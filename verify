@@ -11,4 +11,16 @@ fi
 
 export GRADLE_USER_HOME
 "$river_root/gradle/verify-reproducible-archives.sh"
-exec "$river_root/gradlew" --no-daemon clean check "$@"
+
+case "${RIVER_GRADLE_OFFLINE:-}" in
+  "")
+    exec "$river_root/gradlew" --no-daemon clean check "$@"
+    ;;
+  true)
+    exec "$river_root/gradlew" --no-daemon --offline clean check "$@"
+    ;;
+  *)
+    echo "RIVER_GRADLE_OFFLINE must be 'true' or unset" >&2
+    exit 2
+    ;;
+esac

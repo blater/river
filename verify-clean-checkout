@@ -1,0 +1,94 @@
+#!/bin/sh
+set -eu
+
+river_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+checkout_parent=$(mktemp -d "${TMPDIR:-/tmp}/river-clean-checkout.XXXXXX")
+checkout_root="$checkout_parent/river"
+
+cleanup() {
+  rm -rf -- "$checkout_parent"
+}
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+  echo "clean-checkout verification failed: $1" >&2
+  exit 1
+}
+
+command -v git >/dev/null 2>&1 || fail "git is not available"
+git -C "$river_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || fail "the River root is not a Git worktree"
+
+source_commit=$(git -C "$river_root" rev-parse --verify 'HEAD^{commit}')
+
+if [ -n "${RIVER_GRADLE_HOME:-}" ]; then
+  clean_gradle_home=$RIVER_GRADLE_HOME
+elif [ -n "${GRADLE_USER_HOME:-}" ]; then
+  clean_gradle_home=$GRADLE_USER_HOME
+else
+  fail "RIVER_GRADLE_HOME or GRADLE_USER_HOME must name a populated offline cache"
+fi
+
+case "$clean_gradle_home" in
+  /*) ;;
+  *) fail "the selected Gradle user home must be an absolute path" ;;
+esac
+[ -d "$clean_gradle_home" ] \
+  || fail "the selected Gradle user home is not a directory"
+
+for init_script in \
+  "$clean_gradle_home/init.gradle" \
+  "$clean_gradle_home/init.gradle.kts"; do
+  [ ! -e "$init_script" ] \
+    || fail "Gradle user-home init scripts are not allowed: $init_script"
+done
+if [ -d "$clean_gradle_home/init.d" ] \
+    && find "$clean_gradle_home/init.d" -type f -print -quit | grep -q .; then
+  fail "Gradle user-home init scripts are not allowed: $clean_gradle_home/init.d"
+fi
+
+git clone --quiet --no-local --no-checkout "$river_root" "$checkout_root"
+git -C "$checkout_root" checkout --quiet --detach "$source_commit"
+
+[ "$(git -C "$checkout_root" rev-parse --verify HEAD)" = "$source_commit" ] \
+  || fail "temporary checkout is not at the requested commit"
+[ "$(git -C "$checkout_root" symbolic-ref --quiet --short HEAD || true)" = "" ] \
+  || fail "temporary checkout is not detached"
+[ -z "$(git -C "$checkout_root" status --porcelain=v1 --untracked-files=all)" ] \
+  || fail "temporary checkout is dirty before the build"
+
+tracked_symlinks=$(git -C "$checkout_root" ls-files --stage \
+  | awk '$1 == "120000" { print $4 }')
+[ -z "$tracked_symlinks" ] \
+  || fail "tracked symlinks are not allowed in the clean build: $tracked_symlinks"
+
+distribution_url=$(sed -n 's/^distributionUrl=//p' \
+  "$checkout_root/gradle/wrapper/gradle-wrapper.properties")
+[ -n "$distribution_url" ] \
+  || fail "wrapper properties do not declare distributionUrl"
+distribution_archive=${distribution_url##*/}
+distribution_directory=${distribution_archive%.zip}
+case "$distribution_archive" in
+  gradle-*-bin.zip|gradle-*-all.zip) ;;
+  *) fail "unsupported Gradle distribution archive: $distribution_archive" ;;
+esac
+distribution_install=${distribution_directory%-bin}
+distribution_install=${distribution_install%-all}
+wrapper_cache="$clean_gradle_home/wrapper/dists/$distribution_directory"
+[ -d "$wrapper_cache" ] \
+  || fail "the pinned Gradle wrapper distribution is not cached"
+[ -n "$(find "$wrapper_cache" -type f -name "$distribution_archive.ok" -print -quit)" ] \
+  || fail "the pinned Gradle wrapper distribution has no completion marker"
+[ -n "$(find "$wrapper_cache" -type f \
+  -path "*/$distribution_install/bin/gradle" -perm -100 -print -quit)" ] \
+  || fail "the pinned Gradle wrapper distribution is not installed"
+
+echo "clean detached checkout ready: $source_commit"
+(
+  cd "$checkout_root"
+  RIVER_GRADLE_HOME=$clean_gradle_home \
+  RIVER_GRADLE_OFFLINE=true \
+    ./verify --rerun-tasks
+)
+
+echo "clean detached checkout verification passed: $source_commit"

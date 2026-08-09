@@ -16,6 +16,21 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+run_gradle() {
+  case "${RIVER_GRADLE_OFFLINE:-}" in
+    "")
+      "$river_root/gradlew" "$@"
+      ;;
+    true)
+      "$river_root/gradlew" --offline "$@"
+      ;;
+    *)
+      echo "RIVER_GRADLE_OFFLINE must be 'true' or unset" >&2
+      exit 2
+      ;;
+  esac
+}
+
 snapshot_archives() {
   snapshot_name=$1
   snapshot_directory="$river_snapshot_root/$snapshot_name"
@@ -56,10 +71,10 @@ snapshot_archives() {
   fi
 }
 
-"$river_root/gradlew" --no-daemon --no-build-cache --rerun-tasks \
+run_gradle --no-daemon --no-build-cache --rerun-tasks \
   clean assembleRiverArchives
 snapshot_archives first
-"$river_root/gradlew" --no-daemon --no-build-cache --rerun-tasks \
+run_gradle --no-daemon --no-build-cache --rerun-tasks \
   clean assembleRiverArchives
 snapshot_archives second
 

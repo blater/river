@@ -29,3 +29,11 @@ The command uses the checksum-pinned Gradle wrapper and an isolated
 repository-local Gradle home, then runs a clean compile, static source policy,
 module dependency checks, and all tests. GitHub verification is intentionally
 manual during the initial build phase; local validation is the merge gate.
+
+To prove that committed `HEAD` builds without ignored or untracked worktree
+inputs, reuse an already populated absolute Gradle user home and run the
+offline detached-checkout gate:
+
+```sh
+RIVER_GRADLE_HOME=/absolute/path/to/gradle-home ./verify-clean-checkout
+```
