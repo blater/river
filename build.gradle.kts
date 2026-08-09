@@ -116,6 +116,7 @@ val declaredDependencies = mapOf(
   "river-format" to setOf("river-base"),
   "river-tx-api" to setOf("river-base"),
   "river-journal-api" to setOf("river-base"),
+  "river-wal" to setOf("river-base", "river-format", "river-platform"),
   "river-engine" to setOf("river-base", "river-format", "river-platform"),
   "river-testkit" to setOf(
     "river-base", "river-platform", "river-tx-api", "river-journal-api"
