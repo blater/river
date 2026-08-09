@@ -5,6 +5,5 @@ public enum EventPublishResult {
   PUBLISHED,
   DISABLED,
   DROPPED,
-  COALESCED,
   BACKPRESSURE
 }

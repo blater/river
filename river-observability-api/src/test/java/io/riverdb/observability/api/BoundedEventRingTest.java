@@ -6,8 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.observability.api.event.BoundedEventRing;
+import io.riverdb.observability.api.event.ConsumerAccess;
 import io.riverdb.observability.api.event.DiagnosticContext;
 import io.riverdb.observability.api.event.DiagnosticEvent;
+import io.riverdb.observability.api.event.EventPollResult;
 import io.riverdb.observability.api.event.EventPublishResult;
 import io.riverdb.observability.api.event.EventTypeId;
 import io.riverdb.observability.api.event.LevelGatedDiagnosticSink;
@@ -27,19 +29,20 @@ class BoundedEventRingTest {
   @Test
   void rejectsInvalidColdConfiguration() {
     assertThrows(IllegalArgumentException.class,
-        () -> new BoundedEventRing(1, Severity.INFO, SaturationPolicy.DROP));
+        () -> new BoundedEventRing(1, Severity.INFO, SaturationPolicy.DROP_AND_COUNT));
     assertThrows(IllegalArgumentException.class,
-        () -> new BoundedEventRing(3, Severity.INFO, SaturationPolicy.DROP));
+        () -> new BoundedEventRing(3, Severity.INFO, SaturationPolicy.DROP_AND_COUNT));
     assertThrows(IllegalArgumentException.class,
         () -> new BoundedEventRing(
             BoundedEventRing.MAX_CAPACITY + 1,
             Severity.INFO,
-            SaturationPolicy.DROP));
+            SaturationPolicy.DROP_AND_COUNT));
   }
 
   @Test
   void preservesOrderAndCopiesBeforeProducerReuse() {
-    BoundedEventRing ring = new BoundedEventRing(4, Severity.DEBUG, SaturationPolicy.DROP);
+    BoundedEventRing ring = new BoundedEventRing(
+        4, Severity.DEBUG, SaturationPolicy.DROP_AND_COUNT);
     DiagnosticContext context = new DiagnosticContext().databaseId(9);
     DiagnosticEvent event = new DiagnosticEvent();
     for (int sequence = 0; sequence < 4; sequence++) {
@@ -51,26 +54,26 @@ class BoundedEventRingTest {
 
     DiagnosticEvent target = new DiagnosticEvent();
     for (int sequence = 0; sequence < 4; sequence++) {
-      assertTrue(ring.poll(target));
+      assertEquals(EventPollResult.POLLED, ring.poll(target));
       assertEquals(sequence, target.sequence());
       assertEquals(sequence, target.field0());
     }
-    assertFalse(ring.poll(target));
-    assertEquals(0, ring.size());
+    assertEquals(EventPollResult.EMPTY, ring.poll(target));
+    assertEquals(0, ring.approximateSize());
     assertEquals(4, ring.publishedCount());
   }
 
   @Test
   void everySaturationModeIsExplicitAndCountedWithoutWaiting() {
-    assertSaturation(SaturationPolicy.DROP, EventPublishResult.DROPPED, 1, 0, 0);
-    assertSaturation(SaturationPolicy.COALESCE, EventPublishResult.COALESCED, 0, 1, 0);
+    assertSaturation(SaturationPolicy.DROP_AND_COUNT, EventPublishResult.DROPPED, 1, 0);
     assertSaturation(
-        SaturationPolicy.REPORT_BACKPRESSURE, EventPublishResult.BACKPRESSURE, 0, 0, 1);
+        SaturationPolicy.REPORT_BACKPRESSURE, EventPublishResult.BACKPRESSURE, 0, 1);
   }
 
   @Test
   void levelGateAvoidsPublicationAndCanChangeAtRuntime() {
-    BoundedEventRing ring = new BoundedEventRing(2, Severity.DEBUG, SaturationPolicy.DROP);
+    BoundedEventRing ring = new BoundedEventRing(
+        2, Severity.DEBUG, SaturationPolicy.DROP_AND_COUNT);
     LevelGatedDiagnosticSink gate = new LevelGatedDiagnosticSink(ring, Severity.WARN);
     DiagnosticContext context = new DiagnosticContext();
     DiagnosticEvent event = new DiagnosticEvent().set(
@@ -127,7 +130,7 @@ class BoundedEventRingTest {
 
     DiagnosticEvent target = new DiagnosticEvent();
     int consumed = 0;
-    while (ring.poll(target)) {
+    while (ring.poll(target) == EventPollResult.POLLED) {
       int sequence = (int) target.sequence();
       assertEquals(1, accepted.get(sequence));
       assertEquals(0, seen.getAndIncrement(sequence));
@@ -136,14 +139,31 @@ class BoundedEventRingTest {
 
     assertEquals(consumed, ring.publishedCount());
     assertEquals(eventCount, consumed + ring.backpressureCount());
-    assertEquals(0, ring.size());
+    assertEquals(0, ring.approximateSize());
+  }
+
+  @Test
+  void guardedConsumerRejectsSecondThreadWithoutThrowing() throws Exception {
+    BoundedEventRing ring = new BoundedEventRing(
+        2,
+        Severity.DEBUG,
+        SaturationPolicy.DROP_AND_COUNT,
+        ConsumerAccess.GUARDED);
+    DiagnosticEvent target = new DiagnosticEvent();
+    assertEquals(EventPollResult.EMPTY, ring.poll(target));
+
+    try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+      Future<EventPollResult> misuse = executor.submit(() -> ring.poll(target));
+      assertEquals(EventPollResult.NOT_CONSUMER, misuse.get(5, TimeUnit.SECONDS));
+    }
+    assertEquals(1, ring.consumerMisuseCount());
+    assertEquals(EventPollResult.EMPTY, ring.poll(target));
   }
 
   private static void assertSaturation(
       SaturationPolicy policy,
       EventPublishResult expected,
       long drops,
-      long coalesces,
       long backpressure) {
     BoundedEventRing ring = new BoundedEventRing(2, Severity.DEBUG, policy);
     DiagnosticEvent event = new DiagnosticEvent().set(
@@ -160,8 +180,7 @@ class BoundedEventRingTest {
     assertEquals(EventPublishResult.PUBLISHED, ring.publish(event));
     assertEquals(expected, ring.publish(event));
     assertEquals(drops, ring.droppedCount());
-    assertEquals(coalesces, ring.coalescedCount());
     assertEquals(backpressure, ring.backpressureCount());
-    assertEquals(2, ring.size());
+    assertEquals(2, ring.approximateSize());
   }
 }

@@ -7,8 +7,6 @@ public enum MetricName {
       1000, "river.diagnostic.events.published.total", MetricKind.COUNTER, "events"),
   DIAGNOSTIC_EVENTS_DROPPED_TOTAL(
       1001, "river.diagnostic.events.dropped.total", MetricKind.COUNTER, "events"),
-  DIAGNOSTIC_EVENTS_COALESCED_TOTAL(
-      1002, "river.diagnostic.events.coalesced.total", MetricKind.COUNTER, "events"),
   DIAGNOSTIC_BACKPRESSURE_TOTAL(
       1003, "river.diagnostic.backpressure.total", MetricKind.COUNTER, "events"),
   DIAGNOSTIC_QUEUE_DEPTH(
