@@ -11,12 +11,27 @@ public interface JournalProviderHarness {
 
   StatusCode writeThrough(long journalGeneration, long inclusiveSequence);
 
+  default StatusCode forceThrough(
+      long journalGeneration,
+      long inclusiveSequence,
+      ForceCompletion completion) {
+    return forceThrough(journalGeneration, inclusiveSequence, completion, 0);
+  }
+
   StatusCode forceThrough(
       long journalGeneration,
       long inclusiveSequence,
-      ForceCompletion completion);
+      ForceCompletion completion,
+      long nowNanos);
 
-  StatusCode crashAndRestart(NodeIncarnation restartedNode);
+  default StatusCode crashAndRestart(NodeIncarnation restartedNode) {
+    return crashAndRestart(restartedNode, UnknownRecoveryResolution.NOT_DURABLE, 0);
+  }
+
+  StatusCode crashAndRestart(
+      NodeIncarnation restartedNode,
+      UnknownRecoveryResolution unknownResolution,
+      long nowNanos);
 
   StatusCode reclaimThrough(JournalPosition requestedInclusive, long nowNanos);
 

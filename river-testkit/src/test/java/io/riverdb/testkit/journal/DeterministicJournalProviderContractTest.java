@@ -23,6 +23,31 @@ final class DeterministicJournalProviderContractTest extends JournalProviderCont
         retentionLeaseCapacity,
         maxLeaseDurationNanos,
         new FatalStateFence());
+    return harness(provider);
+  }
+
+  @Override
+  protected JournalProviderHarness openHarnessWithOutcomePolicy(
+      int entryCapacity,
+      int maxEntryBytes,
+      int outcomeCapacity,
+      long outcomeRetentionNanos) {
+    DeterministicJournalProvider provider = new DeterministicJournalProvider(
+        DATABASE,
+        NODE,
+        JOURNAL_GENERATION,
+        7,
+        entryCapacity,
+        maxEntryBytes,
+        4,
+        1_000_000_000L,
+        outcomeCapacity,
+        outcomeRetentionNanos,
+        new FatalStateFence());
+    return harness(provider);
+  }
+
+  private JournalProviderHarness harness(DeterministicJournalProvider provider) {
     return new JournalProviderHarness() {
       @Override
       public JournalProvider provider() {
@@ -38,13 +63,18 @@ final class DeterministicJournalProviderContractTest extends JournalProviderCont
       public StatusCode forceThrough(
           long journalGeneration,
           long inclusiveSequence,
-          ForceCompletion completion) {
-        return provider.forceThrough(journalGeneration, inclusiveSequence, completion);
+          ForceCompletion completion,
+          long nowNanos) {
+        return provider.forceThrough(
+            journalGeneration, inclusiveSequence, completion, nowNanos);
       }
 
       @Override
-      public StatusCode crashAndRestart(NodeIncarnation restartedNode) {
-        return provider.crashAndRestart(restartedNode);
+      public StatusCode crashAndRestart(
+          NodeIncarnation restartedNode,
+          UnknownRecoveryResolution unknownResolution,
+          long nowNanos) {
+        return provider.crashAndRestart(restartedNode, unknownResolution, nowNanos);
       }
 
       @Override

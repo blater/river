@@ -25,6 +25,7 @@ import io.riverdb.journal.api.durability.DurabilityTicket;
 import io.riverdb.journal.api.durability.DurabilityWaitRequest;
 import io.riverdb.journal.api.frontier.JournalFrontierSnapshot;
 import io.riverdb.journal.api.mapping.JournalPositionMapping;
+import io.riverdb.journal.api.outcome.OutcomeRetentionSnapshot;
 import io.riverdb.journal.api.outcome.RequestOutcomeResult;
 import io.riverdb.journal.api.outcome.RequestOutcomeState;
 import io.riverdb.journal.api.outcome.TransactionDecision;
@@ -54,16 +55,47 @@ public abstract class JournalProviderContractTest {
       int retentionLeaseCapacity,
       long maxLeaseDurationNanos);
 
+  /** Provider mode under test; replicated implementations override these expectations. */
+  protected DurabilityRequirement contractRequirement() {
+    return DurabilityRequirement.LOCAL_DURABLE;
+  }
+
+  protected DurabilityRequirement unsupportedRequirement() {
+    return DurabilityRequirement.QUORUM_DURABLE;
+  }
+
+  protected boolean expectsSupport(DurabilityRequirement requirement) {
+    return requirement == DurabilityRequirement.LOCAL_DURABLE;
+  }
+
+  protected boolean expectsConsensus() {
+    return false;
+  }
+
+  protected boolean expectsStateSync() {
+    return false;
+  }
+
+  protected boolean expectsFollowerServing() {
+    return false;
+  }
+
+  protected abstract JournalProviderHarness openHarnessWithOutcomePolicy(
+      int entryCapacity,
+      int maxEntryBytes,
+      int outcomeCapacity,
+      long outcomeRetentionNanos);
+
   @Test
   final void localCapabilityAndJournalOwnedFrontiersAreExplicit() {
     JournalProvider provider = openHarness(4).provider();
 
-    assertTrue(provider.capabilities().supports(DurabilityRequirement.LOCAL_DURABLE));
-    assertFalse(provider.capabilities().supports(DurabilityRequirement.QUORUM_DURABLE));
-    assertFalse(provider.capabilities().supports(DurabilityRequirement.QUORUM_ACCEPTED));
-    assertFalse(provider.capabilities().hasConsensus());
-    assertFalse(provider.capabilities().hasStateSync());
-    assertFalse(provider.capabilities().canServeFollowers());
+    for (DurabilityRequirement requirement : DurabilityRequirement.values()) {
+      assertEquals(expectsSupport(requirement), provider.capabilities().supports(requirement));
+    }
+    assertEquals(expectsConsensus(), provider.capabilities().hasConsensus());
+    assertEquals(expectsStateSync(), provider.capabilities().hasStateSync());
+    assertEquals(expectsFollowerServing(), provider.capabilities().canServeFollowers());
 
     JournalFrontierSnapshot snapshot = frontiers(provider);
     assertEquals(DATABASE.high(), snapshot.databaseIncarnationHigh());
@@ -82,7 +114,7 @@ public abstract class JournalProviderContractTest {
     JournalProvider provider = openHarness(2).provider();
     JournalReservation rejected = new JournalReservation();
     StatusCode status = provider.reserve(
-        reserveRequest(1, DurabilityRequirement.QUORUM_DURABLE),
+        reserveRequest(1, unsupportedRequirement()),
         rejected,
         detail());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, status);
@@ -90,6 +122,20 @@ public abstract class JournalProviderContractTest {
 
     JournalReservation accepted = reserve(provider, 2);
     assertEquals(1, accepted.sequence());
+    publish(provider, accepted, 2, TransactionDecision.COMMITTED);
+    DurabilityTicket unsupportedTicket = new DurabilityTicket();
+    DurabilityResult unsupportedResult = new DurabilityResult();
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        provider.beginDurabilityWait(
+            waitRequest(accepted.sequence(), unsupportedRequirement(), 0),
+            unsupportedTicket,
+            unsupportedResult,
+            detail()));
+    assertFalse(unsupportedTicket.isActive());
+    assertEquals(DurabilityOutcome.UNSUPPORTED, unsupportedResult.outcome());
+    assertEquals(unsupportedRequirement(), unsupportedResult.requestedRequirement());
+    assertEquals(0, unsupportedResult.satisfiedDurabilityMask());
   }
 
   @Test
@@ -122,7 +168,8 @@ public abstract class JournalProviderContractTest {
 
   @Test
   final void reservationCancellationPublishesATombstoneAndClosesTheHole() {
-    JournalProvider provider = openHarness(3).provider();
+    JournalProviderHarness harness = openHarness(3);
+    JournalProvider provider = harness.provider();
     JournalReservation first = reserve(provider, 1);
     JournalReservation second = reserve(provider, 2);
     publish(provider, second, 2, TransactionDecision.NONE);
@@ -131,6 +178,22 @@ public abstract class JournalProviderContractTest {
     assertEquals(StatusCode.CANCELLED, provider.cancelReservation(first, detail()));
     assertFalse(first.isActive());
     assertEquals(2, frontiers(provider).preparedSequence());
+    RequestOutcomeResult cancelled = lookup(provider, NODE, 1);
+    assertEquals(RequestOutcomeState.CANCELLED_TOMBSTONE, cancelled.state());
+    assertTrue(cancelled.isFinal());
+    JournalReservation duplicate = new JournalReservation();
+    assertEquals(
+        StatusCode.CONFLICT,
+        provider.reserve(reserveRequest(1, contractRequirement()), duplicate, detail()));
+    assertEquals(StatusCode.OK, harness.writeThrough(JOURNAL_GENERATION, 2));
+    assertEquals(
+        StatusCode.OK,
+        harness.forceThrough(JOURNAL_GENERATION, 2, ForceCompletion.SUCCEEDED));
+    NodeIncarnation restarted = NodeIncarnation.of(23, 24);
+    assertEquals(StatusCode.OK, harness.crashAndRestart(restarted));
+    assertEquals(
+        RequestOutcomeState.CANCELLED_TOMBSTONE,
+        lookup(provider, restarted, 1).state());
   }
 
   @Test
@@ -142,7 +205,7 @@ public abstract class JournalProviderContractTest {
     JournalReservation rejected = new JournalReservation();
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
-        provider.reserve(reserveRequest(3, DurabilityRequirement.LOCAL_DURABLE),
+        provider.reserve(reserveRequest(3, contractRequirement()),
             rejected, detail()));
     assertFalse(rejected.isActive());
   }
@@ -158,7 +221,7 @@ public abstract class JournalProviderContractTest {
     assertEquals(
         StatusCode.RETRY,
         provider.beginDurabilityWait(
-            waitRequest(append.sequence(), DurabilityRequirement.LOCAL_DURABLE, 0),
+            waitRequest(append.sequence(), contractRequirement(), 0),
             noDeadlineTicket,
             durability,
             detail()));
@@ -188,6 +251,8 @@ public abstract class JournalProviderContractTest {
         provider.pollDurability(
             timeoutTicket, 10, CancellationToken.NONE, durability, detail()));
     assertEquals(DurabilityOutcome.TIMED_OUT, durability.outcome());
+    assertEquals(0, durability.satisfiedDurabilityMask());
+    assertFalse(durability.satisfies(contractRequirement()));
 
     DurabilityTicket cancelledTicket = beginPending(provider, second.sequence(), 100);
     MutableCancellationToken cancellation = new MutableCancellationToken();
@@ -196,12 +261,14 @@ public abstract class JournalProviderContractTest {
         StatusCode.CANCELLED,
         provider.pollDurability(cancelledTicket, 1, cancellation, durability, detail()));
     assertEquals(DurabilityOutcome.CANCELLED, durability.outcome());
+    assertEquals(0, durability.satisfiedDurabilityMask());
 
     DurabilityTicket explicitTicket = beginPending(provider, second.sequence(), 100);
     assertEquals(
         StatusCode.CANCELLED,
         provider.cancelDurabilityWait(explicitTicket, durability, detail()));
     assertEquals(DurabilityOutcome.CANCELLED, durability.outcome());
+    assertEquals(0, durability.satisfiedDurabilityMask());
   }
 
   @Test
@@ -220,6 +287,7 @@ public abstract class JournalProviderContractTest {
         StatusCode.FENCED,
         provider.pollDurability(ticket, 1, CancellationToken.NONE, durability, detail()));
     assertEquals(DurabilityOutcome.UNKNOWN, durability.outcome());
+    assertEquals(0, durability.satisfiedDurabilityMask());
 
     RequestOutcomeResult outcome = lookup(provider, NODE, 1);
     assertEquals(RequestOutcomeState.UNKNOWN, outcome.state());
@@ -229,7 +297,7 @@ public abstract class JournalProviderContractTest {
     JournalReservation rejected = new JournalReservation();
     assertEquals(
         StatusCode.FENCED,
-        provider.reserve(reserveRequest(2, DurabilityRequirement.LOCAL_DURABLE),
+        provider.reserve(reserveRequest(2, contractRequirement()),
             rejected, detail()));
   }
 
@@ -319,7 +387,7 @@ public abstract class JournalProviderContractTest {
     JournalReservation duplicate = new JournalReservation();
     assertEquals(
         StatusCode.CONFLICT,
-        provider.reserve(reserveRequest(1, DurabilityRequirement.LOCAL_DURABLE),
+        provider.reserve(reserveRequest(1, contractRequirement()),
             duplicate, detail()));
     JournalAppendResult append = publish(
         provider, reservation, 1, TransactionDecision.COMMITTED);
@@ -446,7 +514,7 @@ public abstract class JournalProviderContractTest {
     JournalReservation rejected = new JournalReservation();
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
-        provider.reserve(reserveRequest(3, DurabilityRequirement.LOCAL_DURABLE),
+        provider.reserve(reserveRequest(3, contractRequirement()),
             rejected, detail()));
     assertEquals(StatusCode.OK, provider.releaseRetentionLease(lease, detail()));
     assertEquals(
@@ -456,9 +524,199 @@ public abstract class JournalProviderContractTest {
   }
 
   @Test
+  final void outcomesSurviveWalReclaimSlotReuseAndRestartUntilExplicitForgetHorizon() {
+    JournalProviderHarness harness = openHarnessWithOutcomePolicy(1, 32, 2, 10);
+    JournalProvider provider = harness.provider();
+    JournalAppendResult first = append(provider, 1, TransactionDecision.COMMITTED);
+    assertEquals(StatusCode.OK, harness.writeThrough(JOURNAL_GENERATION, first.sequence()));
+    assertEquals(
+        StatusCode.OK,
+        harness.forceThrough(
+            JOURNAL_GENERATION, first.sequence(), ForceCompletion.SUCCEEDED, 0));
+    assertEquals(
+        StatusCode.OK,
+        harness.reclaimThrough(
+            JournalPosition.of(DATABASE, JOURNAL_GENERATION, first.sequence()), 1));
+    assertEquals(0, harness.retainedEntries());
+    assertEquals(RequestOutcomeState.DURABLE, lookup(provider, NODE, 1, 9).state());
+
+    JournalAppendResult second = append(provider, 2, TransactionDecision.COMMITTED);
+    assertEquals(StatusCode.OK, harness.writeThrough(JOURNAL_GENERATION, second.sequence()));
+    assertEquals(
+        StatusCode.OK,
+        harness.forceThrough(
+            JOURNAL_GENERATION, second.sequence(), ForceCompletion.SUCCEEDED, 1));
+    assertEquals(RequestOutcomeState.DURABLE, lookup(provider, NODE, 1, 9).state());
+    assertEquals(RequestOutcomeState.DURABLE, lookup(provider, NODE, 2, 9).state());
+
+    NodeIncarnation restarted = NodeIncarnation.of(51, 52);
+    assertEquals(StatusCode.OK, harness.crashAndRestart(restarted));
+    assertEquals(RequestOutcomeState.DURABLE, lookup(provider, restarted, 1, 9).state());
+    assertEquals(RequestOutcomeState.DURABLE, lookup(provider, restarted, 2, 9).state());
+    assertEquals(
+        StatusCode.OK,
+        harness.reclaimThrough(
+            JournalPosition.of(DATABASE, JOURNAL_GENERATION, second.sequence()), 2));
+
+    assertEquals(RequestOutcomeState.NOT_FOUND, lookup(provider, restarted, 1, 10).state());
+    OutcomeRetentionSnapshot retention = new OutcomeRetentionSnapshot();
+    assertEquals(
+        StatusCode.OK,
+        provider.forgetExpiredOutcomes(10, retention, detail()));
+    assertEquals(1, retention.retainedOutcomes());
+    assertEquals(2, retention.capacity());
+    assertEquals(11, retention.earliestForgetAtNanos());
+    assertEquals(3, reserve(provider, restarted, 3).sequence());
+  }
+
+  @Test
+  final void activeAndForeignCapabilitiesAreRejectedWithoutMutation() {
+    JournalProviderHarness firstHarness = openHarness(5);
+    JournalProviderHarness secondHarness = openHarness(5);
+    JournalProvider firstProvider = firstHarness.provider();
+    JournalProvider secondProvider = secondHarness.provider();
+    JournalReservation reservation = reserve(firstProvider, 1);
+    long sequence = reservation.sequence();
+    long token = reservation.providerToken();
+    assertEquals(StatusCode.CONFLICT, reservation.reset());
+    assertEquals(sequence, reservation.sequence());
+    assertEquals(token, reservation.providerToken());
+
+    assertEquals(
+        StatusCode.CONFLICT,
+        firstProvider.reserve(
+            reserveRequest(2, contractRequirement()), reservation, detail()));
+    assertTrue(reservation.isActive());
+    assertEquals(sequence, reservation.sequence());
+    assertEquals(token, reservation.providerToken());
+    JournalAppendResult foreignResult = new JournalAppendResult();
+    assertEquals(
+        StatusCode.CONFLICT,
+        secondProvider.publish(
+            reservation, appendRequest(1, TransactionDecision.COMMITTED),
+            foreignResult, detail()));
+    assertTrue(reservation.isActive());
+    JournalReservation forgedClone = new JournalReservation();
+    assertEquals(
+        StatusCode.CONFLICT,
+        secondProvider.publish(
+            forgedClone, appendRequest(1, TransactionDecision.COMMITTED),
+            foreignResult, detail()));
+    publish(firstProvider, reservation, 1, TransactionDecision.COMMITTED);
+    assertEquals(
+        StatusCode.CONFLICT,
+        firstProvider.publish(
+            reservation, appendRequest(1, TransactionDecision.COMMITTED),
+            foreignResult, detail()));
+
+    JournalAppendResult pending = append(firstProvider, 2, TransactionDecision.COMMITTED);
+    DurabilityTicket ticket = beginPending(firstProvider, pending.sequence(), 100);
+    long requiredSequence = ticket.requiredSequence();
+    assertEquals(StatusCode.CONFLICT, ticket.reset());
+    assertEquals(requiredSequence, ticket.requiredSequence());
+    assertEquals(
+        StatusCode.CONFLICT,
+        firstProvider.beginDurabilityWait(
+            waitRequest(pending.sequence(), contractRequirement(), 100),
+            ticket, new DurabilityResult(), detail()));
+    assertEquals(requiredSequence, ticket.requiredSequence());
+    assertEquals(
+        StatusCode.CONFLICT,
+        secondProvider.pollDurability(
+            ticket, 1, CancellationToken.NONE, new DurabilityResult(), detail()));
+    assertTrue(ticket.isActive());
+    assertEquals(
+        StatusCode.CANCELLED,
+        firstProvider.cancelDurabilityWait(ticket, new DurabilityResult(), detail()));
+    assertEquals(
+        StatusCode.CONFLICT,
+        firstProvider.cancelDurabilityWait(ticket, new DurabilityResult(), detail()));
+
+    assertEquals(StatusCode.OK, firstHarness.writeThrough(JOURNAL_GENERATION, 2));
+    assertEquals(
+        StatusCode.OK,
+        firstHarness.forceThrough(JOURNAL_GENERATION, 2, ForceCompletion.SUCCEEDED));
+    WalRetentionLease lease = new WalRetentionLease();
+    assertEquals(
+        StatusCode.OK,
+        firstProvider.acquireRetentionLease(leaseRequest(7, 1, 0, 50), lease, detail()));
+    long leaseToken = lease.providerToken();
+    assertEquals(StatusCode.CONFLICT, lease.reset());
+    assertEquals(leaseToken, lease.providerToken());
+    assertEquals(
+        StatusCode.CONFLICT,
+        firstProvider.acquireRetentionLease(leaseRequest(8, 2, 0, 50), lease, detail()));
+    assertEquals(leaseToken, lease.providerToken());
+    assertEquals(StatusCode.CONFLICT, secondProvider.releaseRetentionLease(lease, detail()));
+    assertTrue(lease.isActive());
+    assertEquals(StatusCode.OK, firstProvider.releaseRetentionLease(lease, detail()));
+    assertEquals(StatusCode.CONFLICT, firstProvider.releaseRetentionLease(lease, detail()));
+  }
+
+  @Test
+  final void unknownForceReopenPreservesPriorDurabilityAndResolvesAttemptDeterministically() {
+    JournalProviderHarness durableHarness = openHarness(4);
+    JournalProvider durableProvider = durableHarness.provider();
+    append(durableProvider, 1, TransactionDecision.COMMITTED);
+    assertEquals(StatusCode.OK, durableHarness.writeThrough(JOURNAL_GENERATION, 1));
+    assertEquals(
+        StatusCode.OK,
+        durableHarness.forceThrough(JOURNAL_GENERATION, 1, ForceCompletion.SUCCEEDED, 1));
+    append(durableProvider, 2, TransactionDecision.COMMITTED);
+    assertEquals(StatusCode.OK, durableHarness.writeThrough(JOURNAL_GENERATION, 2));
+    assertEquals(
+        StatusCode.IO_FAILURE,
+        durableHarness.forceThrough(JOURNAL_GENERATION, 2, ForceCompletion.UNKNOWN, 2));
+    assertEquals(RequestOutcomeState.DURABLE, lookup(durableProvider, NODE, 1, 2).state());
+    assertEquals(RequestOutcomeState.UNKNOWN, lookup(durableProvider, NODE, 2, 2).state());
+    assertEquals(1, frontiers(durableProvider).localWalDurableSequence());
+    NodeIncarnation durableRestart = NodeIncarnation.of(61, 62);
+    assertEquals(
+        StatusCode.OK,
+        durableHarness.crashAndRestart(
+            durableRestart, UnknownRecoveryResolution.DURABLE, 3));
+    assertEquals(2, frontiers(durableProvider).localWalDurableSequence());
+    assertEquals(
+        RequestOutcomeState.DURABLE,
+        lookup(durableProvider, durableRestart, 2, 3).state());
+    assertEquals(3, reserve(durableProvider, durableRestart, 3).sequence());
+
+    JournalProviderHarness lostHarness = openHarness(4);
+    JournalProvider lostProvider = lostHarness.provider();
+    append(lostProvider, 1, TransactionDecision.COMMITTED);
+    assertEquals(StatusCode.OK, lostHarness.writeThrough(JOURNAL_GENERATION, 1));
+    assertEquals(
+        StatusCode.OK,
+        lostHarness.forceThrough(JOURNAL_GENERATION, 1, ForceCompletion.SUCCEEDED, 1));
+    append(lostProvider, 2, TransactionDecision.COMMITTED);
+    assertEquals(StatusCode.OK, lostHarness.writeThrough(JOURNAL_GENERATION, 2));
+    assertEquals(
+        StatusCode.IO_FAILURE,
+        lostHarness.forceThrough(JOURNAL_GENERATION, 2, ForceCompletion.UNKNOWN, 2));
+    NodeIncarnation lostRestart = NodeIncarnation.of(71, 72);
+    assertEquals(
+        StatusCode.OK,
+        lostHarness.crashAndRestart(
+            lostRestart, UnknownRecoveryResolution.NOT_DURABLE, 3));
+    assertEquals(1, frontiers(lostProvider).localWalDurableSequence());
+    assertEquals(
+        RequestOutcomeState.DURABLE,
+        lookup(lostProvider, lostRestart, 1, 3).state());
+    assertEquals(
+        RequestOutcomeState.NOT_DURABLE,
+        lookup(lostProvider, lostRestart, 2, 3).state());
+    assertEquals(2, reserve(lostProvider, lostRestart, 3).sequence());
+  }
+
+  @Test
   final void frontierSnapshotsRemainAtomicAndMonotonicForConcurrentReaders() throws Exception {
     JournalProviderHarness harness = openHarness(128);
     JournalProvider provider = harness.provider();
+    JournalAppendResult first = append(provider, 1, TransactionDecision.COMMITTED);
+    assertEquals(StatusCode.OK, harness.writeThrough(JOURNAL_GENERATION, first.sequence()));
+    assertEquals(
+        StatusCode.OK,
+        harness.forceThrough(JOURNAL_GENERATION, first.sequence(), ForceCompletion.SUCCEEDED));
     AtomicBoolean running = new AtomicBoolean(true);
     AtomicReference<AssertionError> failure = new AtomicReference<>();
     CountDownLatch started = new CountDownLatch(1);
@@ -467,10 +725,26 @@ public abstract class JournalProviderContractTest {
       long committed = 0;
       long durable = 0;
       JournalFrontierSnapshot snapshot = new JournalFrontierSnapshot();
+      RequestOutcomeResult outcome = new RequestOutcomeResult();
+      JournalPositionMapping mapping = new JournalPositionMapping();
+      RetentionSnapshot retention = new RetentionSnapshot();
+      StatusDetail readDetail = detail();
+      IdempotencyKey key = IdempotencyKey.of(3001, 4001);
+      JournalPosition position = JournalPosition.of(DATABASE, JOURNAL_GENERATION, 1);
       started.countDown();
       while (running.get()) {
-        provider.snapshotFrontiers(snapshot);
-        if (snapshot.preparedSequence() < prepared
+        StatusCode frontierStatus = provider.snapshotFrontiers(snapshot);
+        StatusCode outcomeStatus = provider.lookupOutcome(
+            DATABASE, NODE, key, 0, outcome, readDetail);
+        StatusCode mappingStatus = provider.inspectMapping(position, mapping);
+        StatusCode retentionStatus = provider.snapshotRetention(0, retention);
+        if (frontierStatus != StatusCode.OK
+            || outcomeStatus != StatusCode.OK
+            || mappingStatus != StatusCode.OK
+            || retentionStatus != StatusCode.OK
+            || outcome.state() != RequestOutcomeState.DURABLE
+            || mapping.sequence() != 1
+            || snapshot.preparedSequence() < prepared
             || snapshot.journalCommittedSequence() < committed
             || snapshot.localWalDurableSequence() < durable
             || snapshot.localWalDurableSequence() > snapshot.journalCommittedSequence()
@@ -485,7 +759,7 @@ public abstract class JournalProviderContractTest {
     });
     reader.start();
     started.await();
-    for (int index = 1; index <= 100; index++) {
+    for (int index = 2; index <= 100; index++) {
       append(provider, index, TransactionDecision.NONE);
       assertEquals(StatusCode.OK, harness.writeThrough(JOURNAL_GENERATION, index));
       assertEquals(
@@ -516,7 +790,7 @@ public abstract class JournalProviderContractTest {
     assertEquals(
         StatusCode.OK,
         provider.reserve(
-            reserveRequest(node, identity, DurabilityRequirement.LOCAL_DURABLE),
+            reserveRequest(node, identity, contractRequirement()),
             reservation,
             detail()));
     return reservation;
@@ -535,17 +809,24 @@ public abstract class JournalProviderContractTest {
       long identity,
       TransactionDecision decision) {
     JournalAppendResult result = new JournalAppendResult();
+    assertEquals(
+        StatusCode.OK,
+        provider.publish(reservation, appendRequest(identity, decision), result, detail()));
+    return result;
+  }
+
+  private JournalAppendRequest appendRequest(
+      long identity,
+      TransactionDecision decision) {
     long transactionId = decision == TransactionDecision.NONE ? identity : identity;
     long commitSequence = decision == TransactionDecision.COMMITTED ? identity + 100 : 0;
-    JournalAppendRequest request = new JournalAppendRequest().set(
+    return new JournalAppendRequest().set(
         ByteBuffer.wrap(new byte[] {(byte) identity}),
         1,
         1,
         transactionId,
         commitSequence,
         decision);
-    assertEquals(StatusCode.OK, provider.publish(reservation, request, result, detail()));
-    return result;
   }
 
   private JournalReserveRequest reserveRequest(
@@ -578,7 +859,7 @@ public abstract class JournalProviderContractTest {
     assertEquals(
         StatusCode.RETRY,
         provider.beginDurabilityWait(
-            waitRequest(sequence, DurabilityRequirement.LOCAL_DURABLE, deadline),
+            waitRequest(sequence, contractRequirement(), deadline),
             ticket,
             new DurabilityResult(),
             detail()));
@@ -597,12 +878,20 @@ public abstract class JournalProviderContractTest {
       JournalProvider provider,
       NodeIncarnation node,
       long identity) {
+    return lookup(provider, node, identity, 0);
+  }
+
+  private RequestOutcomeResult lookup(
+      JournalProvider provider,
+      NodeIncarnation node,
+      long identity,
+      long nowNanos) {
     RequestOutcomeResult result = new RequestOutcomeResult();
     assertEquals(
         StatusCode.OK,
         provider.lookupOutcome(
             DATABASE, node, IdempotencyKey.of(3000 + identity, 4000 + identity),
-            0, result, detail()));
+            nowNanos, result, detail()));
     return result;
   }
 

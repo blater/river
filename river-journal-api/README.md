@@ -23,6 +23,19 @@ boundaries. A durability deadline of zero means no timeout. Cancellation of a
 reservation must publish a bounded repair/tombstone so a public gap-free
 frontier can never silently skip the abandoned position.
 
+Reservation, durability-ticket, and retention-lease handles are authenticated
+provider capabilities. An active handle cannot be reset or reused as output;
+foreign-provider, forged, stale, and double-completion attempts return a
+stable conflict/fenced status without changing the handle.
+
+Durable request outcomes live in a bounded store independent of reclaimable
+WAL ring slots. Reclaiming or reusing a ring slot does not forget its outcome.
+Each terminal outcome has an explicit provider-policy forget horizon; expiry
+ends the lookup promise, while `forgetExpiredOutcomes` explicitly releases the
+bounded outcome capacity. An unknown force never relabels an already durable
+prefix and must be resolved by validated stable scanning during a fresh
+provider lifecycle.
+
 Durable semantic retention leases are explicitly reopened under the current
 node incarnation after restart; pre-restart handles remain fenced.
 
@@ -30,6 +43,12 @@ node incarnation after restart; pre-restart handles remain fenced.
 memory-replicated, journal-committed, local-WAL-durable, and
 quorum-WAL-durable prefixes. It intentionally has no mutable `visibleCsn`,
 `durableRecovery`, or `safeTruncate` counter.
+
+State-changing calls are owner-thread operations. Frontier/retention snapshots,
+position inspection, and outcome lookup are read-only and may run concurrently;
+each returns one atomic synchronized view. Callers own and reuse a separate
+output carrier per concurrent invocation. Expiry/forget, lease renewal/release,
+and all append or durability transitions remain owner-thread mutations.
 
 The warmed fake-provider test proves that its reused
 reserve-to-publish-to-wait/poll path allocates no more than measurement noise.

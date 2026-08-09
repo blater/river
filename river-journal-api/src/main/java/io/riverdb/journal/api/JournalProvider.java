@@ -18,7 +18,11 @@ import io.riverdb.journal.api.retention.RetentionSnapshot;
 import io.riverdb.journal.api.retention.WalRetentionLease;
 import io.riverdb.journal.api.retention.WalRetentionLeaseRequest;
 
-/** Provider-independent bounded ordered journal contract. */
+/**
+ * Provider-independent bounded ordered journal contract. Implementations serialize mutations
+ * under their declared owner model. Snapshot, inspection, and outcome lookup operations must
+ * return an atomic view and may be called by concurrent readers with distinct output carriers.
+ */
 public interface JournalProvider {
   DatabaseIncarnation databaseIncarnation();
 

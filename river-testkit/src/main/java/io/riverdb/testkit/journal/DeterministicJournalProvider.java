@@ -71,6 +71,11 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private final long[] walStarts;
   private final long[] walEnds;
   private final int[] outcomeSlots;
+  private final long[] ringOutcomeTokens;
+  private final boolean[] ringUnknownOutcomes;
+  private final long[] ringTransactionIds;
+  private final long[] ringCommitSequences;
+  private final byte[] ringTransactionDecisions;
   private final long[] requestHigh;
   private final long[] requestLow;
   private final long[] idempotencyHigh;
@@ -87,6 +92,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private final long[] outcomeSequences;
   private final long[] outcomeAdmittedAtNanos;
   private final long[] outcomeForgetAtNanos;
+  private final long[] outcomeTokens;
   private final long outcomeRetentionNanos;
   private final long[] leaseIds;
   private final long[] leaseTokens;
@@ -96,6 +102,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private final long maxLeaseDurationNanos;
   private NodeIncarnation nodeIncarnation;
   private long providerToken = 1;
+  private long nextOutcomeToken = 1;
   private long lifecycleToken = 1;
   private long nextSequence = 1;
   private long nextWalStart;
@@ -178,6 +185,11 @@ public final class DeterministicJournalProvider implements JournalProvider {
     walEnds = new long[boundedCapacity];
     outcomeSlots = new int[boundedCapacity];
     java.util.Arrays.fill(outcomeSlots, -1);
+    ringOutcomeTokens = new long[boundedCapacity];
+    ringUnknownOutcomes = new boolean[boundedCapacity];
+    ringTransactionIds = new long[boundedCapacity];
+    ringCommitSequences = new long[boundedCapacity];
+    ringTransactionDecisions = new byte[boundedCapacity];
     int boundedOutcomeCapacity = Math.max(0, outcomeCapacity);
     requestHigh = new long[boundedOutcomeCapacity];
     requestLow = new long[boundedOutcomeCapacity];
@@ -195,6 +207,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
     outcomeSequences = new long[boundedOutcomeCapacity];
     outcomeAdmittedAtNanos = new long[boundedOutcomeCapacity];
     outcomeForgetAtNanos = new long[boundedOutcomeCapacity];
+    outcomeTokens = new long[boundedOutcomeCapacity];
     outcomeRetentionNanos = Math.max(0, requestOutcomeRetentionNanos);
     int boundedLeaseCount = Math.max(0, maxRetentionLeases);
     leaseIds = new long[boundedLeaseCount];
@@ -290,6 +303,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
     walStarts[slot] = nextWalStart;
     walEnds[slot] = end;
     outcomeSlots[slot] = outcomeSlot;
+    long outcomeToken = nextOutcomeToken++;
+    ringOutcomeTokens[slot] = outcomeToken;
+    outcomeTokens[outcomeSlot] = outcomeToken;
     requestHigh[outcomeSlot] = request.requestIdHigh();
     requestLow[outcomeSlot] = request.requestIdLow();
     idempotencyHigh[outcomeSlot] = request.idempotencyKeyHigh();
@@ -343,6 +359,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
     formatIds[outcomeSlot] = request.formatId();
     formatVersions[outcomeSlot] = request.formatVersion();
     transactionDecisions[outcomeSlot] = (byte) request.transactionDecision().ordinal();
+    ringTransactionIds[slot] = request.transactionId();
+    ringCommitSequences[slot] = request.commitSequence();
+    ringTransactionDecisions[slot] = (byte) request.transactionDecision().ordinal();
     outcomeStates[outcomeSlot] = (byte) (request.transactionDecision() == TransactionDecision.NONE
         ? RequestOutcomeState.PUBLISHED.ordinal()
         : RequestOutcomeState.DECIDED.ordinal());
@@ -533,9 +552,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
         walGeneration,
         walStarts[slot],
         walEnds[slot],
-        transactionIds[outcomeSlots[slot]],
-        commitSequences[outcomeSlots[slot]],
-        transactionDecisions[outcomeSlots[slot]] != 0);
+        ringTransactionIds[slot],
+        ringCommitSequences[slot],
+        ringTransactionDecisions[slot] != 0);
     return StatusCode.OK;
   }
 
@@ -549,10 +568,6 @@ public final class DeterministicJournalProvider implements JournalProvider {
       StatusDetail detail) {
     result.reset();
     detail.reset();
-    StatusCode owner = checkOwner();
-    if (!owner.isOk()) {
-      return detail.set(owner).code();
-    }
     if (!databaseIncarnation.equals(database) || !nodeIncarnation.equals(node)) {
       return detail.set(StatusCode.FENCED).code();
     }
@@ -629,6 +644,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
     }
     if (!validLeaseRequest(request)) {
       return detail.set(StatusCode.INVALID_EXTERNAL_INPUT).code();
+    }
+    if (!historyRetained(request.minimumRequired().sequence())) {
+      return detail.set(StatusCode.CONFLICT).append("retention history unavailable").code();
     }
     expireLeases(request.nowNanos());
     if (findLeaseId(request.leaseId()) >= 0) {
@@ -876,9 +894,12 @@ public final class DeterministicJournalProvider implements JournalProvider {
       terminalWaitOutcome = DurabilityOutcome.UNKNOWN;
       for (int index = 0; index < states.length; index++) {
         if (states[index] == WRITTEN && sequences[index] <= inclusiveSequence) {
-          int outcomeSlot = outcomeSlots[index];
-          unknownOutcomes[outcomeSlot] = true;
-          outcomeStates[outcomeSlot] = (byte) RequestOutcomeState.UNKNOWN.ordinal();
+          ringUnknownOutcomes[index] = true;
+          int outcomeSlot = activeOutcomeSlot(index);
+          if (outcomeSlot >= 0) {
+            unknownOutcomes[outcomeSlot] = true;
+            outcomeStates[outcomeSlot] = (byte) RequestOutcomeState.UNKNOWN.ordinal();
+          }
         }
       }
       fatalState.fence(StatusCode.IO_FAILURE);
@@ -887,12 +908,14 @@ public final class DeterministicJournalProvider implements JournalProvider {
     for (int index = 0; index < states.length; index++) {
       if (sequences[index] <= inclusiveSequence && states[index] == WRITTEN) {
         states[index] = DURABLE;
-        int outcomeSlot = outcomeSlots[index];
-        unknownOutcomes[outcomeSlot] = false;
-        outcomeStates[outcomeSlot] = (byte) (cancelledOutcomes[outcomeSlot]
-            ? RequestOutcomeState.CANCELLED_TOMBSTONE.ordinal()
-            : RequestOutcomeState.DURABLE.ordinal());
-        outcomeForgetAtNanos[outcomeSlot] = forgetAt(nowNanos);
+        int outcomeSlot = activeOutcomeSlot(index);
+        if (outcomeSlot >= 0) {
+          unknownOutcomes[outcomeSlot] = false;
+          outcomeStates[outcomeSlot] = (byte) (cancelledOutcomes[outcomeSlot]
+              ? RequestOutcomeState.CANCELLED_TOMBSTONE.ordinal()
+              : RequestOutcomeState.DURABLE.ordinal());
+          outcomeForgetAtNanos[outcomeSlot] = forgetAt(nowNanos);
+        }
       }
     }
     advanceDurableFrontier();
@@ -924,21 +947,24 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (terminalWaitOutcome == DurabilityOutcome.UNKNOWN
         && unknownResolution == UnknownRecoveryResolution.DURABLE) {
       for (int index = 0; index < states.length; index++) {
-        int outcomeSlot = outcomeSlots[index];
-        if (outcomeSlot >= 0 && unknownOutcomes[outcomeSlot]) {
+        if (ringUnknownOutcomes[index]) {
           states[index] = DURABLE;
-          unknownOutcomes[outcomeSlot] = false;
-          outcomeStates[outcomeSlot] = (byte) (cancelledOutcomes[outcomeSlot]
-              ? RequestOutcomeState.CANCELLED_TOMBSTONE.ordinal()
-              : RequestOutcomeState.DURABLE.ordinal());
-          outcomeForgetAtNanos[outcomeSlot] = forgetAt(nowNanos);
+          ringUnknownOutcomes[index] = false;
+          int outcomeSlot = activeOutcomeSlot(index);
+          if (outcomeSlot >= 0) {
+            unknownOutcomes[outcomeSlot] = false;
+            outcomeStates[outcomeSlot] = (byte) (cancelledOutcomes[outcomeSlot]
+                ? RequestOutcomeState.CANCELLED_TOMBSTONE.ordinal()
+                : RequestOutcomeState.DURABLE.ordinal());
+            outcomeForgetAtNanos[outcomeSlot] = forgetAt(nowNanos);
+          }
         }
       }
       advanceDurableFrontier();
     }
     for (int index = 0; index < states.length; index++) {
       if (states[index] != FREE && sequences[index] > durableSequence) {
-        int outcomeSlot = outcomeSlots[index];
+        int outcomeSlot = activeOutcomeSlot(index);
         if (outcomeSlot >= 0) {
           unknownOutcomes[outcomeSlot] = false;
           outcomeStates[outcomeSlot] = (byte) RequestOutcomeState.NOT_DURABLE.ordinal();
@@ -973,6 +999,16 @@ public final class DeterministicJournalProvider implements JournalProvider {
       return StatusCode.CONFLICT;
     }
     nextWalStart = walStart;
+    return StatusCode.OK;
+  }
+
+  synchronized StatusCode discardHistoryForTest(long sequence) {
+    int slot = findSequence(sequence);
+    if (slot < 0) {
+      return StatusCode.RETRY;
+    }
+    clearSlot(slot);
+    retainedEntries--;
     return StatusCode.OK;
   }
 
@@ -1046,7 +1082,6 @@ public final class DeterministicJournalProvider implements JournalProvider {
         && sameJournalLineage(request.minimumRequired())
         && request.minimumRequired().sequence() > 0
         && request.minimumRequired().sequence() < nextSequence
-        && historyRetained(request.minimumRequired().sequence())
         && request.nowNanos() >= 0
         && request.expiresAtNanos() > request.nowNanos()
         && duration > 0
@@ -1102,6 +1137,14 @@ public final class DeterministicJournalProvider implements JournalProvider {
     }
     int candidate = slot(sequence);
     return states[candidate] != FREE && sequences[candidate] == sequence ? candidate : -1;
+  }
+
+  private int activeOutcomeSlot(int ringSlot) {
+    int outcomeSlot = outcomeSlots[ringSlot];
+    return outcomeSlot >= 0
+            && outcomeTokens[outcomeSlot] == ringOutcomeTokens[ringSlot]
+        ? outcomeSlot
+        : -1;
   }
 
   private int slot(long sequence) {
@@ -1165,6 +1208,11 @@ public final class DeterministicJournalProvider implements JournalProvider {
     walStarts[slot] = 0;
     walEnds[slot] = 0;
     outcomeSlots[slot] = -1;
+    ringOutcomeTokens[slot] = 0;
+    ringUnknownOutcomes[slot] = false;
+    ringTransactionIds[slot] = 0;
+    ringCommitSequences[slot] = 0;
+    ringTransactionDecisions[slot] = 0;
   }
 
   private long forgetAt(long nowNanos) {
@@ -1190,5 +1238,6 @@ public final class DeterministicJournalProvider implements JournalProvider {
     outcomeSequences[slot] = 0;
     outcomeAdmittedAtNanos[slot] = 0;
     outcomeForgetAtNanos[slot] = 0;
+    outcomeTokens[slot] = 0;
   }
 }
