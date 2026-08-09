@@ -48,19 +48,21 @@ if [ -d "$clean_gradle_home/init.d" ] \
 fi
 
 git clone --quiet --no-local --no-checkout "$river_root" "$checkout_root"
-git -C "$checkout_root" checkout --quiet --detach "$source_commit"
+git -c core.hooksPath=/dev/null -C "$checkout_root" \
+  checkout --quiet --detach "$source_commit"
 
 [ "$(git -C "$checkout_root" rev-parse --verify HEAD)" = "$source_commit" ] \
   || fail "temporary checkout is not at the requested commit"
 [ "$(git -C "$checkout_root" symbolic-ref --quiet --short HEAD || true)" = "" ] \
   || fail "temporary checkout is not detached"
-[ -z "$(git -C "$checkout_root" status --porcelain=v1 --untracked-files=all)" ] \
+[ -z "$(git -C "$checkout_root" status \
+  --porcelain=v1 --untracked-files=all --ignored)" ] \
   || fail "temporary checkout is dirty before the build"
 
-tracked_symlinks=$(git -C "$checkout_root" ls-files --stage \
-  | awk '$1 == "120000" { print $4 }')
-[ -z "$tracked_symlinks" ] \
-  || fail "tracked symlinks are not allowed in the clean build: $tracked_symlinks"
+unsupported_entries=$(git -C "$checkout_root" ls-files --stage \
+  | awk '$1 != "100644" && $1 != "100755" { print $1 "\t" $4 }')
+[ -z "$unsupported_entries" ] \
+  || fail "tracked symlinks or gitlinks are not allowed: $unsupported_entries"
 
 distribution_url=$(sed -n 's/^distributionUrl=//p' \
   "$checkout_root/gradle/wrapper/gradle-wrapper.properties")
