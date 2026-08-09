@@ -108,6 +108,11 @@ public final class LocalWal {
     return nextJournalSequence;
   }
 
+  /** Exclusive local byte end known forced by this synchronous provider. */
+  public long durableEnd() {
+    return tailEnd;
+  }
+
   /** Explicit River-side payload copies; device transfer bytes are not copies. */
   public long copiedPayloadBytes() {
     return copiedPayloadBytes;
@@ -129,7 +134,14 @@ public final class LocalWal {
     appendPayload.clear();
     appendPayload.limit(payloadBytes);
     long token = nextReservationToken++;
-    StatusCode status = reservation.claim(this, token, appendPayload, payloadBytes);
+    long endOffset = tailEnd + WalRecordCodec.encodedBytes(payloadBytes);
+    StatusCode status = reservation.claim(
+        this,
+        token,
+        appendPayload,
+        payloadBytes,
+        tailEnd,
+        endOffset);
     if (status.isOk()) {
       activeReservationToken = token;
     }

@@ -117,7 +117,9 @@ val declaredDependencies = mapOf(
   "river-tx-api" to setOf("river-base"),
   "river-journal-api" to setOf("river-base"),
   "river-wal" to setOf("river-base", "river-format", "river-platform"),
-  "river-engine" to setOf("river-base", "river-format", "river-platform"),
+  "river-engine" to setOf(
+    "river-base", "river-format", "river-platform", "river-wal"
+  ),
   "river-testkit" to setOf(
     "river-base", "river-platform", "river-tx-api", "river-journal-api"
   ),
@@ -215,6 +217,10 @@ val localWalReservationDescriptor = "Lio/riverdb/wal/local/LocalWalReservation;"
 val localWalAppendResultDescriptor = "Lio/riverdb/wal/local/LocalWalAppendResult;"
 val localWalReadResultDescriptor = "Lio/riverdb/wal/local/LocalWalReadResult;"
 val walRecordHeaderDescriptor = "Lio/riverdb/format/wal/WalRecordHeader;"
+val databaseIncarnationDescriptor = "Lio/riverdb/base/id/DatabaseIncarnation;"
+val walGenerationDescriptor = "Lio/riverdb/base/id/WalGeneration;"
+val pageHeaderDescriptor = "Lio/riverdb/format/page/PageHeader;"
+val pageUpdateDescriptor = "Lio/riverdb/engine/page/PageUpdate;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val liveHotPathMethods = setOf(
@@ -317,6 +323,37 @@ val liveHotPathMethods = setOf(
     "io.riverdb.format.wal.WalRecordCodec",
     "checksum",
     "($byteBufferDescriptor" + "I$crc32cDescriptor)I"
+  ),
+  hotMethod(
+    "io.riverdb.format.page.PageCodec",
+    "encode",
+    "($databaseIncarnationDescriptor$walGenerationDescriptor"
+        + "JJJJI$byteBufferDescriptor$crc32cDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.format.page.PageCodec",
+    "validate",
+    "($byteBufferDescriptor$pageHeaderDescriptor$crc32cDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.format.page.PageCodec",
+    "checksum",
+    "($byteBufferDescriptor$crc32cDescriptor)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.SinglePageStore",
+    "beginUpdate",
+    "(I$pageUpdateDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.SinglePageStore",
+    "commit",
+    "($pageUpdateDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.SinglePageStore",
+    "flush",
+    "()$statusCodeDescriptor"
   )
 )
 val liveHotPathAllowedRules = mapOf(
