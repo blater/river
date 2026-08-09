@@ -121,6 +121,18 @@ final class FaultingDurableDirectoryContractTest {
   }
 
   @Test
+  void contentOnlyForceCannotPublishTruncatedLengthMetadata() {
+    Fixture fixture = new Fixture(0, 24);
+    fixture.createDurable("data", new byte[] {1, 2, 3, 4});
+    assertEquals(StatusCode.OK, fixture.directory.truncate("data", 2, fixture.result));
+    DurableFile file = fixture.result.file();
+    assertEquals(StatusCode.OK, file.force(ForceMode.CONTENT));
+    assertEquals(StatusCode.OK, file.close());
+    fixture.restartAfterCrash();
+    assertArrayEquals(new byte[] {1, 2, 3, 4}, fixture.read("data"));
+  }
+
+  @Test
   void listCarrierIsBoundedReusableAndBorrowsStableNames() {
     Fixture fixture = new Fixture(0, 4);
     String stableName = new String("control");

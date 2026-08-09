@@ -609,7 +609,7 @@ public final class FaultingDurableDirectory implements DurableDirectory {
               : StatusCode.IO_FAILURE;
           return record(DirectoryOperation.FILE_FORCE, status, DirectoryDurability.NOT_APPLIED);
         }
-        entry.publishContent();
+        entry.publishContent(mode);
         status = after(DirectoryOperation.FILE_FORCE, 0, entry.volatileSize);
         DirectoryDurability durability = generation == started
             ? DirectoryDurability.DURABLE
@@ -718,12 +718,20 @@ public final class FaultingDurableDirectory implements DurableDirectory {
       durableDirectory = volatileDirectory;
     }
 
-    private void publishContent() {
-      System.arraycopy(volatileBytes, 0, durableBytes, 0, volatileSize);
-      if (durableSize > volatileSize) {
-        Arrays.fill(durableBytes, volatileSize, durableSize, (byte) 0);
+    private void publishContent(ForceMode mode) {
+      switch (mode) {
+        case CONTENT -> {
+          int publishedSize = Math.min(volatileSize, durableSize);
+          System.arraycopy(volatileBytes, 0, durableBytes, 0, publishedSize);
+        }
+        case CONTENT_AND_METADATA -> {
+          System.arraycopy(volatileBytes, 0, durableBytes, 0, volatileSize);
+          if (durableSize > volatileSize) {
+            Arrays.fill(durableBytes, volatileSize, durableSize, (byte) 0);
+          }
+          durableSize = volatileSize;
+        }
       }
-      durableSize = volatileSize;
     }
 
     private void restoreDurable() {
