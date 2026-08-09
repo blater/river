@@ -33,7 +33,8 @@ public final class RiverBankStreamingGenerator {
         + ";accounts=" + scale.accountCount()
         + ";transactions=" + scale.transactionCount()
         + ";hot_accounts=" + scale.hotAccountCount()
-        + ";hot_selection_rate=80_percent;timestamps=epoch_millis_2020_2024"
+        + ";hot_selection_rate=80_percent"
+        + ";timestamps=monotonic_uniform_epoch_millis_2020_2024"
         + ";amount_minor=1..250000;external_dataset=none";
     StreamingWorkloadArtifact accounts = new StreamingWorkloadArtifact(
         "riverbank_accounts",
@@ -63,6 +64,7 @@ public final class RiverBankStreamingGenerator {
         && scale.branchCount() <= MAX_BRANCHES
         && scale.accountCount() >= 2
         && scale.accountCount() <= MAX_ACCOUNTS
+        && scale.accountCount() % 2 == 0
         && scale.branchCount() <= scale.accountCount()
         && scale.transactionCount() >= 1
         && scale.transactionCount() <= MAX_TRANSACTIONS
@@ -134,7 +136,7 @@ public final class RiverBankStreamingGenerator {
         }
         tsv.appendLong(sequence + 1);
         tsv.append('\t');
-        tsv.appendLong(EPOCH_MILLIS + sequence % FIVE_YEARS_MILLIS);
+        tsv.appendLong(transactionTimestamp(sequence, scale.transactionCount()));
         tsv.append('\t');
         tsv.appendAscii(TYPES[type]);
         tsv.append('\t');
@@ -171,6 +173,15 @@ public final class RiverBankStreamingGenerator {
     boolean hot = DeterministicValues.bounded(seed, sequence, lane, 100) < 80;
     int bound = hot ? scale.hotAccountCount() : scale.accountCount();
     return 1 + DeterministicValues.bounded(seed, sequence, lane + 20, bound);
+  }
+
+  private static long transactionTimestamp(long sequence, long transactionCount) {
+    if (transactionCount == 1) {
+      return EPOCH_MILLIS;
+    }
+    double fraction = (double) sequence / (double) (transactionCount - 1);
+    long offset = (long) (fraction * (FIVE_YEARS_MILLIS - 1));
+    return EPOCH_MILLIS + offset;
   }
 
   private static StreamingGenerationResult completed(

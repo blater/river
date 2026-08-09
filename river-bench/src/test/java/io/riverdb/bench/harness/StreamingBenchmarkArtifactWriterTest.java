@@ -101,15 +101,102 @@ final class StreamingBenchmarkArtifactWriterTest {
         "schema=riverbank_v2;table=unstable;external_dataset=none",
         (output, scratch) -> {
           byte value = passes.getAndIncrement() == 0 ? (byte) 'a' : (byte) 'b';
-          output.write(new byte[] {value, '\n'});
+          output.write(new byte[] {'h', '\n', value, '\n'});
           return new StreamingGenerationResult(
-              StreamingGenerationStatus.GENERATED, 1, 2);
+              StreamingGenerationStatus.GENERATED, 1, 4);
         });
 
     assertThrows(IOException.class, () -> new BenchmarkArtifactWriter().writeStreaming(
         directory, "local-streaming-unstable", Instant.EPOCH, "commit",
         List.of(unstable), List.of(sample(unstable.name())), 1_000_000, 3));
     assertFalse(Files.exists(directory.resolve("local-streaming-unstable")));
+  }
+
+  @Test
+  void independentlyRejectsLyingEmitterCounts(@TempDir Path directory) throws IOException {
+    StreamingWorkloadArtifact wrongRows = lyingArtifact("riverbank_wrong_rows", 1, 4,
+        new byte[] {'h', '\n', 'a', '\n', 'b', '\n'});
+    StreamingWorkloadArtifact wrongBytes = lyingArtifact("riverbank_wrong_bytes", 1, 99,
+        new byte[] {'h', '\n', 'a', '\n'});
+    BenchmarkArtifactWriter writer = new BenchmarkArtifactWriter();
+
+    ArtifactWriteResult rows = writer.writeStreaming(
+        directory, "local-lying-rows", Instant.EPOCH, "commit", List.of(wrongRows),
+        List.of(sample(wrongRows.name())), 1_000_000, 3);
+    ArtifactWriteResult bytes = writer.writeStreaming(
+        directory, "local-lying-bytes", Instant.EPOCH, "commit", List.of(wrongBytes),
+        List.of(sample(wrongBytes.name())), 1_000_000, 3);
+
+    assertEquals(ArtifactWriteStatus.WORKLOAD_GENERATION_FAILED, rows.status());
+    assertEquals(ArtifactWriteStatus.WORKLOAD_GENERATION_FAILED, bytes.status());
+    assertFalse(Files.exists(directory.resolve("local-lying-rows")));
+    assertFalse(Files.exists(directory.resolve("local-lying-bytes")));
+  }
+
+  @Test
+  void independentlyRejectsSecondPassCountLie(@TempDir Path directory) {
+    AtomicInteger passes = new AtomicInteger();
+    StreamingWorkloadArtifact unstable = new StreamingWorkloadArtifact(
+        "riverbank_second_pass_lie", 2, 1, 1, "riverbank.second_pass_lie.v2",
+        "schema=riverbank_v2;table=second_pass_lie;external_dataset=none",
+        (output, scratch) -> {
+          output.write(new byte[] {'h', '\n', 'a', '\n'});
+          int pass = passes.getAndIncrement();
+          return new StreamingGenerationResult(
+              StreamingGenerationStatus.GENERATED, pass == 0 ? 1 : 2, 4);
+        });
+
+    assertThrows(IOException.class, () -> new BenchmarkArtifactWriter().writeStreaming(
+        directory, "local-second-pass-lie", Instant.EPOCH, "commit", List.of(unstable),
+        List.of(sample(unstable.name())), 1_000_000, 3));
+    assertFalse(Files.exists(directory.resolve("local-second-pass-lie")));
+  }
+
+  @Test
+  void rejectsInvalidOrExistingTargetBeforeInvokingEmitter(@TempDir Path directory)
+      throws IOException {
+    AtomicInteger calls = new AtomicInteger();
+    StreamingWorkloadArtifact artifact = new StreamingWorkloadArtifact(
+        "riverbank_probe", 2, 1, 1, "riverbank.probe.v2",
+        "schema=riverbank_v2;table=probe;external_dataset=none",
+        (output, scratch) -> {
+          calls.incrementAndGet();
+          output.write(new byte[] {'h', '\n', 'a', '\n'});
+          return new StreamingGenerationResult(StreamingGenerationStatus.GENERATED, 1, 4);
+        });
+    Files.createDirectory(directory.resolve("local-existing-target"));
+    BenchmarkArtifactWriter writer = new BenchmarkArtifactWriter();
+
+    ArtifactWriteResult invalid = writer.writeStreaming(
+        directory, "../escape", Instant.EPOCH, "commit", List.of(artifact),
+        List.of(sample(artifact.name())), 1_000_000, 3);
+    ArtifactWriteResult existing = writer.writeStreaming(
+        directory, "local-existing-target", Instant.EPOCH, "commit", List.of(artifact),
+        List.of(sample(artifact.name())), 1_000_000, 3);
+
+    assertEquals(ArtifactWriteStatus.INVALID_DOCUMENT, invalid.status());
+    assertEquals(ArtifactWriteStatus.TARGET_EXISTS, existing.status());
+    assertEquals(0, calls.get());
+  }
+
+  private static StreamingWorkloadArtifact lyingArtifact(
+      String name,
+      long rows,
+      long bytes,
+      byte[] payload) {
+    return new StreamingWorkloadArtifact(
+        name,
+        2,
+        1,
+        1,
+        "riverbank." + name.substring("riverbank_".length()) + ".v2",
+        "schema=riverbank_v2;table=" + name.substring("riverbank_".length())
+            + ";external_dataset=none",
+        (output, scratch) -> {
+          output.write(payload);
+          return new StreamingGenerationResult(
+              StreamingGenerationStatus.GENERATED, rows, bytes);
+        });
   }
 
   private static SampleArtifact sample(String workload) {

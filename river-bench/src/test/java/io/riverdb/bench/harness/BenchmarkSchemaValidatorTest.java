@@ -90,4 +90,95 @@ final class BenchmarkSchemaValidatorTest {
     assertFalse(validation.valid());
     assertTrue(validation.errors().size() >= 5, validation.errors().toString());
   }
+
+  @Test
+  void validatesStreamingManifestIdentitySemanticsWithoutChangingV1() {
+    String valid = validStreamingManifest();
+
+    assertTrue(validator.validate(BenchmarkSchemaValidator.STREAMING_MANIFEST, valid).valid());
+    assertFalse(validator.validate(BenchmarkSchemaValidator.STREAMING_MANIFEST,
+        valid.replace("riverbank_transactions\"", "riverbank_accounts\"")).valid());
+    assertFalse(validator.validate(BenchmarkSchemaValidator.STREAMING_MANIFEST,
+        valid.replace("riverbank.transactions.v2", "riverpapers.transactions.v2")).valid());
+    assertFalse(validator.validate(BenchmarkSchemaValidator.STREAMING_MANIFEST,
+        valid.replace("table=transactions", "table=accounts")).valid());
+    assertFalse(validator.validate(BenchmarkSchemaValidator.STREAMING_MANIFEST,
+        valid.replace(
+            "\"name\": \"riverbank_transactions\", \"version\": 2, \"seed\": 42",
+            "\"name\": \"riverbank_transactions\", \"version\": 2, \"seed\": 43"))
+        .valid());
+    assertFalse(validator.validate(BenchmarkSchemaValidator.MANIFEST,
+        valid.replace("\"schema_version\": 2", "\"schema_version\": 1")).valid());
+  }
+
+  @Test
+  void rejectsDuplicateStreamingResultWorkloadIdentity() {
+    SchemaValidation validation = validator.validate(
+        BenchmarkSchemaValidator.STREAMING_RESULT, """
+        {
+          "schema_version": 2,
+          "artifact_type": "result",
+          "evidence_class": "local_smoke",
+          "run_id": "local-streaming-result",
+          "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "samples_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "workload_artifacts": [
+            {
+              "name": "riverbank_accounts", "path": "riverbank_accounts-v2.tsv",
+              "record_count": 1, "byte_count": 10,
+              "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            {
+              "name": "riverbank_accounts", "path": "riverbank_accounts-v2.tsv",
+              "record_count": 1, "byte_count": 10,
+              "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          ],
+          "sample_count": 1,
+          "status": "developer_smoke_not_promotion_evidence"
+        }
+        """);
+
+    assertFalse(validation.valid());
+    assertTrue(validation.errors().stream()
+        .anyMatch(error -> error.contains("duplicate workload name")));
+  }
+
+  private static String validStreamingManifest() {
+    return """
+        {
+          "schema_version": 2,
+          "artifact_type": "manifest",
+          "evidence_class": "local_smoke",
+          "run_id": "local-streaming-test",
+          "created_at": "2026-08-09T14:22:00Z",
+          "river_commit": "test",
+          "environment": {
+            "os": "test", "architecture": "test", "java_runtime": "25",
+            "java_vm": "test", "available_processors": 1
+          },
+          "workloads": [
+            {
+              "name": "riverbank_accounts", "version": 2, "seed": 42,
+              "record_count": 10, "byte_count": 100,
+              "schema_id": "riverbank.accounts.v2",
+              "config": "schema=riverbank_v2;scale=test;table=accounts",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            {
+              "name": "riverbank_transactions", "version": 2, "seed": 42,
+              "record_count": 20, "byte_count": 200,
+              "schema_id": "riverbank.transactions.v2",
+              "config": "schema=riverbank_v2;scale=test;table=transactions",
+              "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }
+          ],
+          "measurement": {
+            "clock": "synthetic_monotonic_smoke", "highest_trackable_ns": 1000,
+            "significant_digits": 3, "modes": ["closed_loop", "open_loop"]
+          },
+          "canonical_gaps": ["not promotion evidence"]
+        }
+        """;
+  }
 }

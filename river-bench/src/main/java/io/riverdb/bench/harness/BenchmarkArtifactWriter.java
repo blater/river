@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 /**
@@ -43,6 +44,7 @@ public final class BenchmarkArtifactWriter {
   private static final String CLAIM_MARKER = ".river-bench-claim-v1";
   private static final String PUBLISHED_DIRECTORY = "artifacts";
   private static final int STREAMING_SCRATCH_BYTES = 64 * 1024;
+  private static final Pattern RUN_ID = Pattern.compile("^[a-z0-9][a-z0-9._-]{7,127}$");
 
   private final BenchmarkSchemaValidator validator = new BenchmarkSchemaValidator();
   private final ArtifactWriteFailure failure;
@@ -98,6 +100,10 @@ public final class BenchmarkArtifactWriter {
       List<SampleArtifact> samples,
       long highestTrackableNanos,
       int significantDigits) throws IOException {
+    ArtifactWriteResult target = advisoryTarget(outputRoot, runId);
+    if (target != null) {
+      return target;
+    }
     PreparedWorkloads preparedWorkloads = prepareStreamingWorkloads(workloads);
     return writePrepared(
         outputRoot,
@@ -233,7 +239,7 @@ public final class BenchmarkArtifactWriter {
       verifyFile(manifestPath, WorkloadChecksums.sha256(manifestBytes));
       verifyFile(samplesPath, WorkloadChecksums.sha256(sampleBytes));
       for (PreparedWorkload workload : workloads) {
-        verifyFile(staging.resolve(workload.fileName()), workload.sha256());
+        verifyWorkloadFile(staging.resolve(workload.fileName()), workload);
       }
 
       // Emit result.json last so the staged tree can be validated from its root document.
@@ -330,12 +336,16 @@ public final class BenchmarkArtifactWriter {
         return new PreparedWorkloads(ArtifactWriteStatus.DUPLICATE_OUTPUT_NAME, List.of());
       }
       MessageDigest digest = WorkloadChecksums.sha256Digest();
+      CountingOutputStream counted = new CountingOutputStream(OutputStream.nullOutputStream());
       StreamingGenerationResult generation;
-      try (DigestOutputStream output = new DigestOutputStream(OutputStream.nullOutputStream(), digest)) {
+      try (DigestOutputStream output = new DigestOutputStream(counted, digest)) {
         generation = workload.writeTo(output, new byte[STREAMING_SCRATCH_BYTES]);
       }
+      long observedRows = counted.dataRows();
       if (generation.status() != StreamingGenerationStatus.GENERATED
-          || generation.rowCount() != workload.recordCount()) {
+          || generation.rowCount() != workload.recordCount()
+          || generation.rowCount() != observedRows
+          || generation.byteCount() != counted.byteCount()) {
         return new PreparedWorkloads(
             ArtifactWriteStatus.WORKLOAD_GENERATION_FAILED, List.of());
       }
@@ -351,16 +361,27 @@ public final class BenchmarkArtifactWriter {
           fileName,
           output -> {
             MessageDigest stagedDigest = WorkloadChecksums.sha256Digest();
+            CountingOutputStream stagedCount = new CountingOutputStream(
+                new NonClosingOutputStream(output));
             StreamingGenerationResult staged;
             try (DigestOutputStream digestOutput = new DigestOutputStream(
-                new NonClosingOutputStream(output), stagedDigest)) {
+                stagedCount, stagedDigest)) {
               staged = workload.writeTo(
                   digestOutput, new byte[STREAMING_SCRATCH_BYTES]);
             }
+            StreamingGenerationStatus status = staged.status();
+            if (status == StreamingGenerationStatus.GENERATED
+                && staged.rowCount() != stagedCount.dataRows()) {
+              status = StreamingGenerationStatus.ROW_COUNT_MISMATCH;
+            }
+            if (status == StreamingGenerationStatus.GENERATED
+                && staged.byteCount() != stagedCount.byteCount()) {
+              status = StreamingGenerationStatus.BYTE_COUNT_MISMATCH;
+            }
             return new ContentWrite(
-                staged.status(),
-                staged.rowCount(),
-                staged.byteCount(),
+                status,
+                stagedCount.dataRows(),
+                stagedCount.byteCount(),
                 WorkloadChecksums.hex(stagedDigest.digest()));
           },
           sha256));
@@ -417,6 +438,9 @@ public final class BenchmarkArtifactWriter {
     gaps.add("provenance clearance before any optional external dataset use");
     if (schemaVersion >= 2) {
       gaps.add("reviewed scale-to-hardware sizing and executable SQL workload drivers");
+      gaps.add("full canonical RiverBank tables operations mutations and expected aggregates");
+      gaps.add("RiverPapers revision histories and executable index query corpus");
+      gaps.add("dedicated allocation and generated-hot-path bytecode evidence");
     } else {
       gaps.add("streaming canonical-scale workload generators and adapters");
     }
@@ -509,20 +533,45 @@ public final class BenchmarkArtifactWriter {
   }
 
   private static void verifyFile(Path path, String expectedSha256) throws IOException {
+    ObservedFile observed = observeFile(path);
+    if (!expectedSha256.equals(observed.sha256())) {
+      throw new IOException("staged artifact digest mismatch: " + path.getFileName());
+    }
+  }
+
+  private static void verifyWorkloadFile(Path path, PreparedWorkload workload)
+      throws IOException {
+    ObservedFile observed = observeFile(path);
+    if (observed.byteCount() != workload.byteCount()
+        || observed.dataRows() != workload.recordCount()
+        || !observed.sha256().equals(workload.sha256())) {
+      throw new IOException("staged workload observation mismatch: " + path.getFileName());
+    }
+  }
+
+  private static ObservedFile observeFile(Path path) throws IOException {
     MessageDigest digest = WorkloadChecksums.sha256Digest();
+    long bytes = 0;
+    long lineFeeds = 0;
     try (InputStream input = Files.newInputStream(path)) {
       byte[] buffer = new byte[STREAMING_SCRATCH_BYTES];
       int length;
       while ((length = input.read(buffer)) >= 0) {
         if (length > 0) {
           digest.update(buffer, 0, length);
+          bytes = Math.addExact(bytes, length);
+          for (int index = 0; index < length; index++) {
+            if (buffer[index] == '\n') {
+              lineFeeds = Math.addExact(lineFeeds, 1);
+            }
+          }
         }
       }
     }
-    String actual = WorkloadChecksums.hex(digest.digest());
-    if (!expectedSha256.equals(actual)) {
-      throw new IOException("staged artifact digest mismatch: " + path.getFileName());
-    }
+    return new ObservedFile(
+        bytes,
+        lineFeeds < 1 ? -1 : lineFeeds - 1,
+        WorkloadChecksums.hex(digest.digest()));
   }
 
   private static void verifyResultReferences(Path staging, byte[] resultBytes)
@@ -666,6 +715,7 @@ public final class BenchmarkArtifactWriter {
     if (content.status() != StreamingGenerationStatus.GENERATED
         || content.rowCount() != workload.recordCount()
         || content.byteCount() != workload.byteCount()
+        || Files.size(path) != workload.byteCount()
         || !content.sha256().equals(workload.sha256())) {
       throw new IOException("streamed workload changed between preflight and staging: "
           + workload.name());
@@ -702,6 +752,9 @@ public final class BenchmarkArtifactWriter {
       String sha256) {
   }
 
+  private record ObservedFile(long byteCount, long dataRows, String sha256) {
+  }
+
   private static final class NonClosingOutputStream extends OutputStream {
     private final OutputStream output;
 
@@ -723,5 +776,66 @@ public final class BenchmarkArtifactWriter {
     public void flush() throws IOException {
       output.flush();
     }
+  }
+
+  private static final class CountingOutputStream extends OutputStream {
+    private final OutputStream output;
+    private long byteCount;
+    private long lineFeeds;
+
+    private CountingOutputStream(OutputStream output) {
+      this.output = output;
+    }
+
+    @Override
+    public void write(int value) throws IOException {
+      output.write(value);
+      byteCount = Math.addExact(byteCount, 1);
+      if ((value & 0xff) == '\n') {
+        lineFeeds = Math.addExact(lineFeeds, 1);
+      }
+    }
+
+    @Override
+    public void write(byte[] bytes, int offset, int length) throws IOException {
+      output.write(bytes, offset, length);
+      byteCount = Math.addExact(byteCount, length);
+      for (int index = offset; index < offset + length; index++) {
+        if (bytes[index] == '\n') {
+          lineFeeds = Math.addExact(lineFeeds, 1);
+        }
+      }
+    }
+
+    @Override
+    public void flush() throws IOException {
+      output.flush();
+    }
+
+    long byteCount() {
+      return byteCount;
+    }
+
+    long dataRows() {
+      return lineFeeds < 1 ? -1 : lineFeeds - 1;
+    }
+  }
+
+  private static ArtifactWriteResult advisoryTarget(Path outputRoot, String runId) {
+    if (outputRoot == null || runId == null || !RUN_ID.matcher(runId).matches()) {
+      return invalid(new SchemaValidation(false, List.of("$: invalid output root or run id")));
+    }
+    Path normalizedRoot = outputRoot.toAbsolutePath().normalize();
+    Path claimDirectory = normalizedRoot.resolve(runId).normalize();
+    if (!normalizedRoot.equals(claimDirectory.getParent())) {
+      return invalid(new SchemaValidation(false, List.of("$: run path escapes output root")));
+    }
+    if (Files.exists(claimDirectory)) {
+      return new ArtifactWriteResult(
+          ArtifactWriteStatus.TARGET_EXISTS,
+          claimDirectory.resolve(PUBLISHED_DIRECTORY),
+          null);
+    }
+    return null;
   }
 }

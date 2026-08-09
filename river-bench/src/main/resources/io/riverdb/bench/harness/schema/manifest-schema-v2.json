@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://riverdb.io/schemas/benchmark/manifest-v2.json",
+  "$comment": "Partial developer-harness workload slice; not canonical P05 evidence.",
   "type": "object",
   "additionalProperties": false,
   "required": [

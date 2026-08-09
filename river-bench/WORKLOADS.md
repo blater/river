@@ -2,7 +2,8 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: schema v2 developer harness; not a P05 baseline or production format
+Status: partial schema v2 developer-harness slice; not the full canonical
+workloads, a P05 baseline, or a production format
 
 These are River-owned synthetic schemas. They do not copy, adapt, download, or
 claim to reproduce either external dataset discussed in the performance plan.
@@ -22,7 +23,7 @@ Generated text contains no tab, CR, or LF. Integer ranges below are inclusive.
 | --- | --- |
 | `account_id` | Positive 64-bit integer; unique primary key |
 | `branch_id` | Positive integer in the configured branch range |
-| `customer_id` | Positive 64-bit integer; two accounts per generated customer key |
+| `customer_id` | Positive 64-bit integer; exactly two accounts per generated customer key |
 | `opened_at_epoch_ms` | Valid instant in 2020-2024, UTC epoch milliseconds |
 | `status` | `active` or `frozen` |
 | `balance_minor` | Non-negative minor currency units; initial workload balance |
@@ -81,6 +82,12 @@ category/date, nullable, prefix, join, scan, sort, spill, and indexing workloads
 The token stream is data for scans and future supported operators, not a claim
 of full-text-index support.
 
+This partial slice does not yet generate RiverBank branches, customers, cards,
+loans, payments, card transactions, employees, support tickets, executable
+operation mixes, expected aggregates, mutations, or outcomes. It also does not
+generate RiverPapers revision histories or executable SQL/index corpora. These
+remain explicit canonical P05 gaps rather than being implied by the v2 name.
+
 ## Determinism and resource bounds
 
 Every value is a pure function of the generator version, signed 64-bit seed,
@@ -88,8 +95,15 @@ row sequence, and a stable value lane. Output is independent of table emission
 order and scratch-buffer size. Generation accepts one caller-owned 64 byte to
 1 MiB scratch array, emits bounded chunks, manually encodes numbers, and reuses
 static token bytes. It retains no row collection or cardinality-sized state.
+That design avoids intentional per-row model construction, but this slice does
+not present measured zero-allocation evidence. Dedicated allocation profiling
+and generated-path bytecode inspection remain required before an allocation
+budget or hot-path claim.
 
 The public scale records reject zero, inconsistent, and out-of-policy counts.
+RiverBank requires an even account count so its two-accounts-per-customer
+invariant is exact.
+
 RiverBank currently caps branches at 100000, accounts at 10000000, and
 transactions at 2000000000. RiverPapers caps documents at 100000000, authors at
 10000000, institutions at 1000000, and abstract width at 4096 tokens. Derived
@@ -100,3 +114,9 @@ digest-only sink. The second writes to owned staging. A change in status, rows,
 bytes, or checksum between passes aborts publication and cleans owned staging.
 Persisted files are then streamed through SHA-256 verification before the
 existing create-once atomic directory install.
+
+That install provides atomic namespace visibility, not machine-crash
+durability; the harness does not force all payloads and parent directories. A
+crash can leave a marker-only run claim. The manual recovery proof and procedure
+are documented in [README.md](README.md); automatic claim recovery is omitted
+because a local process cannot safely infer that a concurrent owner is dead.

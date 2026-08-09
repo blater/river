@@ -12,9 +12,10 @@ high-water diagnostic rather than a queue correctness invariant.
 It also contains the local P05 harness infrastructure: versioned manifest,
 result, and sample schemas; the original in-memory `riverbank_tiny` and
 `riverpapers_tiny` schema-v1 fixtures; bounded HdrHistogram latency accounting;
-and atomically published local JSON/TSV artifacts. Schema v2 adds bounded-memory,
-scale-controlled generated RiverBank and RiverPapers relational tables. This is
-functional evidence for the harness, not a P05 baseline.
+and atomically published local JSON/TSV artifacts. Schema v2 adds a partial,
+bounded-memory, scale-controlled RiverBank and RiverPapers relational core. This
+is functional evidence for the harness, not the full canonical workloads or a
+P05 baseline.
 
 ## Generated relational workloads
 
@@ -46,16 +47,25 @@ do not claim that River implements a full-text index.
 Both generators are stateless by row: seed, row sequence, and value lane fully
 determine each value. The output is invariant across caller scratch-buffer
 sizes and table generation order. Generation uses a caller-supplied bounded
-byte array, manual numeric encoding, and static token bytes rather than building
-per-row objects. Publication performs a digest-only preflight and a second
-streaming pass, then verifies row count, byte count, SHA-256, and the persisted
-file before the existing create-once atomic tree install. Memory is bounded by
-artifact metadata and the 64 KiB publication scratch buffer, not row count.
+byte array, manual numeric encoding, and static token bytes, and does not
+intentionally construct a row model. Publication performs a digest-only
+preflight and a second streaming pass, then independently verifies row count,
+byte count, SHA-256, and the persisted file before the existing create-once
+atomic tree install. Retained generator state is bounded by artifact metadata
+and the 64 KiB publication scratch buffer, not row count. This is an
+implementation property, not a measured zero-allocation claim: dedicated
+allocation profiles and generated-path bytecode evidence remain required.
 
 Scale labels record intent; this slice deliberately does not assign `cache`,
 `memory-pressure`, `storage`, or `history` cardinalities before P05 hardware and
 buffer-pool sizing are accepted. No external dataset is downloaded or mimicked.
 Kaggle adapters and comparison claims remain provenance gated.
+
+Canonical RiverBank still requires branches, customers, cards, loans, payments,
+card transactions, employees, support tickets, executable transaction mixes,
+expected aggregates, mutations, and failure/retry outcomes. Canonical
+RiverPapers still requires document revision histories and executable SQL/index
+corpora. Those gaps remain in every v2 manifest and P05 remains active.
 
 The current mechanisms cover:
 
@@ -133,3 +143,13 @@ Run `:river-bench:workloadSmoke` for the developer-only schema-v2 streaming
 check. It generates the small declared RiverBank/RiverPapers scale, publishes a
 create-once v2 artifact tree, and makes no throughput, allocation-budget, P05,
 or G0 claim.
+
+The atomic directory move makes a completed tree visible as one namespace
+operation; it is not a machine-crash durability claim because this harness does
+not force every file and parent directory. A crash after the run-ID claim but
+before the move may leave a marker-only claim. Recovery is deliberately manual:
+an operator first proves no writer for that run ID is alive, `artifacts/` is
+absent, the marker is a regular file with the exact run ID, and the claim
+contains only that marker, then removes the marker and empty claim before retry.
+The harness does not automatically recover claims because it cannot prove that
+a concurrent owner is dead.

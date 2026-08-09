@@ -10,6 +10,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.YearMonth;
+import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -47,12 +50,27 @@ final class StreamingWorkloadGeneratorTest {
     Set<String> idempotencyKeys = new HashSet<>();
     int hotReferences = 0;
     int presentReferences = 0;
+    long previousTimestamp = Long.MIN_VALUE;
+    long minimumGap = Long.MAX_VALUE;
+    long maximumGap = Long.MIN_VALUE;
+    Set<Integer> years = new HashSet<>();
+    Set<YearMonth> months = new HashSet<>();
 
     assertEquals(scale.accountCount(), accountIds.size());
     for (String row : dataRows(transactions)) {
       String[] fields = row.split("\t", -1);
       long timestamp = Long.parseLong(fields[1]);
       assertTrue(timestamp >= 1_577_836_800_000L && timestamp < 1_735_689_600_000L);
+      if (previousTimestamp != Long.MIN_VALUE) {
+        long gap = timestamp - previousTimestamp;
+        assertTrue(gap >= 0);
+        minimumGap = Math.min(minimumGap, gap);
+        maximumGap = Math.max(maximumGap, gap);
+      }
+      previousTimestamp = timestamp;
+      var dateTime = Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC);
+      years.add(dateTime.getYear());
+      months.add(YearMonth.from(dateTime));
       assertTrue(Set.of("transfer", "deposit", "withdrawal", "card_authorize", "card_reverse")
           .contains(fields[2]));
       for (int field : new int[] {3, 4}) {
@@ -71,6 +89,14 @@ final class StreamingWorkloadGeneratorTest {
     }
     assertTrue(hotReferences * 100L / presentReferences >= 70);
     assertTrue(hotReferences * 100L / presentReferences <= 90);
+    assertEquals(Set.of(2020, 2021, 2022, 2023, 2024), years);
+    assertEquals(60, months.size());
+    assertTrue(maximumGap - minimumGap <= 1);
+    String[] transactionRows = dataRows(transactions);
+    assertEquals(1_577_836_800_000L,
+        Long.parseLong(transactionRows[0].split("\t", -1)[1]));
+    assertEquals(1_735_689_599_999L,
+        Long.parseLong(transactionRows[transactionRows.length - 1].split("\t", -1)[1]));
   }
 
   @Test
@@ -137,7 +163,7 @@ final class StreamingWorkloadGeneratorTest {
     expected.put("riverbank_accounts", new PinnedArtifact(
         128, 5_062, "91d1869c12ef8d59ee77fb78673c7f18823c56742467ccb1953aa268616814bf"));
     expected.put("riverbank_transactions", new PinnedArtifact(
-        512, 30_679, "1e9c34738a056f232a10eca33732492f0801def4956eb5b266805c9cc5b63fc8"));
+        512, 30_679, "0e1f3bbec274479f68dc055972c92a4628bbb8152099376b34a7215b6a407e0b"));
     expected.put("riverpapers_authors", new PinnedArtifact(
         48, 1_028, "6105504fe93e035cc7bfe39655c766b3dd563f742bb201fcf4ffa7edf3fddd1c"));
     expected.put("riverpapers_documents", new PinnedArtifact(
@@ -165,6 +191,14 @@ final class StreamingWorkloadGeneratorTest {
     assertEquals(StreamingWorkloadPlan.Status.INVALID_SCALE,
         bank.plan(1, new RiverBankScale(
             "over", 1, RiverBankStreamingGenerator.MAX_ACCOUNTS + 1, 1, 1)).status());
+    assertEquals(StreamingWorkloadPlan.Status.INVALID_SCALE,
+        bank.plan(1, new RiverBankScale("odd", 1, 3, 1, 1)).status());
+    assertEquals(StreamingWorkloadPlan.Status.PLANNED,
+        bank.plan(1, new RiverBankScale("minimum", 1, 2, 1, 1)).status());
+    assertEquals(StreamingWorkloadPlan.Status.PLANNED,
+        bank.plan(1, new RiverBankScale(
+            "maximum_accounts", 1, RiverBankStreamingGenerator.MAX_ACCOUNTS, 1, 1))
+        .status());
     assertEquals(StreamingWorkloadPlan.Status.INVALID_SCALE,
         papers.plan(1, new RiverPapersScale("zero", 0, 0, 0, 0, 0)).status());
     assertEquals(StreamingWorkloadPlan.Status.INVALID_SCALE,

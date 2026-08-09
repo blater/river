@@ -64,6 +64,8 @@ public final class BenchmarkSchemaValidator {
     if ((SAMPLE.equals(schemaName) || STREAMING_SAMPLE.equals(schemaName))
         && document.isObject()) {
       validateSampleSemantics(document, errors);
+    } else if (STREAMING_MANIFEST.equals(schemaName) && document.isObject()) {
+      validateStreamingManifestSemantics(document, errors);
     } else if ((RESULT.equals(schemaName) || STREAMING_RESULT.equals(schemaName))
         && document.isObject()) {
       validateResultSemantics(document, errors);
@@ -241,14 +243,74 @@ public final class BenchmarkSchemaValidator {
 
   private static void validateResultSemantics(JsonNode result, List<String> errors) {
     Set<String> paths = new HashSet<>();
+    Set<String> names = new HashSet<>();
     for (JsonNode reference : result.path("workload_artifacts")) {
       String name = reference.path("name").textValue();
       String path = reference.path("path").textValue();
+      if (name != null && !names.add(name)) {
+        errors.add("$.workload_artifacts: duplicate workload name " + name);
+      }
       if (name != null && path != null && !path.startsWith(name + "-v")) {
         errors.add("$.workload_artifacts: path does not identify its named workload");
       }
       if (path != null && !paths.add(path)) {
         errors.add("$.workload_artifacts: duplicate output path " + path);
+      }
+    }
+  }
+
+  private static void validateStreamingManifestSemantics(
+      JsonNode manifest,
+      List<String> errors) {
+    Set<String> names = new HashSet<>();
+    Map<String, Long> familySeeds = new HashMap<>();
+    Map<String, String> familyConfigs = new HashMap<>();
+    for (JsonNode workload : manifest.path("workloads")) {
+      String name = workload.path("name").textValue();
+      String schemaId = workload.path("schema_id").textValue();
+      String config = workload.path("config").textValue();
+      if (name == null || !names.add(name)) {
+        errors.add("$.workloads: duplicate or absent workload name " + name);
+        continue;
+      }
+      int separator = name.indexOf('_');
+      if (separator < 1) {
+        errors.add("$.workloads: workload name has no family " + name);
+        continue;
+      }
+      String family = name.substring(0, separator);
+      String table = name.substring(separator + 1);
+      String expectedSchema = family + '.' + table + ".v2";
+      if (!expectedSchema.equals(schemaId)) {
+        errors.add("$.workloads: schema_id does not match workload name " + name);
+      }
+      String configPrefix = "schema=" + family + "_v2;";
+      if (config == null || !config.startsWith(configPrefix)) {
+        errors.add("$.workloads: config family does not match workload name " + name);
+        continue;
+      }
+      int tableOffset = config.indexOf(";table=");
+      if (tableOffset < 0) {
+        errors.add("$.workloads: config has no table identity " + name);
+        continue;
+      }
+      int tableStart = tableOffset + ";table=".length();
+      int tableEnd = config.indexOf(';', tableStart);
+      String configuredTable = tableEnd < 0
+          ? config.substring(tableStart)
+          : config.substring(tableStart, tableEnd);
+      if (!table.equals(configuredTable)) {
+        errors.add("$.workloads: config table does not match workload name " + name);
+      }
+      String commonConfig = tableOffset < 0 ? config : config.substring(0, tableOffset);
+      long seed = workload.path("seed").asLong();
+      Long priorSeed = familySeeds.putIfAbsent(family, seed);
+      if (priorSeed != null && priorSeed != seed) {
+        errors.add("$.workloads: inconsistent seed for family " + family);
+      }
+      String priorConfig = familyConfigs.putIfAbsent(family, commonConfig);
+      if (priorConfig != null && !priorConfig.equals(commonConfig)) {
+        errors.add("$.workloads: inconsistent common config for family " + family);
       }
     }
   }
