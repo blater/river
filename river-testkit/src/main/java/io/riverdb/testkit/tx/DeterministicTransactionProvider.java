@@ -31,6 +31,8 @@ public final class DeterministicTransactionProvider
   private static final byte VERSION_FREE = 0;
   private static final byte VERSION_LIVE = 1;
   private static final byte VERSION_ROLLED_BACK = 2;
+  private static final TransactionState[] TRANSACTION_STATE_VALUES = TransactionState.values();
+  private static final LockMode[] LOCK_MODE_VALUES = LockMode.values();
 
   private final long databaseIncarnationHigh;
   private final long databaseIncarnationLow;
@@ -62,6 +64,7 @@ public final class DeterministicTransactionProvider
   private final long[] lockResourceLow;
   private final long[] lockTransactionIds;
   private final byte[] lockModes;
+  private final byte[] lockScopes;
   private final long[] lockCapabilityTokens;
 
   private long nextVersionAddress = 1;
@@ -110,6 +113,7 @@ public final class DeterministicTransactionProvider
     lockResourceLow = new long[boundedLocks];
     lockTransactionIds = new long[boundedLocks];
     lockModes = new byte[boundedLocks];
+    lockScopes = new byte[boundedLocks];
     lockCapabilityTokens = new long[boundedLocks];
   }
 
@@ -216,6 +220,9 @@ public final class DeterministicTransactionProvider
         view.databaseIncarnationHigh(), view.databaseIncarnationLow())) {
       return detail.set(StatusCode.CONFLICT).code();
     }
+    if (view.transactionId() == 0) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
     int slot = transactionSlot(view.transactionId());
     if (slot < 0) {
       if (view.state() != TransactionState.ACTIVE) {
@@ -229,6 +236,10 @@ public final class DeterministicTransactionProvider
     } else {
       TransactionState current = transactionState(slot);
       if (!allowedTransition(current, view.state())) {
+        return detail.set(StatusCode.CONFLICT).code();
+      }
+      if (isTerminal(current)
+          && !sameRecoveryView(slot, view)) {
         return detail.set(StatusCode.CONFLICT).code();
       }
       if (lineageRegresses(slot, view)) {
@@ -264,6 +275,9 @@ public final class DeterministicTransactionProvider
     if (!matchesDatabase(databaseHigh, databaseLow)) {
       return detail.set(StatusCode.CONFLICT).code();
     }
+    if (transactionId == 0) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
     int slot = transactionSlot(transactionId);
     if (slot < 0) {
       return detail.set(StatusCode.RETRY).code();
@@ -287,6 +301,9 @@ public final class DeterministicTransactionProvider
     detail.reset();
     result.reset();
     if (!matchesDatabase(databaseHigh, databaseLow)) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    if (transactionId == 0) {
       return detail.set(StatusCode.CONFLICT).code();
     }
     int slot = transactionSlot(transactionId);
@@ -406,8 +423,9 @@ public final class DeterministicTransactionProvider
       if (lockActive[slot]
           && lockResourceHigh[slot] == request.resourceHigh()
           && lockResourceLow[slot] == request.resourceLow()
+          && lockScopes[slot] == (byte) request.scope().ordinal()
           && lockTransactionIds[slot] != context.transactionId()) {
-        LockMode existing = LockMode.values()[lockModes[slot]];
+        LockMode existing = LOCK_MODE_VALUES[lockModes[slot]];
         if (request.mode().conflictsWith(existing) || existing.conflictsWith(request.mode())) {
           return detail.set(StatusCode.RETRY).code();
         }
@@ -423,6 +441,7 @@ public final class DeterministicTransactionProvider
     lockResourceLow[slot] = request.resourceLow();
     lockTransactionIds[slot] = context.transactionId();
     lockModes[slot] = (byte) request.mode().ordinal();
+    lockScopes[slot] = (byte) request.scope().ordinal();
     lockCapabilityTokens[slot] = capability;
     StatusCode claimed = token.claim(
         capabilityOwnerHigh,
@@ -469,6 +488,11 @@ public final class DeterministicTransactionProvider
   private StatusCode contextStatus(TransactionContext context) {
     if (!matchesDatabase(
         context.databaseIncarnationHigh(), context.databaseIncarnationLow())) {
+      return StatusCode.CONFLICT;
+    }
+    if (!matchesDatabase(
+        context.snapshot().databaseIncarnationHigh(),
+        context.snapshot().databaseIncarnationLow())) {
       return StatusCode.CONFLICT;
     }
     return context.cancellation().status();
@@ -545,7 +569,7 @@ public final class DeterministicTransactionProvider
   }
 
   private TransactionState transactionState(int slot) {
-    return TransactionState.values()[transactionStates[slot] - 1];
+    return TRANSACTION_STATE_VALUES[transactionStates[slot] - 1];
   }
 
   private static boolean allowedTransition(TransactionState current, TransactionState next) {
@@ -570,6 +594,20 @@ public final class DeterministicTransactionProvider
             && next.lastRecordLsn() < transactionLastLsns[slot]);
   }
 
+  private static boolean isTerminal(TransactionState state) {
+    return state == TransactionState.COMMITTED
+        || state == TransactionState.ABORTED
+        || state == TransactionState.INDETERMINATE;
+  }
+
+  private boolean sameRecoveryView(int slot, RecoveryTransactionView view) {
+    return transactionLastGenerations[slot] == view.lastRecordGeneration()
+        && transactionLastLsns[slot] == view.lastRecordLsn()
+        && transactionUndoGenerations[slot] == view.undoNextGeneration()
+        && transactionUndoLsns[slot] == view.undoNextLsn()
+        && transactionCommitSequences[slot] == view.commitSequence();
+  }
+
   private int freeLockSlot() {
     for (int slot = 0; slot < lockActive.length; slot++) {
       if (!lockActive[slot]) {
@@ -585,6 +623,7 @@ public final class DeterministicTransactionProvider
     lockResourceLow[slot] = 0;
     lockTransactionIds[slot] = 0;
     lockModes[slot] = 0;
+    lockScopes[slot] = 0;
     lockCapabilityTokens[slot] = 0;
   }
 
