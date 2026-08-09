@@ -10,12 +10,52 @@ WAL event/byte counters use race-safe atomics. Maximum occupancy is an observed
 high-water diagnostic rather than a queue correctness invariant.
 
 It also contains the local P05 harness infrastructure: versioned manifest,
-result, and sample schemas; partial in-memory `riverbank_tiny` and
-`riverpapers_tiny` schema-v1 generators; bounded HdrHistogram latency
-accounting; and atomically published local JSON/TSV artifacts. These generators
-prove small-fixture determinism and workload shape only. They are not the full
-canonical RiverBank/RiverPapers schemas or streaming scale generators. This is
+result, and sample schemas; the original in-memory `riverbank_tiny` and
+`riverpapers_tiny` schema-v1 fixtures; bounded HdrHistogram latency accounting;
+and atomically published local JSON/TSV artifacts. Schema v2 adds bounded-memory,
+scale-controlled generated RiverBank and RiverPapers relational tables. This is
 functional evidence for the harness, not a P05 baseline.
+
+## Generated relational workloads
+
+`RiverBankScale` controls branch, account, transaction, and hot-account counts.
+The exact v2 columns and invariants are recorded in [WORKLOADS.md](WORKLOADS.md).
+The generator emits:
+
+- `riverbank_accounts`: unique positive account IDs, branch/customer keys,
+  2020-2024 epoch-millisecond open times, active/frozen state, non-negative
+  minor-unit balances, and bounded risk bands; and
+- `riverbank_transactions`: unique transaction and idempotency IDs,
+  2020-2024 epoch-millisecond event times, five declared operation types,
+  nullable account references encoded as empty TSV fields, and positive bounded
+  minor-unit amounts. Transfers have two different accounts. Deposits have only
+  a destination. Other current operations have only a source. Eighty percent
+  of account selections target the declared hot set; the cold lane selects
+  across all accounts and can therefore also encounter a hot account.
+
+`RiverPapersScale` controls document, author, institution, and minimum/maximum
+abstract-token counts. The v2 generator emits `riverpapers_authors`,
+`riverpapers_documents`, and `riverpapers_document_authors`. Documents have a
+unique synthetic DOI, common-prefix title, institution, 2020-2024 epoch day,
+version, skewed category, nullable publication DOI, and bounded River-owned UTF-8
+text. Each document has exactly three distinct author relations. Repeated,
+category-correlated, rare, and non-ASCII tokens exercise B+tree-compatible
+metadata predicates, scans, tuple width, and future text-token pipelines; they
+do not claim that River implements a full-text index.
+
+Both generators are stateless by row: seed, row sequence, and value lane fully
+determine each value. The output is invariant across caller scratch-buffer
+sizes and table generation order. Generation uses a caller-supplied bounded
+byte array, manual numeric encoding, and static token bytes rather than building
+per-row objects. Publication performs a digest-only preflight and a second
+streaming pass, then verifies row count, byte count, SHA-256, and the persisted
+file before the existing create-once atomic tree install. Memory is bounded by
+artifact metadata and the 64 KiB publication scratch buffer, not row count.
+
+Scale labels record intent; this slice deliberately does not assign `cache`,
+`memory-pressure`, `storage`, or `history` cardinalities before P05 hardware and
+buffer-pool sizing are accepted. No external dataset is downloaded or mimicked.
+Kaggle adapters and comparison claims remain provenance gated.
 
 The current mechanisms cover:
 
@@ -88,3 +128,8 @@ Open-loop rows report service latency,
 intended-schedule latency (the primary coordinated-omission-safe view), and an
 HdrHistogram expected-interval-corrected service diagnostic. Closed-loop rows
 report service latency only.
+
+Run `:river-bench:workloadSmoke` for the developer-only schema-v2 streaming
+check. It generates the small declared RiverBank/RiverPapers scale, publishes a
+create-once v2 artifact tree, and makes no throughput, allocation-budget, P05,
+or G0 claim.

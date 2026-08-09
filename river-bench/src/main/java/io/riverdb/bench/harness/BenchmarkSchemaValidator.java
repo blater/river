@@ -21,7 +21,10 @@ import java.util.regex.Pattern;
 public final class BenchmarkSchemaValidator {
   public static final String MANIFEST = "manifest-schema-v1.json";
   public static final String RESULT = "result-schema-v1.json";
+  public static final String STREAMING_MANIFEST = "manifest-schema-v2.json";
+  public static final String STREAMING_RESULT = "result-schema-v2.json";
   public static final String SAMPLE = "sample-schema-v1.json";
+  public static final String STREAMING_SAMPLE = "sample-schema-v2.json";
 
   private static final String RESOURCE_ROOT = "/io/riverdb/bench/harness/schema/";
   private static final ObjectMapper MAPPER = JsonMapper.builder()
@@ -34,7 +37,10 @@ public final class BenchmarkSchemaValidator {
     schemas = new HashMap<>();
     schemas.put(MANIFEST, load(MANIFEST));
     schemas.put(RESULT, load(RESULT));
+    schemas.put(STREAMING_MANIFEST, load(STREAMING_MANIFEST));
+    schemas.put(STREAMING_RESULT, load(STREAMING_RESULT));
     schemas.put(SAMPLE, load(SAMPLE));
+    schemas.put(STREAMING_SAMPLE, load(STREAMING_SAMPLE));
   }
 
   public SchemaValidation validate(String schemaName, String json) {
@@ -55,9 +61,11 @@ public final class BenchmarkSchemaValidator {
     }
     List<String> errors = new ArrayList<>();
     validateNode(schema, document, "$", errors);
-    if (SAMPLE.equals(schemaName) && document.isObject()) {
+    if ((SAMPLE.equals(schemaName) || STREAMING_SAMPLE.equals(schemaName))
+        && document.isObject()) {
       validateSampleSemantics(document, errors);
-    } else if (RESULT.equals(schemaName) && document.isObject()) {
+    } else if ((RESULT.equals(schemaName) || STREAMING_RESULT.equals(schemaName))
+        && document.isObject()) {
       validateResultSemantics(document, errors);
     }
     return new SchemaValidation(errors.isEmpty(), errors);

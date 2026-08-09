@@ -16,6 +16,14 @@ tasks.register<JavaExec>("benchmarkSmoke") {
   args(layout.buildDirectory.dir("benchmark-smoke").get().asFile.absolutePath)
 }
 
+tasks.register<JavaExec>("workloadSmoke") {
+  group = "verification"
+  description = "Writes one developer-only streaming workload artifact."
+  classpath = sourceSets.main.get().runtimeClasspath
+  mainClass.set("io.riverdb.bench.harness.WorkloadGenerationSmoke")
+  args(layout.buildDirectory.dir("workload-smoke").get().asFile.absolutePath)
+}
+
 tasks.register<JavaExec>("prototypeSmoke") {
   group = "verification"
   description = "Runs short, developer-only P09 prototype measurements."

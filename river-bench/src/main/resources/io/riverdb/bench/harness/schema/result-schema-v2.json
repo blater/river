@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://riverdb.io/schemas/benchmark/result-v2.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_type",
+    "evidence_class",
+    "run_id",
+    "manifest_sha256",
+    "samples_sha256",
+    "workload_artifacts",
+    "sample_count",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "artifact_type": {"const": "result"},
+    "evidence_class": {"const": "local_smoke"},
+    "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,127}$"},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "samples_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "workload_artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path", "record_count", "byte_count", "sha256"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^(riverbank|riverpapers)_[a-z][a-z0-9_]{1,63}$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(riverbank|riverpapers)_[a-z][a-z0-9_]{1,63}-v2\\.tsv$"
+          },
+          "record_count": {"type": "integer", "minimum": 1},
+          "byte_count": {"type": "integer", "minimum": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "sample_count": {"type": "integer", "minimum": 1},
+    "status": {"const": "developer_smoke_not_promotion_evidence"}
+  }
+}
