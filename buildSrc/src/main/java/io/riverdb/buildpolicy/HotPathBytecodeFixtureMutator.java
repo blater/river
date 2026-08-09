@@ -42,6 +42,13 @@ public final class HotPathBytecodeFixtureMutator {
     return result;
   }
 
+  public static byte[] invalidReferenceReturn(byte[] source, String methodName) {
+    byte[] result = source.clone();
+    int opcode = findOpcode(result, layout(result).method(methodName).code(), 0xb0);
+    result[opcode] = (byte) 0xac;
+    return result;
+  }
+
   public static byte[] invalidInvokeInterfaceReserved(
       byte[] source,
       String methodName

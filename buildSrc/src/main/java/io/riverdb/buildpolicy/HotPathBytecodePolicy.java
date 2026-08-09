@@ -1,7 +1,10 @@
 package io.riverdb.buildpolicy;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.lang.VerifyError;
+import java.lang.classfile.ClassHierarchyResolver;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassModel;
 import java.lang.classfile.CodeElement;
@@ -17,7 +20,9 @@ import java.lang.classfile.instruction.NewPrimitiveArrayInstruction;
 import java.lang.classfile.instruction.NewReferenceArrayInstruction;
 import java.lang.classfile.instruction.TableSwitchInstruction;
 import java.lang.classfile.instruction.ThrowInstruction;
+import java.lang.constant.ClassDesc;
 import java.lang.constant.DirectMethodHandleDesc;
+import java.lang.reflect.AccessFlag;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -28,7 +33,10 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /** Java 25 class-file checks for exact, explicitly designated hot methods. */
 public final class HotPathBytecodePolicy {
@@ -107,8 +115,20 @@ public final class HotPathBytecodePolicy {
       Collection<MethodScope> scopes,
       Map<MethodScope, Set<Allowance>> allowances
   ) {
+    return violations(root, classFiles, List.of(), scopes, allowances);
+  }
+
+  /** Audits with an explicit directory/JAR hierarchy class path. */
+  public static List<String> violations(
+      Path root,
+      Collection<Path> classFiles,
+      Collection<Path> hierarchyEntries,
+      Collection<MethodScope> scopes,
+      Map<MethodScope, Set<Allowance>> allowances
+  ) {
     List<String> violations = new ArrayList<>();
     Map<String, ParsedClass> classes = parseClasses(root, classFiles, violations);
+    ControlledHierarchy hierarchy = new ControlledHierarchy(classes, hierarchyEntries);
 
     Set<MethodScope> selected = new LinkedHashSet<>(scopes);
     if (selected.size() != scopes.size()) {
@@ -120,6 +140,13 @@ public final class HotPathBytecodePolicy {
       violations.add("allowlist entries are not selected hot methods: "
           + unknownAllowlistScopes);
     }
+    Set<String> verificationTargets = new LinkedHashSet<>();
+    if (selected.isEmpty()) {
+      verificationTargets.addAll(classes.keySet());
+    } else {
+      selected.forEach(scope -> verificationTargets.add(scope.className()));
+    }
+    verifyClasses(classes, hierarchy, verificationTargets, violations);
 
     for (MethodScope scope : selected) {
       ParsedClass parsed = classes.get(scope.className());
@@ -145,7 +172,7 @@ public final class HotPathBytecodePolicy {
           parsed,
           method,
           code,
-          classes,
+          hierarchy,
           allowances.getOrDefault(scope, Set.of()),
           violations
       );
@@ -174,19 +201,8 @@ public final class HotPathBytecodePolicy {
           return;
         }
         forceTraversal(model);
-        List<VerifyError> verifyErrors = parser.verify(bytes);
-        verifyErrors.stream()
-            .map(HotPathBytecodePolicy::stableMessage)
-            .filter(message -> !message.contains("Could not resolve class"))
-            .forEach(message -> violations.add(
-                displayPath + ": invalid class file: " + message
-            ));
-        if (violations.stream().anyMatch(violation ->
-            violation.startsWith(displayPath + ": invalid class file:"))) {
-          return;
-        }
         String className = model.thisClass().asInternalName();
-        ParsedClass parsed = new ParsedClass(displayPath, model);
+        ParsedClass parsed = new ParsedClass(displayPath, model, bytes);
         ParsedClass previous = classes.putIfAbsent(className, parsed);
         if (previous != null) {
           violations.add(displayPath + ": duplicate class input " + className);
@@ -197,6 +213,43 @@ public final class HotPathBytecodePolicy {
       }
     });
     return classes;
+  }
+
+  private static void verifyClasses(
+      Map<String, ParsedClass> classes,
+      ControlledHierarchy hierarchy,
+      Set<String> verificationTargets,
+      List<String> violations
+  ) {
+    Set<ClassDesc> interfaces = new LinkedHashSet<>();
+    Map<ClassDesc, ClassDesc> superclasses = new LinkedHashMap<>();
+    classes.values().forEach(parsed -> {
+      ClassModel model = parsed.model();
+      ClassDesc type = model.thisClass().asSymbol();
+      if (model.flags().has(AccessFlag.INTERFACE)) {
+        interfaces.add(type);
+      } else {
+        model.superclass().ifPresent(superclass ->
+            superclasses.put(type, superclass.asSymbol())
+        );
+      }
+    });
+    ClassHierarchyResolver localResolver = ClassHierarchyResolver
+        .of(interfaces, superclasses)
+        .orElse(ClassHierarchyResolver.ofResourceParsing(hierarchy::openResource))
+        .cached();
+    ClassFile verifier = ClassFile.of(
+        ClassFile.ClassHierarchyResolverOption.of(localResolver)
+    );
+    verificationTargets.stream()
+        .map(classes::get)
+        .filter(java.util.Objects::nonNull)
+        .forEach(parsed -> {
+          List<VerifyError> verifyErrors = verifier.verify(parsed.bytes());
+          verifyErrors.forEach(error -> violations.add(
+              parsed.path() + ": invalid class file: " + stableMessage(error)
+          ));
+        });
   }
 
   private static void forceTraversal(ClassModel model) {
@@ -255,7 +308,7 @@ public final class HotPathBytecodePolicy {
       ParsedClass owner,
       MethodModel method,
       CodeModel code,
-      Map<String, ParsedClass> classes,
+      ControlledHierarchy hierarchy,
       Set<Allowance> allowed,
       List<String> violations
   ) {
@@ -278,7 +331,7 @@ public final class HotPathBytecodePolicy {
             usedAllowances,
             violations
         );
-        ThrowableState throwable = throwableState(allocatedClass, classes);
+        ThrowableState throwable = throwableState(allocatedClass, hierarchy);
         if (throwable == ThrowableState.YES) {
           addViolation(
               owner,
@@ -522,29 +575,19 @@ public final class HotPathBytecodePolicy {
 
   private static ThrowableState throwableState(
       String className,
-      Map<String, ParsedClass> classes
+      ControlledHierarchy hierarchy
   ) {
     Set<String> visited = new HashSet<>();
     String current = className;
     while (current != null && visited.add(current)) {
-      ParsedClass parsed = classes.get(current);
-      if (parsed == null) {
-        try {
-          Class<?> type = Class.forName(
-              current.replace('/', '.'),
-              false,
-              HotPathBytecodePolicy.class.getClassLoader()
-          );
-          return Throwable.class.isAssignableFrom(type)
-              ? ThrowableState.YES
-              : ThrowableState.NO;
-        } catch (ClassNotFoundException | LinkageError exception) {
-          return ThrowableState.UNKNOWN;
-        }
+      if (current.equals("java/lang/Throwable")) {
+        return ThrowableState.YES;
       }
-      current = parsed.model().superclass()
-          .map(entry -> entry.asInternalName())
-          .orElse(null);
+      Optional<String> superclass = hierarchy.superclass(current);
+      if (superclass == null) {
+        return ThrowableState.UNKNOWN;
+      }
+      current = superclass.orElse(null);
     }
     return current == null ? ThrowableState.NO : ThrowableState.UNKNOWN;
   }
@@ -562,7 +605,102 @@ public final class HotPathBytecodePolicy {
         : path;
   }
 
-  private record ParsedClass(Path path, ClassModel model) {
+  private record ParsedClass(Path path, ClassModel model, byte[] bytes) {
+  }
+
+  private static final class ControlledHierarchy {
+    private final Map<String, ParsedClass> localClasses;
+    private final List<Path> entries;
+    private final Map<String, Optional<ClassModel>> externalClasses = new LinkedHashMap<>();
+
+    private ControlledHierarchy(
+        Map<String, ParsedClass> localClasses,
+        Collection<Path> entries
+    ) {
+      this.localClasses = localClasses;
+      this.entries = entries.stream()
+          .map(path -> path.toAbsolutePath().normalize())
+          .distinct()
+          .sorted()
+          .toList();
+    }
+
+    private InputStream openResource(ClassDesc type) {
+      String descriptor = type.descriptorString();
+      if (!descriptor.startsWith("L") || !descriptor.endsWith(";")) {
+        return null;
+      }
+      return openResource(descriptor.substring(1, descriptor.length() - 1) + ".class");
+    }
+
+    private InputStream openResource(String resourceName) {
+      for (Path entry : entries) {
+        try {
+          if (Files.isDirectory(entry)) {
+            Path candidate = entry.resolve(resourceName);
+            if (Files.isRegularFile(candidate)) {
+              return new ByteArrayInputStream(Files.readAllBytes(candidate));
+            }
+          } else if (Files.isRegularFile(entry)) {
+            try (ZipFile archive = new ZipFile(entry.toFile())) {
+              ZipEntry candidate = archive.getEntry(resourceName);
+              if (candidate != null) {
+                try (InputStream input = archive.getInputStream(candidate)) {
+                  return new ByteArrayInputStream(input.readAllBytes());
+                }
+              }
+            }
+          }
+        } catch (IOException exception) {
+          throw new IllegalArgumentException(
+              "cannot read hierarchy entry " + entry + " for " + resourceName,
+              exception
+          );
+        }
+      }
+      InputStream platform = ClassLoader.getPlatformClassLoader()
+          .getResourceAsStream(resourceName);
+      if (platform == null) {
+        return null;
+      }
+      try (platform) {
+        return new ByteArrayInputStream(platform.readAllBytes());
+      } catch (IOException exception) {
+        throw new IllegalArgumentException(
+            "cannot read platform hierarchy resource " + resourceName,
+            exception
+        );
+      }
+    }
+
+    private Optional<String> superclass(String className) {
+      ParsedClass local = localClasses.get(className);
+      if (local != null) {
+        return local.model().superclass().map(entry -> entry.asInternalName());
+      }
+      Optional<ClassModel> external = externalClasses.computeIfAbsent(
+          className,
+          this::loadExternal
+      );
+      if (external.isEmpty()) {
+        return null;
+      }
+      return external.get().superclass().map(entry -> entry.asInternalName());
+    }
+
+    private Optional<ClassModel> loadExternal(String className) {
+      try (InputStream input = openResource(className + ".class")) {
+        if (input == null) {
+          return Optional.empty();
+        }
+        return Optional.of(ClassFile.of().parse(input.readAllBytes()));
+      } catch (IOException | IllegalArgumentException exception) {
+        throw new IllegalArgumentException(
+            "cannot parse hierarchy class " + className,
+            exception
+        );
+      }
+    }
   }
 
   private record MethodReference(String owner, String name, String descriptor) {

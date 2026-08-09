@@ -526,19 +526,47 @@ fun classFilesUnder(directories: Collection<java.io.File>): List<java.nio.file.P
 val productionClassDirectories = subprojects.map { module ->
   module.layout.buildDirectory.dir("classes/java/main")
 }
+val productionHierarchyManifests = subprojects.map { module ->
+  val manifest = module.layout.buildDirectory.file(
+    "reports/hot-path-bytecode-runtime-classpath.txt"
+  )
+  val writeManifest = module.tasks.register("writeHotPathBytecodeHierarchyManifest") {
+    val runtimeClasspath = module.configurations.named("runtimeClasspath")
+    inputs.files(runtimeClasspath)
+    outputs.file(manifest)
+
+    doLast {
+      val lines = runtimeClasspath.get().files
+          .map { file -> file.toPath().toAbsolutePath().normalize().toString() }
+          .distinct()
+          .sorted()
+      val path = manifest.get().asFile.toPath()
+      Files.createDirectories(path.parent)
+      Files.write(path, lines)
+    }
+  }
+  writeManifest to manifest
+}
 val verifyHotPathBytecode = tasks.register("verifyHotPathBytecode") {
   group = LifecycleBasePlugin.VERIFICATION_GROUP
   description = "Audits exact declared production hot methods in structured class files."
   dependsOn(subprojects.map { module -> module.tasks.named("compileJava") })
+  dependsOn(productionHierarchyManifests.map { (task, _) -> task })
   inputs.files(productionClassDirectories)
+  inputs.files(productionHierarchyManifests.map { (_, manifest) -> manifest })
 
   doLast {
     val classFiles = classFilesUnder(
       productionClassDirectories.map { directory -> directory.get().asFile }
     )
+    val hierarchyEntries = productionHierarchyManifests
+        .flatMap { (_, manifest) -> Files.readAllLines(manifest.get().asFile.toPath()) }
+        .map { entry -> java.nio.file.Path.of(entry) }
+        .distinct()
     val violations = HotPathBytecodePolicy.violations(
       rootDir.toPath(),
       classFiles,
+      hierarchyEntries,
       liveHotPathMethods,
       liveHotPathAllowedRules
     )
@@ -796,6 +824,75 @@ val verifyHotPathBytecodeFixtures = tasks.register("verifyHotPathBytecodeFixture
       )
     }
 
+    val fixtureWithoutExternalBase = fixtureClassFiles.filterNot { path ->
+      path.toString().endsWith("fixture/external/ExternalThrowableBase.class")
+    }
+    val fixtureHierarchy = listOf(hotPathFixtureClasses.get().asFile.toPath())
+    val externalThrowableScope = hotMethod(
+      adversarialClass,
+      "externalThrowable",
+      "()Lfixture/bytecode/AdversarialHotPath\$ExternalThrowable;"
+    )
+    val externalThrowableViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureWithoutExternalBase,
+      fixtureHierarchy,
+      setOf(externalThrowableScope),
+      emptyMap()
+    )
+    if (externalThrowableViolations.none { "HP006" in it }
+        || externalThrowableViolations.any { "unresolved throwable ancestry" in it }) {
+      throw GradleException(
+        "controlled external Throwable hierarchy was not resolved: "
+            + externalThrowableViolations
+      )
+    }
+
+    val unknownThrowableViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureWithoutExternalBase,
+      setOf(
+        hotMethod(
+          adversarialClass,
+          "unknownThrowable",
+          "()Lfixture/bytecode/AdversarialHotPath\$UnknownThrowable;"
+        )
+      ),
+      emptyMap()
+    )
+    if (unknownThrowableViolations.none { violation ->
+        "HP006" in violation && "unresolved throwable ancestry" in violation
+      }) {
+      throw GradleException(
+        "unknown Throwable hierarchy did not fail closed: $unknownThrowableViolations"
+      )
+    }
+
+    val duplicateAllocationScope = hotMethod(
+      adversarialClass,
+      "duplicateAllocation",
+      "(Z)Ljava/lang/Object;"
+    )
+    val duplicateAllowanceViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(duplicateAllocationScope),
+      mapOf(
+        duplicateAllocationScope to setOf(
+          HotPathBytecodePolicy.Allowance(
+            HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
+            "new java.lang.Object"
+          )
+        )
+      )
+    )
+    if (duplicateAllowanceViolations.count { "HP001" in it } != 1) {
+      throw GradleException(
+        "single-use allowance did not leave one duplicate violation: "
+            + duplicateAllowanceViolations
+      )
+    }
+
     val adversarialPath = hotPathFixtureClasses.get().asFile.toPath()
         .resolve("fixture/bytecode/AdversarialHotPath.class")
     val adversarialBytes = Files.readAllBytes(adversarialPath)
@@ -917,6 +1014,31 @@ val verifyHotPathBytecodeFixtures = tasks.register("verifyHotPathBytecodeFixture
       "bootstrap-reference",
       HotPathBytecodeFixtureMutator.invalidBootstrapReference(adversarialBytes)
     )
+
+    val hierarchySemanticPath = malformedDirectory.toPath()
+        .resolve("hierarchy-before-semantic-error.class")
+    Files.write(
+      hierarchySemanticPath,
+      HotPathBytecodeFixtureMutator.invalidReferenceReturn(
+        adversarialBytes,
+        "externalThrowable"
+      )
+    )
+    val hierarchySemanticViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      listOf(hierarchySemanticPath),
+      fixtureHierarchy,
+      setOf(externalThrowableScope),
+      emptyMap()
+    )
+    if (hierarchySemanticViolations.none { violation ->
+        "invalid class file" in violation && "Could not resolve class" !in violation
+      }) {
+      throw GradleException(
+        "resolved hierarchy did not expose later verifier error: "
+            + hierarchySemanticViolations
+      )
+    }
 
     val misleadingInvokeDynamicPath = malformedDirectory.toPath()
         .resolve("misleading-invokedynamic-name.class")

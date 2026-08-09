@@ -1,5 +1,7 @@
 package fixture.bytecode;
 
+import fixture.external.ExternalThrowableBase;
+
 final class AdversarialHotPath {
   private AdversarialHotPath() {
   }
@@ -58,6 +60,21 @@ final class AdversarialHotPath {
     return value.stream();
   }
 
+  static ExternalThrowable externalThrowable() {
+    return new ExternalThrowable();
+  }
+
+  static UnknownThrowable unknownThrowable() {
+    return new UnknownThrowable();
+  }
+
+  static Object duplicateAllocation(boolean first) {
+    if (first) {
+      return new Object();
+    }
+    return new Object();
+  }
+
   interface Action {
     void run();
   }
@@ -69,5 +86,11 @@ final class AdversarialHotPath {
     int stream() {
       return 1;
     }
+  }
+
+  static final class ExternalThrowable extends ExternalThrowableBase {
+  }
+
+  static final class UnknownThrowable extends ExternalThrowableBase {
   }
 }
