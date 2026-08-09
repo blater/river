@@ -74,8 +74,16 @@ used to mark P09, P05, or G0 complete.
 
 Run `:river-bench:benchmarkSmoke` for the local harness check. It writes a new
 create-once directory under `build/benchmark-smoke` by verifying a same-filesystem
-staging directory and atomically publishing it after `result.json` is emitted as
-the completion marker. It labels its synthetic measurements as developer smoke.
+staging directory, exclusively claiming the run-id directory with a no-clobber
+directory creation, and atomically installing the verified tree as its
+`artifacts/` child. The run-id parent is only a claim and may remain incomplete
+after a process or machine crash. A reader accepts a run as complete only when
+`run-id/artifacts/` exists, `result.json` passes schema validation, and every
+digest referenced by that result verifies. `result.json` is written last inside
+staging and verified before the whole tree becomes visible. The no-clobber
+guarantee covers writers that compete for the run-id path; it is not a security
+boundary against another process mutating the contents of an already claimed
+directory. The harness labels its synthetic measurements as developer smoke.
 Open-loop rows report service latency,
 intended-schedule latency (the primary coordinated-omission-safe view), and an
 HdrHistogram expected-interval-corrected service diagnostic. Closed-loop rows

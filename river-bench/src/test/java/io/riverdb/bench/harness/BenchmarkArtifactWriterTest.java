@@ -48,6 +48,8 @@ final class BenchmarkArtifactWriterTest {
         3);
 
     assertEquals(ArtifactWriteStatus.WRITTEN, first.status());
+    assertEquals(directory.resolve("local-test-0001").resolve("artifacts"),
+        first.runDirectory());
     assertEquals(ArtifactWriteStatus.TARGET_EXISTS, second.status());
     assertArrayEquals(originalManifest, Files.readAllBytes(manifest));
     assertTrue(Files.readString(first.runDirectory().resolve("samples.tsv"))
@@ -187,6 +189,47 @@ final class BenchmarkArtifactWriterTest {
         List.of(sample("riverbank_tiny")), 1_000_000, 3));
     assertEquals("owned elsewhere", Files.readString(unexpected));
     assertFalse(Files.exists(directory.resolve(runId)));
+  }
+
+  @Test
+  void recoveryRefusesEmptyUnmarkedStaging(@TempDir Path directory) throws IOException {
+    String runId = "local-recover-empty-01";
+    Path staging = Files.createDirectory(directory.resolve(".pending-" + runId + "-foreign"));
+    WorkloadArtifact workload = new RiverBankGenerator().generate(7, 3).artifact();
+
+    assertThrows(IOException.class, () -> new BenchmarkArtifactWriter().write(
+        directory, runId, Instant.EPOCH, "commit", List.of(workload),
+        List.of(sample("riverbank_tiny")), 1_000_000, 3));
+
+    assertTrue(Files.isDirectory(staging));
+    try (Stream<Path> paths = Files.list(staging)) {
+      assertEquals(0, paths.count());
+    }
+    assertFalse(Files.exists(directory.resolve(runId)));
+  }
+
+  @Test
+  void competitorClaimBetweenPreflightAndPublishIsNeverOverwritten(
+      @TempDir Path directory) throws IOException {
+    String runId = "local-race-claim-01";
+    Path runDirectory = directory.resolve(runId);
+    Path competitor = runDirectory.resolve("competitor.txt");
+    ArtifactPublishProbe competitorClaims = target -> {
+      assertEquals(runDirectory, target);
+      Files.createDirectory(target);
+      Files.writeString(competitor, "competitor-owned");
+    };
+    WorkloadArtifact workload = new RiverBankGenerator().generate(7, 3).artifact();
+
+    ArtifactWriteResult result = new BenchmarkArtifactWriter(
+        ArtifactWriteFailure.NONE, competitorClaims).write(
+            directory, runId, Instant.EPOCH, "commit", List.of(workload),
+            List.of(sample("riverbank_tiny")), 1_000_000, 3);
+
+    assertEquals(ArtifactWriteStatus.TARGET_EXISTS, result.status());
+    assertEquals("competitor-owned", Files.readString(competitor));
+    assertFalse(Files.exists(runDirectory.resolve("artifacts")));
+    assertEquals(0, pendingDirectoryCount(directory));
   }
 
   private static SampleArtifact sample(String workload) {

@@ -21,7 +21,13 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 
-/** Preflights, stages, verifies, and atomically publishes a create-once local run. */
+/**
+ * Preflights, stages, verifies, and publishes a create-once local run.
+ *
+ * <p>The run directory is an exclusive claim and is not itself a completion signal. Readers
+ * consider only the atomically installed {@code artifacts/} child, and must validate its
+ * {@code result.json} plus referenced digests before accepting the run as complete.
+ */
 public final class BenchmarkArtifactWriter {
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final ObjectWriter JSON = MAPPER.writerWithDefaultPrettyPrinter();
@@ -30,16 +36,26 @@ public final class BenchmarkArtifactWriter {
       "expected_interval_ns", "histogram_count", "minimum_ns", "p50_ns",
       "p95_ns", "p99_ns", "p999_ns", "maximum_ns", "mean_ns") + "\n";
   private static final String STAGING_MARKER = ".river-bench-staging-v1";
+  private static final String CLAIM_MARKER = ".river-bench-claim-v1";
+  private static final String PUBLISHED_DIRECTORY = "artifacts";
 
   private final BenchmarkSchemaValidator validator = new BenchmarkSchemaValidator();
   private final ArtifactWriteFailure failure;
+  private final ArtifactPublishProbe publishProbe;
 
   public BenchmarkArtifactWriter() {
-    this(ArtifactWriteFailure.NONE);
+    this(ArtifactWriteFailure.NONE, ArtifactPublishProbe.NONE);
   }
 
   BenchmarkArtifactWriter(ArtifactWriteFailure failure) {
+    this(failure, ArtifactPublishProbe.NONE);
+  }
+
+  BenchmarkArtifactWriter(
+      ArtifactWriteFailure failure,
+      ArtifactPublishProbe publishProbe) {
     this.failure = failure;
+    this.publishProbe = publishProbe;
   }
 
   public ArtifactWriteResult write(
@@ -96,18 +112,20 @@ public final class BenchmarkArtifactWriter {
     }
 
     Path normalizedRoot = outputRoot.toAbsolutePath().normalize();
-    Path runDirectory = normalizedRoot.resolve(runId).normalize();
-    if (!normalizedRoot.equals(runDirectory.getParent())) {
+    Path claimDirectory = normalizedRoot.resolve(runId).normalize();
+    if (!normalizedRoot.equals(claimDirectory.getParent())) {
       return invalid(new SchemaValidation(false, List.of("$: run path escapes output root")));
     }
+    Path publishedDirectory = claimDirectory.resolve(PUBLISHED_DIRECTORY);
     Files.createDirectories(normalizedRoot);
-    if (Files.exists(runDirectory)) {
-      return new ArtifactWriteResult(ArtifactWriteStatus.TARGET_EXISTS, runDirectory, null);
+    if (Files.exists(claimDirectory)) {
+      return new ArtifactWriteResult(
+          ArtifactWriteStatus.TARGET_EXISTS, publishedDirectory, null);
     }
     recoverOwnedStaging(normalizedRoot, runId, preparedWorkloads.workloads());
     return stageAndPublish(
         normalizedRoot,
-        runDirectory,
+        claimDirectory,
         runId,
         manifestBytes,
         sampleBytes,
@@ -117,7 +135,7 @@ public final class BenchmarkArtifactWriter {
 
   private ArtifactWriteResult stageAndPublish(
       Path outputRoot,
-      Path runDirectory,
+      Path claimDirectory,
       String runId,
       byte[] manifestBytes,
       byte[] sampleBytes,
@@ -125,6 +143,8 @@ public final class BenchmarkArtifactWriter {
       List<PreparedWorkload> workloads) throws IOException {
     Path staging = Files.createTempDirectory(outputRoot, ".pending-" + runId + '-');
     List<Path> stagedFiles = new ArrayList<>();
+    byte[] claimMarker = claimMarkerBytes(runId);
+    boolean claimOwned = false;
     try {
       Path ownerPath = staging.resolve(STAGING_MARKER);
       stagedFiles.add(ownerPath);
@@ -155,29 +175,50 @@ public final class BenchmarkArtifactWriter {
         verifyFile(staging.resolve(workload.fileName()), workload.sha256());
       }
 
-      // result.json is the completion marker and is deliberately emitted last.
+      // Emit result.json last so the staged tree can be validated from its root document.
       Path resultPath = staging.resolve("result.json");
       stagedFiles.add(resultPath);
       writeNew(resultPath, resultBytes);
       verifyFile(resultPath, WorkloadChecksums.sha256(resultBytes));
       verifyResultReferences(staging, resultBytes);
       failAt(ArtifactWriteFailure.BEFORE_PUBLISH);
+      publishProbe.beforeClaim(claimDirectory);
       try {
-        Files.move(staging, runDirectory, StandardCopyOption.ATOMIC_MOVE);
+        Files.createDirectory(claimDirectory);
       } catch (FileAlreadyExistsException exception) {
         cleanupStaging(staging, stagedFiles);
-        return new ArtifactWriteResult(ArtifactWriteStatus.TARGET_EXISTS, runDirectory, null);
+        return new ArtifactWriteResult(
+            ArtifactWriteStatus.TARGET_EXISTS,
+            claimDirectory.resolve(PUBLISHED_DIRECTORY),
+            null);
+      }
+      Path claimMarkerPath = claimDirectory.resolve(CLAIM_MARKER);
+      writeNew(claimMarkerPath, claimMarker);
+      claimOwned = true;
+      Path publishedDirectory = claimDirectory.resolve(PUBLISHED_DIRECTORY);
+      try {
+        Files.move(staging, publishedDirectory, StandardCopyOption.ATOMIC_MOVE);
       } catch (AtomicMoveNotSupportedException exception) {
         cleanupStaging(staging, stagedFiles);
+        cleanupOwnedClaim(claimDirectory, claimMarker);
         return new ArtifactWriteResult(
-            ArtifactWriteStatus.ATOMIC_PUBLISH_UNAVAILABLE, runDirectory, null);
+            ArtifactWriteStatus.ATOMIC_PUBLISH_UNAVAILABLE, publishedDirectory, null);
       }
-      return new ArtifactWriteResult(ArtifactWriteStatus.WRITTEN, runDirectory, null);
+      return new ArtifactWriteResult(ArtifactWriteStatus.WRITTEN, publishedDirectory, null);
     } catch (IOException | RuntimeException exception) {
       try {
-        cleanupStaging(staging, stagedFiles);
+        if (Files.exists(staging, LinkOption.NOFOLLOW_LINKS)) {
+          cleanupStaging(staging, stagedFiles);
+        }
       } catch (IOException cleanupFailure) {
         exception.addSuppressed(cleanupFailure);
+      }
+      if (claimOwned && Files.notExists(claimDirectory.resolve(PUBLISHED_DIRECTORY))) {
+        try {
+          cleanupOwnedClaim(claimDirectory, claimMarker);
+        } catch (IOException cleanupFailure) {
+          exception.addSuppressed(cleanupFailure);
+        }
       }
       throw exception;
     }
@@ -403,18 +444,14 @@ public final class BenchmarkArtifactWriter {
           || Files.isSymbolicLink(staging)) {
         throw new IOException("refusing to recover non-directory staging path");
       }
-      List<Path> entries;
-      try (Stream<Path> paths = Files.list(staging)) {
-        entries = paths.toList();
-      }
-      if (entries.isEmpty()) {
-        Files.delete(staging);
-        continue;
-      }
       Path marker = staging.resolve(STAGING_MARKER);
       if (!Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS)
           || !java.util.Arrays.equals(expectedMarker, Files.readAllBytes(marker))) {
         throw new IOException("refusing to recover staging without matching ownership marker");
+      }
+      List<Path> entries;
+      try (Stream<Path> paths = Files.list(staging)) {
+        entries = paths.toList();
       }
       for (Path entry : entries) {
         if (!staging.equals(entry.getParent())
@@ -434,6 +471,32 @@ public final class BenchmarkArtifactWriter {
   private static byte[] stagingMarkerBytes(String runId) {
     return ("river-bench-staging-v1\nrun_id=" + runId + "\n")
         .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] claimMarkerBytes(String runId) {
+    return ("river-bench-claim-v1\nrun_id=" + runId + "\n")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static void cleanupOwnedClaim(Path runDirectory, byte[] expectedMarker)
+      throws IOException {
+    Path marker = runDirectory.resolve(CLAIM_MARKER);
+    if (!Files.isDirectory(runDirectory, LinkOption.NOFOLLOW_LINKS)
+        || Files.isSymbolicLink(runDirectory)
+        || !Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS)
+        || Files.isSymbolicLink(marker)
+        || !java.util.Arrays.equals(expectedMarker, Files.readAllBytes(marker))) {
+      throw new IOException("refusing to clean a run claim without matching ownership marker");
+    }
+    List<Path> entries;
+    try (Stream<Path> paths = Files.list(runDirectory)) {
+      entries = paths.toList();
+    }
+    if (entries.size() != 1 || !marker.equals(entries.getFirst())) {
+      throw new IOException("refusing to clean a run claim with unexpected content");
+    }
+    Files.delete(marker);
+    Files.delete(runDirectory);
   }
 
   private static String property(String name) {
