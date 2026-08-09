@@ -15,11 +15,19 @@ fail() {
   exit 1
 }
 
+run_git() {
+  GIT_CONFIG_NOSYSTEM=1 \
+  GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_COUNT=0 \
+  GIT_ATTR_NOSYSTEM=1 \
+    git "$@"
+}
+
 command -v git >/dev/null 2>&1 || fail "git is not available"
-git -C "$river_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+run_git -C "$river_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || fail "the River root is not a Git worktree"
 
-source_commit=$(git -C "$river_root" rev-parse --verify 'HEAD^{commit}')
+source_commit=$(run_git -C "$river_root" rev-parse --verify 'HEAD^{commit}')
 
 if [ -n "${RIVER_GRADLE_HOME:-}" ]; then
   clean_gradle_home=$RIVER_GRADLE_HOME
@@ -35,40 +43,45 @@ case "$clean_gradle_home" in
 esac
 [ -d "$clean_gradle_home" ] \
   || fail "the selected Gradle user home is not a directory"
+clean_gradle_home=$(CDPATH= cd -- "$clean_gradle_home" && pwd -P)
 
 for init_script in \
   "$clean_gradle_home/init.gradle" \
-  "$clean_gradle_home/init.gradle.kts"; do
+  "$clean_gradle_home/init.gradle.kts" \
+  "$clean_gradle_home/gradle.properties"; do
   [ ! -e "$init_script" ] \
-    || fail "Gradle user-home init scripts are not allowed: $init_script"
+    && [ ! -L "$init_script" ] \
+    || fail "Gradle user-home build configuration is not allowed: $init_script"
 done
-if [ -d "$clean_gradle_home/init.d" ] \
-    && find "$clean_gradle_home/init.d" -type f -print -quit | grep -q .; then
-  fail "Gradle user-home init scripts are not allowed: $clean_gradle_home/init.d"
-fi
+[ ! -e "$clean_gradle_home/init.d" ] \
+  && [ ! -L "$clean_gradle_home/init.d" ] \
+  || fail "Gradle user-home build configuration is not allowed: $clean_gradle_home/init.d"
 
-git clone --quiet --no-local --no-checkout "$river_root" "$checkout_root"
-git -c core.hooksPath=/dev/null -C "$checkout_root" \
+run_git clone --quiet --no-local --no-checkout "$river_root" "$checkout_root"
+run_git -c core.hooksPath=/dev/null -C "$checkout_root" \
   checkout --quiet --detach "$source_commit"
 
-[ "$(git -C "$checkout_root" rev-parse --verify HEAD)" = "$source_commit" ] \
+[ "$(run_git -C "$checkout_root" rev-parse --verify HEAD)" = "$source_commit" ] \
   || fail "temporary checkout is not at the requested commit"
-[ "$(git -C "$checkout_root" symbolic-ref --quiet --short HEAD || true)" = "" ] \
+[ "$(run_git -C "$checkout_root" symbolic-ref --quiet --short HEAD || true)" = "" ] \
   || fail "temporary checkout is not detached"
-[ -z "$(git -C "$checkout_root" status \
+[ -z "$(run_git -C "$checkout_root" status \
   --porcelain=v1 --untracked-files=all --ignored)" ] \
   || fail "temporary checkout is dirty before the build"
 
-unsupported_entries=$(git -C "$checkout_root" ls-files --stage \
+unsupported_entries=$(run_git -C "$checkout_root" ls-files --stage \
   | awk '$1 != "100644" && $1 != "100755" { print $1 "\t" $4 }')
 [ -z "$unsupported_entries" ] \
   || fail "tracked symlinks or gitlinks are not allowed: $unsupported_entries"
 
-distribution_url=$(sed -n 's/^distributionUrl=//p' \
-  "$checkout_root/gradle/wrapper/gradle-wrapper.properties")
-[ -n "$distribution_url" ] \
-  || fail "wrapper properties do not declare distributionUrl"
-distribution_archive=${distribution_url##*/}
+wrapper_properties="$checkout_root/gradle/wrapper/gradle-wrapper.properties"
+cache_coordinates=$(java "$checkout_root/gradle/WrapperCacheKey.java" \
+  "$wrapper_properties") \
+  || fail "wrapper properties do not identify a supported distribution"
+distribution_archive=$(printf '%s\n' "$cache_coordinates" | sed -n '1p')
+distribution_hash=$(printf '%s\n' "$cache_coordinates" | sed -n '2p')
+[ -n "$distribution_hash" ] \
+  || fail "wrapper cache-key helper returned an incomplete result"
 distribution_directory=${distribution_archive%.zip}
 case "$distribution_archive" in
   gradle-*-bin.zip|gradle-*-all.zip) ;;
@@ -76,13 +89,32 @@ case "$distribution_archive" in
 esac
 distribution_install=${distribution_directory%-bin}
 distribution_install=${distribution_install%-all}
-wrapper_cache="$clean_gradle_home/wrapper/dists/$distribution_directory"
+wrapper_root="$clean_gradle_home/wrapper"
+wrapper_dists="$wrapper_root/dists"
+wrapper_distribution="$wrapper_dists/$distribution_directory"
+wrapper_cache="$wrapper_distribution/$distribution_hash"
+wrapper_install="$wrapper_cache/$distribution_install"
+wrapper_bin="$wrapper_install/bin"
 [ -d "$wrapper_cache" ] \
   || fail "the pinned Gradle wrapper distribution is not cached"
-[ -n "$(find "$wrapper_cache" -type f -name "$distribution_archive.ok" -print -quit)" ] \
+for cache_directory in \
+  "$wrapper_root" \
+  "$wrapper_dists" \
+  "$wrapper_distribution" \
+  "$wrapper_cache" \
+  "$wrapper_install" \
+  "$wrapper_bin"; do
+  [ -d "$cache_directory" ] \
+    || fail "the pinned Gradle wrapper distribution is incomplete"
+  [ ! -L "$cache_directory" ] \
+    || fail "wrapper cache directories must not be symlinks: $cache_directory"
+done
+completion_marker="$wrapper_cache/$distribution_archive.ok"
+[ -f "$completion_marker" ] && [ ! -L "$completion_marker" ] \
   || fail "the pinned Gradle wrapper distribution has no completion marker"
-[ -n "$(find "$wrapper_cache" -type f \
-  -path "*/$distribution_install/bin/gradle" -perm -100 -print -quit)" ] \
+wrapper_executable="$wrapper_bin/gradle"
+[ -f "$wrapper_executable" ] && [ ! -L "$wrapper_executable" ] \
+    && [ -x "$wrapper_executable" ] \
   || fail "the pinned Gradle wrapper distribution is not installed"
 
 echo "clean detached checkout ready: $source_commit"
