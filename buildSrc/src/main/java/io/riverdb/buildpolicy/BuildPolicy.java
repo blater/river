@@ -134,7 +134,7 @@ public final class BuildPolicy {
     return List.copyOf(violations);
   }
 
-  /** Validates exact declared edges and rejects dependency cycles. */
+  /** Validates that declared edges fit within a maximum graph and rejects cycles. */
   public static List<String> graphViolations(
       Map<String, Set<String>> actualGraph,
       Map<String, Set<String>> allowedGraph
@@ -161,11 +161,6 @@ public final class BuildPolicy {
       forbidden.removeAll(allowed);
       if (!forbidden.isEmpty()) {
         violations.add(module + " has forbidden dependencies: " + sorted(forbidden));
-      }
-      Set<String> missing = new LinkedHashSet<>(allowed);
-      missing.removeAll(dependencies);
-      if (!missing.isEmpty()) {
-        violations.add(module + " is missing declared dependencies: " + sorted(missing));
       }
       Set<String> unknownDependencies = new LinkedHashSet<>(dependencies);
       unknownDependencies.removeAll(actualGraph.keySet());

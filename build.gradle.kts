@@ -111,6 +111,21 @@ val allowedDependencies = mapOf(
   }
 }
 
+val declaredDependencies = mapOf(
+  "river-platform" to setOf("river-base"),
+  "river-tx-api" to setOf("river-base"),
+  "river-journal-api" to setOf("river-base"),
+  "river-testkit" to setOf(
+    "river-base", "river-platform", "river-tx-api", "river-journal-api"
+  ),
+  "river-bench" to setOf("river-base")
+)
+
+// Project dependencies are compile-private unless a current River consumer
+// must compile against a type exposed by a dependency. Keep this allowset exact:
+// adding an entry changes downstream compile visibility and requires P03 review.
+val approvedApiDependencies = emptyMap<String, Set<String>>()
+
 subprojects {
   apply(plugin = "java-library")
 
@@ -145,9 +160,17 @@ subprojects {
     "testRuntimeOnly"("org.junit.platform:junit-platform-launcher")
   }
 
-  allowedDependencies.getValue(name).forEach { dependencyName ->
-    dependencies.add("api", dependencies.project(":$dependencyName"))
+  declaredDependencies.getOrDefault(name, emptySet()).forEach { dependencyName ->
+    val configuration = if (
+      dependencyName in approvedApiDependencies.getOrDefault(name, emptySet())
+    ) {
+      "api"
+    } else {
+      "implementation"
+    }
+    dependencies.add(configuration, dependencies.project(":$dependencyName"))
   }
+
 }
 
 val checkedTextExtensions = setOf(
@@ -331,15 +354,88 @@ val verifyModuleGraph = tasks.register("verifyModuleGraph") {
     val actualGraph = linkedMapOf<String, Set<String>>()
     subprojects.forEach { module ->
       actualGraph[module.name] = BuildPolicy.inheritedProjectDependencies(
-        listOf(
+        listOfNotNull(
           module.configurations.getByName("compileClasspath"),
-          module.configurations.getByName("runtimeClasspath")
+          module.configurations.getByName("runtimeClasspath"),
+          module.configurations.findByName("testFixturesImplementation")
         )
+      ) - module.name
+    }
+    val violations = BuildPolicy.graphViolations(
+      actualGraph,
+      allowedDependencies
+    ).toMutableList()
+    val unknownDeclaredModules = declaredDependencies.keys - allowedDependencies.keys
+    if (unknownDeclaredModules.isNotEmpty()) {
+      violations.add(
+        "declared dependency modules are unknown: ${unknownDeclaredModules.sorted()}"
       )
     }
-    val violations = BuildPolicy.graphViolations(actualGraph, allowedDependencies)
-    if (violations.isNotEmpty()) {
-      throw GradleException(violations.joinToString(separator = "\n"))
+    declaredDependencies.forEach { (module, dependencies) ->
+      val allowed = allowedDependencies[module] ?: emptySet()
+      val forbidden = dependencies - allowed
+      if (forbidden.isNotEmpty()) {
+        violations.add(
+          "$module declares dependencies outside the maximum graph: ${forbidden.sorted()}"
+        )
+      }
+    }
+    actualGraph.forEach { (module, dependencies) ->
+      val declared = declaredDependencies.getOrDefault(module, emptySet())
+      val undeclared = dependencies - declared
+      val stale = declared - dependencies
+      if (undeclared.isNotEmpty()) {
+        violations.add(
+          "$module has undeclared current dependencies: ${undeclared.sorted()}"
+        )
+      }
+      if (stale.isNotEmpty()) {
+        violations.add(
+          "$module has stale declared dependencies: ${stale.sorted()}"
+        )
+      }
+    }
+    val actualApiGraph = linkedMapOf<String, Set<String>>()
+    subprojects.forEach { module ->
+      actualApiGraph[module.name] = BuildPolicy.inheritedProjectDependencies(
+        listOf(module.configurations.getByName("api"))
+      )
+    }
+    val approvedApiGraph = allowedDependencies.keys.associateWith { module ->
+      approvedApiDependencies.getOrDefault(module, emptySet())
+    }
+    val apiViolations = BuildPolicy.graphViolations(
+      actualApiGraph,
+      approvedApiGraph
+    ).map { violation -> "public API dependency: $violation" }
+        .toMutableList()
+    val unknownApiModules = approvedApiDependencies.keys - declaredDependencies.keys
+    if (unknownApiModules.isNotEmpty()) {
+      apiViolations.add(
+        "public API dependency modules are not declared: ${unknownApiModules.sorted()}"
+      )
+    }
+    approvedApiDependencies.forEach { (module, dependencies) ->
+      val declared = declaredDependencies[module] ?: emptySet()
+      val undeclared = dependencies - declared
+      if (undeclared.isNotEmpty()) {
+        apiViolations.add(
+          "$module exports undeclared dependencies: ${undeclared.sorted()}"
+        )
+      }
+    }
+    actualApiGraph.forEach { (module, dependencies) ->
+      val approved = approvedApiDependencies.getOrDefault(module, emptySet())
+      val missing = approved - dependencies
+      if (missing.isNotEmpty()) {
+        apiViolations.add(
+          "$module has stale public API dependencies: ${missing.sorted()}"
+        )
+      }
+    }
+    val allViolations = (violations + apiViolations).sorted()
+    if (allViolations.isNotEmpty()) {
+      throw GradleException(allViolations.joinToString(separator = "\n"))
     }
   }
 }
@@ -530,6 +626,208 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
       ),
       "module dependency cycle: a -> b -> a"
     )
+  }
+}
+
+val verifyProjectDependencyVisibility = tasks.register(
+  "verifyProjectDependencyVisibility"
+) {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Compiles a disposable graph to prove project edges are private by default."
+
+  val fixtureDirectory = layout.buildDirectory.dir(
+    "policy-fixtures/project-dependency-visibility"
+  )
+  outputs.dir(fixtureDirectory)
+  outputs.upToDateWhen { false }
+
+  doLast {
+    val root = fixtureDirectory.get().asFile
+    if (!root.deleteRecursively()) {
+      throw GradleException("could not clear dependency visibility fixture $root")
+    }
+    Files.createDirectories(root.toPath())
+
+    fun writeFixture(relative: String, content: String) {
+      val path = root.toPath().resolve(relative)
+      Files.createDirectories(path.parent)
+      Files.writeString(path, content)
+    }
+
+    val catalogStorageConfiguration = if (
+      "river-storage" in approvedApiDependencies.getOrDefault(
+        "river-catalog",
+        emptySet()
+      )
+    ) {
+      "api"
+    } else {
+      "implementation"
+    }
+    val sqlCatalogConfiguration = if (
+      "river-catalog" in approvedApiDependencies.getOrDefault(
+        "river-sql",
+        emptySet()
+      )
+    ) {
+      "api"
+    } else {
+      "implementation"
+    }
+
+    writeFixture(
+      "settings.gradle.kts",
+      """
+      rootProject.name = "project-dependency-visibility"
+      include(
+        "river-storage",
+        "river-catalog",
+        "river-sql",
+        "approved-direct-consumer"
+      )
+      """.trimIndent() + "\n"
+    )
+    writeFixture(
+      "build.gradle.kts",
+      """
+      import org.gradle.api.tasks.compile.JavaCompile
+
+      subprojects {
+        apply(plugin = "java-library")
+
+        extensions.configure<JavaPluginExtension> {
+          toolchain {
+            languageVersion.set(JavaLanguageVersion.of(25))
+          }
+        }
+
+        tasks.withType<JavaCompile>().configureEach {
+          options.release.set(25)
+          options.encoding = "UTF-8"
+          options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
+        }
+      }
+
+      project(":river-catalog") {
+        dependencies.add(
+          "$catalogStorageConfiguration",
+          dependencies.project(":river-storage")
+        )
+      }
+      project(":river-sql") {
+        dependencies.add(
+          "$sqlCatalogConfiguration",
+          dependencies.project(":river-catalog")
+        )
+      }
+      project(":approved-direct-consumer") {
+        dependencies.add(
+          "implementation",
+          dependencies.project(":river-storage")
+        )
+      }
+      """.trimIndent() + "\n"
+    )
+    writeFixture(
+      "river-storage/src/main/java/io/riverdb/fixture/storage/StorageType.java",
+      """
+      package io.riverdb.fixture.storage;
+
+      public final class StorageType {
+        private StorageType() {
+        }
+
+        public static long identity() {
+          return 7L;
+        }
+      }
+      """.trimIndent() + "\n"
+    )
+    writeFixture(
+      "river-catalog/src/main/java/io/riverdb/fixture/catalog/CatalogType.java",
+      """
+      package io.riverdb.fixture.catalog;
+
+      public final class CatalogType {
+        private CatalogType() {
+        }
+
+        public static long identity() {
+          return 11L;
+        }
+      }
+      """.trimIndent() + "\n"
+    )
+    val storageConsumer = """
+      package io.riverdb.fixture.consumer;
+
+      import io.riverdb.fixture.storage.StorageType;
+
+      public final class StorageConsumer {
+        private StorageConsumer() {
+        }
+
+        public static long identity() {
+          return StorageType.identity();
+        }
+      }
+    """.trimIndent() + "\n"
+    writeFixture(
+      "river-sql/src/main/java/io/riverdb/fixture/consumer/StorageConsumer.java",
+      storageConsumer
+    )
+    writeFixture(
+      "approved-direct-consumer/src/main/java/io/riverdb/fixture/consumer/StorageConsumer.java",
+      storageConsumer
+    )
+
+    data class FixtureResult(val exitCode: Int, val output: String)
+
+    fun runFixture(task: String): FixtureResult {
+      val gradleHome = gradle.gradleHomeDir
+          ?: throw GradleException("Gradle installation directory is unavailable")
+      val gradleExecutable = gradleHome.resolve("bin/gradle")
+      val process = ProcessBuilder(
+        gradleExecutable.absolutePath,
+        "--offline",
+        "--no-daemon",
+        "--console=plain",
+        task
+      )
+          .directory(root)
+          .redirectErrorStream(true)
+          .apply {
+            environment()["GRADLE_USER_HOME"] = gradle.gradleUserHomeDir.absolutePath
+          }
+          .start()
+      val output = process.inputStream.bufferedReader().use { it.readText() }
+      return FixtureResult(process.waitFor(), output)
+    }
+
+    val direct = runFixture(":approved-direct-consumer:compileJava")
+    if (direct.exitCode != 0) {
+      throw GradleException(
+        "approved direct project dependency did not compile:\n${direct.output}"
+      )
+    }
+
+    val transitive = runFixture(":river-sql:compileJava")
+    if (transitive.exitCode == 0) {
+      throw GradleException(
+        "river-sql fixture compiled against river-storage solely through river-catalog"
+      )
+    }
+    if (
+      "StorageType" !in transitive.output
+          || (
+            "does not exist" !in transitive.output
+                && "cannot find symbol" !in transitive.output
+          )
+    ) {
+      throw GradleException(
+        "transitive compilation failed for an unexpected reason:\n${transitive.output}"
+      )
+    }
   }
 }
 
@@ -1320,6 +1618,7 @@ tasks.named("check") {
     verifySourcePolicy,
     verifyModuleGraph,
     verifyBuildPolicyFixtures,
+    verifyProjectDependencyVisibility,
     verifyHotPathBytecode,
     verifyHotPathBytecodeFixtures,
     verifyDependencyLedger
