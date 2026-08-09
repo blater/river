@@ -76,6 +76,61 @@ final class FaultingAtomicFileStoreContractTest {
   }
 
   @Test
+  void completionIsReportedOnlyThroughOwningInstallerInspection() {
+    Fixture fixture = new Fixture(0, 16);
+    AtomicInstallProgress progress = new AtomicInstallProgress();
+    AtomicInstallSnapshot snapshot = new AtomicInstallSnapshot();
+    assertEquals(StatusCode.NOT_OWNER, fixture.store.inspect(progress, snapshot));
+    AtomicInstallDriveResult driveResult = new AtomicInstallDriveResult();
+    assertEquals(
+        StatusCode.OK,
+        fixture.contract.drive(
+            fixture.store,
+            request(new byte[] {6}),
+            progress,
+            fixture.stepResult,
+            8,
+            driveResult));
+
+    assertEquals(StatusCode.OK, fixture.store.inspect(progress, snapshot));
+    assertTrue(snapshot.isComplete());
+    assertEquals(AtomicInstallPhase.VERIFIED, snapshot.phase());
+    assertEquals(DirectoryDurability.DURABLE, snapshot.durability());
+  }
+
+  @Test
+  void progressCannotCrossProviderOrResetWhileActive() {
+    Fixture first = new Fixture(0, 16);
+    Fixture second = new Fixture(0, 16);
+    AtomicInstallRequest request = request(new byte[] {1, 2});
+    AtomicInstallProgress progress = new AtomicInstallProgress();
+    assertEquals(StatusCode.OK, first.store.advance(request, progress, first.stepResult));
+    AtomicInstallSnapshot before = first.snapshot(progress);
+
+    assertEquals(StatusCode.NOT_OWNER, second.store.advance(request, progress, second.stepResult));
+    assertEquals(StatusCode.CONFLICT, progress.reset());
+    AtomicInstallSnapshot after = first.snapshot(progress);
+    assertEquals(before.phase(), after.phase());
+    assertEquals(before.bytesWritten(), after.bytesWritten());
+  }
+
+  @Test
+  void borrowedContentMutationFailsBeforeTheNextBoundary() {
+    Fixture fixture = new Fixture(0, 16);
+    byte[] bytes = {1, 2, 3};
+    AtomicInstallRequest request = request(bytes);
+    AtomicInstallProgress progress = new AtomicInstallProgress();
+    assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
+    bytes[1] = 9;
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        fixture.store.advance(request, progress, fixture.stepResult));
+    assertEquals(AtomicInstallPhase.TEMP_CREATED, fixture.snapshot(progress).phase());
+    assertEquals(0, fixture.snapshot(progress).bytesWritten());
+  }
+
+  @Test
   void delayedReplaceCompletionCannotRepeatTheNamespaceMutation() {
     Fixture fixture = new Fixture(1, 16);
     assertEquals(
@@ -97,6 +152,7 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(StatusCode.RETRY, fixture.store.advance(request, progress, fixture.stepResult));
     assertEquals(AtomicInstallPhase.CONTENT_FORCED, fixture.snapshot(progress).phase());
     assertTrue(fixture.snapshot(progress).completionPending());
+    assertTrue(fixture.snapshot(progress).pendingOperationId() != 0);
     assertEquals(AtomicInstallPhase.DESTINATION_REPLACED, fixture.stepResult.phaseAfter());
     assertEquals(
         DirectoryDurability.VISIBLE_NOT_DURABLE,
@@ -105,6 +161,7 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
     assertEquals(AtomicInstallPhase.DESTINATION_REPLACED, fixture.snapshot(progress).phase());
     assertFalse(fixture.snapshot(progress).completionPending());
+    assertEquals(0, fixture.snapshot(progress).pendingOperationId());
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
     assertTrue(fixture.snapshot(progress).isComplete());
@@ -466,6 +523,115 @@ final class FaultingAtomicFileStoreContractTest {
         assertEquals(StatusCode.OK, reopenStatus, "boundary " + boundary);
       }
     }
+  }
+
+  @Test
+  void restartBeforeAndAfterEveryBoundaryImmediatelyRequiresRecovery() {
+    for (FaultBoundary faultBoundary : FaultBoundary.values()) {
+      for (int boundary = 0; boundary < 6; boundary++) {
+        Fixture fixture = new Fixture(1, 16);
+        FaultPoint point = faultBoundary == FaultBoundary.BEFORE
+            ? fixture.beforePoint(boundary)
+            : fixture.afterPoint(boundary);
+        assertEquals(
+            StatusCode.OK,
+            fixture.controller.addRule(
+                point,
+                fixture.operation(boundary),
+                faultBoundary,
+                1,
+                1,
+                FaultAction.RESTART,
+                0));
+        AtomicInstallRequest request = request(new byte[] {5, 4, 3});
+        AtomicInstallProgress progress = new AtomicInstallProgress();
+        AtomicInstallDriveResult driveResult = new AtomicInstallDriveResult();
+
+        assertEquals(
+            StatusCode.CANCELLED,
+            fixture.contract.drive(
+                fixture.store,
+                request,
+                progress,
+                fixture.stepResult,
+                8,
+                driveResult),
+            faultBoundary + " boundary " + boundary);
+        AtomicInstallSnapshot snapshot = fixture.snapshot(progress);
+        assertEquals(
+            AtomicInstallPhase.RECOVERY_REQUIRED,
+            snapshot.phase(),
+            faultBoundary + " boundary " + boundary);
+        assertEquals(DirectoryDurability.UNKNOWN, snapshot.durability());
+        assertEquals(
+            StatusCode.FENCED,
+            fixture.store.advance(request, progress, fixture.stepResult));
+      }
+    }
+  }
+
+  @Test
+  void unsupportedAfterBoundaryFaultIsRejectedBeforeMutation() {
+    Fixture fixture = new Fixture(1, 16);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        fixture.controller.addRule(
+            fixture.points.tempWriteAfter(),
+            FaultOperation.TEMP_WRITE,
+            FaultBoundary.AFTER,
+            1,
+            1,
+            FaultAction.SHORT_WRITE,
+            1));
+    AtomicInstallProgress progress = new AtomicInstallProgress();
+    AtomicInstallDriveResult driveResult = new AtomicInstallDriveResult();
+    assertEquals(
+        StatusCode.OK,
+        fixture.contract.drive(
+            fixture.store,
+            request(new byte[] {1, 2}),
+            progress,
+            fixture.stepResult,
+            8,
+            driveResult));
+    assertTrue(fixture.snapshot(progress).isComplete());
+  }
+
+  @Test
+  void directDirectoryOperationsAreSynchronousAndFenceRestartedHandles() {
+    Fixture delayed = new Fixture(1, 8);
+    assertEquals(
+        StatusCode.OK,
+        delayed.controller.addRule(
+            delayed.points.tempCreateAfter(),
+            FaultOperation.TEMP_CREATE,
+            FaultBoundary.AFTER,
+            1,
+            1,
+            FaultAction.DELAY,
+            0));
+    DirectoryOperationResult directoryResult = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, delayed.store.createTemporary("direct.tmp", directoryResult));
+    assertEquals(DirectoryDurability.VISIBLE_NOT_DURABLE, directoryResult.durability());
+    assertTrue(directoryResult.file() != null);
+    assertEquals(StatusCode.OK, directoryResult.file().close());
+
+    Fixture restarted = new Fixture(1, 8);
+    assertEquals(
+        StatusCode.OK,
+        restarted.controller.addRule(
+            restarted.points.tempCreateAfter(),
+            FaultOperation.TEMP_CREATE,
+            FaultBoundary.AFTER,
+            1,
+            1,
+            FaultAction.RESTART,
+            0));
+    assertEquals(
+        StatusCode.CANCELLED,
+        restarted.store.createTemporary("direct.tmp", directoryResult));
+    assertEquals(DirectoryDurability.UNKNOWN, directoryResult.durability());
+    assertEquals(null, directoryResult.file());
   }
 
   @Test

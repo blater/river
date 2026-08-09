@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
+import io.riverdb.platform.fault.FaultBoundary;
 import io.riverdb.platform.fault.FaultDecision;
 import io.riverdb.platform.fault.FaultOperation;
 import io.riverdb.platform.fault.FaultPoint;
@@ -132,19 +133,59 @@ final class CrashPointControllerTest {
     int checkedPairs = 0;
     for (FaultAction action : FaultAction.values()) {
       for (FaultOperation operation : FaultOperation.values()) {
-        CrashPointController controller = new CrashPointController(1);
-        StatusCode expected = action.isCompatibleWith(operation)
-            ? StatusCode.OK
-            : StatusCode.INVALID_EXTERNAL_INPUT;
-        assertEquals(
-            expected,
-            controller.addRule(point, operation, 1, 1, action, 0));
-        checkedPairs++;
+        for (FaultBoundary boundary : FaultBoundary.values()) {
+          CrashPointController controller = new CrashPointController(1);
+          StatusCode expected = action.isCompatibleWith(operation, boundary)
+              ? StatusCode.OK
+              : StatusCode.INVALID_EXTERNAL_INPUT;
+          assertEquals(
+              expected,
+              controller.addRule(point, operation, boundary, 1, 1, action, 0));
+          checkedPairs++;
+        }
       }
     }
     assertEquals(
-        FaultAction.values().length * FaultOperation.values().length,
+        FaultAction.values().length
+            * FaultOperation.values().length
+            * FaultBoundary.values().length,
         checkedPairs);
+  }
+
+  @Test
+  void boundarySpecificRuleDoesNotFireAtTheOtherHalfStep() {
+    FaultPoint point = point("install.write.after");
+    CrashPointController controller = new CrashPointController(1, new FaultTrace(1));
+    FaultDecision decision = new FaultDecision();
+    assertEquals(
+        StatusCode.OK,
+        controller.addRule(
+            point,
+            FaultOperation.TEMP_WRITE,
+            FaultBoundary.AFTER,
+            1,
+            1,
+            FaultAction.DELAY,
+            0));
+
+    controller.evaluate(
+        point,
+        FaultOperation.TEMP_WRITE,
+        FaultBoundary.BEFORE,
+        1,
+        0,
+        4,
+        decision);
+    assertEquals(FaultAction.NONE, decision.action());
+    controller.evaluate(
+        point,
+        FaultOperation.TEMP_WRITE,
+        FaultBoundary.AFTER,
+        2,
+        0,
+        4,
+        decision);
+    assertEquals(FaultAction.DELAY, decision.action());
   }
 
   private static FaultAction[] observeFour(

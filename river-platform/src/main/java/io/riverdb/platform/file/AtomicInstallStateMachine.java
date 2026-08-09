@@ -5,8 +5,9 @@ import io.riverdb.base.error.StatusCode;
 /**
  * Provider-owned authority for monotonic progress transitions.
  *
- * <p>Each installer owns one private instance. Its opaque identity binds a progress carrier to
- * that provider, so another provider cannot resume or promote it.
+ * <p>Each installer owns one private instance and never exposes it to callers. The instance is the
+ * opaque capability: its identity binds a progress carrier to that provider, so another provider
+ * or a caller-created state machine cannot inspect, resume, or promote the provider-owned state.
  */
 public final class AtomicInstallStateMachine {
   private final Object capability = new Object();

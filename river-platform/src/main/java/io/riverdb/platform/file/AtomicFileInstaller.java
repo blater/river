@@ -6,8 +6,9 @@ import io.riverdb.base.error.StatusCode;
  * Resumable same-directory file installation.
  *
  * <p>Each call attempts at most one named boundary. {@code OK} can therefore mean safe progress
- * rather than terminal completion; callers check {@link AtomicInstallProgress#isComplete()}.
- * {@code RETRY} with {@code completionPending=true} means an operation was applied but its
+ * rather than terminal completion; callers use {@link #inspect} and check
+ * {@link AtomicInstallSnapshot#isComplete()}. {@code RETRY} with
+ * {@code completionPending=true} means an operation was applied but its
  * completion was withheld, and the next call polls that completion without repeating the
  * operation. {@link AtomicInstallPhase#RECOVERY_REQUIRED} requires reopen-based recovery.
  */

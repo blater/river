@@ -83,13 +83,14 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
           result,
           0);
     }
+    if (progressState.validateOwner(progress).isOk()
+        && progressState.phase(progress) == AtomicInstallPhase.RECOVERY_REQUIRED) {
+      return record(StatusCode.FENCED, AtomicInstallStep.NONE, progress, result, 0);
+    }
     StatusCode resumeStatus = progressState.resume(
         progress, request.version(), generation, request.contentLength());
     if (!resumeStatus.isOk()) {
       return record(resumeStatus, AtomicInstallStep.NONE, progress, result, 0);
-    }
-    if (progressState.phase(progress) == AtomicInstallPhase.RECOVERY_REQUIRED) {
-      return record(StatusCode.FENCED, AtomicInstallStep.NONE, progress, result, 0);
     }
     if (request.contentLength() > maxFileBytes) {
       return record(
