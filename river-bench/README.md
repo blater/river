@@ -1,6 +1,7 @@
 # River P09 prototypes
 
-Status: disposable, developer-only measurements; not a production API or format
+Status: partial P09 developer evidence; not P09 completion, a production API,
+format, or gate
 
 This module holds mechanisms used to test Phase 0 design assumptions. Production
 modules must never depend on `river-bench`, and none of the layouts, checksums,
@@ -10,12 +11,13 @@ high-water diagnostic rather than a queue correctness invariant.
 
 The current mechanisms cover:
 
-- bounded preallocated WAL claim/direct-encode/checksum/gap-free publication;
+- bounded preallocated WAL claim/direct-encode/checksum/gap-free publication,
+  including a small two-producer delayed-hole and saturation-recovery scenario;
 - reusable primitive columns and selection-vector scans;
 - 8/16/32 KiB positional NIO read/write/force against owned temporary files;
 - first-page-image versus double-write first-dirty/redirty/checkpoint-storm
   accounting, retaining WAL/staging/data bytes and force classes separately; and
-- a fixed-layout append/visibility-scan version-store alternative.
+- a fixed-layout append/read/visibility-scan version-store alternative.
 
 Run deterministic tests and all repository checks with:
 
@@ -38,6 +40,26 @@ on the developer machine and are not storage-device durability evidence.
 The smoke intentionally samples only 10,000 hot-path iterations; use JMH and a
 dedicated manifest for decisions or stable comparisons.
 
+The page-protection comparison is a deterministic accounting model. It treats
+the first-dirty FPI as an immutable page-image copy and the double-write path as
+a checkpoint staging copy, resets dirty state at every modeled checkpoint
+epoch, and reports those copies separately. It does not implement either
+recovery mechanism.
+
 For a short JMH mechanism check, run `:river-bench:jmhSmoke`. Normal JMH defaults
 on `MechanismBenchmark` provide longer warmup and measurement runs when invoked
 directly. Neither command is a release gate.
+
+## P09 evidence still required
+
+- dedicated-runner repetition, control variance, allocation profiling, and
+  multi-core producer/concurrency sweeps;
+- real WAL segmentation, rollover, group-force ordering, durable media, crash,
+  and recovery measurements;
+- production-representative page dirties, checkpoint scheduling, write
+  coalescing, FPI compression choices, and double-write recovery behavior;
+- comparison against accepted ADR assumptions followed by numeric budget
+  review.
+
+Until those exist, this module informs design discussion only and must not be
+used to mark P09, P05, or G0 complete.

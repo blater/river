@@ -44,6 +44,10 @@ public final class PreallocatedWalRing {
   }
 
   public StatusCode tryReserve(WalReservation target) {
+    if (target.state == WalReservationState.RESERVED
+        || target.state == WalReservationState.ENCODED) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     long sequence;
     long head;
     do {
@@ -56,8 +60,9 @@ public final class PreallocatedWalRing {
     } while (!claimed.compareAndSet(sequence, sequence + 1L));
 
     target.sequence = sequence;
+    target.generation++;
     target.offset = slotOffset(sequence);
-    target.encoded = false;
+    target.state = WalReservationState.RESERVED;
     counters.recordReservation(sequence + 1L - head);
     return StatusCode.OK;
   }
@@ -67,7 +72,8 @@ public final class PreallocatedWalRing {
       long transactionId,
       long value
   ) {
-    if (!isCurrentReservation(reservation)) {
+    if (reservation.state != WalReservationState.RESERVED
+        || !isCurrentReservation(reservation)) {
       return StatusCode.INVARIANT_BROKEN;
     }
     long sequence = reservation.sequence;
@@ -77,19 +83,20 @@ public final class PreallocatedWalRing {
     records.putLong(offset + TRANSACTION_OFFSET, transactionId);
     records.putLong(offset + VALUE_OFFSET, value);
     records.putLong(offset + CHECKSUM_OFFSET, checksum);
-    reservation.encoded = true;
+    reservation.state = WalReservationState.ENCODED;
     counters.recordEncodedBytes(RECORD_BYTES);
     return StatusCode.OK;
   }
 
   public StatusCode publish(WalReservation reservation) {
-    if (!reservation.encoded || !isCurrentReservation(reservation)) {
+    if (reservation.state != WalReservationState.ENCODED
+        || !isCurrentReservation(reservation)) {
       return StatusCode.INVARIANT_BROKEN;
     }
     long sequence = reservation.sequence;
     completedSequences.set(slot(sequence), sequence);
     counters.recordPublication();
-    reservation.encoded = false;
+    reservation.state = WalReservationState.PUBLISHED;
     advancePublicationFrontier();
     return StatusCode.OK;
   }

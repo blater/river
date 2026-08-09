@@ -76,6 +76,11 @@ public final class FixedVersionStore {
     return StatusCode.OK;
   }
 
+  public void clear() {
+    size = 0;
+    selectionCount = 0;
+  }
+
   public long sumVisibleValues() {
     long sum = 0L;
     for (int index = 0; index < selectionCount; index++) {

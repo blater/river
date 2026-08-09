@@ -3,12 +3,16 @@ package io.riverdb.bench.prototype;
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
 import java.io.IOException;
+import java.lang.management.BufferPoolMXBean;
 import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryUsage;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.openjdk.jol.info.ClassLayout;
 import org.openjdk.jol.vm.VM;
 
@@ -35,20 +39,41 @@ public final class PrototypeSmoke {
       Files.createDirectories(outputDirectory);
       AllocationMeter allocation = new AllocationMeter();
       Measurement wal = measureWal(allocation);
+      Measurement walMpsc = measureWalMpsc(allocation);
       Measurement vector = measureVector(allocation);
       Measurement versions = measureVersions(allocation);
+      Measurement versionAppendRead = measureVersionAppendRead(allocation);
       Measurement model = measureProtectionModel(allocation);
       Measurement[] pageIo = new Measurement[] {
         measurePageIo(8 * 1_024, allocation),
         measurePageIo(16 * 1_024, allocation),
         measurePageIo(32 * 1_024, allocation)
       };
-      for (Measurement measurement : pageIo) {
+      Measurement[] requiredMeasurements = new Measurement[] {
+        wal,
+        walMpsc,
+        vector,
+        versions,
+        versionAppendRead,
+        model,
+        pageIo[0],
+        pageIo[1],
+        pageIo[2]
+      };
+      for (Measurement measurement : requiredMeasurements) {
         if (!measurement.status.isOk()) {
           return measurement.status;
         }
       }
-      String results = resultsJson(wal, vector, versions, model, pageIo);
+      String results = resultsJson(
+        wal,
+        walMpsc,
+        vector,
+        versions,
+        versionAppendRead,
+        model,
+        pageIo
+      );
       String manifest = manifestJson(allocation.available);
       Files.writeString(
         outputDirectory.resolve("results.json"),
@@ -148,6 +173,213 @@ public final class PrototypeSmoke {
     return measurement;
   }
 
+  private static Measurement measureWalMpsc(AllocationMeter allocation) {
+    int producerIterations = HOT_ITERATIONS / 2;
+    var ring = new PreallocatedWalRing(128);
+    var start = new CountDownLatch(1);
+    var holeReserved = new CountDownLatch(1);
+    var secondPublished = new CountDownLatch(1);
+    var releaseHole = new CountDownLatch(1);
+    long[][] samples = new long[][] {
+      new long[producerIterations], new long[producerIterations]
+    };
+    long[] allocated = new long[2];
+    StatusCode[] producerStatuses = new StatusCode[] {StatusCode.OK, StatusCode.OK};
+    Thread first = Thread.ofPlatform().unstarted(() -> runWalProducer(
+      0,
+      producerIterations,
+      ring,
+      start,
+      holeReserved,
+      secondPublished,
+      releaseHole,
+      samples[0],
+      allocated,
+      producerStatuses,
+      allocation
+    ));
+    Thread second = Thread.ofPlatform().unstarted(() -> runWalProducer(
+      1,
+      producerIterations,
+      ring,
+      start,
+      holeReserved,
+      secondPublished,
+      releaseHole,
+      samples[1],
+      allocated,
+      producerStatuses,
+      allocation
+    ));
+    first.start();
+    second.start();
+    long started = System.nanoTime();
+    start.countDown();
+    StatusCode status = StatusCode.OK;
+    long delayedPublicationObserved = 0L;
+    long consumed = 0L;
+    var record = new WalRecord();
+    try {
+      if (!holeReserved.await(5L, TimeUnit.SECONDS)
+          || !secondPublished.await(5L, TimeUnit.SECONDS)) {
+        status = StatusCode.TIMEOUT;
+      } else if (ring.publishedSequence() == -1L) {
+        delayedPublicationObserved = 1L;
+      } else {
+        status = StatusCode.INVARIANT_BROKEN;
+      }
+      releaseHole.countDown();
+      long expected = (long) producerIterations * 2L;
+      while (status.isOk() && consumed < expected) {
+        StatusCode pollStatus = ring.poll(record);
+        if (pollStatus.isOk()) {
+          consumed++;
+        } else if (pollStatus == StatusCode.RETRY) {
+          Thread.onSpinWait();
+        } else {
+          status = pollStatus;
+        }
+      }
+      first.join(TimeUnit.SECONDS.toMillis(5L));
+      second.join(TimeUnit.SECONDS.toMillis(5L));
+      if (first.isAlive() || second.isAlive()) {
+        status = StatusCode.TIMEOUT;
+      } else if (!producerStatuses[0].isOk()) {
+        status = producerStatuses[0];
+      } else if (!producerStatuses[1].isOk()) {
+        status = producerStatuses[1];
+      }
+    } catch (InterruptedException failure) {
+      Thread.currentThread().interrupt();
+      status = StatusCode.CANCELLED;
+    } finally {
+      releaseHole.countDown();
+    }
+    long elapsed = System.nanoTime() - started;
+    long[] mergedSamples = new long[producerIterations * 2];
+    System.arraycopy(samples[0], 0, mergedSamples, 0, producerIterations);
+    System.arraycopy(
+      samples[1],
+      0,
+      mergedSamples,
+      producerIterations,
+      producerIterations
+    );
+    Measurement measurement = summarize(
+      "wal_ring_mpsc_delayed_hole",
+      status,
+      mergedSamples,
+      elapsed,
+      allocated[0] < 0L || allocated[1] < 0L ? -1L : allocated[0] + allocated[1]
+    );
+    measurement.operations = consumed;
+    measurement.bytes = ring.counters().encodedBytes();
+    measurement.copiedBytes = ring.counters().copiedBytes();
+    measurement.maximumOccupancy = ring.counters().maximumOccupancy();
+    measurement.backpressureEvents = ring.counters().backpressureEvents();
+    measurement.delayedPublicationObserved = delayedPublicationObserved;
+    measurement.saturationRecovered = verifySaturationRecovery();
+    if (measurement.saturationRecovered == 0L && status.isOk()) {
+      measurement.status = StatusCode.INVARIANT_BROKEN;
+    }
+    return measurement;
+  }
+
+  private static void runWalProducer(
+      int producer,
+      int iterations,
+      PreallocatedWalRing ring,
+      CountDownLatch start,
+      CountDownLatch holeReserved,
+      CountDownLatch secondPublished,
+      CountDownLatch releaseHole,
+      long[] samples,
+      long[] allocated,
+      StatusCode[] producerStatuses,
+      AllocationMeter allocation
+  ) {
+    var reservation = new WalReservation();
+    try {
+      start.await();
+      if (producer == 1) {
+        holeReserved.await();
+      }
+      long allocationBefore = allocation.currentThreadBytes();
+      for (int iteration = 0; iteration < iterations; iteration++) {
+        long operationStarted = System.nanoTime();
+        StatusCode status;
+        do {
+          status = ring.tryReserve(reservation);
+          if (status == StatusCode.RESOURCE_EXHAUSTED) {
+            Thread.onSpinWait();
+          }
+        } while (status == StatusCode.RESOURCE_EXHAUSTED);
+        if (status.isOk()) {
+          long transaction = ((long) producer << 32) | iteration;
+          status = ring.encode(reservation, transaction, transaction * 17L);
+        }
+        if (status.isOk() && producer == 0 && iteration == 0) {
+          holeReserved.countDown();
+          releaseHole.await();
+        }
+        if (status.isOk()) {
+          status = ring.publish(reservation);
+        }
+        if (status.isOk() && producer == 1 && iteration == 0) {
+          secondPublished.countDown();
+        }
+        samples[iteration] = System.nanoTime() - operationStarted;
+        if (!status.isOk()) {
+          producerStatuses[producer] = status;
+          break;
+        }
+      }
+      allocated[producer] = allocation.delta(allocationBefore);
+    } catch (InterruptedException failure) {
+      Thread.currentThread().interrupt();
+      producerStatuses[producer] = StatusCode.CANCELLED;
+    }
+  }
+
+  private static long verifySaturationRecovery() {
+    var ring = new PreallocatedWalRing(2);
+    var first = new WalReservation();
+    var second = new WalReservation();
+    var third = new WalReservation();
+    var record = new WalRecord();
+    if (!reserveEncodePublish(ring, first, 1L).isOk()
+        || !reserveEncodePublish(ring, second, 2L).isOk()
+        || ring.tryReserve(third) != StatusCode.RESOURCE_EXHAUSTED
+        || !ring.poll(record).isOk()
+        || record.transactionId() != 1L
+        || !ring.tryReserve(third).isOk()
+        || !ring.encode(third, 3L, 3L).isOk()
+        || !ring.publish(third).isOk()
+        || !ring.poll(record).isOk()
+        || record.transactionId() != 2L
+        || !ring.poll(record).isOk()
+        || record.transactionId() != 3L
+        || ring.occupancy() != 0L) {
+      return 0L;
+    }
+    return 1L;
+  }
+
+  private static StatusCode reserveEncodePublish(
+      PreallocatedWalRing ring,
+      WalReservation reservation,
+      long value
+  ) {
+    StatusCode status = ring.tryReserve(reservation);
+    if (status.isOk()) {
+      status = ring.encode(reservation, value, value);
+    }
+    if (status.isOk()) {
+      status = ring.publish(reservation);
+    }
+    return status;
+  }
+
   private static Measurement measureVersions(AllocationMeter allocation) {
     var store = new FixedVersionStore(8_192);
     for (int record = 0; record < 8_192; record++) {
@@ -184,12 +416,55 @@ public final class PrototypeSmoke {
     return measurement;
   }
 
+  private static Measurement measureVersionAppendRead(AllocationMeter allocation) {
+    var store = new FixedVersionStore(1_024);
+    var record = new VersionRecord();
+    for (int iteration = 0; iteration < 1_024; iteration++) {
+      store.append(iteration, iteration, 0L, iteration * 13L, 0L);
+      store.read(iteration, record);
+    }
+    store.clear();
+    long[] samples = new long[HOT_ITERATIONS];
+    long allocationBefore = allocation.currentThreadBytes();
+    long started = System.nanoTime();
+    long sink = 0L;
+    StatusCode status = StatusCode.OK;
+    for (int iteration = 0; iteration < HOT_ITERATIONS; iteration++) {
+      if (store.size() == 1_024) {
+        store.clear();
+      }
+      long operationStarted = System.nanoTime();
+      status = store.append(iteration, iteration, 0L, iteration * 13L, 0L);
+      if (status.isOk()) {
+        status = store.read(store.size() - 1, record);
+      }
+      samples[iteration] = System.nanoTime() - operationStarted;
+      sink ^= record.value();
+      if (!status.isOk()) {
+        break;
+      }
+    }
+    long elapsed = System.nanoTime() - started;
+    Measurement measurement = summarize(
+      "fixed_version_append_read",
+      status,
+      samples,
+      elapsed,
+      allocation.delta(allocationBefore)
+    );
+    measurement.operations = HOT_ITERATIONS;
+    measurement.bytes = (long) HOT_ITERATIONS * FixedVersionStore.RECORD_BYTES;
+    measurement.copiedBytes = store.copiedBytes();
+    measurement.checkValue = sink;
+    return measurement;
+  }
+
   private static Measurement measureProtectionModel(AllocationMeter allocation) {
     var model = new PageProtectionModel(4_096, 16 * 1_024, 128, 64);
     var result = new PageProtectionResult();
     for (int iteration = 0; iteration < 50; iteration++) {
-      model.firstPageImage(4_096, iteration, result);
-      model.doubleWrite(4_096, iteration, result);
+      model.firstPageImageEpochs(4, 1_024, iteration, result);
+      model.doubleWriteEpochs(4, 1_024, iteration, result);
     }
     long[] samples = new long[2_000];
     long allocationBefore = allocation.currentThreadBytes();
@@ -198,9 +473,9 @@ public final class PrototypeSmoke {
     for (int iteration = 0; iteration < samples.length; iteration++) {
       long operationStarted = System.nanoTime();
       if ((iteration & 1) == 0) {
-        model.firstPageImage(4_096, iteration, result);
+        model.firstPageImageEpochs(4, 1_024, iteration, result);
       } else {
-        model.doubleWrite(4_096, iteration, result);
+        model.doubleWriteEpochs(4, 1_024, iteration, result);
       }
       samples[iteration] = System.nanoTime() - operationStarted;
       sink ^= result.totalBytes();
@@ -215,7 +490,7 @@ public final class PrototypeSmoke {
     );
     measurement.operations = (long) samples.length * 4_096L;
     measurement.checkValue = sink;
-    model.firstPageImage(4_096, 17L, result);
+    model.firstPageImageEpochs(4, 1_024, 17L, result);
     measurement.firstPageImageBytes = result.totalBytes();
     measurement.firstPageImageWalBytes = result.walBytes();
     measurement.firstPageImageStagingBytes = result.stagingBytes();
@@ -224,7 +499,9 @@ public final class PrototypeSmoke {
     measurement.firstPageImageStagingForces = result.stagingForceCalls();
     measurement.firstPageImageDataForces = result.dataForceCalls();
     measurement.firstPageImageCopiedBytes = result.copiedBytes();
-    model.doubleWrite(4_096, 17L, result);
+    measurement.firstPageImageCopies = result.immutableImageCopies();
+    measurement.checkpointEpochs = result.checkpointEpochs();
+    model.doubleWriteEpochs(4, 1_024, 17L, result);
     measurement.doubleWriteBytes = result.totalBytes();
     measurement.doubleWriteWalBytes = result.walBytes();
     measurement.doubleWriteStagingBytes = result.stagingBytes();
@@ -233,6 +510,7 @@ public final class PrototypeSmoke {
     measurement.doubleWriteStagingForces = result.stagingForceCalls();
     measurement.doubleWriteDataForces = result.dataForceCalls();
     measurement.doubleWriteCopiedBytes = result.copiedBytes();
+    measurement.doubleWriteCopies = result.stagingCopies();
     return measurement;
   }
 
@@ -349,8 +627,10 @@ public final class PrototypeSmoke {
 
   private static String resultsJson(
       Measurement wal,
+      Measurement walMpsc,
       Measurement vector,
       Measurement versions,
+      Measurement versionAppendRead,
       Measurement model,
       Measurement[] pageIo
   ) {
@@ -362,8 +642,10 @@ public final class PrototypeSmoke {
     json.append("  \"gate_claim\": \"none_P05_G0_not_claimed\",\n");
     json.append("  \"measurements\": [\n");
     appendMeasurement(json, wal, true);
+    appendMeasurement(json, walMpsc, true);
     appendMeasurement(json, vector, true);
     appendMeasurement(json, versions, true);
+    appendMeasurement(json, versionAppendRead, true);
     appendMeasurement(json, model, true);
     for (int index = 0; index < pageIo.length; index++) {
       appendMeasurement(json, pageIo[index], index + 1 < pageIo.length);
@@ -397,6 +679,10 @@ public final class PrototypeSmoke {
       .append(measurement.maximumOccupancy).append(",\n");
     json.append("      \"backpressure_events\": ")
       .append(measurement.backpressureEvents).append(",\n");
+    json.append("      \"delayed_publication_observed\": ")
+      .append(measurement.delayedPublicationObserved).append(",\n");
+    json.append("      \"saturation_recovered\": ")
+      .append(measurement.saturationRecovered).append(",\n");
     json.append("      \"force_calls\": ").append(measurement.forceCalls).append(",\n");
     json.append("      \"page_size\": ").append(measurement.pageSize).append(",\n");
     json.append("      \"fpi_total_bytes\": ")
@@ -415,6 +701,8 @@ public final class PrototypeSmoke {
       .append(measurement.firstPageImageDataForces).append(",\n");
     json.append("      \"fpi_copied_bytes\": ")
       .append(measurement.firstPageImageCopiedBytes).append(",\n");
+    json.append("      \"fpi_immutable_image_copies\": ")
+      .append(measurement.firstPageImageCopies).append(",\n");
     json.append("      \"double_write_total_bytes\": ")
       .append(measurement.doubleWriteBytes).append(",\n");
     json.append("      \"double_write_wal_bytes\": ")
@@ -431,18 +719,42 @@ public final class PrototypeSmoke {
       .append(measurement.doubleWriteDataForces).append(",\n");
     json.append("      \"double_write_copied_bytes\": ")
       .append(measurement.doubleWriteCopiedBytes).append(",\n");
+    json.append("      \"double_write_staging_copies\": ")
+      .append(measurement.doubleWriteCopies).append(",\n");
+    json.append("      \"checkpoint_epochs\": ")
+      .append(measurement.checkpointEpochs).append(",\n");
     json.append("      \"check_value\": ").append(measurement.checkValue).append("\n");
     json.append("    }");
     json.append(comma ? ",\n" : "\n");
   }
 
-  private static String manifestJson(boolean allocationAvailable) {
+  private static String manifestJson(boolean allocationAvailable) throws IOException {
     String commit = commandOutput("git", "rev-parse", "HEAD");
     String dirty = commandOutput("git", "status", "--porcelain").isEmpty()
       ? "false" : "true";
     long reservationBytes = ClassLayout.parseInstance(new WalReservation()).instanceSize();
     long recordBytes = ClassLayout.parseInstance(new WalRecord()).instanceSize();
     int objectAlignment = VM.current().objectAlignment();
+    MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+    String jvmArguments = jsonStringArray(
+      ManagementFactory.getRuntimeMXBean().getInputArguments().toArray(String[]::new),
+      true
+    );
+    String[] collectorNames = ManagementFactory.getGarbageCollectorMXBeans().stream()
+      .map(java.lang.management.GarbageCollectorMXBean::getName)
+      .toArray(String[]::new);
+    String collectors = jsonStringArray(collectorNames, false);
+    long directCount = -1L;
+    long directMemoryUsed = -1L;
+    long directCapacity = -1L;
+    for (BufferPoolMXBean pool : ManagementFactory.getPlatformMXBeans(BufferPoolMXBean.class)) {
+      if ("direct".equals(pool.getName())) {
+        directCount = pool.getCount();
+        directMemoryUsed = pool.getMemoryUsed();
+        directCapacity = pool.getTotalCapacity();
+      }
+    }
+    var fileStore = Files.getFileStore(Path.of(System.getProperty("java.io.tmpdir")));
     return "{\n"
       + "  \"schema_version\": 1,\n"
       + "  \"evidence_class\": \"developer_only_not_gate\",\n"
@@ -454,6 +766,18 @@ public final class PrototypeSmoke {
       + "  \"architecture\": \"" + jsonEscape(System.getProperty("os.arch")) + "\",\n"
       + "  \"jdk\": \"" + jsonEscape(System.getProperty("java.runtime.version")) + "\",\n"
       + "  \"jvm\": \"" + jsonEscape(System.getProperty("java.vm.name")) + "\",\n"
+      + "  \"jvm_arguments\": " + jvmArguments + ",\n"
+      + "  \"gc_collectors\": " + collectors + ",\n"
+      + "  \"heap_init_bytes\": " + heap.getInit() + ",\n"
+      + "  \"heap_used_bytes\": " + heap.getUsed() + ",\n"
+      + "  \"heap_committed_bytes\": " + heap.getCommitted() + ",\n"
+      + "  \"heap_max_bytes\": " + heap.getMax() + ",\n"
+      + "  \"direct_buffer_count_current\": " + directCount + ",\n"
+      + "  \"direct_buffer_memory_used_current_bytes\": "
+      + directMemoryUsed + ",\n"
+      + "  \"direct_buffer_capacity_current_bytes\": " + directCapacity + ",\n"
+      + "  \"temp_filesystem_name\": \"" + jsonEscape(fileStore.name()) + "\",\n"
+      + "  \"temp_filesystem_type\": \"" + jsonEscape(fileStore.type()) + "\",\n"
       + "  \"available_processors\": "
       + Runtime.getRuntime().availableProcessors() + ",\n"
       + "  \"thread_allocation_measurement_available\": "
@@ -470,6 +794,9 @@ public final class PrototypeSmoke {
       + "    \"single_developer_machine\",\n"
       + "    \"no_dedicated_runner_or_control_variance\",\n"
       + "    \"no_end_to_end_sql_or_crash_recovery\",\n"
+      + "    \"small_mpsc_scenario_is_not_a_scaling_result\",\n"
+      + "    \"filesystem_and_device_cache_policy_not_proven\",\n"
+      + "    \"page_protection_is_accounting_model_only\",\n"
       + "    \"models_are_not_production_formats_or_APIs\",\n"
       + "    \"does_not_freeze_budgets_or_claim_P05_or_G0\"\n"
       + "  ]\n"
@@ -492,6 +819,32 @@ public final class PrototypeSmoke {
 
   private static String jsonEscape(String value) {
     return value.replace("\\", "\\\\").replace("\"", "\\\"");
+  }
+
+  private static String jsonStringArray(String[] values, boolean redactProperties) {
+    StringBuilder json = new StringBuilder();
+    json.append('[');
+    for (int index = 0; index < values.length; index++) {
+      if (index > 0) {
+        json.append(", ");
+      }
+      String value = redactProperties ? redactArgument(values[index]) : values[index];
+      json.append('\"').append(jsonEscape(value)).append('\"');
+    }
+    json.append(']');
+    return json.toString();
+  }
+
+  private static String redactArgument(String argument) {
+    String lower = argument.toLowerCase(java.util.Locale.ROOT);
+    if ((lower.contains("password")
+        || lower.contains("secret")
+        || lower.contains("token")
+        || lower.contains("key"))
+        && argument.indexOf('=') >= 0) {
+      return argument.substring(0, argument.indexOf('=') + 1) + "<redacted>";
+    }
+    return argument;
   }
 
   private static final class AllocationMeter {
@@ -534,6 +887,8 @@ public final class PrototypeSmoke {
     long copiedBytes;
     long maximumOccupancy;
     long backpressureEvents;
+    long delayedPublicationObserved;
+    long saturationRecovered;
     long forceCalls;
     long pageSize;
     long firstPageImageBytes;
@@ -552,6 +907,9 @@ public final class PrototypeSmoke {
     long doubleWriteDataForces;
     long firstPageImageCopiedBytes;
     long doubleWriteCopiedBytes;
+    long firstPageImageCopies;
+    long doubleWriteCopies;
+    long checkpointEpochs;
     long checkValue;
   }
 }

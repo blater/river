@@ -22,53 +22,83 @@ public final class PageProtectionModel {
   }
 
   public void firstPageImage(int dirtyOperations, long seed, PageProtectionResult out) {
+    firstPageImageEpochs(1, dirtyOperations, seed, out);
+  }
+
+  public void firstPageImageEpochs(
+      int epochCount,
+      int dirtyOperationsPerEpoch,
+      long seed,
+      PageProtectionResult out
+  ) {
     reset(out);
-    clearDirtied();
-    long state = seed;
-    for (int operation = 0; operation < dirtyOperations; operation++) {
-      state = next(state);
-      int page = (int) Long.remainderUnsigned(state, pageCount);
-      if (!dirtied[page]) {
-        dirtied[page] = true;
-        out.walBytes += pageSize;
-        out.copiedBytes += pageSize;
-        out.firstDirtyPages++;
-      } else {
-        out.redirties++;
+    for (int epoch = 0; epoch < epochCount; epoch++) {
+      clearDirtied();
+      long state = seed ^ (epoch * 0x9E3779B97F4A7C15L);
+      long epochFirstDirties = 0L;
+      for (int operation = 0; operation < dirtyOperationsPerEpoch; operation++) {
+        state = next(state);
+        int page = (int) Long.remainderUnsigned(state, pageCount);
+        if (!dirtied[page]) {
+          dirtied[page] = true;
+          out.walBytes += pageSize;
+          out.copiedBytes += pageSize;
+          out.firstDirtyPages++;
+          out.immutableImageCopies++;
+          out.immutableImageCopyBytes += pageSize;
+          epochFirstDirties++;
+        } else {
+          out.redirties++;
+        }
+        out.walBytes += deltaBytes;
+        out.dirties++;
       }
-      out.walBytes += deltaBytes;
-      out.dirties++;
+      out.dataBytes += epochFirstDirties * pageSize;
+      out.walForceCalls += divideRoundUp(dirtyOperationsPerEpoch, groupSize);
+      out.dataForceCalls += epochFirstDirties == 0L ? 0L : 1L;
+      out.checkpointEpochs++;
     }
-    out.dataBytes = out.firstDirtyPages * pageSize;
-    // FPI records share WAL group commits; checkpoint pages need one data force.
-    out.walForceCalls = divideRoundUp(dirtyOperations, groupSize);
-    out.dataForceCalls = out.firstDirtyPages == 0L ? 0L : 1L;
   }
 
   public void doubleWrite(int dirtyOperations, long seed, PageProtectionResult out) {
+    doubleWriteEpochs(1, dirtyOperations, seed, out);
+  }
+
+  public void doubleWriteEpochs(
+      int epochCount,
+      int dirtyOperationsPerEpoch,
+      long seed,
+      PageProtectionResult out
+  ) {
     reset(out);
-    clearDirtied();
-    long state = seed;
-    for (int operation = 0; operation < dirtyOperations; operation++) {
-      state = next(state);
-      int page = (int) Long.remainderUnsigned(state, pageCount);
-      if (!dirtied[page]) {
-        dirtied[page] = true;
-        out.firstDirtyPages++;
-      } else {
-        out.redirties++;
+    for (int epoch = 0; epoch < epochCount; epoch++) {
+      clearDirtied();
+      long state = seed ^ (epoch * 0x9E3779B97F4A7C15L);
+      long epochFirstDirties = 0L;
+      for (int operation = 0; operation < dirtyOperationsPerEpoch; operation++) {
+        state = next(state);
+        int page = (int) Long.remainderUnsigned(state, pageCount);
+        if (!dirtied[page]) {
+          dirtied[page] = true;
+          out.firstDirtyPages++;
+          epochFirstDirties++;
+        } else {
+          out.redirties++;
+        }
+        out.walBytes += deltaBytes;
+        out.dirties++;
       }
-      out.walBytes += deltaBytes;
-      out.dirties++;
+      long pageBytes = epochFirstDirties * pageSize;
+      out.stagingBytes += pageBytes;
+      out.dataBytes += pageBytes;
+      out.copiedBytes += pageBytes;
+      out.stagingCopies += epochFirstDirties;
+      out.stagingCopyBytes += pageBytes;
+      out.walForceCalls += divideRoundUp(dirtyOperationsPerEpoch, groupSize);
+      out.stagingForceCalls += divideRoundUp(epochFirstDirties, groupSize);
+      out.dataForceCalls += epochFirstDirties == 0L ? 0L : 1L;
+      out.checkpointEpochs++;
     }
-    long pageBytes = out.firstDirtyPages * pageSize;
-    out.stagingBytes = pageBytes;
-    out.dataBytes = pageBytes;
-    out.copiedBytes = pageBytes;
-    // Staging must be stable before checkpoint pages reach their home positions.
-    out.walForceCalls = divideRoundUp(dirtyOperations, groupSize);
-    out.stagingForceCalls = divideRoundUp(out.firstDirtyPages, groupSize);
-    out.dataForceCalls = out.firstDirtyPages == 0L ? 0L : 1L;
   }
 
   private void clearDirtied() {
@@ -88,6 +118,11 @@ public final class PageProtectionModel {
     out.dirties = 0L;
     out.firstDirtyPages = 0L;
     out.redirties = 0L;
+    out.checkpointEpochs = 0L;
+    out.immutableImageCopies = 0L;
+    out.immutableImageCopyBytes = 0L;
+    out.stagingCopies = 0L;
+    out.stagingCopyBytes = 0L;
   }
 
   private static long next(long state) {

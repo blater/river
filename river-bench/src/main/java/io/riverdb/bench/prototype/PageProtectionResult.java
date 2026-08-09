@@ -12,6 +12,11 @@ public final class PageProtectionResult {
   long dirties;
   long firstDirtyPages;
   long redirties;
+  long checkpointEpochs;
+  long immutableImageCopies;
+  long immutableImageCopyBytes;
+  long stagingCopies;
+  long stagingCopyBytes;
 
   public long walBytes() {
     return walBytes;
@@ -63,5 +68,25 @@ public final class PageProtectionResult {
 
   public long redirties() {
     return redirties;
+  }
+
+  public long checkpointEpochs() {
+    return checkpointEpochs;
+  }
+
+  public long immutableImageCopies() {
+    return immutableImageCopies;
+  }
+
+  public long immutableImageCopyBytes() {
+    return immutableImageCopyBytes;
+  }
+
+  public long stagingCopies() {
+    return stagingCopies;
+  }
+
+  public long stagingCopyBytes() {
+    return stagingCopyBytes;
   }
 }

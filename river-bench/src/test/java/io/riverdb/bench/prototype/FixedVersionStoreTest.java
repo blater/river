@@ -30,5 +30,12 @@ final class FixedVersionStoreTest {
 
     assertEquals(2, store.scanVisible(6L));
     assertEquals(500L, store.sumVisibleValues());
+
+    store.clear();
+    assertEquals(0, store.size());
+    assertEquals(StatusCode.INVARIANT_BROKEN, store.read(0, record));
+    assertEquals(StatusCode.OK, store.append(20L, 9L, 0L, 500L, 1L));
+    assertEquals(StatusCode.OK, store.read(0, record));
+    assertEquals(20L, record.rowId());
   }
 }

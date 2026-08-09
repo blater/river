@@ -46,7 +46,9 @@ public class MechanismBenchmark {
   @State(Scope.Thread)
   public static class VersionState {
     final FixedVersionStore store = new FixedVersionStore(4_096);
+    final VersionRecord record = new VersionRecord();
     long snapshot;
+    long appendSequence;
 
     @Setup(Level.Trial)
     public void setup() {
@@ -126,6 +128,32 @@ public class MechanismBenchmark {
     state.snapshot = state.snapshot + 1L & 255L;
     state.store.scanVisible(state.snapshot);
     return state.store.sumVisibleValues();
+  }
+
+  @Benchmark
+  public long fixedVersionAppendRead(VersionState state) {
+    long sequence = state.appendSequence++;
+    StatusCode status = state.store.append(
+      sequence,
+      sequence,
+      0L,
+      sequence * 13L,
+      0L
+    );
+    if (status == StatusCode.RESOURCE_EXHAUSTED) {
+      state.store.clear();
+      status = state.store.append(
+        sequence,
+        sequence,
+        0L,
+        sequence * 13L,
+        0L
+      );
+    }
+    if (status.isOk()) {
+      status = state.store.read(state.store.size() - 1, state.record);
+    }
+    return status.stableCode() + state.record.value();
   }
 
   @Benchmark
