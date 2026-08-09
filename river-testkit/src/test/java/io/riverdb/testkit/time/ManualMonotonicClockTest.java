@@ -19,4 +19,17 @@ final class ManualMonotonicClockTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, nearLimit.advanceBy(2));
     assertEquals(Long.MAX_VALUE - 1, nearLimit.nanoTime());
   }
+
+  @Test
+  void foreignThreadCannotAdvanceEventLoopTime() throws InterruptedException {
+    ManualMonotonicClock clock = new ManualMonotonicClock(5);
+    StatusCode[] status = new StatusCode[1];
+    Thread foreign = new Thread(() -> status[0] = clock.advanceBy(1));
+
+    foreign.start();
+    foreign.join();
+
+    assertEquals(StatusCode.NOT_OWNER, status[0]);
+    assertEquals(5, clock.nanoTime());
+  }
 }

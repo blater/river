@@ -222,6 +222,95 @@ final class DeterministicSchedulerTest {
     assertEquals(1, cancellations);
   }
 
+  @Test
+  void criticalClassesMakeRoundRobinProgressUnderSustainedOverload() {
+    ManualMonotonicClock clock = new ManualMonotonicClock(0);
+    ScheduleTrace trace = new ScheduleTrace(40);
+    DeterministicScheduler scheduler = scheduler(8, 1, 91, clock, trace);
+    SchedulingClass[] criticalClasses = {
+        SchedulingClass.JOURNAL,
+        SchedulingClass.RECOVERY,
+        SchedulingClass.CONSENSUS,
+        SchedulingClass.CHECKPOINT
+    };
+    int[] executions = new int[SchedulingClass.values().length];
+    long[] nextTaskId = {100};
+    io.riverdb.platform.schedule.ScheduledTask[] repeatingTasks =
+        new io.riverdb.platform.schedule.ScheduledTask[criticalClasses.length];
+    for (int index = 0; index < criticalClasses.length; index++) {
+      int classIndex = index;
+      repeatingTasks[index] = () -> {
+        SchedulingClass schedulingClass = criticalClasses[classIndex];
+        executions[schedulingClass.ordinal()]++;
+        return scheduler.schedule(
+            schedulingClass,
+            0,
+            nextTaskId[0]++,
+            repeatingTasks[classIndex]);
+      };
+      assertEquals(
+          StatusCode.OK,
+          scheduler.schedule(
+              criticalClasses[index],
+              0,
+              nextTaskId[0]++,
+              repeatingTasks[index]));
+    }
+    for (int extraJournal = 0; extraJournal < 4; extraJournal++) {
+      assertEquals(
+          StatusCode.OK,
+          scheduler.schedule(
+              SchedulingClass.JOURNAL,
+              0,
+              nextTaskId[0]++,
+              repeatingTasks[0]));
+    }
+
+    for (int execution = 0; execution < 40; execution++) {
+      assertEquals(StatusCode.OK, scheduler.runNext());
+    }
+
+    for (SchedulingClass schedulingClass : criticalClasses) {
+      assertEquals(10, executions[schedulingClass.ordinal()]);
+    }
+    assertEquals(8, scheduler.pendingTasks());
+  }
+
+  @Test
+  void foreignThreadAndReentrantDriveAreRejectedAndCallbackRunsUnlocked()
+      throws InterruptedException {
+    ManualMonotonicClock clock = new ManualMonotonicClock(0);
+    ScheduleTrace trace = new ScheduleTrace(1);
+    DeterministicScheduler scheduler = scheduler(2, 0, 23, clock, trace);
+    StatusCode[] foreignStatuses = new StatusCode[2];
+    Thread foreign = new Thread(() -> {
+      foreignStatuses[0] = scheduler.schedule(
+          SchedulingClass.FOREGROUND_SQL, 0, 99, () -> StatusCode.OK);
+      foreignStatuses[1] = scheduler.runNext();
+    });
+    foreign.start();
+    foreign.join();
+    assertEquals(StatusCode.NOT_OWNER, foreignStatuses[0]);
+    assertEquals(StatusCode.NOT_OWNER, foreignStatuses[1]);
+
+    StatusCode[] reentrantStatus = new StatusCode[1];
+    boolean[] heldMonitor = new boolean[1];
+    assertEquals(
+        StatusCode.OK,
+        scheduler.schedule(
+            SchedulingClass.FOREGROUND_SQL,
+            0,
+            1,
+            () -> {
+              heldMonitor[0] = Thread.holdsLock(scheduler);
+              reentrantStatus[0] = scheduler.runNext();
+              return StatusCode.OK;
+            }));
+    assertEquals(StatusCode.OK, scheduler.runNext());
+    assertEquals(StatusCode.CONFLICT, reentrantStatus[0]);
+    assertEquals(false, heldMonitor[0]);
+  }
+
   private static ScheduleTrace runWorkload(long seed) {
     ManualMonotonicClock clock = new ManualMonotonicClock(1_000);
     ScheduleTrace trace = new ScheduleTrace(6);

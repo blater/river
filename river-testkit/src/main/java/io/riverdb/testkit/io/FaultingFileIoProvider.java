@@ -35,6 +35,12 @@ public final class FaultingFileIoProvider implements FileIoProvider {
   private int openHandles;
   private long operationSequence;
   private long generation = 1;
+  private long handleAllocations;
+  private long fileAllocations;
+  private long readCopyBytes;
+  private long writeCopyBytes;
+  private long durableCopyBytes;
+  private long recoveryCopyBytes;
   private boolean running = true;
 
   public FaultingFileIoProvider(
@@ -74,8 +80,10 @@ public final class FaultingFileIoProvider implements FileIoProvider {
       }
       modelFile = new ModelFile(fileName, maxFileBytes);
       files[fileCount++] = modelFile;
+      fileAllocations++;
     }
     openHandles++;
+    handleAllocations++;
     result.setFile(new ModelHandle(modelFile, generation));
     return StatusCode.OK;
   }
@@ -101,6 +109,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
 
   private void performCrash() {
     for (int index = 0; index < fileCount; index++) {
+      recoveryCopyBytes += files[index].durableSize;
       files[index].restoreDurable();
     }
     running = false;
@@ -148,6 +157,17 @@ public final class FaultingFileIoProvider implements FileIoProvider {
 
   public synchronized int openHandleCount() {
     return openHandles;
+  }
+
+  public synchronized StatusCode snapshotCounters(FileModelCounters result) {
+    result.set(
+        handleAllocations,
+        fileAllocations,
+        readCopyBytes,
+        writeCopyBytes,
+        durableCopyBytes,
+        recoveryCopyBytes);
+    return StatusCode.OK;
   }
 
   private FaultAction decide(
@@ -248,6 +268,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
       for (int index = 0; index < transferred; index++) {
         target.put((byte) (file.volatileBytes[(int) position + index] ^ xorMask));
       }
+      readCopyBytes += transferred;
       result.setBytesTransferred(transferred);
       return action == FaultAction.DETECTED_CORRUPTION
           ? StatusCode.CORRUPTION
@@ -291,6 +312,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
         resultStatus = StatusCode.RESOURCE_EXHAUSTED;
       }
       source.get(file.volatileBytes, (int) position, transferred);
+      writeCopyBytes += transferred;
       file.volatileSize = Math.max(file.volatileSize, (int) position + transferred);
       result.setBytesTransferred(transferred);
       if (action == FaultAction.TORN_WRITE) {
@@ -300,6 +322,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
             file.durableBytes,
             (int) position,
             transferred);
+        durableCopyBytes += transferred;
         file.durableSize = Math.max(file.durableSize, (int) position + transferred);
       }
       return resultStatus;
@@ -327,6 +350,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
             ? StatusCode.RESOURCE_EXHAUSTED
             : StatusCode.IO_FAILURE;
       }
+      durableCopyBytes += file.volatileSize;
       file.publishDurable();
       return StatusCode.OK;
     }

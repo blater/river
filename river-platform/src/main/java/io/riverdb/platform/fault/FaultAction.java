@@ -24,7 +24,9 @@ public enum FaultAction {
     }
     return switch (this) {
       case NONE, CRASH, CANCEL -> true;
-      case RESTART -> operation != FaultOperation.CRASH;
+      case RESTART -> operation != FaultOperation.CRASH
+          && operation != FaultOperation.SCHEDULE
+          && operation != FaultOperation.RUN_TASK;
       case SHORT_READ, CORRUPT_READ, DETECTED_CORRUPTION ->
           operation == FaultOperation.READ;
       case SHORT_WRITE, PARTIAL_WRITE, TORN_WRITE -> operation == FaultOperation.WRITE;

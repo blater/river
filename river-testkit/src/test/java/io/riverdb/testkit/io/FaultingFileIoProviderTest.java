@@ -2,6 +2,8 @@ package io.riverdb.testkit.io;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
@@ -15,6 +17,7 @@ import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.OpenFileResult;
 import io.riverdb.testkit.crash.CrashPointController;
+import io.riverdb.testkit.crash.FaultTrace;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
@@ -264,6 +267,109 @@ final class FaultingFileIoProviderTest {
     assertEquals(StatusCode.CLOSED, write(file, 0, new byte[] {1}));
   }
 
+  @Test
+  void boundedFaultTraceCombinesActionAndIoSequenceButOmitsDisabledPoints() {
+    FaultTrace trace = new FaultTrace(4);
+    Fixture fixture = new Fixture(3, trace);
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.write(),
+            FaultOperation.WRITE,
+            1,
+            1,
+            FaultAction.SHORT_WRITE,
+            2));
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.force(),
+            FaultOperation.FORCE,
+            1,
+            1,
+            FaultAction.FORCE_FAILURE,
+            0));
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.read(),
+            FaultOperation.READ,
+            1,
+            1,
+            FaultAction.DETECTED_CORRUPTION,
+            1));
+    DurableFile file = fixture.open();
+    assertEquals(StatusCode.OK, write(file, 0, new byte[] {1, 2, 3}));
+    assertEquals(StatusCode.IO_FAILURE, file.force(ForceMode.CONTENT));
+    FileSizeResult sizeResult = new FileSizeResult();
+    assertEquals(StatusCode.OK, file.size(sizeResult));
+    assertEquals(2, trace.size());
+    assertArrayEquals(new byte[] {0, 3}, read(file, 0, 2, StatusCode.CORRUPTION));
+
+    assertEquals(3, trace.size());
+    assertSame(fixture.points.write(), trace.point(0));
+    assertEquals(FaultOperation.WRITE, trace.operation(0));
+    assertEquals(FaultAction.SHORT_WRITE, trace.action(0));
+    assertEquals(2, trace.argument(0));
+    assertEquals(FaultOperation.FORCE, trace.operation(1));
+    assertEquals(FaultAction.FORCE_FAILURE, trace.action(1));
+    assertEquals(FaultOperation.READ, trace.operation(2));
+    assertEquals(FaultAction.DETECTED_CORRUPTION, trace.action(2));
+    assertTrue(trace.sequence(0) < trace.sequence(1));
+    assertTrue(trace.sequence(1) < trace.sequence(2));
+    assertEquals(StatusCode.OK, fixture.controller.traceStatus());
+  }
+
+  @Test
+  void faultTraceReportsBoundWithoutOverwritingRecordedEntry() {
+    FaultTrace trace = new FaultTrace(1);
+    Fixture fixture = new Fixture(2, trace);
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.write(),
+            FaultOperation.WRITE,
+            1,
+            1,
+            FaultAction.SHORT_WRITE,
+            1));
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.read(),
+            FaultOperation.READ,
+            1,
+            1,
+            FaultAction.SHORT_READ,
+            1));
+    DurableFile file = fixture.open();
+    assertEquals(StatusCode.OK, write(file, 0, new byte[] {1, 2}));
+    assertArrayEquals(new byte[] {1}, read(file, 0, 2, StatusCode.OK));
+
+    assertEquals(1, trace.size());
+    assertEquals(FaultAction.SHORT_WRITE, trace.action(0));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.controller.traceStatus());
+  }
+
+  @Test
+  void exposesCallerOwnedAllocationAndCopyCountersForP09() {
+    Fixture fixture = new Fixture(1);
+    DurableFile file = fixture.open();
+    assertEquals(StatusCode.OK, write(file, 0, new byte[] {1, 2, 3}));
+    assertEquals(StatusCode.OK, file.force(ForceMode.CONTENT));
+    assertArrayEquals(new byte[] {1, 2, 3}, read(file, 0, 3, StatusCode.OK));
+    assertEquals(StatusCode.OK, fixture.provider.crash());
+    FileModelCounters counters = new FileModelCounters();
+
+    assertEquals(StatusCode.OK, fixture.provider.snapshotCounters(counters));
+    assertEquals(1, counters.handleAllocations());
+    assertEquals(1, counters.fileAllocations());
+    assertEquals(3, counters.writeCopyBytes());
+    assertEquals(3, counters.readCopyBytes());
+    assertEquals(3, counters.durableCopyBytes());
+    assertEquals(3, counters.recoveryCopyBytes());
+  }
+
   private static StatusCode write(DurableFile file, long position, byte[] bytes) {
     IoResult result = new IoResult();
     return file.write(position, ByteBuffer.wrap(bytes), result);
@@ -290,6 +396,10 @@ final class FaultingFileIoProviderTest {
     private final FaultingFileIoProvider provider;
 
     private Fixture(int ruleCapacity) {
+      this(ruleCapacity, null);
+    }
+
+    private Fixture(int ruleCapacity, FaultTrace trace) {
       FaultPointRegistry registry = new FaultPointRegistry(9);
       points = new FileFaultPoints(
           point(registry, "file.open"),
@@ -301,7 +411,7 @@ final class FaultingFileIoProviderTest {
           point(registry, "file.close"),
           point(registry, "process.crash"),
           point(registry, "process.restart"));
-      controller = new CrashPointController(ruleCapacity);
+      controller = new CrashPointController(ruleCapacity, trace);
       provider = new FaultingFileIoProvider(2, 64, 4, controller, points);
     }
 

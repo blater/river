@@ -21,9 +21,15 @@ public final class CrashPointController implements FaultInjector {
   private final FaultAction[] actions;
   private final long[] arguments;
   private final long[] observations;
+  private final FaultTrace trace;
+  private StatusCode traceStatus = StatusCode.OK;
   private int size;
 
   public CrashPointController(int capacity) {
+    this(capacity, null);
+  }
+
+  public CrashPointController(int capacity, FaultTrace trace) {
     points = new FaultPoint[capacity];
     operations = new FaultOperation[capacity];
     firstOccurrences = new long[capacity];
@@ -31,6 +37,7 @@ public final class CrashPointController implements FaultInjector {
     actions = new FaultAction[capacity];
     arguments = new long[capacity];
     observations = new long[capacity];
+    this.trace = trace;
   }
 
   public synchronized StatusCode addRule(
@@ -83,15 +90,31 @@ public final class CrashPointController implements FaultInjector {
         selected = true;
       }
     }
+    if (selected && trace != null) {
+      traceStatus = trace.append(
+          point,
+          operation,
+          result.action(),
+          result.argument(),
+          attempt);
+    }
   }
 
   public synchronized void reset() {
     for (int index = 0; index < size; index++) {
       observations[index] = 0;
     }
+    traceStatus = StatusCode.OK;
+    if (trace != null) {
+      trace.reset();
+    }
   }
 
   public synchronized int size() {
     return size;
+  }
+
+  public synchronized StatusCode traceStatus() {
+    return traceStatus;
   }
 }

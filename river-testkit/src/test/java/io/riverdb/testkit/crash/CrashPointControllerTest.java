@@ -75,6 +75,24 @@ final class CrashPointControllerTest {
             1,
             FaultAction.FORCE_FAILURE,
             0));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        controller.addRule(
+            point,
+            FaultOperation.SCHEDULE,
+            1,
+            1,
+            FaultAction.RESTART,
+            0));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        controller.addRule(
+            point,
+            FaultOperation.RUN_TASK,
+            1,
+            1,
+            FaultAction.RESTART,
+            0));
     assertEquals(0, controller.size());
   }
 
@@ -106,6 +124,27 @@ final class CrashPointControllerTest {
     assertEquals(FaultAction.CANCEL, decision.action());
     controller.evaluate(point, FaultOperation.READ, 2, 0, 4, decision);
     assertEquals(FaultAction.DETECTED_CORRUPTION, decision.action());
+  }
+
+  @Test
+  void admissionAppliesCompatibilityForEveryActionOperationPair() {
+    FaultPoint point = point("matrix.point");
+    int checkedPairs = 0;
+    for (FaultAction action : FaultAction.values()) {
+      for (FaultOperation operation : FaultOperation.values()) {
+        CrashPointController controller = new CrashPointController(1);
+        StatusCode expected = action.isCompatibleWith(operation)
+            ? StatusCode.OK
+            : StatusCode.INVALID_EXTERNAL_INPUT;
+        assertEquals(
+            expected,
+            controller.addRule(point, operation, 1, 1, action, 0));
+        checkedPairs++;
+      }
+    }
+    assertEquals(
+        FaultAction.values().length * FaultOperation.values().length,
+        checkedPairs);
   }
 
   private static FaultAction[] observeFour(
