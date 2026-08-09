@@ -17,6 +17,8 @@ import io.riverdb.platform.file.AtomicInstallSnapshot;
 import io.riverdb.platform.file.AtomicInstallStateMachine;
 import io.riverdb.platform.file.AtomicInstallStep;
 import io.riverdb.platform.file.DirectoryDurability;
+import io.riverdb.platform.file.DirectoryEntryType;
+import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
@@ -494,6 +496,62 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   }
 
   @Override
+  public synchronized StatusCode createDirectory(
+      String childDirectoryName,
+      DirectoryOperationResult result) {
+    result.reset();
+    if (!running) {
+      return StatusCode.RETRY;
+    }
+    if (!validFileName(childDirectoryName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (findVolatile(childDirectoryName) != null) {
+      return StatusCode.CONFLICT;
+    }
+    ModelFile entry = allocateFile();
+    if (entry == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    entry.prepare(childDirectoryName, true);
+    result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
+    return StatusCode.OK;
+  }
+
+  @Override
+  public synchronized StatusCode createFile(
+      String fileName,
+      DirectoryOperationResult result) {
+    return createNamedFile(fileName, result);
+  }
+
+  private StatusCode createNamedFile(
+      String fileName,
+      DirectoryOperationResult result) {
+    result.reset();
+    if (!running) {
+      return StatusCode.RETRY;
+    }
+    if (!validFileName(fileName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (findVolatile(fileName) != null) {
+      return StatusCode.CONFLICT;
+    }
+    if (openHandles == maxOpenHandles) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    ModelFile file = allocateFile();
+    if (file == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    file.prepare(fileName, false);
+    openHandles++;
+    result.set(new ModelHandle(file, generation), DirectoryDurability.VISIBLE_NOT_DURABLE);
+    return StatusCode.OK;
+  }
+
+  @Override
   public synchronized StatusCode createTemporary(
       String temporaryFileName,
       DirectoryOperationResult result) {
@@ -533,7 +591,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     if (file == null || openHandle && openHandles == maxOpenHandles) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    file.prepare(temporaryFileName);
+    file.prepare(temporaryFileName, false);
     DurableFile handle = null;
     if (openHandle) {
       openHandles++;
@@ -556,11 +614,102 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   }
 
   @Override
+  public synchronized StatusCode list(DirectoryListResult result) {
+    result.reset();
+    if (!running) {
+      return StatusCode.RETRY;
+    }
+    for (int index = 0; index < fileCount; index++) {
+      ModelFile entry = files[index];
+      if (entry.volatileName == null) {
+        continue;
+      }
+      StatusCode status = result.add(
+          entry.volatileName,
+          entry.directory ? DirectoryEntryType.DIRECTORY : DirectoryEntryType.FILE);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    result.finish(generation);
+    return StatusCode.OK;
+  }
+
+  @Override
+  public synchronized StatusCode rename(
+      String sourceName,
+      String destinationName,
+      DirectoryOperationResult result) {
+    result.reset();
+    if (!running) {
+      return StatusCode.RETRY;
+    }
+    if (!validFileName(sourceName) || !validFileName(destinationName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    ModelFile source = findVolatile(sourceName);
+    if (source == null || findVolatile(destinationName) != null) {
+      return StatusCode.CONFLICT;
+    }
+    source.volatileName = destinationName;
+    result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
+    return StatusCode.OK;
+  }
+
+  @Override
   public synchronized StatusCode replace(
       String temporaryFileName,
       String destinationFileName,
       DirectoryOperationResult result) {
     return replaceInternal(temporaryFileName, destinationFileName, result, false);
+  }
+
+  @Override
+  public synchronized StatusCode remove(
+      String entryName,
+      DirectoryOperationResult result) {
+    result.reset();
+    if (!running) {
+      return StatusCode.RETRY;
+    }
+    if (!validFileName(entryName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    ModelFile entry = findVolatile(entryName);
+    if (entry == null) {
+      return StatusCode.CONFLICT;
+    }
+    entry.volatileName = null;
+    result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
+    return StatusCode.OK;
+  }
+
+  @Override
+  public synchronized StatusCode truncate(
+      String fileName,
+      long sizeBytes,
+      DirectoryOperationResult result) {
+    result.reset();
+    if (!running) {
+      return StatusCode.RETRY;
+    }
+    if (!validFileName(fileName) || sizeBytes < 0 || sizeBytes > maxFileBytes) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    ModelFile file = findVolatile(fileName);
+    if (file == null || file.directory) {
+      return StatusCode.CONFLICT;
+    }
+    if (openHandles == maxOpenHandles) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (sizeBytes < file.volatileSize) {
+      Arrays.fill(file.volatileBytes, (int) sizeBytes, file.volatileSize, (byte) 0);
+    }
+    file.volatileSize = (int) sizeBytes;
+    openHandles++;
+    result.set(new ModelHandle(file, generation), DirectoryDurability.VISIBLE_NOT_DURABLE);
+    return StatusCode.OK;
   }
 
   private StatusCode replaceInternal(
@@ -676,7 +825,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     ModelFile file = findVolatile(fileName);
-    if (file == null) {
+    if (file == null || file.directory) {
       return StatusCode.CORRUPTION;
     }
     if (openHandles == maxOpenHandles) {
@@ -1043,6 +1192,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     private final byte[] durableBytes;
     private String volatileName;
     private String durableName;
+    private boolean directory;
     private int volatileSize;
     private int durableSize;
 
@@ -1051,11 +1201,12 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       durableBytes = new byte[capacity];
     }
 
-    private void prepare(String name) {
+    private void prepare(String name, boolean isDirectory) {
       Arrays.fill(volatileBytes, (byte) 0);
       Arrays.fill(durableBytes, (byte) 0);
       volatileName = name;
       durableName = null;
+      directory = isDirectory;
       volatileSize = 0;
       durableSize = 0;
     }
