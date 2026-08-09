@@ -152,9 +152,12 @@ subprojects {
 
 val checkedTextExtensions = setOf(
   "java", "kt", "kts", "gradle", "xml", "yml", "yaml", "json",
-  "properties", "md"
+  "properties", "md", "sh", ""
 )
-val indentedExtensions = setOf("java", "kt", "kts", "gradle", "xml", "yml", "yaml")
+val indentedExtensions = setOf(
+  "java", "kt", "kts", "gradle", "xml", "yml", "yaml", "sh", ""
+)
+val extensionlessPolicyFiles = setOf("gradlew", "verify", "verify-clean-checkout")
 val hotPathPackagePrefixes = setOf(
   "io.riverdb.observability.api.event",
   "io.riverdb.wal.append",
@@ -284,7 +287,9 @@ val verifySourcePolicy = tasks.register("verifySourcePolicy") {
   inputs.files(sourceFiles)
 
   doLast {
-    val checkedFiles = sourceFiles.files.map { it.toPath() }
+    val checkedFiles = sourceFiles.files
+      .filter { file -> file.extension.isNotEmpty() || file.name in extensionlessPolicyFiles }
+      .map { it.toPath() }
     val javaSources = sourceFiles.files
       .filter { it.extension.equals("java", ignoreCase = true) }
       .map { file ->
@@ -397,6 +402,26 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
     requireViolation(
       "indent",
       sourceViolations(emptyList(), listOf(indentPath)),
+      "indentation is not a multiple of two"
+    )
+
+    val shellTabPath = writeFixture(
+      "tab/verify.sh",
+      "#!/bin/sh\n\techo rejected\n"
+    )
+    requireViolation(
+      "shell tab",
+      sourceViolations(emptyList(), listOf(shellTabPath)),
+      "tab character"
+    )
+
+    val extensionlessIndentPath = writeFixture(
+      "indent/verify",
+      "#!/bin/sh\n echo rejected\n"
+    )
+    requireViolation(
+      "extensionless indentation",
+      sourceViolations(emptyList(), listOf(extensionlessIndentPath)),
       "indentation is not a multiple of two"
     )
 
@@ -1193,6 +1218,12 @@ val verifyDependencyLedger = tasks.register("verifyDependencyLedger") {
       require(artifactRows.put(fields[0], fields) == null) {
         "duplicate provenance artifact ID ${fields[0]}"
       }
+      require(fields[1] in setOf("source", "reference", "dependency", "tool")) {
+        "unknown provenance artifact type ${fields[1]} at line ${index + 2}"
+      }
+      require(fields[9].startsWith("approved ")) {
+        "provenance approval must fail closed at line ${index + 2}"
+      }
       if (fields[1] == "dependency" || fields[1] == "tool") {
         require(
           fields[0].isNotBlank()
@@ -1205,6 +1236,28 @@ val verifyDependencyLedger = tasks.register("verifyDependencyLedger") {
               && fields[8].isNotBlank()
               && fields[9].isNotBlank()
         ) { "provenance ${fields[1]} row is incomplete at line ${index + 2}" }
+      }
+      if (fields[1] == "source") {
+        require(
+          fields[0].isNotBlank()
+              && fields[2].isNotBlank()
+              && fields[4].isNotBlank()
+              && fields[6].isNotBlank()
+              && fields[7].isNotBlank()
+              && fields[8].isNotBlank()
+        ) { "provenance source row is incomplete at line ${index + 2}" }
+      }
+      if (fields[1] == "reference") {
+        require(
+          fields[0].isNotBlank()
+              && fields[2].isNotBlank()
+              && fields[3].isNotBlank()
+              && fields[4].isNotBlank()
+              && fields[5].matches(Regex("[0-9a-f]{64}"))
+              && fields[6].isNotBlank()
+              && fields[7].isNotBlank()
+              && fields[8].isNotBlank()
+        ) { "provenance reference row is incomplete at line ${index + 2}" }
       }
       if (fields[1] == "dependency") {
         require(fields[2].count { it == ':' } == 1) {
