@@ -1,0 +1,39 @@
+schema_version: 1
+status: template_not_evidence
+river_commit: required
+baseline:
+  product: required
+  version: required
+  commit_or_build: required
+durability_tier: required
+acknowledgement_contract: required
+environment:
+  runner_id: required
+  cpu: required
+  memory: required
+  os_kernel: required
+  jdk: required
+  jvm_flags: required
+  filesystem_mounts: required
+  storage_firmware_cache: required
+  network_topology: required
+workload:
+  name: required
+  version: required
+  seed: required
+  scale: required
+  skew: required
+  source_checksums: required
+protocol:
+  warmup_seconds: required
+  measurement_seconds: required
+  samples: required
+  mode: required
+  concurrency_or_rate: required
+  interleave_order: required
+artifacts:
+  hdr_histograms: required
+  time_series: required
+  engine_counters: required
+  profiles: required
+  logs: required
