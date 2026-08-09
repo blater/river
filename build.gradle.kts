@@ -1,5 +1,4 @@
 import io.riverdb.buildpolicy.BuildPolicy
-import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.tasks.Jar
@@ -159,6 +158,14 @@ val hotPathPackagePrefixes = setOf(
   "io.riverdb.tx.commit",
   "io.riverdb.exec.vector"
 )
+val inheritedDependencyFixture = configurations.create("policyFixtureInheritedDependency")
+val inheritedClasspathFixture = configurations.create("policyFixtureCompileClasspath") {
+  extendsFrom(inheritedDependencyFixture)
+}
+dependencies.add(
+  inheritedDependencyFixture.name,
+  dependencies.project(mapOf("path" to ":river-base"))
+)
 
 val verifySourcePolicy = tasks.register("verifySourcePolicy") {
   group = LifecycleBasePlugin.VERIFICATION_GROUP
@@ -174,12 +181,21 @@ val verifySourcePolicy = tasks.register("verifySourcePolicy") {
     val javaSources = sourceFiles.files
       .filter { it.extension.equals("java", ignoreCase = true) }
       .map { file ->
+        val sourcePath = file.toPath().toAbsolutePath().normalize()
         val owner = subprojects.firstOrNull { module ->
-          file.toPath().toAbsolutePath().normalize().startsWith(
+          sourcePath.startsWith(
             module.projectDir.toPath().toAbsolutePath().normalize()
           )
-        }?.name ?: "__root__"
-        BuildPolicy.JavaSource(owner, file.toPath(), file.readText())
+        }
+        val productionSource = owner != null && sourcePath.startsWith(
+          owner.projectDir.resolve("src/main/java").toPath().toAbsolutePath().normalize()
+        )
+        BuildPolicy.JavaSource(
+          owner?.name ?: "__root__",
+          file.toPath(),
+          file.readText(),
+          productionSource
+        )
       }
     val violations = BuildPolicy.sourceViolations(
       rootDir.toPath(),
@@ -202,16 +218,12 @@ val verifyModuleGraph = tasks.register("verifyModuleGraph") {
   doLast {
     val actualGraph = linkedMapOf<String, Set<String>>()
     subprojects.forEach { module ->
-      val actual = mutableSetOf<String>()
-      setOf("api", "implementation", "compileOnly", "runtimeOnly").forEach {
-          configurationName ->
-        module.configurations.getByName(configurationName).dependencies
-          .withType(ProjectDependency::class.java)
-          .forEach { dependency ->
-            actual.add(dependency.path.substringAfterLast(':'))
-          }
-      }
-      actualGraph[module.name] = actual
+      actualGraph[module.name] = BuildPolicy.inheritedProjectDependencies(
+        listOf(
+          module.configurations.getByName("compileClasspath"),
+          module.configurations.getByName("runtimeClasspath")
+        )
+      )
     }
     val violations = BuildPolicy.graphViolations(actualGraph, allowedDependencies)
     if (violations.isNotEmpty()) {
@@ -233,6 +245,12 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
         throw GradleException(
           "$name fixture did not produce expected diagnostic '$expected': $violations"
         )
+      }
+    }
+
+    fun requireNoViolation(name: String, violations: List<String>) {
+      if (violations.isNotEmpty()) {
+        throw GradleException("$name fixture unexpectedly failed: $violations")
       }
     }
 
@@ -298,8 +316,11 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
     val hotPath = writeFixture(
       "forbidden/HotLoop.java",
       "package fixture.hot;\n"
-          + "import java.util.stream.IntStream;\n"
-          + "final class HotLoop { IntStream values; }\n"
+          + "import java.util.List;\n"
+          + "final class HotLoop {\n"
+          + "  List<String> values;\n"
+          + "  long count() { return values.stream().count(); }\n"
+          + "}\n"
     )
     requireViolation(
       "forbidden API",
@@ -310,13 +331,64 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
       "hot-path package references stream/collector APIs"
     )
 
+    val hotPathTest = writeFixture(
+      "forbidden/test/HotLoopTest.java",
+      "package fixture.hot;\n"
+          + "import java.util.List;\n"
+          + "final class HotLoopTest {\n"
+          + "  List<String> values;\n"
+          + "  long count() { return values.parallelStream().count(); }\n"
+          + "}\n"
+    )
+    requireNoViolation(
+      "test-source hot-path exclusion",
+      sourceViolations(
+        listOf(
+          BuildPolicy.JavaSource(
+            "hot",
+            hotPathTest,
+            Files.readString(hotPathTest),
+            false
+          )
+        ),
+        hotPackages = setOf("fixture.hot")
+      )
+    )
+
+    val unicodeBypass = writeFixture(
+      "forbidden/UnicodeBypass.java",
+      "package fixture.hot;\n"
+          + "import java.util.str\\u0065am.IntStream;\n"
+          + "final class UnicodeBypass { IntStream values; }\n"
+    )
     requireViolation(
-      "forbidden dependency",
-      BuildPolicy.graphViolations(
-        mapOf("a" to setOf("b"), "b" to emptySet()),
-        mapOf("a" to emptySet(), "b" to emptySet())
+      "Unicode escape bypass",
+      sourceViolations(
+        listOf(
+          BuildPolicy.JavaSource(
+            "hot",
+            unicodeBypass,
+            Files.readString(unicodeBypass),
+            true
+          )
+        ),
+        hotPackages = setOf("fixture.hot")
       ),
-      "a has forbidden dependencies: [b]"
+      "raw Java Unicode escape is forbidden"
+    )
+
+    requireViolation(
+      "inherited custom-configuration dependency",
+      BuildPolicy.graphViolations(
+        mapOf(
+          "fixture-consumer" to BuildPolicy.inheritedProjectDependencies(
+            listOf(inheritedClasspathFixture)
+          ),
+          "river-base" to emptySet()
+        ),
+        mapOf("fixture-consumer" to emptySet(), "river-base" to emptySet())
+      ),
+      "fixture-consumer has forbidden dependencies: [river-base]"
     )
     requireViolation(
       "dependency cycle",
@@ -329,9 +401,35 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
   }
 }
 
+val expectedArchiveList = layout.buildDirectory.file("reports/expected-archives.paths")
+val expectedArchiveCount = layout.buildDirectory.file("reports/expected-archives.count")
+val writeExpectedArchiveList = tasks.register("writeExpectedArchiveList") {
+  outputs.files(expectedArchiveList, expectedArchiveCount)
+
+  doLast {
+    val archivePaths = subprojects.flatMap { module ->
+      listOf(
+        module.tasks.named<Jar>("jar").get().archiveFile.get().asFile,
+        module.tasks.named<Jar>("sourcesJar").get().archiveFile.get().asFile
+      )
+    }.map { archive ->
+      rootDir.toPath().toAbsolutePath().normalize()
+        .relativize(archive.toPath().toAbsolutePath().normalize())
+        .toString()
+        .replace(java.io.File.separatorChar, '/')
+    }.sorted()
+    val listPath = expectedArchiveList.get().asFile.toPath()
+    val countPath = expectedArchiveCount.get().asFile.toPath()
+    Files.createDirectories(listPath.parent)
+    Files.write(listPath, archivePaths)
+    Files.writeString(countPath, "${archivePaths.size}\n")
+  }
+}
+
 tasks.register("assembleRiverArchives") {
   group = LifecycleBasePlugin.BUILD_GROUP
   description = "Assembles every production, testkit, and benchmark JAR for comparison."
+  dependsOn(writeExpectedArchiveList)
   dependsOn(subprojects.flatMap { module ->
     listOf(module.tasks.named("jar"), module.tasks.named("sourcesJar"))
   })

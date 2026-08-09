@@ -1,5 +1,8 @@
 package io.riverdb.buildpolicy;
 
+import org.gradle.api.artifacts.Configuration;
+import org.gradle.api.artifacts.ProjectDependency;
+
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -28,19 +31,31 @@ public final class BuildPolicy {
   );
   private static final Pattern STREAM_API = Pattern.compile(
       "\\bjava\\s*\\.\\s*util\\s*\\.\\s*stream\\b|"
-          + "\\bCollectors\\s*\\.|\\bStreamSupport\\s*\\."
+          + "\\bCollectors\\s*\\.|\\bStreamSupport\\s*\\.|"
+          + "\\.\\s*(?:parallelStream|stream)\\s*\\("
   );
   private static final Pattern STRING_FORMAT = Pattern.compile(
       "\\bjava\\s*\\.\\s*util\\s*\\.\\s*Formatter\\b|"
           + "\\bString\\s*\\.\\s*format\\s*\\(|"
           + "\\.\\s*(?:formatted|printf)\\s*\\("
   );
+  private static final Pattern RAW_UNICODE_ESCAPE = Pattern.compile(
+      "\\\\u+[0-9a-fA-F]{4}"
+  );
 
   private BuildPolicy() {
   }
 
   /** A Java source together with the project module that owns it. */
-  public record JavaSource(String module, Path path, String text) {
+  public record JavaSource(
+      String module,
+      Path path,
+      String text,
+      boolean productionSource
+  ) {
+    public JavaSource(String module, Path path, String text) {
+      this(module, path, text, true);
+    }
   }
 
   /**
@@ -69,6 +84,10 @@ public final class BuildPolicy {
     javaSources.stream()
         .sorted((left, right) -> left.path().compareTo(right.path()))
         .forEach(source -> {
+          if (RAW_UNICODE_ESCAPE.matcher(source.text()).find()) {
+            violations.add(relative(root, source.path())
+                + ": raw Java Unicode escape is forbidden");
+          }
           ParsedJava parsed = parseJava(source.text());
           parsedSources.put(source, parsed);
           if (isInternalPackage(parsed.packageName())) {
@@ -98,7 +117,8 @@ public final class BuildPolicy {
         }
       });
 
-      if (isHotPathPackage(parsed.packageName(), hotPathPackagePrefixes)) {
+      if (source.productionSource()
+          && isHotPathPackage(parsed.packageName(), hotPathPackagePrefixes)) {
         if (STREAM_API.matcher(parsed.code()).find()) {
           violations.add(relativePath
               + ": hot-path package references stream/collector APIs");
@@ -159,6 +179,21 @@ public final class BuildPolicy {
     );
     Collections.sort(violations);
     return List.copyOf(violations);
+  }
+
+  /** Extracts every inherited project edge visible to a main classpath. */
+  public static Set<String> inheritedProjectDependencies(
+      Collection<Configuration> mainClasspaths
+  ) {
+    Set<String> dependencies = new LinkedHashSet<>();
+    mainClasspaths.forEach(configuration ->
+        configuration.getAllDependencies()
+            .withType(ProjectDependency.class)
+            .forEach(dependency -> dependencies.add(
+                dependency.getPath().substring(dependency.getPath().lastIndexOf(':') + 1)
+            ))
+    );
+    return Set.copyOf(dependencies);
   }
 
   private static void checkTextLayout(

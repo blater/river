@@ -2,8 +2,13 @@
 set -eu
 
 river_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-river_gradle_home=${RIVER_GRADLE_HOME:-"$river_root/.river-gradle"}
 
-export GRADLE_USER_HOME="$river_gradle_home"
+if [ -n "${RIVER_GRADLE_HOME:-}" ]; then
+  GRADLE_USER_HOME=$RIVER_GRADLE_HOME
+elif [ -z "${GRADLE_USER_HOME:-}" ]; then
+  GRADLE_USER_HOME="$river_root/.river-gradle"
+fi
+
+export GRADLE_USER_HOME
 "$river_root/gradle/verify-reproducible-archives.sh"
 exec "$river_root/gradlew" --no-daemon clean check "$@"
