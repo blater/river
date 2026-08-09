@@ -9,6 +9,11 @@ status mappings, queue algorithms, or measurement results here are authoritative
 WAL event/byte counters use race-safe atomics. Maximum occupancy is an observed
 high-water diagnostic rather than a queue correctness invariant.
 
+It also contains the local P05 harness infrastructure: versioned manifest,
+result, and sample schemas; deterministic generated RiverBank/RiverPapers tiny
+workloads; bounded HdrHistogram latency accounting; and immutable local JSON/TSV
+artifacts. This is functional evidence for the harness, not a P05 baseline.
+
 The current mechanisms cover:
 
 - bounded preallocated WAL claim/direct-encode/checksum/gap-free publication,
@@ -63,3 +68,10 @@ directly. Neither command is a release gate.
 
 Until those exist, this module informs design discussion only and must not be
 used to mark P09, P05, or G0 complete.
+
+Run `:river-bench:benchmarkSmoke` for the local harness check. It writes a new
+create-once directory under `build/benchmark-smoke` and labels its synthetic
+measurements as developer smoke. Open-loop rows report service latency,
+intended-schedule latency (the primary coordinated-omission-safe view), and an
+HdrHistogram expected-interval-corrected service diagnostic. Closed-loop rows
+report service latency only.

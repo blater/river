@@ -1,6 +1,6 @@
 # River benchmarks
 
-Status: P05/P09 scaffolding; no canonical baseline yet
+Status: local P05 infrastructure and P09 scaffolding; no canonical baseline yet
 
 Canonical results use the process in the performance plan. Shared CI and local
 developer machines run functional and smoke measurements only. Dedicated Linux
@@ -23,3 +23,36 @@ control. The manifest records:
 
 `manifest-template.yaml` is intentionally invalid as promotion evidence until
 every required field is replaced with an observed value.
+
+## Local harness smoke
+
+The `river-bench` local harness now supplies:
+
+- version 1 JSON Schemas for the manifest, result, and logical sample row under
+  `river-bench/src/main/resources/io/riverdb/bench/harness/schema`;
+- a schema-driven validator which rejects missing, unknown, mistyped, and
+  bounded numeric fields before any run directory is created;
+- fixed-seed, River-owned RiverBank and RiverPapers generators with pinned tiny
+  fixtures and SHA-256 checksums; and
+- fixed-footprint HdrHistogram recording which keeps closed-loop service
+  latency distinct from open-loop service, intended-schedule, and
+  coordinated-omission-corrected service views.
+
+Run it locally with:
+
+```shell
+GRADLE_USER_HOME=/private/tmp/river-gradle-home \
+  ./gradlew :river-bench:benchmarkSmoke
+```
+
+Each invocation creates a new directory under
+`river-bench/build/benchmark-smoke`; files use create-new semantics and an
+existing run ID is never overwritten. `manifest.json` records the environment,
+workload versions, seeds, checksums, and generator configuration. `samples.tsv`
+contains the latency summaries, and `result.json` binds the manifest, sample
+table, and workload TSV files by SHA-256. These synthetic local artifacts prove
+harness behavior only. They are explicitly marked
+`developer_smoke_not_promotion_evidence`.
+
+See [external-adapter-backlog.md](external-adapter-backlog.md) for the optional
+provenance-cleared realism adapters and the remaining canonical-run work.
