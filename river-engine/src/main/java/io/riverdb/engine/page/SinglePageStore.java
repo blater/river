@@ -308,12 +308,12 @@ public final class SinglePageStore {
     if (valid) {
       payloadBytes = pageHeader.payloadBytes();
       recordEnd = pageHeader.recordEnd();
-      return StatusCode.OK;
+      return recoverFromWal(recordEnd, false);
     }
-    return recoverFromWal();
+    return recoverFromWal(0, true);
   }
 
-  private StatusCode recoverFromWal() {
+  private StatusCode recoverFromWal(long minimumRecordEnd, boolean recoveryRequired) {
     long offset = WalFileHeaderCodec.HEADER_BYTES;
     long latestPageOffset = 0;
     while (offset < wal.tailEnd()) {
@@ -335,14 +335,15 @@ public final class SinglePageStore {
             && pageHeader.pageId() == PAGE_ID
             && pageHeader.pageGeneration() == PAGE_GENERATION
             && pageHeader.recordStart() == offset
-            && pageHeader.recordEnd() == walReadResult.nextOffset()) {
+            && pageHeader.recordEnd() == walReadResult.nextOffset()
+            && pageHeader.recordEnd() > minimumRecordEnd) {
           latestPageOffset = offset;
         }
       }
       offset = walReadResult.nextOffset();
     }
     if (latestPageOffset == 0) {
-      return StatusCode.CORRUPTION;
+      return recoveryRequired ? StatusCode.CORRUPTION : StatusCode.OK;
     }
     StatusCode status = wal.read(latestPageOffset, walReadResult);
     if (!status.isOk()) {

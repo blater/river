@@ -136,6 +136,38 @@ final class SinglePageStoreTest {
     assertEquals(StatusCode.OK, directory.close());
   }
 
+  @Test
+  void replaysForcedWalWhenCrashLeavesOlderValidPage(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    SinglePageStore store = createStore(directory, wal);
+    byte[] expected = {2, 7, 1, 8, 2, 8};
+    PageUpdate update = new PageUpdate();
+    assertEquals(StatusCode.OK, store.beginUpdate(expected.length, update));
+    update.writablePayload().put(expected);
+    assertEquals(StatusCode.OK, store.commit(update));
+    assertTrue(store.isDirty());
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    SinglePageStoreOpenResult recovered = new SinglePageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        SinglePageStore.open(directory, wal, DATABASE, GENERATION, recovered));
+    assertEquals(PageCodec.PAGE_BYTES, recovered.store().copiedPayloadBytes());
+    PageReadResult read = new PageReadResult();
+    assertEquals(StatusCode.OK, recovered.store().read(read));
+    byte[] actual = new byte[expected.length];
+    read.payload().get(actual);
+    assertArrayEquals(expected, actual);
+    assertEquals(StatusCode.OK, recovered.store().close());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
   private static NioDurableDirectory openDirectory(Path root) {
     NioDirectoryOpenResult result = new NioDirectoryOpenResult();
     assertEquals(
