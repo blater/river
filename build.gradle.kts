@@ -172,10 +172,11 @@ val verifySourcePolicy = tasks.register("verifySourcePolicy") {
             violations.add("${file.relativeTo(rootDir)}:${index + 1}: tab character")
           }
           if (extension in indentedExtensions && line.isNotBlank()) {
+            val trimmed = line.trimStart()
             val leadingSpaces = line.indexOfFirst { it != ' ' }.let {
               if (it < 0) line.length else it
             }
-            if (leadingSpaces % 2 != 0) {
+            if (!trimmed.startsWith('*') && leadingSpaces % 2 != 0) {
               violations.add(
                 "${file.relativeTo(rootDir)}:${index + 1}: indentation is not a multiple of two"
               )
