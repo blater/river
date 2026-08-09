@@ -269,12 +269,12 @@ public final class DurableDirectoryContractSuite {
         || operationResult.file().force(ForceMode.CONTENT_AND_METADATA) != StatusCode.IO_FAILURE) {
       return StatusCode.INVARIANT_BROKEN;
     }
-    return forceFailure.script(
-               DirectoryOperation.LIST,
-               FaultBoundary.BEFORE,
-               FaultAction.SHORT_WRITE,
-               1)
-            == StatusCode.INVALID_EXTERNAL_INPUT
+    StatusCode invalidScript = forceFailure.script(
+        DirectoryOperation.LIST,
+        FaultBoundary.BEFORE,
+        FaultAction.SHORT_WRITE,
+        1);
+    return invalidScript == StatusCode.INVALID_EXTERNAL_INPUT
         ? StatusCode.OK
         : StatusCode.INVARIANT_BROKEN;
   }

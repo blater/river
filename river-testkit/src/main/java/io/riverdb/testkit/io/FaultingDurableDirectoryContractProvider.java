@@ -7,6 +7,7 @@ import io.riverdb.platform.fault.FaultPointRegistry;
 import io.riverdb.platform.fault.FaultPointSlot;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.testkit.crash.CrashPointController;
+import java.util.Locale;
 
 /** Deterministic adapter for the reusable general-directory suite. */
 public final class FaultingDurableDirectoryContractProvider
@@ -23,9 +24,9 @@ public final class FaultingDurableDirectoryContractProvider
       for (FaultBoundary boundary : FaultBoundary.values()) {
         FaultPointSlot slot = new FaultPointSlot();
         String name = "directory."
-            + operation.name().toLowerCase().replace('_', '-')
+            + operation.name().toLowerCase(Locale.ROOT).replace('_', '-')
             + "."
-            + boundary.name().toLowerCase();
+            + boundary.name().toLowerCase(Locale.ROOT);
         StatusCode status = registry.register(name, slot);
         if (status.isOk()) {
           points.set(operation, boundary, slot.value());
