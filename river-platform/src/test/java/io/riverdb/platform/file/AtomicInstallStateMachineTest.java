@@ -52,6 +52,15 @@ final class AtomicInstallStateMachineTest {
             4));
     assertEquals(AtomicInstallPhase.NEW, snapshot(machine, progress).phase());
     assertEquals(
+        StatusCode.INVARIANT_BROKEN,
+        machine.transition(
+            progress,
+            AtomicInstallPhase.NEW,
+            AtomicInstallPhase.TEMP_CREATED,
+            DirectoryDurability.DURABLE,
+            0));
+    assertEquals(AtomicInstallPhase.NEW, snapshot(machine, progress).phase());
+    assertEquals(
         StatusCode.OK,
         machine.transition(
             progress,

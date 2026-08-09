@@ -185,7 +185,11 @@ public final class AtomicInstallStateMachine {
         || bytesWritten > progress.totalBytes
         || durability == null
         || durability == DirectoryDurability.UNKNOWN
-        || durability.ordinal() < progress.durability.ordinal()) {
+        || durability.ordinal() < progress.durability.ordinal()
+        || !validDurability(next, durability)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    if (progress.phase == AtomicInstallPhase.NEW && bytesWritten != 0) {
       return StatusCode.INVARIANT_BROKEN;
     }
     if (next.ordinal() >= AtomicInstallPhase.CONTENT_WRITTEN.ordinal()
@@ -205,6 +209,17 @@ public final class AtomicInstallStateMachine {
       case DESTINATION_REPLACED -> next == AtomicInstallPhase.DIRECTORY_FORCED;
       case DIRECTORY_FORCED -> next == AtomicInstallPhase.VERIFIED;
       case VERIFIED, RECOVERY_REQUIRED -> false;
+    };
+  }
+
+  private static boolean validDurability(
+      AtomicInstallPhase phase,
+      DirectoryDurability durability) {
+    return switch (phase) {
+      case TEMP_CREATED, CONTENT_WRITTEN, CONTENT_FORCED, DESTINATION_REPLACED ->
+          durability == DirectoryDurability.VISIBLE_NOT_DURABLE;
+      case DIRECTORY_FORCED, VERIFIED -> durability == DirectoryDurability.DURABLE;
+      case NEW, RECOVERY_REQUIRED -> false;
     };
   }
 

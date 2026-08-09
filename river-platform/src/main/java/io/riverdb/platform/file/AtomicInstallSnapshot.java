@@ -42,7 +42,7 @@ public final class AtomicInstallSnapshot {
     return phase == AtomicInstallPhase.VERIFIED && !completionPending;
   }
 
-  public void set(
+  void set(
       AtomicInstallPhase phase,
       AtomicInstallPhase appliedPhase,
       DirectoryDurability durability,
