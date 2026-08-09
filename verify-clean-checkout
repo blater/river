@@ -90,7 +90,7 @@ echo "clean detached checkout ready: $source_commit"
   cd "$checkout_root"
   RIVER_GRADLE_HOME=$clean_gradle_home \
   RIVER_GRADLE_OFFLINE=true \
-    ./verify --rerun-tasks
+    ./verify --rerun-tasks --no-build-cache
 )
 
 echo "clean detached checkout verification passed: $source_commit"
