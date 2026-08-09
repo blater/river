@@ -97,7 +97,13 @@ val allowedDependencies = mapOf(
   "river-observability" to setOf("river-observability-api"),
   "river-testkit" to productionModules.toSet(),
   "river-bench" to productionModules.toSet()
-)
+).mapValues { (module, dependencies) ->
+  if (module == "river-base" || module == "river-observability-api") {
+    dependencies
+  } else {
+    dependencies + "river-base"
+  }
+}
 
 subprojects {
   apply(plugin = "java-library")
