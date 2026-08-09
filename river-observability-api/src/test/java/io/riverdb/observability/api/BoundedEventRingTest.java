@@ -6,13 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.observability.api.event.BoundedEventRing;
-import io.riverdb.observability.api.event.ConsumerAccess;
+import io.riverdb.observability.api.event.BoundedEventRingFactory;
 import io.riverdb.observability.api.event.DiagnosticContext;
 import io.riverdb.observability.api.event.DiagnosticEvent;
 import io.riverdb.observability.api.event.EventPollResult;
 import io.riverdb.observability.api.event.EventPublishResult;
 import io.riverdb.observability.api.event.EventTypeId;
 import io.riverdb.observability.api.event.LevelGatedDiagnosticSink;
+import io.riverdb.observability.api.event.ObservabilityBuildMode;
 import io.riverdb.observability.api.event.SaturationPolicy;
 import io.riverdb.observability.api.event.Severity;
 import java.util.ArrayList;
@@ -29,11 +30,11 @@ class BoundedEventRingTest {
   @Test
   void rejectsInvalidColdConfiguration() {
     assertThrows(IllegalArgumentException.class,
-        () -> new BoundedEventRing(1, Severity.INFO, SaturationPolicy.DROP_AND_COUNT));
+        () -> ring(1, Severity.INFO, SaturationPolicy.DROP_AND_COUNT));
     assertThrows(IllegalArgumentException.class,
-        () -> new BoundedEventRing(3, Severity.INFO, SaturationPolicy.DROP_AND_COUNT));
+        () -> ring(3, Severity.INFO, SaturationPolicy.DROP_AND_COUNT));
     assertThrows(IllegalArgumentException.class,
-        () -> new BoundedEventRing(
+        () -> ring(
             BoundedEventRing.MAX_CAPACITY + 1,
             Severity.INFO,
             SaturationPolicy.DROP_AND_COUNT));
@@ -41,7 +42,7 @@ class BoundedEventRingTest {
 
   @Test
   void preservesOrderAndCopiesBeforeProducerReuse() {
-    BoundedEventRing ring = new BoundedEventRing(
+    BoundedEventRing ring = ring(
         4, Severity.DEBUG, SaturationPolicy.DROP_AND_COUNT);
     DiagnosticContext context = new DiagnosticContext().databaseId(9);
     DiagnosticEvent event = new DiagnosticEvent();
@@ -72,7 +73,7 @@ class BoundedEventRingTest {
 
   @Test
   void levelGateAvoidsPublicationAndCanChangeAtRuntime() {
-    BoundedEventRing ring = new BoundedEventRing(
+    BoundedEventRing ring = ring(
         2, Severity.DEBUG, SaturationPolicy.DROP_AND_COUNT);
     LevelGatedDiagnosticSink gate = new LevelGatedDiagnosticSink(ring, Severity.WARN);
     DiagnosticContext context = new DiagnosticContext();
@@ -94,7 +95,7 @@ class BoundedEventRingTest {
     int producerCount = 4;
     int eventsPerProducer = 4_000;
     int eventCount = producerCount * eventsPerProducer;
-    BoundedEventRing ring = new BoundedEventRing(
+    BoundedEventRing ring = ring(
         32_768, Severity.DEBUG, SaturationPolicy.REPORT_BACKPRESSURE);
     AtomicIntegerArray accepted = new AtomicIntegerArray(eventCount);
     AtomicIntegerArray seen = new AtomicIntegerArray(eventCount);
@@ -144,11 +145,11 @@ class BoundedEventRingTest {
 
   @Test
   void guardedConsumerRejectsSecondThreadWithoutThrowing() throws Exception {
-    BoundedEventRing ring = new BoundedEventRing(
+    BoundedEventRing ring = BoundedEventRingFactory.create(
         2,
         Severity.DEBUG,
         SaturationPolicy.DROP_AND_COUNT,
-        ConsumerAccess.GUARDED);
+        ObservabilityBuildMode.TEST);
     DiagnosticEvent target = new DiagnosticEvent();
     assertEquals(EventPollResult.EMPTY, ring.poll(target));
 
@@ -165,7 +166,7 @@ class BoundedEventRingTest {
       EventPublishResult expected,
       long drops,
       long backpressure) {
-    BoundedEventRing ring = new BoundedEventRing(2, Severity.DEBUG, policy);
+    BoundedEventRing ring = ring(2, Severity.DEBUG, policy);
     DiagnosticEvent event = new DiagnosticEvent().set(
         EventTypeId.DIAGNOSTIC_QUEUE_SATURATED,
         Severity.WARN,
@@ -182,5 +183,16 @@ class BoundedEventRingTest {
     assertEquals(drops, ring.droppedCount());
     assertEquals(backpressure, ring.backpressureCount());
     assertEquals(2, ring.approximateSize());
+  }
+
+  private static BoundedEventRing ring(
+      int capacity,
+      Severity threshold,
+      SaturationPolicy policy) {
+    return BoundedEventRingFactory.create(
+        capacity,
+        threshold,
+        policy,
+        ObservabilityBuildMode.PRODUCTION);
   }
 }

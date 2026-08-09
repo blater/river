@@ -4,12 +4,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.observability.api.event.BoundedEventRing;
-import io.riverdb.observability.api.event.ConsumerAccess;
+import io.riverdb.observability.api.event.BoundedEventRingFactory;
 import io.riverdb.observability.api.event.DiagnosticContext;
 import io.riverdb.observability.api.event.DiagnosticEvent;
 import io.riverdb.observability.api.event.EventPollResult;
 import io.riverdb.observability.api.event.EventPublishResult;
 import io.riverdb.observability.api.event.EventTypeId;
+import io.riverdb.observability.api.event.ObservabilityBuildMode;
 import io.riverdb.observability.api.event.SaturationPolicy;
 import io.riverdb.observability.api.event.Severity;
 import java.util.ArrayList;
@@ -28,11 +29,11 @@ class BoundedEventRingWraparoundStressTest {
     int producerCount = 4;
     int eventsPerProducer = 5_000;
     int eventCount = producerCount * eventsPerProducer;
-    BoundedEventRing ring = new BoundedEventRing(
+    BoundedEventRing ring = BoundedEventRingFactory.create(
         64,
         Severity.DEBUG,
         SaturationPolicy.REPORT_BACKPRESSURE,
-        ConsumerAccess.GUARDED);
+        ObservabilityBuildMode.TEST);
     AtomicIntegerArray seen = new AtomicIntegerArray(eventCount);
     CountDownLatch start = new CountDownLatch(1);
 

@@ -7,6 +7,7 @@ import io.riverdb.observability.api.event.EventPollResult;
 import io.riverdb.observability.api.event.EventTypeId;
 import io.riverdb.observability.api.event.Severity;
 import io.riverdb.observability.api.redaction.DiagnosticRedactor;
+import io.riverdb.observability.api.redaction.SensitiveFieldPolicies;
 import io.riverdb.observability.api.redaction.SensitiveFieldPolicy;
 
 /**
@@ -18,7 +19,21 @@ public final class DiagnosticEventExporter {
   private final SanitizedEventView sanitizedView;
   private final DiagnosticEvent rawEvent = new DiagnosticEvent();
 
-  public DiagnosticEventExporter(BoundedEventRing source, SensitiveFieldPolicy policy) {
+  /** Creates an exporter with the external-safe policy. */
+  public DiagnosticEventExporter(BoundedEventRing source) {
+    this(source, SensitiveFieldPolicies.safeExternal());
+  }
+
+  public static DiagnosticEventExporter safeExternal(BoundedEventRing source) {
+    return new DiagnosticEventExporter(source);
+  }
+
+  /** Explicit privileged path for internal, access-controlled diagnostic consumers only. */
+  public static DiagnosticEventExporter privilegedInternal(BoundedEventRing source) {
+    return new DiagnosticEventExporter(source, SensitiveFieldPolicies.privileged());
+  }
+
+  private DiagnosticEventExporter(BoundedEventRing source, SensitiveFieldPolicy policy) {
     this.source = source;
     sanitizedView = new SanitizedEventView(policy);
   }

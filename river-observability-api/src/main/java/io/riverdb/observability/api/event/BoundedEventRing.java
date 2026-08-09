@@ -40,7 +40,7 @@ public final class BoundedEventRing implements DiagnosticSink {
   private volatile Severity threshold;
   private volatile boolean enabled = true;
 
-  public BoundedEventRing(
+  BoundedEventRing(
       int requestedCapacity,
       Severity initialThreshold,
       SaturationPolicy newSaturationPolicy) {
@@ -52,7 +52,7 @@ public final class BoundedEventRing implements DiagnosticSink {
         PublicationClaimObserver.NO_OP);
   }
 
-  public BoundedEventRing(
+  BoundedEventRing(
       int requestedCapacity,
       Severity initialThreshold,
       SaturationPolicy newSaturationPolicy,
@@ -164,6 +164,10 @@ public final class BoundedEventRing implements DiagnosticSink {
 
   public int capacity() {
     return capacity;
+  }
+
+  public ConsumerAccess consumerAccess() {
+    return consumerAccess;
   }
 
   /**

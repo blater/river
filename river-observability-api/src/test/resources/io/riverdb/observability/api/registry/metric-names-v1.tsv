@@ -1,6 +1,7 @@
-UNKNOWN	0	river.unknown	GAUGE	1
-DIAGNOSTIC_EVENTS_PUBLISHED_TOTAL	1000	river.diagnostic.events.published.total	COUNTER	events
-DIAGNOSTIC_EVENTS_DROPPED_TOTAL	1001	river.diagnostic.events.dropped.total	COUNTER	events
-DIAGNOSTIC_BACKPRESSURE_TOTAL	1003	river.diagnostic.backpressure.total	COUNTER	events
-DIAGNOSTIC_QUEUE_DEPTH	1004	river.diagnostic.queue.depth	GAUGE	events
-WAL_FORCE_LATENCY_NANOS	2000	river.wal.force.latency	HISTOGRAM	nanoseconds
+UNKNOWN	0	river.unknown	GAUGE	1	ACTIVE
+DIAGNOSTIC_EVENTS_PUBLISHED_TOTAL	1000	river.diagnostic.events.published.total	COUNTER	events	ACTIVE
+DIAGNOSTIC_EVENTS_DROPPED_TOTAL	1001	river.diagnostic.events.dropped.total	COUNTER	events	ACTIVE
+RETIRED_DIAGNOSTIC_EVENTS_COALESCED_TOTAL	1002	river.diagnostic.events.coalesced.total	COUNTER	events	RETIRED
+DIAGNOSTIC_BACKPRESSURE_TOTAL	1003	river.diagnostic.backpressure.total	COUNTER	events	ACTIVE
+DIAGNOSTIC_QUEUE_DEPTH	1004	river.diagnostic.queue.depth	GAUGE	events	ACTIVE
+WAL_FORCE_LATENCY_NANOS	2000	river.wal.force.latency	HISTOGRAM	nanoseconds	ACTIVE

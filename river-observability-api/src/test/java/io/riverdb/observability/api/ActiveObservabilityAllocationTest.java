@@ -5,10 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.observability.api.event.BoundedEventRing;
+import io.riverdb.observability.api.event.BoundedEventRingFactory;
 import io.riverdb.observability.api.event.DiagnosticContext;
 import io.riverdb.observability.api.event.DiagnosticEvent;
 import io.riverdb.observability.api.event.EventPollResult;
 import io.riverdb.observability.api.event.EventTypeId;
+import io.riverdb.observability.api.event.ObservabilityBuildMode;
 import io.riverdb.observability.api.event.SaturationPolicy;
 import io.riverdb.observability.api.event.Severity;
 import java.lang.management.ManagementFactory;
@@ -21,8 +23,11 @@ class ActiveObservabilityAllocationTest {
   @Test
   void warmedPublishPollAndSlotReuseDoNotAllocate() {
     ThreadMXBean bean = allocationBean();
-    BoundedEventRing ring = new BoundedEventRing(
-        2, Severity.DEBUG, SaturationPolicy.DROP_AND_COUNT);
+    BoundedEventRing ring = BoundedEventRingFactory.create(
+        2,
+        Severity.DEBUG,
+        SaturationPolicy.DROP_AND_COUNT,
+        ObservabilityBuildMode.PRODUCTION);
     DiagnosticContext context = new DiagnosticContext().databaseId(1);
     DiagnosticEvent event = new DiagnosticEvent().set(
         EventTypeId.WAL_STALL, Severity.WARN, 2, 3, context, 4, 5, 6, 7);
@@ -49,8 +54,11 @@ class ActiveObservabilityAllocationTest {
   @Test
   void warmedSaturationAccountingDoesNotAllocate() {
     ThreadMXBean bean = allocationBean();
-    BoundedEventRing ring = new BoundedEventRing(
-        2, Severity.DEBUG, SaturationPolicy.DROP_AND_COUNT);
+    BoundedEventRing ring = BoundedEventRingFactory.create(
+        2,
+        Severity.DEBUG,
+        SaturationPolicy.DROP_AND_COUNT,
+        ObservabilityBuildMode.PRODUCTION);
     DiagnosticEvent event = new DiagnosticEvent().set(
         EventTypeId.WAL_STALL,
         Severity.WARN,

@@ -35,7 +35,8 @@ class RegistryCompatibilityFixtureTest {
           .append(metric.stableId()).append('\t')
           .append(metric.canonicalName()).append('\t')
           .append(metric.kind()).append('\t')
-          .append(metric.unit()).append('\n');
+          .append(metric.unit()).append('\t')
+          .append(metric.isRetired() ? "RETIRED" : "ACTIVE").append('\n');
     }
     assertEquals(fixture("metric-names-v1.tsv"), actual.toString());
   }
@@ -48,6 +49,16 @@ class RegistryCompatibilityFixtureTest {
           .append(severity.stableCode()).append('\n');
     }
     assertEquals(fixture("severities-v1.tsv"), actual.toString());
+  }
+
+  @Test
+  void registryVersionOneBaselineIsFrozenAtHardeningCommit() throws IOException {
+    String actual = "version\t" + ObservabilityRegistryV1.VERSION + '\n'
+        + "baseline-commit\t" + ObservabilityRegistryV1.BASELINE_COMMIT + '\n';
+    assertEquals(fixture("registry-v1.tsv"), actual);
+    assertEquals(
+        MetricName.RETIRED_DIAGNOSTIC_EVENTS_COALESCED_TOTAL,
+        MetricName.fromStableId(1002));
   }
 
   private static String fixture(String name) throws IOException {
