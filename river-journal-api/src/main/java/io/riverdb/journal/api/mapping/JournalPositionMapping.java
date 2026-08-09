@@ -1,12 +1,14 @@
 package io.riverdb.journal.api.mapping;
 
+import io.riverdb.base.id.WalGeneration;
+
 /** Caller-owned inspection result keeping logical, physical, and visibility units distinct. */
 public final class JournalPositionMapping {
   private long databaseIncarnationHigh;
   private long databaseIncarnationLow;
   private long journalGeneration;
   private long sequence;
-  private long walGeneration;
+  private WalGeneration walGeneration = WalGeneration.NONE;
   private long recordStartLsn;
   private long recordEndLsnExclusive;
   private long transactionId;
@@ -18,7 +20,7 @@ public final class JournalPositionMapping {
     databaseIncarnationLow = 0;
     journalGeneration = 0;
     sequence = 0;
-    walGeneration = 0;
+    walGeneration = WalGeneration.NONE;
     recordStartLsn = 0;
     recordEndLsnExclusive = 0;
     transactionId = 0;
@@ -33,7 +35,7 @@ public final class JournalPositionMapping {
       long databaseLow,
       long logicalGeneration,
       long logicalSequence,
-      long localWalGeneration,
+      WalGeneration localWalGeneration,
       long localRecordStartLsn,
       long localRecordEndLsnExclusive,
       long transaction,
@@ -68,7 +70,7 @@ public final class JournalPositionMapping {
     return sequence;
   }
 
-  public long walGeneration() {
+  public WalGeneration walGeneration() {
     return walGeneration;
   }
 

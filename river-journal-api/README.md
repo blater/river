@@ -10,14 +10,18 @@ The contract keeps four units separate:
 
 - a logical `JournalPosition` is database-incarnation, journal-generation,
   and sequence;
-- local WAL ranges use a lineage-qualified `recordStartLsn` and exclusive
-  `recordEndLsnExclusive`;
+- local WAL ranges use a database-incarnation-qualified semantic
+  `WalGeneration`, `recordStartLsn`, and exclusive `recordEndLsnExclusive`;
 - local stable media is represented by an exclusive `durableEndLsnExclusive`;
 - transaction visibility order is an explicit `CommitSequence` mapping and is
   never inferred from a journal position or LSN.
 
 Common reserve, publish, wait, and poll operations populate reusable
-caller-owned carriers with flattened primitive lineage fields. Immutable
+caller-owned carriers. Those carriers may flatten validated fields internally,
+but public WAL-generation and node-incarnation boundaries use the
+dependency-neutral semantic types. Providers retain and return an existing
+`WalGeneration` value rather than constructing one per operation; the warmed
+allocation regression exercises those typed accessors. Immutable
 position/range records are reserved for cold inspection and control-plane
 boundaries. A durability deadline of zero means no timeout. Cancellation of a
 reservation must publish a bounded repair/tombstone so a public gap-free

@@ -1,5 +1,7 @@
 package io.riverdb.journal.api.durability;
 
+import io.riverdb.base.id.WalGeneration;
+
 /** Caller-owned durability result and proof coordinates. */
 public final class DurabilityResult {
   private DurabilityOutcome outcome = DurabilityOutcome.PENDING;
@@ -9,7 +11,7 @@ public final class DurabilityResult {
   private long databaseIncarnationLow;
   private long journalGeneration;
   private long coveredSequence;
-  private long walGeneration;
+  private WalGeneration walGeneration = WalGeneration.NONE;
   private long durableEndLsnExclusive;
 
   public DurabilityResult reset() {
@@ -20,7 +22,7 @@ public final class DurabilityResult {
     databaseIncarnationLow = 0;
     journalGeneration = 0;
     coveredSequence = 0;
-    walGeneration = 0;
+    walGeneration = WalGeneration.NONE;
     durableEndLsnExclusive = 0;
     return this;
   }
@@ -34,7 +36,7 @@ public final class DurabilityResult {
       long databaseLow,
       long logicalGeneration,
       long sequence,
-      long localWalGeneration,
+      WalGeneration localWalGeneration,
       long localDurableEndLsnExclusive) {
     outcome = durabilityOutcome;
     requestedRequirement = requested;
@@ -80,7 +82,7 @@ public final class DurabilityResult {
     return coveredSequence;
   }
 
-  public long walGeneration() {
+  public WalGeneration walGeneration() {
     return walGeneration;
   }
 

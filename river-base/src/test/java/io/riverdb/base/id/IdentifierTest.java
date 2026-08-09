@@ -18,6 +18,7 @@ final class IdentifierTest {
     assertFalse(TransactionId.NONE.isValid());
     assertFalse(CommitSequence.NONE.isValid());
     assertFalse(CheckpointId.NONE.isValid());
+    assertFalse(WalGeneration.NONE.isValid());
 
     assertEquals(Integer.MAX_VALUE, TablespaceId.of(Integer.MAX_VALUE).value());
     assertEquals(Integer.MAX_VALUE, RelationId.of(Integer.MAX_VALUE).value());
@@ -27,6 +28,7 @@ final class IdentifierTest {
     assertEquals(Long.MAX_VALUE, TransactionId.of(Long.MAX_VALUE).value());
     assertEquals(Long.MAX_VALUE, CommitSequence.of(Long.MAX_VALUE).value());
     assertEquals(Long.MAX_VALUE, CheckpointId.of(Long.MAX_VALUE).value());
+    assertEquals(Long.MAX_VALUE, WalGeneration.of(Long.MAX_VALUE).value());
 
     assertThrows(IllegalArgumentException.class, () -> TablespaceId.of(0));
     assertThrows(IllegalArgumentException.class, () -> RelationId.of(0));
@@ -36,6 +38,7 @@ final class IdentifierTest {
     assertThrows(IllegalArgumentException.class, () -> TransactionId.of(0));
     assertThrows(IllegalArgumentException.class, () -> CommitSequence.of(0));
     assertThrows(IllegalArgumentException.class, () -> CheckpointId.of(0));
+    assertThrows(IllegalArgumentException.class, () -> WalGeneration.of(0));
 
     assertThrows(IllegalArgumentException.class, () -> new TablespaceId(-1));
     assertThrows(IllegalArgumentException.class, () -> new RelationId(-1));
@@ -45,6 +48,7 @@ final class IdentifierTest {
     assertThrows(IllegalArgumentException.class, () -> new TransactionId(-1));
     assertThrows(IllegalArgumentException.class, () -> new CommitSequence(-1));
     assertThrows(IllegalArgumentException.class, () -> new CheckpointId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new WalGeneration(-1));
   }
 
   @Test
@@ -59,6 +63,15 @@ final class IdentifierTest {
     assertThrows(IllegalArgumentException.class, () -> DatabaseIncarnation.of(0, 0));
     assertThrows(IllegalArgumentException.class, () -> RequestId.of(0, 0));
     assertThrows(IllegalArgumentException.class, () -> IdempotencyKey.of(0, 0));
+  }
+
+  @Test
+  void semanticUnitsHaveIndependentEqualityDomains() {
+    WalGeneration walGeneration = WalGeneration.of(7);
+    CheckpointId checkpoint = CheckpointId.of(7);
+
+    assertEquals(WalGeneration.of(7), walGeneration);
+    assertFalse(walGeneration.equals(checkpoint));
   }
 
   @Test

@@ -7,6 +7,7 @@ import io.riverdb.base.concurrent.CancellationToken;
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
+import io.riverdb.base.id.WalGeneration;
 import io.riverdb.journal.api.JournalAppendRequest;
 import io.riverdb.journal.api.JournalAppendResult;
 import io.riverdb.journal.api.JournalReservation;
@@ -33,7 +34,13 @@ final class DeterministicJournalAllocationTest {
     NodeIncarnation node = NodeIncarnation.of(3, 4);
     long journalGeneration = 5;
     DeterministicJournalProvider provider = new DeterministicJournalProvider(
-        database, node, journalGeneration, 6, 6_000, 1, new FatalStateFence());
+        database,
+        node,
+        journalGeneration,
+        WalGeneration.of(6),
+        6_000,
+        1,
+        new FatalStateFence());
     JournalReserveRequest reserveRequest = new JournalReserveRequest();
     JournalReservation reservation = new JournalReservation();
     JournalAppendRequest appendRequest = new JournalAppendRequest().set(
@@ -114,6 +121,7 @@ final class DeterministicJournalAllocationTest {
     allocationGuard += provider.reserve(reserveRequest, reservation, detail).ordinal();
     allocationGuard += provider.publish(
         reservation, appendRequest, appendResult, detail).ordinal();
+    allocationGuard += appendResult.walGeneration().value();
     waitRequest.set(
         database,
         node,
@@ -125,11 +133,13 @@ final class DeterministicJournalAllocationTest {
         waitRequest, ticket, durabilityResult, detail).ordinal();
     allocationGuard += provider.pollDurability(
         ticket, 1, CancellationToken.NONE, durabilityResult, detail).ordinal();
+    allocationGuard += durabilityResult.walGeneration().value();
     allocationGuard += provider.writeThrough(journalGeneration, appendResult.sequence()).ordinal();
     allocationGuard += provider.forceThrough(
         journalGeneration, appendResult.sequence(), ForceCompletion.SUCCEEDED).ordinal();
     allocationGuard += provider.pollDurability(
         ticket, 1, CancellationToken.NONE, durabilityResult, detail).ordinal();
+    allocationGuard += durabilityResult.walGeneration().value();
   }
 
   private static ThreadMXBean allocationBean() {

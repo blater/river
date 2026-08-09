@@ -10,6 +10,7 @@ import io.riverdb.base.id.IdempotencyKey;
 import io.riverdb.base.id.JournalPosition;
 import io.riverdb.base.id.RequestId;
 import io.riverdb.base.id.TransactionId;
+import io.riverdb.base.id.WalGeneration;
 import io.riverdb.journal.api.JournalAppendRequest;
 import io.riverdb.journal.api.JournalAppendResult;
 import io.riverdb.journal.api.JournalProvider;
@@ -57,7 +58,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
 
   private final DatabaseIncarnation databaseIncarnation;
   private final long journalGeneration;
-  private final long walGeneration;
+  private final WalGeneration walGeneration;
   private final JournalCapabilities capabilities;
   private final long capabilityOwnerHigh;
   private final long capabilityOwnerLow;
@@ -118,7 +119,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
       DatabaseIncarnation database,
       NodeIncarnation node,
       long generation,
-      long localWalGeneration,
+      WalGeneration localWalGeneration,
       int capacity,
       int maxEntryBytes,
       FatalStateFence fence) {
@@ -130,7 +131,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
       DatabaseIncarnation database,
       NodeIncarnation node,
       long generation,
-      long localWalGeneration,
+      WalGeneration localWalGeneration,
       int capacity,
       int maxEntryBytes,
       int maxRetentionLeases,
@@ -154,7 +155,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
       DatabaseIncarnation database,
       NodeIncarnation node,
       long generation,
-      long localWalGeneration,
+      WalGeneration localWalGeneration,
       int capacity,
       int maxEntryBytes,
       int maxRetentionLeases,
@@ -171,7 +172,11 @@ public final class DeterministicJournalProvider implements JournalProvider {
     capabilityOwnerHigh = mix(
         database.high() ^ node.high() ^ generation ^ providerIdentity ^ 0x52495645524a4e4cL);
     capabilityOwnerLow = mix(
-        database.low() ^ node.low() ^ localWalGeneration ^ providerIdentity ^ 0x57414c4f574e4552L);
+        database.low()
+            ^ node.low()
+            ^ localWalGeneration.value()
+            ^ providerIdentity
+            ^ 0x57414c4f574e4552L);
     fatalState = fence;
     ownerThread = Thread.currentThread();
     int boundedCapacity = Math.max(0, capacity);
@@ -1227,7 +1232,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
         databaseIncarnation.low(),
         journalGeneration,
         coveredSequence,
-        durableSequence == 0 ? 0 : walGeneration,
+        durableSequence == 0 ? WalGeneration.NONE : walGeneration,
         durableEndExclusive);
   }
 

@@ -3,6 +3,7 @@ package io.riverdb.testkit.journal;
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.JournalPosition;
+import io.riverdb.base.id.WalGeneration;
 import io.riverdb.journal.api.JournalProvider;
 import io.riverdb.journal.api.NodeIncarnation;
 
@@ -17,7 +18,7 @@ final class DeterministicJournalProviderContractTest extends JournalProviderCont
         DATABASE,
         NODE,
         JOURNAL_GENERATION,
-        7,
+        WalGeneration.of(7),
         entryCapacity,
         maxEntryBytes,
         retentionLeaseCapacity,
@@ -36,7 +37,7 @@ final class DeterministicJournalProviderContractTest extends JournalProviderCont
         DATABASE,
         NODE,
         JOURNAL_GENERATION,
-        7,
+        WalGeneration.of(7),
         entryCapacity,
         maxEntryBytes,
         4,

@@ -17,6 +17,7 @@ import io.riverdb.journal.api.JournalAppendResult;
 import io.riverdb.journal.api.JournalProvider;
 import io.riverdb.journal.api.JournalReservation;
 import io.riverdb.journal.api.JournalReserveRequest;
+import io.riverdb.base.id.WalGeneration;
 import io.riverdb.journal.api.NodeIncarnation;
 import io.riverdb.journal.api.durability.DurabilityOutcome;
 import io.riverdb.journal.api.durability.DurabilityRequirement;
@@ -484,11 +485,22 @@ public abstract class JournalProviderContractTest {
         provider.inspectMapping(
             JournalPosition.of(DATABASE, JOURNAL_GENERATION, append.sequence()), mapping));
     assertEquals(append.sequence(), mapping.sequence());
+    assertTrue(append.walGeneration().isValid());
+    assertEquals(append.walGeneration(), mapping.walGeneration());
     assertEquals(append.recordStartLsn(), mapping.recordStartLsn());
     assertEquals(append.recordEndLsnExclusive(), mapping.recordEndLsnExclusive());
     assertEquals(7, mapping.transactionId());
     assertEquals(107, mapping.commitSequence());
     assertTrue(mapping.isTransactionDecision());
+
+    JournalPositionMapping staleLineage = new JournalPositionMapping();
+    assertEquals(
+        StatusCode.FENCED,
+        provider.inspectMapping(
+            JournalPosition.of(DatabaseIncarnation.of(91, 92), JOURNAL_GENERATION,
+                append.sequence()),
+            staleLineage));
+    assertEquals(WalGeneration.NONE, staleLineage.walGeneration());
   }
 
   @Test

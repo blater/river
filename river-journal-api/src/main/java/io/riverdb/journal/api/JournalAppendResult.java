@@ -1,12 +1,14 @@
 package io.riverdb.journal.api;
 
+import io.riverdb.base.id.WalGeneration;
+
 /** Caller-owned append output keeping logical position and local physical bytes separate. */
 public final class JournalAppendResult {
   private long databaseIncarnationHigh;
   private long databaseIncarnationLow;
   private long journalGeneration;
   private long sequence;
-  private long walGeneration;
+  private WalGeneration walGeneration = WalGeneration.NONE;
   private long recordStartLsn;
   private long recordEndLsnExclusive;
   private boolean duplicate;
@@ -16,7 +18,7 @@ public final class JournalAppendResult {
     databaseIncarnationLow = 0;
     journalGeneration = 0;
     sequence = 0;
-    walGeneration = 0;
+    walGeneration = WalGeneration.NONE;
     recordStartLsn = 0;
     recordEndLsnExclusive = 0;
     duplicate = false;
@@ -29,7 +31,7 @@ public final class JournalAppendResult {
       long databaseLow,
       long logicalGeneration,
       long logicalSequence,
-      long localWalGeneration,
+      WalGeneration localWalGeneration,
       long localRecordStartLsn,
       long localRecordEndLsnExclusive,
       boolean wasDuplicate) {
@@ -60,7 +62,7 @@ public final class JournalAppendResult {
     return sequence;
   }
 
-  public long walGeneration() {
+  public WalGeneration walGeneration() {
     return walGeneration;
   }
 

@@ -9,6 +9,7 @@ import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.IdempotencyKey;
 import io.riverdb.base.id.JournalPosition;
+import io.riverdb.base.id.WalGeneration;
 import io.riverdb.journal.api.JournalAppendRequest;
 import io.riverdb.journal.api.JournalAppendResult;
 import io.riverdb.journal.api.JournalReservation;
@@ -82,7 +83,7 @@ final class DeterministicJournalReviewRegressionTest {
   @Test
   void outcomeSlotReuseCannotCorruptAnUnreclaimedWalEntryOrItsMapping() {
     DeterministicJournalProvider provider = new DeterministicJournalProvider(
-        DATABASE, NODE, GENERATION, 7, 2, 32, 1, 100, 1, 10,
+        DATABASE, NODE, GENERATION, WalGeneration.of(7), 2, 32, 1, 100, 1, 10,
         new FatalStateFence());
     JournalReservation cancelled = new JournalReservation();
     assertEquals(StatusCode.OK, provider.reserve(reserveRequest(1), cancelled, detail()));
@@ -133,7 +134,7 @@ final class DeterministicJournalReviewRegressionTest {
 
   private static DeterministicJournalProvider provider() {
     return new DeterministicJournalProvider(
-        DATABASE, NODE, GENERATION, 7, 4, 32, new FatalStateFence());
+        DATABASE, NODE, GENERATION, WalGeneration.of(7), 4, 32, new FatalStateFence());
   }
 
   private static void appendAndForce(DeterministicJournalProvider provider, long identity) {
