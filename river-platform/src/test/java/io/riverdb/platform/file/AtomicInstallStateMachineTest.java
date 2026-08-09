@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import io.riverdb.base.error.StatusCode;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
 final class AtomicInstallStateMachineTest {
@@ -29,9 +30,10 @@ final class AtomicInstallStateMachineTest {
     AtomicInstallStateMachine first = new AtomicInstallStateMachine();
     AtomicInstallStateMachine second = new AtomicInstallStateMachine();
     AtomicInstallProgress progress = new AtomicInstallProgress();
-    assertEquals(StatusCode.OK, first.resume(progress, 1, 1, 4));
+    AtomicInstallRequest request = request(first, new byte[] {1, 2, 3, 4});
+    assertEquals(StatusCode.OK, first.resume(progress, request, 1));
 
-    assertEquals(StatusCode.NOT_OWNER, second.resume(progress, 1, 1, 4));
+    assertEquals(StatusCode.NOT_OWNER, second.resume(progress, request, 1));
     AtomicInstallSnapshot snapshot = snapshot(first, progress);
     assertEquals(AtomicInstallPhase.NEW, snapshot.phase());
     assertEquals(0, snapshot.bytesWritten());
@@ -41,7 +43,8 @@ final class AtomicInstallStateMachineTest {
   void rejectsSkippedRegressionAndInvalidByteTransitionsWithoutMutation() {
     AtomicInstallStateMachine machine = new AtomicInstallStateMachine();
     AtomicInstallProgress progress = new AtomicInstallProgress();
-    assertEquals(StatusCode.OK, machine.resume(progress, 1, 1, 4));
+    AtomicInstallRequest request = request(machine, new byte[] {1, 2, 3, 4});
+    assertEquals(StatusCode.OK, machine.resume(progress, request, 1));
     assertEquals(
         StatusCode.INVARIANT_BROKEN,
         machine.transition(
@@ -84,7 +87,8 @@ final class AtomicInstallStateMachineTest {
   void activeResetRejectsWithoutMutationAndTerminalResetReleasesOwnership() {
     AtomicInstallStateMachine machine = new AtomicInstallStateMachine();
     AtomicInstallProgress progress = new AtomicInstallProgress();
-    assertEquals(StatusCode.OK, machine.resume(progress, 7, 9, 1));
+    AtomicInstallRequest request = request(machine, new byte[] {7});
+    assertEquals(StatusCode.OK, machine.resume(progress, request, 9));
     assertEquals(
         StatusCode.OK,
         machine.transition(
@@ -101,11 +105,64 @@ final class AtomicInstallStateMachineTest {
     assertEquals(StatusCode.NOT_OWNER, machine.snapshot(progress, new AtomicInstallSnapshot()));
   }
 
+  @Test
+  void issuedInstallIdAllowsEquivalentRequestReconstructionButRejectsRebinding() {
+    AtomicInstallStateMachine machine = new AtomicInstallStateMachine();
+    AtomicInstallId installId = new AtomicInstallId();
+    assertEquals(StatusCode.OK, machine.issueInstallId(installId));
+    assertEquals(StatusCode.CONFLICT, machine.issueInstallId(installId));
+    AtomicInstallRequest original = new AtomicInstallRequest();
+    AtomicInstallRequest reconstructed = new AtomicInstallRequest();
+    AtomicInstallRequest conflicting = new AtomicInstallRequest();
+    assertEquals(
+        StatusCode.OK,
+        original.configure(
+            installId,
+            "control.tmp",
+            "control",
+            ByteBuffer.wrap(new byte[] {1, 2})));
+    assertEquals(
+        StatusCode.OK,
+        reconstructed.configure(
+            installId,
+            "control.tmp",
+            "control",
+            ByteBuffer.wrap(new byte[] {1, 2})));
+    assertEquals(
+        StatusCode.CONFLICT,
+        conflicting.configure(
+            installId,
+            "control.tmp",
+            "control",
+            ByteBuffer.wrap(new byte[] {2, 1})));
+
+    AtomicInstallProgress progress = new AtomicInstallProgress();
+    assertEquals(StatusCode.OK, machine.resume(progress, original, 1));
+    assertEquals(StatusCode.OK, machine.resume(progress, reconstructed, 1));
+    assertEquals(StatusCode.NOT_OWNER, machine.resume(progress, conflicting, 1));
+  }
+
   private static AtomicInstallSnapshot snapshot(
       AtomicInstallStateMachine machine,
       AtomicInstallProgress progress) {
     AtomicInstallSnapshot snapshot = new AtomicInstallSnapshot();
     assertEquals(StatusCode.OK, machine.snapshot(progress, snapshot));
     return snapshot;
+  }
+
+  private static AtomicInstallRequest request(
+      AtomicInstallStateMachine machine,
+      byte[] content) {
+    AtomicInstallId installId = new AtomicInstallId();
+    assertEquals(StatusCode.OK, machine.issueInstallId(installId));
+    AtomicInstallRequest request = new AtomicInstallRequest();
+    assertEquals(
+        StatusCode.OK,
+        request.configure(
+            installId,
+            "control.tmp",
+            "control",
+            ByteBuffer.wrap(content)));
+    return request;
   }
 }

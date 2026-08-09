@@ -6,24 +6,48 @@ import io.riverdb.base.error.StatusCode;
  * Provider-owned authority for monotonic progress transitions.
  *
  * <p>Each installer owns one private instance and never exposes it to callers. The instance is the
- * opaque capability: its identity binds a progress carrier to that provider, so another provider
- * or a caller-created state machine cannot inspect, resume, or promote the provider-owned state.
+ * opaque capability: its identity binds a progress carrier to that provider and one issued
+ * install identity, so another provider, install, or caller-created state machine cannot inspect,
+ * resume, or promote the provider-owned state.
  */
 public final class AtomicInstallStateMachine {
   private final Object capability = new Object();
+  private long nextInstallValue = 1;
   private long nextOperationId = 1;
+
+  /** Issues a provider-authenticated identity for one logical install. */
+  public StatusCode issueInstallId(AtomicInstallId result) {
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (result.owner != null || result.value != 0 || result.bound) {
+      return StatusCode.CONFLICT;
+    }
+    if (nextInstallValue == 0) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    result.owner = capability;
+    result.value = nextInstallValue++;
+    return StatusCode.OK;
+  }
 
   public StatusCode resume(
       AtomicInstallProgress progress,
-      long requestVersion,
-      long providerGeneration,
-      int totalBytes) {
+      AtomicInstallRequest request,
+      long providerGeneration) {
+    if (request == null || !request.issuedBy(capability)) {
+      return StatusCode.NOT_OWNER;
+    }
+    long requestVersion = request.version();
+    long installValue = request.installValue();
+    int totalBytes = request.contentLength();
     if (requestVersion == 0 || providerGeneration == 0 || totalBytes < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (progress.owner == null) {
       if (progress.phase != AtomicInstallPhase.NEW
           || progress.requestVersion != 0
+          || progress.installValue != 0
           || progress.providerGeneration != 0
           || progress.bytesWritten != 0
           || progress.completionPending) {
@@ -31,6 +55,7 @@ public final class AtomicInstallStateMachine {
       }
       progress.owner = capability;
       progress.requestVersion = requestVersion;
+      progress.installValue = installValue;
       progress.providerGeneration = providerGeneration;
       progress.totalBytes = totalBytes;
       return StatusCode.OK;
@@ -38,7 +63,9 @@ public final class AtomicInstallStateMachine {
     if (progress.owner != capability) {
       return StatusCode.NOT_OWNER;
     }
-    if (progress.requestVersion != requestVersion || progress.totalBytes != totalBytes) {
+    if (progress.requestVersion != requestVersion
+        || progress.installValue != installValue
+        || progress.totalBytes != totalBytes) {
       return StatusCode.CONFLICT;
     }
     if (progress.providerGeneration != providerGeneration) {

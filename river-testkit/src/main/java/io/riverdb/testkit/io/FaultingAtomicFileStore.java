@@ -8,6 +8,7 @@ import io.riverdb.platform.fault.FaultInjector;
 import io.riverdb.platform.fault.FaultOperation;
 import io.riverdb.platform.fault.FaultPoint;
 import io.riverdb.platform.file.AtomicFileInstaller;
+import io.riverdb.platform.file.AtomicInstallId;
 import io.riverdb.platform.file.AtomicInstallPhase;
 import io.riverdb.platform.file.AtomicInstallProgress;
 import io.riverdb.platform.file.AtomicInstallRequest;
@@ -67,6 +68,14 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   }
 
   @Override
+  public synchronized StatusCode issueInstallId(AtomicInstallId result) {
+    if (!running) {
+      return StatusCode.RETRY;
+    }
+    return progressState.issueInstallId(result);
+  }
+
+  @Override
   public synchronized StatusCode advance(
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
@@ -95,8 +104,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
         && progressState.phase(progress) == AtomicInstallPhase.RECOVERY_REQUIRED) {
       return record(StatusCode.FENCED, AtomicInstallStep.NONE, progress, result, 0);
     }
-    StatusCode resumeStatus = progressState.resume(
-        progress, request.version(), generation, request.contentLength());
+    StatusCode resumeStatus = progressState.resume(progress, request, generation);
     if (!resumeStatus.isOk()) {
       return record(resumeStatus, AtomicInstallStep.NONE, progress, result, 0);
     }

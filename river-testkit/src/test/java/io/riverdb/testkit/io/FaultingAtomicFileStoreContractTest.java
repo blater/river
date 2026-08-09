@@ -12,6 +12,7 @@ import io.riverdb.platform.fault.FaultOperation;
 import io.riverdb.platform.fault.FaultPoint;
 import io.riverdb.platform.fault.FaultPointRegistry;
 import io.riverdb.platform.fault.FaultPointSlot;
+import io.riverdb.platform.file.AtomicInstallId;
 import io.riverdb.platform.file.AtomicInstallPhase;
 import io.riverdb.platform.file.AtomicInstallProgress;
 import io.riverdb.platform.file.AtomicInstallRequest;
@@ -31,7 +32,7 @@ final class FaultingAtomicFileStoreContractTest {
   @Test
   void installsForcesAndVerifiesBeforeReportingCompletion() {
     Fixture fixture = new Fixture(0, 16);
-    AtomicInstallRequest request = request(new byte[] {1, 2, 3, 4});
+    AtomicInstallRequest request = request(fixture, new byte[] {1, 2, 3, 4});
     AtomicInstallProgress progress = new AtomicInstallProgress();
     AtomicInstallDriveResult driveResult = new AtomicInstallDriveResult();
 
@@ -86,7 +87,7 @@ final class FaultingAtomicFileStoreContractTest {
         StatusCode.OK,
         fixture.contract.drive(
             fixture.store,
-            request(new byte[] {6}),
+            request(fixture, new byte[] {6}),
             progress,
             fixture.stepResult,
             8,
@@ -102,7 +103,7 @@ final class FaultingAtomicFileStoreContractTest {
   void progressCannotCrossProviderOrResetWhileActive() {
     Fixture first = new Fixture(0, 16);
     Fixture second = new Fixture(0, 16);
-    AtomicInstallRequest request = request(new byte[] {1, 2});
+    AtomicInstallRequest request = request(first, new byte[] {1, 2});
     AtomicInstallProgress progress = new AtomicInstallProgress();
     assertEquals(StatusCode.OK, first.store.advance(request, progress, first.stepResult));
     AtomicInstallSnapshot before = first.snapshot(progress);
@@ -115,10 +116,100 @@ final class FaultingAtomicFileStoreContractTest {
   }
 
   @Test
+  void sameProviderInstallIdsCannotCrossWireAnyReachedPhase() {
+    AtomicInstallPhase[] reachedPhases = {
+      AtomicInstallPhase.TEMP_CREATED,
+      AtomicInstallPhase.CONTENT_WRITTEN,
+      AtomicInstallPhase.CONTENT_FORCED,
+      AtomicInstallPhase.DESTINATION_REPLACED,
+      AtomicInstallPhase.DIRECTORY_FORCED,
+      AtomicInstallPhase.VERIFIED
+    };
+    for (int advances = 1; advances <= reachedPhases.length; advances++) {
+      Fixture fixture = new Fixture(0, 24);
+      AtomicInstallRequest first = request(
+          fixture,
+          "first.tmp",
+          "first",
+          new byte[] {1, 1});
+      AtomicInstallRequest second = request(
+          fixture,
+          "second.tmp",
+          "second",
+          new byte[] {2, 2});
+      assertEquals(first.version(), second.version());
+      assertEquals(first.contentLength(), second.contentLength());
+      AtomicInstallProgress firstProgress = new AtomicInstallProgress();
+      for (int advance = 0; advance < advances; advance++) {
+        assertEquals(
+            StatusCode.OK,
+            fixture.store.advance(first, firstProgress, fixture.stepResult));
+      }
+      AtomicInstallSnapshot before = fixture.snapshot(firstProgress);
+      assertEquals(reachedPhases[advances - 1], before.phase());
+
+      assertEquals(
+          StatusCode.CONFLICT,
+          fixture.store.advance(second, firstProgress, fixture.stepResult),
+          before.phase().name());
+      AtomicInstallSnapshot after = fixture.snapshot(firstProgress);
+      assertEquals(before.phase(), after.phase());
+      assertEquals(before.durability(), after.durability());
+      assertEquals(before.bytesWritten(), after.bytesWritten());
+      assertEquals(before.completionPending(), after.completionPending());
+    }
+  }
+
+  @Test
+  void rejectedCrossWireCannotPromoteUnforcedSecondInstallAcrossCrash() {
+    Fixture fixture = new Fixture(0, 32);
+    AtomicInstallDriveResult driveResult = new AtomicInstallDriveResult();
+    assertEquals(
+        StatusCode.OK,
+        fixture.contract.drive(
+            fixture.store,
+            request(fixture, "second-seed.tmp", "second", new byte[] {9}),
+            new AtomicInstallProgress(),
+            fixture.stepResult,
+            8,
+            driveResult));
+    AtomicInstallRequest first = request(
+        fixture,
+        "first.tmp",
+        "first",
+        new byte[] {1, 1});
+    AtomicInstallRequest second = request(
+        fixture,
+        "second.tmp",
+        "second",
+        new byte[] {2, 2});
+    AtomicInstallProgress firstProgress = new AtomicInstallProgress();
+    AtomicInstallProgress secondProgress = new AtomicInstallProgress();
+    for (int advance = 0; advance < 3; advance++) {
+      assertEquals(StatusCode.OK, fixture.store.advance(first, firstProgress, fixture.stepResult));
+    }
+    for (int advance = 0; advance < 2; advance++) {
+      assertEquals(StatusCode.OK, fixture.store.advance(second, secondProgress, fixture.stepResult));
+    }
+    assertEquals(AtomicInstallPhase.CONTENT_FORCED, fixture.snapshot(firstProgress).phase());
+    assertEquals(AtomicInstallPhase.CONTENT_WRITTEN, fixture.snapshot(secondProgress).phase());
+
+    assertEquals(
+        StatusCode.CONFLICT,
+        fixture.store.advance(second, firstProgress, fixture.stepResult));
+    assertEquals(AtomicInstallPhase.CONTENT_FORCED, fixture.snapshot(firstProgress).phase());
+    assertEquals(AtomicInstallPhase.CONTENT_WRITTEN, fixture.snapshot(secondProgress).phase());
+    assertEquals(StatusCode.OK, fixture.store.crash());
+    assertEquals(StatusCode.OK, fixture.store.restart());
+    assertEquals(StatusCode.CORRUPTION, fixture.reopenStatus("second.tmp"));
+    assertArrayEquals(new byte[] {9}, fixture.reopenAndRead("second"));
+  }
+
+  @Test
   void borrowedContentMutationFailsBeforeTheNextBoundary() {
     Fixture fixture = new Fixture(0, 16);
     byte[] bytes = {1, 2, 3};
-    AtomicInstallRequest request = request(bytes);
+    AtomicInstallRequest request = request(fixture, bytes);
     AtomicInstallProgress progress = new AtomicInstallProgress();
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
     bytes[1] = 9;
@@ -143,7 +234,7 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.DELAY,
             0));
-    AtomicInstallRequest request = request(new byte[] {8, 9});
+    AtomicInstallRequest request = request(fixture, new byte[] {8, 9});
     AtomicInstallProgress progress = new AtomicInstallProgress();
 
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
@@ -187,7 +278,7 @@ final class FaultingAtomicFileStoreContractTest {
           StatusCode.OK,
           fixture.contract.drive(
               fixture.store,
-              request(new byte[] {1, 3, 5}),
+              request(fixture, new byte[] {1, 3, 5}),
               progress,
               fixture.stepResult,
               9,
@@ -218,7 +309,7 @@ final class FaultingAtomicFileStoreContractTest {
           StatusCode.OK,
           fixture.contract.drive(
               fixture.store,
-              request(new byte[] {2, 4, 6}),
+              request(fixture, new byte[] {2, 4, 6}),
               progress,
               fixture.stepResult,
               9,
@@ -241,7 +332,7 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.SHORT_WRITE,
             2));
-    AtomicInstallRequest request = request(new byte[] {1, 2, 3, 4});
+    AtomicInstallRequest request = request(shortWrite, new byte[] {1, 2, 3, 4});
     AtomicInstallProgress progress = new AtomicInstallProgress();
     assertEquals(StatusCode.OK, shortWrite.store.advance(request, progress, shortWrite.stepResult));
     assertEquals(StatusCode.OK, shortWrite.store.advance(request, progress, shortWrite.stepResult));
@@ -268,6 +359,7 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.DISK_FULL,
             1));
+    request = request(diskFull, new byte[] {1, 2, 3, 4});
     assertEquals(StatusCode.OK, progress.reset());
     assertEquals(StatusCode.OK, diskFull.store.advance(request, progress, diskFull.stepResult));
     assertEquals(
@@ -298,7 +390,7 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.SHORT_READ,
             2));
-    AtomicInstallRequest request = request(new byte[] {4, 3, 2, 1});
+    AtomicInstallRequest request = request(fixture, new byte[] {4, 3, 2, 1});
     AtomicInstallProgress progress = new AtomicInstallProgress();
     for (int index = 0; index < 5; index++) {
       assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
@@ -323,7 +415,7 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.FORCE_FAILURE,
             0));
-    AtomicInstallRequest request = request(new byte[] {4, 5});
+    AtomicInstallRequest request = request(fileForce, new byte[] {4, 5});
     AtomicInstallProgress progress = new AtomicInstallProgress();
     assertEquals(StatusCode.OK, fileForce.store.advance(request, progress, fileForce.stepResult));
     assertEquals(StatusCode.OK, fileForce.store.advance(request, progress, fileForce.stepResult));
@@ -340,6 +432,7 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.FORCE_FAILURE,
             0));
+    request = request(directoryForce, new byte[] {4, 5});
     progress = new AtomicInstallProgress();
     for (int index = 0; index < 4; index++) {
       assertEquals(
@@ -398,7 +491,7 @@ final class FaultingAtomicFileStoreContractTest {
               1,
               FaultAction.DISK_FULL,
               caseIndex == 1 ? 1 : 0));
-      AtomicInstallRequest request = request(new byte[] {9, 8, 7});
+      AtomicInstallRequest request = request(fixture, new byte[] {9, 8, 7});
       AtomicInstallProgress progress = new AtomicInstallProgress();
       for (int advance = 0; advance < advancesBeforeFault[caseIndex]; advance++) {
         assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
@@ -430,7 +523,7 @@ final class FaultingAtomicFileStoreContractTest {
           StatusCode.IO_FAILURE,
           fixture.contract.drive(
               fixture.store,
-              request(new byte[] {7, 6, 5}),
+              request(fixture, new byte[] {7, 6, 5}),
               progress,
               fixture.stepResult,
               8,
@@ -458,7 +551,7 @@ final class FaultingAtomicFileStoreContractTest {
         StatusCode.OK,
         fixture.contract.drive(
             fixture.store,
-            request(new byte[] {1, 1}),
+            request(fixture, new byte[] {1, 1}),
             new AtomicInstallProgress(),
             fixture.stepResult,
             8,
@@ -478,7 +571,7 @@ final class FaultingAtomicFileStoreContractTest {
         StatusCode.IO_FAILURE,
         fixture.contract.drive(
             fixture.store,
-            request(new byte[] {2, 2}),
+            request(fixture, new byte[] {2, 2}),
             new AtomicInstallProgress(),
             fixture.stepResult,
             8,
@@ -506,7 +599,7 @@ final class FaultingAtomicFileStoreContractTest {
           StatusCode.IO_FAILURE,
           fixture.contract.drive(
               fixture.store,
-              request(new byte[] {3, 2, 1}),
+              request(fixture, new byte[] {3, 2, 1}),
               progress,
               fixture.stepResult,
               8,
@@ -543,7 +636,7 @@ final class FaultingAtomicFileStoreContractTest {
                 1,
                 FaultAction.RESTART,
                 0));
-        AtomicInstallRequest request = request(new byte[] {5, 4, 3});
+        AtomicInstallRequest request = request(fixture, new byte[] {5, 4, 3});
         AtomicInstallProgress progress = new AtomicInstallProgress();
         AtomicInstallDriveResult driveResult = new AtomicInstallDriveResult();
 
@@ -589,7 +682,7 @@ final class FaultingAtomicFileStoreContractTest {
         StatusCode.OK,
         fixture.contract.drive(
             fixture.store,
-            request(new byte[] {1, 2}),
+            request(fixture, new byte[] {1, 2}),
             progress,
             fixture.stepResult,
             8,
@@ -653,7 +746,7 @@ final class FaultingAtomicFileStoreContractTest {
         StatusCode.CORRUPTION,
         fixture.contract.drive(
             fixture.store,
-            request(new byte[] {0, 1}),
+            request(fixture, new byte[] {0, 1}),
             progress,
             fixture.stepResult,
             8,
@@ -672,7 +765,7 @@ final class FaultingAtomicFileStoreContractTest {
         StatusCode.OK,
         fixture.contract.drive(
             fixture.store,
-            request(new byte[] {5}),
+            request(fixture, new byte[] {5}),
             progress,
             fixture.stepResult,
             8,
@@ -682,11 +775,25 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.store.traceStatus());
   }
 
-  private static AtomicInstallRequest request(byte[] content) {
+  private static AtomicInstallRequest request(Fixture fixture, byte[] content) {
+    return request(fixture, "control.tmp", "control", content);
+  }
+
+  private static AtomicInstallRequest request(
+      Fixture fixture,
+      String temporaryFileName,
+      String destinationFileName,
+      byte[] content) {
+    AtomicInstallId installId = new AtomicInstallId();
+    assertEquals(StatusCode.OK, fixture.store.issueInstallId(installId));
     AtomicInstallRequest request = new AtomicInstallRequest();
     assertEquals(
         StatusCode.OK,
-        request.configure("control.tmp", "control", ByteBuffer.wrap(content)));
+        request.configure(
+            installId,
+            temporaryFileName,
+            destinationFileName,
+            ByteBuffer.wrap(content)));
     return request;
   }
 

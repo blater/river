@@ -6,10 +6,11 @@ import java.nio.ByteBuffer;
 /**
  * Caller-owned immutable-for-an-install description of bytes and provider-relative names.
  *
- * <p>The buffer and its position, limit, and bytes are borrowed until progress reaches
- * {@code VERIFIED} or {@code RECOVERY_REQUIRED} and is reset. Debug/contract providers validate
- * the recorded fingerprint before every boundary; production providers may instead retain a
- * bounded stable copy under the same SPI.
+ * <p>Configuration requires a provider-issued {@link AtomicInstallId}. The buffer and its
+ * position, limit, and bytes are borrowed until progress reaches {@code VERIFIED} or
+ * {@code RECOVERY_REQUIRED} and is reset. Debug/contract providers validate the recorded
+ * fingerprint before every boundary; production providers may instead retain a bounded stable
+ * copy under the same SPI.
  */
 public final class AtomicInstallRequest {
   private String temporaryFileName;
@@ -20,24 +21,39 @@ public final class AtomicInstallRequest {
   private int contentLimit;
   private long contentFingerprint;
   private long version;
+  private AtomicInstallId installId;
 
   public StatusCode configure(
+      AtomicInstallId installId,
       String temporaryFileName,
       String destinationFileName,
       ByteBuffer content) {
-    if (!validFileName(temporaryFileName)
+    if (installId == null
+        || !validFileName(temporaryFileName)
         || !validFileName(destinationFileName)
         || content == null
         || temporaryFileName.equals(destinationFileName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    int newContentPosition = content.position();
+    int newContentLength = content.remaining();
+    long newContentFingerprint = fingerprint(content, newContentPosition, newContentLength);
+    StatusCode bindStatus = installId.bind(
+        temporaryFileName,
+        destinationFileName,
+        newContentFingerprint,
+        newContentLength);
+    if (!bindStatus.isOk()) {
+      return bindStatus;
+    }
+    this.installId = installId;
     this.temporaryFileName = temporaryFileName;
     this.destinationFileName = destinationFileName;
     this.content = content;
-    contentPosition = content.position();
-    contentLength = content.remaining();
+    contentPosition = newContentPosition;
+    contentLength = newContentLength;
     contentLimit = content.limit();
-    contentFingerprint = fingerprint(content, contentPosition, contentLength);
+    contentFingerprint = newContentFingerprint;
     version++;
     if (version == 0) {
       version = 1;
@@ -77,6 +93,17 @@ public final class AtomicInstallRequest {
         && content.limit() == contentLimit
         && content.limit() >= contentPosition + contentLength
         && fingerprint(content, contentPosition, contentLength) == contentFingerprint;
+  }
+
+  boolean issuedBy(Object capability) {
+    return installId != null
+        && installId.owner == capability
+        && installId.value != 0
+        && installId.bound;
+  }
+
+  long installValue() {
+    return installId == null ? 0 : installId.value;
   }
 
   private static boolean validFileName(String fileName) {

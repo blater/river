@@ -16,6 +16,6 @@ final class AtomicFileInstallerContractSuiteTest {
         suite.run(FaultingAtomicInstallContractProvider::new, result));
     assertEquals(StatusCode.OK, result.status());
     assertEquals(0, result.scenario());
-    assertEquals(6, result.completedScenarios());
+    assertEquals(7, result.completedScenarios());
   }
 }

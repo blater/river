@@ -2,12 +2,16 @@ package io.riverdb.platform.file;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Caller-owned, provider-authenticated resumable state. Never share it concurrently. */
+/**
+ * Caller-owned resumable state authenticated to one provider and issued install identity.
+ * Never share it concurrently.
+ */
 public final class AtomicInstallProgress {
   Object owner;
   AtomicInstallPhase phase = AtomicInstallPhase.NEW;
   DirectoryDurability durability = DirectoryDurability.NOT_APPLIED;
   long requestVersion;
+  long installValue;
   long providerGeneration;
   long pendingOperationId;
   int totalBytes;
@@ -31,6 +35,7 @@ public final class AtomicInstallProgress {
     phase = AtomicInstallPhase.NEW;
     durability = DirectoryDurability.NOT_APPLIED;
     requestVersion = 0;
+    installValue = 0;
     providerGeneration = 0;
     pendingOperationId = 0;
     totalBytes = 0;

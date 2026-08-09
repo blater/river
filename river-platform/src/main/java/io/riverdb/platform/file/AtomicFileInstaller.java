@@ -5,14 +5,18 @@ import io.riverdb.base.error.StatusCode;
 /**
  * Resumable same-directory file installation.
  *
- * <p>Each call attempts at most one named boundary. {@code OK} can therefore mean safe progress
- * rather than terminal completion; callers use {@link #inspect} and check
- * {@link AtomicInstallSnapshot#isComplete()}. {@code RETRY} with
+ * <p>Callers first obtain an {@link AtomicInstallId}, configure a request with it, and retain the
+ * ID when reconstructing an equivalent request carrier. Each advance attempts at most one named
+ * boundary. {@code OK} can therefore mean safe progress rather than terminal completion; callers
+ * use {@link #inspect} and check {@link AtomicInstallSnapshot#isComplete()}. {@code RETRY} with
  * {@code completionPending=true} means an operation was applied but its
  * completion was withheld, and the next call polls that completion without repeating the
  * operation. {@link AtomicInstallPhase#RECOVERY_REQUIRED} requires reopen-based recovery.
  */
 public interface AtomicFileInstaller {
+  /** Issues an opaque identity that can bind exactly one logical install request. */
+  StatusCode issueInstallId(AtomicInstallId result);
+
   StatusCode advance(
       AtomicInstallRequest request,
       AtomicInstallProgress progress,

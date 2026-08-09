@@ -3,6 +3,7 @@ package io.riverdb.testkit.io;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
 import io.riverdb.platform.fault.FaultBoundary;
+import io.riverdb.platform.file.AtomicInstallId;
 import io.riverdb.platform.file.AtomicInstallPhase;
 import io.riverdb.platform.file.AtomicInstallProgress;
 import io.riverdb.platform.file.AtomicInstallRequest;
@@ -27,6 +28,7 @@ public final class AtomicFileInstallerContractSuite {
   public static final int SCENARIO_RESTORE_OLD = 4;
   public static final int SCENARIO_FORCE_FAILURE = 5;
   public static final int SCENARIO_BOUNDED_TRACE = 6;
+  public static final int SCENARIO_INSTALL_IDENTITY = 7;
 
   private static final AtomicInstallStep[] STEPS = {
     AtomicInstallStep.TEMP_CREATE,
@@ -80,6 +82,11 @@ public final class AtomicFileInstallerContractSuite {
     status = boundedTrace(factory);
     if (!status.isOk()) {
       return fail(result, status, SCENARIO_BOUNDED_TRACE);
+    }
+    completedScenarios++;
+    status = installIdentity(factory);
+    if (!status.isOk()) {
+      return fail(result, status, SCENARIO_INSTALL_IDENTITY);
     }
     completedScenarios++;
     result.set(StatusCode.OK, 0, completedScenarios);
@@ -225,13 +232,81 @@ public final class AtomicFileInstallerContractSuite {
         : StatusCode.INVARIANT_BROKEN;
   }
 
+  private StatusCode installIdentity(AtomicInstallContractProviderFactory factory) {
+    AtomicInstallPhase[] reachedPhases = {
+      AtomicInstallPhase.TEMP_CREATED,
+      AtomicInstallPhase.CONTENT_WRITTEN,
+      AtomicInstallPhase.CONTENT_FORCED,
+      AtomicInstallPhase.DESTINATION_REPLACED,
+      AtomicInstallPhase.DIRECTORY_FORCED,
+      AtomicInstallPhase.VERIFIED
+    };
+    for (int advances = 1; advances <= reachedPhases.length; advances++) {
+      AtomicInstallContractProvider provider = factory.create(0, 16);
+      AtomicInstallId firstId = new AtomicInstallId();
+      AtomicInstallId secondId = new AtomicInstallId();
+      StatusCode status = provider.installer().issueInstallId(firstId);
+      if (!status.isOk()) {
+        return status;
+      }
+      status = provider.installer().issueInstallId(secondId);
+      if (!status.isOk()) {
+        return status;
+      }
+      AtomicInstallRequest first = new AtomicInstallRequest();
+      AtomicInstallRequest second = new AtomicInstallRequest();
+      status = first.configure(
+          firstId,
+          "first.tmp",
+          "first",
+          ByteBuffer.wrap(new byte[] {1, 1}));
+      if (!status.isOk()) {
+        return status;
+      }
+      status = second.configure(
+          secondId,
+          "second.tmp",
+          "second",
+          ByteBuffer.wrap(new byte[] {2, 2}));
+      if (!status.isOk()) {
+        return status;
+      }
+      AtomicInstallProgress progress = new AtomicInstallProgress();
+      for (int advance = 0; advance < advances; advance++) {
+        status = provider.installer().advance(first, progress, stepResult);
+        if (!status.isOk()) {
+          return status;
+        }
+      }
+      status = provider.installer().inspect(progress, snapshot);
+      if (!status.isOk() || snapshot.phase() != reachedPhases[advances - 1]) {
+        return StatusCode.INVARIANT_BROKEN;
+      }
+      AtomicInstallPhase phaseBefore = snapshot.phase();
+      int bytesBefore = snapshot.bytesWritten();
+      status = provider.installer().advance(second, progress, stepResult);
+      if (status != StatusCode.CONFLICT
+          || !provider.installer().inspect(progress, snapshot).isOk()
+          || snapshot.phase() != phaseBefore
+          || snapshot.bytesWritten() != bytesBefore) {
+        return StatusCode.INVARIANT_BROKEN;
+      }
+    }
+    return StatusCode.OK;
+  }
+
   private StatusCode install(
       AtomicInstallContractProvider provider,
       ByteBuffer content,
       AtomicInstallProgress progress,
       int maxAdvances) {
     AtomicInstallRequest request = new AtomicInstallRequest();
-    StatusCode status = request.configure("control.tmp", "control", content);
+    AtomicInstallId installId = new AtomicInstallId();
+    StatusCode status = provider.installer().issueInstallId(installId);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = request.configure(installId, "control.tmp", "control", content);
     if (!status.isOk()) {
       return status;
     }
