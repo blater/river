@@ -3,6 +3,7 @@ import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.tasks.Jar
 import java.nio.file.Files
+import java.security.MessageDigest
 
 plugins {
   base
@@ -435,7 +436,123 @@ tasks.register("assembleRiverArchives") {
   })
 }
 
+fun sha256(file: java.io.File): String {
+  val digest = MessageDigest.getInstance("SHA-256")
+  file.inputStream().use { input ->
+    val buffer = ByteArray(16 * 1024)
+    while (true) {
+      val read = input.read(buffer)
+      if (read < 0) {
+        break
+      }
+      digest.update(buffer, 0, read)
+    }
+  }
+  return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+}
+
+val externalDependencyReports = subprojects.associateWith { module ->
+  val report = module.layout.buildDirectory.file("reports/external-dependencies.tsv")
+  module.tasks.register("writeExternalDependencyReport") {
+    outputs.file(report)
+    outputs.upToDateWhen { false }
+
+    doLast {
+      val resolved = sortedMapOf<String, String>()
+      module.configurations.filter { it.isCanBeResolved }.forEach { configuration ->
+        configuration.resolvedConfiguration.resolvedArtifacts.forEach { artifact ->
+          val component = artifact.moduleVersion.id
+          if (component.group != rootProject.group.toString()) {
+            val key = "${component.group}:${component.name}:${component.version}"
+            val checksum = sha256(artifact.file)
+            val previous = resolved.putIfAbsent(key, checksum)
+            require(previous == null || previous == checksum) {
+              "external dependency $key resolved to different bytes in ${module.path}"
+            }
+          }
+        }
+      }
+      val reportPath = report.get().asFile.toPath()
+      Files.createDirectories(reportPath.parent)
+      Files.write(
+        reportPath,
+        resolved.map { (coordinate, checksum) -> "$coordinate\t$checksum" }
+      )
+    }
+  }
+}
+
+val verifyDependencyLedger = tasks.register("verifyDependencyLedger") {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Verifies every resolved external JAR against the provenance ledger."
+  dependsOn(externalDependencyReports.values)
+
+  doLast {
+    val ledgerPath = rootDir.toPath().resolve("docs/governance/provenance-ledger.csv")
+    val ledgerLines = Files.readAllLines(ledgerPath)
+    require(ledgerLines.isNotEmpty()) { "provenance ledger is empty" }
+    require(
+      ledgerLines.first()
+          == "artifact_id,artifact_type,name,upstream,version,sha256,license,use,vendoring,approval"
+    ) { "provenance ledger header does not match the v1 schema" }
+
+    val dependencyRows = linkedMapOf<String, List<String>>()
+    ledgerLines.drop(1).forEachIndexed { index, line ->
+      val fields = line.split(',')
+      require(fields.size == 10) {
+        "provenance ledger line ${index + 2} has ${fields.size} fields, expected 10"
+      }
+      if (fields[1] == "dependency") {
+        require(fields[2].count { it == ':' } == 1) {
+          "provenance dependency coordinate must be group:name at line ${index + 2}"
+        }
+        require(fields[4].isNotBlank() && fields[5].matches(Regex("[0-9a-f]{64}"))) {
+          "provenance dependency version/checksum is incomplete at line ${index + 2}"
+        }
+        val key = "${fields[2]}:${fields[4]}"
+        require(dependencyRows.put(key, fields) == null) {
+          "duplicate provenance dependency $key"
+        }
+      }
+    }
+
+    val resolved = sortedMapOf<String, String>()
+    externalDependencyReports.values.forEach { reportTask ->
+      val reportPath = reportTask.get().outputs.files.singleFile.toPath()
+      Files.readAllLines(reportPath).forEach { line ->
+        val fields = line.split('\t')
+        require(fields.size == 2) { "invalid external dependency report line: $line" }
+        val previous = resolved.putIfAbsent(fields[0], fields[1])
+        require(previous == null || previous == fields[1]) {
+          "external dependency ${fields[0]} resolved to multiple checksums"
+        }
+      }
+    }
+
+    val missingRows = resolved.keys - dependencyRows.keys
+    val staleRows = dependencyRows.keys - resolved.keys
+    require(missingRows.isEmpty()) {
+      "resolved dependencies missing from provenance ledger: ${missingRows.sorted()}"
+    }
+    require(staleRows.isEmpty()) {
+      "provenance dependency rows are not resolved by the build: ${staleRows.sorted()}"
+    }
+
+    resolved.forEach { (key, actual) ->
+      val expected = dependencyRows.getValue(key)[5]
+      require(actual == expected) {
+        "provenance checksum mismatch for $key: expected $expected, got $actual"
+      }
+    }
+  }
+}
+
 tasks.named("check") {
-  dependsOn(verifySourcePolicy, verifyModuleGraph, verifyBuildPolicyFixtures)
+  dependsOn(
+    verifySourcePolicy,
+    verifyModuleGraph,
+    verifyBuildPolicyFixtures,
+    verifyDependencyLedger
+  )
   dependsOn(subprojects.map { it.tasks.named("check") })
 }
