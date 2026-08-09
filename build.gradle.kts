@@ -117,8 +117,9 @@ val declaredDependencies = mapOf(
   "river-tx-api" to setOf("river-base"),
   "river-journal-api" to setOf("river-base"),
   "river-wal" to setOf("river-base", "river-format", "river-platform"),
+  "river-storage" to setOf("river-base"),
   "river-engine" to setOf(
-    "river-base", "river-format", "river-platform", "river-wal"
+    "river-base", "river-format", "river-platform", "river-storage", "river-wal"
   ),
   "river-testkit" to setOf(
     "river-base", "river-platform", "river-tx-api", "river-journal-api"
@@ -221,6 +222,9 @@ val databaseIncarnationDescriptor = "Lio/riverdb/base/id/DatabaseIncarnation;"
 val walGenerationDescriptor = "Lio/riverdb/base/id/WalGeneration;"
 val pageHeaderDescriptor = "Lio/riverdb/format/page/PageHeader;"
 val pageUpdateDescriptor = "Lio/riverdb/engine/page/PageUpdate;"
+val heapInsertResultDescriptor = "Lio/riverdb/storage/heap/HeapInsertResult;"
+val heapRowResultDescriptor = "Lio/riverdb/storage/heap/HeapRowResult;"
+val heapScanCursorDescriptor = "Lio/riverdb/storage/heap/HeapScanCursor;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val liveHotPathMethods = setOf(
@@ -352,8 +356,55 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.engine.page.SinglePageStore",
+    "beginUpdateFromCurrent",
+    "($pageUpdateDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.SinglePageStore",
+    "commit",
+    "($pageUpdateDescriptor" + "JJI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.SinglePageStore",
     "flush",
     "()$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.heap.HeapPage",
+    "validate",
+    "($byteBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.heap.HeapPage",
+    "insert",
+    "($byteBufferDescriptor$byteBufferDescriptor$heapInsertResultDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.storage.heap.HeapPage",
+    "fetch",
+    "($byteBufferDescriptor" + "I$heapRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.heap.HeapPage",
+    "next",
+    "($byteBufferDescriptor$heapScanCursorDescriptor$heapRowResultDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.SinglePageTable",
+    "insert",
+    "(J$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.SinglePageTable",
+    "fetch",
+    "(I$heapRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.SinglePageTable",
+    "next",
+    "($heapScanCursorDescriptor$heapRowResultDescriptor)$statusCodeDescriptor"
   )
 )
 val liveHotPathAllowedRules = mapOf(

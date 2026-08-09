@@ -155,7 +155,27 @@ public final class SinglePageStore {
     return status;
   }
 
+  public StatusCode beginUpdateFromCurrent(PageUpdate update) {
+    StatusCode status = beginUpdate(payloadBytes, update);
+    if (!status.isOk()) {
+      return status;
+    }
+    currentPayload.clear();
+    currentPayload.limit(payloadBytes);
+    stagingPayload.put(currentPayload);
+    copiedPayloadBytes += payloadBytes;
+    return StatusCode.OK;
+  }
+
   public StatusCode commit(PageUpdate update) {
+    return commit(update, 0, 0, 0);
+  }
+
+  public StatusCode commit(
+      PageUpdate update,
+      long transactionId,
+      long commitSequence,
+      int decisionCode) {
     if (update == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -167,6 +187,13 @@ public final class SinglePageStore {
       return StatusCode.CONFLICT;
     }
     if (update.writablePayload().position() != update.payloadBytes()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if ((decisionCode == 0 && commitSequence != 0)
+        || (decisionCode == 1 && (transactionId <= 0 || commitSequence <= 0))
+        || (decisionCode == 2 && (transactionId <= 0 || commitSequence != 0))
+        || decisionCode < 0
+        || decisionCode > 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = wal.reserve(PageCodec.PAGE_BYTES, walReservation);
@@ -191,9 +218,9 @@ public final class SinglePageStore {
     copiedPayloadBytes += PageCodec.PAGE_BYTES;
     status = wal.publish(
         walReservation,
-        0,
-        0,
-        0,
+        transactionId,
+        commitSequence,
+        decisionCode,
         WAL_FORMAT_ID,
         WAL_FORMAT_VERSION,
         walAppendResult);
@@ -210,6 +237,22 @@ public final class SinglePageStore {
     payloadBytes = update.payloadBytes();
     recordEnd = walAppendResult.endOffset();
     dirty = true;
+    activeUpdateToken = 0;
+    update.complete();
+    return StatusCode.OK;
+  }
+
+  public StatusCode cancel(PageUpdate update) {
+    if (update == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode admission = admission();
+    if (!admission.isOk()) {
+      return admission;
+    }
+    if (!update.isOwnedBy(this, activeUpdateToken)) {
+      return StatusCode.CONFLICT;
+    }
     activeUpdateToken = 0;
     update.complete();
     return StatusCode.OK;
@@ -323,6 +366,7 @@ public final class SinglePageStore {
       }
       if (walReadResult.header().formatId() == WAL_FORMAT_ID
           && walReadResult.header().formatVersion() == WAL_FORMAT_VERSION
+          && walReadResult.header().decisionCode() != 2
           && walReadResult.header().payloadBytes() == PageCodec.PAGE_BYTES) {
         StatusCode pageStatus = PageCodec.validate(
             walReadResult.payload(), pageHeader, checksum);
