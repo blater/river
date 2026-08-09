@@ -3,10 +3,10 @@ package io.riverdb.bench.harness;
 import java.nio.charset.StandardCharsets;
 import java.util.SplittableRandom;
 
-/** River-owned transactional workload generator; it contains no external data. */
+/** Partial in-memory tiny workload-shape generator; it contains no external data. */
 public final class RiverBankGenerator {
   public static final int VERSION = 1;
-  public static final int MAX_RECORDS = 1_000_000;
+  public static final int MAX_RECORDS = 10_000;
 
   private static final String[] OPERATIONS = {
       "transfer", "deposit", "withdrawal", "card_authorize", "card_reverse"
@@ -40,11 +40,12 @@ public final class RiverBankGenerator {
     }
     byte[] bytes = output.toString().getBytes(StandardCharsets.UTF_8);
     WorkloadArtifact artifact = new WorkloadArtifact(
-        "riverbank",
+        "riverbank_tiny",
         VERSION,
         seed,
         recordCount,
-        "branches=32;accounts=8192;amount_minor=1..250000;distribution=uniform",
+        "schema=partial_tiny_v1;branches=32;accounts=8192;"
+            + "amount_minor=1..250000;distribution=uniform",
         bytes,
         WorkloadChecksums.sha256(bytes));
     return GenerationResult.generated(artifact);

@@ -10,7 +10,7 @@
     "run_id",
     "manifest_sha256",
     "samples_sha256",
-    "workload_sha256",
+    "workload_artifacts",
     "sample_count",
     "status"
   ],
@@ -21,10 +21,25 @@
     "run_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{7,127}$"},
     "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "samples_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "workload_sha256": {
+    "workload_artifacts": {
       "type": "array",
       "minItems": 1,
-      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path", "sha256"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["riverbank_tiny", "riverpapers_tiny"]
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^(riverbank_tiny|riverpapers_tiny)-v[1-9][0-9]*\\.tsv$"
+          },
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
     },
     "sample_count": {"type": "integer", "minimum": 1},
     "status": {"const": "developer_smoke_not_promotion_evidence"}

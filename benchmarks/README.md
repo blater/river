@@ -32,8 +32,9 @@ The `river-bench` local harness now supplies:
   `river-bench/src/main/resources/io/riverdb/bench/harness/schema`;
 - a schema-driven validator which rejects missing, unknown, mistyped, and
   bounded numeric fields before any run directory is created;
-- fixed-seed, River-owned RiverBank and RiverPapers generators with pinned tiny
-  fixtures and SHA-256 checksums; and
+- fixed-seed, River-owned, partial in-memory `riverbank_tiny` and
+  `riverpapers_tiny` schema-v1 generators with pinned fixtures and SHA-256
+  checksums; and
 - fixed-footprint HdrHistogram recording which keeps closed-loop service
   latency distinct from open-loop service, intended-schedule, and
   coordinated-omission-corrected service views.
@@ -46,13 +47,27 @@ GRADLE_USER_HOME=/private/tmp/river-gradle-home \
 ```
 
 Each invocation creates a new directory under
-`river-bench/build/benchmark-smoke`; files use create-new semantics and an
-existing run ID is never overwritten. `manifest.json` records the environment,
-workload versions, seeds, checksums, and generator configuration. `samples.tsv`
-contains the latency summaries, and `result.json` binds the manifest, sample
-table, and workload TSV files by SHA-256. These synthetic local artifacts prove
-harness behavior only. They are explicitly marked
+`river-bench/build/benchmark-smoke`. The writer preflights every document and
+path, snapshots and verifies workload bytes, writes into same-filesystem
+staging, verifies all referenced SHA-256 values, emits `result.json` as the last
+completion marker, and atomically publishes the directory. A failure or existing
+run ID never exposes or overwrites a partial result. `manifest.json` records the
+environment, workload versions, seeds, checksums, and generator configuration.
+`samples.tsv` contains latency summaries, and `result.json` binds the manifest,
+sample table, and workload TSV files by name, path, and SHA-256. These synthetic
+local artifacts prove harness behavior only. They are explicitly marked
 `developer_smoke_not_promotion_evidence`.
+
+An interrupted retry with the same run ID recovers only a direct child staging
+directory carrying the matching v1 ownership marker and expected regular-file
+names. Unexpected files, directories, or symbolic links cause recovery to stop
+without deleting them.
+
+The v1 generators build a deliberately small TSV in memory. They cover harness
+determinism and relational workload shape only; they are not the canonical
+RiverBank/RiverPapers schemas or a scale generator. Canonical work requires
+streaming generation/adaptation, complete constraints and expected aggregates,
+and the dedicated-run evidence listed in the backlog.
 
 See [external-adapter-backlog.md](external-adapter-backlog.md) for the optional
 provenance-cleared realism adapters and the remaining canonical-run work.

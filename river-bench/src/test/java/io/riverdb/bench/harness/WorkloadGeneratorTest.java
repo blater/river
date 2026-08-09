@@ -16,7 +16,8 @@ final class WorkloadGeneratorTest {
     GenerationResult second = new RiverBankGenerator().generate(0x52_49_56_45_52L, 3);
 
     assertEquals(GenerationResult.Status.GENERATED, first.status());
-    assertArrayEquals(fixture("riverbank-v1-seed-5249564552-count-3.tsv"), first.artifact().tsv());
+    assertArrayEquals(fixture("riverbank_tiny-v1-seed-5249564552-count-3.tsv"),
+        first.artifact().tsv());
     assertArrayEquals(first.artifact().tsv(), second.artifact().tsv());
     assertEquals(first.artifact().sha256(), second.artifact().sha256());
   }
@@ -26,7 +27,7 @@ final class WorkloadGeneratorTest {
     GenerationResult result = new RiverPapersGenerator().generate(0x50_41_50_45_52L, 3);
 
     assertEquals(GenerationResult.Status.GENERATED, result.status());
-    assertArrayEquals(fixture("riverpapers-v1-seed-5041504552-count-3.tsv"),
+    assertArrayEquals(fixture("riverpapers_tiny-v1-seed-5041504552-count-3.tsv"),
         result.artifact().tsv());
   }
 

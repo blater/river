@@ -42,11 +42,11 @@
         "additionalProperties": false,
         "required": ["name", "version", "seed", "record_count", "config", "sha256"],
         "properties": {
-          "name": {"type": "string", "enum": ["riverbank", "riverpapers"]},
+          "name": {"type": "string", "enum": ["riverbank_tiny", "riverpapers_tiny"]},
           "version": {"type": "integer", "minimum": 1},
           "seed": {"type": "integer"},
           "record_count": {"type": "integer", "minimum": 1},
-          "config": {"type": "string", "minLength": 1},
+          "config": {"type": "string", "pattern": "^schema=partial_tiny_v1;.+$"},
           "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
         }
       }

@@ -13,7 +13,7 @@ final class BenchmarkSchemaValidatorTest {
     SchemaValidation validation = validator.validate(BenchmarkSchemaValidator.SAMPLE, """
         {
           "schema_version": 1,
-          "workload": "riverbank",
+          "workload": "riverbank_tiny",
           "mode": "open_loop",
           "metric": "scheduled",
           "operation_count": 10,
@@ -60,6 +60,34 @@ final class BenchmarkSchemaValidatorTest {
   @Test
   void rejectsMalformedJsonAndUnknownSchema() {
     assertFalse(validator.validate(BenchmarkSchemaValidator.MANIFEST, "{").valid());
+    assertFalse(validator.validate(BenchmarkSchemaValidator.SAMPLE, "{} {}").valid());
+    assertFalse(validator.validate(BenchmarkSchemaValidator.SAMPLE,
+        "{\"mode\":\"open_loop\",\"mode\":\"closed_loop\"}").valid());
     assertFalse(validator.validate("future-schema.json", "{}").valid());
+  }
+
+  @Test
+  void rejectsSemanticallyInconsistentLatencySample() {
+    SchemaValidation validation = validator.validate(BenchmarkSchemaValidator.SAMPLE, """
+        {
+          "schema_version": 1,
+          "workload": "riverbank_tiny",
+          "mode": "closed_loop",
+          "metric": "scheduled",
+          "operation_count": 10,
+          "expected_interval_ns": 1000,
+          "histogram_count": 9,
+          "minimum_ns": 10,
+          "p50_ns": 30,
+          "p95_ns": 20,
+          "p99_ns": 40,
+          "p999_ns": 50,
+          "maximum_ns": 60,
+          "mean_ns": 70
+        }
+        """);
+
+    assertFalse(validation.valid());
+    assertTrue(validation.errors().size() >= 5, validation.errors().toString());
   }
 }

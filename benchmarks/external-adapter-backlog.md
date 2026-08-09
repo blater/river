@@ -2,11 +2,13 @@
 
 Status: backlog; no external data is downloaded, copied, or approved here
 
-River-owned fixed-seed generators and tiny fixtures are the reproducible default
-for local development. External datasets are optional realism inputs. An adapter
-may land only after the provenance policy permits the intended download, use,
-derived output, and redistribution behavior. Adapters pin metadata and validate
-source checksums; they never silently fetch data in a test or build.
+River-owned partial in-memory tiny-schema-v1 generators and pinned fixtures are
+the reproducible default for local harness development. They do not implement
+the full RiverBank or RiverPapers canonical schema, streaming scale generation,
+or expected aggregate suites. External datasets are optional realism inputs. An
+adapter may land only after the provenance policy permits the intended download,
+use, derived output, and redistribution behavior. Adapters pin metadata and
+validate source checksums; they never silently fetch data in a test or build.
 
 ## Optional adapters
 
@@ -58,6 +60,11 @@ The local harness does not close P05 or G0. Canonical evidence still requires:
    not from developer laptops or shared CI; and
 10. an independent repeatability/performance review and explicit promotion,
     blocker, or recorded trade-off decision.
+
+Before a canonical generated-data run, replace or extend the tiny v1 generators
+with bounded-memory streaming generators, version the complete relational
+schema, constraints, distributions and expected aggregates, and start a new
+baseline for every generator-version change.
 
 GitHub Actions remains a manual secondary portability check during the initial
 build. Local validation is the primary functional gate; canonical performance

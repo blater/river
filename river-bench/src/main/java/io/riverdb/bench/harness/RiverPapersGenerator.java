@@ -4,10 +4,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.SplittableRandom;
 
-/** River-owned variable-width relational workload generator; no abstracts are copied. */
+/** Partial in-memory tiny workload-shape generator; no abstracts are copied. */
 public final class RiverPapersGenerator {
   public static final int VERSION = 1;
-  public static final int MAX_RECORDS = 1_000_000;
+  public static final int MAX_RECORDS = 10_000;
 
   private static final String[] CATEGORIES = {
       "cell-biology", "genomics", "neuroscience", "microbiology", "ecology"
@@ -51,11 +51,12 @@ public final class RiverPapersGenerator {
     }
     byte[] bytes = output.toString().getBytes(StandardCharsets.UTF_8);
     WorkloadArtifact artifact = new WorkloadArtifact(
-        "riverpapers",
+        "riverpapers_tiny",
         VERSION,
         seed,
         recordCount,
-        "abstract_words=12..48;publication_doi_null_rate=0.8;distribution=uniform",
+        "schema=partial_tiny_v1;abstract_words=12..48;"
+            + "publication_doi_null_rate=0.8;distribution=uniform",
         bytes,
         WorkloadChecksums.sha256(bytes));
     return GenerationResult.generated(artifact);

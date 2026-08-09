@@ -7,14 +7,21 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Stream;
 
-/** Writes a self-checking, create-once local benchmark artifact directory. */
+/** Preflights, stages, verifies, and atomically publishes a create-once local run. */
 public final class BenchmarkArtifactWriter {
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final ObjectWriter JSON = MAPPER.writerWithDefaultPrettyPrinter();
@@ -22,8 +29,18 @@ public final class BenchmarkArtifactWriter {
       "schema_version", "workload", "mode", "metric", "operation_count",
       "expected_interval_ns", "histogram_count", "minimum_ns", "p50_ns",
       "p95_ns", "p99_ns", "p999_ns", "maximum_ns", "mean_ns") + "\n";
+  private static final String STAGING_MARKER = ".river-bench-staging-v1";
 
   private final BenchmarkSchemaValidator validator = new BenchmarkSchemaValidator();
+  private final ArtifactWriteFailure failure;
+
+  public BenchmarkArtifactWriter() {
+    this(ArtifactWriteFailure.NONE);
+  }
+
+  BenchmarkArtifactWriter(ArtifactWriteFailure failure) {
+    this.failure = failure;
+  }
 
   public ArtifactWriteResult write(
       Path outputRoot,
@@ -34,67 +51,169 @@ public final class BenchmarkArtifactWriter {
       List<SampleArtifact> samples,
       long highestTrackableNanos,
       int significantDigits) throws IOException {
-    ObjectNode manifest = manifest(
+    PreparedWorkloads preparedWorkloads = prepareWorkloads(workloads);
+    if (preparedWorkloads.status() != ArtifactWriteStatus.WRITTEN) {
+      return new ArtifactWriteResult(preparedWorkloads.status(), null, null);
+    }
+    byte[] manifestBytes = jsonBytes(manifest(
         runId,
         createdAt,
         riverCommit,
-        workloads,
+        preparedWorkloads.workloads(),
         highestTrackableNanos,
-        significantDigits);
-    byte[] manifestBytes = jsonBytes(manifest);
-    SchemaValidation manifestValidation = validator.validate(
-        BenchmarkSchemaValidator.MANIFEST,
-        new String(manifestBytes, StandardCharsets.UTF_8));
+        significantDigits));
+    SchemaValidation manifestValidation = validate(
+        BenchmarkSchemaValidator.MANIFEST, manifestBytes);
     if (!manifestValidation.valid()) {
-      return new ArtifactWriteResult(
-          ArtifactWriteStatus.INVALID_DOCUMENT, null, manifestValidation);
+      return invalid(manifestValidation);
     }
 
     StringBuilder sampleTsv = new StringBuilder(SAMPLE_HEADER);
+    Set<String> workloadNames = new HashSet<>();
+    preparedWorkloads.workloads().forEach(workload -> workloadNames.add(workload.name()));
     for (SampleArtifact sample : samples) {
-      ObjectNode sampleNode = sample(sample);
-      String sampleJson = MAPPER.writeValueAsString(sampleNode);
+      if (!workloadNames.contains(sample.workload())) {
+        return invalid(new SchemaValidation(
+            false, List.of("$.workload: sample references an absent workload")));
+      }
       SchemaValidation sampleValidation = validator.validate(
-          BenchmarkSchemaValidator.SAMPLE, sampleJson);
+          BenchmarkSchemaValidator.SAMPLE, MAPPER.writeValueAsString(sample(sample)));
       if (!sampleValidation.valid()) {
-        return new ArtifactWriteResult(
-            ArtifactWriteStatus.INVALID_DOCUMENT, null, sampleValidation);
+        return invalid(sampleValidation);
       }
       appendSample(sampleTsv, sample);
     }
     byte[] sampleBytes = sampleTsv.toString().getBytes(StandardCharsets.UTF_8);
-    ObjectNode result = result(runId, manifestBytes, sampleBytes, workloads, samples.size());
-    byte[] resultBytes = jsonBytes(result);
-    SchemaValidation resultValidation = validator.validate(
-        BenchmarkSchemaValidator.RESULT,
-        new String(resultBytes, StandardCharsets.UTF_8));
+    byte[] resultBytes = jsonBytes(result(
+        runId,
+        manifestBytes,
+        sampleBytes,
+        preparedWorkloads.workloads(),
+        samples.size()));
+    SchemaValidation resultValidation = validate(BenchmarkSchemaValidator.RESULT, resultBytes);
     if (!resultValidation.valid()) {
-      return new ArtifactWriteResult(
-          ArtifactWriteStatus.INVALID_DOCUMENT, null, resultValidation);
+      return invalid(resultValidation);
     }
 
-    Path runDirectory = outputRoot.resolve(runId);
-    try {
-      Files.createDirectories(outputRoot);
-      Files.createDirectory(runDirectory);
-    } catch (FileAlreadyExistsException exception) {
+    Path normalizedRoot = outputRoot.toAbsolutePath().normalize();
+    Path runDirectory = normalizedRoot.resolve(runId).normalize();
+    if (!normalizedRoot.equals(runDirectory.getParent())) {
+      return invalid(new SchemaValidation(false, List.of("$: run path escapes output root")));
+    }
+    Files.createDirectories(normalizedRoot);
+    if (Files.exists(runDirectory)) {
       return new ArtifactWriteResult(ArtifactWriteStatus.TARGET_EXISTS, runDirectory, null);
     }
-    writeNew(runDirectory.resolve("manifest.json"), manifestBytes);
-    writeNew(runDirectory.resolve("samples.tsv"), sampleBytes);
-    writeNew(runDirectory.resolve("result.json"), resultBytes);
-    for (WorkloadArtifact workload : workloads) {
-      writeNew(runDirectory.resolve(workload.name() + "-v" + workload.version() + ".tsv"),
-          workload.tsv());
+    recoverOwnedStaging(normalizedRoot, runId, preparedWorkloads.workloads());
+    return stageAndPublish(
+        normalizedRoot,
+        runDirectory,
+        runId,
+        manifestBytes,
+        sampleBytes,
+        resultBytes,
+        preparedWorkloads.workloads());
+  }
+
+  private ArtifactWriteResult stageAndPublish(
+      Path outputRoot,
+      Path runDirectory,
+      String runId,
+      byte[] manifestBytes,
+      byte[] sampleBytes,
+      byte[] resultBytes,
+      List<PreparedWorkload> workloads) throws IOException {
+    Path staging = Files.createTempDirectory(outputRoot, ".pending-" + runId + '-');
+    List<Path> stagedFiles = new ArrayList<>();
+    try {
+      Path ownerPath = staging.resolve(STAGING_MARKER);
+      stagedFiles.add(ownerPath);
+      writeNew(ownerPath, stagingMarkerBytes(runId));
+      Path manifestPath = staging.resolve("manifest.json");
+      stagedFiles.add(manifestPath);
+      writeNew(manifestPath, manifestBytes);
+      failAt(ArtifactWriteFailure.AFTER_FIRST_PAYLOAD);
+
+      Path samplesPath = staging.resolve("samples.tsv");
+      stagedFiles.add(samplesPath);
+      writeNew(samplesPath, sampleBytes);
+      for (PreparedWorkload workload : workloads) {
+        Path path = staging.resolve(workload.fileName());
+        stagedFiles.add(path);
+        writeNew(path, workload.bytes());
+      }
+      if (failure == ArtifactWriteFailure.CORRUPT_FIRST_WORKLOAD && !workloads.isEmpty()) {
+        Files.writeString(
+            staging.resolve(workloads.getFirst().fileName()),
+            "injected-corruption",
+            StandardOpenOption.TRUNCATE_EXISTING,
+            StandardOpenOption.WRITE);
+      }
+      verifyFile(manifestPath, WorkloadChecksums.sha256(manifestBytes));
+      verifyFile(samplesPath, WorkloadChecksums.sha256(sampleBytes));
+      for (PreparedWorkload workload : workloads) {
+        verifyFile(staging.resolve(workload.fileName()), workload.sha256());
+      }
+
+      // result.json is the completion marker and is deliberately emitted last.
+      Path resultPath = staging.resolve("result.json");
+      stagedFiles.add(resultPath);
+      writeNew(resultPath, resultBytes);
+      verifyFile(resultPath, WorkloadChecksums.sha256(resultBytes));
+      verifyResultReferences(staging, resultBytes);
+      failAt(ArtifactWriteFailure.BEFORE_PUBLISH);
+      try {
+        Files.move(staging, runDirectory, StandardCopyOption.ATOMIC_MOVE);
+      } catch (FileAlreadyExistsException exception) {
+        cleanupStaging(staging, stagedFiles);
+        return new ArtifactWriteResult(ArtifactWriteStatus.TARGET_EXISTS, runDirectory, null);
+      } catch (AtomicMoveNotSupportedException exception) {
+        cleanupStaging(staging, stagedFiles);
+        return new ArtifactWriteResult(
+            ArtifactWriteStatus.ATOMIC_PUBLISH_UNAVAILABLE, runDirectory, null);
+      }
+      return new ArtifactWriteResult(ArtifactWriteStatus.WRITTEN, runDirectory, null);
+    } catch (IOException | RuntimeException exception) {
+      try {
+        cleanupStaging(staging, stagedFiles);
+      } catch (IOException cleanupFailure) {
+        exception.addSuppressed(cleanupFailure);
+      }
+      throw exception;
     }
-    return new ArtifactWriteResult(ArtifactWriteStatus.WRITTEN, runDirectory, null);
+  }
+
+  private static PreparedWorkloads prepareWorkloads(List<WorkloadArtifact> workloads) {
+    List<PreparedWorkload> prepared = new ArrayList<>(workloads.size());
+    Set<String> fileNames = new HashSet<>();
+    for (WorkloadArtifact workload : workloads) {
+      byte[] bytes = workload.tsv();
+      String actualDigest = WorkloadChecksums.sha256(bytes);
+      if (!actualDigest.equals(workload.sha256())) {
+        return new PreparedWorkloads(ArtifactWriteStatus.DIGEST_MISMATCH, List.of());
+      }
+      String fileName = workload.name() + "-v" + workload.version() + ".tsv";
+      if (!fileNames.add(fileName)) {
+        return new PreparedWorkloads(ArtifactWriteStatus.DUPLICATE_OUTPUT_NAME, List.of());
+      }
+      prepared.add(new PreparedWorkload(
+          workload.name(),
+          workload.version(),
+          workload.seed(),
+          workload.recordCount(),
+          workload.config(),
+          fileName,
+          bytes,
+          actualDigest));
+    }
+    return new PreparedWorkloads(ArtifactWriteStatus.WRITTEN, List.copyOf(prepared));
   }
 
   private static ObjectNode manifest(
       String runId,
       Instant createdAt,
       String riverCommit,
-      List<WorkloadArtifact> workloads,
+      List<PreparedWorkload> workloads,
       long highestTrackableNanos,
       int significantDigits) {
     ObjectNode root = MAPPER.createObjectNode();
@@ -111,7 +230,7 @@ public final class BenchmarkArtifactWriter {
     environment.put("java_vm", property("java.vm.name"));
     environment.put("available_processors", Runtime.getRuntime().availableProcessors());
     ArrayNode workloadArray = root.putArray("workloads");
-    for (WorkloadArtifact workload : workloads) {
+    for (PreparedWorkload workload : workloads) {
       ObjectNode node = workloadArray.addObject();
       node.put("name", workload.name());
       node.put("version", workload.version());
@@ -132,6 +251,7 @@ public final class BenchmarkArtifactWriter {
     gaps.add("repeated interleaved uninstrumented samples plus attributed profiles");
     gaps.add("reviewed numeric budgets and promotion decision");
     gaps.add("provenance clearance before any optional external dataset use");
+    gaps.add("streaming canonical-scale workload generators and adapters");
     return root;
   }
 
@@ -139,7 +259,7 @@ public final class BenchmarkArtifactWriter {
       String runId,
       byte[] manifest,
       byte[] samples,
-      List<WorkloadArtifact> workloads,
+      List<PreparedWorkload> workloads,
       int sampleCount) {
     ObjectNode root = MAPPER.createObjectNode();
     root.put("schema_version", 1);
@@ -148,8 +268,13 @@ public final class BenchmarkArtifactWriter {
     root.put("run_id", runId);
     root.put("manifest_sha256", WorkloadChecksums.sha256(manifest));
     root.put("samples_sha256", WorkloadChecksums.sha256(samples));
-    ArrayNode checksums = root.putArray("workload_sha256");
-    workloads.forEach(workload -> checksums.add(workload.sha256()));
+    ArrayNode references = root.putArray("workload_artifacts");
+    for (PreparedWorkload workload : workloads) {
+      ObjectNode reference = references.addObject();
+      reference.put("name", workload.name());
+      reference.put("path", workload.fileName());
+      reference.put("sha256", workload.sha256());
+    }
     root.put("sample_count", sampleCount);
     root.put("status", "developer_smoke_not_promotion_evidence");
     return root;
@@ -193,6 +318,124 @@ public final class BenchmarkArtifactWriter {
         .append(latency.meanNanos()).append('\n');
   }
 
+  private static ArtifactWriteResult invalid(SchemaValidation validation) {
+    return new ArtifactWriteResult(ArtifactWriteStatus.INVALID_DOCUMENT, null, validation);
+  }
+
+  private SchemaValidation validate(String schema, byte[] bytes) {
+    return validator.validate(schema, new String(bytes, StandardCharsets.UTF_8));
+  }
+
+  private void failAt(ArtifactWriteFailure point) throws IOException {
+    if (failure == point) {
+      throw new IOException("injected benchmark artifact failure at " + point);
+    }
+  }
+
+  private static void verifyFile(Path path, String expectedSha256) throws IOException {
+    String actual = WorkloadChecksums.sha256(Files.readAllBytes(path));
+    if (!expectedSha256.equals(actual)) {
+      throw new IOException("staged artifact digest mismatch: " + path.getFileName());
+    }
+  }
+
+  private static void verifyResultReferences(Path staging, byte[] resultBytes)
+      throws IOException {
+    ObjectNode result = (ObjectNode) MAPPER.readTree(resultBytes);
+    verifyFile(staging.resolve("manifest.json"), result.path("manifest_sha256").textValue());
+    verifyFile(staging.resolve("samples.tsv"), result.path("samples_sha256").textValue());
+    for (com.fasterxml.jackson.databind.JsonNode reference : result.path("workload_artifacts")) {
+      Path path = staging.resolve(reference.path("path").textValue()).normalize();
+      if (!staging.equals(path.getParent())) {
+        throw new IOException("result reference escapes staging directory");
+      }
+      verifyFile(path, reference.path("sha256").textValue());
+    }
+  }
+
+  private static void cleanupStaging(Path staging, List<Path> stagedFiles) throws IOException {
+    IOException failure = null;
+    for (int index = stagedFiles.size() - 1; index >= 0; index--) {
+      Path file = stagedFiles.get(index);
+      if (!staging.equals(file.getParent())) {
+        throw new IOException("refusing to clean a path outside owned staging directory");
+      }
+      try {
+        Files.deleteIfExists(file);
+      } catch (IOException exception) {
+        if (failure == null) {
+          failure = exception;
+        } else {
+          failure.addSuppressed(exception);
+        }
+      }
+    }
+    try {
+      Files.deleteIfExists(staging);
+    } catch (IOException exception) {
+      if (failure == null) {
+        failure = exception;
+      } else {
+        failure.addSuppressed(exception);
+      }
+    }
+    if (failure != null) {
+      throw failure;
+    }
+  }
+
+  private static void recoverOwnedStaging(
+      Path outputRoot,
+      String runId,
+      List<PreparedWorkload> workloads) throws IOException {
+    String prefix = ".pending-" + runId + '-';
+    Set<String> allowed = new HashSet<>(Set.of(
+        STAGING_MARKER, "manifest.json", "samples.tsv", "result.json"));
+    workloads.forEach(workload -> allowed.add(workload.fileName()));
+    List<Path> candidates;
+    try (Stream<Path> paths = Files.list(outputRoot)) {
+      candidates = paths.filter(path -> path.getFileName().toString().startsWith(prefix))
+          .toList();
+    }
+    byte[] expectedMarker = stagingMarkerBytes(runId);
+    for (Path staging : candidates) {
+      if (!Files.isDirectory(staging, LinkOption.NOFOLLOW_LINKS)
+          || Files.isSymbolicLink(staging)) {
+        throw new IOException("refusing to recover non-directory staging path");
+      }
+      List<Path> entries;
+      try (Stream<Path> paths = Files.list(staging)) {
+        entries = paths.toList();
+      }
+      if (entries.isEmpty()) {
+        Files.delete(staging);
+        continue;
+      }
+      Path marker = staging.resolve(STAGING_MARKER);
+      if (!Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS)
+          || !java.util.Arrays.equals(expectedMarker, Files.readAllBytes(marker))) {
+        throw new IOException("refusing to recover staging without matching ownership marker");
+      }
+      for (Path entry : entries) {
+        if (!staging.equals(entry.getParent())
+            || !allowed.contains(entry.getFileName().toString())
+            || !Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)
+            || Files.isSymbolicLink(entry)) {
+          throw new IOException("refusing to recover staging with unexpected content");
+        }
+      }
+      for (Path entry : entries) {
+        Files.delete(entry);
+      }
+      Files.delete(staging);
+    }
+  }
+
+  private static byte[] stagingMarkerBytes(String runId) {
+    return ("river-bench-staging-v1\nrun_id=" + runId + "\n")
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
   private static String property(String name) {
     return System.getProperty(name, "unknown");
   }
@@ -203,5 +446,21 @@ public final class BenchmarkArtifactWriter {
 
   private static void writeNew(Path path, byte[] bytes) throws IOException {
     Files.write(path, bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+  }
+
+  private record PreparedWorkloads(
+      ArtifactWriteStatus status,
+      List<PreparedWorkload> workloads) {
+  }
+
+  private record PreparedWorkload(
+      String name,
+      int version,
+      long seed,
+      int recordCount,
+      String config,
+      String fileName,
+      byte[] bytes,
+      String sha256) {
   }
 }

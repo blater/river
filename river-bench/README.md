@@ -10,9 +10,12 @@ WAL event/byte counters use race-safe atomics. Maximum occupancy is an observed
 high-water diagnostic rather than a queue correctness invariant.
 
 It also contains the local P05 harness infrastructure: versioned manifest,
-result, and sample schemas; deterministic generated RiverBank/RiverPapers tiny
-workloads; bounded HdrHistogram latency accounting; and immutable local JSON/TSV
-artifacts. This is functional evidence for the harness, not a P05 baseline.
+result, and sample schemas; partial in-memory `riverbank_tiny` and
+`riverpapers_tiny` schema-v1 generators; bounded HdrHistogram latency
+accounting; and atomically published local JSON/TSV artifacts. These generators
+prove small-fixture determinism and workload shape only. They are not the full
+canonical RiverBank/RiverPapers schemas or streaming scale generators. This is
+functional evidence for the harness, not a P05 baseline.
 
 The current mechanisms cover:
 
@@ -70,8 +73,10 @@ Until those exist, this module informs design discussion only and must not be
 used to mark P09, P05, or G0 complete.
 
 Run `:river-bench:benchmarkSmoke` for the local harness check. It writes a new
-create-once directory under `build/benchmark-smoke` and labels its synthetic
-measurements as developer smoke. Open-loop rows report service latency,
+create-once directory under `build/benchmark-smoke` by verifying a same-filesystem
+staging directory and atomically publishing it after `result.json` is emitted as
+the completion marker. It labels its synthetic measurements as developer smoke.
+Open-loop rows report service latency,
 intended-schedule latency (the primary coordinated-omission-safe view), and an
 HdrHistogram expected-interval-corrected service diagnostic. Closed-loop rows
 report service latency only.

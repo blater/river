@@ -4,5 +4,8 @@ package io.riverdb.bench.harness;
 public enum ArtifactWriteStatus {
   WRITTEN,
   INVALID_DOCUMENT,
-  TARGET_EXISTS
+  TARGET_EXISTS,
+  DIGEST_MISMATCH,
+  DUPLICATE_OUTPUT_NAME,
+  ATOMIC_PUBLISH_UNAVAILABLE
 }
