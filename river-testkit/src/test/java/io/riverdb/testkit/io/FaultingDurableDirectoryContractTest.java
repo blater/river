@@ -127,6 +127,9 @@ final class FaultingDurableDirectoryContractTest {
     assertEquals(StatusCode.OK, fixture.directory.truncate("data", 2, fixture.result));
     DurableFile file = fixture.result.file();
     assertEquals(StatusCode.OK, file.force(ForceMode.CONTENT));
+    assertEquals(
+        io.riverdb.platform.file.DirectoryDurability.VISIBLE_NOT_DURABLE,
+        fixture.provider.traceDurability(fixture.provider.traceSize() - 1));
     assertEquals(StatusCode.OK, file.close());
     fixture.restartAfterCrash();
     assertArrayEquals(new byte[] {1, 2, 3, 4}, fixture.read("data"));
@@ -217,6 +220,11 @@ final class FaultingDurableDirectoryContractTest {
     assertEquals(StatusCode.OK, after.directory.createDirectory("wal", after.result));
     assertTrue(after.exists("wal"));
     assertEquals(StatusCode.CONFLICT, after.directory.createDirectory("wal", after.result));
+
+    assertDelayedFileRead(FaultBoundary.BEFORE);
+    assertDelayedFileRead(FaultBoundary.AFTER);
+    assertDelayedFileWrite(FaultBoundary.BEFORE);
+    assertDelayedFileWrite(FaultBoundary.AFTER);
   }
 
   @Test
@@ -347,6 +355,57 @@ final class FaultingDurableDirectoryContractTest {
 
   private static StatusCode expected(FaultAction action) {
     return action == FaultAction.CRASH ? StatusCode.IO_FAILURE : StatusCode.CANCELLED;
+  }
+
+  private static void assertDelayedFileRead(FaultBoundary boundary) {
+    Fixture fixture = new Fixture(1, 24);
+    fixture.createDurable("data", new byte[] {4});
+    assertEquals(StatusCode.OK, fixture.directory.reopen("data", fixture.result));
+    DurableFile file = fixture.result.file();
+    assertEquals(
+        StatusCode.OK,
+        fixture.provider.script(
+            DirectoryOperation.FILE_READ,
+            boundary,
+            FaultAction.DELAY,
+            0));
+    ByteBuffer target = ByteBuffer.allocate(1);
+    StatusCode first = file.read(0, target, fixture.io);
+    if (boundary == FaultBoundary.BEFORE) {
+      assertEquals(StatusCode.RETRY, first);
+      assertEquals(0, fixture.io.bytesTransferred());
+      assertEquals(StatusCode.OK, file.read(0, target, fixture.io));
+    } else {
+      assertEquals(StatusCode.OK, first);
+    }
+    assertEquals(1, fixture.io.bytesTransferred());
+    assertEquals(StatusCode.OK, file.close());
+  }
+
+  private static void assertDelayedFileWrite(FaultBoundary boundary) {
+    Fixture fixture = new Fixture(1, 24);
+    fixture.createDurable("data", new byte[] {1});
+    assertEquals(StatusCode.OK, fixture.directory.reopen("data", fixture.result));
+    DurableFile file = fixture.result.file();
+    assertEquals(
+        StatusCode.OK,
+        fixture.provider.script(
+            DirectoryOperation.FILE_WRITE,
+            boundary,
+            FaultAction.DELAY,
+            0));
+    ByteBuffer source = ByteBuffer.wrap(new byte[] {9});
+    StatusCode first = file.write(0, source, fixture.io);
+    if (boundary == FaultBoundary.BEFORE) {
+      assertEquals(StatusCode.RETRY, first);
+      assertEquals(0, fixture.io.bytesTransferred());
+      assertEquals(StatusCode.OK, file.write(0, source, fixture.io));
+    } else {
+      assertEquals(StatusCode.OK, first);
+    }
+    assertEquals(1, fixture.io.bytesTransferred());
+    assertEquals(StatusCode.OK, file.close());
+    assertArrayEquals(new byte[] {9}, fixture.read("data"));
   }
 
   private static final class Fixture {

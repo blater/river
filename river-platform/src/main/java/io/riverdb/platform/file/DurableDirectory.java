@@ -28,6 +28,10 @@ public interface DurableDirectory {
   /** Renames without replacement; an existing destination returns {@code CONFLICT}. */
   StatusCode rename(String sourceName, String destinationName, DirectoryOperationResult result);
 
+  /**
+   * Replaces a missing or file destination with a file source. Missing sources and either
+   * directory kind return {@code CONFLICT}; contextual recovery code may promote that outcome.
+   */
   StatusCode replace(
       String temporaryFileName,
       String destinationFileName,
@@ -42,5 +46,6 @@ public interface DurableDirectory {
   /** Publishes preceding namespace mutations; it never publishes unforced file bytes. */
   StatusCode force(DirectoryOperationResult result);
 
+  /** Missing names and directory entries return the routine lookup outcome {@code CONFLICT}. */
   StatusCode reopen(String fileName, DirectoryOperationResult result);
 }

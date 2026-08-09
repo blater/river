@@ -85,6 +85,8 @@ public enum FaultAction {
         || operation == FaultOperation.FILE_RENAME
         || operation == FaultOperation.FILE_REMOVE
         || operation == FaultOperation.NAMED_TRUNCATE
+        || operation == FaultOperation.DIRECTORY_FILE_READ
+        || operation == FaultOperation.DIRECTORY_FILE_WRITE
         || operation == FaultOperation.DIRECTORY_FILE_FORCE
         || operation == FaultOperation.DIRECTORY_REOPEN;
   }

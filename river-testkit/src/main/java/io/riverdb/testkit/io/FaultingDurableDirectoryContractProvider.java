@@ -6,6 +6,7 @@ import io.riverdb.platform.fault.FaultBoundary;
 import io.riverdb.platform.fault.FaultPointRegistry;
 import io.riverdb.platform.fault.FaultPointSlot;
 import io.riverdb.platform.file.DurableDirectory;
+import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.testkit.crash.CrashPointController;
 import java.util.Locale;
 
@@ -80,6 +81,11 @@ public final class FaultingDurableDirectoryContractProvider
   @Override
   public int traceSize() {
     return trace.size();
+  }
+
+  @Override
+  public DirectoryDurability traceDurability(int index) {
+    return trace.durability(index);
   }
 
   @Override

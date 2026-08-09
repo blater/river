@@ -23,12 +23,76 @@ import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
+import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.testkit.crash.CrashPointController;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
 final class FaultingAtomicFileStoreContractTest {
+  @Test
+  void reusedEntryCannotBeReachedThroughRetiredHandle() {
+    Fixture fixture = new Fixture(0, 16);
+    DirectoryOperationResult result = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, fixture.store.createFile("first", result));
+    DurableFile retired = result.file();
+    assertEquals(StatusCode.OK, fixture.store.force(result));
+    assertEquals(StatusCode.OK, fixture.store.remove("first", result));
+    assertEquals(StatusCode.OK, fixture.store.force(result));
+    assertEquals(StatusCode.OK, fixture.store.createFile("second", result));
+    DurableFile current = result.file();
+
+    IoResult io = new IoResult();
+    assertEquals(
+        StatusCode.CANCELLED,
+        retired.write(0, ByteBuffer.wrap(new byte[] {9}), io));
+    assertEquals(StatusCode.CANCELLED, retired.force(ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.CANCELLED, retired.close());
+    assertEquals(StatusCode.OK, current.size(new FileSizeResult()));
+    assertEquals(StatusCode.OK, current.close());
+  }
+
+  @Test
+  void contentOnlyForceDoesNotPublishLengthMetadata() {
+    Fixture fixture = new Fixture(0, 16);
+    DirectoryOperationResult result = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, fixture.store.createFile("data", result));
+    DurableFile created = result.file();
+    IoResult io = new IoResult();
+    assertEquals(
+        StatusCode.OK,
+        created.write(0, ByteBuffer.wrap(new byte[] {1, 2, 3, 4}), io));
+    assertEquals(StatusCode.OK, created.force(ForceMode.CONTENT_AND_METADATA));
+    assertEquals(StatusCode.OK, created.close());
+    assertEquals(StatusCode.OK, fixture.store.force(result));
+
+    assertEquals(StatusCode.OK, fixture.store.truncate("data", 2, result));
+    DurableFile truncated = result.file();
+    assertEquals(StatusCode.OK, truncated.force(ForceMode.CONTENT));
+    assertEquals(StatusCode.OK, truncated.close());
+    assertEquals(StatusCode.OK, fixture.store.crash());
+    assertEquals(StatusCode.OK, fixture.store.restart());
+
+    assertEquals(StatusCode.OK, fixture.store.reopen("data", result));
+    FileSizeResult size = new FileSizeResult();
+    assertEquals(StatusCode.OK, result.file().size(size));
+    assertEquals(4, size.sizeBytes());
+    assertEquals(StatusCode.OK, result.file().close());
+  }
+
+  @Test
+  void fileReplacementRejectsDirectorySourceAndDestination() {
+    Fixture fixture = new Fixture(0, 16);
+    DirectoryOperationResult result = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, fixture.store.createDirectory("directory", result));
+    assertEquals(StatusCode.OK, fixture.store.createFile("file", result));
+    assertEquals(StatusCode.OK, result.file().close());
+
+    assertEquals(StatusCode.CONFLICT, fixture.store.replace("directory", "file", result));
+    assertEquals(StatusCode.CONFLICT, fixture.store.replace("file", "directory", result));
+    assertEquals(StatusCode.CONFLICT, fixture.store.reopen("directory", result));
+  }
+
   @Test
   void installsForcesAndVerifiesBeforeReportingCompletion() {
     Fixture fixture = new Fixture(0, 16);
@@ -201,7 +265,7 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(AtomicInstallPhase.CONTENT_WRITTEN, fixture.snapshot(secondProgress).phase());
     assertEquals(StatusCode.OK, fixture.store.crash());
     assertEquals(StatusCode.OK, fixture.store.restart());
-    assertEquals(StatusCode.CORRUPTION, fixture.reopenStatus("second.tmp"));
+    assertEquals(StatusCode.CONFLICT, fixture.reopenStatus("second.tmp"));
     assertArrayEquals(new byte[] {9}, fixture.reopenAndRead("second"));
   }
 
@@ -450,7 +514,7 @@ final class FaultingAtomicFileStoreContractTest {
         directoryForce.snapshot(progress).durability());
     assertEquals(StatusCode.OK, directoryForce.store.crash());
     assertEquals(StatusCode.OK, directoryForce.store.restart());
-    assertEquals(StatusCode.CORRUPTION, directoryForce.reopenStatus("control"));
+    assertEquals(StatusCode.CONFLICT, directoryForce.reopenStatus("control"));
   }
 
   @Test
@@ -535,7 +599,7 @@ final class FaultingAtomicFileStoreContractTest {
       assertEquals(StatusCode.OK, fixture.store.restart());
       StatusCode reopenStatus = fixture.reopenStatus("control");
       if (boundary < 4) {
-        assertEquals(StatusCode.CORRUPTION, reopenStatus, "boundary " + boundary);
+        assertEquals(StatusCode.CONFLICT, reopenStatus, "boundary " + boundary);
       } else {
         assertEquals(StatusCode.OK, reopenStatus, "boundary " + boundary);
         assertArrayEquals(new byte[] {7, 6, 5}, fixture.reopenAndRead("control"));
@@ -611,7 +675,7 @@ final class FaultingAtomicFileStoreContractTest {
       assertEquals(StatusCode.OK, fixture.store.restart());
       StatusCode reopenStatus = fixture.reopenStatus("control");
       if (boundary <= 4) {
-        assertEquals(StatusCode.CORRUPTION, reopenStatus, "boundary " + boundary);
+        assertEquals(StatusCode.CONFLICT, reopenStatus, "boundary " + boundary);
       } else {
         assertEquals(StatusCode.OK, reopenStatus, "boundary " + boundary);
       }

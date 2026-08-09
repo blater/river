@@ -188,7 +188,11 @@ public final class FaultingDurableDirectory implements DurableDirectory {
     }
     Entry source = find(sourceName);
     Entry destination = find(destinationName);
-    if (source == null || source == destination || !replace && destination != null) {
+    if (source == null
+        || source == destination
+        || replace && (source.volatileDirectory
+            || destination != null && destination.volatileDirectory)
+        || !replace && destination != null) {
       return record(operation, StatusCode.CONFLICT, result.durability());
     }
     if (destination != null) {
@@ -611,9 +615,14 @@ public final class FaultingDurableDirectory implements DurableDirectory {
         }
         entry.publishContent(mode);
         status = after(DirectoryOperation.FILE_FORCE, 0, entry.volatileSize);
-        DirectoryDurability durability = generation == started
-            ? DirectoryDurability.DURABLE
-            : DirectoryDurability.UNKNOWN;
+        DirectoryDurability durability;
+        if (generation != started) {
+          durability = DirectoryDurability.UNKNOWN;
+        } else if (mode == ForceMode.CONTENT_AND_METADATA) {
+          durability = DirectoryDurability.DURABLE;
+        } else {
+          durability = DirectoryDurability.VISIBLE_NOT_DURABLE;
+        }
         return record(DirectoryOperation.FILE_FORCE, status, durability);
       }
     }

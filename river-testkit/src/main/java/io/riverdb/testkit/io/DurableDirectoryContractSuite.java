@@ -96,6 +96,12 @@ public final class DurableDirectoryContractSuite {
     if (!status.isOk()) {
       return status;
     }
+    if (directory.reopen("missing", operationResult) != StatusCode.CONFLICT
+        || directory.replace("missing", "target", operationResult) != StatusCode.CONFLICT
+        || directory.replace("wal", "control", operationResult) != StatusCode.CONFLICT
+        || directory.replace("control", "wal", operationResult) != StatusCode.CONFLICT) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     if (!provider.crash().isOk() || !provider.restart().isOk()) {
       return StatusCode.INVARIANT_BROKEN;
     }

@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
 import io.riverdb.platform.fault.FaultBoundary;
 import io.riverdb.platform.file.DurableDirectory;
+import io.riverdb.platform.file.DirectoryDurability;
 
 /** Adapter implemented by fakes and future physical providers running the shared contract. */
 public interface DurableDirectoryContractProvider {
@@ -22,6 +23,8 @@ public interface DurableDirectoryContractProvider {
   long generation();
 
   int traceSize();
+
+  DirectoryDurability traceDurability(int index);
 
   StatusCode traceStatus();
 }

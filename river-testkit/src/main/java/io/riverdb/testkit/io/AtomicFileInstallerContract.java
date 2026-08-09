@@ -66,6 +66,9 @@ public final class AtomicFileInstallerContract {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = directory.reopen(destinationFileName, openResult);
+    if (status == StatusCode.CONFLICT) {
+      return StatusCode.CORRUPTION;
+    }
     if (!status.isOk()) {
       return status;
     }

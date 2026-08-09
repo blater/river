@@ -344,6 +344,17 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     directoryResult.reset();
     StatusCode status = replaceInternal(
         request.temporaryFileName(), request.destinationFileName(), directoryResult, true);
+    if (status == StatusCode.CONFLICT
+        && directoryResult.durability() == DirectoryDurability.NOT_APPLIED) {
+      progressState.requireRecovery(progress);
+      return record(
+          StatusCode.CORRUPTION,
+          AtomicInstallStep.DESTINATION_REPLACE,
+          before,
+          progress,
+          result,
+          0);
+    }
     StatusCode progressStatus = StatusCode.OK;
     if (directoryResult.durability() == DirectoryDurability.UNKNOWN) {
       progressStatus = progressState.requireRecovery(progress);
@@ -736,10 +747,13 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       return status;
     }
     ModelFile temporary = findVolatile(temporaryFileName);
-    if (temporary == null) {
-      return StatusCode.CORRUPTION;
+    if (temporary == null || temporary.directory) {
+      return StatusCode.CONFLICT;
     }
     ModelFile destination = findVolatile(destinationFileName);
+    if (destination != null && destination.directory) {
+      return StatusCode.CONFLICT;
+    }
     if (destination != null) {
       destination.volatileName = null;
     }
@@ -826,7 +840,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     }
     ModelFile file = findVolatile(fileName);
     if (file == null || file.directory) {
-      return StatusCode.CORRUPTION;
+      return StatusCode.CONFLICT;
     }
     if (openHandles == maxOpenHandles) {
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -1075,11 +1089,13 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   private final class ModelHandle implements DurableFile {
     private final ModelFile file;
     private final long openedGeneration;
+    private final long openedFileEpoch;
     private boolean closed;
 
     private ModelHandle(ModelFile file, long openedGeneration) {
       this.file = file;
       this.openedGeneration = openedGeneration;
+      openedFileEpoch = file.epoch;
     }
 
     @Override
@@ -1126,7 +1142,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
         if (!status.isOk()) {
           return status;
         }
-        file.publishDurable();
+        file.publishDurable(mode);
         return StatusCode.OK;
       }
     }
@@ -1171,6 +1187,11 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
           closed = true;
           return StatusCode.CANCELLED;
         }
+        if (openedFileEpoch != file.epoch) {
+          closed = true;
+          openHandles--;
+          return StatusCode.CANCELLED;
+        }
         closed = true;
         openHandles--;
         return StatusCode.OK;
@@ -1181,7 +1202,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       if (closed) {
         return StatusCode.CLOSED;
       }
-      return running && openedGeneration == generation
+      return running && openedGeneration == generation && openedFileEpoch == file.epoch
           ? StatusCode.OK
           : StatusCode.CANCELLED;
     }
@@ -1195,6 +1216,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     private boolean directory;
     private int volatileSize;
     private int durableSize;
+    private long epoch;
 
     private ModelFile(int capacity) {
       volatileBytes = new byte[capacity];
@@ -1209,6 +1231,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       directory = isDirectory;
       volatileSize = 0;
       durableSize = 0;
+      epoch++;
     }
 
     private void publishDurable() {
@@ -1217,6 +1240,16 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
         Arrays.fill(durableBytes, volatileSize, durableSize, (byte) 0);
       }
       durableSize = volatileSize;
+    }
+
+    private void publishDurable(ForceMode mode) {
+      switch (mode) {
+        case CONTENT -> {
+          int publishedSize = Math.min(volatileSize, durableSize);
+          System.arraycopy(volatileBytes, 0, durableBytes, 0, publishedSize);
+        }
+        case CONTENT_AND_METADATA -> publishDurable();
+      }
     }
 
     private void restoreDurable() {
