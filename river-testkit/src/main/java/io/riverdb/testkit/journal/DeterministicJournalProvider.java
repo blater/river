@@ -513,6 +513,20 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (!ticket.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
       return detail.set(StatusCode.CONFLICT).append("foreign durability ticket").code();
     }
+    if (ticket.providerToken() != lifecycleToken
+        || ticket.journalGeneration() != journalGeneration) {
+      ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
+      setDurabilityResult(result, DurabilityOutcome.FENCED, ticket.requirement(), 0);
+      return detail.set(StatusCode.FENCED).code();
+    }
+    if (fatalState.isFenced()) {
+      ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
+      DurabilityOutcome outcome = terminalWaitOutcome == DurabilityOutcome.UNKNOWN
+          ? DurabilityOutcome.UNKNOWN
+          : DurabilityOutcome.FENCED;
+      setDurabilityResult(result, outcome, ticket.requirement(), 0);
+      return detail.set(StatusCode.FENCED).code();
+    }
     ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
     setDurabilityResult(result, DurabilityOutcome.CANCELLED, ticket.requirement(), 0);
     return detail.set(StatusCode.CANCELLED).code();
@@ -684,20 +698,32 @@ public final class DeterministicJournalProvider implements JournalProvider {
       WalRetentionLeaseRequest request,
       StatusDetail detail) {
     detail.reset();
+    if (!lease.isActive()) {
+      return detail.set(StatusCode.CONFLICT).append("inactive retention lease").code();
+    }
+    if (!lease.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
+      return detail.set(StatusCode.CONFLICT).append("foreign retention lease").code();
+    }
     StatusCode admission = admission(request.databaseIncarnation(), request.nodeIncarnation());
     if (!admission.isOk()) {
       return detail.set(admission).code();
     }
     if (!lease.nodeIncarnation().equals(nodeIncarnation)) {
+      lease.complete(capabilityOwnerHigh, capabilityOwnerLow);
       return detail.set(StatusCode.FENCED).code();
     }
-    if (!lease.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
-      return detail.set(StatusCode.CONFLICT).append("foreign retention lease").code();
+    int slot = findLease(lease);
+    if (slot < 0) {
+      lease.complete(capabilityOwnerHigh, capabilityOwnerLow);
+      return detail.set(StatusCode.FENCED).append("expired retention lease").code();
+    }
+    if (request.nowNanos() >= leaseExpiries[slot]) {
+      clearLease(slot);
+      lease.complete(capabilityOwnerHigh, capabilityOwnerLow);
+      return detail.set(StatusCode.FENCED).append("expired retention lease").code();
     }
     expireLeases(request.nowNanos());
-    int slot = findLease(lease);
-    if (slot < 0
-        || !validLeaseRequest(request)
+    if (!validLeaseRequest(request)
         || request.leaseId() != lease.leaseId()
         || request.ownerKind() != lease.ownerKind()
         || request.minimumRequired().sequence() < leaseMinimumSequences[slot]) {
@@ -768,15 +794,20 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (!admission.isOk()) {
       return detail.set(admission).code();
     }
-    if (!lease.nodeIncarnation().equals(nodeIncarnation)) {
-      return detail.set(StatusCode.FENCED).code();
+    if (!lease.isActive()) {
+      return detail.set(StatusCode.CONFLICT).append("inactive retention lease").code();
     }
     if (!lease.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
       return detail.set(StatusCode.CONFLICT).append("foreign retention lease").code();
     }
+    if (!lease.nodeIncarnation().equals(nodeIncarnation)) {
+      lease.complete(capabilityOwnerHigh, capabilityOwnerLow);
+      return detail.set(StatusCode.FENCED).code();
+    }
     int slot = findLease(lease);
     if (slot < 0) {
-      return detail.set(StatusCode.CONFLICT).code();
+      lease.complete(capabilityOwnerHigh, capabilityOwnerLow);
+      return detail.set(StatusCode.FENCED).append("expired retention lease").code();
     }
     clearLease(slot);
     lease.complete(capabilityOwnerHigh, capabilityOwnerLow);

@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.JournalPosition;
 import io.riverdb.journal.api.JournalProvider;
 import io.riverdb.journal.api.NodeIncarnation;
+import io.riverdb.journal.api.durability.DurabilityRequirement;
 
 /** Provider mechanics needed to drive the implementation-neutral semantic contract suite. */
 public interface JournalProviderHarness {
@@ -23,6 +24,18 @@ public interface JournalProviderHarness {
       long inclusiveSequence,
       ForceCompletion completion,
       long nowNanos);
+
+  /** Drives the named durability contract; replicated harnesses override consensus mechanics. */
+  default StatusCode satisfyDurabilityThrough(
+      DurabilityRequirement requirement,
+      long journalGeneration,
+      long inclusiveSequence) {
+    StatusCode written = writeThrough(journalGeneration, inclusiveSequence);
+    if (!written.isOk()) {
+      return written;
+    }
+    return forceThrough(journalGeneration, inclusiveSequence, ForceCompletion.SUCCEEDED);
+  }
 
   default StatusCode crashAndRestart(NodeIncarnation restartedNode) {
     return crashAndRestart(restartedNode, UnknownRecoveryResolution.NOT_DURABLE, 0);
