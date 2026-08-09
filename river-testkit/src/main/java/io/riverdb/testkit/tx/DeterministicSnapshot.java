@@ -1,8 +1,9 @@
 package io.riverdb.testkit.tx;
 
 import io.riverdb.tx.api.Snapshot;
+import java.util.Arrays;
 
-/** Immutable deterministic snapshot backed by a sorted borrowed active-transaction array. */
+/** Immutable deterministic snapshot that owns a copy of its sorted active-transaction array. */
 public final class DeterministicSnapshot implements Snapshot {
   private final long databaseIncarnationHigh;
   private final long databaseIncarnationLow;
@@ -22,7 +23,7 @@ public final class DeterministicSnapshot implements Snapshot {
     databaseIncarnationLow = databaseLow;
     sequence = snapshotSequence;
     visibleCommitSequence = visibleCsn;
-    activeTransactions = sortedActiveTransactions;
+    activeTransactions = Arrays.copyOf(sortedActiveTransactions, activeCount);
     activeTransactionCount = activeCount;
   }
 

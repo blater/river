@@ -249,6 +249,12 @@ public final class DeterministicTransactionProvider
     if (view.state() == TransactionState.COMMITTED && view.commitSequence() == 0) {
       return detail.set(StatusCode.CONFLICT).code();
     }
+    if (transactionStates[slot] != 0
+        && transactionState(slot) == TransactionState.ABORTING
+        && view.state() == TransactionState.INDETERMINATE
+        && view.commitSequence() != 0) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
     if (view.state() != TransactionState.COMMITTED
         && view.state() != TransactionState.INDETERMINATE
         && view.commitSequence() != 0) {
@@ -493,6 +499,9 @@ public final class DeterministicTransactionProvider
     if (!matchesDatabase(
         context.snapshot().databaseIncarnationHigh(),
         context.snapshot().databaseIncarnationLow())) {
+      return StatusCode.CONFLICT;
+    }
+    if (context.transactionId() == 0) {
       return StatusCode.CONFLICT;
     }
     return context.cancellation().status();

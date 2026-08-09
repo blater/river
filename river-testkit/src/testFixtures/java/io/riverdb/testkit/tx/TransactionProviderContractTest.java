@@ -75,6 +75,15 @@ public abstract class TransactionProviderContractTest {
         StatusCode.OK,
         store(harness, recovery(2, TransactionState.INDETERMINATE, 1, 3, 9)));
 
+    assertEquals(StatusCode.OK, store(harness, recovery(3, TransactionState.ACTIVE, 1, 1, 0)));
+    assertEquals(StatusCode.OK, store(harness, recovery(3, TransactionState.ABORTING, 1, 2, 0)));
+    assertEquals(
+        StatusCode.CONFLICT,
+        store(harness, recovery(3, TransactionState.INDETERMINATE, 1, 3, 10)));
+    assertEquals(
+        StatusCode.OK,
+        store(harness, recovery(3, TransactionState.INDETERMINATE, 1, 3, 0)));
+
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(
         StatusCode.OK,

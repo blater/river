@@ -11,7 +11,8 @@ codec, heap/index/page type, lock-table implementation, or recovery algorithm.
   transaction implementation. Its `Snapshot` and `CancellationToken` are
   borrowed for the context lifetime; it is not a public authentication token.
 - `Snapshot` exposes a commit publication boundary and a sorted primitive
-  active-transaction set. Implementations own the immutable snapshot storage.
+  active-transaction set. Implementations own the immutable snapshot storage;
+  the deterministic snapshot makes one lifecycle-time copy.
 - `VersionRecord`, `VersionPointer`, `TransactionOutcome`,
   `RecoveryTransactionView`, `VisibilityResult`, and `VacuumResult` are
   caller-owned reusable carriers. A version append borrows bytes for the call;
