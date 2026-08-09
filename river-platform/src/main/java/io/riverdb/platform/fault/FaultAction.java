@@ -14,6 +14,8 @@ public enum FaultAction {
   CORRUPT_READ,
   /** Mutates returned bytes and reports {@code CORRUPTION}, modeling checksum detection. */
   DETECTED_CORRUPTION,
+  /** Withholds completion without applying the operation at a before boundary. */
+  DELAY,
   CANCEL,
   RESTART;
 
@@ -23,16 +25,24 @@ public enum FaultAction {
       return false;
     }
     return switch (this) {
-      case NONE, CRASH, CANCEL -> true;
+      case NONE, CRASH, CANCEL, DELAY -> true;
       case RESTART -> operation != FaultOperation.CRASH
           && operation != FaultOperation.SCHEDULE
           && operation != FaultOperation.RUN_TASK;
       case SHORT_READ, CORRUPT_READ, DETECTED_CORRUPTION ->
-          operation == FaultOperation.READ;
-      case SHORT_WRITE, PARTIAL_WRITE, TORN_WRITE -> operation == FaultOperation.WRITE;
-      case FORCE_FAILURE -> operation == FaultOperation.FORCE;
+          operation == FaultOperation.READ || operation == FaultOperation.REOPEN_VERIFY;
+      case SHORT_WRITE, PARTIAL_WRITE, TORN_WRITE ->
+          operation == FaultOperation.WRITE || operation == FaultOperation.TEMP_WRITE;
+      case FORCE_FAILURE -> operation == FaultOperation.FORCE
+          || operation == FaultOperation.TEMP_FORCE
+          || operation == FaultOperation.DIRECTORY_FORCE;
       case DISK_FULL ->
-          operation == FaultOperation.WRITE || operation == FaultOperation.FORCE;
+          operation == FaultOperation.WRITE
+              || operation == FaultOperation.FORCE
+              || operation == FaultOperation.TEMP_CREATE
+              || operation == FaultOperation.TEMP_WRITE
+              || operation == FaultOperation.TEMP_FORCE
+              || operation == FaultOperation.DIRECTORY_FORCE;
     };
   }
 }
