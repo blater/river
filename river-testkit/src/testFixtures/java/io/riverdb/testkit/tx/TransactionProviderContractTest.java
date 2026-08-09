@@ -113,12 +113,16 @@ public abstract class TransactionProviderContractTest {
     assertEquals(StatusCode.CONFLICT, harness.recoveryStorage().resolveIndeterminate(
         recovery(4, TransactionState.ABORTED, 1, 4, 0), detail()));
     assertEquals(StatusCode.OK, harness.recoveryStorage().resolveIndeterminate(
-        recovery(4, TransactionState.ABORTING, 1, 4, 0), detail()));
+        recovery(4, TransactionState.ABORTING, 1, 2, 0), detail()));
     TransactionOutcome loser = new TransactionOutcome();
     assertEquals(StatusCode.OK, harness.storage().lookupOutcome(
         DATABASE_HIGH, DATABASE_LOW, 4, loser, detail()));
     assertEquals(TransactionState.ABORTING, loser.state());
     assertFalse(loser.isFinal());
+    RecoveryTransactionView validatedTail = new RecoveryTransactionView();
+    assertEquals(StatusCode.OK, harness.recoveryStorage().lookupRecoveryTransaction(
+        DATABASE_HIGH, DATABASE_LOW, 4, validatedTail, detail()));
+    assertEquals(2, validatedTail.lastRecordLsn());
     assertEquals(StatusCode.OK, store(
         harness, recovery(4, TransactionState.ABORTED, 1, 5, 0)));
     assertEquals(StatusCode.CONFLICT, store(

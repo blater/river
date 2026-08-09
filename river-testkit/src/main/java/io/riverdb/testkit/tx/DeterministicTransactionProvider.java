@@ -278,9 +278,6 @@ public final class DeterministicTransactionProvider
         && resolvedView.state() != TransactionState.ABORTING) {
       return detail.set(StatusCode.CONFLICT).code();
     }
-    if (lineageRegresses(slot, resolvedView)) {
-      return detail.set(StatusCode.CONFLICT).code();
-    }
     long uncertainCommitSequence = transactionCommitSequences[slot];
     if (resolvedView.state() == TransactionState.COMMITTED
         && (resolvedView.commitSequence() == 0

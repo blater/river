@@ -12,7 +12,9 @@ public interface RecoveryTransactionStorage {
   /**
    * Resolves uncertainty to COMMITTED when recovery proves the decision durable, or to ABORTING
    * when stable history proves it absent. ABORTING still requires WAL-driven loser undo and CLRs
-   * before ordinary state persistence may record ABORTED. A provisional CSN is then a gap.
+   * before ordinary state persistence may record ABORTED. A provisional CSN is then a gap. The
+   * authoritative view may replace an uncertain in-memory tail with an earlier validated durable
+   * predecessor; ordinary transaction state writes still reject lineage regression.
    */
   StatusCode resolveIndeterminate(
       RecoveryTransactionView resolvedView,
