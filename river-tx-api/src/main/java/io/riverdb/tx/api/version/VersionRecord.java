@@ -1,13 +1,13 @@
 package io.riverdb.tx.api.version;
 
 /**
- * Caller-owned prior-version carrier. Input payload bytes are borrowed for the call; a provider
- * may return a borrowed stable-lifetime array view from {@code readVersion}. Callers must not
- * mutate or retain a returned array beyond the provider's documented reclamation boundary.
+ * Caller-owned prior-version append request. Input payload bytes are borrowed only for the append
+ * call; the provider establishes its own stable lifetime before returning success.
  */
 public final class VersionRecord {
   private long owningTransactionId;
-  private long cachedCommitSequence;
+  private long previousDatabaseIncarnationHigh;
+  private long previousDatabaseIncarnationLow;
   private long previousStoreGeneration;
   private long previousAddress;
   private byte[] payload;
@@ -16,14 +16,16 @@ public final class VersionRecord {
 
   public VersionRecord set(
       long ownerTransactionId,
-      long commitSequence,
+      long previousDatabaseHigh,
+      long previousDatabaseLow,
       long previousGeneration,
       long previousOpaqueAddress,
       byte[] bytes,
       int offset,
       int length) {
     owningTransactionId = ownerTransactionId;
-    cachedCommitSequence = commitSequence;
+    previousDatabaseIncarnationHigh = previousDatabaseHigh;
+    previousDatabaseIncarnationLow = previousDatabaseLow;
     previousStoreGeneration = previousGeneration;
     previousAddress = previousOpaqueAddress;
     payload = bytes;
@@ -36,8 +38,12 @@ public final class VersionRecord {
     return owningTransactionId;
   }
 
-  public long cachedCommitSequence() {
-    return cachedCommitSequence;
+  public long previousDatabaseIncarnationHigh() {
+    return previousDatabaseIncarnationHigh;
+  }
+
+  public long previousDatabaseIncarnationLow() {
+    return previousDatabaseIncarnationLow;
   }
 
   public long previousStoreGeneration() {

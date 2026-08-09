@@ -15,6 +15,7 @@ import io.riverdb.tx.api.lock.LockRequest;
 import io.riverdb.tx.api.lock.LockScope;
 import io.riverdb.tx.api.lock.LockToken;
 import io.riverdb.tx.api.version.VersionPointer;
+import io.riverdb.tx.api.version.VersionReadResult;
 import io.riverdb.tx.api.version.VersionRecord;
 import io.riverdb.tx.spi.RecoveryTransactionView;
 import java.lang.management.ManagementFactory;
@@ -33,17 +34,24 @@ final class DeterministicTransactionAllocationTest {
     RecoveryTransactionView recovery = new RecoveryTransactionView().set(
         1, 2, 1, TransactionState.ACTIVE, 1, 1, 0, 0, 0);
     allocationGuard += provider.storeRecoveryView(recovery, detail).ordinal();
+    recovery.set(1, 2, 2, TransactionState.ACTIVE, 1, 1, 0, 0, 0);
+    allocationGuard += provider.storeRecoveryView(recovery, detail).ordinal();
+    recovery.set(1, 2, 2, TransactionState.COMMITTING, 1, 2, 0, 0, 0);
+    allocationGuard += provider.storeRecoveryView(recovery, detail).ordinal();
+    recovery.set(1, 2, 2, TransactionState.COMMITTED, 1, 3, 0, 0, 6);
+    allocationGuard += provider.storeRecoveryView(recovery, detail).ordinal();
     DeterministicSnapshot snapshot = new DeterministicSnapshot(
         1, 2, 1, 7, new long[] {1}, 1);
     TransactionContext context = new TransactionContext(
         1, 2, 1, IsolationLevel.REPEATABLE_READ, snapshot, CancellationToken.NONE);
-    VersionRecord append = new VersionRecord().set(1, 0, 0, 0, new byte[] {1}, 0, 1);
+    VersionRecord append = new VersionRecord().set(
+        1, 0, 0, 0, 0, new byte[] {1}, 0, 1);
     VersionPointer pointer = new VersionPointer();
     allocationGuard += provider.appendVersion(context, append, pointer, detail).ordinal();
 
     TransactionOutcome outcome = new TransactionOutcome();
     VisibilityResult visibility = new VisibilityResult();
-    VersionRecord read = new VersionRecord();
+    VersionReadResult read = new VersionReadResult().useDestination(new byte[1], 0, 1);
     LockRequest request = new LockRequest().set(
         LockScope.KEY, 4, 5, LockMode.EXCLUSIVE, 0);
     LockToken token = new LockToken();
@@ -70,12 +78,12 @@ final class DeterministicTransactionAllocationTest {
       VersionPointer pointer,
       TransactionOutcome outcome,
       VisibilityResult visibility,
-      VersionRecord read,
+      VersionReadResult read,
       LockRequest request,
       LockToken token,
       StatusDetail detail) {
     allocationGuard += provider.lookupOutcome(1, 2, 1, outcome, detail).ordinal();
-    allocationGuard += provider.resolve(context, 2, 6, visibility, detail).ordinal();
+    allocationGuard += provider.resolve(context, 2, visibility, detail).ordinal();
     allocationGuard += provider.readVersion(pointer, read, detail).ordinal();
     allocationGuard += provider.tryAcquire(context, request, 1, token, detail).ordinal();
     allocationGuard += provider.release(token, detail).ordinal();

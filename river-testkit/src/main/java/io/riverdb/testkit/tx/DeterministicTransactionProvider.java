@@ -12,10 +12,11 @@ import io.riverdb.tx.api.lock.LockMode;
 import io.riverdb.tx.api.lock.LockRequest;
 import io.riverdb.tx.api.lock.LockService;
 import io.riverdb.tx.api.lock.LockToken;
-import io.riverdb.tx.api.version.VacuumResult;
 import io.riverdb.tx.api.version.VersionPointer;
+import io.riverdb.tx.api.version.VersionReadResult;
 import io.riverdb.tx.api.version.VersionRecord;
 import io.riverdb.tx.spi.RecoveryTransactionView;
+import io.riverdb.tx.spi.RecoveryTransactionStorage;
 import io.riverdb.tx.spi.TransactionStorage;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -26,11 +27,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * observation. One bounded copy establishes provider ownership of appended version bytes.
  */
 public final class DeterministicTransactionProvider
-    implements TransactionStorage, Visibility, LockService {
+    implements TransactionStorage, RecoveryTransactionStorage, Visibility, LockService {
   private static final AtomicLong PROVIDER_IDENTITIES = new AtomicLong();
   private static final byte VERSION_FREE = 0;
   private static final byte VERSION_LIVE = 1;
-  private static final byte VERSION_ROLLED_BACK = 2;
   private static final TransactionState[] TRANSACTION_STATE_VALUES = TransactionState.values();
   private static final LockMode[] LOCK_MODE_VALUES = LockMode.values();
 
@@ -45,7 +45,8 @@ public final class DeterministicTransactionProvider
   private final byte[] versionStates;
   private final long[] versionAddresses;
   private final long[] versionOwners;
-  private final long[] versionCommitSequences;
+  private final long[] previousDatabaseIncarnationHigh;
+  private final long[] previousDatabaseIncarnationLow;
   private final long[] previousStoreGenerations;
   private final long[] previousAddresses;
   private final int[] versionPayloadLengths;
@@ -101,7 +102,8 @@ public final class DeterministicTransactionProvider
     versionStates = new byte[boundedVersions];
     versionAddresses = new long[boundedVersions];
     versionOwners = new long[boundedVersions];
-    versionCommitSequences = new long[boundedVersions];
+    previousDatabaseIncarnationHigh = new long[boundedVersions];
+    previousDatabaseIncarnationLow = new long[boundedVersions];
     previousStoreGenerations = new long[boundedVersions];
     previousAddresses = new long[boundedVersions];
     versionPayloadLengths = new int[boundedVersions];
@@ -147,7 +149,8 @@ public final class DeterministicTransactionProvider
     versionStates[slot] = VERSION_LIVE;
     versionAddresses[slot] = address;
     versionOwners[slot] = record.owningTransactionId();
-    versionCommitSequences[slot] = record.cachedCommitSequence();
+    previousDatabaseIncarnationHigh[slot] = record.previousDatabaseIncarnationHigh();
+    previousDatabaseIncarnationLow[slot] = record.previousDatabaseIncarnationLow();
     previousStoreGenerations[slot] = record.previousStoreGeneration();
     previousAddresses[slot] = record.previousAddress();
     versionPayloadLengths[slot] = record.payloadLength();
@@ -157,53 +160,43 @@ public final class DeterministicTransactionProvider
         versionPayloads[slot],
         0,
         record.payloadLength());
-    result.set(storeGeneration, address);
+    result.set(
+        databaseIncarnationHigh,
+        databaseIncarnationLow,
+        storeGeneration,
+        address);
     return StatusCode.OK;
   }
 
   @Override
   public synchronized StatusCode readVersion(
       VersionPointer pointer,
-      VersionRecord result,
+      VersionReadResult result,
       StatusDetail detail) {
     detail.reset();
+    result.resetMetadata();
     int slot = versionSlot(pointer);
     if (slot < 0) {
       return detail.set(StatusCode.CONFLICT).code();
     }
-    result.set(
-        versionOwners[slot],
-        resolvedVersionCommitSequence(slot),
-        previousStoreGenerations[slot],
-        previousAddresses[slot],
+    int payloadBytes = versionPayloadLengths[slot];
+    if (result.destinationCapacity() < payloadBytes) {
+      result.requirePayloadBytes(payloadBytes);
+      return detail.set(StatusCode.RESOURCE_EXHAUSTED).code();
+    }
+    System.arraycopy(
         versionPayloads[slot],
         0,
-        versionPayloadLengths[slot]);
-    return StatusCode.OK;
-  }
-
-  @Override
-  public synchronized StatusCode applyRollback(
-      TransactionContext context,
-      VersionPointer pointer,
-      StatusDetail detail) {
-    detail.reset();
-    StatusCode owner = mutationOwner();
-    if (!owner.isOk()) {
-      return detail.set(owner).code();
-    }
-    StatusCode contextStatus = contextStatus(context);
-    if (!contextStatus.isOk()) {
-      return detail.set(contextStatus).code();
-    }
-    int slot = versionSlot(pointer);
-    if (slot < 0) {
-      return detail.set(StatusCode.CONFLICT).code();
-    }
-    if (versionOwners[slot] != context.transactionId()) {
-      return detail.set(StatusCode.NOT_OWNER).code();
-    }
-    versionStates[slot] = VERSION_ROLLED_BACK;
+        result.destinationArray(),
+        result.destinationOffset(),
+        payloadBytes);
+    result.setMetadata(
+        versionOwners[slot],
+        previousDatabaseIncarnationHigh[slot],
+        previousDatabaseIncarnationLow[slot],
+        previousStoreGenerations[slot],
+        previousAddresses[slot],
+        payloadBytes);
     return StatusCode.OK;
   }
 
@@ -249,12 +242,6 @@ public final class DeterministicTransactionProvider
     if (view.state() == TransactionState.COMMITTED && view.commitSequence() == 0) {
       return detail.set(StatusCode.CONFLICT).code();
     }
-    if (transactionStates[slot] != 0
-        && transactionState(slot) == TransactionState.ABORTING
-        && view.state() == TransactionState.INDETERMINATE
-        && view.commitSequence() != 0) {
-      return detail.set(StatusCode.CONFLICT).code();
-    }
     if (view.state() != TransactionState.COMMITTED
         && view.state() != TransactionState.INDETERMINATE
         && view.commitSequence() != 0) {
@@ -266,6 +253,51 @@ public final class DeterministicTransactionProvider
     transactionUndoGenerations[slot] = view.undoNextGeneration();
     transactionUndoLsns[slot] = view.undoNextLsn();
     transactionCommitSequences[slot] = view.commitSequence();
+    return StatusCode.OK;
+  }
+
+  @Override
+  public synchronized StatusCode resolveIndeterminate(
+      RecoveryTransactionView resolvedView,
+      StatusDetail detail) {
+    detail.reset();
+    StatusCode owner = mutationOwner();
+    if (!owner.isOk()) {
+      return detail.set(owner).code();
+    }
+    if (!matchesDatabase(
+        resolvedView.databaseIncarnationHigh(),
+        resolvedView.databaseIncarnationLow())) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    int slot = transactionSlot(resolvedView.transactionId());
+    if (slot < 0 || transactionState(slot) != TransactionState.INDETERMINATE) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    if (resolvedView.state() != TransactionState.COMMITTED
+        && resolvedView.state() != TransactionState.ABORTING) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    if (lineageRegresses(slot, resolvedView)) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    long uncertainCommitSequence = transactionCommitSequences[slot];
+    if (resolvedView.state() == TransactionState.COMMITTED
+        && (resolvedView.commitSequence() == 0
+            || (uncertainCommitSequence != 0
+                && resolvedView.commitSequence() != uncertainCommitSequence))) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    if (resolvedView.state() == TransactionState.ABORTING
+        && resolvedView.commitSequence() != 0) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    transactionStates[slot] = (byte) (resolvedView.state().ordinal() + 1);
+    transactionLastGenerations[slot] = resolvedView.lastRecordGeneration();
+    transactionLastLsns[slot] = resolvedView.lastRecordLsn();
+    transactionUndoGenerations[slot] = resolvedView.undoNextGeneration();
+    transactionUndoLsns[slot] = resolvedView.undoNextLsn();
+    transactionCommitSequences[slot] = resolvedView.commitSequence();
     return StatusCode.OK;
   }
 
@@ -330,44 +362,9 @@ public final class DeterministicTransactionProvider
   }
 
   @Override
-  public synchronized StatusCode vacuumBefore(
-      long visibleCommitSequenceExclusive,
-      int maxRecords,
-      VacuumResult result,
-      StatusDetail detail) {
-    detail.reset();
-    StatusCode owner = mutationOwner();
-    if (!owner.isOk()) {
-      return detail.set(owner).code();
-    }
-    int inspected = 0;
-    int reclaimed = 0;
-    boolean moreWork = false;
-    for (int slot = 0; slot < versionStates.length; slot++) {
-      if (versionStates[slot] == VERSION_FREE) {
-        continue;
-      }
-      if (inspected == maxRecords) {
-        moreWork = true;
-        break;
-      }
-      inspected++;
-      long commitSequence = resolvedVersionCommitSequence(slot);
-      if (versionStates[slot] == VERSION_ROLLED_BACK
-          || (commitSequence != 0 && commitSequence < visibleCommitSequenceExclusive)) {
-        clearVersion(slot);
-        reclaimed++;
-      }
-    }
-    result.set(inspected, reclaimed, moreWork);
-    return moreWork ? StatusCode.RETRY : StatusCode.OK;
-  }
-
-  @Override
   public synchronized StatusCode resolve(
       TransactionContext context,
       long owningTransactionId,
-      long cachedCommitSequence,
       VisibilityResult result,
       StatusDetail detail) {
     detail.reset();
@@ -379,24 +376,21 @@ public final class DeterministicTransactionProvider
       result.set(VisibilityState.OWN_WRITE, 0);
       return StatusCode.OK;
     }
-    long commitSequence = cachedCommitSequence;
-    if (commitSequence == 0) {
-      int slot = transactionSlot(owningTransactionId);
-      if (slot < 0) {
-        result.set(VisibilityState.OUTCOME_UNAVAILABLE, 0);
-        return detail.set(StatusCode.RETRY).code();
-      }
-      TransactionState state = transactionState(slot);
-      if (state == TransactionState.INDETERMINATE) {
-        result.set(VisibilityState.INDETERMINATE, transactionCommitSequences[slot]);
-        return detail.set(StatusCode.FENCED).code();
-      }
-      if (state != TransactionState.COMMITTED) {
-        result.set(VisibilityState.HIDDEN, 0);
-        return StatusCode.OK;
-      }
-      commitSequence = transactionCommitSequences[slot];
+    int slot = transactionSlot(owningTransactionId);
+    if (slot < 0) {
+      result.set(VisibilityState.OUTCOME_UNAVAILABLE, 0);
+      return detail.set(StatusCode.RETRY).code();
     }
+    TransactionState state = transactionState(slot);
+    if (state == TransactionState.INDETERMINATE) {
+      result.set(VisibilityState.INDETERMINATE, transactionCommitSequences[slot]);
+      return detail.set(StatusCode.FENCED).code();
+    }
+    if (state != TransactionState.COMMITTED) {
+      result.set(VisibilityState.HIDDEN, 0);
+      return StatusCode.OK;
+    }
+    long commitSequence = transactionCommitSequences[slot];
     boolean visible = commitSequence <= context.snapshot().visibleCommitSequence()
         && !context.snapshot().excludesTransaction(owningTransactionId);
     result.set(visible ? VisibilityState.VISIBLE : VisibilityState.HIDDEN, commitSequence);
@@ -491,6 +485,23 @@ public final class DeterministicTransactionProvider
     return storeGeneration;
   }
 
+  /** Deterministic test mechanic simulating reclamation after an external safe-chain proof. */
+  public synchronized StatusCode reclaimVersionForTest(
+      VersionPointer pointer,
+      StatusDetail detail) {
+    detail.reset();
+    StatusCode owner = mutationOwner();
+    if (!owner.isOk()) {
+      return detail.set(owner).code();
+    }
+    int slot = versionSlot(pointer);
+    if (slot < 0) {
+      return detail.set(StatusCode.CONFLICT).code();
+    }
+    clearVersion(slot);
+    return StatusCode.OK;
+  }
+
   private StatusCode contextStatus(TransactionContext context) {
     if (!matchesDatabase(
         context.databaseIncarnationHigh(), context.databaseIncarnationLow())) {
@@ -525,7 +536,10 @@ public final class DeterministicTransactionProvider
   }
 
   private int versionSlot(VersionPointer pointer) {
-    if (pointer.storeGeneration() != storeGeneration || pointer.address() == 0) {
+    if (!matchesDatabase(
+        pointer.databaseIncarnationHigh(), pointer.databaseIncarnationLow())
+        || pointer.storeGeneration() != storeGeneration
+        || pointer.address() == 0) {
       return -1;
     }
     for (int slot = 0; slot < versionStates.length; slot++) {
@@ -537,23 +551,12 @@ public final class DeterministicTransactionProvider
     return -1;
   }
 
-  private long resolvedVersionCommitSequence(int slot) {
-    if (versionCommitSequences[slot] != 0) {
-      return versionCommitSequences[slot];
-    }
-    int transactionSlot = transactionSlot(versionOwners[slot]);
-    if (transactionSlot >= 0
-        && transactionState(transactionSlot) == TransactionState.COMMITTED) {
-      return transactionCommitSequences[transactionSlot];
-    }
-    return 0;
-  }
-
   private void clearVersion(int slot) {
     versionStates[slot] = VERSION_FREE;
     versionAddresses[slot] = 0;
     versionOwners[slot] = 0;
-    versionCommitSequences[slot] = 0;
+    previousDatabaseIncarnationHigh[slot] = 0;
+    previousDatabaseIncarnationLow[slot] = 0;
     previousStoreGenerations[slot] = 0;
     previousAddresses[slot] = 0;
     versionPayloadLengths[slot] = 0;
@@ -589,8 +592,7 @@ public final class DeterministicTransactionProvider
       case ACTIVE -> next == TransactionState.COMMITTING || next == TransactionState.ABORTING;
       case COMMITTING -> next == TransactionState.COMMITTED
           || next == TransactionState.INDETERMINATE;
-      case ABORTING -> next == TransactionState.ABORTED
-          || next == TransactionState.INDETERMINATE;
+      case ABORTING -> next == TransactionState.ABORTED;
       case COMMITTED, ABORTED, INDETERMINATE -> false;
     };
   }

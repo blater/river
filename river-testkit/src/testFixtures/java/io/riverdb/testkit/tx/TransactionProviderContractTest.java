@@ -20,8 +20,8 @@ import io.riverdb.tx.api.lock.LockMode;
 import io.riverdb.tx.api.lock.LockRequest;
 import io.riverdb.tx.api.lock.LockScope;
 import io.riverdb.tx.api.lock.LockToken;
-import io.riverdb.tx.api.version.VacuumResult;
 import io.riverdb.tx.api.version.VersionPointer;
+import io.riverdb.tx.api.version.VersionReadResult;
 import io.riverdb.tx.api.version.VersionRecord;
 import io.riverdb.tx.spi.RecoveryTransactionView;
 import org.junit.jupiter.api.Test;
@@ -64,7 +64,7 @@ public abstract class TransactionProviderContractTest {
 
   @Test
   final void abortAndIndeterminateBranchesRemainDistinct() {
-    TransactionProviderHarness harness = openHarness(3, 1, 8, 1);
+    TransactionProviderHarness harness = openHarness(4, 1, 8, 1);
     assertEquals(StatusCode.OK, store(harness, recovery(1, TransactionState.ACTIVE, 1, 1, 0)));
     assertEquals(StatusCode.OK, store(harness, recovery(1, TransactionState.ABORTING, 1, 2, 0)));
     assertEquals(StatusCode.OK, store(harness, recovery(1, TransactionState.ABORTED, 1, 3, 0)));
@@ -79,10 +79,14 @@ public abstract class TransactionProviderContractTest {
     assertEquals(StatusCode.OK, store(harness, recovery(3, TransactionState.ABORTING, 1, 2, 0)));
     assertEquals(
         StatusCode.CONFLICT,
-        store(harness, recovery(3, TransactionState.INDETERMINATE, 1, 3, 10)));
+        store(harness, recovery(3, TransactionState.INDETERMINATE, 1, 3, 0)));
+    assertEquals(StatusCode.OK, store(harness, recovery(3, TransactionState.ABORTED, 1, 3, 0)));
+
+    assertEquals(StatusCode.OK, store(harness, recovery(4, TransactionState.ACTIVE, 1, 1, 0)));
+    assertEquals(StatusCode.OK, store(harness, recovery(4, TransactionState.COMMITTING, 1, 2, 0)));
     assertEquals(
         StatusCode.OK,
-        store(harness, recovery(3, TransactionState.INDETERMINATE, 1, 3, 0)));
+        store(harness, recovery(4, TransactionState.INDETERMINATE, 1, 3, 10)));
 
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(
@@ -97,6 +101,28 @@ public abstract class TransactionProviderContractTest {
             DATABASE_HIGH, DATABASE_LOW, 2, outcome, detail()));
     assertEquals(TransactionState.INDETERMINATE, outcome.state());
     assertFalse(outcome.isFinal());
+
+    RecoveryTransactionView committed = recovery(2, TransactionState.COMMITTED, 1, 4, 9);
+    assertEquals(StatusCode.CONFLICT, store(harness, committed));
+    assertEquals(
+        StatusCode.OK,
+        harness.recoveryStorage().resolveIndeterminate(committed, detail()));
+    assertEquals(StatusCode.CONFLICT, harness.recoveryStorage().resolveIndeterminate(
+        recovery(2, TransactionState.ABORTING, 1, 4, 0), detail()));
+
+    assertEquals(StatusCode.CONFLICT, harness.recoveryStorage().resolveIndeterminate(
+        recovery(4, TransactionState.ABORTED, 1, 4, 0), detail()));
+    assertEquals(StatusCode.OK, harness.recoveryStorage().resolveIndeterminate(
+        recovery(4, TransactionState.ABORTING, 1, 4, 0), detail()));
+    TransactionOutcome loser = new TransactionOutcome();
+    assertEquals(StatusCode.OK, harness.storage().lookupOutcome(
+        DATABASE_HIGH, DATABASE_LOW, 4, loser, detail()));
+    assertEquals(TransactionState.ABORTING, loser.state());
+    assertFalse(loser.isFinal());
+    assertEquals(StatusCode.OK, store(
+        harness, recovery(4, TransactionState.ABORTED, 1, 5, 0)));
+    assertEquals(StatusCode.CONFLICT, store(
+        harness, recovery(4, TransactionState.COMMITTED, 1, 6, 10)));
   }
 
   @Test
@@ -109,7 +135,7 @@ public abstract class TransactionProviderContractTest {
     RecoveryTransactionView result = new RecoveryTransactionView();
     assertEquals(
         StatusCode.OK,
-        harness.storage().lookupRecoveryTransaction(
+        harness.recoveryStorage().lookupRecoveryTransaction(
             DATABASE_HIGH, DATABASE_LOW, 1, result, detail()));
     assertEquals(3, result.lastRecordGeneration());
     assertEquals(40, result.lastRecordLsn());
@@ -142,7 +168,7 @@ public abstract class TransactionProviderContractTest {
 
   @Test
   final void snapshotVisibilityUsesPublicationBoundaryActiveSetAndStatus() {
-    TransactionProviderHarness harness = openHarness(6, 1, 8, 1);
+    TransactionProviderHarness harness = openHarness(7, 1, 8, 1);
     commit(harness, 1, 5);
     commit(harness, 2, 8);
     abort(harness, 3);
@@ -152,47 +178,55 @@ public abstract class TransactionProviderContractTest {
         harness, recovery(5, TransactionState.COMMITTING, 1, 2, 0)));
     assertEquals(StatusCode.OK, store(
         harness, recovery(5, TransactionState.INDETERMINATE, 1, 3, 9)));
+    commit(harness, 6, 6);
 
     TransactionContext reader = context(9, snapshot(7, new long[] {1}));
     VisibilityResult result = new VisibilityResult();
-    assertVisibility(harness, reader, 9, 0, StatusCode.OK, VisibilityState.OWN_WRITE, result);
-    assertVisibility(harness, reader, 1, 0, StatusCode.OK, VisibilityState.HIDDEN, result);
-    assertVisibility(harness, reader, 2, 0, StatusCode.OK, VisibilityState.HIDDEN, result);
-    assertVisibility(harness, reader, 3, 0, StatusCode.OK, VisibilityState.HIDDEN, result);
-    assertVisibility(harness, reader, 4, 0, StatusCode.OK, VisibilityState.HIDDEN, result);
+    assertVisibility(harness, reader, 9, StatusCode.OK, VisibilityState.OWN_WRITE, result);
+    assertVisibility(harness, reader, 1, StatusCode.OK, VisibilityState.HIDDEN, result);
+    assertVisibility(harness, reader, 2, StatusCode.OK, VisibilityState.HIDDEN, result);
+    assertVisibility(harness, reader, 3, StatusCode.OK, VisibilityState.HIDDEN, result);
+    assertVisibility(harness, reader, 4, StatusCode.OK, VisibilityState.HIDDEN, result);
     assertVisibility(
-        harness, reader, 5, 0, StatusCode.FENCED, VisibilityState.INDETERMINATE, result);
+        harness, reader, 5, StatusCode.FENCED, VisibilityState.INDETERMINATE, result);
     assertVisibility(
-        harness, reader, 99, 0, StatusCode.RETRY, VisibilityState.OUTCOME_UNAVAILABLE, result);
-    assertVisibility(harness, reader, 77, 6, StatusCode.OK, VisibilityState.VISIBLE, result);
+        harness, reader, 99, StatusCode.RETRY, VisibilityState.OUTCOME_UNAVAILABLE, result);
+    assertVisibility(harness, reader, 6, StatusCode.OK, VisibilityState.VISIBLE, result);
   }
 
   @Test
-  final void versionStorageCopiesInputBorrowsOutputAndRejectsStalePointers() {
+  final void versionStorageCopiesInputAndOutputAcrossExplicitOwnershipBoundaries() {
     TransactionProviderHarness harness = openHarness(2, 2, 8, 1);
     assertEquals(StatusCode.OK, store(harness, recovery(1, TransactionState.ACTIVE, 1, 1, 0)));
     TransactionContext context = context(1, snapshot(0, new long[] {1}));
     byte[] input = {1, 2, 3};
-    VersionRecord append = new VersionRecord().set(1, 0, 0, 0, input, 0, input.length);
+    VersionRecord append = new VersionRecord().set(
+        1, 0, 0, 0, 0, input, 0, input.length);
     VersionPointer pointer = new VersionPointer();
     assertEquals(
         StatusCode.OK,
         harness.storage().appendVersion(context, append, pointer, detail()));
     input[0] = 9;
 
-    VersionRecord read = new VersionRecord();
+    byte[] destination = new byte[3];
+    VersionReadResult read = new VersionReadResult().useDestination(
+        destination, 0, destination.length);
     assertEquals(StatusCode.OK, harness.storage().readVersion(pointer, read, detail()));
-    byte[] actual = new byte[read.payloadLength()];
-    System.arraycopy(
-        read.payloadArray(), read.payloadOffset(), actual, 0, read.payloadLength());
-    assertArrayEquals(new byte[] {1, 2, 3}, actual);
+    assertArrayEquals(new byte[] {1, 2, 3}, destination);
+    assertEquals(DATABASE_HIGH, pointer.databaseIncarnationHigh());
+    assertEquals(DATABASE_LOW, pointer.databaseIncarnationLow());
 
-    assertEquals(StatusCode.OK, harness.storage().applyRollback(context, pointer, detail()));
-    assertEquals(StatusCode.OK, harness.storage().applyRollback(context, pointer, detail()));
-    VacuumResult vacuum = new VacuumResult();
-    assertEquals(StatusCode.OK, harness.storage().vacuumBefore(1, 2, vacuum, detail()));
-    assertEquals(1, vacuum.reclaimed());
-    assertEquals(StatusCode.CONFLICT, harness.storage().readVersion(pointer, read, detail()));
+    VersionPointer foreign = new VersionPointer().set(
+        99, 100, pointer.storeGeneration(), pointer.address());
+    assertEquals(
+        StatusCode.CONFLICT,
+        harness.storage().readVersion(foreign, read, detail()));
+
+    VersionReadResult tooSmall = new VersionReadResult().useDestination(new byte[2], 0, 2);
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        harness.storage().readVersion(pointer, tooSmall, detail()));
+    assertEquals(3, tooSmall.requiredPayloadBytes());
   }
 
   @Test
@@ -201,11 +235,13 @@ public abstract class TransactionProviderContractTest {
     assertEquals(StatusCode.OK, store(harness, recovery(1, TransactionState.ACTIVE, 1, 1, 0)));
     TransactionContext context = context(1, snapshot(0, new long[] {1}));
     VersionPointer pointer = new VersionPointer();
-    VersionRecord oversized = new VersionRecord().set(1, 0, 0, 0, new byte[3], 0, 3);
+    VersionRecord oversized = new VersionRecord().set(
+        1, 0, 0, 0, 0, new byte[3], 0, 3);
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         harness.storage().appendVersion(context, oversized, pointer, detail()));
-    VersionRecord accepted = new VersionRecord().set(1, 0, 0, 0, new byte[2], 0, 2);
+    VersionRecord accepted = new VersionRecord().set(
+        1, 0, 0, 0, 0, new byte[2], 0, 2);
     assertEquals(
         StatusCode.OK,
         harness.storage().appendVersion(context, accepted, pointer, detail()));
@@ -226,6 +262,7 @@ public abstract class TransactionProviderContractTest {
     assertEquals(
         StatusCode.OK, harness.locks().tryAcquire(first, request, 1, token, detail()));
     assertTrue(token.isActive());
+    assertEquals(StatusCode.CONFLICT, token.reset());
     assertEquals(
         StatusCode.CONFLICT,
         harness.locks().tryAcquire(first, request, 1, token, detail()));
@@ -235,10 +272,30 @@ public abstract class TransactionProviderContractTest {
     assertEquals(StatusCode.OK, harness.locks().release(token, detail()));
     assertFalse(token.isActive());
     assertEquals(StatusCode.CONFLICT, harness.locks().release(token, detail()));
-    assertEquals(StatusCode.OK, token.reset());
+    LockToken replacement = new LockToken();
     assertEquals(
-        StatusCode.OK, harness.locks().tryAcquire(second, request, 1, token, detail()));
-    assertEquals(2, token.transactionId());
+        StatusCode.OK, harness.locks().tryAcquire(second, request, 1, replacement, detail()));
+    assertEquals(2, replacement.transactionId());
+    assertEquals(StatusCode.CONFLICT, harness.locks().release(token, detail()));
+    assertEquals(
+        StatusCode.RETRY,
+        harness.locks().tryAcquire(first, request, 1, new LockToken(), detail()));
+
+    LockToken forged = new LockToken();
+    assertEquals(
+        StatusCode.OK,
+        forged.claim(
+            123,
+            456,
+            replacement.providerGeneration(),
+            replacement.capabilityToken(),
+            replacement.transactionId(),
+            replacement.slot()));
+    assertEquals(StatusCode.CONFLICT, harness.locks().release(forged, detail()));
+    assertEquals(
+        StatusCode.RETRY,
+        harness.locks().tryAcquire(first, request, 1, new LockToken(), detail()));
+    assertEquals(StatusCode.OK, harness.locks().release(replacement, detail()));
   }
 
   @Test
@@ -291,14 +348,12 @@ public abstract class TransactionProviderContractTest {
       TransactionProviderHarness harness,
       TransactionContext context,
       long owner,
-      long cachedCommitSequence,
       StatusCode expectedStatus,
       VisibilityState expectedState,
       VisibilityResult result) {
     assertEquals(
         expectedStatus,
-        harness.visibility().resolve(
-            context, owner, cachedCommitSequence, result, detail()));
+        harness.visibility().resolve(context, owner, result, detail()));
     assertEquals(expectedState, result.state());
   }
 

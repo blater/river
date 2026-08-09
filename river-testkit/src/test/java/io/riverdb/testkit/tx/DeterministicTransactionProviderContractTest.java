@@ -2,6 +2,7 @@ package io.riverdb.testkit.tx;
 
 import io.riverdb.tx.api.Visibility;
 import io.riverdb.tx.api.lock.LockService;
+import io.riverdb.tx.spi.RecoveryTransactionStorage;
 import io.riverdb.tx.spi.TransactionStorage;
 
 final class DeterministicTransactionProviderContractTest
@@ -31,6 +32,11 @@ final class DeterministicTransactionProviderContractTest
       implements TransactionProviderHarness {
     @Override
     public TransactionStorage storage() {
+      return provider;
+    }
+
+    @Override
+    public RecoveryTransactionStorage recoveryStorage() {
       return provider;
     }
 

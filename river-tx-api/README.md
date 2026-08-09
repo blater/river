@@ -13,11 +13,12 @@ codec, heap/index/page type, lock-table implementation, or recovery algorithm.
 - `Snapshot` exposes a commit publication boundary and a sorted primitive
   active-transaction set. Implementations own the immutable snapshot storage;
   the deterministic snapshot makes one lifecycle-time copy.
-- `VersionRecord`, `VersionPointer`, `TransactionOutcome`,
-  `RecoveryTransactionView`, `VisibilityResult`, and `VacuumResult` are
-  caller-owned reusable carriers. A version append borrows bytes for the call;
-  a read may return a provider-owned immutable borrow valid until its documented
-  reclamation boundary.
+- `VersionRecord`, `VersionPointer`, `VersionReadResult`, `TransactionOutcome`,
+  `RecoveryTransactionView`, and `VisibilityResult` are caller-owned reusable
+  carriers. A version append borrows bytes for the call and copies them into
+  stable provider storage. A read copies into an explicitly configured
+  caller-owned destination, so provider reclamation cannot mutate retained
+  read bytes.
 - `LockToken` is an authenticated provider capability. An active token cannot
   be reset, only the issuing provider can release it, and a completed or stale
   token cannot release a later lock occupying the same slot.
@@ -33,29 +34,34 @@ exceptions or allocated result wrappers.
 | Status | Contract meaning in this slice |
 | --- | --- |
 | `OK` | Operation completed and its output carrier is populated. |
-| `RETRY` | Lock contention, unavailable retained outcome, or bounded vacuum work remains. |
+| `RETRY` | Lock contention or an unavailable retained transaction outcome. |
 | `CONFLICT` | Stale/foreign capability, wrong database/store identity, illegal lifecycle transition, or missing version address. |
 | `NOT_OWNER` | A provider mutation was attempted outside its declared owner. |
 | `CANCELLED` / `TIMEOUT` | The context was cancelled or the lock deadline had elapsed. |
 | `RESOURCE_EXHAUSTED` | A fixed transaction, version, payload, or lock capacity was reached. |
 | `FENCED` | Visibility depends on an indeterminate transaction decision. |
 
-The lifecycle accepted by `TransactionStorage.storeRecoveryView` is
+The ordinary lifecycle accepted by `TransactionStorage.storeRecoveryView` is
 `ACTIVE -> COMMITTING -> COMMITTED` or
-`ACTIVE -> ABORTING -> ABORTED`. Either decision state may become
-`INDETERMINATE`. Terminal state is immutable and exact repeated writes are
+`ACTIVE -> ABORTING -> ABORTED`. Commit durability uncertainty may transition
+`COMMITTING -> INDETERMINATE`. An uncertain state is stable against ordinary
+runtime writes but is not final: only the separately granted
+`RecoveryTransactionStorage` capability, after authoritative journal evidence,
+can resolve it to committed or to aborting. The latter still requires
+WAL-driven loser undo and CLRs before `ABORTED`. Final decisions are immutable
+and exact repeated writes are
 idempotent. Commit publication ordering and transaction-ID allocation remain
 owned by the future `river-tx` implementation.
 
 ## Allocation and copy policy
 
 The designated warmed semantic path reuses all result/request carriers and
-tests outcome lookup, cached visibility, borrowed version read, and lock
+tests outcome lookup, authoritative visibility, copied version read, and lock
 acquire/release with at most 256 measured bytes across 10,000 iterations on the
 local supported JVM. The threshold is measurement noise, not a production
-budget. Version append makes one explicit bounded copy to establish a stable
-provider lifetime. The fake preallocates all transaction, version, payload, and
-lock capacity.
+budget. Version append and read each make one explicit bounded copy at their
+ownership boundary. The fake preallocates all transaction, version, payload,
+and lock capacity.
 
 ## Deliberately deferred
 
@@ -68,8 +74,9 @@ not selected here:
 - statement versus transaction snapshot acquisition policy;
 - lock upgrades, conversion queues, fairness, deadlock detection, escalation,
   savepoints, and the final serializable range-lock protocol;
-- version-chain pruning horizons, outcome compaction, vacuum scheduling, and
-  physical rollback handlers;
+- validated status freezing and any cached-CSN visibility shortcut;
+- version-chain reachability, snapshot/recovery horizons, outcome compaction,
+  safe vacuum candidates/reclamation, and physical rollback handlers;
 - transaction manager, commit protocol, CLRs, recovery dispatch, or page/index
   integration;
 - public/JDBC transaction facade or external-input validation.
