@@ -28,6 +28,16 @@ public final class AtomicInstallProgress {
     return completionPending;
   }
 
+  /** Phase already applied by the provider, including an unacknowledged completion half-step. */
+  public AtomicInstallPhase appliedPhase() {
+    return completionPending ? pendingPhase : phase;
+  }
+
+  /** Durability already applied by the provider, even while notification remains pending. */
+  public DirectoryDurability appliedDurability() {
+    return completionPending ? pendingDurability : durability;
+  }
+
   public boolean isComplete() {
     return phase == AtomicInstallPhase.VERIFIED && !completionPending;
   }

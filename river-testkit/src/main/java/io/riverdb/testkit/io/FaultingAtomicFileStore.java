@@ -121,7 +121,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     return switch (progress.phase()) {
       case NEW -> createStep(request, progress, result);
       case TEMP_CREATED -> writeStep(request, progress, result);
-      case CONTENT_WRITTEN -> forceStep(progress, result);
+      case CONTENT_WRITTEN -> forceStep(request, progress, result);
       case CONTENT_FORCED -> replaceStep(request, progress, result);
       case DESTINATION_REPLACED -> directoryForceStep(progress, result);
       case DIRECTORY_FORCED -> verifyStep(request, progress, result);
@@ -136,10 +136,8 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallResult result) {
     AtomicInstallPhase before = progress.phase();
     directoryResult.reset();
-    StatusCode status = createTemporary(request.temporaryFileName(), directoryResult);
-    if (directoryResult.file() != null) {
-      directoryResult.file().close();
-    }
+    StatusCode status = createTemporaryInternal(
+        request.temporaryFileName(), directoryResult, false);
     if (directoryResult.durability() == DirectoryDurability.UNKNOWN) {
       progress.requireRecovery();
     } else if (directoryResult.durability() != DirectoryDurability.NOT_APPLIED) {
@@ -248,10 +246,11 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   }
 
   private StatusCode forceStep(
+      AtomicInstallRequest request,
       AtomicInstallProgress progress,
       AtomicInstallResult result) {
     AtomicInstallPhase before = progress.phase();
-    ModelFile file = temporaryForInstall();
+    ModelFile file = findVolatile(request.temporaryFileName());
     if (file == null) {
       progress.requireRecovery();
       return record(StatusCode.CORRUPTION, AtomicInstallStep.TEMP_FORCE, before, progress, result, 0);
@@ -400,6 +399,13 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   public synchronized StatusCode createTemporary(
       String temporaryFileName,
       DirectoryOperationResult result) {
+    return createTemporaryInternal(temporaryFileName, result, true);
+  }
+
+  private StatusCode createTemporaryInternal(
+      String temporaryFileName,
+      DirectoryOperationResult result,
+      boolean openHandle) {
     result.reset();
     if (!running) {
       return StatusCode.RETRY;
@@ -423,12 +429,15 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       return StatusCode.CONFLICT;
     }
     ModelFile file = allocateFile();
-    if (file == null || openHandles == maxOpenHandles) {
+    if (file == null || openHandle && openHandles == maxOpenHandles) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     file.prepare(temporaryFileName);
-    openHandles++;
-    DurableFile handle = new ModelHandle(file, generation);
+    DurableFile handle = null;
+    if (openHandle) {
+      openHandles++;
+      handle = new ModelHandle(file, generation);
+    }
     result.set(handle, DirectoryDurability.VISIBLE_NOT_DURABLE, false);
     FaultAction afterAction = decide(
         points.tempCreateAfter(), FaultOperation.TEMP_CREATE, 0, 0);
@@ -673,16 +682,16 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     result.set(
         step,
         before,
-        progress.phase(),
-        progress.durability(),
+        progress.appliedPhase(),
+        progress.appliedDurability(),
         bytesTransferred,
         progress.completionPending());
     if (trace != null) {
       StatusCode appendStatus = trace.append(
           step,
           before,
-          progress.phase(),
-          progress.durability(),
+          progress.appliedPhase(),
+          progress.appliedDurability(),
           status,
           progress.completionPending());
       if (!appendStatus.isOk()) {
@@ -690,16 +699,6 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       }
     }
     return status;
-  }
-
-  private ModelFile temporaryForInstall() {
-    for (int index = 0; index < fileCount; index++) {
-      ModelFile file = files[index];
-      if (file.volatileName != null && !file.volatileName.equals(file.durableName)) {
-        return file;
-      }
-    }
-    return null;
   }
 
   private ModelFile allocateFile() {

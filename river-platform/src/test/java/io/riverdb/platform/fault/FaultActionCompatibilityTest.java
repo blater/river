@@ -31,7 +31,13 @@ final class FaultActionCompatibilityTest {
 
   private static boolean expected(FaultAction action, FaultOperation operation) {
     return switch (action) {
-      case NONE, CRASH, CANCEL, DELAY -> true;
+      case NONE, CRASH, CANCEL -> true;
+      case DELAY -> operation == FaultOperation.TEMP_CREATE
+          || operation == FaultOperation.TEMP_WRITE
+          || operation == FaultOperation.TEMP_FORCE
+          || operation == FaultOperation.REPLACE
+          || operation == FaultOperation.DIRECTORY_FORCE
+          || operation == FaultOperation.REOPEN_VERIFY;
       case RESTART -> operation != FaultOperation.CRASH
           && operation != FaultOperation.SCHEDULE
           && operation != FaultOperation.RUN_TASK;

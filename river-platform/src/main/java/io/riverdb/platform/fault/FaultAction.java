@@ -14,7 +14,7 @@ public enum FaultAction {
   CORRUPT_READ,
   /** Mutates returned bytes and reports {@code CORRUPTION}, modeling checksum detection. */
   DETECTED_CORRUPTION,
-  /** Withholds completion without applying the operation at a before boundary. */
+  /** Withholds start at a before point or completion at an after point. */
   DELAY,
   CANCEL,
   RESTART;
@@ -25,7 +25,13 @@ public enum FaultAction {
       return false;
     }
     return switch (this) {
-      case NONE, CRASH, CANCEL, DELAY -> true;
+      case NONE, CRASH, CANCEL -> true;
+      case DELAY -> operation == FaultOperation.TEMP_CREATE
+          || operation == FaultOperation.TEMP_WRITE
+          || operation == FaultOperation.TEMP_FORCE
+          || operation == FaultOperation.REPLACE
+          || operation == FaultOperation.DIRECTORY_FORCE
+          || operation == FaultOperation.REOPEN_VERIFY;
       case RESTART -> operation != FaultOperation.CRASH
           && operation != FaultOperation.SCHEDULE
           && operation != FaultOperation.RUN_TASK;

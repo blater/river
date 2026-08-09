@@ -1,6 +1,11 @@
 package io.riverdb.platform.file;
 
-/** Caller-owned report for the last attempted or completed install half-step. */
+/**
+ * Caller-owned report for the last attempted or completed install half-step.
+ *
+ * <p>When completion is pending, {@link #phaseAfter()} and {@link #durability()} describe the
+ * applied operation, while the progress carrier retains the last acknowledged phase.
+ */
 public final class AtomicInstallResult {
   private AtomicInstallStep step = AtomicInstallStep.NONE;
   private AtomicInstallPhase phaseBefore = AtomicInstallPhase.NEW;
