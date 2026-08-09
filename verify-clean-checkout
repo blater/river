@@ -100,6 +100,7 @@ wrapper_distribution="$wrapper_dists/$distribution_directory"
 wrapper_cache="$wrapper_distribution/$distribution_hash"
 wrapper_install="$wrapper_cache/$distribution_install"
 wrapper_bin="$wrapper_install/bin"
+wrapper_lib="$wrapper_install/lib"
 [ -d "$wrapper_cache" ] \
   || fail "the pinned Gradle wrapper distribution is not cached"
 for cache_directory in \
@@ -108,7 +109,8 @@ for cache_directory in \
   "$wrapper_distribution" \
   "$wrapper_cache" \
   "$wrapper_install" \
-  "$wrapper_bin"; do
+  "$wrapper_bin" \
+  "$wrapper_lib"; do
   [ -d "$cache_directory" ] \
     || fail "the pinned Gradle wrapper distribution is incomplete"
   [ ! -L "$cache_directory" ] \
@@ -121,6 +123,34 @@ wrapper_executable="$wrapper_bin/gradle"
 [ -f "$wrapper_executable" ] && [ ! -L "$wrapper_executable" ] \
     && [ -x "$wrapper_executable" ] \
   || fail "the pinned Gradle wrapper distribution is not installed"
+
+install_root_count=0
+for install_root in \
+  "$wrapper_cache"/* \
+  "$wrapper_cache"/.[!.]* \
+  "$wrapper_cache"/..?*; do
+  [ -e "$install_root" ] || [ -L "$install_root" ] || continue
+  [ -d "$install_root" ] || continue
+  install_root_count=$((install_root_count + 1))
+  [ "$install_root" = "$wrapper_install" ] \
+    || fail "wrapper cache contains a competing distribution directory"
+done
+[ "$install_root_count" -eq 1 ] \
+  || fail "wrapper cache must contain exactly one distribution directory"
+
+distribution_version=${distribution_install#gradle-}
+expected_launcher="$wrapper_lib/gradle-launcher-$distribution_version.jar"
+launcher_count=0
+for launcher in "$wrapper_lib"/gradle-launcher-*.jar; do
+  [ -e "$launcher" ] || [ -L "$launcher" ] || continue
+  launcher_count=$((launcher_count + 1))
+  [ "$launcher" = "$expected_launcher" ] \
+    || fail "wrapper distribution contains a competing launcher JAR"
+  [ -f "$launcher" ] && [ ! -L "$launcher" ] \
+    || fail "wrapper launcher JAR must be a regular file"
+done
+[ "$launcher_count" -eq 1 ] \
+  || fail "wrapper distribution must contain exactly one launcher JAR"
 
 echo "clean detached checkout ready: $source_commit"
 (

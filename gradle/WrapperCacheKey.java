@@ -18,6 +18,10 @@ final class WrapperCacheKey {
     try (var input = Files.newInputStream(Path.of(arguments[0]))) {
       properties.load(input);
     }
+    requireProperty(properties, "distributionBase", "GRADLE_USER_HOME");
+    requireProperty(properties, "distributionPath", "wrapper/dists");
+    requireProperty(properties, "zipStoreBase", "GRADLE_USER_HOME");
+    requireProperty(properties, "zipStorePath", "wrapper/dists");
     var distribution = URI.create(properties.getProperty("distributionUrl"));
     var path = Path.of(distribution.getPath());
     var archive = path.getFileName().toString();
@@ -26,5 +30,18 @@ final class WrapperCacheKey {
     );
     System.out.println(archive);
     System.out.println(new BigInteger(1, digest).toString(36));
+  }
+
+  private static void requireProperty(
+    Properties properties,
+    String name,
+    String expected
+  ) {
+    var actual = properties.getProperty(name);
+    if (!expected.equals(actual)) {
+      throw new IllegalArgumentException(
+        name + " must be " + expected + ", got " + actual
+      );
+    }
   }
 }
