@@ -1,4 +1,5 @@
 import io.riverdb.buildpolicy.BuildPolicy
+import io.riverdb.buildpolicy.HotPathBytecodePolicy
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.tasks.compile.JavaCompile
@@ -160,6 +161,108 @@ val hotPathPackagePrefixes = setOf(
   "io.riverdb.storage.access",
   "io.riverdb.tx.commit",
   "io.riverdb.exec.vector"
+)
+fun hotMethod(
+  className: String,
+  methodName: String,
+  descriptor: String
+) = HotPathBytecodePolicy.MethodScope(
+  className.replace('.', '/'),
+  methodName,
+  descriptor
+)
+
+val eventPackage = "io.riverdb.observability.api.event"
+val eventBinaryPackage = eventPackage.replace('.', '/')
+val diagnosticEventDescriptor = "L$eventBinaryPackage/DiagnosticEvent;"
+val diagnosticContextDescriptor = "L$eventBinaryPackage/DiagnosticContext;"
+val eventPublishResultDescriptor = "L$eventBinaryPackage/EventPublishResult;"
+val eventPollResultDescriptor = "L$eventBinaryPackage/EventPollResult;"
+val severityDescriptor = "L$eventBinaryPackage/Severity;"
+val liveHotPathMethods = setOf(
+  hotMethod(
+    "$eventPackage.BoundedEventRing",
+    "isEnabled",
+    "($severityDescriptor)Z"
+  ),
+  hotMethod(
+    "$eventPackage.BoundedEventRing",
+    "publish",
+    "($diagnosticEventDescriptor)$eventPublishResultDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.BoundedEventRing",
+    "poll",
+    "($diagnosticEventDescriptor)$eventPollResultDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.BoundedEventRing",
+    "onSaturation",
+    "()$eventPublishResultDescriptor"
+  ),
+  hotMethod("$eventPackage.BoundedEventRing", "isConsumerThread", "()Z"),
+  hotMethod(
+    "$eventPackage.LevelGatedDiagnosticSink",
+    "isEnabled",
+    "($severityDescriptor)Z"
+  ),
+  hotMethod(
+    "$eventPackage.LevelGatedDiagnosticSink",
+    "publish",
+    "($diagnosticEventDescriptor)$eventPublishResultDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.DiagnosticEvent",
+    "reset",
+    "()$diagnosticEventDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.DiagnosticEvent",
+    "set",
+    "(L$eventBinaryPackage/EventTypeId;$severityDescriptor"
+        + "JJ$diagnosticContextDescriptor"
+        + "JJJJ)$diagnosticEventDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.DiagnosticEvent",
+    "copyFrom",
+    "($diagnosticEventDescriptor)$diagnosticEventDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.DiagnosticContext",
+    "reset",
+    "()$diagnosticContextDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.DiagnosticContext",
+    "copyFrom",
+    "($diagnosticContextDescriptor)$diagnosticContextDescriptor"
+  ),
+  hotMethod(
+    "$eventPackage.Severity",
+    "isEnabledAt",
+    "($severityDescriptor)Z"
+  )
+)
+val liveHotPathAllowedRules = mapOf(
+  hotMethod(
+    "$eventPackage.BoundedEventRing",
+    "onSaturation",
+    "()$eventPublishResultDescriptor"
+  ) to setOf(
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
+      "new java.lang.MatchException"
+    ),
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.EXCEPTION_CONSTRUCTION,
+      "new java.lang.MatchException"
+    ),
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.EXCEPTION_THROW,
+      "athrow"
+    )
+  )
 )
 val inheritedDependencyFixture = configurations.create("policyFixtureInheritedDependency")
 val inheritedClasspathFixture = configurations.create("policyFixtureCompileClasspath") {
@@ -404,6 +507,210 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
   }
 }
 
+fun classFilesUnder(directories: Collection<java.io.File>): List<java.nio.file.Path> {
+  val files = mutableListOf<java.nio.file.Path>()
+  directories.sorted().forEach { directory ->
+    if (!directory.isDirectory) {
+      return@forEach
+    }
+    Files.walk(directory.toPath()).use { paths ->
+      paths.filter { path ->
+        Files.isRegularFile(path) && path.fileName.toString().endsWith(".class")
+      }.forEach(files::add)
+    }
+  }
+  return files.sorted()
+}
+
+val productionClassDirectories = subprojects.map { module ->
+  module.layout.buildDirectory.dir("classes/java/main")
+}
+val verifyHotPathBytecode = tasks.register("verifyHotPathBytecode") {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Audits exact declared production hot methods in structured class files."
+  dependsOn(subprojects.map { module -> module.tasks.named("compileJava") })
+  inputs.files(productionClassDirectories)
+
+  doLast {
+    val classFiles = classFilesUnder(
+      productionClassDirectories.map { directory -> directory.get().asFile }
+    )
+    val violations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      classFiles,
+      liveHotPathMethods,
+      liveHotPathAllowedRules
+    )
+    if (violations.isNotEmpty()) {
+      throw GradleException(violations.joinToString(separator = "\n"))
+    }
+  }
+}
+
+val hotPathFixtureSources = fileTree(
+  rootDir.resolve("buildSrc/src/test/resources/bytecode-policy")
+) {
+  include("*.java")
+}
+val hotPathFixtureClasses = layout.buildDirectory.dir("bytecode-policy-fixtures/classes")
+val compileHotPathBytecodeFixtures = tasks.register("compileHotPathBytecodeFixtures") {
+  inputs.files(hotPathFixtureSources)
+  outputs.dir(hotPathFixtureClasses)
+
+  doLast {
+    val output = hotPathFixtureClasses.get().asFile
+    Files.createDirectories(output.toPath())
+    val compiler = javax.tools.ToolProvider.getSystemJavaCompiler()
+        ?: throw GradleException("a Java 25 JDK compiler is required for policy fixtures")
+    val arguments = mutableListOf(
+      "--release", "25",
+      "-Xlint:none",
+      "-d", output.absolutePath
+    )
+    arguments.addAll(hotPathFixtureSources.files.map { it.absolutePath }.sorted())
+    val exitCode = compiler.run(null, null, null, *arguments.toTypedArray())
+    if (exitCode != 0) {
+      throw GradleException("hot-path bytecode fixtures failed to compile: exit $exitCode")
+    }
+  }
+}
+
+val verifyHotPathBytecodeFixtures = tasks.register("verifyHotPathBytecodeFixtures") {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Proves every hot-path bytecode rule with compiled negative fixtures."
+  dependsOn(compileHotPathBytecodeFixtures)
+  inputs.files(hotPathFixtureClasses)
+
+  doLast {
+    val fixtureClassFiles = classFilesUnder(listOf(hotPathFixtureClasses.get().asFile))
+    val negativeClass = "fixture.bytecode.NegativeHotPath"
+    val negativeRules = linkedMapOf(
+      hotMethod(negativeClass, "boxingValueOf", "(I)Ljava/lang/Integer;") to "HP003",
+      hotMethod(negativeClass, "boxingConstructor", "(I)Ljava/lang/Integer;") to "HP003",
+      hotMethod(negativeClass, "stream", "(Ljava/util/List;)J") to "HP004",
+      hotMethod(
+        negativeClass,
+        "collector",
+        "(Ljava/util/List;)Ljava/util/List;"
+      ) to "HP004",
+      hotMethod(negativeClass, "format", "(I)Ljava/lang/String;") to "HP005",
+      hotMethod(negativeClass, "formatter", "(I)Ljava/lang/String;") to "HP005",
+      hotMethod(
+        negativeClass,
+        "exceptionConstruction",
+        "()Ljava/lang/RuntimeException;"
+      ) to "HP006",
+      hotMethod(negativeClass, "exceptionThrow", "()V") to "HP007",
+      hotMethod(negativeClass, "objectAllocation", "()Ljava/lang/Object;") to "HP001",
+      hotMethod(negativeClass, "arrayAllocation", "(I)[I") to "HP002",
+      hotMethod(negativeClass, "concat", "(I)Ljava/lang/String;") to "HP008",
+      hotMethod(
+        negativeClass,
+        "capturedLambda",
+        "(I)Ljava/util/function/IntSupplier;"
+      ) to "HP010",
+      hotMethod(negativeClass, "varargs", "(I)V") to "HP009"
+    )
+    val negativeViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      negativeRules.keys,
+      emptyMap()
+    )
+    negativeRules.forEach { (scope, rule) ->
+      val methodMarker = "${scope.className().replace('/', '.')}#"
+          .plus(scope.methodName())
+          .plus(scope.descriptor())
+      if (negativeViolations.none { violation ->
+          methodMarker in violation && rule in violation
+        }) {
+        throw GradleException(
+          "bytecode fixture $methodMarker did not produce $rule: $negativeViolations"
+        )
+      }
+    }
+
+    val positiveClass = "fixture.bytecode.PositiveHotPath"
+    val positiveScopes = setOf(
+      hotMethod(positiveClass, "publish", "([JIJJ)I"),
+      hotMethod(positiveClass, "copy", "([B[BI)I")
+    )
+    val positiveViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      positiveScopes,
+      emptyMap()
+    )
+    if (positiveViolations.isNotEmpty()) {
+      throw GradleException(
+        "caller-owned/status bytecode fixtures unexpectedly failed: $positiveViolations"
+      )
+    }
+
+    val objectAllocationScope = hotMethod(
+      negativeClass,
+      "objectAllocation",
+      "()Ljava/lang/Object;"
+    )
+    val exactAllowanceViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(objectAllocationScope),
+      mapOf(
+        objectAllocationScope to setOf(
+          HotPathBytecodePolicy.Allowance(
+            HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
+            "new java.lang.Object"
+          )
+        )
+      )
+    )
+    if (exactAllowanceViolations.isNotEmpty()) {
+      throw GradleException(
+        "exact bytecode allowance unexpectedly failed: $exactAllowanceViolations"
+      )
+    }
+
+    val positivePublish = positiveScopes.first { scope ->
+      scope.methodName() == "publish"
+    }
+    val staleAllowanceViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(positivePublish),
+      mapOf(
+        positivePublish to setOf(
+          HotPathBytecodePolicy.Allowance(
+            HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
+            "new java.lang.Object"
+          )
+        )
+      )
+    )
+    if (staleAllowanceViolations.none { violation ->
+        "stale hot-path allowlist" in violation
+      }) {
+      throw GradleException(
+        "stale bytecode allowance fixture did not fail: $staleAllowanceViolations"
+      )
+    }
+
+    val missingScopeViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(hotMethod(positiveClass, "publish", "()V")),
+      emptyMap()
+    )
+    if (missingScopeViolations.none { violation ->
+        "missing hot-path method" in violation
+      }) {
+      throw GradleException(
+        "missing bytecode selector fixture did not fail: $missingScopeViolations"
+      )
+    }
+  }
+}
+
 val expectedArchiveList = layout.buildDirectory.file("reports/expected-archives.paths")
 val expectedArchiveCount = layout.buildDirectory.file("reports/expected-archives.count")
 val writeExpectedArchiveList = tasks.register("writeExpectedArchiveList") {
@@ -603,6 +910,8 @@ tasks.named("check") {
     verifySourcePolicy,
     verifyModuleGraph,
     verifyBuildPolicyFixtures,
+    verifyHotPathBytecode,
+    verifyHotPathBytecodeFixtures,
     verifyDependencyLedger
   )
   dependsOn(subprojects.map { it.tasks.named("check") })
