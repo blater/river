@@ -5,7 +5,11 @@ import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.OpenFileResult;
 import io.riverdb.testkit.io.FaultingFileIoProvider;
 
-/** Drives bounded workload/crash/restart/reopen/verify cycles against the file model. */
+/**
+ * Drives bounded workload/crash/restart/reopen/verify cycles against the file model. An operation
+ * failure is treated as an injected process loss only when the provider generation/lifecycle also
+ * changed; an ordinary failure closes its still-owned handle and terminates without recovery.
+ */
 public final class CrashRecoveryHarness {
   private final FaultingFileIoProvider provider;
   private final OpenFileResult openResult = new OpenFileResult();
@@ -14,7 +18,7 @@ public final class CrashRecoveryHarness {
     this.provider = provider;
   }
 
-  public StatusCode run(
+  public synchronized StatusCode run(
       String fileName,
       int cycles,
       CrashWorkload workload,
@@ -32,20 +36,33 @@ public final class CrashRecoveryHarness {
         return status;
       }
       DurableFile beforeCrash = openResult.file();
+      long generationBeforeWorkload = provider.generation();
       status = workload.run(cycle, beforeCrash);
-      if (!status.isOk()) {
-        report.failed(cycle, status);
+      boolean lifecycleChanged = provider.generation() != generationBeforeWorkload
+          || !provider.isRunning();
+      if (!status.isOk() && !lifecycleChanged) {
+        StatusCode cleanupStatus = beforeCrash.close();
+        report.failedWithCleanup(cycle, status, cleanupStatus);
         return status;
       }
-      status = provider.crash();
       if (!status.isOk()) {
-        report.failed(cycle, status);
-        return status;
+        report.recoveredInjectedFailure(status);
+      } else {
+        status = provider.crash();
+        if (!status.isOk()) {
+          StatusCode cleanupStatus = provider.isRunning()
+              ? beforeCrash.close()
+              : StatusCode.CANCELLED;
+          report.failedWithCleanup(cycle, status, cleanupStatus);
+          return status;
+        }
       }
-      status = provider.restart();
-      if (!status.isOk()) {
-        report.failed(cycle, status);
-        return status;
+      if (!provider.isRunning()) {
+        status = provider.restart();
+        if (!status.isOk()) {
+          report.failed(cycle, status);
+          return status;
+        }
       }
       status = provider.open(fileName, openResult);
       if (!status.isOk()) {

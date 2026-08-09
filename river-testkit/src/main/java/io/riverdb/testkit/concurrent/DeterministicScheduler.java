@@ -12,65 +12,104 @@ import io.riverdb.platform.schedule.TaskScheduler;
 import io.riverdb.testkit.time.ManualMonotonicClock;
 
 /**
- * Single-threaded, fixed-capacity scheduler. Equal deadline/class work is selected by a stable
- * seed-derived rank, allowing exact replay while different seeds explore different interleavings.
+ * Fixed-capacity scheduler. Equal deadline/class work is selected by a stable seed-derived rank,
+ * allowing exact replay while different seeds explore different interleavings. Public operations
+ * serialize access; tasks run while the scheduler lock is held so concurrent callers cannot alter
+ * a decision between selection and trace publication.
  */
 public final class DeterministicScheduler implements TaskScheduler {
+  private static final SchedulingClass[] SCHEDULING_CLASSES = SchedulingClass.values();
+
   private final ManualMonotonicClock clock;
   private final ScheduleTrace trace;
   private final FaultInjector faultInjector;
+  private final FaultPoint schedulePoint;
   private final FaultPoint runTaskPoint;
   private final long seed;
-  private final int criticalReserve;
+  private final int criticalReservePerClass;
+  private final StatusCode configurationStatus;
   private final ScheduledTask[] tasks;
   private final SchedulingClass[] classes;
   private final long[] taskIds;
   private final long[] deadlines;
   private final long[] ranks;
   private final long[] attempts;
+  private final int[] pendingByClass;
   private final boolean[] pausedClasses;
   private final FaultDecision faultDecision = new FaultDecision();
   private long sequence;
+  private long scheduleAttempts;
   private int size;
-  private int nonCriticalSize;
 
+  /**
+   * Creates a scheduler with a protected queue reservation for every critical scheduling class.
+   * If total reservations exceed capacity, scheduling fails with {@code INVALID_EXTERNAL_INPUT}
+   * without accepting task ownership.
+   */
   public DeterministicScheduler(
       int capacity,
-      int criticalReserve,
+      int criticalReservePerClass,
       long seed,
       ManualMonotonicClock clock,
       ScheduleTrace trace,
       FaultInjector faultInjector,
+      FaultPoint schedulePoint,
       FaultPoint runTaskPoint) {
     this.clock = clock;
     this.trace = trace;
     this.faultInjector = faultInjector;
+    this.schedulePoint = schedulePoint;
     this.runTaskPoint = runTaskPoint;
     this.seed = seed;
-    this.criticalReserve = criticalReserve;
-    tasks = new ScheduledTask[capacity];
-    classes = new SchedulingClass[capacity];
-    taskIds = new long[capacity];
-    deadlines = new long[capacity];
-    ranks = new long[capacity];
-    attempts = new long[capacity];
-    pausedClasses = new boolean[SchedulingClass.values().length];
+    this.criticalReservePerClass = criticalReservePerClass;
+    long totalCriticalReserve = (long) criticalClassCount() * criticalReservePerClass;
+    configurationStatus = capacity < 0
+            || criticalReservePerClass < 0
+            || totalCriticalReserve > capacity
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : StatusCode.OK;
+    int boundedCapacity = Math.max(0, capacity);
+    tasks = new ScheduledTask[boundedCapacity];
+    classes = new SchedulingClass[boundedCapacity];
+    taskIds = new long[boundedCapacity];
+    deadlines = new long[boundedCapacity];
+    ranks = new long[boundedCapacity];
+    attempts = new long[boundedCapacity];
+    pendingByClass = new int[SCHEDULING_CLASSES.length];
+    pausedClasses = new boolean[SCHEDULING_CLASSES.length];
   }
 
   @Override
-  public StatusCode schedule(
+  public synchronized StatusCode schedule(
       SchedulingClass schedulingClass,
       long delayNanos,
       long taskId,
       ScheduledTask task) {
+    if (!configurationStatus.isOk()) {
+      return configurationStatus;
+    }
     if (delayNanos < 0 || Long.MAX_VALUE - clock.nanoTime() < delayNanos) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    faultInjector.evaluate(
+        schedulePoint,
+        FaultOperation.SCHEDULE,
+        ++scheduleAttempts,
+        clock.nanoTime(),
+        0,
+        faultDecision);
+    FaultAction scheduleAction = faultDecision.action();
+    if (!scheduleAction.isCompatibleWith(FaultOperation.SCHEDULE)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    StatusCode scheduleFaultStatus = faultStatus(scheduleAction);
+    if (!scheduleFaultStatus.isOk()) {
+      return scheduleFaultStatus;
     }
     if (size == tasks.length) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    if (!schedulingClass.isCritical()
-        && nonCriticalSize == tasks.length - criticalReserve) {
+    if (!preservesCriticalReservations(schedulingClass)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     long insertionSequence = sequence++;
@@ -81,14 +120,12 @@ public final class DeterministicScheduler implements TaskScheduler {
     ranks[size] = mix(seed ^ taskId ^ insertionSequence);
     attempts[size] = 0;
     size++;
-    if (!schedulingClass.isCritical()) {
-      nonCriticalSize++;
-    }
+    pendingByClass[schedulingClass.ordinal()]++;
     return StatusCode.OK;
   }
 
   /** Executes one selected task, advancing the manual clock to its deadline. */
-  public StatusCode runNext() {
+  public synchronized StatusCode runNext() {
     int selected = selectNext();
     if (selected < 0) {
       return StatusCode.RETRY;
@@ -110,13 +147,15 @@ public final class DeterministicScheduler implements TaskScheduler {
         0,
         faultDecision);
     FaultAction action = faultDecision.action();
+    if (!action.isCompatibleWith(FaultOperation.RUN_TASK)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     StatusCode taskStatus;
-    if (action == FaultAction.CANCEL || action == FaultAction.RESTART) {
-      taskStatus = StatusCode.CANCELLED;
-    } else if (action == FaultAction.CRASH) {
-      taskStatus = StatusCode.IO_FAILURE;
-    } else {
+    StatusCode faultStatus = faultStatus(action);
+    if (faultStatus.isOk()) {
       taskStatus = tasks[selected].run();
+    } else {
+      taskStatus = faultStatus;
     }
     StatusCode traceStatus = trace.append(
         taskIds[selected], runAtNanos, classes[selected], taskStatus);
@@ -128,7 +167,7 @@ public final class DeterministicScheduler implements TaskScheduler {
   }
 
   /** Runs until no unpaused work remains or a task/trace returns a non-OK status. */
-  public StatusCode runUntilIdle() {
+  public synchronized StatusCode runUntilIdle() {
     while (selectNext() >= 0) {
       StatusCode status = runNext();
       if (!status.isOk()) {
@@ -138,26 +177,26 @@ public final class DeterministicScheduler implements TaskScheduler {
     return StatusCode.OK;
   }
 
-  public void pause(SchedulingClass schedulingClass) {
+  public synchronized void pause(SchedulingClass schedulingClass) {
     pausedClasses[schedulingClass.ordinal()] = true;
   }
 
-  public void resume(SchedulingClass schedulingClass) {
+  public synchronized void resume(SchedulingClass schedulingClass) {
     pausedClasses[schedulingClass.ordinal()] = false;
   }
 
   @Override
-  public int pendingTasks() {
+  public synchronized int pendingTasks() {
     return size;
   }
 
   @Override
-  public int capacity() {
+  public synchronized int capacity() {
     return tasks.length;
   }
 
-  public int criticalReserve() {
-    return criticalReserve;
+  public int criticalReservePerClass() {
+    return criticalReservePerClass;
   }
 
   private int selectNext() {
@@ -188,9 +227,7 @@ public final class DeterministicScheduler implements TaskScheduler {
   }
 
   private void remove(int selected) {
-    if (!classes[selected].isCritical()) {
-      nonCriticalSize--;
-    }
+    pendingByClass[classes[selected].ordinal()]--;
     int last = --size;
     tasks[selected] = tasks[last];
     classes[selected] = classes[last];
@@ -200,6 +237,40 @@ public final class DeterministicScheduler implements TaskScheduler {
     attempts[selected] = attempts[last];
     tasks[last] = null;
     classes[last] = null;
+  }
+
+  private boolean preservesCriticalReservations(SchedulingClass admittedClass) {
+    int missingAfterAdmission = 0;
+    for (SchedulingClass schedulingClass : SCHEDULING_CLASSES) {
+      if (!schedulingClass.isCritical()) {
+        continue;
+      }
+      int pending = pendingByClass[schedulingClass.ordinal()];
+      if (schedulingClass == admittedClass) {
+        pending++;
+      }
+      missingAfterAdmission += Math.max(0, criticalReservePerClass - pending);
+    }
+    return tasks.length - (size + 1) >= missingAfterAdmission;
+  }
+
+  private static StatusCode faultStatus(FaultAction action) {
+    return switch (action) {
+      case NONE -> StatusCode.OK;
+      case CANCEL, RESTART -> StatusCode.CANCELLED;
+      case CRASH -> StatusCode.IO_FAILURE;
+      default -> StatusCode.INVARIANT_BROKEN;
+    };
+  }
+
+  private static int criticalClassCount() {
+    int count = 0;
+    for (SchedulingClass schedulingClass : SCHEDULING_CLASSES) {
+      if (schedulingClass.isCritical()) {
+        count++;
+      }
+    }
+    return count;
   }
 
   private static long mix(long value) {

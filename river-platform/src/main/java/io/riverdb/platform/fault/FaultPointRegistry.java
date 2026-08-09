@@ -15,7 +15,7 @@ public final class FaultPointRegistry {
   }
 
   /** Validates a configuration/authored name once at the registration boundary. */
-  public StatusCode register(String name, FaultPointSlot result) {
+  public synchronized StatusCode register(String name, FaultPointSlot result) {
     if (name == null || name.isBlank() || name.length() > 128) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -35,11 +35,11 @@ public final class FaultPointRegistry {
     return StatusCode.OK;
   }
 
-  public int size() {
+  public synchronized int size() {
     return size;
   }
 
-  public int capacity() {
+  public synchronized int capacity() {
     return points.length;
   }
 }

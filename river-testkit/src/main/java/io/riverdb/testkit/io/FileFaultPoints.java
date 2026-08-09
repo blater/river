@@ -8,5 +8,8 @@ public record FileFaultPoints(
     FaultPoint read,
     FaultPoint write,
     FaultPoint force,
+    FaultPoint size,
     FaultPoint truncate,
-    FaultPoint close) {}
+    FaultPoint close,
+    FaultPoint crash,
+    FaultPoint restart) {}

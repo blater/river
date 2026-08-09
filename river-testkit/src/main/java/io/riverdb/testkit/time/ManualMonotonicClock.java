@@ -12,11 +12,11 @@ public final class ManualMonotonicClock implements MonotonicClock {
   }
 
   @Override
-  public long nanoTime() {
+  public synchronized long nanoTime() {
     return nowNanos;
   }
 
-  public StatusCode advanceBy(long deltaNanos) {
+  public synchronized StatusCode advanceBy(long deltaNanos) {
     if (deltaNanos < 0 || Long.MAX_VALUE - nowNanos < deltaNanos) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -24,7 +24,7 @@ public final class ManualMonotonicClock implements MonotonicClock {
     return StatusCode.OK;
   }
 
-  public StatusCode advanceTo(long targetNanos) {
+  public synchronized StatusCode advanceTo(long targetNanos) {
     if (targetNanos < nowNanos) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

@@ -18,6 +18,11 @@ import java.util.Arrays;
  * Bounded in-memory persistence model. Writes change a volatile image; force publishes that image
  * as durable. Crash invalidates handles and restores the last durable image. A torn-write action
  * is deliberately harsher: it persists only the transferred prefix before returning failure.
+ * All provider and handle operations serialize on the provider monitor, making lifecycle and
+ * fault-script decisions atomic across handles.
+ *
+ * <p>Delayed completion and stale page-cache reads remain deliberately unmodeled until P06 fixes
+ * their visibility and completion semantics. A short read must not be interpreted as either.
  */
 public final class FaultingFileIoProvider implements FileIoProvider {
   private final ModelFile[] files;
@@ -46,7 +51,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
   }
 
   @Override
-  public StatusCode open(String fileName, OpenFileResult result) {
+  public synchronized StatusCode open(String fileName, OpenFileResult result) {
     result.reset();
     if (!running) {
       return StatusCode.RETRY;
@@ -55,7 +60,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     FaultAction action = decide(faultPoints.open(), FaultOperation.OPEN, 0, 0);
-    StatusCode actionStatus = providerAction(action);
+    StatusCode actionStatus = providerAction(action, FaultOperation.OPEN);
     if (!actionStatus.isOk()) {
       return actionStatus;
     }
@@ -76,38 +81,73 @@ public final class FaultingFileIoProvider implements FileIoProvider {
   }
 
   /** Simulates abrupt process loss: unforced state disappears and all handles become stale. */
-  public StatusCode crash() {
+  public synchronized StatusCode crash() {
     if (!running) {
       return StatusCode.OK;
     }
+    FaultAction action = decide(faultPoints.crash(), FaultOperation.CRASH, 0, 0);
+    if (!action.isCompatibleWith(FaultOperation.CRASH)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    if (action == FaultAction.CANCEL) {
+      return StatusCode.CANCELLED;
+    }
+    if (action != FaultAction.NONE && action != FaultAction.CRASH) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    performCrash();
+    return StatusCode.OK;
+  }
+
+  private void performCrash() {
     for (int index = 0; index < fileCount; index++) {
       files[index].restoreDurable();
     }
     running = false;
     generation++;
     openHandles = 0;
-    return StatusCode.OK;
   }
 
   /** Starts a new model process generation. Callers must reopen files. */
-  public StatusCode restart() {
+  public synchronized StatusCode restart() {
     if (running) {
       return StatusCode.OK;
     }
-    running = true;
+    FaultAction action = decide(faultPoints.restart(), FaultOperation.RESTART, 0, 0);
+    if (!action.isCompatibleWith(FaultOperation.RESTART)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    if (action == FaultAction.CANCEL) {
+      return StatusCode.CANCELLED;
+    }
+    if (action == FaultAction.CRASH) {
+      return StatusCode.IO_FAILURE;
+    }
+    if (action != FaultAction.NONE && action != FaultAction.RESTART) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    performRestart();
     return StatusCode.OK;
   }
 
-  public boolean isRunning() {
+  private void performRestart() {
+    running = true;
+  }
+
+  public synchronized boolean isRunning() {
     return running;
   }
 
-  public long generation() {
+  public synchronized long generation() {
     return generation;
   }
 
-  public int fileCount() {
+  public synchronized int fileCount() {
     return fileCount;
+  }
+
+  public synchronized int openHandleCount() {
+    return openHandles;
   }
 
   private FaultAction decide(
@@ -125,17 +165,20 @@ public final class FaultingFileIoProvider implements FileIoProvider {
     return faultDecision.action();
   }
 
-  private StatusCode providerAction(FaultAction action) {
+  private StatusCode providerAction(FaultAction action, FaultOperation operation) {
+    if (!action.isCompatibleWith(operation)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     if (action == FaultAction.CANCEL) {
       return StatusCode.CANCELLED;
     }
     if (action == FaultAction.CRASH) {
-      crash();
+      performCrash();
       return StatusCode.IO_FAILURE;
     }
     if (action == FaultAction.RESTART) {
-      crash();
-      restart();
+      performCrash();
+      performRestart();
       return StatusCode.CANCELLED;
     }
     return StatusCode.OK;
@@ -172,6 +215,12 @@ public final class FaultingFileIoProvider implements FileIoProvider {
 
     @Override
     public StatusCode read(long position, ByteBuffer target, IoResult result) {
+      synchronized (FaultingFileIoProvider.this) {
+        return readLocked(position, target, result);
+      }
+    }
+
+    private StatusCode readLocked(long position, ByteBuffer target, IoResult result) {
       result.reset();
       StatusCode stateStatus = checkState();
       if (!stateStatus.isOk()) {
@@ -182,7 +231,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
       }
       int requested = target.remaining();
       FaultAction action = decide(faultPoints.read(), FaultOperation.READ, position, requested);
-      StatusCode actionStatus = providerAction(action);
+      StatusCode actionStatus = providerAction(action, FaultOperation.READ);
       if (!actionStatus.isOk()) {
         return actionStatus;
       }
@@ -191,20 +240,28 @@ public final class FaultingFileIoProvider implements FileIoProvider {
       if (action == FaultAction.SHORT_READ) {
         transferred = limitedTransfer(transferred, faultDecision.argument());
       }
-      int xorMask = action == FaultAction.CORRUPT_READ
+      boolean corrupted = action == FaultAction.CORRUPT_READ
+          || action == FaultAction.DETECTED_CORRUPTION;
+      int xorMask = corrupted
           ? (int) (faultDecision.argument() == 0 ? 1 : faultDecision.argument())
           : 0;
       for (int index = 0; index < transferred; index++) {
         target.put((byte) (file.volatileBytes[(int) position + index] ^ xorMask));
       }
       result.setBytesTransferred(transferred);
-      return action == FaultAction.CORRUPT_READ
+      return action == FaultAction.DETECTED_CORRUPTION
           ? StatusCode.CORRUPTION
           : StatusCode.OK;
     }
 
     @Override
     public StatusCode write(long position, ByteBuffer source, IoResult result) {
+      synchronized (FaultingFileIoProvider.this) {
+        return writeLocked(position, source, result);
+      }
+    }
+
+    private StatusCode writeLocked(long position, ByteBuffer source, IoResult result) {
       result.reset();
       StatusCode stateStatus = checkState();
       if (!stateStatus.isOk()) {
@@ -215,7 +272,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
       }
       int requested = source.remaining();
       FaultAction action = decide(faultPoints.write(), FaultOperation.WRITE, position, requested);
-      StatusCode actionStatus = providerAction(action);
+      StatusCode actionStatus = providerAction(action, FaultOperation.WRITE);
       if (!actionStatus.isOk()) {
         return actionStatus;
       }
@@ -250,12 +307,18 @@ public final class FaultingFileIoProvider implements FileIoProvider {
 
     @Override
     public StatusCode force(ForceMode mode) {
+      synchronized (FaultingFileIoProvider.this) {
+        return forceLocked(mode);
+      }
+    }
+
+    private StatusCode forceLocked(ForceMode mode) {
       StatusCode stateStatus = checkState();
       if (!stateStatus.isOk()) {
         return stateStatus;
       }
       FaultAction action = decide(faultPoints.force(), FaultOperation.FORCE, 0, file.volatileSize);
-      StatusCode actionStatus = providerAction(action);
+      StatusCode actionStatus = providerAction(action, FaultOperation.FORCE);
       if (!actionStatus.isOk()) {
         return actionStatus;
       }
@@ -270,6 +333,12 @@ public final class FaultingFileIoProvider implements FileIoProvider {
 
     @Override
     public StatusCode truncate(long sizeBytes) {
+      synchronized (FaultingFileIoProvider.this) {
+        return truncateLocked(sizeBytes);
+      }
+    }
+
+    private StatusCode truncateLocked(long sizeBytes) {
       StatusCode stateStatus = checkState();
       if (!stateStatus.isOk()) {
         return stateStatus;
@@ -278,7 +347,7 @@ public final class FaultingFileIoProvider implements FileIoProvider {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       FaultAction action = decide(faultPoints.truncate(), FaultOperation.TRUNCATE, sizeBytes, 0);
-      StatusCode actionStatus = providerAction(action);
+      StatusCode actionStatus = providerAction(action, FaultOperation.TRUNCATE);
       if (!actionStatus.isOk()) {
         return actionStatus;
       }
@@ -291,9 +360,20 @@ public final class FaultingFileIoProvider implements FileIoProvider {
 
     @Override
     public StatusCode size(FileSizeResult result) {
+      synchronized (FaultingFileIoProvider.this) {
+        return sizeLocked(result);
+      }
+    }
+
+    private StatusCode sizeLocked(FileSizeResult result) {
       StatusCode stateStatus = checkState();
       if (!stateStatus.isOk()) {
         return stateStatus;
+      }
+      FaultAction action = decide(faultPoints.size(), FaultOperation.SIZE, 0, 0);
+      StatusCode actionStatus = providerAction(action, FaultOperation.SIZE);
+      if (!actionStatus.isOk()) {
+        return actionStatus;
       }
       result.setSizeBytes(file.volatileSize);
       return StatusCode.OK;
@@ -301,15 +381,21 @@ public final class FaultingFileIoProvider implements FileIoProvider {
 
     @Override
     public StatusCode close() {
+      synchronized (FaultingFileIoProvider.this) {
+        return closeLocked();
+      }
+    }
+
+    private StatusCode closeLocked() {
       if (closed) {
-        return StatusCode.OK;
+        return StatusCode.CLOSED;
       }
       if (openedGeneration != generation) {
         closed = true;
         return StatusCode.CANCELLED;
       }
       FaultAction action = decide(faultPoints.close(), FaultOperation.CLOSE, 0, 0);
-      StatusCode actionStatus = providerAction(action);
+      StatusCode actionStatus = providerAction(action, FaultOperation.CLOSE);
       if (!actionStatus.isOk()) {
         return actionStatus;
       }
@@ -319,7 +405,10 @@ public final class FaultingFileIoProvider implements FileIoProvider {
     }
 
     private StatusCode checkState() {
-      if (closed || openedGeneration != generation || !running) {
+      if (closed) {
+        return StatusCode.CLOSED;
+      }
+      if (openedGeneration != generation || !running) {
         return StatusCode.CANCELLED;
       }
       return StatusCode.OK;

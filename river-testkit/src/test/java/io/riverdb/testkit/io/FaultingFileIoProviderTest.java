@@ -10,6 +10,7 @@ import io.riverdb.platform.fault.FaultPoint;
 import io.riverdb.platform.fault.FaultPointRegistry;
 import io.riverdb.platform.fault.FaultPointSlot;
 import io.riverdb.platform.file.DurableFile;
+import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.platform.file.OpenFileResult;
@@ -148,7 +149,7 @@ final class FaultingFileIoProviderTest {
   }
 
   @Test
-  void corruptionCancellationAndRestartAreObservable() {
+  void rawAndDetectedCorruptionHaveDistinctStatuses() {
     Fixture corruption = new Fixture(2);
     assertEquals(
         StatusCode.OK,
@@ -161,8 +162,25 @@ final class FaultingFileIoProviderTest {
             1));
     DurableFile file = corruption.open();
     assertEquals(StatusCode.OK, write(file, 0, new byte[] {0, 1}));
-    assertArrayEquals(new byte[] {1, 0}, read(file, 0, 2, StatusCode.CORRUPTION));
+    assertArrayEquals(new byte[] {1, 0}, read(file, 0, 2, StatusCode.OK));
 
+    Fixture detected = new Fixture(2);
+    assertEquals(
+        StatusCode.OK,
+        detected.controller.addRule(
+            detected.points.read(),
+            FaultOperation.READ,
+            1,
+            1,
+            FaultAction.DETECTED_CORRUPTION,
+            1));
+    file = detected.open();
+    assertEquals(StatusCode.OK, write(file, 0, new byte[] {0, 1}));
+    assertArrayEquals(new byte[] {1, 0}, read(file, 0, 2, StatusCode.CORRUPTION));
+  }
+
+  @Test
+  void cancellationAndRestartInvalidateTheExpectedOperationAndHandle() {
     Fixture cancellation = new Fixture(2);
     assertEquals(
         StatusCode.OK,
@@ -194,6 +212,58 @@ final class FaultingFileIoProviderTest {
     assertEquals(StatusCode.OK, write(restart.open(), 0, new byte[] {2}));
   }
 
+  @Test
+  void sizeCrashAndRestartHaveNamedInjectionBoundaries() {
+    Fixture size = new Fixture(1);
+    assertEquals(
+        StatusCode.OK,
+        size.controller.addRule(
+            size.points.size(),
+            FaultOperation.SIZE,
+            1,
+            1,
+            FaultAction.CANCEL,
+            0));
+    FileSizeResult sizeResult = new FileSizeResult();
+    DurableFile sizeFile = size.open();
+    assertEquals(StatusCode.CANCELLED, sizeFile.size(sizeResult));
+    assertEquals(StatusCode.OK, sizeFile.size(sizeResult));
+
+    Fixture lifecycle = new Fixture(2);
+    assertEquals(
+        StatusCode.OK,
+        lifecycle.controller.addRule(
+            lifecycle.points.crash(),
+            FaultOperation.CRASH,
+            1,
+            1,
+            FaultAction.CANCEL,
+            0));
+    assertEquals(
+        StatusCode.OK,
+        lifecycle.controller.addRule(
+            lifecycle.points.restart(),
+            FaultOperation.RESTART,
+            1,
+            1,
+            FaultAction.CANCEL,
+            0));
+    assertEquals(StatusCode.CANCELLED, lifecycle.provider.crash());
+    assertEquals(StatusCode.OK, lifecycle.provider.crash());
+    assertEquals(StatusCode.CANCELLED, lifecycle.provider.restart());
+    assertEquals(StatusCode.OK, lifecycle.provider.restart());
+  }
+
+  @Test
+  void closedHandlesReturnClosedRatherThanCancellation() {
+    Fixture fixture = new Fixture(1);
+    DurableFile file = fixture.open();
+
+    assertEquals(StatusCode.OK, file.close());
+    assertEquals(StatusCode.CLOSED, file.close());
+    assertEquals(StatusCode.CLOSED, write(file, 0, new byte[] {1}));
+  }
+
   private static StatusCode write(DurableFile file, long position, byte[] bytes) {
     IoResult result = new IoResult();
     return file.write(position, ByteBuffer.wrap(bytes), result);
@@ -220,14 +290,17 @@ final class FaultingFileIoProviderTest {
     private final FaultingFileIoProvider provider;
 
     private Fixture(int ruleCapacity) {
-      FaultPointRegistry registry = new FaultPointRegistry(6);
+      FaultPointRegistry registry = new FaultPointRegistry(9);
       points = new FileFaultPoints(
           point(registry, "file.open"),
           point(registry, "file.read"),
           point(registry, "file.write"),
           point(registry, "file.force"),
+          point(registry, "file.size"),
           point(registry, "file.truncate"),
-          point(registry, "file.close"));
+          point(registry, "file.close"),
+          point(registry, "process.crash"),
+          point(registry, "process.restart"));
       controller = new CrashPointController(ruleCapacity);
       provider = new FaultingFileIoProvider(2, 64, 4, controller, points);
     }

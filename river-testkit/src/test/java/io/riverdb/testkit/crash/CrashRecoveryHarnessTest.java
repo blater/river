@@ -3,12 +3,16 @@ package io.riverdb.testkit.crash;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.platform.fault.FaultAction;
+import io.riverdb.platform.fault.FaultOperation;
 import io.riverdb.platform.fault.FaultPoint;
 import io.riverdb.platform.fault.FaultPointRegistry;
 import io.riverdb.platform.fault.FaultPointSlot;
 import io.riverdb.platform.fault.NoOpFaultInjector;
 import io.riverdb.platform.file.ForceMode;
+import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
+import io.riverdb.platform.file.OpenFileResult;
 import io.riverdb.testkit.io.FaultingFileIoProvider;
 import io.riverdb.testkit.io.FileFaultPoints;
 import java.nio.ByteBuffer;
@@ -61,16 +65,85 @@ final class CrashRecoveryHarnessTest {
     assertEquals(-1, report.failedCycle());
   }
 
+  @Test
+  void injectedCrashFailureStillRestartsReopensAndVerifies() {
+    FaultPointRegistry registry = new FaultPointRegistry(9);
+    FileFaultPoints points = points(registry);
+    CrashPointController controller = new CrashPointController(1);
+    assertEquals(
+        StatusCode.OK,
+        controller.addRule(
+            points.write(),
+            FaultOperation.WRITE,
+            1,
+            1,
+            FaultAction.CRASH,
+            0));
+    FaultingFileIoProvider provider = new FaultingFileIoProvider(
+        1, 64, 2, controller, points);
+    CrashRecoveryHarness harness = new CrashRecoveryHarness(provider);
+    CrashRunReport report = new CrashRunReport();
+
+    StatusCode status = harness.run(
+        "data-0001",
+        1,
+        (cycle, file) -> {
+          IoResult result = new IoResult();
+          return file.write(0, ByteBuffer.wrap(new byte[] {1}), result);
+        },
+        (cycle, reopened) -> {
+          FileSizeResult result = new FileSizeResult();
+          StatusCode sizeStatus = reopened.size(result);
+          return sizeStatus.isOk() && result.sizeBytes() == 0
+              ? StatusCode.OK
+              : StatusCode.CORRUPTION;
+        },
+        report);
+
+    assertEquals(StatusCode.OK, status);
+    assertEquals(1, report.completedCycles());
+    assertEquals(1, report.recoveredInjectedFailures());
+    assertEquals(StatusCode.IO_FAILURE, report.observedWorkloadStatus());
+  }
+
+  @Test
+  void ordinaryFailureClosesOwnedHandleWithoutRecovery() {
+    FaultingFileIoProvider provider = provider();
+    CrashRecoveryHarness harness = new CrashRecoveryHarness(provider);
+    CrashRunReport report = new CrashRunReport();
+
+    StatusCode status = harness.run(
+        "data-0001",
+        1,
+        (cycle, file) -> StatusCode.IO_FAILURE,
+        (cycle, reopened) -> StatusCode.INVARIANT_BROKEN,
+        report);
+
+    assertEquals(StatusCode.IO_FAILURE, status);
+    assertEquals(0, report.completedCycles());
+    assertEquals(StatusCode.OK, report.cleanupStatus());
+    assertEquals(0, provider.openHandleCount());
+    OpenFileResult result = new OpenFileResult();
+    assertEquals(StatusCode.OK, provider.open("data-0001", result));
+  }
+
   private static FaultingFileIoProvider provider() {
-    FaultPointRegistry registry = new FaultPointRegistry(6);
-    FileFaultPoints points = new FileFaultPoints(
+    FaultPointRegistry registry = new FaultPointRegistry(9);
+    return new FaultingFileIoProvider(
+        1, 64, 4, NoOpFaultInjector.INSTANCE, points(registry));
+  }
+
+  private static FileFaultPoints points(FaultPointRegistry registry) {
+    return new FileFaultPoints(
         point(registry, "file.open"),
         point(registry, "file.read"),
         point(registry, "file.write"),
         point(registry, "file.force"),
+        point(registry, "file.size"),
         point(registry, "file.truncate"),
-        point(registry, "file.close"));
-    return new FaultingFileIoProvider(1, 64, 4, NoOpFaultInjector.INSTANCE, points);
+        point(registry, "file.close"),
+        point(registry, "process.crash"),
+        point(registry, "process.restart"));
   }
 
   private static FaultPoint point(FaultPointRegistry registry, String name) {

@@ -52,6 +52,62 @@ final class CrashPointControllerTest {
         controller.addRule(point, FaultOperation.FORCE, 2, 1, FaultAction.DISK_FULL, 0));
   }
 
+  @Test
+  void rejectsActionsThatCannotApplyToTheNamedOperation() {
+    FaultPoint point = point("scheduler.before-run");
+    CrashPointController controller = new CrashPointController(2);
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        controller.addRule(
+            point,
+            FaultOperation.RUN_TASK,
+            1,
+            1,
+            FaultAction.SHORT_READ,
+            1));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        controller.addRule(
+            point,
+            FaultOperation.WRITE,
+            1,
+            1,
+            FaultAction.FORCE_FAILURE,
+            0));
+    assertEquals(0, controller.size());
+  }
+
+  @Test
+  void overlappingRulesAllObserveWhileFirstFiringRuleWins() {
+    FaultPoint point = point("file.before-read");
+    CrashPointController controller = new CrashPointController(2);
+    FaultDecision decision = new FaultDecision();
+    assertEquals(
+        StatusCode.OK,
+        controller.addRule(
+            point,
+            FaultOperation.READ,
+            1,
+            1,
+            FaultAction.CANCEL,
+            0));
+    assertEquals(
+        StatusCode.OK,
+        controller.addRule(
+            point,
+            FaultOperation.READ,
+            1,
+            2,
+            FaultAction.DETECTED_CORRUPTION,
+            1));
+
+    controller.evaluate(point, FaultOperation.READ, 1, 0, 4, decision);
+    assertEquals(FaultAction.CANCEL, decision.action());
+    controller.evaluate(point, FaultOperation.READ, 2, 0, 4, decision);
+    assertEquals(FaultAction.DETECTED_CORRUPTION, decision.action());
+  }
+
   private static FaultAction[] observeFour(
       CrashPointController controller,
       FaultPoint point,

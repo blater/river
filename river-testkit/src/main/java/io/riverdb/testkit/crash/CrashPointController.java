@@ -8,8 +8,10 @@ import io.riverdb.platform.fault.FaultOperation;
 import io.riverdb.platform.fault.FaultPoint;
 
 /**
- * Fixed-capacity ordered fault script. Rules count matching observations independently, which
- * makes reset and exact replay deterministic.
+ * Fixed-capacity ordered fault script. All matching rules observe every event. If several rules
+ * fire on the same event, the earliest-added firing rule wins. This explicit insertion-order
+ * precedence and {@link #reset()} make exact replay deterministic. Methods serialize access so a
+ * controller can safely be shared by the scheduler and file model.
  */
 public final class CrashPointController implements FaultInjector {
   private final FaultPoint[] points;
@@ -31,14 +33,20 @@ public final class CrashPointController implements FaultInjector {
     observations = new long[capacity];
   }
 
-  public StatusCode addRule(
+  public synchronized StatusCode addRule(
       FaultPoint point,
       FaultOperation operation,
       long firstOccurrence,
       long repeatCount,
       FaultAction action,
       long argument) {
-    if (firstOccurrence < 1 || repeatCount < 1 || argument < 0) {
+    if (point == null
+        || operation == null
+        || action == null
+        || firstOccurrence < 1
+        || repeatCount < 1
+        || argument < 0
+        || !action.isCompatibleWith(operation)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (size == points.length) {
@@ -55,34 +63,35 @@ public final class CrashPointController implements FaultInjector {
   }
 
   @Override
-  public void evaluate(
+  public synchronized void evaluate(
       FaultPoint point,
       FaultOperation operation,
       long attempt,
       long position,
       int requestedBytes,
-      FaultDecision result) {
+    FaultDecision result) {
     result.reset();
+    boolean selected = false;
     for (int index = 0; index < size; index++) {
       if (points[index] != point || operations[index] != operation) {
         continue;
       }
       long observation = ++observations[index];
       long first = firstOccurrences[index];
-      if (observation >= first && observation - first < repeatCounts[index]) {
+      if (!selected && observation >= first && observation - first < repeatCounts[index]) {
         result.set(actions[index], arguments[index]);
-        return;
+        selected = true;
       }
     }
   }
 
-  public void reset() {
+  public synchronized void reset() {
     for (int index = 0; index < size; index++) {
       observations[index] = 0;
     }
   }
 
-  public int size() {
+  public synchronized int size() {
     return size;
   }
 }

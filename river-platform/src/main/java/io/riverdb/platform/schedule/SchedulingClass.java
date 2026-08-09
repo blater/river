@@ -7,6 +7,7 @@ public enum SchedulingClass {
   JOURNAL(0),
   RECOVERY(0),
   CONSENSUS(0),
+  CHECKPOINT(0),
   FOREGROUND_SQL(1),
   MAINTENANCE(2),
   STATE_SYNC(2),
