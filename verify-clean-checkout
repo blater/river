@@ -19,11 +19,16 @@ run_git() {
   GIT_CONFIG_NOSYSTEM=1 \
   GIT_CONFIG_GLOBAL=/dev/null \
   GIT_CONFIG_COUNT=0 \
+  GIT_CONFIG_PARAMETERS= \
   GIT_ATTR_NOSYSTEM=1 \
     git "$@"
 }
 
 command -v git >/dev/null 2>&1 || fail "git is not available"
+[ -z "${GIT_DIR:-}" ] && [ -z "${GIT_WORK_TREE:-}" ] \
+    && [ -z "${GIT_INDEX_FILE:-}" ] && [ -z "${GIT_OBJECT_DIRECTORY:-}" ] \
+    && [ -z "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" ] \
+  || fail "Git repository-selection environment is not allowed"
 run_git -C "$river_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || fail "the River root is not a Git worktree"
 
