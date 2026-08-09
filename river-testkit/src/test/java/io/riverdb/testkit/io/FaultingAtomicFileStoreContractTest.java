@@ -19,6 +19,7 @@ import io.riverdb.platform.file.AtomicInstallStep;
 import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
+import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.testkit.crash.CrashPointController;
 import java.nio.ByteBuffer;
@@ -60,6 +61,16 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(StatusCode.OK, fixture.store.crash());
     assertEquals(StatusCode.OK, fixture.store.restart());
     assertArrayEquals(new byte[] {1, 2, 3, 4}, fixture.reopenAndRead("control"));
+    assertEquals(
+        StatusCode.OK,
+        fixture.contract.verifyInstalled(
+            fixture.store,
+            "control",
+            ByteBuffer.wrap(new byte[] {1, 2, 3, 4}),
+            ByteBuffer.allocate(4),
+            new DirectoryOperationResult(),
+            new FileSizeResult(),
+            new IoResult()));
   }
 
   @Test
@@ -212,6 +223,31 @@ final class FaultingAtomicFileStoreContractTest {
             diskFull.stepResult,
             8,
             driveResult));
+  }
+
+  @Test
+  void shortVerificationReadReportsProgressAndRetriesWithoutPromotion() {
+    Fixture fixture = new Fixture(1, 16);
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.reopenVerifyBefore(),
+            FaultOperation.REOPEN_VERIFY,
+            1,
+            1,
+            FaultAction.SHORT_READ,
+            2));
+    AtomicInstallRequest request = request(new byte[] {4, 3, 2, 1});
+    AtomicInstallProgress progress = new AtomicInstallProgress();
+    for (int index = 0; index < 5; index++) {
+      assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
+    }
+
+    assertEquals(StatusCode.RETRY, fixture.store.advance(request, progress, fixture.stepResult));
+    assertEquals(2, fixture.stepResult.bytesTransferred());
+    assertEquals(AtomicInstallPhase.DIRECTORY_FORCED, progress.phase());
+    assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
+    assertTrue(progress.isComplete());
   }
 
   @Test

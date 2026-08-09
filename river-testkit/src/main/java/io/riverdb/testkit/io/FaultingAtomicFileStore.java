@@ -359,6 +359,38 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       }
       return record(status, AtomicInstallStep.REOPEN_VERIFY, before, progress, result, 0);
     }
+    if (beforeAction == FaultAction.SHORT_READ) {
+      int transferred = limitedTransfer(request.contentLength(), decision.argument());
+      ModelFile shortFile = findVolatile(request.destinationFileName());
+      if (shortFile == null || shortFile.volatileSize < transferred) {
+        return record(
+            StatusCode.CORRUPTION,
+            AtomicInstallStep.REOPEN_VERIFY,
+            before,
+            progress,
+            result,
+            transferred);
+      }
+      for (int index = 0; index < transferred; index++) {
+        if (shortFile.volatileBytes[index]
+            != request.content().get(request.contentPosition() + index)) {
+          return record(
+              StatusCode.CORRUPTION,
+              AtomicInstallStep.REOPEN_VERIFY,
+              before,
+              progress,
+              result,
+              transferred);
+        }
+      }
+      return record(
+          StatusCode.RETRY,
+          AtomicInstallStep.REOPEN_VERIFY,
+          before,
+          progress,
+          result,
+          transferred);
+    }
     ModelFile file = findVolatile(request.destinationFileName());
     boolean valid = file != null && file.volatileSize == request.contentLength();
     if (valid) {
