@@ -16,3 +16,16 @@ their named gate has passed.
 
 See the [project implementation plan](docs/plans/river-project-implementation-plan.md)
 for deliverables, dependencies, gates, and milestone definitions.
+
+## Build and validation
+
+JDK 25 is required. Run the complete initial-phase validation locally:
+
+```sh
+./verify
+```
+
+The command uses the checksum-pinned Gradle wrapper and an isolated
+repository-local Gradle home, then runs a clean compile, static source policy,
+module dependency checks, and all tests. GitHub verification is intentionally
+manual during the initial build phase; local validation is the merge gate.

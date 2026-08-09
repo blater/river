@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+river_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+river_gradle_home=${RIVER_GRADLE_HOME:-"$river_root/.river-gradle"}
+
+export GRADLE_USER_HOME="$river_gradle_home"
+exec "$river_root/gradlew" --no-daemon clean check "$@"

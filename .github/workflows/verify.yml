@@ -1,11 +1,7 @@
 name: verify
 
 on:
-  pull_request:
-  push:
-    branches:
-      - master
-      - codex/implementation
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,4 +26,4 @@ jobs:
         uses: gradle/actions/wrapper-validation@v4
 
       - name: Run clean verification
-        run: ./gradlew --no-daemon clean check
+        run: ./verify
