@@ -25,8 +25,10 @@ frontier can never silently skip the abandoned position.
 
 Reservation, durability-ticket, and retention-lease handles are authenticated
 provider capabilities. An active handle cannot be reset or reused as output;
-foreign-provider, forged, stale, and double-completion attempts return a
-stable conflict/fenced status without changing the handle.
+foreign-provider and forged attempts return a stable conflict/fenced status
+without changing the handle. Once authenticated, stale lifecycle tickets and
+expired or superseded lease handles are retired with a fenced/conflict result
+so the caller can reset and reuse their storage. Double completion is rejected.
 
 Durable request outcomes live in a bounded store independent of reclaimable
 WAL ring slots. Reclaiming or reusing a ring slot does not forget its outcome.
