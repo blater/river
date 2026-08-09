@@ -1,5 +1,7 @@
 package io.riverdb.journal.api;
 
+import java.nio.ByteBuffer;
+
 /** Caller-owned reservation slot filled by one provider and valid until publish or cancellation. */
 public final class JournalReservation {
   private long ownerHigh;
@@ -11,6 +13,7 @@ public final class JournalReservation {
   private long providerToken;
   private int slot = -1;
   private int payloadBytes;
+  private ByteBuffer writablePayload;
   private boolean active;
 
   public boolean isOwnedBy(long providerHigh, long providerLow) {
@@ -31,6 +34,7 @@ public final class JournalReservation {
     providerToken = 0;
     slot = -1;
     payloadBytes = 0;
+    writablePayload = null;
     active = false;
     return io.riverdb.base.error.StatusCode.OK;
   }
@@ -45,7 +49,8 @@ public final class JournalReservation {
       long assignedSequence,
       long token,
       int assignedSlot,
-      int bytes) {
+      int bytes,
+      ByteBuffer payloadStorage) {
     if (active || (providerHigh == 0 && providerLow == 0)) {
       return io.riverdb.base.error.StatusCode.CONFLICT;
     }
@@ -58,6 +63,7 @@ public final class JournalReservation {
     providerToken = token;
     slot = assignedSlot;
     payloadBytes = bytes;
+    writablePayload = payloadStorage;
     active = true;
     return io.riverdb.base.error.StatusCode.OK;
   }
@@ -68,6 +74,7 @@ public final class JournalReservation {
       return io.riverdb.base.error.StatusCode.CONFLICT;
     }
     active = false;
+    writablePayload = null;
     return io.riverdb.base.error.StatusCode.OK;
   }
 
@@ -97,6 +104,11 @@ public final class JournalReservation {
 
   public int payloadBytes() {
     return payloadBytes;
+  }
+
+  /** Provider-owned writable storage, valid only while this reservation is active. */
+  public ByteBuffer writablePayload() {
+    return writablePayload;
   }
 
   public boolean isActive() {

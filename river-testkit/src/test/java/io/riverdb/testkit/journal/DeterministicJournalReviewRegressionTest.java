@@ -24,7 +24,6 @@ import io.riverdb.journal.api.outcome.TransactionDecision;
 import io.riverdb.journal.api.retention.RetentionOwnerKind;
 import io.riverdb.journal.api.retention.WalRetentionLease;
 import io.riverdb.journal.api.retention.WalRetentionLeaseRequest;
-import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
 final class DeterministicJournalReviewRegressionTest {
@@ -94,13 +93,14 @@ final class DeterministicJournalReviewRegressionTest {
 
     JournalReservation second = new JournalReservation();
     assertEquals(StatusCode.OK, provider.reserve(reserveRequest(2), second, detail()));
+    second.writablePayload().put((byte) 2);
     JournalAppendResult append = new JournalAppendResult();
     assertEquals(
         StatusCode.OK,
         provider.publish(
             second,
             new JournalAppendRequest().set(
-                ByteBuffer.wrap(new byte[] {2}), 1, 1, 202, 302,
+                1, 1, 202, 302,
                 TransactionDecision.COMMITTED),
             append,
             detail()));
@@ -140,8 +140,8 @@ final class DeterministicJournalReviewRegressionTest {
   private static void appendAndForce(DeterministicJournalProvider provider, long identity) {
     JournalReservation reservation = new JournalReservation();
     assertEquals(StatusCode.OK, provider.reserve(reserveRequest(identity), reservation, detail()));
+    reservation.writablePayload().put((byte) 1);
     JournalAppendRequest append = new JournalAppendRequest().set(
-        ByteBuffer.wrap(new byte[] {1}),
         1,
         1,
         identity,

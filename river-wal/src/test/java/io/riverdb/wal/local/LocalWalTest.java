@@ -29,9 +29,8 @@ final class LocalWalTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     LocalWalAppendResult appended = new LocalWalAppendResult();
-    assertEquals(
-        StatusCode.OK,
-        wal.append(41, 43, 1, 7, 1, ByteBuffer.wrap(expected), appended));
+    LocalWalReservation reservation = reserve(wal, expected);
+    assertEquals(StatusCode.OK, wal.publish(reservation, 41, 43, 1, 7, 1, appended));
     assertEquals(1, appended.journalSequence());
     assertEquals(64, appended.startOffset());
     assertEquals(StatusCode.OK, wal.close());
@@ -39,10 +38,11 @@ final class LocalWalTest {
 
     directory = openDirectory(root);
     wal = openWal(directory);
-    ByteBuffer actual = ByteBuffer.allocate(expected.length);
     LocalWalReadResult read = new LocalWalReadResult();
-    assertEquals(StatusCode.OK, wal.read(appended.startOffset(), actual, read));
-    assertArrayEquals(expected, actual.array());
+    assertEquals(StatusCode.OK, wal.read(appended.startOffset(), read));
+    byte[] actual = new byte[expected.length];
+    read.payload().get(actual);
+    assertArrayEquals(expected, actual);
     assertEquals(41, read.header().transactionId());
     assertEquals(43, read.header().commitSequence());
     assertEquals(appended.endOffset(), read.nextOffset());
@@ -55,9 +55,8 @@ final class LocalWalTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     LocalWalAppendResult first = new LocalWalAppendResult();
-    assertEquals(
-        StatusCode.OK,
-        wal.append(1, 0, 0, 1, 1, ByteBuffer.wrap(new byte[] {1, 2, 3}), first));
+    LocalWalReservation reservation = reserve(wal, new byte[] {1, 2, 3});
+    assertEquals(StatusCode.OK, wal.publish(reservation, 1, 0, 0, 1, 1, first));
     assertEquals(StatusCode.OK, wal.close());
 
     DirectoryOperationResult operation = new DirectoryOperationResult();
@@ -74,9 +73,9 @@ final class LocalWalTest {
     assertEquals(first.endOffset(), wal.tailEnd());
     assertEquals(2, wal.nextJournalSequence());
     LocalWalAppendResult second = new LocalWalAppendResult();
-    assertEquals(
-        StatusCode.OK,
-        wal.append(2, 0, 0, 1, 1, ByteBuffer.wrap(new byte[] {4, 5}), second));
+    reservation.reset();
+    reservation = reserve(wal, new byte[] {4, 5});
+    assertEquals(StatusCode.OK, wal.publish(reservation, 2, 0, 0, 1, 1, second));
     assertEquals(2, second.journalSequence());
     assertEquals(StatusCode.OK, wal.close());
 
@@ -92,6 +91,26 @@ final class LocalWalTest {
     assertEquals(
         StatusCode.CORRUPTION,
         LocalWal.open(directory, DATABASE, GENERATION, corrupted));
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void reservationUsesProviderStorageWithoutPayloadCopy(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalReservation reservation = new LocalWalReservation();
+    assertEquals(StatusCode.OK, wal.reserve(4, reservation));
+    ByteBuffer providerStorage = reservation.writablePayload();
+    providerStorage.putInt(0x01020304);
+    LocalWalAppendResult appended = new LocalWalAppendResult();
+    assertEquals(StatusCode.OK, wal.publish(reservation, 0, 0, 0, 1, 1, appended));
+    assertEquals(0, wal.copiedPayloadBytes());
+
+    LocalWalReadResult read = new LocalWalReadResult();
+    assertEquals(StatusCode.OK, wal.read(appended.startOffset(), read));
+    assertEquals(0x01020304, read.payload().getInt());
+    assertEquals(0, wal.copiedPayloadBytes());
+    assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
 
@@ -132,5 +151,12 @@ final class LocalWalTest {
     LocalWalOpenResult result = new LocalWalOpenResult();
     assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
     return result.wal();
+  }
+
+  private static LocalWalReservation reserve(LocalWal wal, byte[] payload) {
+    LocalWalReservation reservation = new LocalWalReservation();
+    assertEquals(StatusCode.OK, wal.reserve(payload.length, reservation));
+    reservation.writablePayload().put(payload);
+    return reservation;
   }
 }

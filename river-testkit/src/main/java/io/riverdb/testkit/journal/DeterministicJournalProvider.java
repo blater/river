@@ -69,6 +69,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private final long[] reservationTokens;
   private final int[] payloadLengths;
   private final byte[][] payloads;
+  private final ByteBuffer[] payloadViews;
   private final long[] walStarts;
   private final long[] walEnds;
   private final int[] outcomeSlots;
@@ -186,6 +187,10 @@ public final class DeterministicJournalProvider implements JournalProvider {
     reservationTokens = new long[boundedCapacity];
     payloadLengths = new int[boundedCapacity];
     payloads = new byte[boundedCapacity][boundedEntryBytes];
+    payloadViews = new ByteBuffer[boundedCapacity];
+    for (int index = 0; index < boundedCapacity; index++) {
+      payloadViews[index] = ByteBuffer.wrap(payloads[index]);
+    }
     walStarts = new long[boundedCapacity];
     walEnds = new long[boundedCapacity];
     outcomeSlots = new int[boundedCapacity];
@@ -286,6 +291,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
     }
     long sequence = nextSequence;
     long reservationToken = providerToken + 1;
+    ByteBuffer payloadView = payloadViews[slot];
+    payloadView.clear();
+    payloadView.limit(request.payloadBytes());
     StatusCode claimStatus = reservation.claim(
         capabilityOwnerHigh,
         capabilityOwnerLow,
@@ -295,7 +303,8 @@ public final class DeterministicJournalProvider implements JournalProvider {
         sequence,
         reservationToken,
         slot,
-        request.payloadBytes());
+        request.payloadBytes(),
+        payloadView);
     if (!claimStatus.isOk()) {
       return detail.set(claimStatus).append("reservation output claim").code();
     }
@@ -341,9 +350,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (slot < 0) {
       return detail.set(StatusCode.CONFLICT).append("stale reservation").code();
     }
-    ByteBuffer payload = request.payload();
+    ByteBuffer payload = reservation.writablePayload();
     if (payload == null
-        || payload.remaining() != payloadLengths[slot]
+        || payload.position() != payloadLengths[slot]
         || request.formatId() <= 0
         || request.formatVersion() <= 0
         || (request.transactionDecision() == TransactionDecision.COMMITTED
@@ -353,10 +362,6 @@ public final class DeterministicJournalProvider implements JournalProvider {
         || (request.transactionDecision() == TransactionDecision.NONE
             && request.commitSequence() != 0)) {
       return detail.set(StatusCode.INVALID_EXTERNAL_INPUT).code();
-    }
-    int payloadPosition = payload.position();
-    for (int index = 0; index < payloadLengths[slot]; index++) {
-      payloads[slot][index] = payload.get(payloadPosition + index);
     }
     int outcomeSlot = outcomeSlots[slot];
     transactionIds[outcomeSlot] = request.transactionId();

@@ -15,16 +15,28 @@ import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.IoResult;
 import java.nio.ByteBuffer;
+import java.util.zip.CRC32C;
 
-/** Single-owner, synchronous local WAL with valid-prefix recovery. */
+/** Single-owner, synchronous local WAL with reusable provider-owned record storage. */
 public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
 
   private final DurableFile file;
   private final DatabaseIncarnation databaseIncarnation;
   private final WalGeneration walGeneration;
+  private final ByteBuffer appendRecord;
+  private final ByteBuffer appendPayload;
+  private final ByteBuffer readRecord;
+  private final ByteBuffer readPayload;
+  private final IoResult ioResult = new IoResult();
+  private final FileSizeResult fileSizeResult = new FileSizeResult();
+  private final WalRecordHeader recoveryHeader = new WalRecordHeader();
+  private final CRC32C checksum = new CRC32C();
   private long tailEnd = WalFileHeaderCodec.HEADER_BYTES;
   private long nextJournalSequence = 1;
+  private long nextReservationToken = 1;
+  private long activeReservationToken;
+  private long copiedPayloadBytes;
   private boolean failed;
   private boolean closed;
 
@@ -35,6 +47,11 @@ public final class LocalWal {
     this.file = file;
     databaseIncarnation = database;
     walGeneration = generation;
+    int capacity = WalRecordCodec.HEADER_BYTES + WalRecordCodec.MAX_PAYLOAD_BYTES;
+    appendRecord = ByteBuffer.allocateDirect(capacity);
+    appendPayload = payloadView(appendRecord);
+    readRecord = ByteBuffer.allocateDirect(capacity);
+    readPayload = payloadView(readRecord);
   }
 
   public static StatusCode open(
@@ -91,15 +108,43 @@ public final class LocalWal {
     return nextJournalSequence;
   }
 
-  public StatusCode append(
+  /** Explicit River-side payload copies; device transfer bytes are not copies. */
+  public long copiedPayloadBytes() {
+    return copiedPayloadBytes;
+  }
+
+  public StatusCode reserve(int payloadBytes, LocalWalReservation reservation) {
+    if (reservation == null || payloadBytes < 0
+        || payloadBytes > WalRecordCodec.MAX_PAYLOAD_BYTES) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode admission = admission();
+    if (!admission.isOk()) {
+      return admission;
+    }
+    if (activeReservationToken != 0) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    appendRecord.clear();
+    appendPayload.clear();
+    appendPayload.limit(payloadBytes);
+    long token = nextReservationToken++;
+    StatusCode status = reservation.claim(this, token, appendPayload, payloadBytes);
+    if (status.isOk()) {
+      activeReservationToken = token;
+    }
+    return status;
+  }
+
+  public StatusCode publish(
+      LocalWalReservation reservation,
       long transactionId,
       long commitSequence,
       int decisionCode,
       int formatId,
       int formatVersion,
-      ByteBuffer payload,
       LocalWalAppendResult result) {
-    if (payload == null || result == null) {
+    if (reservation == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -107,28 +152,29 @@ public final class LocalWal {
     if (!admission.isOk()) {
       return admission;
     }
-    int recordBytes = WalRecordCodec.encodedBytes(payload.remaining());
-    if (recordBytes < 0) {
+    if (!reservation.isOwnedBy(this, activeReservationToken)) {
+      return StatusCode.CONFLICT;
+    }
+    if (reservation.writablePayload().position() != reservation.payloadBytes()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
 
-    ByteBuffer encoded = ByteBuffer.allocate(recordBytes);
-    StatusCode status = WalRecordCodec.encode(
+    int recordBytes = WalRecordCodec.encodedBytes(reservation.payloadBytes());
+    StatusCode status = WalRecordCodec.encodeReserved(
         nextJournalSequence,
         transactionId,
         commitSequence,
         decisionCode,
         formatId,
         formatVersion,
-        payload,
-        encoded);
+        reservation.payloadBytes(),
+        appendRecord,
+        checksum);
     if (!status.isOk()) {
       return status;
     }
-    encoded.flip();
-    IoResult io = new IoResult();
-    status = file.write(tailEnd, encoded, io);
-    if (status.isOk() && io.bytesTransferred() != recordBytes) {
+    status = file.write(tailEnd, appendRecord, ioResult);
+    if (status.isOk() && ioResult.bytesTransferred() != recordBytes) {
       status = StatusCode.IO_FAILURE;
     }
     if (status.isOk()) {
@@ -136,6 +182,8 @@ public final class LocalWal {
     }
     if (!status.isOk()) {
       failed = true;
+      activeReservationToken = 0;
+      reservation.complete();
       return status;
     }
 
@@ -143,15 +191,29 @@ public final class LocalWal {
     tailEnd += recordBytes;
     result.set(start, tailEnd, nextJournalSequence);
     nextJournalSequence++;
+    activeReservationToken = 0;
+    reservation.complete();
     return StatusCode.OK;
   }
 
-  public StatusCode read(
-      long offset,
-      ByteBuffer payloadTarget,
-      LocalWalReadResult result) {
-    if (payloadTarget == null
-        || result == null
+  public StatusCode cancel(LocalWalReservation reservation) {
+    if (reservation == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode admission = admission();
+    if (!admission.isOk()) {
+      return admission;
+    }
+    if (!reservation.isOwnedBy(this, activeReservationToken)) {
+      return StatusCode.CONFLICT;
+    }
+    activeReservationToken = 0;
+    reservation.complete();
+    return StatusCode.OK;
+  }
+
+  public StatusCode read(long offset, LocalWalReadResult result) {
+    if (result == null
         || offset < WalFileHeaderCodec.HEADER_BYTES
         || offset >= tailEnd) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -161,38 +223,34 @@ public final class LocalWal {
     if (!admission.isOk()) {
       return admission;
     }
-    ByteBuffer headerBytes = ByteBuffer.allocate(WalRecordCodec.HEADER_BYTES);
-    StatusCode status = readExact(offset, headerBytes);
+    readRecord.clear();
+    readRecord.limit(WalRecordCodec.HEADER_BYTES);
+    StatusCode status = readExact(offset, readRecord);
     if (!status.isOk()) {
       return status;
     }
-    headerBytes.flip();
-    status = WalRecordCodec.decodeHeader(headerBytes, result.header());
-    if (!status.isOk()) {
-      return status;
-    }
-    if (offset + result.header().totalBytes() > tailEnd
-        || payloadTarget.remaining() < result.header().payloadBytes()) {
-      result.reset();
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    readRecord.flip();
+    status = WalRecordCodec.decodeHeader(readRecord, result.header());
+    if (!status.isOk() || offset + result.header().totalBytes() > tailEnd) {
+      return status.isOk() ? StatusCode.CORRUPTION : status;
     }
 
-    ByteBuffer record = ByteBuffer.allocate(result.header().totalBytes());
-    status = readExact(offset, record);
+    readRecord.clear();
+    readRecord.limit(result.header().totalBytes());
+    status = readExact(offset, readRecord);
     if (!status.isOk()) {
       result.reset();
       return status;
     }
-    record.flip();
-    status = WalRecordCodec.validate(record, result.header());
+    readRecord.flip();
+    status = WalRecordCodec.validate(readRecord, result.header(), checksum);
     if (!status.isOk()) {
       return status;
     }
-    status = WalRecordCodec.copyPayload(record, result.header(), payloadTarget);
-    if (status.isOk()) {
-      result.setNextOffset(offset + result.header().totalBytes());
-    }
-    return status;
+    readPayload.clear();
+    readPayload.limit(result.header().payloadBytes());
+    result.set(offset + result.header().totalBytes(), readPayload);
+    return StatusCode.OK;
   }
 
   public StatusCode close() {
@@ -204,12 +262,11 @@ public final class LocalWal {
   }
 
   private StatusCode recoverValidTail() {
-    FileSizeResult size = new FileSizeResult();
-    StatusCode status = file.size(size);
+    StatusCode status = file.size(fileSizeResult);
     if (!status.isOk()) {
       return status;
     }
-    long fileBytes = size.sizeBytes();
+    long fileBytes = fileSizeResult.sizeBytes();
     if (fileBytes < WalFileHeaderCodec.HEADER_BYTES) {
       return StatusCode.CORRUPTION;
     }
@@ -231,36 +288,36 @@ public final class LocalWal {
 
     long offset = WalFileHeaderCodec.HEADER_BYTES;
     long expectedSequence = 1;
-    WalRecordHeader header = new WalRecordHeader();
     while (offset < fileBytes) {
       if (fileBytes - offset < WalRecordCodec.HEADER_BYTES) {
         return truncateTail(offset, expectedSequence);
       }
-      ByteBuffer headerBytes = ByteBuffer.allocate(WalRecordCodec.HEADER_BYTES);
-      status = readExact(offset, headerBytes);
+      readRecord.clear();
+      readRecord.limit(WalRecordCodec.HEADER_BYTES);
+      status = readExact(offset, readRecord);
       if (!status.isOk()) {
         return status;
       }
-      headerBytes.flip();
-      status = WalRecordCodec.decodeHeader(headerBytes, header);
-      if (!status.isOk() || header.journalSequence() != expectedSequence) {
+      readRecord.flip();
+      status = WalRecordCodec.decodeHeader(readRecord, recoveryHeader);
+      if (!status.isOk() || recoveryHeader.journalSequence() != expectedSequence) {
         return StatusCode.CORRUPTION;
       }
-      if (header.totalBytes() > fileBytes - offset) {
+      if (recoveryHeader.totalBytes() > fileBytes - offset) {
         return truncateTail(offset, expectedSequence);
       }
-
-      ByteBuffer record = ByteBuffer.allocate(header.totalBytes());
-      status = readExact(offset, record);
+      readRecord.clear();
+      readRecord.limit(recoveryHeader.totalBytes());
+      status = readExact(offset, readRecord);
       if (!status.isOk()) {
         return status;
       }
-      record.flip();
-      status = WalRecordCodec.validate(record, header);
+      readRecord.flip();
+      status = WalRecordCodec.validate(readRecord, recoveryHeader, checksum);
       if (!status.isOk()) {
         return StatusCode.CORRUPTION;
       }
-      offset += header.totalBytes();
+      offset += recoveryHeader.totalBytes();
       expectedSequence++;
     }
     tailEnd = offset;
@@ -277,9 +334,8 @@ public final class LocalWal {
       return status;
     }
     header.flip();
-    IoResult io = new IoResult();
-    status = file.write(0, header, io);
-    if (status.isOk() && io.bytesTransferred() != WalFileHeaderCodec.HEADER_BYTES) {
+    status = file.write(0, header, ioResult);
+    if (status.isOk() && ioResult.bytesTransferred() != WalFileHeaderCodec.HEADER_BYTES) {
       status = StatusCode.IO_FAILURE;
     }
     if (status.isOk()) {
@@ -305,10 +361,9 @@ public final class LocalWal {
   }
 
   private StatusCode readExact(long offset, ByteBuffer target) {
-    IoResult io = new IoResult();
     int expected = target.remaining();
-    StatusCode status = file.read(offset, target, io);
-    if (status.isOk() && io.bytesTransferred() != expected) {
+    StatusCode status = file.read(offset, target, ioResult);
+    if (status.isOk() && ioResult.bytesTransferred() != expected) {
       return StatusCode.IO_FAILURE;
     }
     return status;
@@ -322,5 +377,12 @@ public final class LocalWal {
       return StatusCode.FENCED;
     }
     return StatusCode.OK;
+  }
+
+  private static ByteBuffer payloadView(ByteBuffer record) {
+    record.position(WalRecordCodec.HEADER_BYTES);
+    ByteBuffer payload = record.slice();
+    record.clear();
+    return payload;
   }
 }

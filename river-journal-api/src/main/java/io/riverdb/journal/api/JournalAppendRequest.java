@@ -1,11 +1,9 @@
 package io.riverdb.journal.api;
 
 import io.riverdb.journal.api.outcome.TransactionDecision;
-import java.nio.ByteBuffer;
 
-/** Borrowed immutable payload view and optional transaction-decision metadata. */
+/** Metadata for payload already encoded into a reservation's provider-owned storage. */
 public final class JournalAppendRequest {
-  private ByteBuffer payload;
   private int formatId;
   private int formatVersion;
   private long transactionId;
@@ -13,23 +11,17 @@ public final class JournalAppendRequest {
   private TransactionDecision transactionDecision = TransactionDecision.NONE;
 
   public JournalAppendRequest set(
-      ByteBuffer payloadView,
       int entryFormatId,
       int entryFormatVersion,
       long transaction,
       long csn,
       TransactionDecision decision) {
-    payload = payloadView;
     formatId = entryFormatId;
     formatVersion = entryFormatVersion;
     transactionId = transaction;
     commitSequence = csn;
     transactionDecision = decision;
     return this;
-  }
-
-  public ByteBuffer payload() {
-    return payload;
   }
 
   public int formatId() {

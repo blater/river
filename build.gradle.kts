@@ -209,6 +209,14 @@ val diagnosticContextDescriptor = "L$eventBinaryPackage/DiagnosticContext;"
 val eventPublishResultDescriptor = "L$eventBinaryPackage/EventPublishResult;"
 val eventPollResultDescriptor = "L$eventBinaryPackage/EventPollResult;"
 val severityDescriptor = "L$eventBinaryPackage/Severity;"
+val statusCodeDescriptor = "Lio/riverdb/base/error/StatusCode;"
+val localWalPackage = "io.riverdb.wal.local"
+val localWalReservationDescriptor = "Lio/riverdb/wal/local/LocalWalReservation;"
+val localWalAppendResultDescriptor = "Lio/riverdb/wal/local/LocalWalAppendResult;"
+val localWalReadResultDescriptor = "Lio/riverdb/wal/local/LocalWalReadResult;"
+val walRecordHeaderDescriptor = "Lio/riverdb/format/wal/WalRecordHeader;"
+val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
+val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val liveHotPathMethods = setOf(
   hotMethod(
     "$eventPackage.BoundedEventRing",
@@ -272,6 +280,43 @@ val liveHotPathMethods = setOf(
     "$eventPackage.Severity",
     "isEnabledAt",
     "($severityDescriptor)Z"
+  ),
+  hotMethod(
+    "$localWalPackage.LocalWal",
+    "reserve",
+    "(I$localWalReservationDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "$localWalPackage.LocalWal",
+    "publish",
+    "($localWalReservationDescriptor"
+        + "JJIII$localWalAppendResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "$localWalPackage.LocalWal",
+    "read",
+    "(J$localWalReadResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.format.wal.WalRecordCodec",
+    "encodeReserved",
+    "(JJJIIII$byteBufferDescriptor$crc32cDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.format.wal.WalRecordCodec",
+    "decodeHeader",
+    "($byteBufferDescriptor$walRecordHeaderDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.format.wal.WalRecordCodec",
+    "validate",
+    "($byteBufferDescriptor$walRecordHeaderDescriptor$crc32cDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.format.wal.WalRecordCodec",
+    "checksum",
+    "($byteBufferDescriptor" + "I$crc32cDescriptor)I"
   )
 )
 val liveHotPathAllowedRules = mapOf(

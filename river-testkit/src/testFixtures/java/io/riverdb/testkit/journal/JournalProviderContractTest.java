@@ -34,7 +34,6 @@ import io.riverdb.journal.api.retention.RetentionOwnerKind;
 import io.riverdb.journal.api.retention.RetentionSnapshot;
 import io.riverdb.journal.api.retention.WalRetentionLease;
 import io.riverdb.journal.api.retention.WalRetentionLeaseRequest;
-import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -896,6 +895,7 @@ public abstract class JournalProviderContractTest {
             reserveRequest(node, identity, contractRequirement()),
             reservation,
             detail()));
+    reservation.writablePayload().put((byte) identity);
     return reservation;
   }
 
@@ -911,6 +911,9 @@ public abstract class JournalProviderContractTest {
       JournalReservation reservation,
       long identity,
       TransactionDecision decision) {
+    while (reservation.writablePayload().hasRemaining()) {
+      reservation.writablePayload().put((byte) identity);
+    }
     JournalAppendResult result = new JournalAppendResult();
     assertEquals(
         StatusCode.OK,
@@ -924,7 +927,6 @@ public abstract class JournalProviderContractTest {
     long transactionId = decision == TransactionDecision.NONE ? identity : identity;
     long commitSequence = decision == TransactionDecision.COMMITTED ? identity + 100 : 0;
     return new JournalAppendRequest().set(
-        ByteBuffer.wrap(new byte[] {(byte) identity}),
         1,
         1,
         transactionId,

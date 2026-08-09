@@ -2,10 +2,9 @@ package io.riverdb.format.wal;
 
 import io.riverdb.base.error.StatusCode;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.zip.CRC32C;
 
-/** Versioned, checksummed local WAL record framing. */
+/** Versioned, checksummed local WAL record framing over caller/provider-owned storage. */
 public final class WalRecordCodec {
   public static final int HEADER_BYTES = 64;
   public static final int MAX_PAYLOAD_BYTES = 1024 * 1024;
@@ -24,51 +23,47 @@ public final class WalRecordCodec {
     return HEADER_BYTES + payloadBytes;
   }
 
-  public static StatusCode encode(
+  /**
+   * Writes framing around payload bytes already present at {@link #HEADER_BYTES}.
+   * The checksum object and record storage are reused by the owning WAL.
+   */
+  public static StatusCode encodeReserved(
       long journalSequence,
       long transactionId,
       long commitSequence,
       int decisionCode,
       int formatId,
       int formatVersion,
-      ByteBuffer payload,
-      ByteBuffer destination) {
-    if (payload == null || destination == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int payloadBytes = payload.remaining();
+      int payloadBytes,
+      ByteBuffer record,
+      CRC32C checksum) {
     int totalBytes = encodedBytes(payloadBytes);
-    if (journalSequence <= 0
+    if (record == null
+        || checksum == null
+        || journalSequence <= 0
         || formatId <= 0
         || formatVersion <= 0
         || decisionCode < 0
         || totalBytes < 0
-        || destination.remaining() < totalBytes) {
+        || record.capacity() < totalBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
 
-    int start = destination.position();
-    ByteBuffer record = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-    record.limit(start + totalBytes);
-    record.putLong(start, MAGIC);
-    record.putInt(start + 8, VERSION);
-    record.putInt(start + 12, HEADER_BYTES);
-    record.putInt(start + 16, totalBytes);
-    record.putInt(start + 20, payloadBytes);
-    record.putInt(start + 24, formatId);
-    record.putInt(start + 28, formatVersion);
-    record.putLong(start + 32, journalSequence);
-    record.putLong(start + 40, transactionId);
-    record.putLong(start + 48, commitSequence);
-    record.putInt(start + 56, decisionCode);
-    record.putInt(start + CHECKSUM_OFFSET, 0);
-
-    ByteBuffer payloadView = payload.duplicate();
-    record.position(start + HEADER_BYTES);
-    record.put(payloadView);
-    int checksum = checksum(record, start, totalBytes);
-    record.putInt(start + CHECKSUM_OFFSET, checksum);
-    destination.position(start + totalBytes);
+    putLong(record, 0, MAGIC);
+    putInt(record, 8, VERSION);
+    putInt(record, 12, HEADER_BYTES);
+    putInt(record, 16, totalBytes);
+    putInt(record, 20, payloadBytes);
+    putInt(record, 24, formatId);
+    putInt(record, 28, formatVersion);
+    putLong(record, 32, journalSequence);
+    putLong(record, 40, transactionId);
+    putLong(record, 48, commitSequence);
+    putInt(record, 56, decisionCode);
+    putInt(record, CHECKSUM_OFFSET, 0);
+    putInt(record, CHECKSUM_OFFSET, checksum(record, totalBytes, checksum));
+    record.position(0);
+    record.limit(totalBytes);
     return StatusCode.OK;
   }
 
@@ -78,16 +73,15 @@ public final class WalRecordCodec {
     }
     result.reset();
     int start = source.position();
-    ByteBuffer record = source.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-    int totalBytes = record.getInt(start + 16);
-    int payloadBytes = record.getInt(start + 20);
-    int formatId = record.getInt(start + 24);
-    int formatVersion = record.getInt(start + 28);
-    long sequence = record.getLong(start + 32);
-    int decisionCode = record.getInt(start + 56);
-    if (record.getLong(start) != MAGIC
-        || record.getInt(start + 8) != VERSION
-        || record.getInt(start + 12) != HEADER_BYTES
+    int totalBytes = getInt(source, start + 16);
+    int payloadBytes = getInt(source, start + 20);
+    int formatId = getInt(source, start + 24);
+    int formatVersion = getInt(source, start + 28);
+    long sequence = getLong(source, start + 32);
+    int decisionCode = getInt(source, start + 56);
+    if (getLong(source, start) != MAGIC
+        || getInt(source, start + 8) != VERSION
+        || getInt(source, start + 12) != HEADER_BYTES
         || totalBytes < HEADER_BYTES
         || totalBytes != HEADER_BYTES + payloadBytes
         || payloadBytes < 0
@@ -104,13 +98,19 @@ public final class WalRecordCodec {
         formatId,
         formatVersion,
         sequence,
-        record.getLong(start + 40),
-        record.getLong(start + 48),
+        getLong(source, start + 40),
+        getLong(source, start + 48),
         decisionCode);
     return StatusCode.OK;
   }
 
-  public static StatusCode validate(ByteBuffer source, WalRecordHeader result) {
+  public static StatusCode validate(
+      ByteBuffer source,
+      WalRecordHeader result,
+      CRC32C checksum) {
+    if (checksum == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     StatusCode status = decodeHeader(source, result);
     if (!status.isOk()) {
       return status;
@@ -119,10 +119,8 @@ public final class WalRecordCodec {
       result.reset();
       return StatusCode.CORRUPTION;
     }
-    int start = source.position();
-    ByteBuffer record = source.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-    int stored = record.getInt(start + CHECKSUM_OFFSET);
-    int actual = checksumWithZeroedField(record, start, result.totalBytes());
+    int stored = getInt(source, source.position() + CHECKSUM_OFFSET);
+    int actual = checksum(source, result.totalBytes(), checksum);
     if (stored != actual) {
       result.reset();
       return StatusCode.CORRUPTION;
@@ -142,41 +140,57 @@ public final class WalRecordCodec {
         || destination.remaining() < header.payloadBytes()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    ByteBuffer payload = source.duplicate();
-    payload.position(source.position() + HEADER_BYTES);
-    payload.limit(source.position() + header.totalBytes());
-    destination.put(payload);
+    int sourceStart = source.position() + HEADER_BYTES;
+    int destinationStart = destination.position();
+    for (int index = 0; index < header.payloadBytes(); index++) {
+      destination.put(destinationStart + index, source.get(sourceStart + index));
+    }
+    destination.position(destinationStart + header.payloadBytes());
     return StatusCode.OK;
   }
 
-  private static int checksum(ByteBuffer record, int start, int totalBytes) {
-    ByteBuffer bytes = record.duplicate();
-    bytes.position(start);
-    bytes.limit(start + totalBytes);
-    CRC32C crc32c = new CRC32C();
-    crc32c.update(bytes);
-    return (int) crc32c.getValue();
+  private static int checksum(ByteBuffer record, int totalBytes, CRC32C checksum) {
+    int originalPosition = record.position();
+    int originalLimit = record.limit();
+    checksum.reset();
+    record.position(0);
+    record.limit(CHECKSUM_OFFSET);
+    checksum.update(record);
+    checksum.update(0);
+    checksum.update(0);
+    checksum.update(0);
+    checksum.update(0);
+    if (totalBytes > HEADER_BYTES) {
+      record.limit(totalBytes);
+      record.position(HEADER_BYTES);
+      checksum.update(record);
+    }
+    record.limit(originalLimit);
+    record.position(originalPosition);
+    return (int) checksum.getValue();
   }
 
-  private static int checksumWithZeroedField(
-      ByteBuffer record,
-      int start,
-      int totalBytes) {
-    CRC32C crc32c = new CRC32C();
-    ByteBuffer prefix = record.duplicate();
-    prefix.position(start);
-    prefix.limit(start + CHECKSUM_OFFSET);
-    crc32c.update(prefix);
-    crc32c.update(0);
-    crc32c.update(0);
-    crc32c.update(0);
-    crc32c.update(0);
-    if (totalBytes > HEADER_BYTES) {
-      ByteBuffer payload = record.duplicate();
-      payload.position(start + HEADER_BYTES);
-      payload.limit(start + totalBytes);
-      crc32c.update(payload);
-    }
-    return (int) crc32c.getValue();
+  private static void putInt(ByteBuffer target, int offset, int value) {
+    target.put(offset, (byte) value);
+    target.put(offset + 1, (byte) (value >>> 8));
+    target.put(offset + 2, (byte) (value >>> 16));
+    target.put(offset + 3, (byte) (value >>> 24));
+  }
+
+  private static int getInt(ByteBuffer source, int offset) {
+    return Byte.toUnsignedInt(source.get(offset))
+        | Byte.toUnsignedInt(source.get(offset + 1)) << 8
+        | Byte.toUnsignedInt(source.get(offset + 2)) << 16
+        | Byte.toUnsignedInt(source.get(offset + 3)) << 24;
+  }
+
+  private static void putLong(ByteBuffer target, int offset, long value) {
+    putInt(target, offset, (int) value);
+    putInt(target, offset + 4, (int) (value >>> 32));
+  }
+
+  private static long getLong(ByteBuffer source, int offset) {
+    return Integer.toUnsignedLong(getInt(source, offset))
+        | Integer.toUnsignedLong(getInt(source, offset + 4)) << 32;
   }
 }

@@ -20,7 +20,6 @@ import io.riverdb.journal.api.durability.DurabilityTicket;
 import io.riverdb.journal.api.durability.DurabilityWaitRequest;
 import io.riverdb.journal.api.outcome.TransactionDecision;
 import java.lang.management.ManagementFactory;
-import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
@@ -44,7 +43,7 @@ final class DeterministicJournalAllocationTest {
     JournalReserveRequest reserveRequest = new JournalReserveRequest();
     JournalReservation reservation = new JournalReservation();
     JournalAppendRequest appendRequest = new JournalAppendRequest().set(
-        ByteBuffer.wrap(new byte[] {1}), 1, 1, 0, 0, TransactionDecision.NONE);
+        1, 1, 0, 0, TransactionDecision.NONE);
     JournalAppendResult appendResult = new JournalAppendResult();
     DurabilityWaitRequest waitRequest = new DurabilityWaitRequest();
     DurabilityTicket ticket = new DurabilityTicket();
@@ -119,6 +118,7 @@ final class DeterministicJournalAllocationTest {
         1,
         0);
     allocationGuard += provider.reserve(reserveRequest, reservation, detail).ordinal();
+    reservation.writablePayload().put((byte) identity);
     allocationGuard += provider.publish(
         reservation, appendRequest, appendResult, detail).ordinal();
     allocationGuard += appendResult.walGeneration().value();
