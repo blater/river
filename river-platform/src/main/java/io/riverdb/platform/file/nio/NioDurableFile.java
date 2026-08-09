@@ -17,6 +17,7 @@ final class NioDurableFile implements DurableFile {
   private final long generation;
   private final int slot;
   private final long slotEpoch;
+  private final ByteBuffer extensionByte = ByteBuffer.allocate(1);
   private boolean closed;
 
   NioDurableFile(
@@ -42,7 +43,7 @@ final class NioDurableFile implements DurableFile {
     if (!admission.isOk()) {
       return admission;
     }
-    if (position < 0) {
+    if (position < 0 || target.isReadOnly()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int transferred = 0;
@@ -144,7 +145,20 @@ final class NioDurableFile implements DurableFile {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     try {
-      channel.truncate(sizeBytes);
+      long currentSize = channel.size();
+      if (sizeBytes < currentSize) {
+        channel.truncate(sizeBytes);
+      } else if (sizeBytes > currentSize) {
+        extensionByte.clear();
+        int zeroProgress = 0;
+        while (extensionByte.hasRemaining()) {
+          int written = channel.write(extensionByte, sizeBytes - 1);
+          if (written == 0 && ++zeroProgress == MAX_ZERO_PROGRESS) {
+            return StatusCode.RETRY;
+          }
+        }
+        owner.counters().recordWrite(1);
+      }
       return StatusCode.OK;
     } catch (IOException failure) {
       return NioStatusMapper.known(failure);

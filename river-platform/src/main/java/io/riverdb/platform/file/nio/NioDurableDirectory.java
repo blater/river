@@ -14,6 +14,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.DirectoryIteratorException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -33,7 +34,8 @@ public final class NioDurableDirectory implements DurableDirectory, FileIoProvid
   };
   private static final OpenOption[] REOPEN_OPTIONS = {
     StandardOpenOption.READ,
-    StandardOpenOption.WRITE
+    StandardOpenOption.WRITE,
+    LinkOption.NOFOLLOW_LINKS
   };
 
   private final Path root;
@@ -190,6 +192,8 @@ public final class NioDurableDirectory implements DurableDirectory, FileIoProvid
       }
       result.finish(generation);
       return StatusCode.OK;
+    } catch (DirectoryIteratorException failure) {
+      return NioStatusMapper.known(failure.getCause());
     } catch (IOException failure) {
       return NioStatusMapper.known(failure);
     }
@@ -285,8 +289,13 @@ public final class NioDurableDirectory implements DurableDirectory, FileIoProvid
     if (sizeBytes < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    Path path = root.resolve(fileName);
+    StatusCode typeStatus = regularFileStatus(path);
+    if (!typeStatus.isOk()) {
+      return typeStatus;
+    }
     StatusCode openStatus = openHandle(
-        root.resolve(fileName), REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
+        path, REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
     if (!openStatus.isOk()) {
       return openStatus;
     }
@@ -327,8 +336,12 @@ public final class NioDurableDirectory implements DurableDirectory, FileIoProvid
     if (!admission.isOk()) {
       return admission;
     }
-    return openHandle(
-        root.resolve(fileName), REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
+    Path path = root.resolve(fileName);
+    StatusCode typeStatus = regularFileStatus(path);
+    if (!typeStatus.isOk()) {
+      return typeStatus;
+    }
+    return openHandle(path, REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
   }
 
   @Override
@@ -507,6 +520,16 @@ public final class NioDurableDirectory implements DurableDirectory, FileIoProvid
         path,
         BasicFileAttributes.class,
         LinkOption.NOFOLLOW_LINKS).isRegularFile();
+  }
+
+  private static StatusCode regularFileStatus(Path path) {
+    try {
+      return regularFile(path) ? StatusCode.OK : StatusCode.CONFLICT;
+    } catch (NoSuchFileException failure) {
+      return StatusCode.CONFLICT;
+    } catch (IOException failure) {
+      return NioStatusMapper.known(failure);
+    }
   }
 
   private static boolean validChildName(String name) {
