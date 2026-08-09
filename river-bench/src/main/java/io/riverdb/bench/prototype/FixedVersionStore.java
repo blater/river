@@ -63,6 +63,19 @@ public final class FixedVersionStore {
     return selected;
   }
 
+  public StatusCode read(int record, VersionRecord target) {
+    if (record < 0 || record >= size) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    int offset = record * RECORD_BYTES;
+    target.rowId = storage.getLong(offset + ROW_ID_OFFSET);
+    target.beginSequence = storage.getLong(offset + BEGIN_OFFSET);
+    target.endSequence = storage.getLong(offset + END_OFFSET);
+    target.value = storage.getLong(offset + VALUE_OFFSET);
+    target.flags = storage.getLong(offset + FLAGS_OFFSET);
+    return StatusCode.OK;
+  }
+
   public long sumVisibleValues() {
     long sum = 0L;
     for (int index = 0; index < selectionCount; index++) {
