@@ -1,4 +1,6 @@
 import io.riverdb.buildpolicy.BuildPolicy
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.tasks.Jar
@@ -460,16 +462,37 @@ val externalDependencyReports = subprojects.associateWith { module ->
     doLast {
       val resolved = sortedMapOf<String, String>()
       module.configurations.filter { it.isCanBeResolved }.forEach { configuration ->
+        val recognizedFiles = mutableSetOf<java.nio.file.Path>()
         configuration.resolvedConfiguration.resolvedArtifacts.forEach { artifact ->
+          recognizedFiles.add(artifact.file.toPath().toAbsolutePath().normalize())
           val component = artifact.moduleVersion.id
-          if (component.group != rootProject.group.toString()) {
+          val identifier = artifact.id.componentIdentifier
+          if (identifier is ModuleComponentIdentifier) {
+            require(artifact.extension == "jar" && artifact.classifier.isNullOrBlank()) {
+              "external artifact classifiers/extensions are unsupported by ledger v1: " +
+                  "${component.group}:${component.name}:${component.version}:" +
+                  "${artifact.classifier}:${artifact.extension}"
+            }
             val key = "${component.group}:${component.name}:${component.version}"
             val checksum = sha256(artifact.file)
             val previous = resolved.putIfAbsent(key, checksum)
             require(previous == null || previous == checksum) {
               "external dependency $key resolved to different bytes in ${module.path}"
             }
+          } else {
+            require(identifier is ProjectComponentIdentifier) {
+              "unsupported non-module dependency in ${module.path}:${configuration.name}: " +
+                  identifier.displayName
+            }
           }
+        }
+        val untrackedFiles = configuration.resolve()
+            .map { it.toPath().toAbsolutePath().normalize() }
+            .filterNot { recognizedFiles.contains(it) }
+            .sorted()
+        require(untrackedFiles.isEmpty()) {
+          "file/self-resolving dependencies are unsupported by ledger v1 in " +
+              "${module.path}:${configuration.name}: $untrackedFiles"
         }
       }
       val reportPath = report.get().asFile.toPath()
@@ -496,24 +519,52 @@ val verifyDependencyLedger = tasks.register("verifyDependencyLedger") {
           == "artifact_id,artifact_type,name,upstream,version,sha256,license,use,vendoring,approval"
     ) { "provenance ledger header does not match the v1 schema" }
 
+    val artifactRows = linkedMapOf<String, List<String>>()
     val dependencyRows = linkedMapOf<String, List<String>>()
     ledgerLines.drop(1).forEachIndexed { index, line ->
       val fields = line.split(',')
       require(fields.size == 10) {
         "provenance ledger line ${index + 2} has ${fields.size} fields, expected 10"
       }
+      require(artifactRows.put(fields[0], fields) == null) {
+        "duplicate provenance artifact ID ${fields[0]}"
+      }
+      if (fields[1] == "dependency" || fields[1] == "tool") {
+        require(
+          fields[0].isNotBlank()
+              && fields[2].isNotBlank()
+              && fields[3].isNotBlank()
+              && fields[4].isNotBlank()
+              && fields[5].matches(Regex("[0-9a-f]{64}"))
+              && fields[6].isNotBlank()
+              && fields[7].isNotBlank()
+              && fields[8].isNotBlank()
+              && fields[9].isNotBlank()
+        ) { "provenance ${fields[1]} row is incomplete at line ${index + 2}" }
+      }
       if (fields[1] == "dependency") {
         require(fields[2].count { it == ':' } == 1) {
           "provenance dependency coordinate must be group:name at line ${index + 2}"
-        }
-        require(fields[4].isNotBlank() && fields[5].matches(Regex("[0-9a-f]{64}"))) {
-          "provenance dependency version/checksum is incomplete at line ${index + 2}"
         }
         val key = "${fields[2]}:${fields[4]}"
         require(dependencyRows.put(key, fields) == null) {
           "duplicate provenance dependency $key"
         }
       }
+    }
+
+    val wrapperJarRow = artifactRows.getValue("gradle-wrapper-jar")
+    val wrapperJarChecksum = sha256(rootDir.resolve("gradle/wrapper/gradle-wrapper.jar"))
+    require(wrapperJarRow[5] == wrapperJarChecksum) {
+      "Gradle wrapper JAR checksum does not match the provenance ledger"
+    }
+    val wrapperProperties = java.util.Properties()
+    rootDir.resolve("gradle/wrapper/gradle-wrapper.properties").inputStream().use {
+      wrapperProperties.load(it)
+    }
+    val distributionRow = artifactRows.getValue("gradle-distribution")
+    require(distributionRow[5] == wrapperProperties.getProperty("distributionSha256Sum")) {
+      "Gradle distribution checksum does not match wrapper properties"
     }
 
     val resolved = sortedMapOf<String, String>()
