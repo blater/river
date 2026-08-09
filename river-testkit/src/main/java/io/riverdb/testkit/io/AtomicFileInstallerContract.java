@@ -5,6 +5,7 @@ import io.riverdb.platform.file.AtomicFileInstaller;
 import io.riverdb.platform.file.AtomicInstallProgress;
 import io.riverdb.platform.file.AtomicInstallRequest;
 import io.riverdb.platform.file.AtomicInstallResult;
+import io.riverdb.platform.file.AtomicInstallSnapshot;
 import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
@@ -15,7 +16,9 @@ import java.nio.ByteBuffer;
 
 /** Reusable bounded driver for fake, NIO, mapped, or native installer contract suites. */
 public final class AtomicFileInstallerContract {
-  public StatusCode drive(
+  private final AtomicInstallSnapshot progressSnapshot = new AtomicInstallSnapshot();
+
+  public synchronized StatusCode drive(
       AtomicFileInstaller installer,
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
@@ -29,7 +32,12 @@ public final class AtomicFileInstallerContract {
     }
     for (int advance = 1; advance <= maxAdvances; advance++) {
       StatusCode status = installer.advance(request, progress, stepResult);
-      if (progress.isComplete()) {
+      StatusCode inspectStatus = installer.inspect(progress, progressSnapshot);
+      if (!inspectStatus.isOk()) {
+        result.set(inspectStatus, advance);
+        return inspectStatus;
+      }
+      if (progressSnapshot.isComplete()) {
         result.set(status, advance);
         return status;
       }

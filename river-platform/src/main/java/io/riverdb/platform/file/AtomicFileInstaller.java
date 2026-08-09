@@ -16,4 +16,7 @@ public interface AtomicFileInstaller {
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
       AtomicInstallResult result);
+
+  /** Authenticates ownership and fills a caller-owned progress view. */
+  StatusCode inspect(AtomicInstallProgress progress, AtomicInstallSnapshot result);
 }

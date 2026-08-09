@@ -1,10 +1,9 @@
 package io.riverdb.platform.file;
 
-/** Caller-owned result for directory operations, including ambiguous half-steps. */
+/** Caller-owned result for synchronous directory operations. */
 public final class DirectoryOperationResult {
   private DurableFile file;
   private DirectoryDurability durability = DirectoryDurability.NOT_APPLIED;
-  private boolean completionPending;
 
   public DurableFile file() {
     return file;
@@ -14,22 +13,13 @@ public final class DirectoryOperationResult {
     return durability;
   }
 
-  public boolean completionPending() {
-    return completionPending;
-  }
-
-  public void set(
-      DurableFile file,
-      DirectoryDurability durability,
-      boolean completionPending) {
+  public void set(DurableFile file, DirectoryDurability durability) {
     this.file = file;
     this.durability = durability;
-    this.completionPending = completionPending;
   }
 
   public void reset() {
     file = null;
     durability = DirectoryDurability.NOT_APPLIED;
-    completionPending = false;
   }
 }

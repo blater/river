@@ -14,4 +14,16 @@ public interface FaultInjector {
       long position,
       int requestedBytes,
       FaultDecision result);
+
+  /** Boundary-aware extension; legacy providers are before-boundary only. */
+  default void evaluate(
+      FaultPoint point,
+      FaultOperation operation,
+      FaultBoundary boundary,
+      long attempt,
+      long position,
+      int requestedBytes,
+      FaultDecision result) {
+    evaluate(point, operation, attempt, position, requestedBytes, result);
+  }
 }

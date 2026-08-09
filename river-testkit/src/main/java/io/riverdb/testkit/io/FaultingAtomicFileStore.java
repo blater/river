@@ -2,6 +2,7 @@ package io.riverdb.testkit.io;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
+import io.riverdb.platform.fault.FaultBoundary;
 import io.riverdb.platform.fault.FaultDecision;
 import io.riverdb.platform.fault.FaultInjector;
 import io.riverdb.platform.fault.FaultOperation;
@@ -11,6 +12,8 @@ import io.riverdb.platform.file.AtomicInstallPhase;
 import io.riverdb.platform.file.AtomicInstallProgress;
 import io.riverdb.platform.file.AtomicInstallRequest;
 import io.riverdb.platform.file.AtomicInstallResult;
+import io.riverdb.platform.file.AtomicInstallSnapshot;
+import io.riverdb.platform.file.AtomicInstallStateMachine;
 import io.riverdb.platform.file.AtomicInstallStep;
 import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.platform.file.DirectoryOperationResult;
@@ -38,11 +41,14 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   private final AtomicInstallTrace trace;
   private final FaultDecision decision = new FaultDecision();
   private final DirectoryOperationResult directoryResult = new DirectoryOperationResult();
+  private final AtomicInstallStateMachine progressState = new AtomicInstallStateMachine();
+  private final AtomicInstallSnapshot progressSnapshot = new AtomicInstallSnapshot();
   private int fileCount;
   private int openHandles;
   private long operationSequence;
   private long generation = 1;
   private StatusCode traceStatus = StatusCode.OK;
+  private boolean operationCompletionPending;
   private boolean running = true;
 
   public FaultingAtomicFileStore(
@@ -77,22 +83,12 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
           result,
           0);
     }
-    if (progress.phase() == AtomicInstallPhase.NEW && progress.requestVersion() == 0) {
-      progress.begin(request.version(), generation);
+    StatusCode resumeStatus = progressState.resume(
+        progress, request.version(), generation, request.contentLength());
+    if (!resumeStatus.isOk()) {
+      return record(resumeStatus, AtomicInstallStep.NONE, progress, result, 0);
     }
-    if (progress.requestVersion() != request.version()) {
-      return record(
-          StatusCode.INVALID_EXTERNAL_INPUT,
-          AtomicInstallStep.NONE,
-          progress,
-          result,
-          0);
-    }
-    if (progress.providerGeneration() != generation) {
-      progress.requireRecovery();
-      return record(StatusCode.CANCELLED, AtomicInstallStep.NONE, progress, result, 0);
-    }
-    if (progress.phase() == AtomicInstallPhase.RECOVERY_REQUIRED) {
+    if (progressState.phase(progress) == AtomicInstallPhase.RECOVERY_REQUIRED) {
       return record(StatusCode.FENCED, AtomicInstallStep.NONE, progress, result, 0);
     }
     if (request.contentLength() > maxFileBytes) {
@@ -103,22 +99,31 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
           result,
           0);
     }
-    if (progress.completionPending()) {
-      AtomicInstallPhase before = progress.phase();
-      int bytesBefore = progress.bytesWritten();
-      progress.completePending();
+    if (progressState.completionPending(progress)) {
+      AtomicInstallPhase before = progressState.phase(progress);
+      int bytesBefore = progressState.bytesWritten(progress);
+      StatusCode completionStatus = progressState.completePending(progress);
+      if (!completionStatus.isOk()) {
+        return record(
+            completionStatus,
+            AtomicInstallStep.NONE,
+            before,
+            progress,
+            result,
+            0);
+      }
       return record(
           StatusCode.OK,
-          stepFor(progress.phase()),
+          stepFor(progressState.phase(progress)),
           before,
           progress,
           result,
-          progress.bytesWritten() - bytesBefore);
+          progressState.bytesWritten(progress) - bytesBefore);
     }
-    if (progress.isComplete()) {
+    if (progressState.isComplete(progress)) {
       return record(StatusCode.OK, AtomicInstallStep.NONE, progress, result, 0);
     }
-    return switch (progress.phase()) {
+    return switch (progressState.phase(progress)) {
       case NEW -> createStep(request, progress, result);
       case TEMP_CREATED -> writeStep(request, progress, result);
       case CONTENT_WRITTEN -> forceStep(request, progress, result);
@@ -134,24 +139,32 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
       AtomicInstallResult result) {
-    AtomicInstallPhase before = progress.phase();
+    AtomicInstallPhase before = progressState.phase(progress);
     directoryResult.reset();
     StatusCode status = createTemporaryInternal(
-        request.temporaryFileName(), directoryResult, false);
+        request.temporaryFileName(), directoryResult, false, true);
+    StatusCode progressStatus = StatusCode.OK;
     if (directoryResult.durability() == DirectoryDurability.UNKNOWN) {
-      progress.requireRecovery();
+      progressStatus = progressState.requireRecovery(progress);
     } else if (directoryResult.durability() != DirectoryDurability.NOT_APPLIED) {
-      if (directoryResult.completionPending()) {
-        progress.delayCompletion(
+      if (operationCompletionPending) {
+        progressStatus = progressState.delayCompletion(
+            progress,
+            before,
             AtomicInstallPhase.TEMP_CREATED,
             DirectoryDurability.VISIBLE_NOT_DURABLE,
             0);
       } else {
-        progress.advance(
+        progressStatus = progressState.transition(
+            progress,
+            before,
             AtomicInstallPhase.TEMP_CREATED,
             DirectoryDurability.VISIBLE_NOT_DURABLE,
             0);
       }
+    }
+    if (!progressStatus.isOk()) {
+      status = progressStatus;
     }
     return record(status, AtomicInstallStep.TEMP_CREATE, before, progress, result, 0);
   }
@@ -160,29 +173,32 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
       AtomicInstallResult result) {
-    AtomicInstallPhase before = progress.phase();
+    AtomicInstallPhase before = progressState.phase(progress);
     ModelFile file = findVolatile(request.temporaryFileName());
     if (file == null) {
-      progress.requireRecovery();
+      progressState.requireRecovery(progress);
       return record(StatusCode.CORRUPTION, AtomicInstallStep.TEMP_WRITE, before, progress, result, 0);
     }
-    int remaining = request.contentLength() - progress.bytesWritten();
+    int remaining = request.contentLength() - progressState.bytesWritten(progress);
     if (remaining == 0) {
-      progress.advance(
+      StatusCode progressStatus = progressState.transition(
+          progress,
+          before,
           AtomicInstallPhase.CONTENT_WRITTEN,
           DirectoryDurability.VISIBLE_NOT_DURABLE,
-          progress.bytesWritten());
-      return record(StatusCode.OK, AtomicInstallStep.TEMP_WRITE, before, progress, result, 0);
+          progressState.bytesWritten(progress));
+      return record(progressStatus, AtomicInstallStep.TEMP_WRITE, before, progress, result, 0);
     }
     FaultAction beforeAction = decide(
         points.tempWriteBefore(),
         FaultOperation.TEMP_WRITE,
-        progress.bytesWritten(),
+        FaultBoundary.BEFORE,
+        progressState.bytesWritten(progress),
         remaining);
     StatusCode boundaryStatus = beforeBoundary(beforeAction, FaultOperation.TEMP_WRITE);
     if (!boundaryStatus.isOk()) {
-      if (!running) {
-        progress.requireRecovery();
+      if (!running || progressState.providerGeneration(progress) != generation) {
+        progressState.requireRecovery(progress);
       }
       return record(
           boundaryStatus,
@@ -204,7 +220,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       transferred = limitedTransfer(remaining, decision.argument());
       status = StatusCode.RESOURCE_EXHAUSTED;
     }
-    int writeOffset = progress.bytesWritten();
+    int writeOffset = progressState.bytesWritten(progress);
     for (int index = 0; index < transferred; index++) {
       file.volatileBytes[writeOffset + index] =
           request.content().get(request.contentPosition() + writeOffset + index);
@@ -226,21 +242,36 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     FaultAction afterAction = decide(
         points.tempWriteAfter(),
         FaultOperation.TEMP_WRITE,
+        FaultBoundary.AFTER,
         writeOffset,
         transferred);
     StatusCode afterStatus = afterBoundary(afterAction, FaultOperation.TEMP_WRITE);
-    if (!running) {
-      progress.requireRecovery();
+    if (!running || progressState.providerGeneration(progress) != generation) {
+      progressState.requireRecovery(progress);
       return record(afterStatus, AtomicInstallStep.TEMP_WRITE, before, progress, result, transferred);
     }
+    StatusCode progressStatus;
     if (status.isOk() && afterAction == FaultAction.DELAY) {
-      progress.delayCompletion(next, DirectoryDurability.VISIBLE_NOT_DURABLE, written);
+      progressStatus = progressState.delayCompletion(
+          progress,
+          before,
+          next,
+          DirectoryDurability.VISIBLE_NOT_DURABLE,
+          written);
       status = StatusCode.RETRY;
     } else {
-      progress.advance(next, DirectoryDurability.VISIBLE_NOT_DURABLE, written);
+      progressStatus = progressState.transition(
+          progress,
+          before,
+          next,
+          DirectoryDurability.VISIBLE_NOT_DURABLE,
+          written);
       if (!afterStatus.isOk()) {
         status = afterStatus;
       }
+    }
+    if (!progressStatus.isOk()) {
+      status = progressStatus;
     }
     return record(status, AtomicInstallStep.TEMP_WRITE, before, progress, result, transferred);
   }
@@ -249,18 +280,22 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
       AtomicInstallResult result) {
-    AtomicInstallPhase before = progress.phase();
+    AtomicInstallPhase before = progressState.phase(progress);
     ModelFile file = findVolatile(request.temporaryFileName());
     if (file == null) {
-      progress.requireRecovery();
+      progressState.requireRecovery(progress);
       return record(StatusCode.CORRUPTION, AtomicInstallStep.TEMP_FORCE, before, progress, result, 0);
     }
     FaultAction beforeAction = decide(
-        points.tempForceBefore(), FaultOperation.TEMP_FORCE, 0, file.volatileSize);
+        points.tempForceBefore(),
+        FaultOperation.TEMP_FORCE,
+        FaultBoundary.BEFORE,
+        0,
+        file.volatileSize);
     StatusCode status = beforeBoundary(beforeAction, FaultOperation.TEMP_FORCE);
     if (!status.isOk()) {
-      if (!running) {
-        progress.requireRecovery();
+      if (!running || progressState.providerGeneration(progress) != generation) {
+        progressState.requireRecovery(progress);
       }
       return record(status, AtomicInstallStep.TEMP_FORCE, before, progress, result, 0);
     }
@@ -272,7 +307,11 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     }
     file.publishDurable();
     FaultAction afterAction = decide(
-        points.tempForceAfter(), FaultOperation.TEMP_FORCE, 0, file.volatileSize);
+        points.tempForceAfter(),
+        FaultOperation.TEMP_FORCE,
+        FaultBoundary.AFTER,
+        0,
+        file.volatileSize);
     StatusCode afterStatus = afterBoundary(afterAction, FaultOperation.TEMP_FORCE);
     return finishAppliedStep(
         afterAction,
@@ -290,24 +329,32 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
       AtomicInstallResult result) {
-    AtomicInstallPhase before = progress.phase();
+    AtomicInstallPhase before = progressState.phase(progress);
     directoryResult.reset();
-    StatusCode status = replace(
-        request.temporaryFileName(), request.destinationFileName(), directoryResult);
+    StatusCode status = replaceInternal(
+        request.temporaryFileName(), request.destinationFileName(), directoryResult, true);
+    StatusCode progressStatus = StatusCode.OK;
     if (directoryResult.durability() == DirectoryDurability.UNKNOWN) {
-      progress.requireRecovery();
+      progressStatus = progressState.requireRecovery(progress);
     } else if (directoryResult.durability() != DirectoryDurability.NOT_APPLIED) {
-      if (directoryResult.completionPending()) {
-        progress.delayCompletion(
+      if (operationCompletionPending) {
+        progressStatus = progressState.delayCompletion(
+            progress,
+            before,
             AtomicInstallPhase.DESTINATION_REPLACED,
             DirectoryDurability.VISIBLE_NOT_DURABLE,
-            progress.bytesWritten());
+            progressState.bytesWritten(progress));
       } else {
-        progress.advance(
+        progressStatus = progressState.transition(
+            progress,
+            before,
             AtomicInstallPhase.DESTINATION_REPLACED,
             DirectoryDurability.VISIBLE_NOT_DURABLE,
-            progress.bytesWritten());
+            progressState.bytesWritten(progress));
       }
+    }
+    if (!progressStatus.isOk()) {
+      status = progressStatus;
     }
     return record(status, AtomicInstallStep.DESTINATION_REPLACE, before, progress, result, 0);
   }
@@ -315,23 +362,31 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   private StatusCode directoryForceStep(
       AtomicInstallProgress progress,
       AtomicInstallResult result) {
-    AtomicInstallPhase before = progress.phase();
+    AtomicInstallPhase before = progressState.phase(progress);
     directoryResult.reset();
-    StatusCode status = force(directoryResult);
+    StatusCode status = forceInternal(directoryResult, true);
+    StatusCode progressStatus = StatusCode.OK;
     if (directoryResult.durability() == DirectoryDurability.UNKNOWN) {
-      progress.requireRecovery();
+      progressStatus = progressState.requireRecovery(progress);
     } else if (directoryResult.durability() == DirectoryDurability.DURABLE) {
-      if (directoryResult.completionPending()) {
-        progress.delayCompletion(
+      if (operationCompletionPending) {
+        progressStatus = progressState.delayCompletion(
+            progress,
+            before,
             AtomicInstallPhase.DIRECTORY_FORCED,
             DirectoryDurability.DURABLE,
-            progress.bytesWritten());
+            progressState.bytesWritten(progress));
       } else {
-        progress.advance(
+        progressStatus = progressState.transition(
+            progress,
+            before,
             AtomicInstallPhase.DIRECTORY_FORCED,
             DirectoryDurability.DURABLE,
-            progress.bytesWritten());
+            progressState.bytesWritten(progress));
       }
+    }
+    if (!progressStatus.isOk()) {
+      status = progressStatus;
     }
     return record(
         status,
@@ -346,16 +401,17 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallRequest request,
       AtomicInstallProgress progress,
       AtomicInstallResult result) {
-    AtomicInstallPhase before = progress.phase();
+    AtomicInstallPhase before = progressState.phase(progress);
     FaultAction beforeAction = decide(
         points.reopenVerifyBefore(),
         FaultOperation.REOPEN_VERIFY,
+        FaultBoundary.BEFORE,
         0,
         request.contentLength());
     StatusCode status = beforeBoundary(beforeAction, FaultOperation.REOPEN_VERIFY);
     if (!status.isOk()) {
-      if (!running) {
-        progress.requireRecovery();
+      if (!running || progressState.providerGeneration(progress) != generation) {
+        progressState.requireRecovery(progress);
       }
       return record(status, AtomicInstallStep.REOPEN_VERIFY, before, progress, result, 0);
     }
@@ -412,6 +468,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     FaultAction afterAction = decide(
         points.reopenVerifyAfter(),
         FaultOperation.REOPEN_VERIFY,
+        FaultBoundary.AFTER,
         0,
         request.contentLength());
     StatusCode afterStatus = afterBoundary(afterAction, FaultOperation.REOPEN_VERIFY);
@@ -431,14 +488,17 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   public synchronized StatusCode createTemporary(
       String temporaryFileName,
       DirectoryOperationResult result) {
-    return createTemporaryInternal(temporaryFileName, result, true);
+    return createTemporaryInternal(temporaryFileName, result, true, false);
   }
 
   private StatusCode createTemporaryInternal(
       String temporaryFileName,
       DirectoryOperationResult result,
-      boolean openHandle) {
+      boolean openHandle,
+      boolean exposePending) {
     result.reset();
+    operationCompletionPending = false;
+    long startingGeneration = generation;
     if (!running) {
       return StatusCode.RETRY;
     }
@@ -446,11 +506,11 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     FaultAction beforeAction = decide(
-        points.tempCreateBefore(), FaultOperation.TEMP_CREATE, 0, 0);
+        points.tempCreateBefore(), FaultOperation.TEMP_CREATE, FaultBoundary.BEFORE, 0, 0);
     StatusCode status = beforeBoundary(beforeAction, FaultOperation.TEMP_CREATE);
     if (!status.isOk()) {
-      if (!running) {
-        result.set(null, DirectoryDurability.UNKNOWN, false);
+      if (!running || generation != startingGeneration) {
+        result.set(null, DirectoryDurability.UNKNOWN);
       }
       return status;
     }
@@ -470,14 +530,18 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       openHandles++;
       handle = new ModelHandle(file, generation);
     }
-    result.set(handle, DirectoryDurability.VISIBLE_NOT_DURABLE, false);
+    result.set(handle, DirectoryDurability.VISIBLE_NOT_DURABLE);
     FaultAction afterAction = decide(
-        points.tempCreateAfter(), FaultOperation.TEMP_CREATE, 0, 0);
+        points.tempCreateAfter(), FaultOperation.TEMP_CREATE, FaultBoundary.AFTER, 0, 0);
     StatusCode afterStatus = afterBoundary(afterAction, FaultOperation.TEMP_CREATE);
-    if (!running) {
-      result.set(null, DirectoryDurability.UNKNOWN, false);
+    if (!running || generation != startingGeneration) {
+      result.set(null, DirectoryDurability.UNKNOWN);
     } else if (afterAction == FaultAction.DELAY) {
-      result.set(handle, DirectoryDurability.VISIBLE_NOT_DURABLE, true);
+      if (exposePending) {
+        operationCompletionPending = true;
+      } else {
+        afterStatus = StatusCode.OK;
+      }
     }
     return afterStatus;
   }
@@ -487,18 +551,29 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       String temporaryFileName,
       String destinationFileName,
       DirectoryOperationResult result) {
+    return replaceInternal(temporaryFileName, destinationFileName, result, false);
+  }
+
+  private StatusCode replaceInternal(
+      String temporaryFileName,
+      String destinationFileName,
+      DirectoryOperationResult result,
+      boolean exposePending) {
     result.reset();
+    operationCompletionPending = false;
+    long startingGeneration = generation;
     if (!running) {
       return StatusCode.RETRY;
     }
     if (!validFileName(temporaryFileName) || !validFileName(destinationFileName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    FaultAction beforeAction = decide(points.replaceBefore(), FaultOperation.REPLACE, 0, 0);
+    FaultAction beforeAction = decide(
+        points.replaceBefore(), FaultOperation.REPLACE, FaultBoundary.BEFORE, 0, 0);
     StatusCode status = beforeBoundary(beforeAction, FaultOperation.REPLACE);
     if (!status.isOk()) {
-      if (!running) {
-        result.set(null, DirectoryDurability.UNKNOWN, false);
+      if (!running || generation != startingGeneration) {
+        result.set(null, DirectoryDurability.UNKNOWN);
       }
       return status;
     }
@@ -511,29 +586,46 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       destination.volatileName = null;
     }
     temporary.volatileName = destinationFileName;
-    result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE, false);
-    FaultAction afterAction = decide(points.replaceAfter(), FaultOperation.REPLACE, 0, 0);
+    result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE);
+    FaultAction afterAction = decide(
+        points.replaceAfter(), FaultOperation.REPLACE, FaultBoundary.AFTER, 0, 0);
     StatusCode afterStatus = afterBoundary(afterAction, FaultOperation.REPLACE);
-    if (!running) {
-      result.set(null, DirectoryDurability.UNKNOWN, false);
+    if (!running || generation != startingGeneration) {
+      result.set(null, DirectoryDurability.UNKNOWN);
     } else if (afterAction == FaultAction.DELAY) {
-      result.set(null, DirectoryDurability.VISIBLE_NOT_DURABLE, true);
+      if (exposePending) {
+        operationCompletionPending = true;
+      } else {
+        afterStatus = StatusCode.OK;
+      }
     }
     return afterStatus;
   }
 
   @Override
   public synchronized StatusCode force(DirectoryOperationResult result) {
+    return forceInternal(result, false);
+  }
+
+  private StatusCode forceInternal(
+      DirectoryOperationResult result,
+      boolean exposePending) {
     result.reset();
+    operationCompletionPending = false;
+    long startingGeneration = generation;
     if (!running) {
       return StatusCode.RETRY;
     }
     FaultAction beforeAction = decide(
-        points.directoryForceBefore(), FaultOperation.DIRECTORY_FORCE, 0, 0);
+        points.directoryForceBefore(),
+        FaultOperation.DIRECTORY_FORCE,
+        FaultBoundary.BEFORE,
+        0,
+        0);
     StatusCode status = beforeBoundary(beforeAction, FaultOperation.DIRECTORY_FORCE);
     if (!status.isOk()) {
-      if (!running) {
-        result.set(null, DirectoryDurability.UNKNOWN, false);
+      if (!running || generation != startingGeneration) {
+        result.set(null, DirectoryDurability.UNKNOWN);
       }
       return status;
     }
@@ -545,14 +637,22 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     for (int index = 0; index < fileCount; index++) {
       files[index].durableName = files[index].volatileName;
     }
-    result.set(null, DirectoryDurability.DURABLE, false);
+    result.set(null, DirectoryDurability.DURABLE);
     FaultAction afterAction = decide(
-        points.directoryForceAfter(), FaultOperation.DIRECTORY_FORCE, 0, 0);
+        points.directoryForceAfter(),
+        FaultOperation.DIRECTORY_FORCE,
+        FaultBoundary.AFTER,
+        0,
+        0);
     StatusCode afterStatus = afterBoundary(afterAction, FaultOperation.DIRECTORY_FORCE);
-    if (!running) {
-      result.set(null, DirectoryDurability.UNKNOWN, false);
+    if (!running || generation != startingGeneration) {
+      result.set(null, DirectoryDurability.UNKNOWN);
     } else if (afterAction == FaultAction.DELAY) {
-      result.set(null, DirectoryDurability.DURABLE, true);
+      if (exposePending) {
+        operationCompletionPending = true;
+      } else {
+        afterStatus = StatusCode.OK;
+      }
     }
     return afterStatus;
   }
@@ -577,7 +677,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     DirectoryDurability durability = fileName.equals(file.durableName)
         ? DirectoryDurability.DURABLE
         : DirectoryDurability.VISIBLE_NOT_DURABLE;
-    result.set(new ModelHandle(file, generation), durability, false);
+    result.set(new ModelHandle(file, generation), durability);
     return StatusCode.OK;
   }
 
@@ -603,6 +703,13 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
     return traceStatus;
   }
 
+  @Override
+  public synchronized StatusCode inspect(
+      AtomicInstallProgress progress,
+      AtomicInstallSnapshot result) {
+    return progressState.snapshot(progress, result);
+  }
+
   private StatusCode finishAppliedStep(
       FaultAction afterAction,
       StatusCode afterStatus,
@@ -613,12 +720,26 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallProgress progress,
       AtomicInstallResult result,
       int bytesTransferred) {
-    if (!running) {
-      progress.requireRecovery();
+    StatusCode progressStatus;
+    if (!running || progressState.providerGeneration(progress) != generation) {
+      progressStatus = progressState.requireRecovery(progress);
     } else if (afterAction == FaultAction.DELAY) {
-      progress.delayCompletion(next, durability, progress.bytesWritten());
+      progressStatus = progressState.delayCompletion(
+          progress,
+          before,
+          next,
+          durability,
+          progressState.bytesWritten(progress));
     } else {
-      progress.advance(next, durability, progress.bytesWritten());
+      progressStatus = progressState.transition(
+          progress,
+          before,
+          next,
+          durability,
+          progressState.bytesWritten(progress));
+    }
+    if (!progressStatus.isOk()) {
+      afterStatus = progressStatus;
     }
     return record(afterStatus, step, before, progress, result, bytesTransferred);
   }
@@ -626,11 +747,13 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   private FaultAction decide(
       FaultPoint point,
       FaultOperation operation,
+      FaultBoundary boundary,
       long position,
       int requestedBytes) {
     faultInjector.evaluate(
         point,
         operation,
+        boundary,
         ++operationSequence,
         position,
         requestedBytes,
@@ -639,7 +762,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   }
 
   private StatusCode beforeBoundary(FaultAction action, FaultOperation operation) {
-    if (!action.isCompatibleWith(operation)) {
+    if (!action.isCompatibleWith(operation, FaultBoundary.BEFORE)) {
       return StatusCode.INVARIANT_BROKEN;
     }
     if (action == FaultAction.DELAY) {
@@ -661,7 +784,7 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
   }
 
   private StatusCode afterBoundary(FaultAction action, FaultOperation operation) {
-    if (!action.isCompatibleWith(operation)) {
+    if (!action.isCompatibleWith(operation, FaultBoundary.AFTER)) {
       return StatusCode.INVARIANT_BROKEN;
     }
     if (action == FaultAction.DELAY) {
@@ -701,7 +824,13 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallProgress progress,
       AtomicInstallResult result,
       int bytesTransferred) {
-    return record(status, step, progress.phase(), progress, result, bytesTransferred);
+    return record(
+        status,
+        step,
+        progressState.phase(progress),
+        progress,
+        result,
+        bytesTransferred);
   }
 
   private StatusCode record(
@@ -711,21 +840,23 @@ public final class FaultingAtomicFileStore implements DurableDirectory, AtomicFi
       AtomicInstallProgress progress,
       AtomicInstallResult result,
       int bytesTransferred) {
+    progressSnapshot.reset();
+    progressState.snapshot(progress, progressSnapshot);
     result.set(
         step,
         before,
-        progress.appliedPhase(),
-        progress.appliedDurability(),
+        progressSnapshot.appliedPhase(),
+        progressSnapshot.appliedDurability(),
         bytesTransferred,
-        progress.completionPending());
+        progressSnapshot.completionPending());
     if (trace != null) {
       StatusCode appendStatus = trace.append(
           step,
           before,
-          progress.appliedPhase(),
-          progress.appliedDurability(),
+          progressSnapshot.appliedPhase(),
+          progressSnapshot.appliedDurability(),
           status,
-          progress.completionPending());
+          progressSnapshot.completionPending());
       if (!appendStatus.isOk()) {
         traceStatus = appendStatus;
       }

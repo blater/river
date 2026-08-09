@@ -1,99 +1,44 @@
 package io.riverdb.platform.file;
 
-/** Caller-owned resumable state. It must not be shared by concurrent installs. */
+import io.riverdb.base.error.StatusCode;
+
+/** Caller-owned, provider-authenticated resumable state. Never share it concurrently. */
 public final class AtomicInstallProgress {
-  private AtomicInstallPhase phase = AtomicInstallPhase.NEW;
-  private DirectoryDurability durability = DirectoryDurability.NOT_APPLIED;
-  private long requestVersion;
-  private long providerGeneration;
-  private int bytesWritten;
-  private boolean completionPending;
-  private AtomicInstallPhase pendingPhase = AtomicInstallPhase.NEW;
-  private DirectoryDurability pendingDurability = DirectoryDurability.NOT_APPLIED;
-  private int pendingBytesWritten;
+  Object owner;
+  AtomicInstallPhase phase = AtomicInstallPhase.NEW;
+  DirectoryDurability durability = DirectoryDurability.NOT_APPLIED;
+  long requestVersion;
+  long providerGeneration;
+  long pendingOperationId;
+  int totalBytes;
+  int bytesWritten;
+  boolean completionPending;
+  AtomicInstallPhase pendingPhase = AtomicInstallPhase.NEW;
+  DirectoryDurability pendingDurability = DirectoryDurability.NOT_APPLIED;
+  int pendingBytesWritten;
 
-  public AtomicInstallPhase phase() {
-    return phase;
-  }
-
-  public DirectoryDurability durability() {
-    return durability;
-  }
-
-  public int bytesWritten() {
-    return bytesWritten;
-  }
-
-  public boolean completionPending() {
-    return completionPending;
-  }
-
-  /** Phase already applied by the provider, including an unacknowledged completion half-step. */
-  public AtomicInstallPhase appliedPhase() {
-    return completionPending ? pendingPhase : phase;
-  }
-
-  /** Durability already applied by the provider, even while notification remains pending. */
-  public DirectoryDurability appliedDurability() {
-    return completionPending ? pendingDurability : durability;
-  }
-
-  public boolean isComplete() {
-    return phase == AtomicInstallPhase.VERIFIED && !completionPending;
-  }
-
-  public long requestVersion() {
-    return requestVersion;
-  }
-
-  public long providerGeneration() {
-    return providerGeneration;
-  }
-
-  public void begin(long requestVersion, long providerGeneration) {
-    this.requestVersion = requestVersion;
-    this.providerGeneration = providerGeneration;
-  }
-
-  public void advance(
-      AtomicInstallPhase phase,
-      DirectoryDurability durability,
-      int bytesWritten) {
-    this.phase = phase;
-    this.durability = durability;
-    this.bytesWritten = bytesWritten;
-    completionPending = false;
-  }
-
-  public void delayCompletion(
-      AtomicInstallPhase phase,
-      DirectoryDurability durability,
-      int bytesWritten) {
-    pendingPhase = phase;
-    pendingDurability = durability;
-    pendingBytesWritten = bytesWritten;
-    completionPending = true;
-  }
-
-  public void completePending() {
-    advance(pendingPhase, pendingDurability, pendingBytesWritten);
-  }
-
-  public void requireRecovery() {
-    phase = AtomicInstallPhase.RECOVERY_REQUIRED;
-    durability = DirectoryDurability.UNKNOWN;
-    completionPending = false;
-  }
-
-  public void reset() {
+  /**
+   * Releases terminal state for reuse. Active or pending work returns {@code CONFLICT} without
+   * mutation; cancellation/recovery must first make the state terminal.
+   */
+  public StatusCode reset() {
+    if (owner != null
+        && phase != AtomicInstallPhase.VERIFIED
+        && phase != AtomicInstallPhase.RECOVERY_REQUIRED) {
+      return StatusCode.CONFLICT;
+    }
+    owner = null;
     phase = AtomicInstallPhase.NEW;
     durability = DirectoryDurability.NOT_APPLIED;
     requestVersion = 0;
     providerGeneration = 0;
+    pendingOperationId = 0;
+    totalBytes = 0;
     bytesWritten = 0;
     completionPending = false;
     pendingPhase = AtomicInstallPhase.NEW;
     pendingDurability = DirectoryDurability.NOT_APPLIED;
     pendingBytesWritten = 0;
+    return StatusCode.OK;
   }
 }

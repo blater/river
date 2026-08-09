@@ -2,6 +2,7 @@ package io.riverdb.testkit.crash;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
+import io.riverdb.platform.fault.FaultBoundary;
 import io.riverdb.platform.fault.FaultOperation;
 import io.riverdb.platform.fault.FaultPoint;
 
@@ -9,6 +10,7 @@ import io.riverdb.platform.fault.FaultPoint;
 public final class FaultTrace {
   private final FaultPoint[] points;
   private final FaultOperation[] operations;
+  private final FaultBoundary[] boundaries;
   private final FaultAction[] actions;
   private final long[] arguments;
   private final long[] sequences;
@@ -18,6 +20,7 @@ public final class FaultTrace {
     int boundedCapacity = Math.max(0, capacity);
     points = new FaultPoint[boundedCapacity];
     operations = new FaultOperation[boundedCapacity];
+    boundaries = new FaultBoundary[boundedCapacity];
     actions = new FaultAction[boundedCapacity];
     arguments = new long[boundedCapacity];
     sequences = new long[boundedCapacity];
@@ -26,6 +29,7 @@ public final class FaultTrace {
   synchronized StatusCode append(
       FaultPoint point,
       FaultOperation operation,
+      FaultBoundary boundary,
       FaultAction action,
       long argument,
       long sequence) {
@@ -34,6 +38,7 @@ public final class FaultTrace {
     }
     points[size] = point;
     operations[size] = operation;
+    boundaries[size] = boundary;
     actions[size] = action;
     arguments[size] = argument;
     sequences[size] = sequence;
@@ -55,6 +60,10 @@ public final class FaultTrace {
 
   public synchronized FaultOperation operation(int index) {
     return operations[index];
+  }
+
+  public synchronized FaultBoundary boundary(int index) {
+    return boundaries[index];
   }
 
   public synchronized FaultAction action(int index) {

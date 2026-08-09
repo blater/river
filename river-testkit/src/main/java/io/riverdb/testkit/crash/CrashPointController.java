@@ -2,6 +2,7 @@ package io.riverdb.testkit.crash;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
+import io.riverdb.platform.fault.FaultBoundary;
 import io.riverdb.platform.fault.FaultDecision;
 import io.riverdb.platform.fault.FaultInjector;
 import io.riverdb.platform.fault.FaultOperation;
@@ -16,6 +17,7 @@ import io.riverdb.platform.fault.FaultPoint;
 public final class CrashPointController implements FaultInjector {
   private final FaultPoint[] points;
   private final FaultOperation[] operations;
+  private final FaultBoundary[] boundaries;
   private final long[] firstOccurrences;
   private final long[] repeatCounts;
   private final FaultAction[] actions;
@@ -32,6 +34,7 @@ public final class CrashPointController implements FaultInjector {
   public CrashPointController(int capacity, FaultTrace trace) {
     points = new FaultPoint[capacity];
     operations = new FaultOperation[capacity];
+    boundaries = new FaultBoundary[capacity];
     firstOccurrences = new long[capacity];
     repeatCounts = new long[capacity];
     actions = new FaultAction[capacity];
@@ -47,13 +50,32 @@ public final class CrashPointController implements FaultInjector {
       long repeatCount,
       FaultAction action,
       long argument) {
+    return addRule(
+        point,
+        operation,
+        FaultBoundary.BEFORE,
+        firstOccurrence,
+        repeatCount,
+        action,
+        argument);
+  }
+
+  public synchronized StatusCode addRule(
+      FaultPoint point,
+      FaultOperation operation,
+      FaultBoundary boundary,
+      long firstOccurrence,
+      long repeatCount,
+      FaultAction action,
+      long argument) {
     if (point == null
         || operation == null
+        || boundary == null
         || action == null
         || firstOccurrence < 1
         || repeatCount < 1
         || argument < 0
-        || !action.isCompatibleWith(operation)) {
+        || !action.isCompatibleWith(operation, boundary)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (size == points.length) {
@@ -61,6 +83,7 @@ public final class CrashPointController implements FaultInjector {
     }
     points[size] = point;
     operations[size] = operation;
+    boundaries[size] = boundary;
     firstOccurrences[size] = firstOccurrence;
     repeatCounts[size] = repeatCount;
     actions[size] = action;
@@ -76,11 +99,32 @@ public final class CrashPointController implements FaultInjector {
       long attempt,
       long position,
       int requestedBytes,
-    FaultDecision result) {
+      FaultDecision result) {
+    evaluate(
+        point,
+        operation,
+        FaultBoundary.BEFORE,
+        attempt,
+        position,
+        requestedBytes,
+        result);
+  }
+
+  @Override
+  public synchronized void evaluate(
+      FaultPoint point,
+      FaultOperation operation,
+      FaultBoundary boundary,
+      long attempt,
+      long position,
+      int requestedBytes,
+      FaultDecision result) {
     result.reset();
     boolean selected = false;
     for (int index = 0; index < size; index++) {
-      if (points[index] != point || operations[index] != operation) {
+      if (points[index] != point
+          || operations[index] != operation
+          || boundaries[index] != boundary) {
         continue;
       }
       long observation = ++observations[index];
@@ -94,6 +138,7 @@ public final class CrashPointController implements FaultInjector {
       traceStatus = trace.append(
           point,
           operation,
+          boundary,
           result.action(),
           result.argument(),
           attempt);

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.platform.fault.FaultAction;
+import io.riverdb.platform.fault.FaultBoundary;
 import io.riverdb.platform.fault.FaultOperation;
 import io.riverdb.platform.fault.FaultPoint;
 import io.riverdb.platform.fault.FaultPointRegistry;
@@ -15,6 +16,7 @@ import io.riverdb.platform.file.AtomicInstallPhase;
 import io.riverdb.platform.file.AtomicInstallProgress;
 import io.riverdb.platform.file.AtomicInstallRequest;
 import io.riverdb.platform.file.AtomicInstallResult;
+import io.riverdb.platform.file.AtomicInstallSnapshot;
 import io.riverdb.platform.file.AtomicInstallStep;
 import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.platform.file.DirectoryOperationResult;
@@ -42,8 +44,8 @@ final class FaultingAtomicFileStoreContractTest {
             fixture.stepResult,
             8,
             driveResult));
-    assertTrue(progress.isComplete());
-    assertEquals(DirectoryDurability.DURABLE, progress.durability());
+    assertTrue(fixture.snapshot(progress).isComplete());
+    assertEquals(DirectoryDurability.DURABLE, fixture.snapshot(progress).durability());
     assertEquals(6, driveResult.advances());
     assertEquals(6, fixture.trace.size());
     AtomicInstallStep[] expectedSteps = {
@@ -81,6 +83,7 @@ final class FaultingAtomicFileStoreContractTest {
         fixture.controller.addRule(
             fixture.points.replaceAfter(),
             FaultOperation.REPLACE,
+            FaultBoundary.AFTER,
             1,
             1,
             FaultAction.DELAY,
@@ -92,19 +95,19 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
     assertEquals(StatusCode.RETRY, fixture.store.advance(request, progress, fixture.stepResult));
-    assertEquals(AtomicInstallPhase.CONTENT_FORCED, progress.phase());
-    assertTrue(progress.completionPending());
+    assertEquals(AtomicInstallPhase.CONTENT_FORCED, fixture.snapshot(progress).phase());
+    assertTrue(fixture.snapshot(progress).completionPending());
     assertEquals(AtomicInstallPhase.DESTINATION_REPLACED, fixture.stepResult.phaseAfter());
     assertEquals(
         DirectoryDurability.VISIBLE_NOT_DURABLE,
         fixture.stepResult.durability());
 
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
-    assertEquals(AtomicInstallPhase.DESTINATION_REPLACED, progress.phase());
-    assertFalse(progress.completionPending());
+    assertEquals(AtomicInstallPhase.DESTINATION_REPLACED, fixture.snapshot(progress).phase());
+    assertFalse(fixture.snapshot(progress).completionPending());
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
-    assertTrue(progress.isComplete());
+    assertTrue(fixture.snapshot(progress).isComplete());
   }
 
   @Test
@@ -116,6 +119,7 @@ final class FaultingAtomicFileStoreContractTest {
           fixture.controller.addRule(
               fixture.afterPoint(boundary),
               fixture.operation(boundary),
+              FaultBoundary.AFTER,
               1,
               1,
               FaultAction.DELAY,
@@ -132,7 +136,7 @@ final class FaultingAtomicFileStoreContractTest {
               9,
               driveResult),
           "boundary " + boundary);
-      assertTrue(progress.isComplete(), "boundary " + boundary);
+      assertTrue(fixture.snapshot(progress).isComplete(), "boundary " + boundary);
       assertEquals(7, driveResult.advances(), "boundary " + boundary);
       assertTrue(fixture.hasPendingCompletion(), "boundary " + boundary);
     }
@@ -163,7 +167,7 @@ final class FaultingAtomicFileStoreContractTest {
               9,
               driveResult),
           "boundary " + boundary);
-      assertTrue(progress.isComplete(), "boundary " + boundary);
+      assertTrue(fixture.snapshot(progress).isComplete(), "boundary " + boundary);
       assertEquals(7, driveResult.advances(), "boundary " + boundary);
     }
   }
@@ -184,8 +188,8 @@ final class FaultingAtomicFileStoreContractTest {
     AtomicInstallProgress progress = new AtomicInstallProgress();
     assertEquals(StatusCode.OK, shortWrite.store.advance(request, progress, shortWrite.stepResult));
     assertEquals(StatusCode.OK, shortWrite.store.advance(request, progress, shortWrite.stepResult));
-    assertEquals(2, progress.bytesWritten());
-    assertEquals(AtomicInstallPhase.TEMP_CREATED, progress.phase());
+    assertEquals(2, shortWrite.snapshot(progress).bytesWritten());
+    assertEquals(AtomicInstallPhase.TEMP_CREATED, shortWrite.snapshot(progress).phase());
     AtomicInstallDriveResult driveResult = new AtomicInstallDriveResult();
     assertEquals(
         StatusCode.OK,
@@ -207,12 +211,12 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.DISK_FULL,
             1));
-    progress.reset();
+    assertEquals(StatusCode.OK, progress.reset());
     assertEquals(StatusCode.OK, diskFull.store.advance(request, progress, diskFull.stepResult));
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         diskFull.store.advance(request, progress, diskFull.stepResult));
-    assertEquals(1, progress.bytesWritten());
+    assertEquals(1, diskFull.snapshot(progress).bytesWritten());
     assertEquals(1, diskFull.stepResult.bytesTransferred());
     assertEquals(
         StatusCode.OK,
@@ -245,9 +249,9 @@ final class FaultingAtomicFileStoreContractTest {
 
     assertEquals(StatusCode.RETRY, fixture.store.advance(request, progress, fixture.stepResult));
     assertEquals(2, fixture.stepResult.bytesTransferred());
-    assertEquals(AtomicInstallPhase.DIRECTORY_FORCED, progress.phase());
+    assertEquals(AtomicInstallPhase.DIRECTORY_FORCED, fixture.snapshot(progress).phase());
     assertEquals(StatusCode.OK, fixture.store.advance(request, progress, fixture.stepResult));
-    assertTrue(progress.isComplete());
+    assertTrue(fixture.snapshot(progress).isComplete());
   }
 
   @Test
@@ -267,7 +271,7 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(StatusCode.OK, fileForce.store.advance(request, progress, fileForce.stepResult));
     assertEquals(StatusCode.OK, fileForce.store.advance(request, progress, fileForce.stepResult));
     assertEquals(StatusCode.IO_FAILURE, fileForce.store.advance(request, progress, fileForce.stepResult));
-    assertEquals(AtomicInstallPhase.CONTENT_WRITTEN, progress.phase());
+    assertEquals(AtomicInstallPhase.CONTENT_WRITTEN, fileForce.snapshot(progress).phase());
 
     Fixture directoryForce = new Fixture(1, 16);
     assertEquals(
@@ -279,7 +283,7 @@ final class FaultingAtomicFileStoreContractTest {
             1,
             FaultAction.FORCE_FAILURE,
             0));
-    progress.reset();
+    progress = new AtomicInstallProgress();
     for (int index = 0; index < 4; index++) {
       assertEquals(
           StatusCode.OK,
@@ -288,8 +292,12 @@ final class FaultingAtomicFileStoreContractTest {
     assertEquals(
         StatusCode.IO_FAILURE,
         directoryForce.store.advance(request, progress, directoryForce.stepResult));
-    assertEquals(AtomicInstallPhase.DESTINATION_REPLACED, progress.phase());
-    assertEquals(DirectoryDurability.VISIBLE_NOT_DURABLE, progress.durability());
+    assertEquals(
+        AtomicInstallPhase.DESTINATION_REPLACED,
+        directoryForce.snapshot(progress).phase());
+    assertEquals(
+        DirectoryDurability.VISIBLE_NOT_DURABLE,
+        directoryForce.snapshot(progress).durability());
     assertEquals(StatusCode.OK, directoryForce.store.crash());
     assertEquals(StatusCode.OK, directoryForce.store.restart());
     assertEquals(StatusCode.CORRUPTION, directoryForce.reopenStatus("control"));
@@ -341,7 +349,7 @@ final class FaultingAtomicFileStoreContractTest {
       assertEquals(
           expectedStatuses[caseIndex],
           fixture.store.advance(request, progress, fixture.stepResult));
-      assertEquals(expectedPhases[caseIndex], progress.phase());
+      assertEquals(expectedPhases[caseIndex], fixture.snapshot(progress).phase());
     }
   }
 
@@ -354,6 +362,7 @@ final class FaultingAtomicFileStoreContractTest {
           fixture.controller.addRule(
               fixture.afterPoint(boundary),
               fixture.operation(boundary),
+              FaultBoundary.AFTER,
               1,
               1,
               FaultAction.CRASH,
@@ -370,7 +379,9 @@ final class FaultingAtomicFileStoreContractTest {
               8,
               driveResult),
           "boundary " + boundary);
-      assertEquals(AtomicInstallPhase.RECOVERY_REQUIRED, progress.phase());
+      assertEquals(
+          AtomicInstallPhase.RECOVERY_REQUIRED,
+          fixture.snapshot(progress).phase());
       assertEquals(StatusCode.OK, fixture.store.restart());
       StatusCode reopenStatus = fixture.reopenStatus("control");
       if (boundary < 4) {
@@ -400,6 +411,7 @@ final class FaultingAtomicFileStoreContractTest {
         fixture.controller.addRule(
             fixture.points.replaceAfter(),
             FaultOperation.REPLACE,
+            FaultBoundary.AFTER,
             1,
             1,
             FaultAction.CRASH,
@@ -443,7 +455,9 @@ final class FaultingAtomicFileStoreContractTest {
               8,
               driveResult),
           "boundary " + boundary);
-      assertEquals(AtomicInstallPhase.RECOVERY_REQUIRED, progress.phase());
+      assertEquals(
+          AtomicInstallPhase.RECOVERY_REQUIRED,
+          fixture.snapshot(progress).phase());
       assertEquals(StatusCode.OK, fixture.store.restart());
       StatusCode reopenStatus = fixture.reopenStatus("control");
       if (boundary <= 4) {
@@ -478,8 +492,8 @@ final class FaultingAtomicFileStoreContractTest {
             fixture.stepResult,
             8,
             driveResult));
-    assertEquals(AtomicInstallPhase.DIRECTORY_FORCED, progress.phase());
-    assertEquals(DirectoryDurability.DURABLE, progress.durability());
+    assertEquals(AtomicInstallPhase.DIRECTORY_FORCED, fixture.snapshot(progress).phase());
+    assertEquals(DirectoryDurability.DURABLE, fixture.snapshot(progress).durability());
   }
 
   @Test
@@ -497,7 +511,7 @@ final class FaultingAtomicFileStoreContractTest {
             fixture.stepResult,
             8,
             driveResult));
-    assertTrue(progress.isComplete());
+    assertTrue(fixture.snapshot(progress).isComplete());
     assertEquals(2, fixture.trace.size());
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.store.traceStatus());
   }
@@ -565,6 +579,12 @@ final class FaultingAtomicFileStoreContractTest {
         }
       }
       return false;
+    }
+
+    private AtomicInstallSnapshot snapshot(AtomicInstallProgress progress) {
+      AtomicInstallSnapshot snapshot = new AtomicInstallSnapshot();
+      assertEquals(StatusCode.OK, store.inspect(progress, snapshot));
+      return snapshot;
     }
 
     private FaultPoint beforePoint(int boundary) {

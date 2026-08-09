@@ -21,8 +21,24 @@ public enum FaultAction {
 
   /** Fail-closed compatibility matrix shared by script admission and fault consumers. */
   public boolean isCompatibleWith(FaultOperation operation) {
-    if (operation == null) {
+    return isCompatibleWith(operation, FaultBoundary.BEFORE);
+  }
+
+  /** Fail-closed compatibility including the operation's mutation boundary. */
+  public boolean isCompatibleWith(FaultOperation operation, FaultBoundary boundary) {
+    if (operation == null || boundary == null) {
       return false;
+    }
+    if (boundary == FaultBoundary.AFTER) {
+      return switch (this) {
+        case NONE, CRASH, CANCEL -> true;
+        case RESTART -> operation != FaultOperation.CRASH
+            && operation != FaultOperation.SCHEDULE
+            && operation != FaultOperation.RUN_TASK;
+        case DELAY -> isInstallOperation(operation);
+        case SHORT_READ, SHORT_WRITE, PARTIAL_WRITE, FORCE_FAILURE, DISK_FULL,
+            TORN_WRITE, CORRUPT_READ, DETECTED_CORRUPTION -> false;
+      };
     }
     return switch (this) {
       case NONE, CRASH, CANCEL -> true;
@@ -50,5 +66,14 @@ public enum FaultAction {
               || operation == FaultOperation.TEMP_FORCE
               || operation == FaultOperation.DIRECTORY_FORCE;
     };
+  }
+
+  private static boolean isInstallOperation(FaultOperation operation) {
+    return operation == FaultOperation.TEMP_CREATE
+        || operation == FaultOperation.TEMP_WRITE
+        || operation == FaultOperation.TEMP_FORCE
+        || operation == FaultOperation.REPLACE
+        || operation == FaultOperation.DIRECTORY_FORCE
+        || operation == FaultOperation.REOPEN_VERIFY;
   }
 }
