@@ -609,7 +609,7 @@ val verifyHotPathBytecodeFixtures = tasks.register("verifyHotPathBytecodeFixture
         "capturedLambda",
         "(I)Ljava/util/function/IntSupplier;"
       ) to "HP010",
-      hotMethod(negativeClass, "varargs", "(I)V") to "HP009"
+      hotMethod(negativeClass, "varargs", "(I)V") to "HP002"
     )
     val negativeViolations = HotPathBytecodePolicy.violations(
       rootDir.toPath(),
