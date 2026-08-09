@@ -1,6 +1,11 @@
 package io.riverdb.wal.local;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.id.DatabaseIncarnation;
+import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.wal.WalFileHeader;
+import io.riverdb.format.wal.WalFileHeaderCodec;
+import io.riverdb.format.wal.WalFileHeaderDecodeResult;
 import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.format.wal.WalRecordHeader;
 import io.riverdb.platform.file.DirectoryOperationResult;
@@ -16,28 +21,42 @@ public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
 
   private final DurableFile file;
-  private long tailEnd;
+  private final DatabaseIncarnation databaseIncarnation;
+  private final WalGeneration walGeneration;
+  private long tailEnd = WalFileHeaderCodec.HEADER_BYTES;
   private long nextJournalSequence = 1;
   private boolean failed;
   private boolean closed;
 
-  private LocalWal(DurableFile file) {
+  private LocalWal(
+      DurableFile file,
+      DatabaseIncarnation database,
+      WalGeneration generation) {
     this.file = file;
+    databaseIncarnation = database;
+    walGeneration = generation;
   }
 
-  public static StatusCode open(DurableDirectory directory, LocalWalOpenResult result) {
-    if (directory == null || result == null) {
+  public static StatusCode open(
+      DurableDirectory directory,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration walGeneration,
+      LocalWalOpenResult result) {
+    if (directory == null
+        || databaseIncarnation == null
+        || !databaseIncarnation.isValid()
+        || walGeneration == null
+        || !walGeneration.isValid()
+        || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     DirectoryOperationResult operation = new DirectoryOperationResult();
     StatusCode status = directory.reopen(FILE_NAME, operation);
+    boolean created = false;
     if (status == StatusCode.CONFLICT) {
       status = directory.createFile(FILE_NAME, operation);
-      if (status.isOk()) {
-        DirectoryOperationResult forceResult = new DirectoryOperationResult();
-        status = directory.force(forceResult);
-      }
+      created = status.isOk();
     }
     if (!status.isOk()) {
       if (operation.file() != null) {
@@ -46,8 +65,8 @@ public final class LocalWal {
       return status;
     }
 
-    LocalWal wal = new LocalWal(operation.file());
-    status = wal.recoverValidTail();
+    LocalWal wal = new LocalWal(operation.file(), databaseIncarnation, walGeneration);
+    status = created ? wal.initializeFile(directory) : wal.recoverValidTail();
     if (!status.isOk()) {
       wal.file.close();
       return status;
@@ -58,6 +77,14 @@ public final class LocalWal {
 
   public long tailEnd() {
     return tailEnd;
+  }
+
+  public DatabaseIncarnation databaseIncarnation() {
+    return databaseIncarnation;
+  }
+
+  public WalGeneration walGeneration() {
+    return walGeneration;
   }
 
   public long nextJournalSequence() {
@@ -123,7 +150,10 @@ public final class LocalWal {
       long offset,
       ByteBuffer payloadTarget,
       LocalWalReadResult result) {
-    if (payloadTarget == null || result == null || offset < 0 || offset >= tailEnd) {
+    if (payloadTarget == null
+        || result == null
+        || offset < WalFileHeaderCodec.HEADER_BYTES
+        || offset >= tailEnd) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -180,7 +210,26 @@ public final class LocalWal {
       return status;
     }
     long fileBytes = size.sizeBytes();
-    long offset = 0;
+    if (fileBytes < WalFileHeaderCodec.HEADER_BYTES) {
+      return StatusCode.CORRUPTION;
+    }
+    ByteBuffer fileHeaderBytes = ByteBuffer.allocate(WalFileHeaderCodec.HEADER_BYTES);
+    status = readExact(0, fileHeaderBytes);
+    if (!status.isOk()) {
+      return status;
+    }
+    fileHeaderBytes.flip();
+    WalFileHeaderDecodeResult fileHeader = new WalFileHeaderDecodeResult();
+    status = WalFileHeaderCodec.decode(fileHeaderBytes, fileHeader);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (!databaseIncarnation.equals(fileHeader.header().databaseIncarnation())
+        || !walGeneration.equals(fileHeader.header().walGeneration())) {
+      return StatusCode.FENCED;
+    }
+
+    long offset = WalFileHeaderCodec.HEADER_BYTES;
     long expectedSequence = 1;
     WalRecordHeader header = new WalRecordHeader();
     while (offset < fileBytes) {
@@ -217,6 +266,30 @@ public final class LocalWal {
     tailEnd = offset;
     nextJournalSequence = expectedSequence;
     return StatusCode.OK;
+  }
+
+  private StatusCode initializeFile(DurableDirectory directory) {
+    ByteBuffer header = ByteBuffer.allocate(WalFileHeaderCodec.HEADER_BYTES);
+    StatusCode status = WalFileHeaderCodec.encode(
+        new WalFileHeader(databaseIncarnation, walGeneration),
+        header);
+    if (!status.isOk()) {
+      return status;
+    }
+    header.flip();
+    IoResult io = new IoResult();
+    status = file.write(0, header, io);
+    if (status.isOk() && io.bytesTransferred() != WalFileHeaderCodec.HEADER_BYTES) {
+      status = StatusCode.IO_FAILURE;
+    }
+    if (status.isOk()) {
+      status = file.force(ForceMode.CONTENT_AND_METADATA);
+    }
+    if (status.isOk()) {
+      DirectoryOperationResult forceResult = new DirectoryOperationResult();
+      status = directory.force(forceResult);
+    }
+    return status;
   }
 
   private StatusCode truncateTail(long validEnd, long sequence) {

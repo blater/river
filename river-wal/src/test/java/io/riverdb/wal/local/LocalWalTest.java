@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.id.DatabaseIncarnation;
+import io.riverdb.base.id.WalGeneration;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
@@ -18,6 +20,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class LocalWalTest {
+  private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(101, 103);
+  private static final WalGeneration GENERATION = WalGeneration.of(1);
+
   @Test
   void appendsForcesReopensAndReads(@TempDir Path root) {
     byte[] expected = {9, 2, 6, 5, 3, 5};
@@ -28,6 +33,7 @@ final class LocalWalTest {
         StatusCode.OK,
         wal.append(41, 43, 1, 7, 1, ByteBuffer.wrap(expected), appended));
     assertEquals(1, appended.journalSequence());
+    assertEquals(64, appended.startOffset());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
 
@@ -35,7 +41,7 @@ final class LocalWalTest {
     wal = openWal(directory);
     ByteBuffer actual = ByteBuffer.allocate(expected.length);
     LocalWalReadResult read = new LocalWalReadResult();
-    assertEquals(StatusCode.OK, wal.read(0, actual, read));
+    assertEquals(StatusCode.OK, wal.read(appended.startOffset(), actual, read));
     assertArrayEquals(expected, actual.array());
     assertEquals(41, read.header().transactionId());
     assertEquals(43, read.header().commitSequence());
@@ -83,7 +89,29 @@ final class LocalWalTest {
     assertEquals(StatusCode.OK, raw.close());
 
     LocalWalOpenResult corrupted = new LocalWalOpenResult();
-    assertEquals(StatusCode.CORRUPTION, LocalWal.open(directory, corrupted));
+    assertEquals(
+        StatusCode.CORRUPTION,
+        LocalWal.open(directory, DATABASE, GENERATION, corrupted));
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void rejectsWalFromAnotherDatabaseOrGeneration(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    assertEquals(StatusCode.OK, wal.close());
+
+    LocalWalOpenResult result = new LocalWalOpenResult();
+    assertEquals(
+        StatusCode.FENCED,
+        LocalWal.open(
+            directory,
+            DatabaseIncarnation.of(107, 109),
+            GENERATION,
+            result));
+    assertEquals(
+        StatusCode.FENCED,
+        LocalWal.open(directory, DATABASE, WalGeneration.of(2), result));
     assertEquals(StatusCode.OK, directory.close());
   }
 
@@ -102,7 +130,7 @@ final class LocalWalTest {
 
   private static LocalWal openWal(NioDurableDirectory directory) {
     LocalWalOpenResult result = new LocalWalOpenResult();
-    assertEquals(StatusCode.OK, LocalWal.open(directory, result));
+    assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
     return result.wal();
   }
 }
