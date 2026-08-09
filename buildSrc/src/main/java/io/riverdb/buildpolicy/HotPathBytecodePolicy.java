@@ -1,6 +1,7 @@
 package io.riverdb.buildpolicy;
 
 import java.io.IOException;
+import java.lang.VerifyError;
 import java.lang.classfile.ClassFile;
 import java.lang.classfile.ClassModel;
 import java.lang.classfile.CodeElement;
@@ -9,10 +10,12 @@ import java.lang.classfile.Instruction;
 import java.lang.classfile.MethodModel;
 import java.lang.classfile.instruction.InvokeDynamicInstruction;
 import java.lang.classfile.instruction.InvokeInstruction;
+import java.lang.classfile.instruction.LookupSwitchInstruction;
 import java.lang.classfile.instruction.NewMultiArrayInstruction;
 import java.lang.classfile.instruction.NewObjectInstruction;
 import java.lang.classfile.instruction.NewPrimitiveArrayInstruction;
 import java.lang.classfile.instruction.NewReferenceArrayInstruction;
+import java.lang.classfile.instruction.TableSwitchInstruction;
 import java.lang.classfile.instruction.ThrowInstruction;
 import java.lang.constant.DirectMethodHandleDesc;
 import java.nio.file.Files;
@@ -171,6 +174,17 @@ public final class HotPathBytecodePolicy {
           return;
         }
         forceTraversal(model);
+        List<VerifyError> verifyErrors = parser.verify(bytes);
+        verifyErrors.stream()
+            .map(HotPathBytecodePolicy::stableMessage)
+            .filter(message -> !message.contains("Could not resolve class"))
+            .forEach(message -> violations.add(
+                displayPath + ": invalid class file: " + message
+            ));
+        if (violations.stream().anyMatch(violation ->
+            violation.startsWith(displayPath + ": invalid class file:"))) {
+          return;
+        }
         String className = model.thisClass().asInternalName();
         ParsedClass parsed = new ParsedClass(displayPath, model);
         ParsedClass previous = classes.putIfAbsent(className, parsed);
@@ -193,13 +207,48 @@ public final class HotPathBytecodePolicy {
       });
       method.code().ifPresent(code -> code.forEach(element -> {
         if (element instanceof Instruction instruction) {
-          instruction.opcode();
-          instruction.sizeInBytes();
+          forceInstruction(instruction);
         }
       }));
     });
     model.forEach(element -> {
     });
+  }
+
+  private static void forceInstruction(Instruction instruction) {
+    instruction.opcode();
+    instruction.sizeInBytes();
+    if (instruction instanceof InvokeInstruction invocation) {
+      invocation.method();
+      invocation.owner();
+      invocation.name();
+      invocation.type();
+      invocation.count();
+      invocation.isInterface();
+    } else if (instruction instanceof InvokeDynamicInstruction invocation) {
+      invocation.invokedynamic();
+      invocation.bootstrapMethod();
+      invocation.bootstrapArgs();
+      invocation.name();
+      invocation.type();
+    } else if (instruction instanceof NewObjectInstruction allocation) {
+      allocation.className();
+    } else if (instruction instanceof NewPrimitiveArrayInstruction allocation) {
+      allocation.typeKind();
+    } else if (instruction instanceof NewReferenceArrayInstruction allocation) {
+      allocation.componentType();
+    } else if (instruction instanceof NewMultiArrayInstruction allocation) {
+      allocation.arrayType();
+      allocation.dimensions();
+    } else if (instruction instanceof TableSwitchInstruction tableSwitch) {
+      tableSwitch.lowValue();
+      tableSwitch.highValue();
+      tableSwitch.defaultTarget();
+      tableSwitch.cases();
+    } else if (instruction instanceof LookupSwitchInstruction lookupSwitch) {
+      lookupSwitch.defaultTarget();
+      lookupSwitch.cases();
+    }
   }
 
   private static void auditMethod(

@@ -1,4 +1,5 @@
 import io.riverdb.buildpolicy.BuildPolicy
+import io.riverdb.buildpolicy.HotPathBytecodeFixtureMutator
 import io.riverdb.buildpolicy.HotPathBytecodePolicy
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
@@ -560,6 +561,12 @@ val compileHotPathBytecodeFixtures = tasks.register("compileHotPathBytecodeFixtu
   doLast {
     val output = hotPathFixtureClasses.get().asFile
     Files.createDirectories(output.toPath())
+    val staleMarker = output.resolve("stale-output.marker")
+    Files.writeString(staleMarker.toPath(), "must be removed before compilation\n")
+    if (!output.deleteRecursively()) {
+      throw GradleException("could not clear scoped bytecode fixture output $output")
+    }
+    Files.createDirectories(output.toPath())
     val compiler = javax.tools.ToolProvider.getSystemJavaCompiler()
         ?: throw GradleException("a Java 25 JDK compiler is required for policy fixtures")
     val arguments = mutableListOf(
@@ -571,6 +578,9 @@ val compileHotPathBytecodeFixtures = tasks.register("compileHotPathBytecodeFixtu
     val exitCode = compiler.run(null, null, null, *arguments.toTypedArray())
     if (exitCode != 0) {
       throw GradleException("hot-path bytecode fixtures failed to compile: exit $exitCode")
+    }
+    if (staleMarker.exists()) {
+      throw GradleException("stale bytecode fixture output survived compilation")
     }
   }
 }
@@ -706,6 +716,231 @@ val verifyHotPathBytecodeFixtures = tasks.register("verifyHotPathBytecodeFixture
       }) {
       throw GradleException(
         "missing bytecode selector fixture did not fail: $missingScopeViolations"
+      )
+    }
+
+    val adversarialClass = "fixture.bytecode.AdversarialHotPath"
+    val threadDeathScope = hotMethod(
+      adversarialClass,
+      "threadDeath",
+      "()Ljava/lang/ThreadDeath;"
+    )
+    val threadDeathViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(threadDeathScope),
+      emptyMap()
+    )
+    if (threadDeathViolations.none { "HP001" in it }
+        || threadDeathViolations.none { "HP006" in it }) {
+      throw GradleException(
+        "ThreadDeath ancestry fixture did not detect allocation and Throwable: "
+            + threadDeathViolations
+      )
+    }
+
+    val threadDeathAllowanceViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(threadDeathScope),
+      mapOf(
+        threadDeathScope to setOf(
+          HotPathBytecodePolicy.Allowance(
+            HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
+            "new java.lang.ThreadDeath"
+          )
+        )
+      )
+    )
+    if (threadDeathAllowanceViolations.none { "HP006" in it }
+        || threadDeathAllowanceViolations.any { "HP001" in it }) {
+      throw GradleException(
+        "object allowance masked Throwable construction: $threadDeathAllowanceViolations"
+      )
+    }
+
+    val misleadingExceptionViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(
+        hotMethod(
+          adversarialClass,
+          "misleadingException",
+          "()Lfixture/bytecode/AdversarialHotPath\$MisleadingException;"
+        )
+      ),
+      emptyMap()
+    )
+    if (misleadingExceptionViolations.none { "HP001" in it }
+        || misleadingExceptionViolations.any { "HP006" in it }) {
+      throw GradleException(
+        "misleading exception name fixture was misclassified: $misleadingExceptionViolations"
+      )
+    }
+
+    val customStreamViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      fixtureClassFiles,
+      setOf(
+        hotMethod(
+          adversarialClass,
+          "customStream",
+          "(Lfixture/bytecode/AdversarialHotPath\$CustomStream;)I"
+        )
+      ),
+      emptyMap()
+    )
+    if (customStreamViolations.isNotEmpty()) {
+      throw GradleException(
+        "custom non-stream method name was misclassified: $customStreamViolations"
+      )
+    }
+
+    val adversarialPath = hotPathFixtureClasses.get().asFile.toPath()
+        .resolve("fixture/bytecode/AdversarialHotPath.class")
+    val adversarialBytes = Files.readAllBytes(adversarialPath)
+    val malformedDirectory = layout.buildDirectory
+        .dir("bytecode-policy-fixtures/malformed")
+        .get().asFile
+    if (malformedDirectory.exists() && !malformedDirectory.deleteRecursively()) {
+      throw GradleException("could not clear malformed bytecode fixtures")
+    }
+    Files.createDirectories(malformedDirectory.toPath())
+
+    fun requireMalformed(name: String, bytes: ByteArray) {
+      val path = malformedDirectory.toPath().resolve("$name.class")
+      Files.write(path, bytes)
+      val structuralViolations = HotPathBytecodePolicy.violations(
+        rootDir.toPath(),
+        listOf(path),
+        emptySet(),
+        emptyMap()
+      )
+      if (structuralViolations.none { violation ->
+          "malformed class file" in violation
+              || "invalid class file" in violation
+              || "expected Java 25 class version" in violation
+        }) {
+        throw GradleException(
+          "malformed $name fixture was accepted: $structuralViolations"
+        )
+      }
+    }
+
+    requireMalformed(
+      "invalid-version",
+      HotPathBytecodeFixtureMutator.invalidVersion(adversarialBytes)
+    )
+    requireMalformed(
+      "invalid-constant-pool-tag",
+      HotPathBytecodeFixtureMutator.invalidConstantPoolTag(adversarialBytes)
+    )
+    requireMalformed(
+      "truncated",
+      HotPathBytecodeFixtureMutator.truncated(adversarialBytes)
+    )
+    requireMalformed(
+      "reserved-opcode",
+      HotPathBytecodeFixtureMutator.invalidReservedOpcode(
+        adversarialBytes,
+        "reservedVictim"
+      )
+    )
+    requireMalformed(
+      "invalid-wide",
+      HotPathBytecodeFixtureMutator.invalidWide(adversarialBytes, "wideVictim")
+    )
+    requireMalformed(
+      "invokeinterface-reserved",
+      HotPathBytecodeFixtureMutator.invalidInvokeInterfaceReserved(
+        adversarialBytes,
+        "interfaceInvoke"
+      )
+    )
+    requireMalformed(
+      "invokedynamic-reserved",
+      HotPathBytecodeFixtureMutator.invalidInvokeDynamicReserved(
+        adversarialBytes,
+        "dynamicConcat"
+      )
+    )
+    requireMalformed(
+      "newarray-type",
+      HotPathBytecodeFixtureMutator.invalidNewArrayType(
+        adversarialBytes,
+        "primitiveArray"
+      )
+    )
+    requireMalformed(
+      "multianewarray-dimensions",
+      HotPathBytecodeFixtureMutator.invalidMultiArrayDimensions(
+        adversarialBytes,
+        "multiArray"
+      )
+    )
+    requireMalformed(
+      "tableswitch-bounds",
+      HotPathBytecodeFixtureMutator.invalidTableSwitchBounds(
+        adversarialBytes,
+        "tableSwitch"
+      )
+    )
+    requireMalformed(
+      "tableswitch-target",
+      HotPathBytecodeFixtureMutator.invalidTableSwitchTarget(
+        adversarialBytes,
+        "tableSwitch"
+      )
+    )
+    requireMalformed(
+      "lookupswitch-order",
+      HotPathBytecodeFixtureMutator.invalidLookupSwitchOrder(
+        adversarialBytes,
+        "lookupSwitch"
+      )
+    )
+    requireMalformed(
+      "code-attribute-length",
+      HotPathBytecodeFixtureMutator.invalidCodeAttributeLength(
+        adversarialBytes,
+        "reservedVictim"
+      )
+    )
+    requireMalformed(
+      "duplicate-code-attribute",
+      HotPathBytecodeFixtureMutator.duplicateCodeAttribute(
+        adversarialBytes,
+        "reservedVictim"
+      )
+    )
+    requireMalformed(
+      "bootstrap-reference",
+      HotPathBytecodeFixtureMutator.invalidBootstrapReference(adversarialBytes)
+    )
+
+    val misleadingInvokeDynamicPath = malformedDirectory.toPath()
+        .resolve("misleading-invokedynamic-name.class")
+    Files.write(
+      misleadingInvokeDynamicPath,
+      HotPathBytecodeFixtureMutator.misleadingInvokeDynamicName(adversarialBytes)
+    )
+    val misleadingInvokeDynamicViolations = HotPathBytecodePolicy.violations(
+      rootDir.toPath(),
+      listOf(misleadingInvokeDynamicPath),
+      setOf(
+        hotMethod(
+          adversarialClass,
+          "dynamicConcat",
+          "(I)Ljava/lang/String;"
+        )
+      ),
+      emptyMap()
+    )
+    if (misleadingInvokeDynamicViolations.none { "HP008" in it }
+        || misleadingInvokeDynamicViolations.any { "HP010" in it }) {
+      throw GradleException(
+        "bootstrap-owner classification fixture failed: "
+            + misleadingInvokeDynamicViolations
       )
     }
   }
