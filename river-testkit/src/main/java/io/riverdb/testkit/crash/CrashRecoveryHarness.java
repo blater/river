@@ -113,10 +113,22 @@ public final class CrashRecoveryHarness {
         reopened = openResult.file();
       }
       report.enter(CrashPhase.CLOSE);
+      long generationBeforeClose = provider.generation();
       StatusCode closeStatus = reopened.close();
       if (!closeStatus.isOk()) {
-        report.failed(cycle, closeStatus);
-        return closeStatus;
+        boolean closeCrash = provider.generation() != generationBeforeClose
+            || !provider.isRunning();
+        if (!closeCrash) {
+          report.failed(cycle, closeStatus);
+          return closeStatus;
+        }
+        if (!recordRecovery(closeStatus, cycle, report)) {
+          return StatusCode.RESOURCE_EXHAUSTED;
+        }
+        status = ensureRunning(cycle, report);
+        if (!status.isOk()) {
+          return status;
+        }
       }
       report.completed();
       report.enter(CrashPhase.COMPLETE);

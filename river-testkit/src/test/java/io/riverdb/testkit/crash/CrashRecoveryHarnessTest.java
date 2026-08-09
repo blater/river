@@ -230,6 +230,70 @@ final class CrashRecoveryHarnessTest {
     assertEquals(CrashPhase.RESTART, report.phase());
   }
 
+  @Test
+  void closeCrashRecoversReadinessWithoutRepeatingVerifier() {
+    HarnessFixture fixture = fixture(1);
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.close(),
+            FaultOperation.CLOSE,
+            1,
+            1,
+            FaultAction.CRASH,
+            0));
+    CrashRecoveryHarness harness = new CrashRecoveryHarness(fixture.provider);
+    CrashRunReport report = new CrashRunReport();
+    int[] verifierCalls = new int[1];
+
+    StatusCode status = runVerifiedCycle(harness, report, verifierCalls);
+
+    assertEquals(StatusCode.OK, status);
+    assertEquals(1, verifierCalls[0]);
+    assertEquals(1, report.recoveryTransitions());
+    assertEquals(CrashPhase.COMPLETE, report.phase());
+    assertEquals(true, fixture.provider.isRunning());
+    OpenFileResult result = new OpenFileResult();
+    assertEquals(StatusCode.OK, fixture.provider.open("data-0001", result));
+  }
+
+  @Test
+  void closeRecoveryExhaustionIsBoundedAndCallerCanRestoreReadiness() {
+    HarnessFixture fixture = fixture(2);
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.close(),
+            FaultOperation.CLOSE,
+            1,
+            1,
+            FaultAction.CRASH,
+            0));
+    assertEquals(
+        StatusCode.OK,
+        fixture.controller.addRule(
+            fixture.points.restart(),
+            FaultOperation.RESTART,
+            2,
+            1,
+            FaultAction.CRASH,
+            0));
+    CrashRecoveryHarness harness = new CrashRecoveryHarness(fixture.provider, 1);
+    CrashRunReport report = new CrashRunReport();
+    int[] verifierCalls = new int[1];
+
+    StatusCode status = runVerifiedCycle(harness, report, verifierCalls);
+
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, status);
+    assertEquals(1, verifierCalls[0]);
+    assertEquals(1, report.recoveryTransitions());
+    assertEquals(CrashPhase.RESTART, report.phase());
+    assertEquals(false, fixture.provider.isRunning());
+    assertEquals(StatusCode.OK, fixture.provider.restart());
+    OpenFileResult result = new OpenFileResult();
+    assertEquals(StatusCode.OK, fixture.provider.open("data-0001", result));
+  }
+
   private static FaultingFileIoProvider provider() {
     FaultPointRegistry registry = new FaultPointRegistry(9);
     return new FaultingFileIoProvider(
@@ -261,6 +325,37 @@ final class CrashRecoveryHarnessTest {
               : writeStatus;
         },
         (cycle, reopened) -> {
+          ByteBuffer target = ByteBuffer.allocate(1);
+          ioResult.reset();
+          StatusCode readStatus = reopened.read(0, target, ioResult);
+          if (!readStatus.isOk()) {
+            return readStatus;
+          }
+          target.flip();
+          return ioResult.bytesTransferred() == 1 && target.get() == 42
+              ? StatusCode.OK
+              : StatusCode.CORRUPTION;
+        },
+        report);
+  }
+
+  private static StatusCode runVerifiedCycle(
+      CrashRecoveryHarness harness,
+      CrashRunReport report,
+      int[] verifierCalls) {
+    IoResult ioResult = new IoResult();
+    return harness.run(
+        "data-0001",
+        1,
+        (cycle, file) -> {
+          StatusCode writeStatus = file.write(
+              0, ByteBuffer.wrap(new byte[] {42}), ioResult);
+          return writeStatus.isOk()
+              ? file.force(ForceMode.CONTENT_AND_METADATA)
+              : writeStatus;
+        },
+        (cycle, reopened) -> {
+          verifierCalls[0]++;
           ByteBuffer target = ByteBuffer.allocate(1);
           ioResult.reset();
           StatusCode readStatus = reopened.read(0, target, ioResult);
