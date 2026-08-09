@@ -5,27 +5,29 @@ package io.riverdb.base.error;
  * identities; they must not be renumbered once published.
  */
 public enum StatusCode {
-  OK(0, StatusFamily.OK, false),
-  RETRY(1000, StatusFamily.RETRY, false),
-  FENCED(1001, StatusFamily.RETRY, false),
-  CLOSED(1002, StatusFamily.RETRY, false),
-  CANCELLED(2000, StatusFamily.CANCELLED, false),
-  INVALID_EXTERNAL_INPUT(3000, StatusFamily.INVALID_EXTERNAL_INPUT, false),
-  CONFLICT(4000, StatusFamily.CONFLICT, false),
-  NOT_OWNER(4001, StatusFamily.CONFLICT, false),
-  RESOURCE_EXHAUSTED(5000, StatusFamily.RESOURCE_EXHAUSTED, false),
-  TIMEOUT(6000, StatusFamily.TIMEOUT, false),
-  IO_FAILURE(7000, StatusFamily.IO_FAILURE, false),
-  CORRUPTION(8000, StatusFamily.CORRUPTION, true),
-  INVARIANT_BROKEN(9000, StatusFamily.INVARIANT_BROKEN, true);
+  OK(0, StatusFamily.OK, false, false),
+  RETRY(1000, StatusFamily.RETRY, true, false),
+  FENCED(1001, StatusFamily.RETRY, false, false),
+  CLOSED(1002, StatusFamily.RETRY, false, false),
+  CANCELLED(2000, StatusFamily.CANCELLED, false, false),
+  INVALID_EXTERNAL_INPUT(3000, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
+  CONFLICT(4000, StatusFamily.CONFLICT, true, false),
+  NOT_OWNER(4001, StatusFamily.CONFLICT, false, false),
+  RESOURCE_EXHAUSTED(5000, StatusFamily.RESOURCE_EXHAUSTED, false, false),
+  TIMEOUT(6000, StatusFamily.TIMEOUT, false, false),
+  IO_FAILURE(7000, StatusFamily.IO_FAILURE, false, false),
+  CORRUPTION(8000, StatusFamily.CORRUPTION, false, true),
+  INVARIANT_BROKEN(9000, StatusFamily.INVARIANT_BROKEN, false, true);
 
   private final int stableCode;
   private final StatusFamily family;
+  private final boolean retryable;
   private final boolean fatal;
 
-  StatusCode(int stableCode, StatusFamily family, boolean fatal) {
+  StatusCode(int stableCode, StatusFamily family, boolean retryable, boolean fatal) {
     this.stableCode = stableCode;
     this.family = family;
+    this.retryable = retryable;
     this.fatal = fatal;
   }
 
@@ -42,9 +44,13 @@ public enum StatusCode {
   }
 
   public boolean isRetryable() {
-    return family == StatusFamily.RETRY || family == StatusFamily.CONFLICT;
+    return retryable;
   }
 
+  /**
+   * Whether every occurrence is intrinsically fail-stop. A component may explicitly fence a
+   * contextual failure such as IO_FAILURE without changing this global classification.
+   */
   public boolean isFatal() {
     return fatal;
   }

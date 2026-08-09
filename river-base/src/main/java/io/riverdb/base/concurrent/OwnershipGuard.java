@@ -28,20 +28,26 @@ public final class OwnershipGuard {
   }
 
   public StatusCode checkOwnedBy(long expectedOwner) {
+    if (expectedOwner == RELEASED) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     return !enabled || owner.get() == expectedOwner ? StatusCode.OK : StatusCode.NOT_OWNER;
   }
 
   public StatusCode transfer(long expectedOwner, long newOwner) {
+    if (expectedOwner == RELEASED || newOwner == RELEASED) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     if (!enabled) {
       return StatusCode.OK;
-    }
-    if (newOwner == RELEASED) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return owner.compareAndSet(expectedOwner, newOwner) ? StatusCode.OK : StatusCode.NOT_OWNER;
   }
 
   public StatusCode release(long expectedOwner) {
+    if (expectedOwner == RELEASED) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     if (!enabled) {
       return StatusCode.OK;
     }

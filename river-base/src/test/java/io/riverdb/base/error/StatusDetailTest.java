@@ -7,15 +7,30 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashSet;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 final class StatusDetailTest {
   @Test
-  void stableCodesHaveFamiliesAndPolicyWithoutAllocation() {
+  void stableCodesAreUniqueAndRetryPolicyIsCodeSpecific() {
+    Set<Integer> stableCodes = new HashSet<>();
+    for (StatusCode code : StatusCode.values()) {
+      assertTrue(stableCodes.add(code.stableCode()), () -> "duplicate code " + code.stableCode());
+      boolean expectedRetryable = switch (code) {
+        case RETRY, CONFLICT -> true;
+        case OK, FENCED, CLOSED, CANCELLED, INVALID_EXTERNAL_INPUT, NOT_OWNER,
+            RESOURCE_EXHAUSTED, TIMEOUT, IO_FAILURE, CORRUPTION, INVARIANT_BROKEN -> false;
+      };
+      assertEquals(expectedRetryable, code.isRetryable(), code.name());
+    }
+
     assertEquals(StatusFamily.OK, StatusCode.OK.family());
     assertTrue(StatusCode.OK.isOk());
     assertTrue(StatusCode.RETRY.isRetryable());
     assertTrue(StatusCode.CONFLICT.isRetryable());
+    assertFalse(StatusCode.CLOSED.isRetryable());
+    assertFalse(StatusCode.NOT_OWNER.isRetryable());
     assertTrue(StatusCode.CORRUPTION.isFatal());
     assertTrue(StatusCode.INVARIANT_BROKEN.isFatal());
     assertFalse(StatusCode.IO_FAILURE.isFatal());
@@ -47,6 +62,37 @@ final class StatusDetailTest {
     assertEquals("abcde", detail.asString());
     assertEquals(5, detail.length());
     assertTrue(detail.truncated());
+  }
+
+  @Test
+  void zeroAndExactCapacityHaveUnambiguousTruncationSemantics() {
+    StatusDetail empty = new StatusDetail(0);
+    empty.append('x');
+    assertEquals(0, empty.length());
+    assertTrue(empty.truncated());
+
+    StatusDetail exact = new StatusDetail(3);
+    exact.append("123");
+    assertEquals("123", exact.asString());
+    assertFalse(exact.truncated());
+    exact.append('4');
+    assertEquals("123", exact.asString());
+    assertTrue(exact.truncated());
+  }
+
+  @Test
+  void detailSupportsPartialNumbersCopiesAndBounds() {
+    StatusDetail detail = new StatusDetail(4).append(-12345);
+    assertEquals("-123", detail.asString());
+    assertTrue(detail.truncated());
+
+    char[] destination = new char[8];
+    assertEquals(4, detail.copyTo(destination, 2));
+    assertEquals('-', destination[2]);
+    assertEquals('3', destination[5]);
+    assertThrows(IndexOutOfBoundsException.class, () -> detail.charAt(-1));
+    assertThrows(IndexOutOfBoundsException.class, () -> detail.charAt(4));
+    assertThrows(IndexOutOfBoundsException.class, () -> detail.subSequence(3, 2));
   }
 
   @Test

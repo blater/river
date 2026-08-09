@@ -2,7 +2,7 @@ package io.riverdb.base.concurrent;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Database/component contract for fencing new work after a fatal transition. */
+/** Database/component contract for fencing new work after an explicit fail-stop transition. */
 public interface FatalState {
   StatusCode admissionStatus();
 
@@ -10,5 +10,10 @@ public interface FatalState {
 
   boolean isFenced();
 
-  StatusCode fence(StatusCode fatalStatus);
+  /**
+   * Records a contextual fail-stop cause and fences admission. Calling this method classifies the
+   * particular failure as fail-stop; it does not make every occurrence of that status globally
+   * fatal. Repeating the winning cause is idempotent. A different later cause returns FENCED.
+   */
+  StatusCode fence(StatusCode failStopCause);
 }

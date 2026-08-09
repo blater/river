@@ -1,6 +1,9 @@
 package io.riverdb.base.id;
 
-/** A node-local physical WAL position. It must not be used as replica identity. */
+/**
+ * A node-local physical WAL position. It must not be used as replica identity. Representation and
+ * sentinel semantics remain provisional until P09/P10 evidence and contract review complete.
+ */
 public record Lsn(long value) implements Comparable<Lsn> {
   public static final Lsn NONE = new Lsn(-1);
   public static final Lsn BEFORE_FIRST = new Lsn(0);

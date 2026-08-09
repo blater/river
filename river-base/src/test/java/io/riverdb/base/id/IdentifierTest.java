@@ -19,11 +19,46 @@ final class IdentifierTest {
     assertFalse(CommitSequence.NONE.isValid());
     assertFalse(CheckpointId.NONE.isValid());
 
-    assertEquals(7, RelationId.of(7).value());
+    assertEquals(Integer.MAX_VALUE, TablespaceId.of(Integer.MAX_VALUE).value());
+    assertEquals(Integer.MAX_VALUE, RelationId.of(Integer.MAX_VALUE).value());
+    assertEquals(Integer.MAX_VALUE, IndexId.of(Integer.MAX_VALUE).value());
+    assertEquals(Integer.MAX_VALUE, ColumnId.of(Integer.MAX_VALUE).value());
+    assertEquals(Long.MAX_VALUE, DatabaseId.of(Long.MAX_VALUE).value());
+    assertEquals(Long.MAX_VALUE, TransactionId.of(Long.MAX_VALUE).value());
+    assertEquals(Long.MAX_VALUE, CommitSequence.of(Long.MAX_VALUE).value());
+    assertEquals(Long.MAX_VALUE, CheckpointId.of(Long.MAX_VALUE).value());
+
+    assertThrows(IllegalArgumentException.class, () -> TablespaceId.of(0));
     assertThrows(IllegalArgumentException.class, () -> RelationId.of(0));
-    assertThrows(IllegalArgumentException.class, () -> new RelationId(-1));
+    assertThrows(IllegalArgumentException.class, () -> IndexId.of(0));
+    assertThrows(IllegalArgumentException.class, () -> ColumnId.of(0));
+    assertThrows(IllegalArgumentException.class, () -> DatabaseId.of(0));
     assertThrows(IllegalArgumentException.class, () -> TransactionId.of(0));
+    assertThrows(IllegalArgumentException.class, () -> CommitSequence.of(0));
+    assertThrows(IllegalArgumentException.class, () -> CheckpointId.of(0));
+
+    assertThrows(IllegalArgumentException.class, () -> new TablespaceId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new RelationId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new IndexId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new ColumnId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new DatabaseId(-1));
     assertThrows(IllegalArgumentException.class, () -> new TransactionId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new CommitSequence(-1));
+    assertThrows(IllegalArgumentException.class, () -> new CheckpointId(-1));
+  }
+
+  @Test
+  void opaque128BitIdsReserveOnlyTheAllZeroValue() {
+    assertFalse(DatabaseIncarnation.NONE.isValid());
+    assertFalse(RequestId.NONE.isValid());
+    assertFalse(IdempotencyKey.NONE.isValid());
+    assertTrue(DatabaseIncarnation.of(0, 1).isValid());
+    assertTrue(RequestId.of(Long.MIN_VALUE, Long.MAX_VALUE).isValid());
+    assertTrue(IdempotencyKey.of(1, 0).isValid());
+
+    assertThrows(IllegalArgumentException.class, () -> DatabaseIncarnation.of(0, 0));
+    assertThrows(IllegalArgumentException.class, () -> RequestId.of(0, 0));
+    assertThrows(IllegalArgumentException.class, () -> IdempotencyKey.of(0, 0));
   }
 
   @Test
@@ -37,6 +72,8 @@ final class IdentifierTest {
 
   @Test
   void pageAndRowIdsRequireAllocationGenerations() {
+    assertFalse(PageId.NONE.isValid());
+    assertFalse(RowId.NONE.isValid());
     PageId page = PageId.of(TablespaceId.of(3), 17, 2);
     RowId row = RowId.of(page, 4, 8);
 
@@ -47,11 +84,19 @@ final class IdentifierTest {
     assertThrows(
         IllegalArgumentException.class,
         () -> PageId.of(TablespaceId.of(3), 17, 0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> PageId.of(TablespaceId.NONE, 17, 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> PageId.of(TablespaceId.of(3), -1, 1));
     assertThrows(IllegalArgumentException.class, () -> RowId.of(page, 4, 0));
+    assertThrows(IllegalArgumentException.class, () -> RowId.of(page, -1, 1));
   }
 
   @Test
   void logicalPositionsCompareOnlyInsideOneHistoryGeneration() {
+    assertFalse(JournalPosition.NONE.isValid());
     DatabaseIncarnation incarnation = DatabaseIncarnation.of(10, 20);
     JournalPosition first = JournalPosition.of(incarnation, 3, 8);
     JournalPosition second = JournalPosition.of(incarnation, 3, 9);
@@ -61,10 +106,20 @@ final class IdentifierTest {
     assertTrue(first.compareSequence(second) < 0);
     assertFalse(first.isComparableTo(otherGeneration));
     assertThrows(IllegalArgumentException.class, () -> first.compareSequence(otherGeneration));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> JournalPosition.of(DatabaseIncarnation.NONE, 1, 0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> JournalPosition.of(incarnation, 0, 0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> JournalPosition.of(incarnation, 1, -1));
   }
 
   @Test
   void manifestIdentityMustCoverTheSameHistory() {
+    assertFalse(CheckpointManifestId.NONE.isValid());
     DatabaseIncarnation incarnation = DatabaseIncarnation.of(1, 2);
     JournalPosition position = JournalPosition.of(incarnation, 1, 100);
     CheckpointManifestId manifest =
@@ -75,5 +130,11 @@ final class IdentifierTest {
         IllegalArgumentException.class,
         () -> CheckpointManifestId.of(
             DatabaseIncarnation.of(5, 6), position, 1, 33, 44));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> CheckpointManifestId.of(incarnation, position, 0, 33, 44));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> CheckpointManifestId.of(incarnation, position, 1, 0, 0));
   }
 }

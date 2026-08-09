@@ -25,11 +25,23 @@ public final class FatalStateFence implements FatalState {
 
   @Override
   public StatusCode fence(StatusCode candidate) {
-    if (!candidate.isFatal()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    boolean misuse = candidate == StatusCode.OK;
+    StatusCode cause = misuse
+        ? StatusCode.INVARIANT_BROKEN
+        : candidate;
+    StatusCode observed = fatalStatus.get();
+    if (observed == cause) {
+      return misuse ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
     }
-    return fatalStatus.compareAndSet(StatusCode.OK, candidate)
-        ? StatusCode.OK
-        : StatusCode.FENCED;
+    if (observed != StatusCode.OK) {
+      return StatusCode.FENCED;
+    }
+    if (fatalStatus.compareAndSet(StatusCode.OK, cause)) {
+      return misuse ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
+    }
+    if (fatalStatus.get() != cause) {
+      return StatusCode.FENCED;
+    }
+    return misuse ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
   }
 }
