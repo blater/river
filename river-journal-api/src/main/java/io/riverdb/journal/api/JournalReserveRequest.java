@@ -13,6 +13,7 @@ public final class JournalReserveRequest {
   private long idempotencyKeyLow;
   private DurabilityRequirement durabilityRequirement = DurabilityRequirement.LOCAL_DURABLE;
   private int payloadBytes;
+  private long admittedAtNanos;
 
   public JournalReserveRequest set(
       DatabaseIncarnation database,
@@ -22,7 +23,8 @@ public final class JournalReserveRequest {
       long idempotencyHigh,
       long idempotencyLow,
       DurabilityRequirement durability,
-      int bytes) {
+      int bytes,
+      long admissionNanos) {
     databaseIncarnation = database;
     nodeIncarnation = node;
     requestIdHigh = requestHigh;
@@ -31,6 +33,7 @@ public final class JournalReserveRequest {
     idempotencyKeyLow = idempotencyLow;
     durabilityRequirement = durability;
     payloadBytes = bytes;
+    admittedAtNanos = admissionNanos;
     return this;
   }
 
@@ -64,5 +67,9 @@ public final class JournalReserveRequest {
 
   public int payloadBytes() {
     return payloadBytes;
+  }
+
+  public long admittedAtNanos() {
+    return admittedAtNanos;
   }
 }

@@ -5,6 +5,8 @@ import io.riverdb.journal.api.NodeIncarnation;
 
 /** Caller-owned cancellable lease handle with a provider-authenticated token. */
 public final class WalRetentionLease {
+  private long ownerHigh;
+  private long ownerLow;
   private long providerToken;
   private NodeIncarnation nodeIncarnation = NodeIncarnation.NONE;
   private long leaseId;
@@ -13,7 +15,16 @@ public final class WalRetentionLease {
   private long expiresAtNanos;
   private boolean active;
 
-  public WalRetentionLease reset() {
+  public boolean isOwnedBy(long providerHigh, long providerLow) {
+    return ownerHigh == providerHigh && ownerLow == providerLow;
+  }
+
+  public io.riverdb.base.error.StatusCode reset() {
+    if (active) {
+      return io.riverdb.base.error.StatusCode.CONFLICT;
+    }
+    ownerHigh = 0;
+    ownerLow = 0;
     providerToken = 0;
     nodeIncarnation = NodeIncarnation.NONE;
     leaseId = 0;
@@ -21,17 +32,24 @@ public final class WalRetentionLease {
     minimumRequired = JournalPosition.NONE;
     expiresAtNanos = 0;
     active = false;
-    return this;
+    return io.riverdb.base.error.StatusCode.OK;
   }
 
   /** Provider-only population hook. */
-  public WalRetentionLease assign(
+  public io.riverdb.base.error.StatusCode claim(
+      long providerHigh,
+      long providerLow,
       long token,
       NodeIncarnation node,
       long id,
       RetentionOwnerKind owner,
       JournalPosition minimum,
       long expiry) {
+    if (active || (providerHigh == 0 && providerLow == 0)) {
+      return io.riverdb.base.error.StatusCode.CONFLICT;
+    }
+    ownerHigh = providerHigh;
+    ownerLow = providerLow;
     providerToken = token;
     nodeIncarnation = node;
     leaseId = id;
@@ -39,12 +57,30 @@ public final class WalRetentionLease {
     minimumRequired = minimum;
     expiresAtNanos = expiry;
     active = true;
-    return this;
+    return io.riverdb.base.error.StatusCode.OK;
   }
 
   /** Provider-only lifecycle hook. */
-  public void complete() {
+  public io.riverdb.base.error.StatusCode complete(long providerHigh, long providerLow) {
+    if (!active || !isOwnedBy(providerHigh, providerLow)) {
+      return io.riverdb.base.error.StatusCode.CONFLICT;
+    }
     active = false;
+    return io.riverdb.base.error.StatusCode.OK;
+  }
+
+  /** Authenticated in-place renewal of an already active provider capability. */
+  public io.riverdb.base.error.StatusCode renew(
+      long providerHigh,
+      long providerLow,
+      JournalPosition minimum,
+      long expiry) {
+    if (!active || !isOwnedBy(providerHigh, providerLow)) {
+      return io.riverdb.base.error.StatusCode.CONFLICT;
+    }
+    minimumRequired = minimum;
+    expiresAtNanos = expiry;
+    return io.riverdb.base.error.StatusCode.OK;
   }
 
   public long providerToken() {

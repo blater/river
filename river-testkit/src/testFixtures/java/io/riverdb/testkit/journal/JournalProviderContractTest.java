@@ -280,7 +280,7 @@ public abstract class JournalProviderContractTest {
     assertEquals(StatusCode.OK, harness.crashAndRestart(restarted));
     assertFrontiers(frontiers(provider), 1, 0, 1, 1, 0);
     assertEquals(RequestOutcomeState.DURABLE, lookup(provider, restarted, 1).state());
-    assertEquals(RequestOutcomeState.NOT_FOUND, lookup(provider, restarted, 2).state());
+    assertEquals(RequestOutcomeState.NOT_DURABLE, lookup(provider, restarted, 2).state());
     DurabilityResult staleWaitResult = new DurabilityResult();
     assertEquals(
         StatusCode.FENCED,
@@ -299,12 +299,12 @@ public abstract class JournalProviderContractTest {
     RequestOutcomeResult stale = new RequestOutcomeResult();
     assertEquals(
         StatusCode.FENCED,
-        provider.lookupOutcome(DATABASE, NODE, IdempotencyKey.of(1, 2), stale, detail()));
+        provider.lookupOutcome(DATABASE, NODE, IdempotencyKey.of(1, 2), 0, stale, detail()));
     assertEquals(
         StatusCode.FENCED,
         provider.lookupOutcome(
             DatabaseIncarnation.of(99, 100), restarted,
-            IdempotencyKey.of(3001, 4001), stale, detail()));
+            IdempotencyKey.of(3001, 4001), 0, stale, detail()));
     JournalReservation next = reserve(provider, restarted, 3);
     assertEquals(durable.sequence() + 1, next.sequence());
   }
@@ -414,6 +414,10 @@ public abstract class JournalProviderContractTest {
     WalRetentionLease expiring = new WalRetentionLease();
     JournalReservation fourth = reserve(provider, 4);
     publish(provider, fourth, 4, TransactionDecision.NONE);
+    assertEquals(StatusCode.OK, harness.writeThrough(JOURNAL_GENERATION, 4));
+    assertEquals(
+        StatusCode.OK,
+        harness.forceThrough(JOURNAL_GENERATION, 4, ForceCompletion.SUCCEEDED));
     assertEquals(
         StatusCode.OK,
         provider.acquireRetentionLease(leaseRequest(3, 4, 10, 20), expiring, detail()));
@@ -562,7 +566,8 @@ public abstract class JournalProviderContractTest {
         3000 + identity,
         4000 + identity,
         requirement,
-        1);
+        1,
+        0);
   }
 
   private DurabilityTicket beginPending(
@@ -597,7 +602,7 @@ public abstract class JournalProviderContractTest {
         StatusCode.OK,
         provider.lookupOutcome(
             DATABASE, node, IdempotencyKey.of(3000 + identity, 4000 + identity),
-            result, detail()));
+            0, result, detail()));
     return result;
   }
 

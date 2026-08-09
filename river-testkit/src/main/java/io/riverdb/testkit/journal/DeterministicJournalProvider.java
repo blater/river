@@ -26,12 +26,14 @@ import io.riverdb.journal.api.frontier.JournalFrontierSnapshot;
 import io.riverdb.journal.api.mapping.JournalPositionMapping;
 import io.riverdb.journal.api.outcome.RequestOutcomeResult;
 import io.riverdb.journal.api.outcome.RequestOutcomeState;
+import io.riverdb.journal.api.outcome.OutcomeRetentionSnapshot;
 import io.riverdb.journal.api.outcome.TransactionDecision;
 import io.riverdb.journal.api.retention.RetentionOwnerKind;
 import io.riverdb.journal.api.retention.RetentionSnapshot;
 import io.riverdb.journal.api.retention.WalRetentionLease;
 import io.riverdb.journal.api.retention.WalRetentionLeaseRequest;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Fixed-capacity single-process journal model for the provider contract suite. It deliberately
@@ -45,6 +47,7 @@ import java.nio.ByteBuffer;
  * reservation and framing alternatives.
  */
 public final class DeterministicJournalProvider implements JournalProvider {
+  private static final AtomicLong PROVIDER_IDENTITIES = new AtomicLong();
   private static final byte FREE = 0;
   private static final byte RESERVED = 1;
   private static final byte PUBLISHED = 2;
@@ -56,7 +59,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private final long journalGeneration;
   private final long walGeneration;
   private final JournalCapabilities capabilities;
-  private final FatalStateFence fatalState;
+  private final long capabilityOwnerHigh;
+  private final long capabilityOwnerLow;
+  private FatalStateFence fatalState;
   private final Thread ownerThread;
   private final byte[] states;
   private final long[] sequences;
@@ -65,6 +70,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private final byte[][] payloads;
   private final long[] walStarts;
   private final long[] walEnds;
+  private final int[] outcomeSlots;
   private final long[] requestHigh;
   private final long[] requestLow;
   private final long[] idempotencyHigh;
@@ -76,6 +82,12 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private final byte[] transactionDecisions;
   private final byte[] requestedDurability;
   private final boolean[] unknownOutcomes;
+  private final boolean[] cancelledOutcomes;
+  private final byte[] outcomeStates;
+  private final long[] outcomeSequences;
+  private final long[] outcomeAdmittedAtNanos;
+  private final long[] outcomeForgetAtNanos;
+  private final long outcomeRetentionNanos;
   private final long[] leaseIds;
   private final long[] leaseTokens;
   private final long[] leaseMinimumSequences;
@@ -92,6 +104,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private long durableSequence;
   private long durableEndExclusive;
   private int retainedEntries;
+  private int retainedOutcomes;
   private DurabilityOutcome terminalWaitOutcome = DurabilityOutcome.PENDING;
 
   public DeterministicJournalProvider(
@@ -103,7 +116,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
       int maxEntryBytes,
       FatalStateFence fence) {
     this(database, node, generation, localWalGeneration, capacity, maxEntryBytes, 4,
-        1_000_000_000L, fence);
+        1_000_000_000L, Math.max(8, capacity * 2), 1_000_000_000L, fence);
   }
 
   public DeterministicJournalProvider(
@@ -116,11 +129,42 @@ public final class DeterministicJournalProvider implements JournalProvider {
       int maxRetentionLeases,
       long maximumLeaseDurationNanos,
       FatalStateFence fence) {
+    this(
+        database,
+        node,
+        generation,
+        localWalGeneration,
+        capacity,
+        maxEntryBytes,
+        maxRetentionLeases,
+        maximumLeaseDurationNanos,
+        Math.max(8, capacity * 2),
+        1_000_000_000L,
+        fence);
+  }
+
+  public DeterministicJournalProvider(
+      DatabaseIncarnation database,
+      NodeIncarnation node,
+      long generation,
+      long localWalGeneration,
+      int capacity,
+      int maxEntryBytes,
+      int maxRetentionLeases,
+      long maximumLeaseDurationNanos,
+      int outcomeCapacity,
+      long requestOutcomeRetentionNanos,
+      FatalStateFence fence) {
     databaseIncarnation = database;
     nodeIncarnation = node;
     journalGeneration = generation;
     walGeneration = localWalGeneration;
     capabilities = JournalCapabilities.LOCAL_ONLY;
+    long providerIdentity = PROVIDER_IDENTITIES.incrementAndGet();
+    capabilityOwnerHigh = mix(
+        database.high() ^ node.high() ^ generation ^ providerIdentity ^ 0x52495645524a4e4cL);
+    capabilityOwnerLow = mix(
+        database.low() ^ node.low() ^ localWalGeneration ^ providerIdentity ^ 0x57414c4f574e4552L);
     fatalState = fence;
     ownerThread = Thread.currentThread();
     int boundedCapacity = Math.max(0, capacity);
@@ -132,17 +176,26 @@ public final class DeterministicJournalProvider implements JournalProvider {
     payloads = new byte[boundedCapacity][boundedEntryBytes];
     walStarts = new long[boundedCapacity];
     walEnds = new long[boundedCapacity];
-    requestHigh = new long[boundedCapacity];
-    requestLow = new long[boundedCapacity];
-    idempotencyHigh = new long[boundedCapacity];
-    idempotencyLow = new long[boundedCapacity];
-    transactionIds = new long[boundedCapacity];
-    commitSequences = new long[boundedCapacity];
-    formatIds = new int[boundedCapacity];
-    formatVersions = new int[boundedCapacity];
-    transactionDecisions = new byte[boundedCapacity];
-    requestedDurability = new byte[boundedCapacity];
-    unknownOutcomes = new boolean[boundedCapacity];
+    outcomeSlots = new int[boundedCapacity];
+    java.util.Arrays.fill(outcomeSlots, -1);
+    int boundedOutcomeCapacity = Math.max(0, outcomeCapacity);
+    requestHigh = new long[boundedOutcomeCapacity];
+    requestLow = new long[boundedOutcomeCapacity];
+    idempotencyHigh = new long[boundedOutcomeCapacity];
+    idempotencyLow = new long[boundedOutcomeCapacity];
+    transactionIds = new long[boundedOutcomeCapacity];
+    commitSequences = new long[boundedOutcomeCapacity];
+    formatIds = new int[boundedOutcomeCapacity];
+    formatVersions = new int[boundedOutcomeCapacity];
+    transactionDecisions = new byte[boundedOutcomeCapacity];
+    requestedDurability = new byte[boundedOutcomeCapacity];
+    unknownOutcomes = new boolean[boundedOutcomeCapacity];
+    cancelledOutcomes = new boolean[boundedOutcomeCapacity];
+    outcomeStates = new byte[boundedOutcomeCapacity];
+    outcomeSequences = new long[boundedOutcomeCapacity];
+    outcomeAdmittedAtNanos = new long[boundedOutcomeCapacity];
+    outcomeForgetAtNanos = new long[boundedOutcomeCapacity];
+    outcomeRetentionNanos = Math.max(0, requestOutcomeRetentionNanos);
     int boundedLeaseCount = Math.max(0, maxRetentionLeases);
     leaseIds = new long[boundedLeaseCount];
     leaseTokens = new long[boundedLeaseCount];
@@ -172,8 +225,10 @@ public final class DeterministicJournalProvider implements JournalProvider {
       JournalReserveRequest request,
       JournalReservation reservation,
       StatusDetail detail) {
-    reservation.reset();
     detail.reset();
+    if (reservation.isActive()) {
+      return detail.set(StatusCode.CONFLICT).append("active reservation output").code();
+    }
     StatusCode admission = admission(request.databaseIncarnation(), request.nodeIncarnation());
     if (!admission.isOk()) {
       return detail.set(admission).code();
@@ -185,6 +240,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
     }
     if ((request.requestIdHigh() == 0 && request.requestIdLow() == 0)
         || (request.idempotencyKeyHigh() == 0 && request.idempotencyKeyLow() == 0)
+        || request.admittedAtNanos() < 0
         || request.payloadBytes() < 0
         || (payloads.length > 0 && request.payloadBytes() > payloads[0].length)) {
       return detail.set(StatusCode.INVALID_EXTERNAL_INPUT).code();
@@ -201,27 +257,20 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (states[slot] != FREE) {
       return detail.set(StatusCode.RESOURCE_EXHAUSTED).append("retained ring slot").code();
     }
-    long sequence = nextSequence++;
     long frameBytes = FRAME_OVERHEAD_BYTES + request.payloadBytes();
-    long end = nextWalStart + frameBytes;
-    if (end < nextWalStart) {
+    if (Long.MAX_VALUE - nextWalStart < frameBytes || nextSequence == Long.MAX_VALUE) {
       return detail.set(StatusCode.RESOURCE_EXHAUSTED).append("local LSN overflow").code();
     }
-    states[slot] = RESERVED;
-    sequences[slot] = sequence;
-    long reservationToken = ++providerToken;
-    reservationTokens[slot] = reservationToken;
-    payloadLengths[slot] = request.payloadBytes();
-    walStarts[slot] = nextWalStart;
-    walEnds[slot] = end;
-    requestHigh[slot] = request.requestIdHigh();
-    requestLow[slot] = request.requestIdLow();
-    idempotencyHigh[slot] = request.idempotencyKeyHigh();
-    idempotencyLow[slot] = request.idempotencyKeyLow();
-    nextWalStart = end;
-    retainedEntries++;
-    requestedDurability[slot] = (byte) request.durabilityRequirement().ordinal();
-    reservation.assign(
+    long end = nextWalStart + frameBytes;
+    int outcomeSlot = findFreeOutcome();
+    if (outcomeSlot < 0) {
+      return detail.set(StatusCode.RESOURCE_EXHAUSTED).append("outcome capacity").code();
+    }
+    long sequence = nextSequence;
+    long reservationToken = providerToken + 1;
+    StatusCode claimStatus = reservation.claim(
+        capabilityOwnerHigh,
+        capabilityOwnerLow,
         databaseIncarnation.high(),
         databaseIncarnation.low(),
         journalGeneration,
@@ -229,6 +278,29 @@ public final class DeterministicJournalProvider implements JournalProvider {
         reservationToken,
         slot,
         request.payloadBytes());
+    if (!claimStatus.isOk()) {
+      return detail.set(claimStatus).append("reservation output claim").code();
+    }
+    nextSequence++;
+    providerToken = reservationToken;
+    states[slot] = RESERVED;
+    sequences[slot] = sequence;
+    reservationTokens[slot] = reservationToken;
+    payloadLengths[slot] = request.payloadBytes();
+    walStarts[slot] = nextWalStart;
+    walEnds[slot] = end;
+    outcomeSlots[slot] = outcomeSlot;
+    requestHigh[outcomeSlot] = request.requestIdHigh();
+    requestLow[outcomeSlot] = request.requestIdLow();
+    idempotencyHigh[outcomeSlot] = request.idempotencyKeyHigh();
+    idempotencyLow[outcomeSlot] = request.idempotencyKeyLow();
+    outcomeSequences[outcomeSlot] = sequence;
+    outcomeAdmittedAtNanos[outcomeSlot] = request.admittedAtNanos();
+    outcomeStates[outcomeSlot] = (byte) RequestOutcomeState.RESERVED.ordinal();
+    requestedDurability[outcomeSlot] = (byte) request.durabilityRequirement().ordinal();
+    retainedOutcomes++;
+    nextWalStart = end;
+    retainedEntries++;
     return StatusCode.OK;
   }
 
@@ -265,13 +337,17 @@ public final class DeterministicJournalProvider implements JournalProvider {
     for (int index = 0; index < payloadLengths[slot]; index++) {
       payloads[slot][index] = payload.get(payloadPosition + index);
     }
-    transactionIds[slot] = request.transactionId();
-    commitSequences[slot] = request.commitSequence();
-    formatIds[slot] = request.formatId();
-    formatVersions[slot] = request.formatVersion();
-    transactionDecisions[slot] = (byte) request.transactionDecision().ordinal();
+    int outcomeSlot = outcomeSlots[slot];
+    transactionIds[outcomeSlot] = request.transactionId();
+    commitSequences[outcomeSlot] = request.commitSequence();
+    formatIds[outcomeSlot] = request.formatId();
+    formatVersions[outcomeSlot] = request.formatVersion();
+    transactionDecisions[outcomeSlot] = (byte) request.transactionDecision().ordinal();
+    outcomeStates[outcomeSlot] = (byte) (request.transactionDecision() == TransactionDecision.NONE
+        ? RequestOutcomeState.PUBLISHED.ordinal()
+        : RequestOutcomeState.DECIDED.ordinal());
     states[slot] = PUBLISHED;
-    reservation.complete();
+    reservation.complete(capabilityOwnerHigh, capabilityOwnerLow);
     advancePublishedFrontiers();
     result.set(
         databaseIncarnation.high(),
@@ -299,11 +375,15 @@ public final class DeterministicJournalProvider implements JournalProvider {
       return detail.set(StatusCode.CONFLICT).append("stale reservation").code();
     }
     payloadLengths[slot] = 0;
-    transactionIds[slot] = 0;
-    commitSequences[slot] = 0;
-    transactionDecisions[slot] = 0;
+    int outcomeSlot = outcomeSlots[slot];
+    transactionIds[outcomeSlot] = 0;
+    commitSequences[outcomeSlot] = 0;
+    transactionDecisions[outcomeSlot] = 0;
+    outcomeStates[outcomeSlot] = (byte) RequestOutcomeState.CANCELLED_TOMBSTONE.ordinal();
+    cancelledOutcomes[outcomeSlot] = true;
+    outcomeForgetAtNanos[outcomeSlot] = forgetAt(outcomeAdmittedAtNanos[outcomeSlot]);
     states[slot] = PUBLISHED;
-    reservation.complete();
+    reservation.complete(capabilityOwnerHigh, capabilityOwnerLow);
     advancePublishedFrontiers();
     return StatusCode.CANCELLED;
   }
@@ -314,9 +394,11 @@ public final class DeterministicJournalProvider implements JournalProvider {
       DurabilityTicket ticket,
       DurabilityResult result,
       StatusDetail detail) {
-    ticket.reset();
     result.reset();
     detail.reset();
+    if (ticket.isActive()) {
+      return detail.set(StatusCode.CONFLICT).append("active durability ticket output").code();
+    }
     StatusCode admission = admission(request.databaseIncarnation(), request.nodeIncarnation());
     if (!admission.isOk()) {
       setDurabilityResult(result, DurabilityOutcome.FENCED, request.requirement(), 0);
@@ -337,8 +419,17 @@ public final class DeterministicJournalProvider implements JournalProvider {
           result, DurabilityOutcome.SATISFIED, request.requirement(), request.requiredSequence());
       return StatusCode.OK;
     }
-    ticket.assign(lifecycleToken, journalGeneration, request.requiredSequence(),
-        request.requirement(), request.deadlineNanos());
+    StatusCode claimStatus = ticket.claim(
+        capabilityOwnerHigh,
+        capabilityOwnerLow,
+        lifecycleToken,
+        journalGeneration,
+        request.requiredSequence(),
+        request.requirement(),
+        request.deadlineNanos());
+    if (!claimStatus.isOk()) {
+      return detail.set(claimStatus).code();
+    }
     return StatusCode.RETRY;
   }
 
@@ -354,14 +445,17 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (!ticket.isActive()) {
       return detail.set(StatusCode.CONFLICT).append("inactive durability ticket").code();
     }
+    if (!ticket.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
+      return detail.set(StatusCode.CONFLICT).append("foreign durability ticket").code();
+    }
     if (ticket.providerToken() != lifecycleToken
         || ticket.journalGeneration() != journalGeneration) {
-      ticket.complete();
+      ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
       setDurabilityResult(result, DurabilityOutcome.FENCED, ticket.requirement(), 0);
       return detail.set(StatusCode.FENCED).code();
     }
     if (fatalState.isFenced()) {
-      ticket.complete();
+      ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
       DurabilityOutcome outcome = terminalWaitOutcome == DurabilityOutcome.UNKNOWN
           ? DurabilityOutcome.UNKNOWN
           : DurabilityOutcome.FENCED;
@@ -369,18 +463,18 @@ public final class DeterministicJournalProvider implements JournalProvider {
       return detail.set(StatusCode.FENCED).code();
     }
     if (cancellation.isCancellationRequested()) {
-      ticket.complete();
+      ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
       setDurabilityResult(result, DurabilityOutcome.CANCELLED, ticket.requirement(), 0);
       return detail.set(StatusCode.CANCELLED).code();
     }
     if (durableSequence >= ticket.requiredSequence()) {
-      ticket.complete();
+      ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
       setDurabilityResult(
           result, DurabilityOutcome.SATISFIED, ticket.requirement(), ticket.requiredSequence());
       return StatusCode.OK;
     }
     if (ticket.deadlineNanos() != 0 && nowNanos >= ticket.deadlineNanos()) {
-      ticket.complete();
+      ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
       setDurabilityResult(result, DurabilityOutcome.TIMED_OUT, ticket.requirement(), 0);
       return detail.set(StatusCode.TIMEOUT).code();
     }
@@ -397,7 +491,10 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (!ticket.isActive()) {
       return detail.set(StatusCode.CONFLICT).code();
     }
-    ticket.complete();
+    if (!ticket.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
+      return detail.set(StatusCode.CONFLICT).append("foreign durability ticket").code();
+    }
+    ticket.complete(capabilityOwnerHigh, capabilityOwnerLow);
     setDurabilityResult(result, DurabilityOutcome.CANCELLED, ticket.requirement(), 0);
     return detail.set(StatusCode.CANCELLED).code();
   }
@@ -436,9 +533,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
         walGeneration,
         walStarts[slot],
         walEnds[slot],
-        transactionIds[slot],
-        commitSequences[slot],
-        transactionDecisions[slot] != 0);
+        transactionIds[outcomeSlots[slot]],
+        commitSequences[outcomeSlots[slot]],
+        transactionDecisions[outcomeSlots[slot]] != 0);
     return StatusCode.OK;
   }
 
@@ -447,6 +544,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
       DatabaseIncarnation database,
       NodeIncarnation node,
       IdempotencyKey idempotencyKey,
+      long nowNanos,
       RequestOutcomeResult result,
       StatusDetail detail) {
     result.reset();
@@ -462,24 +560,15 @@ public final class DeterministicJournalProvider implements JournalProvider {
       return detail.set(StatusCode.INVALID_EXTERNAL_INPUT).code();
     }
     int slot = findIdempotency(idempotencyKey.high(), idempotencyKey.low());
-    if (slot < 0) {
+    if (slot < 0
+        || (outcomeForgetAtNanos[slot] != 0 && nowNanos >= outcomeForgetAtNanos[slot])) {
       return StatusCode.OK;
     }
     TransactionDecision decision = TransactionDecision.values()[transactionDecisions[slot]];
-    RequestOutcomeState outcomeState;
-    boolean finalOutcome = false;
-    if (unknownOutcomes[slot]) {
-      outcomeState = RequestOutcomeState.UNKNOWN;
-    } else if (states[slot] == RESERVED) {
-      outcomeState = RequestOutcomeState.RESERVED;
-    } else if (states[slot] == DURABLE) {
-      outcomeState = RequestOutcomeState.DURABLE;
-      finalOutcome = decision != TransactionDecision.NONE;
-    } else if (decision != TransactionDecision.NONE) {
-      outcomeState = RequestOutcomeState.DECIDED;
-    } else {
-      outcomeState = RequestOutcomeState.PUBLISHED;
-    }
+    RequestOutcomeState outcomeState = RequestOutcomeState.values()[outcomeStates[slot]];
+    boolean finalOutcome = outcomeState == RequestOutcomeState.DURABLE
+        || outcomeState == RequestOutcomeState.NOT_DURABLE
+        || outcomeState == RequestOutcomeState.CANCELLED_TOMBSTONE;
     result.set(
         outcomeState,
         RequestId.of(requestHigh[slot], requestLow[slot]),
@@ -487,7 +576,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
         databaseIncarnation.high(),
         databaseIncarnation.low(),
         journalGeneration,
-        sequences[slot],
+        outcomeSequences[slot],
         transactionIds[slot] == 0 ? TransactionId.NONE : TransactionId.of(transactionIds[slot]),
         commitSequences[slot] == 0
             ? CommitSequence.NONE
@@ -499,12 +588,41 @@ public final class DeterministicJournalProvider implements JournalProvider {
   }
 
   @Override
+  public synchronized StatusCode forgetExpiredOutcomes(
+      long nowNanos,
+      OutcomeRetentionSnapshot result,
+      StatusDetail detail) {
+    detail.reset();
+    StatusCode owner = checkOwner();
+    if (!owner.isOk()) {
+      return detail.set(owner).code();
+    }
+    long earliest = 0;
+    for (int index = 0; index < outcomeStates.length; index++) {
+      if (outcomeStates[index] == RequestOutcomeState.NOT_FOUND.ordinal()) {
+        continue;
+      }
+      if (outcomeForgetAtNanos[index] != 0 && nowNanos >= outcomeForgetAtNanos[index]) {
+        clearOutcome(index);
+        retainedOutcomes--;
+      } else if (outcomeForgetAtNanos[index] != 0
+          && (earliest == 0 || outcomeForgetAtNanos[index] < earliest)) {
+        earliest = outcomeForgetAtNanos[index];
+      }
+    }
+    result.set(retainedOutcomes, outcomeStates.length, earliest);
+    return StatusCode.OK;
+  }
+
+  @Override
   public synchronized StatusCode acquireRetentionLease(
       WalRetentionLeaseRequest request,
       WalRetentionLease lease,
       StatusDetail detail) {
-    lease.reset();
     detail.reset();
+    if (lease.isActive()) {
+      return detail.set(StatusCode.CONFLICT).append("active retention lease output").code();
+    }
     StatusCode admission = admission(request.databaseIncarnation(), request.nodeIncarnation());
     if (!admission.isOk()) {
       return detail.set(admission).code();
@@ -520,14 +638,25 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (slot < 0) {
       return detail.set(StatusCode.RESOURCE_EXHAUSTED).append("retention lease capacity").code();
     }
-    long token = ++providerToken;
+    long token = providerToken + 1;
+    StatusCode claimStatus = lease.claim(
+        capabilityOwnerHigh,
+        capabilityOwnerLow,
+        token,
+        nodeIncarnation,
+        request.leaseId(),
+        request.ownerKind(),
+        request.minimumRequired(),
+        request.expiresAtNanos());
+    if (!claimStatus.isOk()) {
+      return detail.set(claimStatus).code();
+    }
+    providerToken = token;
     leaseIds[slot] = request.leaseId();
     leaseTokens[slot] = token;
     leaseMinimumSequences[slot] = request.minimumRequired().sequence();
     leaseExpiries[slot] = request.expiresAtNanos();
     leaseOwnerKinds[slot] = (byte) request.ownerKind().ordinal();
-    lease.assign(token, nodeIncarnation, request.leaseId(), request.ownerKind(),
-        request.minimumRequired(), request.expiresAtNanos());
     return StatusCode.OK;
   }
 
@@ -544,6 +673,9 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (!lease.nodeIncarnation().equals(nodeIncarnation)) {
       return detail.set(StatusCode.FENCED).code();
     }
+    if (!lease.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
+      return detail.set(StatusCode.CONFLICT).append("foreign retention lease").code();
+    }
     expireLeases(request.nowNanos());
     int slot = findLease(lease);
     if (slot < 0
@@ -553,10 +685,16 @@ public final class DeterministicJournalProvider implements JournalProvider {
         || request.minimumRequired().sequence() < leaseMinimumSequences[slot]) {
       return detail.set(StatusCode.CONFLICT).code();
     }
+    if (!historyRetained(request.minimumRequired().sequence())) {
+      return detail.set(StatusCode.CONFLICT).append("retention history unavailable").code();
+    }
     leaseMinimumSequences[slot] = request.minimumRequired().sequence();
     leaseExpiries[slot] = request.expiresAtNanos();
-    lease.assign(leaseTokens[slot], nodeIncarnation, request.leaseId(), request.ownerKind(),
-        request.minimumRequired(), request.expiresAtNanos());
+    lease.renew(
+        capabilityOwnerHigh,
+        capabilityOwnerLow,
+        request.minimumRequired(),
+        request.expiresAtNanos());
     return StatusCode.OK;
   }
 
@@ -568,8 +706,10 @@ public final class DeterministicJournalProvider implements JournalProvider {
       long nowNanos,
       WalRetentionLease lease,
       StatusDetail detail) {
-    lease.reset();
     detail.reset();
+    if (lease.isActive()) {
+      return detail.set(StatusCode.CONFLICT).append("active retention lease output").code();
+    }
     StatusCode admission = admission(database, node);
     if (!admission.isOk()) {
       return detail.set(admission).code();
@@ -579,16 +719,25 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (slot < 0) {
       return StatusCode.RETRY;
     }
-    long token = ++providerToken;
-    leaseTokens[slot] = token;
+    if (!historyRetained(leaseMinimumSequences[slot])) {
+      return detail.set(StatusCode.CONFLICT).append("retention history unavailable").code();
+    }
+    long token = providerToken + 1;
     RetentionOwnerKind owner = RetentionOwnerKind.values()[leaseOwnerKinds[slot]];
-    lease.assign(
+    StatusCode claimStatus = lease.claim(
+        capabilityOwnerHigh,
+        capabilityOwnerLow,
         token,
         nodeIncarnation,
         leaseIds[slot],
         owner,
         position(leaseMinimumSequences[slot]),
         leaseExpiries[slot]);
+    if (!claimStatus.isOk()) {
+      return detail.set(claimStatus).code();
+    }
+    providerToken = token;
+    leaseTokens[slot] = token;
     return StatusCode.OK;
   }
 
@@ -604,12 +753,15 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (!lease.nodeIncarnation().equals(nodeIncarnation)) {
       return detail.set(StatusCode.FENCED).code();
     }
+    if (!lease.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)) {
+      return detail.set(StatusCode.CONFLICT).append("foreign retention lease").code();
+    }
     int slot = findLease(lease);
     if (slot < 0) {
       return detail.set(StatusCode.CONFLICT).code();
     }
     clearLease(slot);
-    lease.complete();
+    lease.complete(capabilityOwnerHigh, capabilityOwnerLow);
     return StatusCode.OK;
   }
 
@@ -701,6 +853,15 @@ public final class DeterministicJournalProvider implements JournalProvider {
       long generation,
       long inclusiveSequence,
       ForceCompletion completion) {
+    return forceThrough(generation, inclusiveSequence, completion, 0);
+  }
+
+  /** Allocation-free force completion with an explicit outcome-retention timestamp. */
+  public synchronized StatusCode forceThrough(
+      long generation,
+      long inclusiveSequence,
+      ForceCompletion completion,
+      long nowNanos) {
     StatusCode admission = checkOwnerAndFence();
     if (!admission.isOk()) {
       return admission;
@@ -714,8 +875,10 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (completion == ForceCompletion.UNKNOWN) {
       terminalWaitOutcome = DurabilityOutcome.UNKNOWN;
       for (int index = 0; index < states.length; index++) {
-        if (states[index] != FREE && sequences[index] <= inclusiveSequence) {
-          unknownOutcomes[index] = true;
+        if (states[index] == WRITTEN && sequences[index] <= inclusiveSequence) {
+          int outcomeSlot = outcomeSlots[index];
+          unknownOutcomes[outcomeSlot] = true;
+          outcomeStates[outcomeSlot] = (byte) RequestOutcomeState.UNKNOWN.ordinal();
         }
       }
       fatalState.fence(StatusCode.IO_FAILURE);
@@ -724,6 +887,12 @@ public final class DeterministicJournalProvider implements JournalProvider {
     for (int index = 0; index < states.length; index++) {
       if (sequences[index] <= inclusiveSequence && states[index] == WRITTEN) {
         states[index] = DURABLE;
+        int outcomeSlot = outcomeSlots[index];
+        unknownOutcomes[outcomeSlot] = false;
+        outcomeStates[outcomeSlot] = (byte) (cancelledOutcomes[outcomeSlot]
+            ? RequestOutcomeState.CANCELLED_TOMBSTONE.ordinal()
+            : RequestOutcomeState.DURABLE.ordinal());
+        outcomeForgetAtNanos[outcomeSlot] = forgetAt(nowNanos);
       }
     }
     advanceDurableFrontier();
@@ -737,6 +906,14 @@ public final class DeterministicJournalProvider implements JournalProvider {
    * every pre-restart node token is fenced.
    */
   public synchronized StatusCode crashAndRestart(NodeIncarnation restartedNode) {
+    return crashAndRestart(restartedNode, UnknownRecoveryResolution.NOT_DURABLE, 0);
+  }
+
+  /** Reopens under a fresh node/fence after stable scanning resolves any unknown force. */
+  public synchronized StatusCode crashAndRestart(
+      NodeIncarnation restartedNode,
+      UnknownRecoveryResolution unknownResolution,
+      long nowNanos) {
     StatusCode owner = checkOwner();
     if (!owner.isOk()) {
       return owner;
@@ -744,8 +921,29 @@ public final class DeterministicJournalProvider implements JournalProvider {
     if (!restartedNode.isValid() || restartedNode.equals(nodeIncarnation)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (terminalWaitOutcome == DurabilityOutcome.UNKNOWN
+        && unknownResolution == UnknownRecoveryResolution.DURABLE) {
+      for (int index = 0; index < states.length; index++) {
+        int outcomeSlot = outcomeSlots[index];
+        if (outcomeSlot >= 0 && unknownOutcomes[outcomeSlot]) {
+          states[index] = DURABLE;
+          unknownOutcomes[outcomeSlot] = false;
+          outcomeStates[outcomeSlot] = (byte) (cancelledOutcomes[outcomeSlot]
+              ? RequestOutcomeState.CANCELLED_TOMBSTONE.ordinal()
+              : RequestOutcomeState.DURABLE.ordinal());
+          outcomeForgetAtNanos[outcomeSlot] = forgetAt(nowNanos);
+        }
+      }
+      advanceDurableFrontier();
+    }
     for (int index = 0; index < states.length; index++) {
       if (states[index] != FREE && sequences[index] > durableSequence) {
+        int outcomeSlot = outcomeSlots[index];
+        if (outcomeSlot >= 0) {
+          unknownOutcomes[outcomeSlot] = false;
+          outcomeStates[outcomeSlot] = (byte) RequestOutcomeState.NOT_DURABLE.ordinal();
+          outcomeForgetAtNanos[outcomeSlot] = forgetAt(nowNanos);
+        }
         clearSlot(index);
         retainedEntries--;
       }
@@ -755,6 +953,8 @@ public final class DeterministicJournalProvider implements JournalProvider {
     nextSequence = durableSequence + 1;
     nextWalStart = durableEndExclusive;
     nodeIncarnation = restartedNode;
+    fatalState = new FatalStateFence();
+    terminalWaitOutcome = DurabilityOutcome.PENDING;
     providerToken++;
     lifecycleToken++;
     return StatusCode.OK;
@@ -768,6 +968,14 @@ public final class DeterministicJournalProvider implements JournalProvider {
     return states.length;
   }
 
+  synchronized StatusCode setNextWalStartForTest(long walStart) {
+    if (walStart < 0 || retainedEntries != 0) {
+      return StatusCode.CONFLICT;
+    }
+    nextWalStart = walStart;
+    return StatusCode.OK;
+  }
+
   private StatusCode admission(DatabaseIncarnation database, NodeIncarnation node) {
     StatusCode status = checkOwnerAndFence();
     if (!status.isOk()) {
@@ -777,6 +985,15 @@ public final class DeterministicJournalProvider implements JournalProvider {
       return StatusCode.FENCED;
     }
     return StatusCode.OK;
+  }
+
+  private static long mix(long value) {
+    value ^= value >>> 33;
+    value *= 0xff51afd7ed558ccdL;
+    value ^= value >>> 33;
+    value *= 0xc4ceb9fe1a85ec53L;
+    value ^= value >>> 33;
+    return value == 0 ? 1 : value;
   }
 
   private StatusCode checkOwnerAndFence() {
@@ -791,6 +1008,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
   private int validateReservation(JournalReservation reservation) {
     int slot = reservation.slot();
     if (!reservation.isActive()
+        || !reservation.isOwnedBy(capabilityOwnerHigh, capabilityOwnerLow)
         || slot < 0
         || slot >= states.length
         || states[slot] != RESERVED
@@ -802,10 +1020,19 @@ public final class DeterministicJournalProvider implements JournalProvider {
   }
 
   private int findIdempotency(long keyHigh, long keyLow) {
-    for (int index = 0; index < states.length; index++) {
-      if (states[index] != FREE
+    for (int index = 0; index < outcomeStates.length; index++) {
+      if (outcomeStates[index] != RequestOutcomeState.NOT_FOUND.ordinal()
           && idempotencyHigh[index] == keyHigh
           && idempotencyLow[index] == keyLow) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private int findFreeOutcome() {
+    for (int index = 0; index < outcomeStates.length; index++) {
+      if (outcomeStates[index] == RequestOutcomeState.NOT_FOUND.ordinal()) {
         return index;
       }
     }
@@ -819,6 +1046,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
         && sameJournalLineage(request.minimumRequired())
         && request.minimumRequired().sequence() > 0
         && request.minimumRequired().sequence() < nextSequence
+        && historyRetained(request.minimumRequired().sequence())
         && request.nowNanos() >= 0
         && request.expiresAtNanos() > request.nowNanos()
         && duration > 0
@@ -861,6 +1089,11 @@ public final class DeterministicJournalProvider implements JournalProvider {
     leaseMinimumSequences[slot] = 0;
     leaseExpiries[slot] = 0;
     leaseOwnerKinds[slot] = 0;
+  }
+
+  private boolean historyRetained(long sequence) {
+    int slot = findSequence(sequence);
+    return slot >= 0 && states[slot] == DURABLE && sequence <= durableSequence;
   }
 
   private int findSequence(long sequence) {
@@ -915,6 +1148,7 @@ public final class DeterministicJournalProvider implements JournalProvider {
     result.set(
         outcome,
         requirement,
+        outcome == DurabilityOutcome.SATISFIED ? 1L << requirement.ordinal() : 0,
         databaseIncarnation.high(),
         databaseIncarnation.low(),
         journalGeneration,
@@ -930,6 +1164,16 @@ public final class DeterministicJournalProvider implements JournalProvider {
     payloadLengths[slot] = 0;
     walStarts[slot] = 0;
     walEnds[slot] = 0;
+    outcomeSlots[slot] = -1;
+  }
+
+  private long forgetAt(long nowNanos) {
+    return Long.MAX_VALUE - nowNanos < outcomeRetentionNanos
+        ? Long.MAX_VALUE
+        : nowNanos + outcomeRetentionNanos;
+  }
+
+  private void clearOutcome(int slot) {
     requestHigh[slot] = 0;
     requestLow[slot] = 0;
     idempotencyHigh[slot] = 0;
@@ -941,5 +1185,10 @@ public final class DeterministicJournalProvider implements JournalProvider {
     transactionDecisions[slot] = 0;
     requestedDurability[slot] = 0;
     unknownOutcomes[slot] = false;
+    cancelledOutcomes[slot] = false;
+    outcomeStates[slot] = (byte) RequestOutcomeState.NOT_FOUND.ordinal();
+    outcomeSequences[slot] = 0;
+    outcomeAdmittedAtNanos[slot] = 0;
+    outcomeForgetAtNanos[slot] = 0;
   }
 }

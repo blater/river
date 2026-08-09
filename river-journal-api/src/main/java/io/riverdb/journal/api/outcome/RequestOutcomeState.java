@@ -7,5 +7,7 @@ public enum RequestOutcomeState {
   PUBLISHED,
   DECIDED,
   DURABLE,
-  UNKNOWN
+  UNKNOWN,
+  NOT_DURABLE,
+  CANCELLED_TOMBSTONE
 }

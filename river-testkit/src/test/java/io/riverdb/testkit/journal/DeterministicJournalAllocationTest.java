@@ -109,7 +109,8 @@ final class DeterministicJournalAllocationTest {
         identity + 2,
         identity + 3,
         DurabilityRequirement.LOCAL_DURABLE,
-        1);
+        1,
+        0);
     allocationGuard += provider.reserve(reserveRequest, reservation, detail).ordinal();
     allocationGuard += provider.publish(
         reservation, appendRequest, appendResult, detail).ordinal();

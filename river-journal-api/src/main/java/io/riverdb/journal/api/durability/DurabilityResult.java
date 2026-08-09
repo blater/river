@@ -3,7 +3,8 @@ package io.riverdb.journal.api.durability;
 /** Caller-owned durability result and proof coordinates. */
 public final class DurabilityResult {
   private DurabilityOutcome outcome = DurabilityOutcome.PENDING;
-  private DurabilityRequirement satisfiedRequirement = DurabilityRequirement.LOCAL_DURABLE;
+  private DurabilityRequirement requestedRequirement = DurabilityRequirement.LOCAL_DURABLE;
+  private long satisfiedDurabilityMask;
   private long databaseIncarnationHigh;
   private long databaseIncarnationLow;
   private long journalGeneration;
@@ -13,7 +14,8 @@ public final class DurabilityResult {
 
   public DurabilityResult reset() {
     outcome = DurabilityOutcome.PENDING;
-    satisfiedRequirement = DurabilityRequirement.LOCAL_DURABLE;
+    requestedRequirement = DurabilityRequirement.LOCAL_DURABLE;
+    satisfiedDurabilityMask = 0;
     databaseIncarnationHigh = 0;
     databaseIncarnationLow = 0;
     journalGeneration = 0;
@@ -26,7 +28,8 @@ public final class DurabilityResult {
   /** Provider-only population hook. */
   public DurabilityResult set(
       DurabilityOutcome durabilityOutcome,
-      DurabilityRequirement satisfied,
+      DurabilityRequirement requested,
+      long satisfiedMask,
       long databaseHigh,
       long databaseLow,
       long logicalGeneration,
@@ -34,7 +37,8 @@ public final class DurabilityResult {
       long localWalGeneration,
       long localDurableEndLsnExclusive) {
     outcome = durabilityOutcome;
-    satisfiedRequirement = satisfied;
+    requestedRequirement = requested;
+    satisfiedDurabilityMask = satisfiedMask;
     databaseIncarnationHigh = databaseHigh;
     databaseIncarnationLow = databaseLow;
     journalGeneration = logicalGeneration;
@@ -48,8 +52,16 @@ public final class DurabilityResult {
     return outcome;
   }
 
-  public DurabilityRequirement satisfiedRequirement() {
-    return satisfiedRequirement;
+  public DurabilityRequirement requestedRequirement() {
+    return requestedRequirement;
+  }
+
+  public long satisfiedDurabilityMask() {
+    return satisfiedDurabilityMask;
+  }
+
+  public boolean satisfies(DurabilityRequirement requirement) {
+    return (satisfiedDurabilityMask & (1L << requirement.ordinal())) != 0;
   }
 
   public long databaseIncarnationHigh() {

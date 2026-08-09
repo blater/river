@@ -13,6 +13,7 @@ import io.riverdb.journal.api.durability.JournalCapabilities;
 import io.riverdb.journal.api.frontier.JournalFrontierSnapshot;
 import io.riverdb.journal.api.mapping.JournalPositionMapping;
 import io.riverdb.journal.api.outcome.RequestOutcomeResult;
+import io.riverdb.journal.api.outcome.OutcomeRetentionSnapshot;
 import io.riverdb.journal.api.retention.RetentionSnapshot;
 import io.riverdb.journal.api.retention.WalRetentionLease;
 import io.riverdb.journal.api.retention.WalRetentionLeaseRequest;
@@ -64,7 +65,13 @@ public interface JournalProvider {
       DatabaseIncarnation databaseIncarnation,
       NodeIncarnation nodeIncarnation,
       IdempotencyKey idempotencyKey,
+      long nowNanos,
       RequestOutcomeResult result,
+      StatusDetail detail);
+
+  StatusCode forgetExpiredOutcomes(
+      long nowNanos,
+      OutcomeRetentionSnapshot result,
       StatusDetail detail);
 
   StatusCode acquireRetentionLease(
