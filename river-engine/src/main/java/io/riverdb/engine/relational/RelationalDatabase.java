@@ -127,6 +127,34 @@ public final class RelationalDatabase {
     return status;
   }
 
+  public synchronized StatusCode createTable(
+      CharSequence name,
+      TableSchema schema,
+      TableDefinition result) {
+    if (!RelationalKey.validName(name)
+        || schema == null
+        || !schema.isValid()
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.createTable(name, schema, result);
+    }
+    if (status.isOk()) {
+      status = session.commit(outcome);
+    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      session.abort(outcome);
+    }
+    return status;
+  }
+
   public synchronized StatusCode createUniqueValueIndex(
       CharSequence indexName,
       CharSequence tableName) {
@@ -223,7 +251,8 @@ public final class RelationalDatabase {
       CharSequence tableName,
       CharSequence columnName) {
     StatusCode status = session.resolveTable(tableName, indexedTable);
-    if (status.isOk() && !indexedTable.matchesValueColumn(columnName)) {
+    int indexColumn = status.isOk() ? indexedTable.findColumn(columnName) : -1;
+    if (status.isOk() && indexColumn <= 0) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (!status.isOk()) {
@@ -245,6 +274,7 @@ public final class RelationalDatabase {
           && (indexRecord.state() != TableDefinition.INDEX_BUILDING
               || indexRecord.tableId() != indexedTable.tableId()
               || !indexedTable.hasBuildingUniqueValueIndex()
+              || indexedTable.uniqueValueIndexColumn() != indexColumn
               || indexedTable.uniqueValueIndexTableId() != indexRecord.indexTableId())) {
         status = StatusCode.CONFLICT;
       }
@@ -276,9 +306,9 @@ public final class RelationalDatabase {
             indexedTable.tableId(),
             indexTableId,
             TableDefinition.INDEX_BUILDING,
+            indexColumn,
             tableName,
-            indexedTable.keyColumnName(),
-            indexedTable.valueColumnName());
+            indexedTable);
         status = session.indexedSession().update(catalogKey.key(), catalogOutput);
       }
       if (status.isOk()) {
@@ -299,8 +329,8 @@ public final class RelationalDatabase {
             indexedTable.tableId(),
             indexTableId,
             TableDefinition.INDEX_BUILDING,
-            indexedTable.keyColumnName(),
-            indexedTable.valueColumnName());
+            indexColumn,
+            indexedTable);
       }
     }
     if (status.isOk()) {
@@ -340,7 +370,7 @@ public final class RelationalDatabase {
         exhausted = true;
         break;
       }
-      if (status.isOk() && indexBuildRow.row().length() != Long.BYTES) {
+      if (status.isOk() && indexBuildRow.row().length() != indexedTable.rowBytes()) {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
@@ -350,7 +380,8 @@ public final class RelationalDatabase {
       if (status.isOk()) {
         status = session.ensureIndexedValue(
             indexStorageTable,
-            catalogScratch.getLong(0),
+            catalogScratch.getLong(
+                (indexedTable.uniqueValueIndexColumn() - 1) * Long.BYTES),
             indexBuildRow.key());
       }
       if (status.isOk()) {
@@ -400,9 +431,9 @@ public final class RelationalDatabase {
           indexedTable.tableId(),
           indexStorageTable.tableId(),
           TableDefinition.INDEX_READY,
+          indexedTable.uniqueValueIndexColumn(),
           tableName,
-          indexedTable.keyColumnName(),
-          indexedTable.valueColumnName());
+          indexedTable);
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
@@ -492,9 +523,9 @@ public final class RelationalDatabase {
           indexedTable.tableId(),
           0,
           TableDefinition.INDEX_NONE,
+          -1,
           tableName,
-          indexedTable.keyColumnName(),
-          indexedTable.valueColumnName());
+          indexedTable);
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
@@ -523,7 +554,8 @@ public final class RelationalDatabase {
       CharSequence tableName,
       CharSequence columnName) {
     StatusCode status = session.resolveTable(tableName, indexedTable);
-    if (status.isOk() && !indexedTable.matchesValueColumn(columnName)) {
+    int indexColumn = status.isOk() ? indexedTable.findColumn(columnName) : -1;
+    if (status.isOk() && indexColumn <= 0) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (status.isOk() && indexedTable.hasUniqueValueIndex()) {
@@ -563,7 +595,7 @@ public final class RelationalDatabase {
         status = StatusCode.OK;
         break;
       }
-      if (status.isOk() && indexBuildRow.row().length() != Long.BYTES) {
+      if (status.isOk() && indexBuildRow.row().length() != indexedTable.rowBytes()) {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
@@ -575,7 +607,8 @@ public final class RelationalDatabase {
         indexKeyOutput.putLong(0, indexBuildRow.key());
         indexKeyOutput.position(0);
         indexKeyOutput.limit(Long.BYTES);
-        long value = catalogScratch.getLong(0);
+        long value = catalogScratch.getLong(
+            (indexColumn - 1) * Long.BYTES);
         status = session.insertIndexedValue(indexStorageTable, value, indexKeyOutput);
       }
     }
@@ -599,9 +632,9 @@ public final class RelationalDatabase {
           indexedTable.tableId(),
           indexTableId,
           TableDefinition.INDEX_READY,
+          indexColumn,
           tableName,
-          indexedTable.keyColumnName(),
-          indexedTable.valueColumnName());
+          indexedTable);
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {

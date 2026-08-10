@@ -24,8 +24,11 @@ public final class RelationalSession {
   private final ByteBuffer catalogOutput = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
   private final TableDefinition valueIndexTable = new TableDefinition();
+  private final TableSchema schemaScratch = new TableSchema();
   private final HeapRowResult indexedKeyRow = new HeapRowResult();
   private final ByteBuffer valueScratch = ByteBuffer.allocateDirect(Long.BYTES);
+  private final ByteBuffer rowScratch = ByteBuffer.allocateDirect(
+      (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
   private final ByteBuffer indexRow = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean registeredTransaction;
   private boolean schemaChangeActive;
@@ -79,10 +82,22 @@ public final class RelationalSession {
       CharSequence keyColumnName,
       CharSequence valueColumnName,
       TableDefinition result) {
+    schemaScratch.reset();
+    StatusCode status = schemaScratch.addBigint(keyColumnName);
+    if (status.isOk()) {
+      status = schemaScratch.addBigint(valueColumnName);
+    }
+    return status.isOk()
+        ? createTable(name, schemaScratch, result) : status;
+  }
+
+  public StatusCode createTable(
+      CharSequence name,
+      TableSchema schema,
+      TableDefinition result) {
     if (!RelationalKey.validName(name)
-        || !RelationalKey.validName(keyColumnName)
-        || !RelationalKey.validName(valueColumnName)
-        || sameName(keyColumnName, valueColumnName)
+        || schema == null
+        || !schema.isValid()
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -116,9 +131,9 @@ public final class RelationalSession {
           tableId,
           0,
           TableDefinition.INDEX_NONE,
+          -1,
           name,
-          keyColumnName,
-          valueColumnName);
+          schema);
       status = session.insert(physicalKey.key(), catalogOutput);
     }
     if (status.isOk()) {
@@ -127,8 +142,8 @@ public final class RelationalSession {
           tableId,
           0,
           TableDefinition.INDEX_NONE,
-          keyColumnName,
-          valueColumnName);
+          -1,
+          schema);
     }
     return status;
   }
@@ -196,11 +211,19 @@ public final class RelationalSession {
       long key,
       long value,
       ByteBuffer row) {
+    return insertRow(table, key, row);
+  }
+
+  public StatusCode insertRow(TableDefinition table, long key, ByteBuffer row) {
+    if (!validRow(table, row)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long indexedValue = table.hasUniqueValueIndex() ? indexedValue(table, row) : 0;
     StatusCode status = insert(table, key, row);
     if (status.isOk() && table.hasUniqueValueIndex()) {
       prepareValueIndex(table);
       encodeLong(indexRow, key);
-      status = insertIndexedValue(valueIndexTable, value, indexRow);
+      status = insertIndexedValue(valueIndexTable, indexedValue, indexRow);
     }
     return status;
   }
@@ -210,24 +233,32 @@ public final class RelationalSession {
       long key,
       long value,
       ByteBuffer row) {
+    return updateRow(table, key, row);
+  }
+
+  public StatusCode updateRow(TableDefinition table, long key, ByteBuffer row) {
+    if (!validRow(table, row)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     long previousValue = 0;
     StatusCode status = StatusCode.OK;
     if (table.hasUniqueValueIndex()) {
       status = fetch(table, key, indexedKeyRow);
       if (status.isOk()) {
-        status = decodeLong(indexedKeyRow, valueScratch);
-        previousValue = status.isOk() ? valueScratch.getLong(0) : 0;
+        status = copyRow(table, indexedKeyRow, rowScratch);
+        previousValue = status.isOk() ? indexedValue(table, rowScratch) : 0;
       }
     }
+    long nextValue = table.hasUniqueValueIndex() ? indexedValue(table, row) : 0;
     if (status.isOk()) {
       status = update(table, key, row);
     }
-    if (status.isOk() && table.hasUniqueValueIndex() && previousValue != value) {
+    if (status.isOk() && table.hasUniqueValueIndex() && previousValue != nextValue) {
       prepareValueIndex(table);
       status = deleteIndexedValue(valueIndexTable, previousValue);
       if (status.isOk()) {
         encodeLong(indexRow, key);
-        status = insertIndexedValue(valueIndexTable, value, indexRow);
+        status = insertIndexedValue(valueIndexTable, nextValue, indexRow);
       }
     }
     return status;
@@ -239,8 +270,8 @@ public final class RelationalSession {
     if (table.hasUniqueValueIndex()) {
       status = fetch(table, key, indexedKeyRow);
       if (status.isOk()) {
-        status = decodeLong(indexedKeyRow, valueScratch);
-        previousValue = status.isOk() ? valueScratch.getLong(0) : 0;
+        status = copyRow(table, indexedKeyRow, rowScratch);
+        previousValue = status.isOk() ? indexedValue(table, rowScratch) : 0;
       }
     }
     if (status.isOk()) {
@@ -277,9 +308,9 @@ public final class RelationalSession {
       }
     }
     if (status.isOk()) {
-      status = decodeLong(result.row(), valueScratch);
+      status = copyRow(table, result.row(), rowScratch);
     }
-    if (status.isOk() && valueScratch.getLong(0) != value) {
+    if (status.isOk() && indexedValue(table, rowScratch) != value) {
       return StatusCode.CORRUPTION;
     }
     if (status.isOk()) {
@@ -337,9 +368,9 @@ public final class RelationalSession {
       }
     }
     if (status.isOk()) {
-      status = decodeLong(result.row(), valueScratch);
+      status = copyRow(table, result.row(), rowScratch);
     }
-    if (status.isOk() && valueScratch.getLong(0) != value) {
+    if (status.isOk() && indexedValue(table, rowScratch) != value) {
       return StatusCode.CORRUPTION;
     }
     if (status.isOk()) {
@@ -566,16 +597,31 @@ public final class RelationalSession {
     return status;
   }
 
-  private static boolean sameName(CharSequence first, CharSequence second) {
-    if (first.length() != second.length()) {
-      return false;
+  private static boolean validRow(TableDefinition table, ByteBuffer row) {
+    return table != null
+        && row != null
+        && row.remaining() == table.rowBytes();
+  }
+
+  private static long indexedValue(TableDefinition table, ByteBuffer row) {
+    return row.getLong(
+        row.position() + (table.uniqueValueIndexColumn() - 1) * Long.BYTES);
+  }
+
+  private static StatusCode copyRow(
+      TableDefinition table,
+      HeapRowResult source,
+      ByteBuffer target) {
+    if (source.length() != table.rowBytes()) {
+      return StatusCode.CORRUPTION;
     }
-    for (int index = 0; index < first.length(); index++) {
-      if (first.charAt(index) != second.charAt(index)) {
-        return false;
-      }
+    target.clear();
+    target.limit(table.rowBytes());
+    StatusCode status = source.copyTo(target);
+    if (status.isOk()) {
+      target.position(0);
     }
-    return true;
+    return status;
   }
 
   private void releaseTerminalTransaction() {

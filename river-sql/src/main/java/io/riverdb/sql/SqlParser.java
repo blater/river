@@ -5,7 +5,7 @@ import io.riverdb.base.error.StatusCode;
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
 public final class SqlParser {
   private final LongResult numberResult = new LongResult();
-  private final LongPair pairResult = new LongPair();
+  private final LongRow rowResult = new LongRow();
   private int offset;
 
   public StatusCode parse(String sql, SqlCommand result) {
@@ -58,7 +58,7 @@ public final class SqlParser {
         type = SqlCommandType.CREATE_TABLE;
         status = identifier(sql, result.writableTableName());
         if (status.isOk() && consumeCharacter(sql, '(')) {
-          status = identifier(sql, result.writableFirstColumnName());
+          status = columnIdentifier(sql, result);
           if (status.isOk()) {
             status = requireKeyword(sql, "BIGINT");
           }
@@ -68,21 +68,21 @@ public final class SqlParser {
           if (status.isOk()) {
             status = requireKeyword(sql, "KEY");
           }
-          if (status.isOk()) {
+          while (status.isOk() && !consumeCharacter(sql, ')')) {
             status = requireCharacter(sql, ',');
+            if (status.isOk()) {
+              status = columnIdentifier(sql, result);
+            }
+            if (status.isOk()) {
+              status = requireKeyword(sql, "BIGINT");
+            }
           }
-          if (status.isOk()) {
-            status = identifier(sql, result.writableSecondColumnName());
-          }
-          if (status.isOk()) {
-            status = requireKeyword(sql, "BIGINT");
-          }
-          if (status.isOk()) {
-            status = requireCharacter(sql, ')');
+          if (status.isOk() && result.columnCount() < 2) {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
           }
         } else if (status.isOk()) {
-          setIdentifier(result.writableFirstColumnName(), "key");
-          setIdentifier(result.writableSecondColumnName(), "value");
+          setIdentifier(result.writableNextColumnName(), "key");
+          setIdentifier(result.writableNextColumnName(), "value");
         }
       } else {
         type = SqlCommandType.CREATE_UNIQUE_INDEX;
@@ -103,7 +103,7 @@ public final class SqlParser {
           status = requireCharacter(sql, '(');
         }
         if (status.isOk()) {
-          status = identifier(sql, result.writableFirstColumnName());
+          status = columnIdentifier(sql, result);
         }
         if (status.isOk()) {
           status = requireCharacter(sql, ')');
@@ -119,20 +119,23 @@ public final class SqlParser {
         status = requireKeyword(sql, "VALUES");
       }
       if (status.isOk()) {
-        status = pair(sql, pairResult);
-        key = pairResult.first;
-        value = pairResult.second;
+        status = row(sql, rowResult);
+        key = rowResult.values[0];
+        value = rowResult.values[1];
         if (status.isOk()) {
-          result.appendInsert(key, value);
+          result.appendInsert(rowResult.values, rowResult.count);
         }
       }
       while (status.isOk() && consumeCharacter(sql, ',')) {
         if (result.insertRowCount() >= SqlCommand.MAXIMUM_INSERT_ROWS) {
           status = StatusCode.RESOURCE_EXHAUSTED;
         } else {
-          status = pair(sql, pairResult);
+          status = row(sql, rowResult);
+          if (status.isOk() && rowResult.count != result.insertColumnCount()) {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
+          }
           if (status.isOk()) {
-            result.appendInsert(pairResult.first, pairResult.second);
+            result.appendInsert(rowResult.values, rowResult.count);
           }
         }
       }
@@ -153,10 +156,10 @@ public final class SqlParser {
           status = identifier(sql, result.writableTableName());
         }
       } else {
-        status = identifier(sql, result.writableFirstColumnName());
+        status = columnIdentifier(sql, result);
         if (status.isOk() && consumeCharacter(sql, ',')) {
           type = SqlCommandType.SCAN;
-          status = identifier(sql, result.writableSecondColumnName());
+          status = columnIdentifier(sql, result);
           if (status.isOk()) {
             status = requireKeyword(sql, "FROM");
           }
@@ -227,7 +230,7 @@ public final class SqlParser {
         status = requireKeyword(sql, "SET");
       }
       if (status.isOk()) {
-        status = identifier(sql, result.writableFirstColumnName());
+        status = columnIdentifier(sql, result);
       }
       if (status.isOk()) {
         status = requireCharacter(sql, '=');
@@ -288,23 +291,29 @@ public final class SqlParser {
     return StatusCode.OK;
   }
 
-  private StatusCode pair(String sql, LongPair result) {
+  private StatusCode row(String sql, LongRow result) {
+    result.count = 0;
     StatusCode status = requireCharacter(sql, '(');
-    if (status.isOk()) {
+    while (status.isOk()) {
+      if (result.count >= SqlCommand.MAXIMUM_COLUMNS) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
       status = number(sql, numberResult);
-      result.first = numberResult.value;
-    }
-    if (status.isOk()) {
+      if (status.isOk()) {
+        result.values[result.count++] = numberResult.value;
+      }
+      if (!status.isOk() || consumeCharacter(sql, ')')) {
+        break;
+      }
       status = requireCharacter(sql, ',');
     }
-    if (status.isOk()) {
-      status = number(sql, numberResult);
-      result.second = numberResult.value;
-    }
-    if (status.isOk()) {
-      status = requireCharacter(sql, ')');
-    }
-    return status;
+    return status.isOk() && result.count >= 2
+        ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private StatusCode columnIdentifier(String sql, SqlCommand result) {
+    SqlIdentifier column = result.writableNextColumnName();
+    return column == null ? StatusCode.RESOURCE_EXHAUSTED : identifier(sql, column);
   }
 
   private StatusCode identifier(String sql, SqlIdentifier result) {
@@ -322,7 +331,7 @@ public final class SqlParser {
   }
 
   private StatusCode matchingIdentifier(String sql, CharSequence expected) {
-    SqlIdentifier actual = pairResult.identifier;
+    SqlIdentifier actual = rowResult.identifier;
     actual.reset();
     StatusCode status = identifier(sql, actual);
     if (!status.isOk() || actual.length() != expected.length()) {
@@ -465,9 +474,9 @@ public final class SqlParser {
     private long value;
   }
 
-  private static final class LongPair {
-    private long first;
-    private long second;
+  private static final class LongRow {
+    private final long[] values = new long[SqlCommand.MAXIMUM_COLUMNS];
     private final SqlIdentifier identifier = new SqlIdentifier();
+    private int count;
   }
 }

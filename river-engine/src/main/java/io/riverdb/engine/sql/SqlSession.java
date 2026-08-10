@@ -8,6 +8,7 @@ import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.TableDefinition;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.sql.SqlCommand;
@@ -26,6 +27,7 @@ public final class SqlSession {
   private final SqlParser parser = new SqlParser();
   private final SqlCommand command = new SqlCommand();
   private final TableDefinition table = new TableDefinition();
+  private final TableSchema createSchema = new TableSchema();
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final CheckpointResult checkpoint = new CheckpointResult();
   private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
@@ -35,12 +37,14 @@ public final class SqlSession {
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
-  private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
+  private final ByteBuffer row = ByteBuffer.allocateDirect(
+      (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
   private int userSavepointNameLength;
+  private int selectedColumn;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -151,12 +155,13 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.CREATE_TABLE) {
+      status = prepareCreateSchema();
+      if (!status.isOk()) {
+        return status;
+      }
       if (!transactionActive) {
         status = database.createTable(
-            command.tableName(),
-            command.firstColumnName(),
-            command.secondColumnName(),
-            table);
+            command.tableName(), createSchema, table);
         if (status.isOk()) {
           result.setUpdate(0, 0);
         }
@@ -165,10 +170,7 @@ public final class SqlSession {
       status = session.createSavepoint(statementSavepoint);
       if (status.isOk()) {
         status = session.createTable(
-            command.tableName(),
-            command.firstColumnName(),
-            command.secondColumnName(),
-            table);
+            command.tableName(), createSchema, table);
       }
       if (!status.isOk() && statementSavepoint.isActive()) {
         StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
@@ -327,7 +329,7 @@ public final class SqlSession {
     }
     if (status.isOk()) {
       status = cursor.claim(
-          this, implicit, valueIndex);
+          this, implicit, valueIndex, selectedColumn);
     }
     if (status.isOk()) {
       scanActive = true;
@@ -355,20 +357,16 @@ public final class SqlSession {
       return status;
     }
     if (cursor.valueIndex()) {
-      if (indexed.row().length() != Long.BYTES) {
-        return StatusCode.CORRUPTION;
-      }
-      status = indexed.row().copyTo(result.valueBytes());
+      status = copyProjectedValue(
+          indexed.row(), cursor.projectedColumn(), result.valueBytes());
       if (status.isOk()) {
         result.set(indexed.key(), result.valueBytes().getLong(0));
         cursor.rowReturned();
       }
       return status;
     }
-    if (result.relational().row().length() != Long.BYTES) {
-      return StatusCode.CORRUPTION;
-    }
-    status = result.relational().row().copyTo(result.valueBytes());
+    status = copyProjectedValue(
+        result.relational().row(), cursor.projectedColumn(), result.valueBytes());
     if (status.isOk()) {
       result.set(result.relational().key(), result.valueBytes().getLong(0));
       cursor.rowReturned();
@@ -403,21 +401,21 @@ public final class SqlSession {
     if (command.type() == SqlCommandType.INSERT) {
       StatusCode status = StatusCode.OK;
       for (int index = 0; status.isOk() && index < command.insertRowCount(); index++) {
-        long value = command.insertValue(index);
-        row.clear();
-        row.putLong(0, value);
-        row.position(0);
-        row.limit(Long.BYTES);
-        status = session.insertLong(table, command.insertKey(index), value, row);
+        encodeInsertRow(index);
+        status = session.insertRow(table, command.insertKey(index), row);
       }
       return status;
     }
     if (command.type() == SqlCommandType.UPDATE) {
-      row.clear();
-      row.putLong(0, command.value());
-      row.position(0);
-      row.limit(Long.BYTES);
-      return session.updateLong(table, command.key(), command.value(), row);
+      StatusCode status = session.fetch(table, command.key(), fetched);
+      if (status.isOk()) {
+        status = copyRow(fetched);
+      }
+      if (status.isOk()) {
+        row.putLong((selectedColumn - 1) * Long.BYTES, command.value());
+        status = session.updateRow(table, command.key(), row);
+      }
+      return status;
     }
     if (command.type() == SqlCommandType.DELETE) {
       return session.deleteLong(table, command.key());
@@ -426,8 +424,7 @@ public final class SqlSession {
       StatusCode status = session.fetchByUniqueValue(table, command.value(), indexed);
       selected.clear();
       if (status.isOk()) {
-        status = indexed.row().length() == Long.BYTES
-            ? indexed.row().copyTo(selected) : StatusCode.CORRUPTION;
+        status = copyProjectedValue(indexed.row(), selectedColumn, selected);
       }
       if (status.isOk()) {
         result.setRow(indexed.key(), selected.getLong(0), 0);
@@ -474,8 +471,7 @@ public final class SqlSession {
     StatusCode status = session.fetch(table, command.key(), fetched);
     selected.clear();
     if (status.isOk()) {
-      status = fetched.length() == Long.BYTES
-          ? fetched.copyTo(selected) : StatusCode.CORRUPTION;
+      status = copyProjectedValue(fetched, selectedColumn, selected);
     }
     if (status.isOk()) {
       result.setRow(command.key(), selected.getLong(0), 0);
@@ -490,35 +486,45 @@ public final class SqlSession {
   }
 
   private StatusCode bindDataCommand() {
-    if (command.type() == SqlCommandType.INSERT
-        || command.type() == SqlCommandType.COUNT) {
+    selectedColumn = -1;
+    if (command.type() == SqlCommandType.COUNT) {
       return StatusCode.OK;
     }
+    if (command.type() == SqlCommandType.INSERT) {
+      return command.insertColumnCount() == table.columnCount()
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (command.type() == SqlCommandType.SELECT) {
-      return table.matchesValueColumn(command.firstColumnName())
-              && table.matchesKeyColumn(command.predicateColumnName())
+      selectedColumn = table.findColumn(command.firstColumnName());
+      return selectedColumn > 0
+              && table.findColumn(command.predicateColumnName()) == 0
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.SELECT_BY_VALUE) {
-      return table.matchesKeyColumn(command.firstColumnName())
-              && table.matchesValueColumn(command.secondColumnName())
-              && table.matchesValueColumn(command.predicateColumnName())
+      selectedColumn = table.findColumn(command.secondColumnName());
+      return table.findColumn(command.firstColumnName()) == 0
+              && selectedColumn > 0
+              && table.findColumn(command.predicateColumnName()) == selectedColumn
+              && table.hasUniqueIndexOn(selectedColumn)
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.SCAN
         || command.type() == SqlCommandType.VALUE_SCAN) {
-      if (!table.matchesKeyColumn(command.firstColumnName())
-          || !table.matchesValueColumn(command.secondColumnName())) {
+      selectedColumn = table.findColumn(command.secondColumnName());
+      if (table.findColumn(command.firstColumnName()) != 0 || selectedColumn <= 0) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      return !command.isBoundedScan()
-              || table.matchesKeyColumn(command.predicateColumnName())
-              || table.matchesValueColumn(command.predicateColumnName())
+      if (!command.isBoundedScan()) {
+        return StatusCode.OK;
+      }
+      int predicate = table.findColumn(command.predicateColumnName());
+      return predicate == 0 || table.hasUniqueIndexOn(predicate)
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.UPDATE) {
-      return table.matchesValueColumn(command.firstColumnName())
-              && table.matchesKeyColumn(command.predicateColumnName())
+      selectedColumn = table.findColumn(command.firstColumnName());
+      return selectedColumn > 0
+              && table.findColumn(command.predicateColumnName()) == 0
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.DELETE) {
@@ -529,8 +535,53 @@ public final class SqlSession {
   }
 
   private boolean scanUsesValueIndex() {
-    return command.isBoundedScan()
-        && table.matchesValueColumn(command.predicateColumnName());
+    int predicate = table.findColumn(command.predicateColumnName());
+    return command.isBoundedScan() && table.hasUniqueIndexOn(predicate);
+  }
+
+  private StatusCode prepareCreateSchema() {
+    createSchema.reset();
+    StatusCode status = StatusCode.OK;
+    for (int index = 0; status.isOk() && index < command.columnCount(); index++) {
+      status = createSchema.addBigint(command.columnName(index));
+    }
+    return status;
+  }
+
+  private void encodeInsertRow(int rowIndex) {
+    row.clear();
+    row.limit(table.rowBytes());
+    for (int column = 1; column < table.columnCount(); column++) {
+      row.putLong((column - 1) * Long.BYTES, command.insertValue(rowIndex, column));
+    }
+    row.position(0);
+  }
+
+  private StatusCode copyRow(HeapRowResult source) {
+    if (source.length() != table.rowBytes()) {
+      return StatusCode.CORRUPTION;
+    }
+    row.clear();
+    row.limit(table.rowBytes());
+    StatusCode status = source.copyTo(row);
+    if (status.isOk()) {
+      row.position(0);
+    }
+    return status;
+  }
+
+  private StatusCode copyProjectedValue(
+      HeapRowResult source,
+      int column,
+      ByteBuffer destination) {
+    StatusCode status = copyRow(source);
+    if (status.isOk()) {
+      destination.clear();
+      destination.putLong(0, row.getLong((column - 1) * Long.BYTES));
+      destination.position(0);
+      destination.limit(Long.BYTES);
+    }
+    return status;
   }
 
   private int affectedRows() {

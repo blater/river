@@ -29,6 +29,14 @@ final class SqlParserTest {
     assertName("amount", command.secondColumnName());
     assertEquals(
         StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE ledger "
+                + "(id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT)",
+            command));
+    assertEquals(3, command.columnCount());
+    assertName("region", command.columnName(2));
+    assertEquals(
+        StatusCode.OK,
         parser.parse("CREATE UNIQUE INDEX accounts_value ON accounts(value)", command));
     assertEquals(SqlCommandType.CREATE_UNIQUE_INDEX, command.type());
     assertName("accounts_value", command.indexName());
@@ -45,6 +53,12 @@ final class SqlParserTest {
     assertEquals(1, command.insertKey(0));
     assertEquals(20, command.insertValue(1));
     assertEquals(3, command.insertKey(2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("INSERT INTO ledger VALUES (1, 100, 7), (2, 200, 8)", command));
+    assertEquals(2, command.insertRowCount());
+    assertEquals(3, command.insertColumnCount());
+    assertEquals(8, command.insertValue(1, 2));
     assertEquals(StatusCode.OK, parser.parse("select value from accounts where key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertName("value", command.firstColumnName());
@@ -122,6 +136,9 @@ final class SqlParserTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("SELECT * FROM x", command));
     assertFalse(command.isAvailable());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("CREATE TABLE bad-name", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE TABLE only_key (id BIGINT PRIMARY KEY)", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("INSERT INTO x VALUES (9223372036854775808, 1)", command));

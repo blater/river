@@ -3,15 +3,15 @@ package io.riverdb.sql;
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
 public final class SqlCommand {
   public static final int MAXIMUM_INSERT_ROWS = 64;
+  public static final int MAXIMUM_COLUMNS = 8;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
   private final SqlIdentifier savepointName = new SqlIdentifier();
-  private final SqlIdentifier firstColumnName = new SqlIdentifier();
-  private final SqlIdentifier secondColumnName = new SqlIdentifier();
+  private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier predicateColumnName = new SqlIdentifier();
-  private final long[] insertKeys = new long[MAXIMUM_INSERT_ROWS];
-  private final long[] insertValues = new long[MAXIMUM_INSERT_ROWS];
+  private final long[] insertValues =
+      new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
   private SqlCommandType type;
   private long key;
   private long value;
@@ -20,14 +20,23 @@ public final class SqlCommand {
   private boolean boundedScan;
   private boolean serializableTransaction;
   private int insertRowCount;
+  private int insertColumnCount;
+  private int columnCount;
   private boolean available;
+
+  public SqlCommand() {
+    for (int index = 0; index < columnNames.length; index++) {
+      columnNames[index] = new SqlIdentifier();
+    }
+  }
 
   public void reset() {
     tableName.reset();
     indexName.reset();
     savepointName.reset();
-    firstColumnName.reset();
-    secondColumnName.reset();
+    for (SqlIdentifier columnName : columnNames) {
+      columnName.reset();
+    }
     predicateColumnName.reset();
     type = null;
     key = 0;
@@ -37,6 +46,8 @@ public final class SqlCommand {
     boundedScan = false;
     serializableTransaction = false;
     insertRowCount = 0;
+    insertColumnCount = 0;
+    columnCount = 0;
     available = false;
   }
 
@@ -69,16 +80,19 @@ public final class SqlCommand {
     available = true;
   }
 
-  void appendInsert(long primaryKey, long rowValue) {
-    insertKeys[insertRowCount] = primaryKey;
-    insertValues[insertRowCount] = rowValue;
+  void appendInsert(long[] values, int count) {
+    int destination = insertRowCount * MAXIMUM_COLUMNS;
+    for (int index = 0; index < count; index++) {
+      insertValues[destination + index] = values[index];
+    }
+    insertColumnCount = count;
     insertRowCount++;
   }
 
   void setInsert() {
     type = SqlCommandType.INSERT;
-    key = insertKeys[0];
-    value = insertValues[0];
+    key = insertValues[0];
+    value = insertValues[1];
     available = true;
   }
 
@@ -94,12 +108,8 @@ public final class SqlCommand {
     return savepointName;
   }
 
-  SqlIdentifier writableFirstColumnName() {
-    return firstColumnName;
-  }
-
-  SqlIdentifier writableSecondColumnName() {
-    return secondColumnName;
+  SqlIdentifier writableNextColumnName() {
+    return columnCount < columnNames.length ? columnNames[columnCount++] : null;
   }
 
   SqlIdentifier writablePredicateColumnName() {
@@ -123,11 +133,19 @@ public final class SqlCommand {
   }
 
   public SqlIdentifier firstColumnName() {
-    return firstColumnName;
+    return columnNames[0];
   }
 
   public SqlIdentifier secondColumnName() {
-    return secondColumnName;
+    return columnNames[1];
+  }
+
+  public int columnCount() {
+    return columnCount;
+  }
+
+  public SqlIdentifier columnName(int index) {
+    return index >= 0 && index < columnCount ? columnNames[index] : null;
   }
 
   public SqlIdentifier predicateColumnName() {
@@ -147,11 +165,23 @@ public final class SqlCommand {
   }
 
   public long insertKey(int index) {
-    return index >= 0 && index < insertRowCount ? insertKeys[index] : 0;
+    return insertValue(index, 0);
   }
 
   public long insertValue(int index) {
-    return index >= 0 && index < insertRowCount ? insertValues[index] : 0;
+    return insertValue(index, 1);
+  }
+
+  public int insertColumnCount() {
+    return insertColumnCount;
+  }
+
+  public long insertValue(int rowIndex, int columnIndex) {
+    return rowIndex >= 0
+            && rowIndex < insertRowCount
+            && columnIndex >= 0
+            && columnIndex < insertColumnCount
+        ? insertValues[rowIndex * MAXIMUM_COLUMNS + columnIndex] : 0;
   }
 
   public long scanLowerInclusive() {

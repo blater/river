@@ -1,12 +1,14 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.engine.relational.RelationalScanResult;
+import io.riverdb.engine.relational.TableSchema;
 import java.nio.ByteBuffer;
 
 /** Caller-owned decoded `KEY`, `VALUE` row returned by an SQL scan. */
 public final class SqlScanRowResult {
   private final RelationalScanResult relational = new RelationalScanResult();
-  private final ByteBuffer valueBytes = ByteBuffer.allocateDirect(Long.BYTES);
+  private final ByteBuffer valueBytes = ByteBuffer.allocateDirect(
+      (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
   private long key;
   private long value;
   private boolean available;

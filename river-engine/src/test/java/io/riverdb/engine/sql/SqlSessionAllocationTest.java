@@ -39,8 +39,12 @@ final class SqlSessionAllocationTest {
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
     SqlSession session = sessionResult.session();
     SqlExecutionResult result = new SqlExecutionResult();
-    assertEquals(StatusCode.OK, session.execute("CREATE TABLE t", result));
-    assertEquals(StatusCode.OK, session.execute("INSERT INTO t VALUES (1, 10)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE t (id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT)",
+            result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO t VALUES (1, 10, 7)", result));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
     }
@@ -67,7 +71,7 @@ final class SqlSessionAllocationTest {
   }
 
   private static void exercise(SqlSession session, SqlExecutionResult result) {
-    allocationGuard += session.execute("SELECT value FROM t WHERE key=1", result).ordinal();
+    allocationGuard += session.execute("SELECT region FROM t WHERE id=1", result).ordinal();
     allocationGuard += result.value();
   }
 
@@ -77,7 +81,7 @@ final class SqlSessionAllocationTest {
       SqlScanRowResult row,
       SqlExecutionResult result) {
     allocationGuard += cursor.reset().ordinal();
-    allocationGuard += session.beginScan("SELECT KEY, VALUE FROM t", cursor).ordinal();
+    allocationGuard += session.beginScan("SELECT id, balance FROM t", cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.key();
     allocationGuard += row.value();

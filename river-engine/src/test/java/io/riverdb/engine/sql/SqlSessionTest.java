@@ -831,4 +831,92 @@ final class SqlSessionTest {
             "SELECT amount FROM balances WHERE account_id=7", result));
     assertEquals(StatusCode.OK, database.close());
   }
+
+  @Test
+  void executesMultiColumnRowsAndIndexesArbitraryColumn(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE accounts "
+                + "(id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO accounts VALUES (1, 100, 7), (2, 200, 8)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT region FROM accounts WHERE id=2", result));
+    assertEquals(8, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE accounts SET balance=250 WHERE id=2", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT region FROM accounts WHERE id=2", result));
+    assertEquals(8, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX accounts_region ON accounts(region)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, region FROM accounts WHERE region=8", result));
+    assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO accounts VALUES (3, 300, 8)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE accounts SET region=9 WHERE id=2", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT id, region FROM accounts WHERE region=8", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, region FROM accounts WHERE region=9", result));
+    assertEquals(2, result.key());
+
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, balance FROM accounts WHERE region >= 7 AND region < 10",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.key());
+    assertEquals(100, row.value());
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.key());
+    assertEquals(250, row.value());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    session = sessions.session();
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT balance FROM accounts WHERE id=2", result));
+    assertEquals(250, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, region FROM accounts WHERE region=9", result));
+    assertEquals(2, result.key());
+    assertEquals(StatusCode.OK, database.close());
+  }
 }
