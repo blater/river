@@ -33,6 +33,7 @@ public final class SqlSession {
   private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
   private final IndexedSavepoint userSavepoint = new IndexedSavepoint();
   private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
+  private final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
@@ -402,7 +403,10 @@ public final class SqlSession {
       StatusCode status = StatusCode.OK;
       for (int index = 0; status.isOk() && index < command.insertRowCount(); index++) {
         encodeInsertRow(index);
-        status = session.insertRow(table, command.insertKey(index), row);
+        status = session.insertRow(
+            table,
+            command.insertValue(index, insertSourceByColumn[0]),
+            row);
       }
       return status;
     }
@@ -491,8 +495,7 @@ public final class SqlSession {
       return StatusCode.OK;
     }
     if (command.type() == SqlCommandType.INSERT) {
-      return command.insertColumnCount() == table.columnCount()
-          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+      return bindInsertColumns();
     }
     if (command.type() == SqlCommandType.SELECT) {
       selectedColumn = table.findColumn(command.firstColumnName());
@@ -552,9 +555,37 @@ public final class SqlSession {
     row.clear();
     row.limit(table.rowBytes());
     for (int column = 1; column < table.columnCount(); column++) {
-      row.putLong((column - 1) * Long.BYTES, command.insertValue(rowIndex, column));
+      row.putLong(
+          (column - 1) * Long.BYTES,
+          command.insertValue(rowIndex, insertSourceByColumn[column]));
     }
     row.position(0);
+  }
+
+  private StatusCode bindInsertColumns() {
+    if (command.insertColumnCount() != table.columnCount()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < insertSourceByColumn.length; index++) {
+      insertSourceByColumn[index] = -1;
+    }
+    if (command.columnCount() == 0) {
+      for (int index = 0; index < table.columnCount(); index++) {
+        insertSourceByColumn[index] = index;
+      }
+      return StatusCode.OK;
+    }
+    if (command.columnCount() != table.columnCount()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int source = 0; source < command.columnCount(); source++) {
+      int column = table.findColumn(command.columnName(source));
+      if (column < 0 || insertSourceByColumn[column] >= 0) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      insertSourceByColumn[column] = source;
+    }
+    return StatusCode.OK;
   }
 
   private StatusCode copyRow(HeapRowResult source) {

@@ -59,6 +59,15 @@ final class SqlParserTest {
     assertEquals(2, command.insertRowCount());
     assertEquals(3, command.insertColumnCount());
     assertEquals(8, command.insertValue(1, 2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "INSERT INTO ledger (region, id, balance) VALUES (7, 1, 100)",
+            command));
+    assertEquals(3, command.columnCount());
+    assertName("region", command.columnName(0));
+    assertName("balance", command.columnName(2));
+    assertEquals(7, command.insertValue(0, 0));
     assertEquals(StatusCode.OK, parser.parse("select value from accounts where key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertName("value", command.firstColumnName());

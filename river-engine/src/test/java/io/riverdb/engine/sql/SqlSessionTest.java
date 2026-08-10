@@ -856,6 +856,20 @@ final class SqlSessionTest {
             "INSERT INTO accounts VALUES (1, 100, 7), (2, 200, 8)", result));
     assertEquals(
         StatusCode.OK,
+        session.execute(
+            "INSERT INTO accounts (region, id, balance) VALUES (6, 3, 300)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT balance FROM accounts WHERE id=3", result));
+    assertEquals(300, result.value());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "INSERT INTO accounts (id, balance, balance) VALUES (4, 400, 9)",
+            result));
+    assertEquals(
+        StatusCode.OK,
         session.execute("SELECT region FROM accounts WHERE id=2", result));
     assertEquals(8, result.value());
     assertEquals(
@@ -874,7 +888,7 @@ final class SqlSessionTest {
     assertEquals(2, result.key());
     assertEquals(
         StatusCode.CONFLICT,
-        session.execute("INSERT INTO accounts VALUES (3, 300, 8)", result));
+        session.execute("INSERT INTO accounts VALUES (4, 400, 8)", result));
     assertEquals(
         StatusCode.OK,
         session.execute("UPDATE accounts SET region=9 WHERE id=2", result));
@@ -885,6 +899,21 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT id, region FROM accounts WHERE region=9", result));
     assertEquals(2, result.key());
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE accounts SET region=10 WHERE id=2", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE accounts SET balance=999 WHERE id=1", result));
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT id, region FROM accounts WHERE region=10", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT balance FROM accounts WHERE id=1", result));
+    assertEquals(100, result.value());
 
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();

@@ -115,6 +115,15 @@ public final class SqlParser {
       if (status.isOk()) {
         status = identifier(sql, result.writableTableName());
       }
+      if (status.isOk() && consumeCharacter(sql, '(')) {
+        while (status.isOk()) {
+          status = columnIdentifier(sql, result);
+          if (!status.isOk() || consumeCharacter(sql, ')')) {
+            break;
+          }
+          status = requireCharacter(sql, ',');
+        }
+      }
       if (status.isOk()) {
         status = requireKeyword(sql, "VALUES");
       }
