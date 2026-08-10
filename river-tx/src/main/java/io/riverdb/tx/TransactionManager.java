@@ -27,7 +27,7 @@ public final class TransactionManager {
     databaseLow = databaseIncarnationLow;
     nextTransactionId = firstTransactionId;
     activeTransactionIds = new long[maximumActive];
-    locks = new LockManager(maximumActive * 8);
+    locks = new LockManager(maximumActive * 64);
   }
 
   public int maximumActiveTransactions() {

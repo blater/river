@@ -141,6 +141,22 @@ final class SqlSessionTest {
         StatusCode.CONFLICT,
         observer.execute("SELECT value FROM accounts WHERE key=2", result));
     assertEquals(StatusCode.CONFLICT, writer.execute("COMMIT", result));
+
+    assertEquals(StatusCode.OK, writer.execute("BEGIN", result));
+    for (int key = 10; key < 26; key++) {
+      assertEquals(
+          StatusCode.OK,
+          writer.execute(
+              "INSERT INTO accounts VALUES (" + key + ", " + key * 10 + ")",
+              result));
+    }
+    assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
+    long batchSequence = result.commitSequence();
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT value FROM accounts WHERE key=25", result));
+    assertEquals(250, result.value());
+    assertEquals(batchSequence, result.commitSequence());
     assertEquals(StatusCode.OK, database.close());
   }
 }

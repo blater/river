@@ -7,7 +7,8 @@ Each statement uses the durable catalog, transaction manager, authoritative
 index, MVCC versions, and WAL recovery.
 
 `BEGIN`, `COMMIT`, and `ROLLBACK` group point statements into one atomic write
-set. DDL remains outside explicit transactions in this first slice.
+set, currently bounded at 64 mutations. DDL remains outside explicit
+transactions in this first slice.
 
 `SqlParser` writes into a reusable command and identifier buffer. It does not
 build an allocating object tree. Joins, scans, expressions, explicit SQL

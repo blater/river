@@ -2,7 +2,7 @@
 
 The first production consumer supports bounded concurrent transaction handles,
 read-committed statement snapshots, repeatable-read transaction snapshots, and
-up to four deferred indexed inserts, updates, or deletes per transaction.
+up to 64 deferred indexed inserts, updates, or deletes per transaction.
 Exclusive unique-key locks are retained until commit or abort. Normal batches
 use one compact WAL record; insert batches that split an index leaf use one
 atomic page-image record. Append-only row versions preserve repeatable-read

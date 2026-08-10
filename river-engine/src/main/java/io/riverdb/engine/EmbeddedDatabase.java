@@ -22,6 +22,7 @@ import java.nio.file.Path;
 /** Minimal embedded lifecycle over the first durable indexed transaction kernel. */
 public final class EmbeddedDatabase {
   private static final int MAXIMUM_ROW_BYTES = 4096;
+  private static final int MAXIMUM_ACTIVE_TRANSACTIONS = 1024;
 
   private final NioDurableDirectory directory;
   private final LocalWal wal;
@@ -139,6 +140,7 @@ public final class EmbeddedDatabase {
         || generation == null
         || !generation.isValid()
         || maximumActiveTransactions <= 0
+        || maximumActiveTransactions > MAXIMUM_ACTIVE_TRANSACTIONS
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
