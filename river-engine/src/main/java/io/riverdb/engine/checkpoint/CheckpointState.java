@@ -6,7 +6,7 @@ import io.riverdb.base.id.WalGeneration;
 
 /** Caller-owned checkpoint authority with the MVCC metadata needed by its stable page base. */
 public final class CheckpointState {
-  public static final int MAXIMUM_ROWS = 32 * 1024;
+  public static final int MAXIMUM_ROWS = 64 * 1024;
 
   private final long[] deletedWords = new long[MAXIMUM_ROWS / Long.SIZE];
   private final long[] rowCommitSequences = new long[MAXIMUM_ROWS + 1];

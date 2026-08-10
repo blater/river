@@ -263,6 +263,58 @@ public final class BTreePage {
     return StatusCode.OK;
   }
 
+  /** Splits a full internal page after inserting one separator and promotes the middle key. */
+  public static StatusCode splitInternal(
+      ByteBuffer left,
+      ByteBuffer right,
+      long separatorKey,
+      int rightChildPageId,
+      BTreeSplitResult result) {
+    if (!hasCapacity(left)
+        || !hasCapacity(right)
+        || left == right
+        || result == null
+        || separatorKey == Long.MAX_VALUE
+        || rightChildPageId <= 0
+        || getInt(left, 12) != TYPE_INTERNAL
+        || separatorKey >= getLong(left, 24)
+        || left.limit() < entryOffset(MAX_ENTRIES + 1)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    int count = getInt(left, 16);
+    if (count != MAX_ENTRIES) {
+      return StatusCode.CONFLICT;
+    }
+    int insertion = insertionPoint(left, separatorKey, count);
+    if (insertion < count && getLong(left, entryOffset(insertion)) == separatorKey) {
+      return StatusCode.CONFLICT;
+    }
+    moveEntriesRight(left, insertion, count);
+    putEntry(left, insertion, separatorKey, rightChildPageId);
+    int total = count + 1;
+    int promotedIndex = total / 2;
+    long promoted = getLong(left, entryOffset(promotedIndex));
+    int rightFirstChild = getInt(left, entryOffset(promotedIndex) + 8);
+    long previousHigh = getLong(left, 24);
+    StatusCode status = initializeInternal(right, rightFirstChild);
+    if (!status.isOk()) {
+      return status;
+    }
+    putLong(right, 24, previousHigh);
+    int rightCount = total - promotedIndex - 1;
+    for (int index = 0; index < rightCount; index++) {
+      copyEntry(left, promotedIndex + 1 + index, right, index);
+    }
+    putInt(right, 16, rightCount);
+    putInt(left, 16, promotedIndex);
+    putLong(left, 24, promoted);
+    clearEntriesFrom(left, promotedIndex);
+    clearUnusedEntries(right);
+    result.setSeparatorKey(promoted);
+    return StatusCode.OK;
+  }
+
   private static void initialize(ByteBuffer page, int type) {
     for (int index = 0; index < page.limit(); index++) {
       page.put(index, (byte) 0);
@@ -318,6 +370,15 @@ public final class BTreePage {
   private static void clearUnusedEntries(ByteBuffer page) {
     int count = getInt(page, 16);
     for (int index = count; index < MAX_ENTRIES; index++) {
+      int offset = entryOffset(index);
+      putLong(page, offset, 0);
+      putInt(page, offset + 8, 0);
+      putInt(page, offset + 12, 0);
+    }
+  }
+
+  private static void clearEntriesFrom(ByteBuffer page, int from) {
+    for (int index = from; index <= MAX_ENTRIES; index++) {
       int offset = entryOffset(index);
       putLong(page, offset, 0);
       putInt(page, offset + 8, 0);

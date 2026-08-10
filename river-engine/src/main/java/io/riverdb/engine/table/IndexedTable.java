@@ -25,11 +25,14 @@ public final class IndexedTable
   private static final int ROOT_META_PAGE_ID = 2;
   private static final int INITIAL_LEAF_PAGE_ID = 3;
   private static final long BOOTSTRAP_TRANSACTION_ID = 1;
+  private static final int MAXIMUM_TREE_HEIGHT = 8;
 
   private final IndexedPageStore store;
   private final HeapInsertResult heapInsert = new HeapInsertResult();
   private final BTreeLookupResult indexLookup = new BTreeLookupResult();
   private final BTreeSplitResult splitResult = new BTreeSplitResult();
+  private final int[] splitPathPageIds = new int[MAXIMUM_TREE_HEIGHT];
+  private int splitPathDepth;
 
   private IndexedTable(IndexedPageStore pageStore) {
     store = pageStore;
@@ -344,6 +347,11 @@ public final class IndexedTable
     if (!status.isOk()) {
       return status;
     }
+    int operationLeafPageId = findOperationLeafPageId(key);
+    if (operationLeafPageId != leafPageId) {
+      store.cancelOperation();
+      return StatusCode.CORRUPTION;
+    }
     ByteBuffer leaf = store.stageExisting(leafPageId);
     if (leaf == null) {
       store.cancelOperation();
@@ -537,6 +545,29 @@ public final class IndexedTable
     return store.highestPageId();
   }
 
+  /** Returns the current root-to-leaf page count, or zero if the tree is invalid. */
+  public synchronized int treeHeight() {
+    ByteBuffer metadata = store.currentPayload(ROOT_META_PAGE_ID);
+    if (metadata == null) {
+      return 0;
+    }
+    int pageId = BTreeRootPage.rootPageId(metadata);
+    for (int depth = 1; depth <= MAXIMUM_TREE_HEIGHT; depth++) {
+      ByteBuffer page = store.currentPayload(pageId);
+      if (page == null) {
+        return 0;
+      }
+      if (BTreePage.type(page) == BTreePage.TYPE_LEAF) {
+        return depth;
+      }
+      if (BTreePage.type(page) != BTreePage.TYPE_INTERNAL) {
+        return 0;
+      }
+      pageId = BTreePage.firstChildPageId(page);
+    }
+    return 0;
+  }
+
   public synchronized long visibleCommitSequence() {
     return store.currentCommitSequence();
   }
@@ -576,7 +607,6 @@ public final class IndexedTable
       long key,
       int rowId) {
     ByteBuffer currentMetadata = store.operationPayload(ROOT_META_PAGE_ID);
-    int currentRootPageId = BTreeRootPage.rootPageId(currentMetadata);
     ByteBuffer metadata = store.stageExisting(ROOT_META_PAGE_ID);
     if (metadata == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -591,26 +621,53 @@ public final class IndexedTable
     if (!status.isOk()) {
       return status;
     }
-    if (BTreePage.type(store.operationPayload(currentRootPageId)) == BTreePage.TYPE_LEAF) {
-      int newRootPageId = BTreeRootPage.allocatePage(metadata);
-      ByteBuffer root = store.stageNew(newRootPageId);
-      if (root == null) {
+    long separator = splitResult.separatorKey();
+    int promotedLeftPageId = leftPageId;
+    int promotedRightPageId = rightPageId;
+    for (int level = splitPathDepth - 1; level >= 0; level--) {
+      int parentPageId = splitPathPageIds[level];
+      ByteBuffer parent = store.stageExisting(parentPageId);
+      if (parent == null) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      status = BTreePage.initializeInternal(root, leftPageId);
+      status = BTreePage.insertInternal(parent, separator, promotedRightPageId);
       if (status.isOk()) {
-        status = BTreePage.insertInternal(root, splitResult.separatorKey(), rightPageId);
+        return StatusCode.OK;
       }
-      if (status.isOk()) {
-        BTreeRootPage.publishRoot(metadata, newRootPageId);
+      if (status != StatusCode.RESOURCE_EXHAUSTED) {
+        return status;
       }
-      return status;
+      int internalRightPageId = BTreeRootPage.allocatePage(metadata);
+      ByteBuffer internalRight = store.stageNew(internalRightPageId);
+      if (internalRight == null) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      status = BTreePage.splitInternal(
+          parent,
+          internalRight,
+          separator,
+          promotedRightPageId,
+          splitResult);
+      if (!status.isOk()) {
+        return status;
+      }
+      separator = splitResult.separatorKey();
+      promotedLeftPageId = parentPageId;
+      promotedRightPageId = internalRightPageId;
     }
-    ByteBuffer root = store.stageExisting(currentRootPageId);
+    int newRootPageId = BTreeRootPage.allocatePage(metadata);
+    ByteBuffer root = store.stageNew(newRootPageId);
     if (root == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    return BTreePage.insertInternal(root, splitResult.separatorKey(), rightPageId);
+    status = BTreePage.initializeInternal(root, promotedLeftPageId);
+    if (status.isOk()) {
+      status = BTreePage.insertInternal(root, separator, promotedRightPageId);
+    }
+    if (status.isOk()) {
+      BTreeRootPage.publishRoot(metadata, newRootPageId);
+    }
+    return status;
   }
 
   private StatusCode lookupRowId(long key) {
@@ -622,39 +679,40 @@ public final class IndexedTable
   }
 
   private int findLeafPageId(long key) {
-    ByteBuffer metadata = store.currentPayload(ROOT_META_PAGE_ID);
-    if (metadata == null) {
-      return 0;
-    }
-    int rootPageId = BTreeRootPage.rootPageId(metadata);
-    ByteBuffer root = store.currentPayload(rootPageId);
-    if (root == null) {
-      return 0;
-    }
-    if (BTreePage.type(root) == BTreePage.TYPE_LEAF) {
-      return rootPageId;
-    }
-    int leafPageId = BTreePage.childForKey(root, key);
-    ByteBuffer leaf = store.currentPayload(leafPageId);
-    return leaf != null && BTreePage.type(leaf) == BTreePage.TYPE_LEAF ? leafPageId : 0;
+    return findLeafPageId(key, false, false);
   }
 
   private int findOperationLeafPageId(long key) {
-    ByteBuffer metadata = store.operationPayload(ROOT_META_PAGE_ID);
+    return findLeafPageId(key, true, true);
+  }
+
+  private int findLeafPageId(long key, boolean operation, boolean capturePath) {
+    splitPathDepth = 0;
+    ByteBuffer metadata = operation
+        ? store.operationPayload(ROOT_META_PAGE_ID)
+        : store.currentPayload(ROOT_META_PAGE_ID);
     if (metadata == null) {
       return 0;
     }
-    int rootPageId = BTreeRootPage.rootPageId(metadata);
-    ByteBuffer root = store.operationPayload(rootPageId);
-    if (root == null) {
-      return 0;
+    int pageId = BTreeRootPage.rootPageId(metadata);
+    for (int depth = 0; depth < MAXIMUM_TREE_HEIGHT; depth++) {
+      ByteBuffer page = operation
+          ? store.operationPayload(pageId) : store.currentPayload(pageId);
+      if (page == null) {
+        return 0;
+      }
+      if (BTreePage.type(page) == BTreePage.TYPE_LEAF) {
+        return pageId;
+      }
+      if (BTreePage.type(page) != BTreePage.TYPE_INTERNAL) {
+        return 0;
+      }
+      if (capturePath) {
+        splitPathPageIds[splitPathDepth++] = pageId;
+      }
+      pageId = BTreePage.childForKey(page, key);
     }
-    if (BTreePage.type(root) == BTreePage.TYPE_LEAF) {
-      return rootPageId;
-    }
-    int leafPageId = BTreePage.childForKey(root, key);
-    ByteBuffer leaf = store.operationPayload(leafPageId);
-    return leaf != null && BTreePage.type(leaf) == BTreePage.TYPE_LEAF ? leafPageId : 0;
+    return 0;
   }
 
   private static StatusCode validateStructure(IndexedPageStore store) {
@@ -695,54 +753,114 @@ public final class IndexedTable
   private static StatusCode validateTreeLinks(
       IndexedPageStore store,
       int rootPageId) {
-    ByteBuffer root = store.currentPayload(rootPageId);
-    int heapRows = store.rowCount();
-    if (BTreePage.type(root) == BTreePage.TYPE_LEAF) {
-      if (BTreePage.rightSiblingPageId(root) != 0
-          || BTreePage.highKey(root) != Long.MAX_VALUE) {
-        return StatusCode.CORRUPTION;
-      }
-      int versionRows = versionRowsInLeaf(store, root, heapRows);
-      return versionRows == heapRows ? StatusCode.OK : StatusCode.CORRUPTION;
+    TreeValidation validation = new TreeValidation();
+    StatusCode status = validateSubtree(
+        store,
+        rootPageId,
+        0,
+        false,
+        Long.MAX_VALUE,
+        0,
+        validation);
+    if (!status.isOk() || validation.versionRows != store.rowCount()) {
+      return status.isOk() ? StatusCode.CORRUPTION : status;
     }
-    int separatorCount = BTreePage.entryCount(root);
-    int childPageId = BTreePage.firstChildPageId(root);
-    int versionRows = 0;
-    for (int childIndex = 0; childIndex <= separatorCount; childIndex++) {
-      ByteBuffer child = store.currentPayload(childPageId);
-      if (child == null || BTreePage.type(child) != BTreePage.TYPE_LEAF) {
+    if (store.rowCount() > 0) {
+      if (validation.previousLeafPageId <= 0) {
         return StatusCode.CORRUPTION;
       }
-      int childEntries = BTreePage.entryCount(child);
-      if (childEntries <= 0) {
+      ByteBuffer lastLeaf = store.currentPayload(validation.previousLeafPageId);
+      if (BTreePage.rightSiblingPageId(lastLeaf) != 0
+          || BTreePage.highKey(lastLeaf) != Long.MAX_VALUE) {
         return StatusCode.CORRUPTION;
       }
-      int childVersionRows = versionRowsInLeaf(store, child, heapRows);
-      if (childVersionRows < 0) {
+    }
+    int nextPageId = BTreeRootPage.nextPageId(store.currentPayload(ROOT_META_PAGE_ID));
+    for (int pageId = INITIAL_LEAF_PAGE_ID; pageId < nextPageId; pageId++) {
+      ByteBuffer page = store.currentPayload(pageId);
+      if (!HeapPage.isHeap(page) && !validation.visited[pageId]) {
         return StatusCode.CORRUPTION;
       }
-      versionRows += childVersionRows;
-      if (childIndex == separatorCount) {
-        if (BTreePage.rightSiblingPageId(child) != 0
-            || BTreePage.highKey(child) != Long.MAX_VALUE) {
+    }
+    return StatusCode.OK;
+  }
+
+  private static StatusCode validateSubtree(
+      IndexedPageStore store,
+      int pageId,
+      long lowerBound,
+      boolean hasLowerBound,
+      long upperBound,
+      int depth,
+      TreeValidation validation) {
+    if (pageId <= 0
+        || pageId > IndexedPageStore.MAX_PAGES
+        || depth >= MAXIMUM_TREE_HEIGHT
+        || validation.visited[pageId]) {
+      return StatusCode.CORRUPTION;
+    }
+    ByteBuffer page = store.currentPayload(pageId);
+    if (page == null || HeapPage.isHeap(page)) {
+      return StatusCode.CORRUPTION;
+    }
+    validation.visited[pageId] = true;
+    int type = BTreePage.type(page);
+    int entryCount = BTreePage.entryCount(page);
+    if (BTreePage.highKey(page) != upperBound) {
+      return StatusCode.CORRUPTION;
+    }
+    if (type == BTreePage.TYPE_LEAF) {
+      if (entryCount == 0) {
+        return depth == 0 && store.rowCount() == 0
+            ? StatusCode.OK : StatusCode.CORRUPTION;
+      }
+      long firstKey = BTreePage.keyAt(page, 0);
+      if (hasLowerBound && firstKey != lowerBound) {
+        return StatusCode.CORRUPTION;
+      }
+      if (validation.previousLeafPageId > 0) {
+        ByteBuffer previous = store.currentPayload(validation.previousLeafPageId);
+        if (BTreePage.rightSiblingPageId(previous) != pageId
+            || BTreePage.highKey(previous) != firstKey) {
           return StatusCode.CORRUPTION;
         }
-        continue;
       }
-      long separator = BTreePage.keyAt(root, childIndex);
-      int rightChildPageId = BTreePage.valueAt(root, childIndex);
-      ByteBuffer rightChild = store.currentPayload(rightChildPageId);
-      if (rightChild == null
-          || BTreePage.type(rightChild) != BTreePage.TYPE_LEAF
-          || BTreePage.rightSiblingPageId(child) != rightChildPageId
-          || BTreePage.highKey(child) != separator
-          || BTreePage.entryCount(rightChild) <= 0
-          || BTreePage.keyAt(rightChild, 0) != separator) {
+      int leafVersions = versionRowsInLeaf(store, page, store.rowCount());
+      if (leafVersions < 0
+          || validation.versionRows > store.rowCount() - leafVersions) {
         return StatusCode.CORRUPTION;
       }
-      childPageId = rightChildPageId;
+      validation.versionRows += leafVersions;
+      validation.previousLeafPageId = pageId;
+      return StatusCode.OK;
     }
-    return versionRows == heapRows ? StatusCode.OK : StatusCode.CORRUPTION;
+    if (type != BTreePage.TYPE_INTERNAL || entryCount <= 0) {
+      return StatusCode.CORRUPTION;
+    }
+    int childPageId = BTreePage.firstChildPageId(page);
+    long childLower = lowerBound;
+    boolean childHasLower = hasLowerBound;
+    for (int childIndex = 0; childIndex <= entryCount; childIndex++) {
+      long childUpper = childIndex < entryCount
+          ? BTreePage.keyAt(page, childIndex) : upperBound;
+      StatusCode status = validateSubtree(
+          store,
+          childPageId,
+          childLower,
+          childHasLower,
+          childUpper,
+          depth + 1,
+          validation);
+      if (!status.isOk()) {
+        return status;
+      }
+      if (childIndex < entryCount) {
+        childLower = childUpper;
+        childHasLower = true;
+        childPageId = BTreePage.valueAt(page, childIndex);
+      }
+    }
+    return StatusCode.OK;
   }
 
   private static int versionRowsInLeaf(
@@ -775,5 +893,11 @@ public final class IndexedTable
       }
     }
     return versionRows;
+  }
+
+  private static final class TreeValidation {
+    private final boolean[] visited = new boolean[IndexedPageStore.MAX_PAGES + 1];
+    private int previousLeafPageId;
+    private int versionRows;
   }
 }

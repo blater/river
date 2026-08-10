@@ -300,6 +300,98 @@ final class IndexedTableTest {
     close(table, wal, directory);
   }
 
+  @Test
+  void growsToThreeLevelsCheckpointsAndRecovers(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    int batchCapacity = 64;
+    int entries = BTreePage.MAX_ENTRIES * (BTreePage.MAX_ENTRIES / 2 + 1) + 1;
+    long[] keys = new long[batchCapacity];
+    int[] rowLengths = new int[batchCapacity];
+    ByteBuffer rows = ByteBuffer.allocateDirect(batchCapacity * Long.BYTES);
+    IndexedCommitResult committed = new IndexedCommitResult();
+    long transactionId = 2;
+    for (int first = 0; first < entries; first += batchCapacity) {
+      int count = Math.min(batchCapacity, entries - first);
+      rows.clear();
+      for (int index = 0; index < count; index++) {
+        long key = first + index;
+        keys[index] = key;
+        rowLengths[index] = Long.BYTES;
+        rows.putLong(index * Long.BYTES, key * 10);
+      }
+      rows.position(0);
+      rows.limit(count * Long.BYTES);
+      assertEquals(
+          StatusCode.OK,
+          table.commitInserts(
+              transactionId++,
+              keys,
+              rows,
+              Long.BYTES,
+              rowLengths,
+              count,
+              committed));
+    }
+    assertEquals(entries, table.rowCount());
+    assertEquals(3, table.treeHeight());
+    assertLargeTree(table, entries);
+
+    assertEquals(StatusCode.OK, table.flush());
+    int suffix = batchCapacity;
+    rows.clear();
+    for (int index = 0; index < suffix; index++) {
+      long key = entries + index;
+      keys[index] = key;
+      rowLengths[index] = Long.BYTES;
+      rows.putLong(index * Long.BYTES, key * 10);
+    }
+    rows.position(0);
+    rows.limit(suffix * Long.BYTES);
+    assertEquals(
+        StatusCode.OK,
+        table.commitInserts(
+            transactionId,
+            keys,
+            rows,
+            Long.BYTES,
+            rowLengths,
+            suffix,
+            committed));
+    int recoveredEntries = entries + suffix;
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    table = openTable(openStore(directory, wal));
+    assertEquals(recoveredEntries, table.rowCount());
+    assertEquals(3, table.treeHeight());
+    assertLargeTree(table, recoveredEntries);
+    close(table, wal, directory);
+  }
+
+  private static void assertLargeTree(IndexedTable table, int entries) {
+    HeapRowResult fetched = new HeapRowResult();
+    int[] samples = {0, 127, 128, 255, 256, entries / 2, entries - 1};
+    for (int sample : samples) {
+      assertEquals(StatusCode.OK, table.fetchByKey(sample, fetched));
+      assertEquals(sample * 10L, rowValue(fetched));
+    }
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult row = new IndexedScanResult();
+    assertEquals(
+        StatusCode.OK,
+        table.beginScan(table.visibleCommitSequence(), 0, entries, cursor));
+    for (int expected = 0; expected < entries; expected++) {
+      assertEquals(StatusCode.OK, table.nextScan(cursor, row));
+      assertEquals(expected, row.key());
+    }
+    assertEquals(StatusCode.CONFLICT, table.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, table.closeScan(cursor));
+  }
+
   private static void assertAllRows(IndexedTable table, int entries) {
     HeapRowResult fetched = new HeapRowResult();
     for (int index = 0; index < entries; index++) {

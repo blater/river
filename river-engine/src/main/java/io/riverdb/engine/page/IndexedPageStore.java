@@ -32,7 +32,7 @@ public final class IndexedPageStore {
   public static final String FILE_NAME = "river.indexed.pages";
   public static final int WAL_FORMAT_ID = 1002;
   public static final int WAL_FORMAT_VERSION = 1;
-  public static final int MAX_PAGES = 256;
+  public static final int MAX_PAGES = 512;
   public static final int MAX_CHANGED_PAGES = 63;
   public static final int MAX_ROWS = CheckpointState.MAXIMUM_ROWS;
 
@@ -56,6 +56,7 @@ public final class IndexedPageStore {
   private static final int HEAP_PAGE_ID = 1;
   private static final int ROOT_META_PAGE_ID = 2;
   private static final int MAX_PREPARED_INSERT_ROWS = LocalWal.MAX_PENDING_RECORDS * 64;
+  private static final int MAXIMUM_TREE_HEIGHT = 8;
 
   private final DurableDirectory directory;
   private final DurableFile file;
@@ -2614,16 +2615,21 @@ public final class IndexedPageStore {
     if (!present[ROOT_META_PAGE_ID]) {
       return 0;
     }
-    int rootPageId = BTreeRootPage.rootPageId(currentPayloads[ROOT_META_PAGE_ID]);
-    if (!validPresentPage(rootPageId)) {
-      return 0;
+    int pageId = BTreeRootPage.rootPageId(currentPayloads[ROOT_META_PAGE_ID]);
+    for (int depth = 0; depth < MAXIMUM_TREE_HEIGHT; depth++) {
+      if (!validPresentPage(pageId)) {
+        return 0;
+      }
+      ByteBuffer page = currentPayloads[pageId];
+      if (BTreePage.type(page) == BTreePage.TYPE_LEAF) {
+        return pageId;
+      }
+      if (BTreePage.type(page) != BTreePage.TYPE_INTERNAL) {
+        return 0;
+      }
+      pageId = BTreePage.childForKey(page, key);
     }
-    ByteBuffer root = currentPayloads[rootPageId];
-    if (BTreePage.type(root) == BTreePage.TYPE_LEAF) {
-      return rootPageId;
-    }
-    int leafPageId = BTreePage.childForKey(root, key);
-    return validPresentPage(leafPageId) ? leafPageId : 0;
+    return 0;
   }
 
   private boolean addChangedPage(int pageId) {

@@ -64,4 +64,30 @@ final class BTreePageTest {
     assertEquals(6, BTreeRootPage.nextPageId(metadata));
     assertEquals(StatusCode.OK, BTreeRootPage.validate(metadata));
   }
+
+  @Test
+  void splitsInternalPageAndPromotesMiddleSeparator() {
+    ByteBuffer left = ByteBuffer.allocate(PAGE_BYTES);
+    ByteBuffer right = ByteBuffer.allocate(PAGE_BYTES);
+    assertEquals(StatusCode.OK, BTreePage.initializeInternal(left, 1000));
+    for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
+      assertEquals(
+          StatusCode.OK,
+          BTreePage.insertInternal(left, index * 2L + 2, 1001 + index));
+    }
+    BTreeSplitResult split = new BTreeSplitResult();
+    assertEquals(
+        StatusCode.OK,
+        BTreePage.splitInternal(left, right, 257, 2000, split));
+    assertEquals(257, split.separatorKey());
+    assertEquals(128, BTreePage.entryCount(left));
+    assertEquals(128, BTreePage.entryCount(right));
+    assertEquals(1000, BTreePage.childForKey(left, 1));
+    assertEquals(2000, BTreePage.childForKey(right, 257));
+    assertEquals(2000, BTreePage.firstChildPageId(right));
+    assertEquals(257, BTreePage.highKey(left));
+    assertEquals(Long.MAX_VALUE, BTreePage.highKey(right));
+    assertEquals(StatusCode.OK, BTreePage.validate(left));
+    assertEquals(StatusCode.OK, BTreePage.validate(right));
+  }
 }
