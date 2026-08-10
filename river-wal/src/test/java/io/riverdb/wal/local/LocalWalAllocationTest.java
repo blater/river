@@ -1,6 +1,7 @@
 package io.riverdb.wal.local;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
@@ -12,6 +13,7 @@ import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -21,7 +23,7 @@ final class LocalWalAllocationTest {
   private static volatile long allocationGuard;
 
   @Test
-  void warmedReserveEncodeWriteAndForceReuseProductionCarriers(@TempDir Path root) {
+  void warmedAppendAndReadReuseProductionCarriers(@TempDir Path root) {
     ThreadMXBean bean = allocationBean();
     NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
     assertEquals(
@@ -44,6 +46,7 @@ final class LocalWalAllocationTest {
     LocalWal wal = open.wal();
     LocalWalReservation reservation = new LocalWalReservation();
     LocalWalAppendResult appended = new LocalWalAppendResult();
+    LocalWalReadResult read = new LocalWalReadResult();
 
     for (int index = 0; index < 100; index++) {
       exercise(wal, reservation, appended, index);
@@ -53,14 +56,38 @@ final class LocalWalAllocationTest {
     for (int index = 100; index < 300; index++) {
       exercise(wal, reservation, appended, index);
     }
-    long allocated = bean.getThreadAllocatedBytes(threadId) - before;
+    long appendAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+
+    long readOffset = appended.startOffset();
+    for (int index = 0; index < 100; index++) {
+      exerciseRead(wal, readOffset, read);
+    }
+    ByteBuffer payloadIdentity = read.payload();
+    before = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 200; index++) {
+      exerciseRead(wal, readOffset, read);
+    }
+    long readAllocated = bean.getThreadAllocatedBytes(threadId) - before;
 
     assertEquals(0, wal.copiedPayloadBytes());
     assertTrue(
-        allocated <= 512,
-        "warmed production WAL path allocated bytes: " + allocated);
+        appendAllocated <= 512,
+        "warmed production WAL append allocated bytes: " + appendAllocated);
+    assertTrue(
+        readAllocated <= 512,
+        "warmed production WAL read allocated bytes: " + readAllocated);
+    assertSame(payloadIdentity, read.payload());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
+  }
+
+  private static void exerciseRead(
+      LocalWal wal,
+      long offset,
+      LocalWalReadResult read) {
+    allocationGuard += wal.read(offset, read).ordinal();
+    allocationGuard += read.payload().getLong(0);
+    allocationGuard += read.nextOffset();
   }
 
   private static void exercise(
