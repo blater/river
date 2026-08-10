@@ -247,6 +247,34 @@ final class SqlSessionTest {
     assertEquals(0, row.key());
     assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
     assertEquals(false, execution.transactionActive());
+
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        reader.beginScan(
+            "SELECT key, value FROM items WHERE key >= 4 AND key < 9",
+            cursor));
+    long[] expectedKeys = {4, 5, 7, 8};
+    long[] expectedValues = {40, 999, 70, 80};
+    int expectedIndex = 0;
+    while ((scanStatus = reader.nextScan(cursor, row)).isOk()) {
+      assertEquals(expectedKeys[expectedIndex], row.key());
+      assertEquals(expectedValues[expectedIndex], row.value());
+      expectedIndex++;
+    }
+    assertEquals(StatusCode.CONFLICT, scanStatus);
+    assertEquals(expectedKeys.length, expectedIndex);
+    assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        reader.beginScan(
+            "SELECT key, value FROM items WHERE key >= 9 AND key < 4",
+            cursor));
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("SELECT value FROM items WHERE key=4", execution));
+    assertEquals(40, execution.value());
     assertEquals(StatusCode.OK, database.close());
   }
 }

@@ -61,14 +61,26 @@ public final class RelationalSession {
   }
 
   public StatusCode beginScan(TableDefinition table, RelationalScanCursor cursor) {
+    return beginScan(table, 0, RelationalKey.USER_KEY_MASK, cursor);
+  }
+
+  public StatusCode beginScan(
+      TableDefinition table,
+      long lowerInclusive,
+      long upperExclusive,
+      RelationalScanCursor cursor) {
     if (table == null
         || !table.isOwnedBy(database)
+        || lowerInclusive < 0
+        || lowerInclusive > RelationalKey.MAXIMUM_USER_KEY
+        || upperExclusive <= lowerInclusive
+        || upperExclusive > RelationalKey.USER_KEY_MASK
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    long lowerKey = (long) table.tableId() << 48;
-    long upperKey = table.tableId() == RelationalKey.MAXIMUM_TABLE_ID
-        ? Long.MAX_VALUE : (long) (table.tableId() + 1) << 48;
+    long tableKey = (long) table.tableId() << 48;
+    long lowerKey = tableKey | lowerInclusive;
+    long upperKey = tableKey | upperExclusive;
     StatusCode status = session.beginScan(lowerKey, upperKey, cursor.indexed());
     return status.isOk() ? cursor.claim(this) : status;
   }

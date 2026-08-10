@@ -159,7 +159,13 @@ public final class SqlSession {
       status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
-      status = session.beginScan(table, cursor.relational());
+      status = command.isBoundedScan()
+          ? session.beginScan(
+              table,
+              command.scanLowerInclusive(),
+              command.scanUpperExclusive(),
+              cursor.relational())
+          : session.beginScan(table, cursor.relational());
     }
     if (status.isOk()) {
       status = cursor.claim(this, implicit);

@@ -19,6 +19,9 @@ public final class SqlParser {
     SqlCommandType type;
     long key = 0;
     long value = 0;
+    long scanLower = 0;
+    long scanUpper = 0;
+    boolean boundedScan = false;
     if (consumeKeyword(sql, "BEGIN")) {
       type = SqlCommandType.BEGIN;
       status = StatusCode.OK;
@@ -60,6 +63,33 @@ public final class SqlParser {
         }
         if (status.isOk()) {
           status = identifier(sql, result.writableTableName());
+        }
+        if (status.isOk() && consumeKeyword(sql, "WHERE")) {
+          boundedScan = true;
+          status = requireKeyword(sql, "KEY");
+          if (status.isOk()) {
+            status = requireCharacter(sql, '>');
+          }
+          if (status.isOk()) {
+            status = requireCharacter(sql, '=');
+          }
+          if (status.isOk()) {
+            status = number(sql, numberResult);
+            scanLower = numberResult.value;
+          }
+          if (status.isOk()) {
+            status = requireKeyword(sql, "AND");
+          }
+          if (status.isOk()) {
+            status = requireKeyword(sql, "KEY");
+          }
+          if (status.isOk()) {
+            status = requireCharacter(sql, '<');
+          }
+          if (status.isOk()) {
+            status = number(sql, numberResult);
+            scanUpper = numberResult.value;
+          }
         }
       } else {
         type = SqlCommandType.SELECT;
@@ -138,7 +168,11 @@ public final class SqlParser {
     if (!status.isOk() || !finish(sql)) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    result.set(type, key, value);
+    if (type == SqlCommandType.SCAN) {
+      result.setScan(scanLower, scanUpper, boundedScan);
+    } else {
+      result.set(type, key, value);
+    }
     return StatusCode.OK;
   }
 

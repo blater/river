@@ -28,6 +28,16 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("SELECT key, value FROM accounts", command));
     assertEquals(SqlCommandType.SCAN, command.type());
     assertName("accounts", command.tableName());
+    assertEquals(false, command.isBoundedScan());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT key, value FROM accounts WHERE key >= 11 AND key < 29",
+            command));
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertEquals(true, command.isBoundedScan());
+    assertEquals(11, command.scanLowerInclusive());
+    assertEquals(29, command.scanUpperExclusive());
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());
@@ -56,6 +66,9 @@ final class SqlParserTest {
         parser.parse("INSERT INTO x VALUES (0, -9223372036854775808)", command));
     assertEquals(Long.MIN_VALUE, command.value());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("DROP TABLE x", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT key, value FROM x WHERE key > 1", command));
   }
 
   @Test
