@@ -207,8 +207,8 @@ public final class RelationalDatabase {
         indexKeyOutput.putLong(0, indexBuildRow.key());
         indexKeyOutput.position(0);
         indexKeyOutput.limit(Long.BYTES);
-        status = session.insert(
-            indexStorageTable, catalogScratch.getLong(0), indexKeyOutput);
+        long value = catalogScratch.getLong(0);
+        status = session.insertIndexedValue(indexStorageTable, value, indexKeyOutput);
       }
     }
     if (scanActive) {

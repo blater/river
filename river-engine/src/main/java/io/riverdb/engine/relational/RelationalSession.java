@@ -10,6 +10,11 @@ import java.nio.ByteBuffer;
 
 /** Transaction session over catalog-resolved logical tables in one physical keyspace. */
 public final class RelationalSession {
+  private static final long INDEX_VALUE_BIAS = 1L << 47;
+  private static final long MINIMUM_INDEXED_VALUE = -INDEX_VALUE_BIAS;
+  private static final long MAXIMUM_INDEXED_VALUE = INDEX_VALUE_BIAS - 2;
+  private static final long MAXIMUM_INDEXED_VALUE_EXCLUSIVE = INDEX_VALUE_BIAS - 1;
+
   private final RelationalDatabase database;
   private final IndexedTransactionSession session;
   private final RelationalKey.LongKeyResult physicalKey = new RelationalKey.LongKeyResult();
@@ -87,7 +92,7 @@ public final class RelationalSession {
     if (status.isOk() && table.hasUniqueValueIndex()) {
       prepareValueIndex(table);
       encodeLong(indexRow, key);
-      status = insert(valueIndexTable, value, indexRow);
+      status = insertIndexedValue(valueIndexTable, value, indexRow);
     }
     return status;
   }
@@ -111,10 +116,10 @@ public final class RelationalSession {
     }
     if (status.isOk() && table.hasUniqueValueIndex() && previousValue != value) {
       prepareValueIndex(table);
-      status = delete(valueIndexTable, previousValue);
+      status = deleteIndexedValue(valueIndexTable, previousValue);
       if (status.isOk()) {
         encodeLong(indexRow, key);
-        status = insert(valueIndexTable, value, indexRow);
+        status = insertIndexedValue(valueIndexTable, value, indexRow);
       }
     }
     return status;
@@ -135,7 +140,7 @@ public final class RelationalSession {
     }
     if (status.isOk() && table.hasUniqueValueIndex()) {
       prepareValueIndex(table);
-      status = delete(valueIndexTable, previousValue);
+      status = deleteIndexedValue(valueIndexTable, previousValue);
     }
     return status;
   }
@@ -152,11 +157,71 @@ public final class RelationalSession {
     }
     result.reset();
     prepareValueIndex(table);
-    StatusCode status = fetch(valueIndexTable, value, indexedKeyRow);
+    StatusCode status = fetchIndexedValue(valueIndexTable, value, indexedKeyRow);
     if (status.isOk()) {
       status = decodeLong(indexedKeyRow, valueScratch);
     }
     long primaryKey = status.isOk() ? valueScratch.getLong(0) : 0;
+    if (status.isOk()) {
+      status = fetch(table, primaryKey, result.row());
+      if (status == StatusCode.CONFLICT) {
+        return StatusCode.CORRUPTION;
+      }
+    }
+    if (status.isOk()) {
+      status = decodeLong(result.row(), valueScratch);
+    }
+    if (status.isOk() && valueScratch.getLong(0) != value) {
+      return StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) {
+      result.setKey(primaryKey);
+    }
+    return status;
+  }
+
+  public StatusCode beginValueScan(
+      TableDefinition table,
+      long lowerInclusive,
+      long upperExclusive,
+      RelationalScanCursor cursor) {
+    if (table == null
+        || !table.isOwnedBy(database)
+        || !table.hasUniqueValueIndex()
+        || !validIndexedValue(lowerInclusive)
+        || upperExclusive <= lowerInclusive
+        || upperExclusive > MAXIMUM_INDEXED_VALUE_EXCLUSIVE
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    prepareValueIndex(table);
+    return beginScan(
+        valueIndexTable,
+        normalizeIndexedValue(lowerInclusive),
+        normalizeIndexedValue(upperExclusive),
+        cursor);
+  }
+
+  public StatusCode nextValueScan(
+      TableDefinition table,
+      RelationalScanCursor cursor,
+      RelationalScanResult indexResult,
+      ValueIndexLookupResult result) {
+    if (table == null
+        || !table.isOwnedBy(database)
+        || !table.hasUniqueValueIndex()
+        || cursor == null
+        || indexResult == null
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = nextScan(cursor, indexResult);
+    if (status.isOk()) {
+      status = decodeLong(indexResult.row(), valueScratch);
+    }
+    long primaryKey = status.isOk() ? valueScratch.getLong(0) : 0;
+    long value = status.isOk() ? denormalizeIndexedValue(indexResult.key()) : 0;
     if (status.isOk()) {
       status = fetch(table, primaryKey, result.row());
       if (status == StatusCode.CONFLICT) {
@@ -266,6 +331,42 @@ public final class RelationalSession {
 
   private void prepareValueIndex(TableDefinition table) {
     valueIndexTable.set(database, table.uniqueValueIndexTableId(), 0);
+  }
+
+  StatusCode insertIndexedValue(
+      TableDefinition indexTable,
+      long value,
+      ByteBuffer row) {
+    return validIndexedValue(value)
+        ? insert(indexTable, normalizeIndexedValue(value), row)
+        : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private StatusCode deleteIndexedValue(TableDefinition indexTable, long value) {
+    return validIndexedValue(value)
+        ? delete(indexTable, normalizeIndexedValue(value))
+        : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private StatusCode fetchIndexedValue(
+      TableDefinition indexTable,
+      long value,
+      HeapRowResult result) {
+    return validIndexedValue(value)
+        ? fetch(indexTable, normalizeIndexedValue(value), result)
+        : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  static boolean validIndexedValue(long value) {
+    return value >= MINIMUM_INDEXED_VALUE && value <= MAXIMUM_INDEXED_VALUE;
+  }
+
+  private static long normalizeIndexedValue(long value) {
+    return value + INDEX_VALUE_BIAS;
+  }
+
+  private static long denormalizeIndexedValue(long value) {
+    return value - INDEX_VALUE_BIAS;
   }
 
   private static void encodeLong(ByteBuffer target, long value) {

@@ -147,6 +147,67 @@ final class SqlSessionTest {
   }
 
   @Test
+  void scansUniqueIndexInSignedValueOrder(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute("CREATE TABLE measurements", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO measurements VALUES (1, -20)", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO measurements VALUES (2, 5)", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO measurements VALUES (3, 25)", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE UNIQUE INDEX measurements_value ON measurements(value)",
+            execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT key, value FROM measurements WHERE value=-20",
+            execution));
+    assertEquals(1, execution.key());
+
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT key, value FROM measurements "
+                + "WHERE value >= -20 AND value < 20",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.key());
+    assertEquals(-20, row.value());
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.key());
+    assertEquals(5, row.value());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "INSERT INTO measurements VALUES (4, 140737488355327)",
+            execution));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT value FROM measurements WHERE key=4", execution));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void explicitTransactionCommitsOrRollsBackMultipleStatements(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(

@@ -51,6 +51,14 @@ final class SqlParserTest {
             command));
     assertEquals(SqlCommandType.SELECT_BY_VALUE, command.type());
     assertEquals(701, command.value());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT key, value FROM accounts WHERE value >= -50 AND value < 75",
+            command));
+    assertEquals(SqlCommandType.VALUE_SCAN, command.type());
+    assertEquals(-50, command.scanLowerInclusive());
+    assertEquals(75, command.scanUpperExclusive());
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());

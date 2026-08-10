@@ -41,6 +41,14 @@ public final class SqlCommand {
     available = true;
   }
 
+  void setValueScan(long lowerInclusive, long upperExclusive) {
+    type = SqlCommandType.VALUE_SCAN;
+    scanLowerInclusive = lowerInclusive;
+    scanUpperExclusive = upperExclusive;
+    boundedScan = true;
+    available = true;
+  }
+
   void setBegin(boolean serializable) {
     type = SqlCommandType.BEGIN;
     serializableTransaction = serializable;

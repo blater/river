@@ -119,11 +119,33 @@ public final class SqlParser {
               scanUpper = numberResult.value;
             }
           } else if (consumeKeyword(sql, "VALUE")) {
-            type = SqlCommandType.SELECT_BY_VALUE;
-            status = requireCharacter(sql, '=');
-            if (status.isOk()) {
+            if (consumeCharacter(sql, '=')) {
+              type = SqlCommandType.SELECT_BY_VALUE;
               status = number(sql, numberResult);
               value = numberResult.value;
+            } else {
+              type = SqlCommandType.VALUE_SCAN;
+              status = requireCharacter(sql, '>');
+              if (status.isOk()) {
+                status = requireCharacter(sql, '=');
+              }
+              if (status.isOk()) {
+                status = number(sql, numberResult);
+                scanLower = numberResult.value;
+              }
+              if (status.isOk()) {
+                status = requireKeyword(sql, "AND");
+              }
+              if (status.isOk()) {
+                status = requireKeyword(sql, "VALUE");
+              }
+              if (status.isOk()) {
+                status = requireCharacter(sql, '<');
+              }
+              if (status.isOk()) {
+                status = number(sql, numberResult);
+                scanUpper = numberResult.value;
+              }
             }
           } else {
             status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -208,6 +230,8 @@ public final class SqlParser {
     }
     if (type == SqlCommandType.SCAN) {
       result.setScan(scanLower, scanUpper, boundedScan);
+    } else if (type == SqlCommandType.VALUE_SCAN) {
+      result.setValueScan(scanLower, scanUpper);
     } else if (type == SqlCommandType.BEGIN) {
       result.setBegin(serializableTransaction);
     } else {
@@ -308,6 +332,15 @@ public final class SqlParser {
     }
     offset++;
     return StatusCode.OK;
+  }
+
+  private boolean consumeCharacter(String sql, char expected) {
+    skipSpaces(sql);
+    if (offset >= sql.length() || sql.charAt(offset) != expected) {
+      return false;
+    }
+    offset++;
+    return true;
   }
 
   private boolean finish(String sql) {

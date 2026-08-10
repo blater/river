@@ -8,6 +8,7 @@ public final class SqlScanCursor {
   private final RelationalScanCursor relational = new RelationalScanCursor();
   private SqlSession owner;
   private boolean implicitTransaction;
+  private boolean valueIndex;
   private boolean active;
   private long rowsReturned;
 
@@ -17,6 +18,7 @@ public final class SqlScanCursor {
     }
     owner = null;
     implicitTransaction = false;
+    valueIndex = false;
     rowsReturned = 0;
     return relational.reset();
   }
@@ -25,12 +27,13 @@ public final class SqlScanCursor {
     return relational;
   }
 
-  StatusCode claim(SqlSession session, boolean implicit) {
+  StatusCode claim(SqlSession session, boolean implicit, boolean indexedValue) {
     if (active) {
       return StatusCode.CONFLICT;
     }
     owner = session;
     implicitTransaction = implicit;
+    valueIndex = indexedValue;
     active = true;
     rowsReturned = 0;
     return StatusCode.OK;
@@ -42,6 +45,10 @@ public final class SqlScanCursor {
 
   boolean implicitTransaction() {
     return implicitTransaction;
+  }
+
+  boolean valueIndex() {
+    return valueIndex;
   }
 
   void complete() {

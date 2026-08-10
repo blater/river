@@ -7,6 +7,7 @@ public enum SqlCommandType {
   SELECT,
   SELECT_BY_VALUE,
   SCAN,
+  VALUE_SCAN,
   UPDATE,
   DELETE,
   BEGIN,

@@ -192,7 +192,9 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = parser.parse(sql, command);
-    if (!status.isOk() || command.type() != SqlCommandType.SCAN) {
+    if (!status.isOk()
+        || (command.type() != SqlCommandType.SCAN
+            && command.type() != SqlCommandType.VALUE_SCAN)) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
     boolean implicit = !transactionActive;
@@ -203,16 +205,25 @@ public final class SqlSession {
       status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
-      status = command.isBoundedScan()
-          ? session.beginScan(
-              table,
-              command.scanLowerInclusive(),
-              command.scanUpperExclusive(),
-              cursor.relational())
-          : session.beginScan(table, cursor.relational());
+      if (command.type() == SqlCommandType.VALUE_SCAN) {
+        status = session.beginValueScan(
+            table,
+            command.scanLowerInclusive(),
+            command.scanUpperExclusive(),
+            cursor.relational());
+      } else {
+        status = command.isBoundedScan()
+            ? session.beginScan(
+                table,
+                command.scanLowerInclusive(),
+                command.scanUpperExclusive(),
+                cursor.relational())
+            : session.beginScan(table, cursor.relational());
+      }
     }
     if (status.isOk()) {
-      status = cursor.claim(this, implicit);
+      status = cursor.claim(
+          this, implicit, command.type() == SqlCommandType.VALUE_SCAN);
     }
     if (status.isOk()) {
       scanActive = true;
@@ -229,8 +240,25 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode status = session.nextScan(cursor.relational(), result.relational());
+    StatusCode status;
+    if (cursor.valueIndex()) {
+      status = session.nextValueScan(
+          table, cursor.relational(), result.relational(), indexed);
+    } else {
+      status = session.nextScan(cursor.relational(), result.relational());
+    }
     if (!status.isOk()) {
+      return status;
+    }
+    if (cursor.valueIndex()) {
+      if (indexed.row().length() != Long.BYTES) {
+        return StatusCode.CORRUPTION;
+      }
+      status = indexed.row().copyTo(result.valueBytes());
+      if (status.isOk()) {
+        result.set(indexed.key(), result.valueBytes().getLong(0));
+        cursor.rowReturned();
+      }
       return status;
     }
     if (result.relational().row().length() != Long.BYTES) {
