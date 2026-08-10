@@ -81,7 +81,8 @@ final class SqlSessionAllocationTest {
       SqlScanRowResult row,
       SqlExecutionResult result) {
     allocationGuard += cursor.reset().ordinal();
-    allocationGuard += session.beginScan("SELECT id, balance FROM t", cursor).ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id, balance FROM t WHERE region=7", cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.key();
     allocationGuard += row.value();

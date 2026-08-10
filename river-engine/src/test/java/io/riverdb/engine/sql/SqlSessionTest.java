@@ -892,11 +892,13 @@ final class SqlSessionTest {
         session.execute("SELECT region FROM accounts WHERE id=2", result));
     assertEquals(8, result.value());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute("UPDATE accounts SET balance=260 WHERE region=8", result));
+    assertEquals(1, result.affectedRows());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute("DELETE FROM accounts WHERE balance=250", result));
+    assertEquals(0, result.affectedRows());
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX accounts_region ON accounts(region)", result));
@@ -918,14 +920,14 @@ final class SqlSessionTest {
         session.execute("SELECT * FROM accounts WHERE region=8", result));
     assertEquals(3, result.columnCount());
     assertEquals(2, result.valueAt(0));
-    assertEquals(250, result.valueAt(1));
+    assertEquals(260, result.valueAt(1));
     assertEquals(8, result.valueAt(2));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("INSERT INTO accounts VALUES (4, 400, 8)", result));
     assertEquals(
         StatusCode.CONFLICT,
-        session.execute("INSERT INTO accounts VALUES (4, 250, 10)", result));
+        session.execute("INSERT INTO accounts VALUES (4, 260, 10)", result));
     assertEquals(
         StatusCode.OK,
         session.execute("UPDATE accounts SET region=9 WHERE id=2", result));
@@ -1289,6 +1291,67 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void fallsBackToTableScanForUnindexedPredicates(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE events "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, amount BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO events VALUES "
+                + "(1, 10, 100), (2, 10, 200), (3, 20, 300), "
+                + "(4, 10, 400), (5, 30, 500)",
+            result));
+
+    assertUnindexedRows(
+        session,
+        result,
+        "SELECT id, amount FROM events WHERE category=10",
+        new long[] {1, 2, 4},
+        new long[] {100, 200, 400});
+    assertUnindexedRows(
+        session,
+        result,
+        "SELECT id, amount FROM events WHERE category >= 10 AND category < 21",
+        new long[] {1, 2, 3, 4},
+        new long[] {100, 200, 300, 400});
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("SELECT id, amount FROM events WHERE category=10", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE events SET amount=999 WHERE category=10", result));
+    assertEquals(3, result.affectedRows());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT amount FROM events WHERE id=4", result));
+    assertEquals(999, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("DELETE FROM events WHERE amount=999", result));
+    assertEquals(3, result.affectedRows());
+    assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM events", result));
+    assertEquals(2, result.value());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT id FROM events WHERE missing=10", new SqlScanCursor()));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static void assertDuplicateIndexRows(
       SqlSession session,
       SqlExecutionResult result,
@@ -1344,6 +1407,24 @@ final class SqlSessionTest {
     for (long key : expectedKeys) {
       assertEquals(true, seen[(int) key]);
     }
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertUnindexedRows(
+      SqlSession session,
+      SqlExecutionResult result,
+      String sql,
+      long[] expectedKeys,
+      long[] expectedValues) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    for (int index = 0; index < expectedKeys.length; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(expectedKeys[index], row.key());
+      assertEquals(expectedValues[index], row.value());
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 }

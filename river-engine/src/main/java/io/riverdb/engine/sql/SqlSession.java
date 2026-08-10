@@ -320,15 +320,27 @@ public final class SqlSession {
       if (equality) {
         status = bindProjections();
         predicateColumn = table.findColumn(command.predicateColumnName());
-        if (status.isOk()
-            && (predicateColumn <= 0 || !table.hasIndexOn(predicateColumn))) {
+        if (status.isOk() && predicateColumn < 0) {
           status = StatusCode.INVALID_EXTERNAL_INPUT;
         }
       } else {
         status = bindDataCommand();
       }
     }
-    boolean valueIndex = status.isOk() && (equality || scanUsesValueIndex());
+    boolean bounded = equality || command.isBoundedScan();
+    boolean valueIndex = status.isOk()
+        && predicateColumn > 0
+        && table.hasIndexOn(predicateColumn);
+    boolean filterRows = status.isOk()
+        && bounded
+        && predicateColumn > 0
+        && !valueIndex;
+    if (status.isOk()
+        && equality
+        && predicateColumn == 0
+        && command.key() == Long.MAX_VALUE) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (status.isOk()) {
       if (valueIndex) {
         long lower = equality ? command.key() : command.scanLowerInclusive();
@@ -342,11 +354,11 @@ public final class SqlSession {
                 upper,
                 cursor.relational());
       } else {
-        status = command.isBoundedScan()
+        status = bounded && predicateColumn == 0
             ? session.beginScan(
                 table,
-                command.scanLowerInclusive(),
-                command.scanUpperExclusive(),
+                equality ? command.key() : command.scanLowerInclusive(),
+                equality ? command.key() + 1 : command.scanUpperExclusive(),
                 cursor.relational())
             : session.beginScan(table, cursor.relational());
       }
@@ -356,6 +368,10 @@ public final class SqlSession {
           this,
           implicit,
           valueIndex,
+          filterRows ? predicateColumn : -1,
+          equality ? command.key() : command.scanLowerInclusive(),
+          equality ? 0 : command.scanUpperExclusive(),
+          equality,
           projectedColumns,
           projectedColumnCount);
     }
@@ -374,30 +390,37 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode status;
-    if (cursor.valueIndex()) {
-      status = session.nextValueScan(
-          table, cursor.relational(), result.relational(), indexed);
-    } else {
-      status = session.nextScan(cursor.relational(), result.relational());
-    }
-    if (!status.isOk()) {
-      return status;
-    }
-    if (cursor.valueIndex()) {
-      status = projectScanRow(indexed.key(), indexed.row(), cursor, projectedValues);
+    StatusCode status = StatusCode.OK;
+    while (status.isOk()) {
+      long primaryKey;
+      HeapRowResult source;
+      if (cursor.valueIndex()) {
+        status = session.nextValueScan(
+            table, cursor.relational(), result.relational(), indexed);
+        primaryKey = indexed.key();
+        source = indexed.row();
+      } else {
+        status = session.nextScan(cursor.relational(), result.relational());
+        primaryKey = result.relational().key();
+        source = result.relational().row();
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      status = copyRow(source);
+      if (status.isOk() && cursor.filtersRows()) {
+        long predicateValue = cursor.filterColumn() == 0
+            ? primaryKey : row.getLong((cursor.filterColumn() - 1) * Long.BYTES);
+        if (!cursor.matches(predicateValue)) {
+          continue;
+        }
+      }
       if (status.isOk()) {
-        result.set(indexed.key(), projectedValues, cursor.projectedColumnCount());
+        projectCopiedScanRow(primaryKey, cursor, projectedValues);
+        result.set(primaryKey, projectedValues, cursor.projectedColumnCount());
         cursor.rowReturned();
       }
       return status;
-    }
-    status = projectScanRow(
-        result.relational().key(), result.relational().row(), cursor, projectedValues);
-    if (status.isOk()) {
-      result.set(
-          result.relational().key(), projectedValues, cursor.projectedColumnCount());
-      cursor.rowReturned();
     }
     return status;
   }
@@ -570,15 +593,14 @@ public final class SqlSession {
         return StatusCode.OK;
       }
       int predicate = table.findColumn(command.predicateColumnName());
-      return predicate == 0 || table.hasIndexOn(predicate)
-          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+      predicateColumn = predicate;
+      return predicate >= 0 ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.UPDATE) {
       predicateColumn = table.findColumn(command.predicateColumnName());
       if (command.updateColumnCount() <= 0
           || command.updateColumnCount() != command.columnCount()
-          || predicateColumn < 0
-          || predicateColumn > 0 && !table.hasIndexOn(predicateColumn)) {
+          || predicateColumn < 0) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int index = 0; index < command.updateColumnCount(); index++) {
@@ -598,16 +620,9 @@ public final class SqlSession {
     }
     if (command.type() == SqlCommandType.DELETE) {
       predicateColumn = table.findColumn(command.predicateColumnName());
-      return predicateColumn == 0
-              || predicateColumn > 0 && table.hasIndexOn(predicateColumn)
-          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+      return predicateColumn >= 0 ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return StatusCode.INVALID_EXTERNAL_INPUT;
-  }
-
-  private boolean scanUsesValueIndex() {
-    int predicate = table.findColumn(command.predicateColumnName());
-    return command.isBoundedScan() && table.hasIndexOn(predicate);
   }
 
   private StatusCode bindProjections() {
@@ -708,18 +723,15 @@ public final class SqlSession {
     return status;
   }
 
-  private StatusCode projectScanRow(
+  private void projectCopiedScanRow(
       long primaryKey,
-      HeapRowResult source,
       SqlScanCursor cursor,
       long[] destination) {
-    StatusCode status = copyRow(source);
-    for (int index = 0; status.isOk() && index < cursor.projectedColumnCount(); index++) {
+    for (int index = 0; index < cursor.projectedColumnCount(); index++) {
       int column = cursor.projectedColumn(index);
       destination[index] = column == 0
           ? primaryKey : row.getLong((column - 1) * Long.BYTES);
     }
-    return status;
   }
 
   private int affectedRows() {
@@ -745,28 +757,42 @@ public final class SqlSession {
 
   private StatusCode collectMatchedKeys() {
     matchedRowCount = 0;
-    if (command.key() == Long.MAX_VALUE) {
+    boolean indexed = table.hasIndexOn(predicateColumn);
+    if (indexed && command.key() == Long.MAX_VALUE) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = session.beginValueScan(
-        table,
-        predicateColumn,
-        command.key(),
-        command.key() + 1,
-        aggregateCursor);
+    StatusCode status = indexed
+        ? session.beginValueScan(
+            table,
+            predicateColumn,
+            command.key(),
+            command.key() + 1,
+            aggregateCursor)
+        : session.beginScan(table, aggregateCursor);
     boolean active = status.isOk();
     while (status.isOk()) {
-      status = session.nextValueScan(
-          table, aggregateCursor, aggregateRow, indexed);
+      status = indexed
+          ? session.nextValueScan(
+              table, aggregateCursor, aggregateRow, this.indexed)
+          : session.nextScan(aggregateCursor, aggregateRow);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
+      }
+      if (status.isOk() && !indexed) {
+        status = copyRow(aggregateRow.row());
+      }
+      if (status.isOk()
+          && !indexed
+          && row.getLong((predicateColumn - 1) * Long.BYTES) != command.key()) {
+        continue;
       }
       if (status.isOk() && matchedRowCount >= matchedKeys.length) {
         status = StatusCode.RESOURCE_EXHAUSTED;
       }
       if (status.isOk()) {
-        matchedKeys[matchedRowCount++] = indexed.key();
+        matchedKeys[matchedRowCount++] = indexed
+            ? this.indexed.key() : aggregateRow.key();
       }
     }
     if (active) {

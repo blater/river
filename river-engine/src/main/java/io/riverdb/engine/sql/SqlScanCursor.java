@@ -10,6 +10,10 @@ public final class SqlScanCursor {
   private SqlSession owner;
   private boolean implicitTransaction;
   private boolean valueIndex;
+  private int filterColumn = -1;
+  private long filterLowerInclusive;
+  private long filterUpperExclusive;
+  private boolean equalityFilter;
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private int projectedColumnCount;
   private boolean active;
@@ -22,6 +26,10 @@ public final class SqlScanCursor {
     owner = null;
     implicitTransaction = false;
     valueIndex = false;
+    filterColumn = -1;
+    filterLowerInclusive = 0;
+    filterUpperExclusive = 0;
+    equalityFilter = false;
     projectedColumnCount = 0;
     rowsReturned = 0;
     return relational.reset();
@@ -35,6 +43,10 @@ public final class SqlScanCursor {
       SqlSession session,
       boolean implicit,
       boolean indexedValue,
+      int scanFilterColumn,
+      long lowerInclusive,
+      long upperExclusive,
+      boolean equality,
       int[] projections,
       int projectionCount) {
     if (active
@@ -46,6 +58,10 @@ public final class SqlScanCursor {
     owner = session;
     implicitTransaction = implicit;
     valueIndex = indexedValue;
+    filterColumn = scanFilterColumn;
+    filterLowerInclusive = lowerInclusive;
+    filterUpperExclusive = upperExclusive;
+    equalityFilter = equality;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
       projectedColumns[index] = projections[index];
@@ -65,6 +81,20 @@ public final class SqlScanCursor {
 
   boolean valueIndex() {
     return valueIndex;
+  }
+
+  boolean filtersRows() {
+    return filterColumn >= 0;
+  }
+
+  int filterColumn() {
+    return filterColumn;
+  }
+
+  boolean matches(long value) {
+    return equalityFilter
+        ? value == filterLowerInclusive
+        : value >= filterLowerInclusive && value < filterUpperExclusive;
   }
 
   int projectedColumn(int index) {
