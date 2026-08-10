@@ -7,6 +7,9 @@ public final class SqlCommand {
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
   private final SqlIdentifier savepointName = new SqlIdentifier();
+  private final SqlIdentifier firstColumnName = new SqlIdentifier();
+  private final SqlIdentifier secondColumnName = new SqlIdentifier();
+  private final SqlIdentifier predicateColumnName = new SqlIdentifier();
   private final long[] insertKeys = new long[MAXIMUM_INSERT_ROWS];
   private final long[] insertValues = new long[MAXIMUM_INSERT_ROWS];
   private SqlCommandType type;
@@ -23,6 +26,9 @@ public final class SqlCommand {
     tableName.reset();
     indexName.reset();
     savepointName.reset();
+    firstColumnName.reset();
+    secondColumnName.reset();
+    predicateColumnName.reset();
     type = null;
     key = 0;
     value = 0;
@@ -88,6 +94,18 @@ public final class SqlCommand {
     return savepointName;
   }
 
+  SqlIdentifier writableFirstColumnName() {
+    return firstColumnName;
+  }
+
+  SqlIdentifier writableSecondColumnName() {
+    return secondColumnName;
+  }
+
+  SqlIdentifier writablePredicateColumnName() {
+    return predicateColumnName;
+  }
+
   public SqlCommandType type() {
     return type;
   }
@@ -102,6 +120,18 @@ public final class SqlCommand {
 
   public SqlIdentifier savepointName() {
     return savepointName;
+  }
+
+  public SqlIdentifier firstColumnName() {
+    return firstColumnName;
+  }
+
+  public SqlIdentifier secondColumnName() {
+    return secondColumnName;
+  }
+
+  public SqlIdentifier predicateColumnName() {
+    return predicateColumnName;
   }
 
   public long key() {

@@ -18,12 +18,22 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("create table accounts;", command));
     assertEquals(SqlCommandType.CREATE_TABLE, command.type());
     assertName("accounts", command.tableName());
+    assertName("key", command.firstColumnName());
+    assertName("value", command.secondColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE balances (account_id BIGINT PRIMARY KEY, amount BIGINT)",
+            command));
+    assertName("account_id", command.firstColumnName());
+    assertName("amount", command.secondColumnName());
     assertEquals(
         StatusCode.OK,
         parser.parse("CREATE UNIQUE INDEX accounts_value ON accounts(value)", command));
     assertEquals(SqlCommandType.CREATE_UNIQUE_INDEX, command.type());
     assertName("accounts_value", command.indexName());
     assertName("accounts", command.tableName());
+    assertName("value", command.firstColumnName());
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());
@@ -37,6 +47,8 @@ final class SqlParserTest {
     assertEquals(3, command.insertKey(2));
     assertEquals(StatusCode.OK, parser.parse("select value from accounts where key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
+    assertName("value", command.firstColumnName());
+    assertName("key", command.predicateColumnName());
     assertEquals(7, command.key());
     assertEquals(StatusCode.OK, parser.parse("SELECT COUNT(*) FROM accounts", command));
     assertEquals(SqlCommandType.COUNT, command.type());
@@ -61,6 +73,9 @@ final class SqlParserTest {
             command));
     assertEquals(SqlCommandType.SELECT_BY_VALUE, command.type());
     assertEquals(701, command.value());
+    assertName("key", command.firstColumnName());
+    assertName("value", command.secondColumnName());
+    assertName("value", command.predicateColumnName());
     assertEquals(
         StatusCode.OK,
         parser.parse(

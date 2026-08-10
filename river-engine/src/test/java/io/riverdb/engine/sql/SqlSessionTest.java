@@ -731,4 +731,104 @@ final class SqlSessionTest {
     assertEquals(1, result.key());
     assertEquals(StatusCode.OK, database.close());
   }
+
+  @Test
+  void bindsDurableExplicitColumnNamesAcrossReopen(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE balances "
+                + "(account_id BIGINT PRIMARY KEY, amount BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO balances VALUES (7, 700)", result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("SELECT value FROM balances WHERE key=7", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT amount FROM balances WHERE account_id=7", result));
+    assertEquals(700, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "UPDATE balances SET amount=701 WHERE account_id=7", result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "CREATE UNIQUE INDEX wrong_column ON balances(value)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE UNIQUE INDEX balances_amount ON balances(amount)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT account_id, amount FROM balances WHERE amount=701", result));
+    assertEquals(7, result.key());
+    assertEquals(701, result.value());
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult scanRow = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT account_id, amount FROM balances "
+                + "WHERE account_id >= 7 AND account_id < 8",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(7, scanRow.key());
+    assertEquals(701, scanRow.value());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT account_id, amount FROM balances "
+                + "WHERE amount >= 701 AND amount < 702",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(7, scanRow.key());
+    assertEquals(701, scanRow.value());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    session = sessions.session();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT amount FROM balances WHERE account_id=7", result));
+    assertEquals(701, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT account_id, amount FROM balances WHERE amount=701", result));
+    assertEquals(7, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("DELETE FROM balances WHERE account_id=7", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute(
+            "SELECT amount FROM balances WHERE account_id=7", result));
+    assertEquals(StatusCode.OK, database.close());
+  }
 }

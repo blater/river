@@ -70,7 +70,20 @@ public final class RelationalSession {
 
   /** Adds one catalog table entry within this session's active transaction. */
   public StatusCode createTable(CharSequence name, TableDefinition result) {
-    if (!RelationalKey.validName(name) || result == null) {
+    return createTable(name, "key", "value", result);
+  }
+
+  /** Adds one two-BIGINT-column catalog table entry within the active transaction. */
+  public StatusCode createTable(
+      CharSequence name,
+      CharSequence keyColumnName,
+      CharSequence valueColumnName,
+      TableDefinition result) {
+    if (!RelationalKey.validName(name)
+        || !RelationalKey.validName(keyColumnName)
+        || !RelationalKey.validName(valueColumnName)
+        || sameName(keyColumnName, valueColumnName)
+        || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -98,11 +111,24 @@ public final class RelationalSession {
       status = session.update(RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
     }
     if (status.isOk()) {
-      CatalogRecord.encodeTable(catalogOutput, tableId, 0, name);
+      CatalogRecord.encodeTable(
+          catalogOutput,
+          tableId,
+          0,
+          TableDefinition.INDEX_NONE,
+          name,
+          keyColumnName,
+          valueColumnName);
       status = session.insert(physicalKey.key(), catalogOutput);
     }
     if (status.isOk()) {
-      result.set(database, tableId, 0, TableDefinition.INDEX_NONE);
+      result.set(
+          database,
+          tableId,
+          0,
+          TableDefinition.INDEX_NONE,
+          keyColumnName,
+          valueColumnName);
     }
     return status;
   }
@@ -116,9 +142,17 @@ public final class RelationalSession {
   public StatusCode createUniqueValueIndex(
       CharSequence indexName,
       CharSequence tableName) {
+    return createUniqueValueIndex(indexName, tableName, "value");
+  }
+
+  public StatusCode createUniqueValueIndex(
+      CharSequence indexName,
+      CharSequence tableName,
+      CharSequence columnName) {
     if (!registeredTransaction
         || !RelationalKey.validName(indexName)
-        || !RelationalKey.validName(tableName)) {
+        || !RelationalKey.validName(tableName)
+        || !RelationalKey.validName(columnName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     boolean acquired = false;
@@ -132,7 +166,7 @@ public final class RelationalSession {
       }
     }
     if (status.isOk()) {
-      status = database.buildUniqueValueIndex(this, indexName, tableName);
+      status = database.buildUniqueValueIndex(this, indexName, tableName, columnName);
     }
     if (!status.isOk() && acquired) {
       database.completeSchemaChange(this, false);
@@ -530,6 +564,18 @@ public final class RelationalSession {
     StatusCode status = source.length() == Long.BYTES
         ? source.copyTo(target) : StatusCode.CORRUPTION;
     return status;
+  }
+
+  private static boolean sameName(CharSequence first, CharSequence second) {
+    if (first.length() != second.length()) {
+      return false;
+    }
+    for (int index = 0; index < first.length(); index++) {
+      if (first.charAt(index) != second.charAt(index)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private void releaseTerminalTransaction() {

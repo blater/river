@@ -152,7 +152,11 @@ public final class SqlSession {
     }
     if (command.type() == SqlCommandType.CREATE_TABLE) {
       if (!transactionActive) {
-        status = database.createTable(command.tableName(), table);
+        status = database.createTable(
+            command.tableName(),
+            command.firstColumnName(),
+            command.secondColumnName(),
+            table);
         if (status.isOk()) {
           result.setUpdate(0, 0);
         }
@@ -160,7 +164,11 @@ public final class SqlSession {
       }
       status = session.createSavepoint(statementSavepoint);
       if (status.isOk()) {
-        status = session.createTable(command.tableName(), table);
+        status = session.createTable(
+            command.tableName(),
+            command.firstColumnName(),
+            command.secondColumnName(),
+            table);
       }
       if (!status.isOk() && statementSavepoint.isActive()) {
         StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
@@ -183,7 +191,7 @@ public final class SqlSession {
     if (command.type() == SqlCommandType.CREATE_UNIQUE_INDEX) {
       if (!transactionActive) {
         status = database.createUniqueValueIndex(
-            command.indexName(), command.tableName());
+            command.indexName(), command.tableName(), command.firstColumnName());
         if (status.isOk()) {
           result.setUpdate(0, 0);
         }
@@ -192,7 +200,7 @@ public final class SqlSession {
       status = session.createSavepoint(statementSavepoint);
       if (status.isOk()) {
         status = session.createUniqueValueIndex(
-            command.indexName(), command.tableName());
+            command.indexName(), command.tableName(), command.firstColumnName());
       }
       if (!status.isOk() && statementSavepoint.isActive()) {
         StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
@@ -234,6 +242,9 @@ public final class SqlSession {
     }
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
+    }
+    if (status.isOk()) {
+      status = bindDataCommand();
     }
     if (status.isOk()) {
       status = executeDataCommand(result);
@@ -294,7 +305,11 @@ public final class SqlSession {
       status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
-      if (command.type() == SqlCommandType.VALUE_SCAN) {
+      status = bindDataCommand();
+    }
+    boolean valueIndex = status.isOk() && scanUsesValueIndex();
+    if (status.isOk()) {
+      if (valueIndex) {
         status = session.beginValueScan(
             table,
             command.scanLowerInclusive(),
@@ -312,7 +327,7 @@ public final class SqlSession {
     }
     if (status.isOk()) {
       status = cursor.claim(
-          this, implicit, command.type() == SqlCommandType.VALUE_SCAN);
+          this, implicit, valueIndex);
     }
     if (status.isOk()) {
       scanActive = true;
@@ -472,6 +487,50 @@ public final class SqlSession {
     return command.type() == SqlCommandType.SELECT
         || command.type() == SqlCommandType.SELECT_BY_VALUE
         || command.type() == SqlCommandType.COUNT;
+  }
+
+  private StatusCode bindDataCommand() {
+    if (command.type() == SqlCommandType.INSERT
+        || command.type() == SqlCommandType.COUNT) {
+      return StatusCode.OK;
+    }
+    if (command.type() == SqlCommandType.SELECT) {
+      return table.matchesValueColumn(command.firstColumnName())
+              && table.matchesKeyColumn(command.predicateColumnName())
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (command.type() == SqlCommandType.SELECT_BY_VALUE) {
+      return table.matchesKeyColumn(command.firstColumnName())
+              && table.matchesValueColumn(command.secondColumnName())
+              && table.matchesValueColumn(command.predicateColumnName())
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (command.type() == SqlCommandType.SCAN
+        || command.type() == SqlCommandType.VALUE_SCAN) {
+      if (!table.matchesKeyColumn(command.firstColumnName())
+          || !table.matchesValueColumn(command.secondColumnName())) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      return !command.isBoundedScan()
+              || table.matchesKeyColumn(command.predicateColumnName())
+              || table.matchesValueColumn(command.predicateColumnName())
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (command.type() == SqlCommandType.UPDATE) {
+      return table.matchesValueColumn(command.firstColumnName())
+              && table.matchesKeyColumn(command.predicateColumnName())
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (command.type() == SqlCommandType.DELETE) {
+      return table.matchesKeyColumn(command.predicateColumnName())
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private boolean scanUsesValueIndex() {
+    return command.isBoundedScan()
+        && table.matchesValueColumn(command.predicateColumnName());
   }
 
   private int affectedRows() {
