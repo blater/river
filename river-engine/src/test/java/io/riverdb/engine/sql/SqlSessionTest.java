@@ -892,6 +892,12 @@ final class SqlSessionTest {
         session.execute("SELECT region FROM accounts WHERE id=2", result));
     assertEquals(8, result.value());
     assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("UPDATE accounts SET balance=260 WHERE region=8", result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("DELETE FROM accounts WHERE balance=250", result));
+    assertEquals(
         StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX accounts_region ON accounts(region)", result));
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
@@ -930,6 +936,19 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT id, region FROM accounts WHERE region=9", result));
     assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE accounts SET balance=260 WHERE region=9", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=260", result));
+    assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=250", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE accounts SET balance=250 WHERE balance=260", result));
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT id, balance FROM accounts WHERE balance=250", result));
@@ -1045,7 +1064,7 @@ final class SqlSessionTest {
     assertEquals(2, result.key());
     assertEquals(
         StatusCode.OK,
-        session.execute("DELETE FROM accounts WHERE id=3", result));
+        session.execute("DELETE FROM accounts WHERE balance=300", result));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("SELECT id, balance FROM accounts WHERE balance=300", result));

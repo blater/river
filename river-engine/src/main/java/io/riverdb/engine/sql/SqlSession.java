@@ -47,6 +47,7 @@ public final class SqlSession {
   private boolean userSavepointActive;
   private boolean scanActive;
   private int userSavepointNameLength;
+  private int predicateColumn;
   private int updatedColumnCount;
   private int projectedColumnCount;
 
@@ -415,9 +416,20 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.UPDATE) {
-      StatusCode status = session.fetch(table, command.key(), fetched);
+      long primaryKey = command.key();
+      StatusCode status;
+      HeapRowResult source;
+      if (predicateColumn == 0) {
+        status = session.fetch(table, primaryKey, fetched);
+        source = fetched;
+      } else {
+        status = session.fetchByUniqueValue(
+            table, predicateColumn, command.key(), indexed);
+        primaryKey = indexed.key();
+        source = indexed.row();
+      }
       if (status.isOk()) {
-        status = copyRow(fetched);
+        status = copyRow(source);
       }
       if (status.isOk()) {
         for (int index = 0; index < updatedColumnCount; index++) {
@@ -425,12 +437,19 @@ public final class SqlSession {
               (updatedColumns[index] - 1) * Long.BYTES,
               command.updateValue(index));
         }
-        status = session.updateRow(table, command.key(), row);
+        status = session.updateRow(table, primaryKey, row);
       }
       return status;
     }
     if (command.type() == SqlCommandType.DELETE) {
-      return session.deleteLong(table, command.key());
+      long primaryKey = command.key();
+      StatusCode status = StatusCode.OK;
+      if (predicateColumn > 0) {
+        status = session.fetchByUniqueValue(
+            table, predicateColumn, command.key(), indexed);
+        primaryKey = indexed.key();
+      }
+      return status.isOk() ? session.deleteLong(table, primaryKey) : status;
     }
     if (command.type() == SqlCommandType.COUNT) {
       long count = 0;
@@ -499,6 +518,7 @@ public final class SqlSession {
 
   private StatusCode bindDataCommand() {
     updatedColumnCount = 0;
+    predicateColumn = -1;
     projectedColumnCount = 0;
     if (command.type() == SqlCommandType.COUNT) {
       return StatusCode.OK;
@@ -525,9 +545,11 @@ public final class SqlSession {
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.UPDATE) {
+      predicateColumn = table.findColumn(command.predicateColumnName());
       if (command.updateColumnCount() <= 0
           || command.updateColumnCount() != command.columnCount()
-          || table.findColumn(command.predicateColumnName()) != 0) {
+          || predicateColumn < 0
+          || predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int index = 0; index < command.updateColumnCount(); index++) {
@@ -546,7 +568,9 @@ public final class SqlSession {
       return StatusCode.OK;
     }
     if (command.type() == SqlCommandType.DELETE) {
-      return table.matchesKeyColumn(command.predicateColumnName())
+      predicateColumn = table.findColumn(command.predicateColumnName());
+      return predicateColumn == 0
+              || predicateColumn > 0 && table.hasUniqueIndexOn(predicateColumn)
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return StatusCode.INVALID_EXTERNAL_INPUT;
