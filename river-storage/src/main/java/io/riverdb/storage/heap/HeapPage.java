@@ -144,6 +144,38 @@ public final class HeapPage {
     return StatusCode.OK;
   }
 
+  /** Copies one row into an absolute destination range without creating a buffer view. */
+  public static StatusCode copyRowTo(
+      ByteBuffer page,
+      int rowId,
+      ByteBuffer destination,
+      int destinationOffset) {
+    if (page == null || destination == null || rowId <= 0 || destinationOffset < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int rowCount = getInt(page, 12);
+    if (rowId > rowCount) {
+      return StatusCode.CONFLICT;
+    }
+    int slotOffset = HEADER_BYTES + (rowId - 1) * SLOT_BYTES;
+    int rowOffset = getInt(page, slotOffset);
+    int rowLength = getInt(page, slotOffset + 4);
+    if (destination.limit() - destinationOffset < rowLength) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    for (int index = 0; index < rowLength; index++) {
+      destination.put(destinationOffset + index, page.get(rowOffset + index));
+    }
+    return StatusCode.OK;
+  }
+
+  public static int rowLength(ByteBuffer page, int rowId) {
+    if (page == null || rowId <= 0 || rowId > getInt(page, 12)) {
+      return 0;
+    }
+    return getInt(page, HEADER_BYTES + (rowId - 1) * SLOT_BYTES + 4);
+  }
+
   public static StatusCode next(
       ByteBuffer page,
       HeapScanCursor cursor,

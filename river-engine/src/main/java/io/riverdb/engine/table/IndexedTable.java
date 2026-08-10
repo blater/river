@@ -251,6 +251,19 @@ public final class IndexedTable implements CommitSequenceSource {
     return status;
   }
 
+  /** Compacts obsolete row versions; caller must hold the transaction publication barrier. */
+  public synchronized StatusCode vacuum(
+      long transactionId,
+      IndexedVacuumResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return store.commitVacuum(
+        transactionId,
+        store.nextCommitSequence(),
+        result);
+  }
+
   public synchronized StatusCode insertCommitted(
       long transactionId,
       long commitSequence,

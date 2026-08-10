@@ -11,9 +11,13 @@ publication barrier across WAL force, heap/index publication, active-set
 removal, and the final outcome. Transaction IDs and commit CSNs resume from the
 recovered WAL.
 
+The same publication barrier admits synchronous maintenance only when the
+active transaction and lock sets are empty. The first consumer uses this seam
+to compact obsolete row versions without invalidating a retained snapshot.
+
 Serializable point reads and inserts are supported with retained shared and
 exclusive key locks, including missing-key protection and in-transaction lock
 upgrade. Range scans are not yet exposed transactionally, so this does not
 claim phantom protection for scans. Physical undo/savepoints, durable non-final
-outcomes, version pruning, and vacuum remain the next transaction stages; abort
-currently discards the deferred mutation set and releases its locks.
+outcomes, and concurrent horizon-based pruning remain later transaction stages;
+abort currently discards the deferred mutation set and releases its locks.

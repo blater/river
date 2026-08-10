@@ -27,6 +27,11 @@ final class HeapPageTest {
     ByteBuffer copied = ByteBuffer.allocate(3);
     assertEquals(StatusCode.OK, row.copyTo(copied));
     assertEquals(2, copied.get(1));
+    ByteBuffer directCopy = ByteBuffer.allocate(8);
+    assertEquals(StatusCode.OK, HeapPage.copyRowTo(page, 1, directCopy, 2));
+    assertEquals(3, HeapPage.rowLength(page, 1));
+    assertEquals(1, directCopy.get(2));
+    assertEquals(3, directCopy.get(4));
     HeapScanCursor scan = new HeapScanCursor();
     assertEquals(StatusCode.OK, HeapPage.next(page, scan, row));
     assertEquals(1, row.rowId());

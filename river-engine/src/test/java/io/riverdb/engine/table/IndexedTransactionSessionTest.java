@@ -388,6 +388,82 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void quiescentVacuumReclaimsVersionsAndRecoversBeforePageFlush(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(manager, table);
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(201, row(2010)));
+    assertEquals(StatusCode.OK, seed.insert(202, row(2020)));
+    assertEquals(StatusCode.OK, seed.insert(203, row(2030)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.update(201, row(2011)));
+    assertEquals(StatusCode.OK, writer.delete(202));
+    assertEquals(StatusCode.OK, writer.delete(203));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    IndexedTransactionSession reinserter = session(manager, table);
+    assertEquals(StatusCode.OK, reinserter.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, reinserter.insert(202, row(2021)));
+    assertEquals(StatusCode.OK, reinserter.commit(outcome));
+    assertEquals(7, table.rowCount());
+
+    IndexedTransactionSession snapshot = session(manager, table);
+    assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    assertEquals(StatusCode.RETRY, vacuum.run(outcome));
+    assertEquals(7, table.rowCount());
+    assertEquals(StatusCode.OK, snapshot.abort(outcome));
+
+    long stagedBefore = table.stagedCopyBytes();
+    long walCopiedBefore = table.walCopyBytes();
+    assertEquals(StatusCode.OK, vacuum.run(outcome));
+    assertEquals(TransactionState.COMMITTED, outcome.state());
+    assertEquals(7, vacuum.result().rowsBefore());
+    assertEquals(3, vacuum.result().rowsAfter());
+    assertEquals(4, vacuum.result().rowsReclaimed());
+    assertEquals(3, table.rowCount());
+    assertEquals(
+        2L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
+        table.stagedCopyBytes() - stagedBefore);
+    assertEquals(17, table.walCopyBytes() - walCopiedBefore);
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(201, fetched));
+    assertEquals(2011, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(202, fetched));
+    assertEquals(2021, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(203, fetched));
+    assertEquals(StatusCode.CONFLICT, vacuum.run(outcome));
+    assertEquals(TransactionState.ABORTED, outcome.state());
+    assertEquals(3, table.rowCount());
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertEquals(3, table.rowCount());
+    assertEquals(StatusCode.OK, table.fetchByKey(201, fetched));
+    assertEquals(2011, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(202, fetched));
+    assertEquals(2021, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(203, fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void commitsDistinctTransactionsFromConcurrentSessions(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

@@ -243,6 +243,52 @@ public final class TransactionManager {
     return StatusCode.OK;
   }
 
+  /**
+   * Publishes a maintenance transaction only while no user transaction can retain a snapshot.
+   */
+  public synchronized StatusCode commitMaintenance(
+      TransactionCommitParticipant participant,
+      TransactionOutcome result) {
+    if (participant == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    if (activeTransactionCount != 0 || locks.activeLockCount() != 0) {
+      return StatusCode.RETRY;
+    }
+    if (nextTransactionId <= 0) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    long transactionId = nextTransactionId++;
+    if (nextTransactionId <= 0) {
+      nextTransactionId = 0;
+    }
+    StatusCode status = participant.commit(transactionId);
+    if (!status.isOk()) {
+      TransactionState state = indeterminate(status)
+          ? TransactionState.INDETERMINATE : TransactionState.ABORTED;
+      result.set(databaseHigh, databaseLow, transactionId, state, 0);
+      return status;
+    }
+    long commitSequence = participant.committedSequence();
+    if (commitSequence <= 0) {
+      result.set(
+          databaseHigh,
+          databaseLow,
+          transactionId,
+          TransactionState.INDETERMINATE,
+          0);
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    result.set(
+        databaseHigh,
+        databaseLow,
+        transactionId,
+        TransactionState.COMMITTED,
+        commitSequence);
+    return StatusCode.OK;
+  }
+
   private void capture(Transaction transaction, long visibleCommitSequence) {
     transaction.snapshot().capture(
         databaseHigh,
