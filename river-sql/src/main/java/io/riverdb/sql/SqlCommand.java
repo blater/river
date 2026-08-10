@@ -3,6 +3,7 @@ package io.riverdb.sql;
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
 public final class SqlCommand {
   private final SqlIdentifier tableName = new SqlIdentifier();
+  private final SqlIdentifier indexName = new SqlIdentifier();
   private SqlCommandType type;
   private long key;
   private long value;
@@ -14,6 +15,7 @@ public final class SqlCommand {
 
   public void reset() {
     tableName.reset();
+    indexName.reset();
     type = null;
     key = 0;
     value = 0;
@@ -49,12 +51,20 @@ public final class SqlCommand {
     return tableName;
   }
 
+  SqlIdentifier writableIndexName() {
+    return indexName;
+  }
+
   public SqlCommandType type() {
     return type;
   }
 
   public SqlIdentifier tableName() {
     return tableName;
+  }
+
+  public SqlIdentifier indexName() {
+    return indexName;
   }
 
   public long key() {

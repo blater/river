@@ -39,10 +39,33 @@ public final class SqlParser {
       type = SqlCommandType.CHECKPOINT;
       status = StatusCode.OK;
     } else if (consumeKeyword(sql, "CREATE")) {
-      type = SqlCommandType.CREATE_TABLE;
-      status = requireKeyword(sql, "TABLE");
-      if (status.isOk()) {
+      if (consumeKeyword(sql, "TABLE")) {
+        type = SqlCommandType.CREATE_TABLE;
         status = identifier(sql, result.writableTableName());
+      } else {
+        type = SqlCommandType.CREATE_UNIQUE_INDEX;
+        status = requireKeyword(sql, "UNIQUE");
+        if (status.isOk()) {
+          status = requireKeyword(sql, "INDEX");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableIndexName());
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "ON");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableTableName());
+        }
+        if (status.isOk()) {
+          status = requireCharacter(sql, '(');
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "VALUE");
+        }
+        if (status.isOk()) {
+          status = requireCharacter(sql, ')');
+        }
       }
     } else if (consumeKeyword(sql, "INSERT")) {
       type = SqlCommandType.INSERT;
@@ -72,30 +95,38 @@ public final class SqlParser {
           status = identifier(sql, result.writableTableName());
         }
         if (status.isOk() && consumeKeyword(sql, "WHERE")) {
-          boundedScan = true;
-          status = requireKeyword(sql, "KEY");
-          if (status.isOk()) {
+          if (consumeKeyword(sql, "KEY")) {
+            boundedScan = true;
             status = requireCharacter(sql, '>');
-          }
-          if (status.isOk()) {
+            if (status.isOk()) {
+              status = requireCharacter(sql, '=');
+            }
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+              scanLower = numberResult.value;
+            }
+            if (status.isOk()) {
+              status = requireKeyword(sql, "AND");
+            }
+            if (status.isOk()) {
+              status = requireKeyword(sql, "KEY");
+            }
+            if (status.isOk()) {
+              status = requireCharacter(sql, '<');
+            }
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+              scanUpper = numberResult.value;
+            }
+          } else if (consumeKeyword(sql, "VALUE")) {
+            type = SqlCommandType.SELECT_BY_VALUE;
             status = requireCharacter(sql, '=');
-          }
-          if (status.isOk()) {
-            status = number(sql, numberResult);
-            scanLower = numberResult.value;
-          }
-          if (status.isOk()) {
-            status = requireKeyword(sql, "AND");
-          }
-          if (status.isOk()) {
-            status = requireKeyword(sql, "KEY");
-          }
-          if (status.isOk()) {
-            status = requireCharacter(sql, '<');
-          }
-          if (status.isOk()) {
-            status = number(sql, numberResult);
-            scanUpper = numberResult.value;
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+              value = numberResult.value;
+            }
+          } else {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
           }
         }
       } else {

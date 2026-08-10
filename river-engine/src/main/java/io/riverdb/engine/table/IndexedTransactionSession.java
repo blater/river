@@ -100,16 +100,13 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       status = table.prepareInsert(
           transaction.snapshot().visibleCommitSequence(), key, mutationTarget);
     }
-    int previousRowId = 0;
-    if (status.isOk()) {
-      previousRowId = mutationTarget.rowId();
-    } else if (status != StatusCode.CONFLICT) {
+    if (!status.isOk()) {
       return status;
     }
     appendPending(
         IndexedTable.MUTATION_INSERT,
         key,
-        previousRowId,
+        mutationTarget.rowId(),
         row,
         row.position(),
         row.remaining(),

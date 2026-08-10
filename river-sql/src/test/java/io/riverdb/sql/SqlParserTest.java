@@ -18,6 +18,12 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("create table accounts;", command));
     assertEquals(SqlCommandType.CREATE_TABLE, command.type());
     assertName("accounts", command.tableName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("CREATE UNIQUE INDEX accounts_value ON accounts(value)", command));
+    assertEquals(SqlCommandType.CREATE_UNIQUE_INDEX, command.type());
+    assertName("accounts_value", command.indexName());
+    assertName("accounts", command.tableName());
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());
@@ -38,6 +44,13 @@ final class SqlParserTest {
     assertEquals(true, command.isBoundedScan());
     assertEquals(11, command.scanLowerInclusive());
     assertEquals(29, command.scanUpperExclusive());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT key, value FROM accounts WHERE value = 701",
+            command));
+    assertEquals(SqlCommandType.SELECT_BY_VALUE, command.type());
+    assertEquals(701, command.value());
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());

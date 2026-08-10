@@ -46,6 +46,54 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT value FROM accounts WHERE key = 7", result));
     assertEquals(701, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE UNIQUE INDEX accounts_value ON accounts(value)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT key, value FROM accounts WHERE value=701",
+            result));
+    assertEquals(7, result.key());
+    assertEquals(701, result.value());
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO accounts VALUES (8, 701)", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT value FROM accounts WHERE key=8", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO accounts VALUES (8, 800)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE accounts SET value=801 WHERE key=8", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT key, value FROM accounts WHERE value=800", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT key, value FROM accounts WHERE value=801", result));
+    assertEquals(8, result.key());
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("UPDATE accounts SET value=701 WHERE key=8", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO accounts VALUES (9, 900)", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT key, value FROM accounts WHERE value=801", result));
+    assertEquals(8, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT key, value FROM accounts WHERE value=900", result));
+    assertEquals(9, result.key());
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
     assertEquals(0, result.affectedRows());
     assertEquals(true, result.commitSequence() > insertSequence);
@@ -63,7 +111,14 @@ final class SqlSessionTest {
     assertEquals(701, result.value());
     assertEquals(
         StatusCode.OK,
+        session.execute("SELECT key, value FROM accounts WHERE value=801", result));
+    assertEquals(8, result.key());
+    assertEquals(
+        StatusCode.OK,
         session.execute("DELETE FROM accounts WHERE key = 7", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT key, value FROM accounts WHERE value=701", result));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("SELECT value FROM accounts WHERE key = 7", result));
@@ -313,6 +368,43 @@ final class SqlSessionTest {
         StatusCode.OK,
         reader.execute("SELECT value FROM items WHERE key=15", execution));
     assertEquals(150, execution.value());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void uniqueIndexBuildRejectsDuplicateExistingValuesAtomically(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute("CREATE TABLE items", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO items VALUES (1, 10)", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO items VALUES (2, 10)", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("CREATE UNIQUE INDEX items_value ON items(value)", result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("SELECT key, value FROM items WHERE value=10", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE items SET value=20 WHERE key=2", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX items_value ON items(value)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT key, value FROM items WHERE value=10", result));
+    assertEquals(1, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT key, value FROM items WHERE value=20", result));
+    assertEquals(2, result.key());
     assertEquals(StatusCode.OK, database.close());
   }
 }

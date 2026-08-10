@@ -4,6 +4,7 @@ package io.riverdb.engine.sql;
 public final class SqlExecutionResult {
   private long commitSequence;
   private long value;
+  private long key;
   private int affectedRows;
   private boolean hasValue;
   private boolean transactionActive;
@@ -11,6 +12,7 @@ public final class SqlExecutionResult {
   public void reset() {
     commitSequence = 0;
     value = 0;
+    key = 0;
     affectedRows = 0;
     hasValue = false;
     transactionActive = false;
@@ -22,6 +24,14 @@ public final class SqlExecutionResult {
   }
 
   void setValue(long selectedValue, long committedAt) {
+    value = selectedValue;
+    hasValue = true;
+    affectedRows = 1;
+    commitSequence = committedAt;
+  }
+
+  void setRow(long selectedKey, long selectedValue, long committedAt) {
+    key = selectedKey;
     value = selectedValue;
     hasValue = true;
     affectedRows = 1;
@@ -43,6 +53,10 @@ public final class SqlExecutionResult {
 
   public long value() {
     return value;
+  }
+
+  public long key() {
+    return key;
   }
 
   public long commitSequence() {

@@ -10,6 +10,7 @@ final class CatalogRecord {
 
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
   private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
+  private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
   private static final int VERSION = 1;
 
   private CatalogRecord() {
@@ -41,13 +42,35 @@ final class CatalogRecord {
     return StatusCode.OK;
   }
 
-  static void encodeTable(ByteBuffer target, int tableId, CharSequence name) {
+  static void encodeTable(
+      ByteBuffer target,
+      int tableId,
+      int uniqueValueIndexTableId,
+      CharSequence name) {
     clear(target);
     target.putLong(0, TABLE_MAGIC);
     target.putInt(8, VERSION);
     target.putInt(12, tableId);
     target.putInt(16, name.length());
-    target.putInt(20, 0);
+    target.putInt(20, uniqueValueIndexTableId);
+    for (int index = 0; index < name.length(); index++) {
+      target.put(24 + index, (byte) name.charAt(index));
+    }
+    target.position(0);
+    target.limit(24 + name.length());
+  }
+
+  static void encodeIndex(
+      ByteBuffer target,
+      int tableId,
+      int indexTableId,
+      CharSequence name) {
+    clear(target);
+    target.putLong(0, INDEX_MAGIC);
+    target.putInt(8, VERSION);
+    target.putInt(12, tableId);
+    target.putInt(16, indexTableId);
+    target.putInt(20, name.length());
     for (int index = 0; index < name.length(); index++) {
       target.put(24 + index, (byte) name.charAt(index));
     }
@@ -64,6 +87,7 @@ final class CatalogRecord {
     scratch.clear();
     StatusCode status = source.copyTo(scratch);
     int nameBytes = source.length() >= 20 ? scratch.getInt(16) : -1;
+    int valueIndexTableId = source.length() >= 24 ? scratch.getInt(20) : -1;
     if (!status.isOk()
         || source.length() < 25
         || source.length() != 24 + nameBytes
@@ -71,8 +95,9 @@ final class CatalogRecord {
         || scratch.getInt(8) != VERSION
         || scratch.getInt(12) <= 0
         || scratch.getInt(12) > RelationalKey.MAXIMUM_TABLE_ID
-        || nameBytes != expectedName.length()
-        || scratch.getInt(20) != 0) {
+        || valueIndexTableId < 0
+        || valueIndexTableId > RelationalKey.MAXIMUM_TABLE_ID
+        || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
     for (int index = 0; index < nameBytes; index++) {
@@ -80,7 +105,7 @@ final class CatalogRecord {
         return StatusCode.CONFLICT;
       }
     }
-    result.set(database, scratch.getInt(12));
+    result.set(database, scratch.getInt(12), valueIndexTableId);
     return StatusCode.OK;
   }
 

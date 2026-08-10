@@ -6,6 +6,7 @@ import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.relational.TableDefinition;
+import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
@@ -26,6 +27,7 @@ public final class SqlSession {
   private final CheckpointResult checkpoint = new CheckpointResult();
   private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
   private final HeapRowResult fetched = new HeapRowResult();
+  private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean transactionActive;
@@ -110,6 +112,17 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.CREATE_UNIQUE_INDEX) {
+      if (transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = database.createUniqueValueIndex(
+          command.indexName(), command.tableName());
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CHECKPOINT) {
       if (transactionActive) {
         return StatusCode.CONFLICT;
@@ -151,15 +164,15 @@ public final class SqlSession {
       status = session.commit(outcome);
       active = false;
       if (status.isOk()) {
-        if (command.type() == SqlCommandType.SELECT) {
-          result.setValue(selected.getLong(0), outcome.commitSequence());
+        if (isSelect()) {
+          result.setRow(result.key(), selected.getLong(0), outcome.commitSequence());
         } else {
           result.setUpdate(1, outcome.commitSequence());
         }
       }
     } else if (status.isOk()) {
-      if (command.type() == SqlCommandType.SELECT) {
-        result.setValue(selected.getLong(0), session.visibleCommitSequence());
+      if (isSelect()) {
+        result.setRow(result.key(), selected.getLong(0), session.visibleCommitSequence());
       } else {
         result.setUpdate(1, 0);
       }
@@ -262,11 +275,23 @@ public final class SqlSession {
       row.position(0);
       row.limit(Long.BYTES);
       return command.type() == SqlCommandType.INSERT
-          ? session.insert(table, command.key(), row)
-          : session.update(table, command.key(), row);
+          ? session.insertLong(table, command.key(), command.value(), row)
+          : session.updateLong(table, command.key(), command.value(), row);
     }
     if (command.type() == SqlCommandType.DELETE) {
-      return session.delete(table, command.key());
+      return session.deleteLong(table, command.key());
+    }
+    if (command.type() == SqlCommandType.SELECT_BY_VALUE) {
+      StatusCode status = session.fetchByUniqueValue(table, command.value(), indexed);
+      selected.clear();
+      if (status.isOk()) {
+        status = indexed.row().length() == Long.BYTES
+            ? indexed.row().copyTo(selected) : StatusCode.CORRUPTION;
+      }
+      if (status.isOk()) {
+        result.setRow(indexed.key(), selected.getLong(0), 0);
+      }
+      return status;
     }
     if (command.type() != SqlCommandType.SELECT) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -278,8 +303,13 @@ public final class SqlSession {
           ? fetched.copyTo(selected) : StatusCode.CORRUPTION;
     }
     if (status.isOk()) {
-      result.setValue(selected.getLong(0), 0);
+      result.setRow(command.key(), selected.getLong(0), 0);
     }
     return status;
+  }
+
+  private boolean isSelect() {
+    return command.type() == SqlCommandType.SELECT
+        || command.type() == SqlCommandType.SELECT_BY_VALUE;
   }
 }

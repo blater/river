@@ -106,6 +106,40 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, first.close());
   }
 
+  @Test
+  void indexDdlWaitsForTransactionsAndFencesStaleDefinitions(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    RelationalDatabase database = opened.database();
+    TableDefinition stale = new TableDefinition();
+    assertEquals(StatusCode.OK, database.createTable("accounts", stale));
+
+    RelationalSessionOpenResult sessions = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    RelationalSession session = sessions.session();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.resolveTable("accounts", stale));
+    assertEquals(
+        StatusCode.RETRY,
+        database.createUniqueValueIndex("accounts_value", "accounts"));
+    assertEquals(StatusCode.OK, session.abort(new TransactionOutcome()));
+
+    assertEquals(
+        StatusCode.OK,
+        database.createUniqueValueIndex("accounts_value", "accounts"));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.insertLong(stale, 1, 10, row(10)));
+    TableDefinition current = new TableDefinition();
+    assertEquals(StatusCode.OK, session.resolveTable("accounts", current));
+    assertEquals(StatusCode.OK, session.insertLong(current, 1, 10, row(10)));
+    assertEquals(StatusCode.OK, session.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static ByteBuffer row(long value) {
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     row.putLong(0, value);

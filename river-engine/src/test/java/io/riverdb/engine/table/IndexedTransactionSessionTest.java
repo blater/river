@@ -80,8 +80,8 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, first.commit(outcome));
     assertEquals(0, manager.activeLockCount());
-    assertEquals(StatusCode.OK, second.insert(9, row(92)));
-    assertEquals(StatusCode.CONFLICT, second.commit(outcome));
+    assertEquals(StatusCode.CONFLICT, second.insert(9, row(92)));
+    assertEquals(StatusCode.OK, second.abort(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
     assertEquals(0, manager.activeTransactionCount());
     assertEquals(0, manager.activeLockCount());
@@ -284,8 +284,8 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert(41, row(410)));
-    assertEquals(StatusCode.OK, writer.insert(40, row(401)));
-    assertEquals(StatusCode.CONFLICT, writer.commit(outcome));
+    assertEquals(StatusCode.CONFLICT, writer.insert(40, row(401)));
+    assertEquals(StatusCode.OK, writer.abort(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.CONFLICT, table.fetchByKey(41, fetched));
