@@ -30,6 +30,7 @@ public final class IndexedPageStore {
   public static final int WAL_FORMAT_VERSION = 1;
   public static final int MAX_PAGES = 12;
   public static final int MAX_CHANGED_PAGES = 8;
+  public static final int MAX_ROWS = 2048;
 
   private static final long OPERATION_MAGIC = 0x5249564552494458L; // RIVERIDX
   private static final int OPERATION_TYPE_PAGE_IMAGES = 1;
@@ -53,6 +54,7 @@ public final class IndexedPageStore {
   private final boolean[] dirty = new boolean[MAX_PAGES + 1];
   private final long[] pageRecordStarts = new long[MAX_PAGES + 1];
   private final long[] pageRecordEnds = new long[MAX_PAGES + 1];
+  private final long[] rowCommitSequences = new long[MAX_ROWS + 1];
   private final int[] changedPageIds = new int[MAX_CHANGED_PAGES];
   private final int[] recoveryPageIds = new int[MAX_CHANGED_PAGES];
   private final CRC32C checksum = new CRC32C();
@@ -246,7 +248,10 @@ public final class IndexedPageStore {
       failed = true;
       return status;
     }
+    int previousRowCount = present[HEAP_PAGE_ID]
+        ? HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) : 0;
     publishStagedPages();
+    recordNewRowCommits(previousRowCount, commitSequence);
     lastCommitSequence = commitSequence;
     operationActive = false;
     changedPageCount = 0;
@@ -329,7 +334,8 @@ public final class IndexedPageStore {
     status = applyInsertOperation(
         recordPayload,
         walAppendResult.startOffset(),
-        walAppendResult.endOffset());
+        walAppendResult.endOffset(),
+        commitSequence);
     if (!status.isOk()) {
       failed = true;
       return status;
@@ -403,6 +409,18 @@ public final class IndexedPageStore {
     return wal.nextCommitSequence();
   }
 
+  public long currentCommitSequence() {
+    return wal.currentCommitSequence();
+  }
+
+  public long nextTransactionId() {
+    return wal.nextTransactionId();
+  }
+
+  public long rowCommitSequence(int rowId) {
+    return rowId > 0 && rowId <= MAX_ROWS ? rowCommitSequences[rowId] : 0;
+  }
+
   public StatusCode close() {
     if (closed) {
       return StatusCode.CLOSED;
@@ -428,7 +446,8 @@ public final class IndexedPageStore {
         if (walReadResult.header().commitSequence() <= lastCommitSequence) {
           return StatusCode.CORRUPTION;
         }
-        status = applyOperation(offset, walReadResult);
+        status = applyOperation(
+            offset, walReadResult, walReadResult.header().commitSequence());
         if (!status.isOk()) {
           return status;
         }
@@ -440,7 +459,10 @@ public final class IndexedPageStore {
     return found ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 
-  private StatusCode applyOperation(long recordStart, LocalWalReadResult record) {
+  private StatusCode applyOperation(
+      long recordStart,
+      LocalWalReadResult record,
+      long commitSequence) {
     ByteBuffer payload = record.payload();
     if (record.header().payloadBytes() < PAGE_OPERATION_HEADER_BYTES
         || getLong(payload, 0) != OPERATION_MAGIC
@@ -449,25 +471,34 @@ public final class IndexedPageStore {
     }
     int operationType = getInt(payload, 12);
     if (operationType == OPERATION_TYPE_INSERT) {
-      return applyInsertOperation(payload, recordStart, record.nextOffset());
+      return applyInsertOperation(
+          payload, recordStart, record.nextOffset(), commitSequence);
     }
     if (operationType != OPERATION_TYPE_PAGE_IMAGES) {
       return StatusCode.CORRUPTION;
     }
-    return applyPageOperation(payload, recordStart, record.nextOffset(), record.header().payloadBytes());
+    return applyPageOperation(
+        payload,
+        recordStart,
+        record.nextOffset(),
+        record.header().payloadBytes(),
+        commitSequence);
   }
 
   private StatusCode applyPageOperation(
       ByteBuffer payload,
       long recordStart,
       long recordEnd,
-      int payloadBytes) {
+      int payloadBytes,
+      long commitSequence) {
     int pageCount = getInt(payload, 16);
     if (pageCount <= 0
         || pageCount > MAX_CHANGED_PAGES
         || payloadBytes != PAGE_OPERATION_HEADER_BYTES + pageCount * PageCodec.PAGE_BYTES) {
       return StatusCode.CORRUPTION;
     }
+    int previousRowCount = present[HEAP_PAGE_ID]
+        ? HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) : 0;
     for (int index = 0; index < pageCount; index++) {
       int pageOffset = PAGE_OPERATION_HEADER_BYTES + index * PageCodec.PAGE_BYTES;
       StatusCode status = PageCodec.validateAt(payload, pageOffset, pageHeader, checksum);
@@ -496,7 +527,11 @@ public final class IndexedPageStore {
       pageRecordEnds[pageId] = recordEnd;
       highestPageId = Math.max(highestPageId, pageId);
     }
-    return validateAppliedPages(pageCount);
+    StatusCode status = validateAppliedPages(pageCount);
+    if (status.isOk()) {
+      recordNewRowCommits(previousRowCount, commitSequence);
+    }
+    return status;
   }
 
   private StatusCode validateAppliedPages(int pageCount) {
@@ -520,7 +555,8 @@ public final class IndexedPageStore {
   private StatusCode applyInsertOperation(
       ByteBuffer payload,
       long recordStart,
-      long recordEnd) {
+      long recordEnd,
+      long commitSequence) {
     if (payload.limit() < INSERT_OPERATION_HEADER_BYTES
         || getLong(payload, 0) != OPERATION_MAGIC
         || getInt(payload, 8) != WAL_FORMAT_VERSION
@@ -566,9 +602,20 @@ public final class IndexedPageStore {
     pageRecordEnds[HEAP_PAGE_ID] = recordEnd;
     pageRecordStarts[leafPageId] = recordStart;
     pageRecordEnds[leafPageId] = recordEnd;
+    rowCommitSequences[rowId] = commitSequence;
     dirty[HEAP_PAGE_ID] = true;
     dirty[leafPageId] = true;
     return StatusCode.OK;
+  }
+
+  private void recordNewRowCommits(int previousRowCount, long commitSequence) {
+    if (!present[HEAP_PAGE_ID]) {
+      return;
+    }
+    int currentRowCount = HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]);
+    for (int rowId = previousRowCount + 1; rowId <= currentRowCount; rowId++) {
+      rowCommitSequences[rowId] = commitSequence;
+    }
   }
 
   private StatusCode encodeCurrentPage(int pageId, long recordStart, long recordEnd) {

@@ -138,6 +138,28 @@ final class IndexedTableTest {
   }
 
   @Test
+  void snapshotHidesRowsCommittedAfterItsBoundary(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    long beforeInsert = table.visibleCommitSequence();
+    long commitSequence = table.nextCommitSequence();
+    ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
+    row.putLong(0, 991);
+    row.position(0);
+    row.limit(Long.BYTES);
+    assertEquals(
+        StatusCode.OK,
+        table.insertCommitted(17, commitSequence, 99, row, new HeapInsertResult()));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(beforeInsert, 99, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(commitSequence, 99, fetched));
+    assertEquals(991, rowValue(fetched));
+    assertEquals(StatusCode.OK, table.flush());
+    close(table, wal, directory);
+  }
+
+  @Test
   void reportsRegularAndSplitCopyAmplification(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

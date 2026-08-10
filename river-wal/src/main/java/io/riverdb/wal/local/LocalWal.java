@@ -38,6 +38,7 @@ public final class LocalWal {
   private long nextJournalSequence = 1;
   private long nextReservationToken = 1;
   private long lastCommitSequence;
+  private long maximumTransactionId = 1;
   private long activeReservationToken;
   private long copiedPayloadBytes;
   private boolean failed;
@@ -113,6 +114,14 @@ public final class LocalWal {
 
   public long nextCommitSequence() {
     return lastCommitSequence + 1;
+  }
+
+  public long currentCommitSequence() {
+    return lastCommitSequence;
+  }
+
+  public long nextTransactionId() {
+    return maximumTransactionId == Long.MAX_VALUE ? 0 : maximumTransactionId + 1;
   }
 
   /** Exclusive local byte end known forced by this synchronous provider. */
@@ -215,6 +224,9 @@ public final class LocalWal {
     nextJournalSequence++;
     if (decisionCode == 1) {
       lastCommitSequence = commitSequence;
+    }
+    if (transactionId > maximumTransactionId) {
+      maximumTransactionId = transactionId;
     }
     activeReservationToken = 0;
     reservation.complete();
@@ -350,6 +362,9 @@ public final class LocalWal {
       }
       if (recoveryHeader.decisionCode() == 1) {
         lastCommitSequence = recoveryHeader.commitSequence();
+      }
+      if (recoveryHeader.transactionId() > maximumTransactionId) {
+        maximumTransactionId = recoveryHeader.transactionId();
       }
       offset += recoveryHeader.totalBytes();
       expectedSequence++;

@@ -10,10 +10,11 @@ import io.riverdb.storage.btree.BTreeSplitResult;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
+import io.riverdb.tx.CommitSequenceSource;
 import java.nio.ByteBuffer;
 
 /** Single-owner heap plus authoritative unique long-key B+tree committed atomically. */
-public final class IndexedTable {
+public final class IndexedTable implements CommitSequenceSource {
   private static final int HEAP_PAGE_ID = 1;
   private static final int ROOT_META_PAGE_ID = 2;
   private static final int INITIAL_LEAF_PAGE_ID = 3;
@@ -82,12 +83,41 @@ public final class IndexedTable {
     return status;
   }
 
-  public StatusCode insert(
+  public synchronized StatusCode insert(
       long transactionId,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
+    return insertCommitted(
+        transactionId, store.nextCommitSequence(), key, row, result);
+  }
+
+  public synchronized StatusCode commitInsert(
+      long transactionId,
+      long key,
+      ByteBuffer row,
+      IndexedCommitResult result) {
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    long commitSequence = store.nextCommitSequence();
+    StatusCode status = insertCommitted(
+        transactionId, commitSequence, key, row, heapInsert);
+    if (status.isOk()) {
+      result.set(heapInsert.rowId(), commitSequence);
+    }
+    return status;
+  }
+
+  public synchronized StatusCode insertCommitted(
+      long transactionId,
+      long commitSequence,
+      long key,
+      ByteBuffer row,
+      HeapInsertResult result) {
     if (transactionId <= BOOTSTRAP_TRANSACTION_ID
+        || commitSequence <= 0
         || key == Long.MAX_VALUE
         || row == null
         || !row.hasRemaining()
@@ -113,7 +143,7 @@ public final class IndexedTable {
     }
     if (BTreePage.entryCount(currentLeaf) < BTreePage.MAX_ENTRIES) {
       return store.commitInsert(
-          transactionId, store.nextCommitSequence(), key, row, result);
+          transactionId, commitSequence, key, row, result);
     }
     status = store.beginOperation();
     if (!status.isOk()) {
@@ -138,14 +168,21 @@ public final class IndexedTable {
       store.cancelOperation();
       return status;
     }
-    status = store.commit(transactionId, store.nextCommitSequence());
+    status = store.commit(transactionId, commitSequence);
     if (status.isOk()) {
       result.setRowId(heapInsert.rowId());
     }
     return status;
   }
 
-  public StatusCode fetchByKey(long key, HeapRowResult result) {
+  public synchronized StatusCode fetchByKey(long key, HeapRowResult result) {
+    return fetchByKeyAt(store.currentCommitSequence(), key, result);
+  }
+
+  public synchronized StatusCode fetchByKeyAt(
+      long visibleCommitSequence,
+      long key,
+      HeapRowResult result) {
     if (key == Long.MAX_VALUE || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -153,10 +190,18 @@ public final class IndexedTable {
     if (!status.isOk()) {
       return status;
     }
+    long rowCommitSequence = store.rowCommitSequence(indexLookup.rowId());
+    if (rowCommitSequence <= 0) {
+      return StatusCode.CORRUPTION;
+    }
+    if (rowCommitSequence > visibleCommitSequence) {
+      result.reset();
+      return StatusCode.CONFLICT;
+    }
     return HeapPage.fetch(store.currentPayload(HEAP_PAGE_ID), indexLookup.rowId(), result);
   }
 
-  public int rowCount() {
+  public synchronized int rowCount() {
     return HeapPage.rowCount(store.currentPayload(HEAP_PAGE_ID));
   }
 
@@ -166,6 +211,23 @@ public final class IndexedTable {
 
   public int pageCount() {
     return store.highestPageId();
+  }
+
+  public synchronized long visibleCommitSequence() {
+    return store.currentCommitSequence();
+  }
+
+  @Override
+  public synchronized long currentCommitSequence() {
+    return store.currentCommitSequence();
+  }
+
+  public synchronized long nextCommitSequence() {
+    return store.nextCommitSequence();
+  }
+
+  public synchronized long nextTransactionId() {
+    return store.nextTransactionId();
   }
 
   public long stagedCopyBytes() {

@@ -14,6 +14,9 @@ import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapInsertResult;
+import io.riverdb.tx.TransactionManager;
+import io.riverdb.tx.api.IsolationLevel;
+import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import java.lang.management.ManagementFactory;
@@ -82,10 +85,44 @@ final class IndexedTableAllocationTest {
         5L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
         table.walCopyBytes() - walCopiedBefore);
     assertTrue(splitAllocated <= 512, "leaf split allocated bytes: " + splitAllocated);
+
+    TransactionManager manager = new TransactionManager(
+        database.high(), database.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, Long.BYTES);
+    TransactionOutcome outcome = new TransactionOutcome();
+    for (int index = 300; index < 332; index++) {
+      exerciseTransaction(session, row, outcome, index);
+    }
+    long writeSetCopiedBefore = session.copiedWriteSetBytes();
+    before = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 332; index < 364; index++) {
+      exerciseTransaction(session, row, outcome, index);
+    }
+    long transactionAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(
+        32L * Long.BYTES,
+        session.copiedWriteSetBytes() - writeSetCopiedBefore);
+    assertTrue(
+        transactionAllocated <= 512,
+        "warmed transaction commit allocated bytes: " + transactionAllocated);
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
+  }
+
+  private static void exerciseTransaction(
+      IndexedTransactionSession session,
+      ByteBuffer row,
+      TransactionOutcome outcome,
+      int value) {
+    row.putLong(0, value);
+    row.position(0);
+    row.limit(Long.BYTES);
+    allocationGuard += session.begin(IsolationLevel.REPEATABLE_READ).ordinal();
+    allocationGuard += session.insert(value, row).ordinal();
+    allocationGuard += session.commit(outcome).ordinal();
+    allocationGuard += outcome.commitSequence();
   }
 
   private static void exercise(

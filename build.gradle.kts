@@ -118,8 +118,10 @@ val declaredDependencies = mapOf(
   "river-journal-api" to setOf("river-base"),
   "river-wal" to setOf("river-base", "river-format", "river-platform"),
   "river-storage" to setOf("river-base"),
+  "river-tx" to setOf("river-base", "river-tx-api"),
   "river-engine" to setOf(
-    "river-base", "river-format", "river-platform", "river-storage", "river-wal"
+    "river-base", "river-format", "river-platform", "river-storage",
+    "river-tx", "river-tx-api", "river-wal"
   ),
   "river-testkit" to setOf(
     "river-base", "river-platform", "river-tx-api", "river-journal-api"
@@ -227,6 +229,12 @@ val heapRowResultDescriptor = "Lio/riverdb/storage/heap/HeapRowResult;"
 val heapScanCursorDescriptor = "Lio/riverdb/storage/heap/HeapScanCursor;"
 val btreeLookupResultDescriptor = "Lio/riverdb/storage/btree/BTreeLookupResult;"
 val btreeSplitResultDescriptor = "Lio/riverdb/storage/btree/BTreeSplitResult;"
+val transactionDescriptor = "Lio/riverdb/tx/Transaction;"
+val commitSequenceSourceDescriptor = "Lio/riverdb/tx/CommitSequenceSource;"
+val transactionParticipantDescriptor = "Lio/riverdb/tx/TransactionCommitParticipant;"
+val transactionOutcomeDescriptor = "Lio/riverdb/tx/api/TransactionOutcome;"
+val isolationLevelDescriptor = "Lio/riverdb/tx/api/IsolationLevel;"
+val indexedCommitResultDescriptor = "Lio/riverdb/engine/table/IndexedCommitResult;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val liveHotPathMethods = setOf(
@@ -470,12 +478,22 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.page.IndexedPageStore",
     "applyInsertOperation",
-    "($byteBufferDescriptor" + "JJ)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTable",
     "insert",
     "(JJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "commitInsert",
+    "(JJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "insertCommitted",
+    "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTable",
@@ -486,6 +504,68 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.table.IndexedTable",
     "fetchByKey",
     "(J$heapRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "fetchByKeyAt",
+    "(JJ$heapRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "begin",
+    "($isolationLevelDescriptor" + "J$transactionDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "begin",
+    "($isolationLevelDescriptor$commitSequenceSourceDescriptor$transactionDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "refreshReadCommitted",
+    "($transactionDescriptor" + "J)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "refreshReadCommitted",
+    "($transactionDescriptor$commitSequenceSourceDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "commit",
+    "($transactionDescriptor$transactionParticipantDescriptor$transactionOutcomeDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "abort",
+    "($transactionDescriptor$transactionOutcomeDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "begin",
+    "($isolationLevelDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "insert",
+    "(J$byteBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "fetchByKey",
+    "(J$heapRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "commit",
+    "($transactionOutcomeDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "commit",
+    "(J)$statusCodeDescriptor"
   )
 )
 val liveHotPathAllowedRules = mapOf(

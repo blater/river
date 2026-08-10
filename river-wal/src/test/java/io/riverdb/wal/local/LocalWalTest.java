@@ -39,6 +39,7 @@ final class LocalWalTest {
     directory = openDirectory(root);
     wal = openWal(directory);
     assertEquals(44, wal.nextCommitSequence());
+    assertEquals(42, wal.nextTransactionId());
     LocalWalReadResult read = new LocalWalReadResult();
     assertEquals(StatusCode.OK, wal.read(appended.startOffset(), read));
     byte[] actual = new byte[expected.length];
