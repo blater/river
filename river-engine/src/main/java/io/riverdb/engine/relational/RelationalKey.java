@@ -11,7 +11,7 @@ final class RelationalKey {
   private RelationalKey() {
   }
 
-  static StatusCode catalogTableKey(String name, LongKeyResult result) {
+  static StatusCode catalogTableKey(CharSequence name, LongKeyResult result) {
     if (!validName(name) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -40,7 +40,7 @@ final class RelationalKey {
     return StatusCode.OK;
   }
 
-  static boolean validName(String name) {
+  static boolean validName(CharSequence name) {
     if (name == null || name.isEmpty() || name.length() > 64) {
       return false;
     }

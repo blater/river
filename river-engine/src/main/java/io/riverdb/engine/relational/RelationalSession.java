@@ -24,7 +24,7 @@ public final class RelationalSession {
     return session.begin(isolationLevel);
   }
 
-  public StatusCode resolveTable(String name, TableDefinition result) {
+  public StatusCode resolveTable(CharSequence name, TableDefinition result) {
     if (result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

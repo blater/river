@@ -119,9 +119,10 @@ val declaredDependencies = mapOf(
   "river-wal" to setOf("river-base", "river-format", "river-platform"),
   "river-storage" to setOf("river-base"),
   "river-tx" to setOf("river-base", "river-tx-api"),
+  "river-sql" to setOf("river-base"),
   "river-engine" to setOf(
     "river-base", "river-format", "river-platform", "river-storage",
-    "river-tx", "river-tx-api", "river-wal"
+    "river-tx", "river-tx-api", "river-wal", "river-sql"
   ),
   "river-testkit" to setOf(
     "river-base", "river-platform", "river-tx-api", "river-journal-api"
@@ -240,6 +241,8 @@ val lockTokenDescriptor = "Lio/riverdb/tx/api/lock/LockToken;"
 val indexedCommitResultDescriptor = "Lio/riverdb/engine/table/IndexedCommitResult;"
 val indexedMutationTargetDescriptor = "Lio/riverdb/engine/table/IndexedMutationTarget;"
 val indexedPageStoreDescriptor = "Lio/riverdb/engine/page/IndexedPageStore;"
+val sqlCommandDescriptor = "Lio/riverdb/sql/SqlCommand;"
+val sqlExecutionResultDescriptor = "Lio/riverdb/engine/sql/SqlExecutionResult;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val longArrayDescriptor = "[J"
@@ -730,6 +733,16 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "begin",
     "($isolationLevelDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.sql.SqlParser",
+    "parse",
+    "(Ljava/lang/String;$sqlCommandDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.sql.SqlSession",
+    "execute",
+    "(Ljava/lang/String;$sqlExecutionResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

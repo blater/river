@@ -41,7 +41,7 @@ final class CatalogRecord {
     return StatusCode.OK;
   }
 
-  static void encodeTable(ByteBuffer target, int tableId, String name) {
+  static void encodeTable(ByteBuffer target, int tableId, CharSequence name) {
     clear(target);
     target.putLong(0, TABLE_MAGIC);
     target.putInt(8, VERSION);
@@ -58,7 +58,7 @@ final class CatalogRecord {
   static StatusCode decodeTable(
       HeapRowResult source,
       ByteBuffer scratch,
-      String expectedName,
+      CharSequence expectedName,
       RelationalDatabase database,
       TableDefinition result) {
     scratch.clear();

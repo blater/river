@@ -80,7 +80,7 @@ public final class RelationalDatabase {
     return StatusCode.OK;
   }
 
-  public synchronized StatusCode createTable(String name, TableDefinition result) {
+  public synchronized StatusCode createTable(CharSequence name, TableDefinition result) {
     if (!RelationalKey.validName(name) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
