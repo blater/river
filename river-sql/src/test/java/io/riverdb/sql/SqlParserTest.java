@@ -117,6 +117,16 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE accounts SET balance=12, region=-3 WHERE key=7",
+            command));
+    assertEquals(2, command.updateColumnCount());
+    assertName("balance", command.columnName(0));
+    assertName("region", command.columnName(1));
+    assertEquals(12, command.updateValue(0));
+    assertEquals(-3, command.updateValue(1));
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
     assertEquals(StatusCode.OK, parser.parse("BEGIN;", command));

@@ -219,15 +219,23 @@ public final class SqlParser {
       if (status.isOk()) {
         status = requireKeyword(sql, "SET");
       }
-      if (status.isOk()) {
+      while (status.isOk()) {
         status = columnIdentifier(sql, result);
-      }
-      if (status.isOk()) {
-        status = requireCharacter(sql, '=');
-      }
-      if (status.isOk()) {
-        status = number(sql, numberResult);
-        value = numberResult.value;
+        if (status.isOk()) {
+          status = requireCharacter(sql, '=');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+        }
+        if (status.isOk()) {
+          result.appendUpdate(numberResult.value);
+          if (result.updateColumnCount() == 1) {
+            value = numberResult.value;
+          }
+        }
+        if (!status.isOk() || !consumeCharacter(sql, ',')) {
+          break;
+        }
       }
       if (status.isOk()) {
         status = requireKeyword(sql, "WHERE");

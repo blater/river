@@ -34,6 +34,7 @@ public final class SqlSession {
   private final IndexedSavepoint userSavepoint = new IndexedSavepoint();
   private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
   private final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final HeapRowResult fetched = new HeapRowResult();
@@ -46,7 +47,7 @@ public final class SqlSession {
   private boolean userSavepointActive;
   private boolean scanActive;
   private int userSavepointNameLength;
-  private int selectedColumn;
+  private int updatedColumnCount;
   private int projectedColumnCount;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
@@ -419,7 +420,11 @@ public final class SqlSession {
         status = copyRow(fetched);
       }
       if (status.isOk()) {
-        row.putLong((selectedColumn - 1) * Long.BYTES, command.value());
+        for (int index = 0; index < updatedColumnCount; index++) {
+          row.putLong(
+              (updatedColumns[index] - 1) * Long.BYTES,
+              command.updateValue(index));
+        }
         status = session.updateRow(table, command.key(), row);
       }
       return status;
@@ -493,7 +498,7 @@ public final class SqlSession {
   }
 
   private StatusCode bindDataCommand() {
-    selectedColumn = -1;
+    updatedColumnCount = 0;
     projectedColumnCount = 0;
     if (command.type() == SqlCommandType.COUNT) {
       return StatusCode.OK;
@@ -520,10 +525,25 @@ public final class SqlSession {
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.UPDATE) {
-      selectedColumn = table.findColumn(command.firstColumnName());
-      return selectedColumn > 0
-              && table.findColumn(command.predicateColumnName()) == 0
-          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+      if (command.updateColumnCount() <= 0
+          || command.updateColumnCount() != command.columnCount()
+          || table.findColumn(command.predicateColumnName()) != 0) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int index = 0; index < command.updateColumnCount(); index++) {
+        int column = table.findColumn(command.columnName(index));
+        if (column <= 0) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        for (int prior = 0; prior < index; prior++) {
+          if (updatedColumns[prior] == column) {
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+        }
+        updatedColumns[index] = column;
+      }
+      updatedColumnCount = command.updateColumnCount();
+      return StatusCode.OK;
     }
     if (command.type() == SqlCommandType.DELETE) {
       return table.matchesKeyColumn(command.predicateColumnName())

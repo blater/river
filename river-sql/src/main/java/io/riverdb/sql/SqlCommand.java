@@ -12,6 +12,7 @@ public final class SqlCommand {
   private final SqlIdentifier predicateColumnName = new SqlIdentifier();
   private final long[] insertValues =
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
+  private final long[] updateValues = new long[MAXIMUM_COLUMNS];
   private SqlCommandType type;
   private long key;
   private long value;
@@ -22,6 +23,7 @@ public final class SqlCommand {
   private boolean serializableTransaction;
   private int insertRowCount;
   private int insertColumnCount;
+  private int updateColumnCount;
   private int columnCount;
   private boolean available;
 
@@ -49,6 +51,7 @@ public final class SqlCommand {
     serializableTransaction = false;
     insertRowCount = 0;
     insertColumnCount = 0;
+    updateColumnCount = 0;
     columnCount = 0;
     available = false;
   }
@@ -92,6 +95,10 @@ public final class SqlCommand {
     key = insertValues[0];
     value = insertValues[1];
     available = true;
+  }
+
+  void appendUpdate(long updateValue) {
+    updateValues[updateColumnCount++] = updateValue;
   }
 
   SqlIdentifier writableTableName() {
@@ -155,7 +162,16 @@ public final class SqlCommand {
   }
 
   public long value() {
-    return value;
+    return type == SqlCommandType.UPDATE && updateColumnCount > 0
+        ? updateValues[0] : value;
+  }
+
+  public int updateColumnCount() {
+    return updateColumnCount;
+  }
+
+  public long updateValue(int index) {
+    return index >= 0 && index < updateColumnCount ? updateValues[index] : 0;
   }
 
   public int insertRowCount() {

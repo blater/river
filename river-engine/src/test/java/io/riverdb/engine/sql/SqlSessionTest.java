@@ -876,6 +876,11 @@ final class SqlSessionTest {
             "INSERT INTO accounts (id, balance, balance) VALUES (4, 400, 9)",
             result));
     assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "UPDATE accounts SET balance=111, balance=112 WHERE id=1",
+            result));
+    assertEquals(
         StatusCode.OK,
         session.execute("SELECT region FROM accounts WHERE id=2", result));
     assertEquals(8, result.value());
@@ -932,14 +937,13 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(
         StatusCode.OK,
-        session.execute("UPDATE accounts SET region=10 WHERE id=2", result));
-    assertEquals(
-        StatusCode.OK,
-        session.execute("UPDATE accounts SET balance=999 WHERE id=1", result));
+        session.execute(
+            "UPDATE accounts SET region=10, balance=999 WHERE id=2",
+            result));
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT id, balance FROM accounts WHERE balance=999", result));
-    assertEquals(1, result.key());
+    assertEquals(2, result.key());
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
     assertEquals(
         StatusCode.CONFLICT,
@@ -955,6 +959,19 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT id, balance FROM accounts WHERE balance=100", result));
     assertEquals(1, result.key());
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute(
+            "UPDATE accounts SET balance=100, region=6 WHERE id=2",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=250", result));
+    assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, region FROM accounts WHERE region=9", result));
+    assertEquals(2, result.key());
 
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
