@@ -31,6 +31,31 @@ public final class PageCodec {
       int payloadBytes,
       ByteBuffer page,
       CRC32C checksum) {
+    return encodeAt(
+        database,
+        walGeneration,
+        pageId,
+        pageGeneration,
+        recordStart,
+        recordEnd,
+        payloadBytes,
+        page,
+        0,
+        checksum);
+  }
+
+  /** Encodes one page at an absolute offset in caller/provider-owned storage. */
+  public static StatusCode encodeAt(
+      DatabaseIncarnation database,
+      WalGeneration walGeneration,
+      long pageId,
+      long pageGeneration,
+      long recordStart,
+      long recordEnd,
+      int payloadBytes,
+      ByteBuffer page,
+      int start,
+      CRC32C checksum) {
     if (database == null
         || !database.isValid()
         || walGeneration == null
@@ -43,40 +68,39 @@ public final class PageCodec {
             ? recordStart != recordEnd
             : recordEnd <= recordStart)
         || page == null
-        || page.capacity() < PAGE_BYTES
+        || start < 0
+        || page.limit() - start < PAGE_BYTES
         || checksum == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
 
-    putLong(page, 0, MAGIC);
-    putInt(page, 8, VERSION);
-    putInt(page, 12, PAGE_BYTES);
-    putInt(page, 16, PAGE_TYPE_SYNTHETIC);
-    putInt(page, 20, HEADER_BYTES);
-    putLong(page, 24, database.high());
-    putLong(page, 32, database.low());
-    putLong(page, 40, walGeneration.value());
-    putLong(page, 48, pageId);
-    putLong(page, 56, pageGeneration);
-    putLong(page, 64, recordStart);
-    putLong(page, 72, recordEnd);
-    putInt(page, 80, payloadBytes);
-    putInt(page, 84, 0);
+    putLong(page, start, MAGIC);
+    putInt(page, start + 8, VERSION);
+    putInt(page, start + 12, PAGE_BYTES);
+    putInt(page, start + 16, PAGE_TYPE_SYNTHETIC);
+    putInt(page, start + 20, HEADER_BYTES);
+    putLong(page, start + 24, database.high());
+    putLong(page, start + 32, database.low());
+    putLong(page, start + 40, walGeneration.value());
+    putLong(page, start + 48, pageId);
+    putLong(page, start + 56, pageGeneration);
+    putLong(page, start + 64, recordStart);
+    putLong(page, start + 72, recordEnd);
+    putInt(page, start + 80, payloadBytes);
+    putInt(page, start + 84, 0);
     for (int index = 88; index < CHECKSUM_OFFSET; index++) {
-      page.put(index, (byte) 0);
+      page.put(start + index, (byte) 0);
     }
-    putInt(page, CHECKSUM_OFFSET, 0);
-    putInt(page, COMPLEMENT_OFFSET, 0);
+    putInt(page, start + CHECKSUM_OFFSET, 0);
+    putInt(page, start + COMPLEMENT_OFFSET, 0);
     for (int index = HEADER_BYTES + payloadBytes; index < PAGE_BYTES; index++) {
-      page.put(index, (byte) 0);
+      page.put(start + index, (byte) 0);
     }
-    page.position(0);
-    page.limit(PAGE_BYTES);
-    int pageChecksum = checksum(page, checksum);
-    putInt(page, CHECKSUM_OFFSET, pageChecksum);
-    putInt(page, COMPLEMENT_OFFSET, ~pageChecksum);
-    page.position(0);
-    page.limit(PAGE_BYTES);
+    int pageChecksum = checksum(page, start, checksum);
+    putInt(page, start + CHECKSUM_OFFSET, pageChecksum);
+    putInt(page, start + COMPLEMENT_OFFSET, ~pageChecksum);
+    page.position(start);
+    page.limit(start + PAGE_BYTES);
     return StatusCode.OK;
   }
 
@@ -84,11 +108,26 @@ public final class PageCodec {
       ByteBuffer page,
       PageHeader result,
       CRC32C checksum) {
-    if (page == null || result == null || checksum == null || page.remaining() < PAGE_BYTES) {
+    if (page == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return validateAt(page, page.position(), result, checksum);
+  }
+
+  /** Validates one page at an absolute offset without creating a buffer view. */
+  public static StatusCode validateAt(
+      ByteBuffer page,
+      int start,
+      PageHeader result,
+      CRC32C checksum) {
+    if (page == null
+        || result == null
+        || checksum == null
+        || start < 0
+        || page.limit() - start < PAGE_BYTES) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    int start = page.position();
     long databaseHigh = getLong(page, start + 24);
     long databaseLow = getLong(page, start + 32);
     long walGeneration = getLong(page, start + 40);
@@ -115,7 +154,7 @@ public final class PageCodec {
         || getInt(page, start + 84) != 0
         || !reservedBytesAreZero(page, start)
         || getInt(page, start + COMPLEMENT_OFFSET) != ~storedChecksum
-        || checksum(page, checksum) != storedChecksum) {
+        || checksum(page, start, checksum) != storedChecksum) {
       return StatusCode.CORRUPTION;
     }
     result.set(
@@ -139,10 +178,9 @@ public final class PageCodec {
     return true;
   }
 
-  private static int checksum(ByteBuffer page, CRC32C checksum) {
+  private static int checksum(ByteBuffer page, int start, CRC32C checksum) {
     int originalPosition = page.position();
     int originalLimit = page.limit();
-    int start = originalPosition;
     checksum.reset();
     page.position(start);
     page.limit(start + CHECKSUM_OFFSET);

@@ -73,8 +73,26 @@ public final class HeapPage {
     if (page == null || row == null || result == null || !row.hasRemaining()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    result.reset();
     int rowBytes = row.remaining();
+    return insertFrom(page, row, row.position(), rowBytes, result);
+  }
+
+  /** Inserts bytes from an absolute source range without creating a buffer view. */
+  public static StatusCode insertFrom(
+      ByteBuffer page,
+      ByteBuffer source,
+      int sourceOffset,
+      int rowBytes,
+      HeapInsertResult result) {
+    if (page == null
+        || source == null
+        || result == null
+        || sourceOffset < 0
+        || rowBytes <= 0
+        || source.limit() - sourceOffset < rowBytes) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
     int rowCount = getInt(page, 12);
     int freeStart = getInt(page, 16);
     int freeEnd = getInt(page, 20);
@@ -83,9 +101,8 @@ public final class HeapPage {
     if (newFreeStart > newFreeEnd) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    int rowStart = row.position();
     for (int index = 0; index < rowBytes; index++) {
-      page.put(newFreeEnd + index, row.get(rowStart + index));
+      page.put(newFreeEnd + index, source.get(sourceOffset + index));
     }
     putInt(page, freeStart, newFreeEnd);
     putInt(page, freeStart + 4, rowBytes);
@@ -94,6 +111,13 @@ public final class HeapPage {
     putInt(page, 20, newFreeEnd);
     result.setRowId(rowCount + 1);
     return StatusCode.OK;
+  }
+
+  public static boolean canInsert(ByteBuffer page, int rowBytes) {
+    if (page == null || rowBytes <= 0) {
+      return false;
+    }
+    return getInt(page, 16) + SLOT_BYTES <= getInt(page, 20) - rowBytes;
   }
 
   public static StatusCode fetch(

@@ -38,6 +38,7 @@ final class LocalWalTest {
 
     directory = openDirectory(root);
     wal = openWal(directory);
+    assertEquals(44, wal.nextCommitSequence());
     LocalWalReadResult read = new LocalWalReadResult();
     assertEquals(StatusCode.OK, wal.read(appended.startOffset(), read));
     byte[] actual = new byte[expected.length];
@@ -110,6 +111,24 @@ final class LocalWalTest {
     assertEquals(StatusCode.OK, wal.read(appended.startOffset(), read));
     assertEquals(0x01020304, read.payload().getInt());
     assertEquals(0, wal.copiedPayloadBytes());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void enforcesCommitSequenceOrderWithoutConsumingReservation(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalAppendResult appended = new LocalWalAppendResult();
+    LocalWalReservation reservation = reserve(wal, new byte[] {1});
+    assertEquals(StatusCode.OK, wal.publish(reservation, 7, 2, 1, 1, 1, appended));
+    reservation.reset();
+    reservation = reserve(wal, new byte[] {2});
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        wal.publish(reservation, 8, 2, 1, 1, 1, appended));
+    assertEquals(StatusCode.OK, wal.publish(reservation, 8, 3, 1, 1, 1, appended));
+    assertEquals(4, wal.nextCommitSequence());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }

@@ -45,7 +45,7 @@ public final class SinglePageTable {
     status = store.commit(
         table.pageUpdate,
         BOOTSTRAP_TRANSACTION_ID,
-        BOOTSTRAP_TRANSACTION_ID,
+        store.nextCommitSequence(),
         1);
     if (status.isOk()) {
       status = store.flush();
@@ -91,7 +91,8 @@ public final class SinglePageTable {
       pageStore.cancel(pageUpdate);
       return status;
     }
-    status = pageStore.commit(pageUpdate, transactionId, transactionId, 1);
+    status = pageStore.commit(
+        pageUpdate, transactionId, pageStore.nextCommitSequence(), 1);
     if (status.isOk()) {
       copiedRowBytes += rowBytes;
     }

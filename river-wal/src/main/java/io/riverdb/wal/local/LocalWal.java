@@ -17,7 +17,9 @@ import io.riverdb.platform.file.IoResult;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
-/** Single-owner, synchronous local WAL with reusable provider-owned record storage. */
+/**
+ * Single-owner synchronous WAL with reusable provider storage and globally ordered commit CSNs.
+ */
 public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
 
@@ -35,6 +37,7 @@ public final class LocalWal {
   private long tailEnd = WalFileHeaderCodec.HEADER_BYTES;
   private long nextJournalSequence = 1;
   private long nextReservationToken = 1;
+  private long lastCommitSequence;
   private long activeReservationToken;
   private long copiedPayloadBytes;
   private boolean failed;
@@ -108,6 +111,10 @@ public final class LocalWal {
     return nextJournalSequence;
   }
 
+  public long nextCommitSequence() {
+    return lastCommitSequence + 1;
+  }
+
   /** Exclusive local byte end known forced by this synchronous provider. */
   public long durableEnd() {
     return tailEnd;
@@ -170,6 +177,9 @@ public final class LocalWal {
     if (reservation.writablePayload().position() != reservation.payloadBytes()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (!validDecision(transactionId, commitSequence, decisionCode)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
 
     int recordBytes = WalRecordCodec.encodedBytes(reservation.payloadBytes());
     StatusCode status = WalRecordCodec.encodeReserved(
@@ -203,6 +213,9 @@ public final class LocalWal {
     tailEnd += recordBytes;
     result.set(start, tailEnd, nextJournalSequence);
     nextJournalSequence++;
+    if (decisionCode == 1) {
+      lastCommitSequence = commitSequence;
+    }
     activeReservationToken = 0;
     reservation.complete();
     return StatusCode.OK;
@@ -329,6 +342,15 @@ public final class LocalWal {
       if (!status.isOk()) {
         return StatusCode.CORRUPTION;
       }
+      if (!validDecision(
+          recoveryHeader.transactionId(),
+          recoveryHeader.commitSequence(),
+          recoveryHeader.decisionCode())) {
+        return StatusCode.CORRUPTION;
+      }
+      if (recoveryHeader.decisionCode() == 1) {
+        lastCommitSequence = recoveryHeader.commitSequence();
+      }
       offset += recoveryHeader.totalBytes();
       expectedSequence++;
     }
@@ -389,6 +411,18 @@ public final class LocalWal {
       return StatusCode.FENCED;
     }
     return StatusCode.OK;
+  }
+
+  private boolean validDecision(
+      long transactionId,
+      long commitSequence,
+      int decisionCode) {
+    return switch (decisionCode) {
+      case 0 -> commitSequence == 0;
+      case 1 -> transactionId > 0 && commitSequence > lastCommitSequence;
+      case 2 -> transactionId > 0 && commitSequence == 0;
+      default -> false;
+    };
   }
 
   private static ByteBuffer payloadView(ByteBuffer record) {

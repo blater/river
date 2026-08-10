@@ -11,6 +11,36 @@ import org.junit.jupiter.api.Test;
 
 final class PageCodecTest {
   @Test
+  void encodesAndValidatesAtAbsoluteOffset() {
+    int offset = 17;
+    ByteBuffer container = ByteBuffer.allocate(PageCodec.PAGE_BYTES + 34);
+    container.put(offset - 1, (byte) 41);
+    container.put(offset + PageCodec.PAGE_BYTES, (byte) 43);
+    container.put(offset + PageCodec.HEADER_BYTES, (byte) 47);
+    CRC32C checksum = new CRC32C();
+    assertEquals(
+        StatusCode.OK,
+        PageCodec.encodeAt(
+            DatabaseIncarnation.of(2, 3),
+            WalGeneration.of(1),
+            7,
+            1,
+            64,
+            128,
+            1,
+            container,
+            offset,
+            checksum));
+    container.limit(container.capacity());
+    PageHeader header = new PageHeader();
+    assertEquals(StatusCode.OK, PageCodec.validateAt(container, offset, header, checksum));
+    assertEquals(7, header.pageId());
+    assertEquals(41, container.get(offset - 1));
+    assertEquals(43, container.get(offset + PageCodec.PAGE_BYTES));
+    assertEquals(47, container.get(offset + PageCodec.HEADER_BYTES));
+  }
+
+  @Test
   void validatesEveryByteAndRejectsCorruption() {
     ByteBuffer page = ByteBuffer.allocate(PageCodec.PAGE_BYTES);
     page.position(PageCodec.HEADER_BYTES);

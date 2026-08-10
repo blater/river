@@ -306,6 +306,10 @@ public final class SinglePageStore {
     return copiedPayloadBytes;
   }
 
+  public long nextCommitSequence() {
+    return wal.nextCommitSequence();
+  }
+
   public boolean isDirty() {
     return dirty;
   }

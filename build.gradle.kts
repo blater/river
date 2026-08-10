@@ -225,6 +225,8 @@ val pageUpdateDescriptor = "Lio/riverdb/engine/page/PageUpdate;"
 val heapInsertResultDescriptor = "Lio/riverdb/storage/heap/HeapInsertResult;"
 val heapRowResultDescriptor = "Lio/riverdb/storage/heap/HeapRowResult;"
 val heapScanCursorDescriptor = "Lio/riverdb/storage/heap/HeapScanCursor;"
+val btreeLookupResultDescriptor = "Lio/riverdb/storage/btree/BTreeLookupResult;"
+val btreeSplitResultDescriptor = "Lio/riverdb/storage/btree/BTreeSplitResult;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val liveHotPathMethods = setOf(
@@ -308,6 +310,11 @@ val liveHotPathMethods = setOf(
     "(J$localWalReadResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
+    "$localWalPackage.LocalWal",
+    "validDecision",
+    "(JJI)Z"
+  ),
+  hotMethod(
     "io.riverdb.format.wal.WalRecordCodec",
     "encodeReserved",
     "(JJJIIII$byteBufferDescriptor$crc32cDescriptor)$statusCodeDescriptor"
@@ -336,13 +343,25 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.format.page.PageCodec",
+    "encodeAt",
+    "($databaseIncarnationDescriptor$walGenerationDescriptor"
+        + "JJJJI$byteBufferDescriptor" + "I$crc32cDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.format.page.PageCodec",
     "validate",
     "($byteBufferDescriptor$pageHeaderDescriptor$crc32cDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.format.page.PageCodec",
+    "validateAt",
+    "($byteBufferDescriptor" + "I$pageHeaderDescriptor$crc32cDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.format.page.PageCodec",
     "checksum",
-    "($byteBufferDescriptor$crc32cDescriptor)I"
+    "($byteBufferDescriptor" + "I$crc32cDescriptor)I"
   ),
   hotMethod(
     "io.riverdb.engine.page.SinglePageStore",
@@ -382,6 +401,17 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.storage.heap.HeapPage",
+    "insertFrom",
+    "($byteBufferDescriptor$byteBufferDescriptor"
+        + "II$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.heap.HeapPage",
+    "canInsert",
+    "($byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.storage.heap.HeapPage",
     "fetch",
     "($byteBufferDescriptor" + "I$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
@@ -405,6 +435,57 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.table.SinglePageTable",
     "next",
     "($heapScanCursorDescriptor$heapRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.btree.BTreePage",
+    "lookupLeaf",
+    "($byteBufferDescriptor" + "J$btreeLookupResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.btree.BTreePage",
+    "childForKey",
+    "($byteBufferDescriptor" + "J)I"
+  ),
+  hotMethod(
+    "io.riverdb.storage.btree.BTreePage",
+    "insertLeaf",
+    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.btree.BTreePage",
+    "splitLeaf",
+    "($byteBufferDescriptor$byteBufferDescriptor"
+        + "IJI$btreeSplitResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.btree.BTreePage",
+    "insertInternal",
+    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "commitInsert",
+    "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "applyInsertOperation",
+    "($byteBufferDescriptor" + "JJ)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "insert",
+    "(JJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "splitAndInsert",
+    "(I$byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "fetchByKey",
+    "(J$heapRowResultDescriptor)$statusCodeDescriptor"
   )
 )
 val liveHotPathAllowedRules = mapOf(
