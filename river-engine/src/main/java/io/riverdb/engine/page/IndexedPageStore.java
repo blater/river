@@ -1228,42 +1228,45 @@ public final class IndexedPageStore {
     DurableFile checkpointFile = operation.file();
     status = checkpointFile.size(fileSizeResult);
     long expectedBytes = (long) checkpoint.pageCount() * PageCodec.PAGE_BYTES;
-    if (!status.isOk() || fileSizeResult.sizeBytes() != expectedBytes) {
+    long checkpointBytes = status.isOk() ? fileSizeResult.sizeBytes() : 0;
+    if (!status.isOk() || checkpointBytes > expectedBytes) {
       checkpointFile.close();
       return status.isOk() ? StatusCode.CORRUPTION : status;
     }
+    boolean repaired = false;
     for (int pageId = 1; pageId <= checkpoint.pageCount(); pageId++) {
       ensurePageBuffers(pageId);
       ByteBuffer page = currentPages[pageId];
-      page.clear();
-      status = checkpointFile.read(
-          (long) (pageId - 1) * PageCodec.PAGE_BYTES, page, ioResult);
-      if (!status.isOk() || ioResult.bytesTransferred() != PageCodec.PAGE_BYTES) {
-        checkpointFile.close();
-        return status.isOk() ? StatusCode.CORRUPTION : status;
+      long pageOffset = (long) (pageId - 1) * PageCodec.PAGE_BYTES;
+      boolean loaded = false;
+      if (pageOffset + PageCodec.PAGE_BYTES <= checkpointBytes) {
+        page.clear();
+        status = checkpointFile.read(pageOffset, page, ioResult);
+        if (!status.isOk()) {
+          checkpointFile.close();
+          return status;
+        }
+        if (ioResult.bytesTransferred() == PageCodec.PAGE_BYTES) {
+          page.position(0);
+          page.limit(PageCodec.PAGE_BYTES);
+          loaded = validateCheckpointPage(pageId, walGeneration.value()).isOk();
+        }
       }
-      page.position(0);
-      page.limit(PageCodec.PAGE_BYTES);
-      status = PageCodec.validate(page, pageHeader, checksum);
-      if (!status.isOk()
-          || pageHeader.databaseHigh() != database.high()
-          || pageHeader.databaseLow() != database.low()
-          || pageHeader.walGeneration() != walGeneration.value()
-          || pageHeader.pageId() != pageId
-          || pageHeader.pageGeneration() != 1
-          || pageHeader.recordStart() != 0
-          || pageHeader.recordEnd() != 0) {
-        checkpointFile.close();
-        return status.isOk() ? StatusCode.CORRUPTION : status;
+      if (!loaded) {
+        status = repairCheckpointPage(checkpointFile, pageId, pageOffset);
+        if (!status.isOk()) {
+          checkpointFile.close();
+          return status;
+        }
+        repaired = true;
       }
       present[pageId] = true;
       highestPageId = pageId;
-      if (HeapPage.isHeap(currentPayloads[pageId])) {
-        status = HeapPage.validate(currentPayloads[pageId]);
-      } else if (pageId == ROOT_META_PAGE_ID) {
-        status = BTreeRootPage.validate(currentPayloads[pageId]);
-      } else {
-        status = BTreePage.validate(currentPayloads[pageId]);
+    }
+    if (repaired) {
+      status = checkpointFile.truncate(expectedBytes);
+      if (status.isOk()) {
+        status = checkpointFile.force(ForceMode.CONTENT_AND_METADATA);
       }
       if (!status.isOk()) {
         checkpointFile.close();
@@ -1287,6 +1290,73 @@ public final class IndexedPageStore {
     lastCommitSequence = checkpoint.commitSequence();
     baseLoaded = true;
     return StatusCode.OK;
+  }
+
+  private StatusCode repairCheckpointPage(
+      DurableFile checkpointFile,
+      int pageId,
+      long pageOffset) {
+    if (walGeneration.value() <= 1) {
+      return StatusCode.CORRUPTION;
+    }
+    ByteBuffer page = currentPages[pageId];
+    page.clear();
+    StatusCode status = file.read(pageOffset, page, ioResult);
+    if (!status.isOk() || ioResult.bytesTransferred() != PageCodec.PAGE_BYTES) {
+      return status.isOk() ? StatusCode.CORRUPTION : status;
+    }
+    page.position(0);
+    page.limit(PageCodec.PAGE_BYTES);
+    status = validateCheckpointPage(pageId, 0);
+    if (!status.isOk()) {
+      return StatusCode.CORRUPTION;
+    }
+    status = PageCodec.encode(
+        database,
+        walGeneration,
+        pageId,
+        1,
+        0,
+        0,
+        PageCodec.MAX_PAYLOAD_BYTES,
+        page,
+        checksum);
+    if (!status.isOk()) {
+      return status;
+    }
+    page.position(0);
+    page.limit(PageCodec.PAGE_BYTES);
+    status = checkpointFile.write(pageOffset, page, ioResult);
+    return status.isOk() && ioResult.bytesTransferred() != PageCodec.PAGE_BYTES
+        ? StatusCode.IO_FAILURE : status;
+  }
+
+  private StatusCode validateCheckpointPage(int pageId, long expectedWalGeneration) {
+    ByteBuffer page = currentPages[pageId];
+    StatusCode status = PageCodec.validate(page, pageHeader, checksum);
+    if (!status.isOk()
+        || pageHeader.databaseHigh() != database.high()
+        || pageHeader.databaseLow() != database.low()
+        || pageHeader.pageId() != pageId
+        || pageHeader.pageGeneration() != 1) {
+      return StatusCode.CORRUPTION;
+    }
+    if ((expectedWalGeneration == 0
+            && pageHeader.walGeneration() >= walGeneration.value())
+        || (expectedWalGeneration != 0
+            && pageHeader.walGeneration() != expectedWalGeneration)) {
+      return StatusCode.CORRUPTION;
+    }
+    if (expectedWalGeneration == walGeneration.value()
+        && (pageHeader.recordStart() != 0 || pageHeader.recordEnd() != 0)) {
+      return StatusCode.CORRUPTION;
+    }
+    if (HeapPage.isHeap(currentPayloads[pageId])) {
+      return HeapPage.validate(currentPayloads[pageId]);
+    }
+    return pageId == ROOT_META_PAGE_ID
+        ? BTreeRootPage.validate(currentPayloads[pageId])
+        : BTreePage.validate(currentPayloads[pageId]);
   }
 
   private StatusCode applyOperation(

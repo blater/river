@@ -222,6 +222,77 @@ final class EmbeddedDatabaseTest {
   }
 
   @Test
+  void repairsTornCheckpointPageFromForcedPreRotationBase(@TempDir Path root)
+      throws Exception {
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    EmbeddedDatabase database = opened.database();
+    EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
+    IndexedTransactionSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(61, row(610)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
+    assertEquals(StatusCode.OK, database.close());
+
+    Path checkpointBase = root.resolve("river.indexed.pages.checkpoint.2");
+    byte[] checkpointBytes = Files.readAllBytes(checkpointBase);
+    checkpointBytes[256] ^= 0x5a;
+    Files.write(checkpointBase, checkpointBytes);
+
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
+    session = sessionResult.session();
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.fetchByKey(61, fetched));
+    assertEquals(610, value(fetched));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+
+    byte[] mainBytes = Files.readAllBytes(root.resolve("river.indexed.pages"));
+    mainBytes[256] ^= 0x33;
+    Files.write(root.resolve("river.indexed.pages"), mainBytes);
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, opened.database().close());
+  }
+
+  @Test
+  void refusesUnsafeCheckpointRepairFromPostCheckpointPage(@TempDir Path root)
+      throws Exception {
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    EmbeddedDatabase database = opened.database();
+    EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
+    IndexedTransactionSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(67, row(670)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.update(67, row(671)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+
+    Path checkpointBase = root.resolve("river.indexed.pages.checkpoint.2");
+    byte[] checkpointBytes = Files.readAllBytes(checkpointBase);
+    checkpointBytes[256] ^= 0x5a;
+    Files.write(checkpointBase, checkpointBytes);
+    assertEquals(
+        StatusCode.CORRUPTION,
+        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+  }
+
+  @Test
   void checkpointsVacuumedRowsAcrossHeapPages(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 6, opened));
