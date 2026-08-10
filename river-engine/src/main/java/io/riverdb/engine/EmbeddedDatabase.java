@@ -4,6 +4,10 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.engine.checkpoint.CheckpointControlStore;
+import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.checkpoint.CheckpointState;
+import io.riverdb.engine.checkpoint.EmbeddedCheckpoint;
 import io.riverdb.engine.page.IndexedPageStore;
 import io.riverdb.engine.page.IndexedPageStoreOpenResult;
 import io.riverdb.engine.table.IndexedTable;
@@ -29,13 +33,17 @@ public final class EmbeddedDatabase {
   private final IndexedTable table;
   private final TransactionManager transactions;
   private final IndexedVacuum vacuum;
+  private final EmbeddedCheckpoint checkpoint;
   private boolean closed;
 
   private EmbeddedDatabase(
       NioDurableDirectory openedDirectory,
       LocalWal openedWal,
+      IndexedPageStore openedStore,
       IndexedTable openedTable,
-      int maximumActiveTransactions) {
+      int maximumActiveTransactions,
+      CheckpointControlStore checkpointControl,
+      long checkpointId) {
     directory = openedDirectory;
     wal = openedWal;
     table = openedTable;
@@ -45,6 +53,14 @@ public final class EmbeddedDatabase {
         openedTable.nextTransactionId(),
         maximumActiveTransactions);
     vacuum = new IndexedVacuum(transactions, table);
+    checkpoint = new EmbeddedCheckpoint(
+        transactions,
+        openedDirectory,
+        openedWal,
+        openedStore,
+        openedTable,
+        checkpointControl,
+        checkpointId);
   }
 
   public static StatusCode create(
@@ -85,6 +101,9 @@ public final class EmbeddedDatabase {
     if (closed) {
       return StatusCode.CLOSED;
     }
+    if (checkpoint.isFenced()) {
+      return StatusCode.FENCED;
+    }
     result.set(new IndexedTransactionSession(transactions, table, maximumRowBytes));
     return StatusCode.OK;
   }
@@ -93,7 +112,17 @@ public final class EmbeddedDatabase {
     if (closed) {
       return StatusCode.CLOSED;
     }
+    if (checkpoint.isFenced()) {
+      return StatusCode.FENCED;
+    }
     return vacuum.run(result);
+  }
+
+  public StatusCode checkpoint(CheckpointResult result) {
+    if (closed) {
+      return StatusCode.CLOSED;
+    }
+    return checkpoint.run(result);
   }
 
   public int activeTransactionCount() {
@@ -156,19 +185,72 @@ public final class EmbeddedDatabase {
       return status;
     }
     NioDurableDirectory directory = directoryResult.directory();
+    CheckpointControlStore checkpointControl = new CheckpointControlStore();
+    CheckpointState checkpointState = new CheckpointState();
+    boolean checkpointAvailable = false;
+    status = checkpointControl.read(directory, checkpointState);
+    if (create) {
+      if (status.isOk()) {
+        directory.close();
+        return StatusCode.CONFLICT;
+      }
+      if (status != StatusCode.CONFLICT) {
+        directory.close();
+        return status;
+      }
+      status = StatusCode.OK;
+    } else {
+      if (status.isOk()) {
+        if (!database.equals(checkpointState.database())) {
+          directory.close();
+          return StatusCode.FENCED;
+        }
+        checkpointAvailable = true;
+      } else if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+      } else {
+        directory.close();
+        return status;
+      }
+    }
     LocalWalOpenResult walResult = new LocalWalOpenResult();
-    status = create
-        ? LocalWal.create(directory, database, generation, walResult)
-        : LocalWal.openExisting(directory, database, generation, walResult);
+    if (create) {
+      status = LocalWal.create(directory, database, generation, walResult);
+    } else if (checkpointAvailable) {
+      status = LocalWal.openExistingNamed(
+          directory,
+          LocalWal.generationFileName(checkpointState.walGeneration()),
+          database,
+          checkpointState.walGeneration(),
+          walResult);
+    } else {
+      status = LocalWal.openExisting(directory, database, generation, walResult);
+    }
     if (!status.isOk()) {
       directory.close();
-      return status;
+      return checkpointAvailable && status == StatusCode.CONFLICT
+          ? StatusCode.CORRUPTION : status;
     }
     LocalWal wal = walResult.wal();
+    if (checkpointAvailable) {
+      status = wal.adoptCheckpointState(
+          checkpointState.commitSequence(), checkpointState.maximumTransactionId());
+      if (!status.isOk()) {
+        wal.close();
+        directory.close();
+        return status;
+      }
+    }
     IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
-    status = create
-        ? IndexedPageStore.create(directory, wal, database, generation, storeResult)
-        : IndexedPageStore.openExisting(directory, wal, database, generation, storeResult);
+    if (create) {
+      status = IndexedPageStore.create(directory, wal, database, generation, storeResult);
+    } else if (checkpointAvailable) {
+      status = IndexedPageStore.openCheckpoint(
+          directory, wal, database, checkpointState, storeResult);
+    } else {
+      status = IndexedPageStore.openExisting(
+          directory, wal, database, generation, storeResult);
+    }
     if (!status.isOk()) {
       wal.close();
       directory.close();
@@ -187,8 +269,11 @@ public final class EmbeddedDatabase {
     result.set(new EmbeddedDatabase(
         directory,
         wal,
+        storeResult.store(),
         tableResult.table(),
-        maximumActiveTransactions));
+        maximumActiveTransactions,
+        checkpointControl,
+        checkpointAvailable ? checkpointState.checkpointId() : 0));
     return StatusCode.OK;
   }
 }

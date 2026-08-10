@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -43,6 +44,9 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, session.insert(papers, 7, row(701)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     long committedAt = outcome.commitSequence();
+    CheckpointResult checkpoint = new CheckpointResult();
+    assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
+    assertEquals(5, checkpoint.rowCount());
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(
@@ -62,7 +66,8 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, session.fetch(papers, 7, fetched));
     assertEquals(701, value(fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
-    assertEquals(committedAt, outcome.commitSequence());
+    assertEquals(checkpoint.commitSequence(), outcome.commitSequence());
+    assertEquals(true, checkpoint.commitSequence() >= committedAt);
     assertEquals(StatusCode.OK, database.close());
   }
 

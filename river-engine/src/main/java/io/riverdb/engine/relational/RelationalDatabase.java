@@ -6,6 +6,7 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedDatabase;
 import io.riverdb.engine.EmbeddedDatabaseOpenResult;
 import io.riverdb.engine.EmbeddedSessionOpenResult;
+import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -148,6 +149,10 @@ public final class RelationalDatabase {
 
   public StatusCode vacuum(TransactionOutcome result) {
     return embedded.vacuum(result);
+  }
+
+  public StatusCode checkpoint(CheckpointResult result) {
+    return embedded.checkpoint(result);
   }
 
   public StatusCode close() {

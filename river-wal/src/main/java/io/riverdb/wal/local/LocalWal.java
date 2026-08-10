@@ -23,9 +23,10 @@ import java.util.zip.CRC32C;
 public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
 
-  private final DurableFile file;
+  private DurableFile file;
   private final DatabaseIncarnation databaseIncarnation;
-  private final WalGeneration walGeneration;
+  private WalGeneration walGeneration;
+  private String fileName;
   private final ByteBuffer appendRecord;
   private final ByteBuffer appendPayload;
   private final ByteBuffer readRecord;
@@ -47,10 +48,12 @@ public final class LocalWal {
   private LocalWal(
       DurableFile file,
       DatabaseIncarnation database,
-      WalGeneration generation) {
+      WalGeneration generation,
+      String openedFileName) {
     this.file = file;
     databaseIncarnation = database;
     walGeneration = generation;
+    fileName = openedFileName;
     int capacity = WalRecordCodec.HEADER_BYTES + WalRecordCodec.MAX_PAYLOAD_BYTES;
     appendRecord = ByteBuffer.allocateDirect(capacity);
     appendPayload = payloadView(appendRecord);
@@ -63,7 +66,8 @@ public final class LocalWal {
       DatabaseIncarnation databaseIncarnation,
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
-    return open(directory, databaseIncarnation, walGeneration, true, false, result);
+    return open(
+        directory, FILE_NAME, databaseIncarnation, walGeneration, true, false, result);
   }
 
   public static StatusCode create(
@@ -71,7 +75,8 @@ public final class LocalWal {
       DatabaseIncarnation databaseIncarnation,
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
-    return open(directory, databaseIncarnation, walGeneration, false, true, result);
+    return open(
+        directory, FILE_NAME, databaseIncarnation, walGeneration, false, true, result);
   }
 
   public static StatusCode openExisting(
@@ -79,17 +84,41 @@ public final class LocalWal {
       DatabaseIncarnation databaseIncarnation,
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
-    return open(directory, databaseIncarnation, walGeneration, false, false, result);
+    return open(
+        directory, FILE_NAME, databaseIncarnation, walGeneration, false, false, result);
+  }
+
+  public static StatusCode createNamed(
+      DurableDirectory directory,
+      String fileName,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration walGeneration,
+      LocalWalOpenResult result) {
+    return open(
+        directory, fileName, databaseIncarnation, walGeneration, false, true, result);
+  }
+
+  public static StatusCode openExistingNamed(
+      DurableDirectory directory,
+      String fileName,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration walGeneration,
+      LocalWalOpenResult result) {
+    return open(
+        directory, fileName, databaseIncarnation, walGeneration, false, false, result);
   }
 
   private static StatusCode open(
       DurableDirectory directory,
+      String fileName,
       DatabaseIncarnation databaseIncarnation,
       WalGeneration walGeneration,
       boolean createWhenMissing,
       boolean requireCreate,
       LocalWalOpenResult result) {
     if (directory == null
+        || fileName == null
+        || fileName.isEmpty()
         || databaseIncarnation == null
         || !databaseIncarnation.isValid()
         || walGeneration == null
@@ -100,13 +129,13 @@ public final class LocalWal {
     result.reset();
     DirectoryOperationResult operation = new DirectoryOperationResult();
     StatusCode status = requireCreate
-        ? directory.createFile(FILE_NAME, operation)
-        : directory.reopen(FILE_NAME, operation);
+        ? directory.createFile(fileName, operation)
+        : directory.reopen(fileName, operation);
     boolean created = false;
     if (requireCreate && status.isOk()) {
       created = true;
     } else if (status == StatusCode.CONFLICT && createWhenMissing) {
-      status = directory.createFile(FILE_NAME, operation);
+      status = directory.createFile(fileName, operation);
       created = status.isOk();
     }
     if (!status.isOk()) {
@@ -116,7 +145,8 @@ public final class LocalWal {
       return status;
     }
 
-    LocalWal wal = new LocalWal(operation.file(), databaseIncarnation, walGeneration);
+    LocalWal wal = new LocalWal(
+        operation.file(), databaseIncarnation, walGeneration, fileName);
     status = created ? wal.initializeFile(directory) : wal.recoverValidTail();
     if (!status.isOk()) {
       wal.file.close();
@@ -138,6 +168,10 @@ public final class LocalWal {
     return walGeneration;
   }
 
+  public String fileName() {
+    return fileName;
+  }
+
   public long nextJournalSequence() {
     return nextJournalSequence;
   }
@@ -152,6 +186,68 @@ public final class LocalWal {
 
   public long nextTransactionId() {
     return maximumTransactionId == Long.MAX_VALUE ? 0 : maximumTransactionId + 1;
+  }
+
+  public long maximumTransactionId() {
+    return maximumTransactionId;
+  }
+
+  public StatusCode adoptCheckpointState(long commitSequence, long transactionId) {
+    if (commitSequence <= 0
+        || transactionId <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (lastCommitSequence != 0 && lastCommitSequence <= commitSequence) {
+      return StatusCode.CORRUPTION;
+    }
+    if (lastCommitSequence == 0) {
+      lastCommitSequence = commitSequence;
+    }
+    maximumTransactionId = Math.max(maximumTransactionId, transactionId);
+    return StatusCode.OK;
+  }
+
+  public static String generationFileName(WalGeneration generation) {
+    return generation == null || !generation.isValid()
+        ? "" : FILE_NAME + "." + generation.value();
+  }
+
+  /** Switches this live provider to a forced empty next-generation WAL file. */
+  public StatusCode rotate(
+      DurableDirectory directory,
+      String nextFileName,
+      WalGeneration nextGeneration,
+      long checkpointTransactionId) {
+    if (directory == null
+        || nextFileName == null
+        || nextFileName.isEmpty()
+        || nextGeneration == null
+        || !nextGeneration.isValid()
+        || nextGeneration.value() <= walGeneration.value()
+        || checkpointTransactionId <= 0
+        || activeReservationToken != 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    LocalWalOpenResult opened = new LocalWalOpenResult();
+    StatusCode status = createNamed(
+        directory, nextFileName, databaseIncarnation, nextGeneration, opened);
+    if (!status.isOk()) {
+      return status;
+    }
+    LocalWal replacement = opened.wal();
+    replacement.lastCommitSequence = lastCommitSequence;
+    replacement.maximumTransactionId = Math.max(maximumTransactionId, checkpointTransactionId);
+    DurableFile previousFile = file;
+    file = replacement.file;
+    fileName = nextFileName;
+    walGeneration = nextGeneration;
+    tailEnd = replacement.tailEnd;
+    nextJournalSequence = replacement.nextJournalSequence;
+    nextReservationToken = replacement.nextReservationToken;
+    lastCommitSequence = replacement.lastCommitSequence;
+    maximumTransactionId = replacement.maximumTransactionId;
+    copiedPayloadBytes += replacement.copiedPayloadBytes;
+    return previousFile.close();
   }
 
   /** Exclusive local byte end known forced by this synchronous provider. */
