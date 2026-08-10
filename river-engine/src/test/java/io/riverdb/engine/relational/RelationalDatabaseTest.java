@@ -140,6 +140,73 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void resumesBoundedLargeIndexBuildAfterReopen(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    TableDefinition events = new TableDefinition();
+    assertEquals(StatusCode.OK, database.createTable("events", events));
+    RelationalSessionOpenResult sessions = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    RelationalSession session = sessions.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    for (int first = 0; first < 120; first += 40) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      for (int key = first; key < first + 40; key++) {
+        assertEquals(StatusCode.OK, session.insertLong(events, key, key * 10L, row(key * 10L)));
+      }
+      assertEquals(StatusCode.OK, session.commit(outcome));
+    }
+
+    assertEquals(
+        StatusCode.RETRY,
+        database.createUniqueValueIndex("events_value", "events", 1));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    TableDefinition building = new TableDefinition();
+    assertEquals(StatusCode.OK, session.resolveTable("events", building));
+    assertEquals(true, building.hasBuildingUniqueValueIndex());
+    assertEquals(StatusCode.RETRY, session.updateLong(building, 7, 71, row(71)));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, session.fetch(building, 7, fetched));
+    assertEquals(70, value(fetched));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    session = sessions.session();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    building.reset();
+    assertEquals(StatusCode.OK, session.resolveTable("events", building));
+    assertEquals(StatusCode.RETRY, session.deleteLong(building, 9));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(
+        StatusCode.OK,
+        database.createUniqueValueIndex("events_value", "events"));
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    session = sessions.session();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    events.reset();
+    assertEquals(StatusCode.OK, session.resolveTable("events", events));
+    assertEquals(false, events.hasBuildingUniqueValueIndex());
+    assertEquals(true, events.hasUniqueValueIndex());
+    ValueIndexLookupResult indexed = new ValueIndexLookupResult();
+    assertEquals(StatusCode.OK, session.fetchByUniqueValue(events, 0, indexed));
+    assertEquals(0, indexed.key());
+    assertEquals(StatusCode.OK, session.fetchByUniqueValue(events, 470, indexed));
+    assertEquals(47, indexed.key());
+    assertEquals(StatusCode.OK, session.fetchByUniqueValue(events, 1190, indexed));
+    assertEquals(119, indexed.key());
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static ByteBuffer row(long value) {
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     row.putLong(0, value);

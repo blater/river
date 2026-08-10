@@ -40,7 +40,7 @@ public final class RelationalSession {
     if (registeredTransaction) {
       return StatusCode.CONFLICT;
     }
-    StatusCode status = database.enterTransaction();
+    StatusCode status = database.enterTransaction(this);
     if (status.isOk()) {
       status = session.begin(isolationLevel);
     }
@@ -102,13 +102,13 @@ public final class RelationalSession {
       status = session.insert(physicalKey.key(), catalogOutput);
     }
     if (status.isOk()) {
-      result.set(database, tableId, 0);
+      result.set(database, tableId, 0, TableDefinition.INDEX_NONE);
     }
     return status;
   }
 
   public StatusCode insert(TableDefinition table, long key, ByteBuffer row) {
-    StatusCode status = resolveKey(table, key);
+    StatusCode status = resolveWriteKey(table, key);
     return status.isOk() ? session.insert(physicalKey.key(), row) : status;
   }
 
@@ -143,12 +143,12 @@ public final class RelationalSession {
   }
 
   public StatusCode update(TableDefinition table, long key, ByteBuffer row) {
-    StatusCode status = resolveKey(table, key);
+    StatusCode status = resolveWriteKey(table, key);
     return status.isOk() ? session.update(physicalKey.key(), row) : status;
   }
 
   public StatusCode delete(TableDefinition table, long key) {
-    StatusCode status = resolveKey(table, key);
+    StatusCode status = resolveWriteKey(table, key);
     return status.isOk() ? session.delete(physicalKey.key()) : status;
   }
 
@@ -408,6 +408,38 @@ public final class RelationalSession {
     return session;
   }
 
+  StatusCode commitBuildPhase(TransactionOutcome result) {
+    StatusCode status = session.commit(result);
+    releaseTerminalTransaction();
+    return status;
+  }
+
+  StatusCode abortBuildPhase(TransactionOutcome result) {
+    StatusCode status = session.abort(result);
+    releaseTerminalTransaction();
+    return status;
+  }
+
+  StatusCode beginPersistentSchemaChange() {
+    if (!registeredTransaction || schemaChangeActive) {
+      return StatusCode.CONFLICT;
+    }
+    StatusCode status = database.beginSchemaChange(this);
+    if (status.isOk()) {
+      schemaChangeMutationStart = session.pendingMutationCount();
+      schemaChangeActive = true;
+    }
+    return status;
+  }
+
+  void releasePersistentSchemaChange() {
+    if (schemaChangeActive && !session.transaction().isActiveHandle()) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+  }
+
   private StatusCode resolveKey(TableDefinition table, long key) {
     if (table == null || !table.isOwnedBy(database)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -415,8 +447,19 @@ public final class RelationalSession {
     return RelationalKey.tableRowKey(table.tableId(), key, physicalKey);
   }
 
+  private StatusCode resolveWriteKey(TableDefinition table, long key) {
+    if (table != null && table.hasBuildingUniqueValueIndex()) {
+      return StatusCode.RETRY;
+    }
+    return resolveKey(table, key);
+  }
+
   private void prepareValueIndex(TableDefinition table) {
-    valueIndexTable.set(database, table.uniqueValueIndexTableId(), 0);
+    valueIndexTable.set(
+        database,
+        table.uniqueValueIndexTableId(),
+        0,
+        TableDefinition.INDEX_NONE);
   }
 
   StatusCode insertIndexedValue(
@@ -426,6 +469,26 @@ public final class RelationalSession {
     return validIndexedValue(value)
         ? insert(indexTable, normalizeIndexedValue(value), row)
         : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  StatusCode ensureIndexedValue(
+      TableDefinition indexTable,
+      long value,
+      long primaryKey) {
+    if (!validIndexedValue(value)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = fetchIndexedValue(indexTable, value, indexedKeyRow);
+    if (status == StatusCode.CONFLICT) {
+      encodeLong(indexRow, primaryKey);
+      return insertIndexedValue(indexTable, value, indexRow);
+    }
+    if (!status.isOk()) {
+      return status;
+    }
+    status = decodeLong(indexedKeyRow, valueScratch);
+    return status.isOk() && valueScratch.getLong(0) == primaryKey
+        ? StatusCode.OK : StatusCode.CONFLICT;
   }
 
   private StatusCode deleteIndexedValue(TableDefinition indexTable, long value) {

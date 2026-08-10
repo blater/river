@@ -17,6 +17,7 @@ import java.nio.file.Path;
 /** Durable named-table catalog and logical table sessions over the embedded kernel. */
 public final class RelationalDatabase {
   private static final int CATALOG_ROW_BYTES = CatalogRecord.MAXIMUM_BYTES;
+  private static final int INDEX_BUILD_BATCH_ROWS = 48;
 
   private final EmbeddedDatabase embedded;
   private final HeapRowResult catalogRow = new HeapRowResult();
@@ -24,11 +25,15 @@ public final class RelationalDatabase {
   private final ByteBuffer catalogOutput = ByteBuffer.allocateDirect(CATALOG_ROW_BYTES);
   private final RelationalKey.LongKeyResult catalogKey = new RelationalKey.LongKeyResult();
   private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
+  private final CatalogRecord.IndexResult indexRecord = new CatalogRecord.IndexResult();
   private final TableDefinition indexedTable = new TableDefinition();
   private final TableDefinition indexStorageTable = new TableDefinition();
   private final RelationalScanCursor indexBuildCursor = new RelationalScanCursor();
   private final RelationalScanResult indexBuildRow = new RelationalScanResult();
   private final ByteBuffer indexKeyOutput = ByteBuffer.allocateDirect(Long.BYTES);
+  private final long[] cleanupIndexKeys = new long[INDEX_BUILD_BATCH_ROWS];
+  private long buildLastKey;
+  private boolean buildBatchFull;
   private volatile long schemaVersion = 1;
   private RelationalSession schemaChangeOwner;
   private int activeTransactions;
@@ -114,7 +119,17 @@ public final class RelationalDatabase {
   public synchronized StatusCode createUniqueValueIndex(
       CharSequence indexName,
       CharSequence tableName) {
+    return createUniqueValueIndex(indexName, tableName, Integer.MAX_VALUE);
+  }
+
+  synchronized StatusCode createUniqueValueIndex(
+      CharSequence indexName,
+      CharSequence tableName,
+      int maximumBuildBatches) {
     if (!RelationalKey.validName(indexName) || !RelationalKey.validName(tableName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (maximumBuildBatches <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     RelationalSession session = newSession();
@@ -122,19 +137,343 @@ public final class RelationalDatabase {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     TransactionOutcome outcome = new TransactionOutcome();
+    boolean buildReserved = false;
     StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
     if (status.isOk()) {
-      status = session.createUniqueValueIndex(indexName, tableName);
+      status = session.beginPersistentSchemaChange();
     }
     if (status.isOk()) {
-      status = session.commit(outcome);
+      status = reserveOrResumeUniqueValueIndex(session, indexName, tableName);
+    }
+    if (status.isOk()) {
+      status = session.commitBuildPhase(outcome);
+      buildReserved = status.isOk();
+      if (status.isOk()) {
+        status = publishBuildingSchema(session);
+      }
     } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode abort = session.abort(outcome);
+      StatusCode abort = session.abortBuildPhase(outcome);
+      if (!abort.isOk()) {
+        session.releasePersistentSchemaChange();
+        return abort;
+      }
+    }
+    int batches = 0;
+    long lowerKey = 0;
+    boolean complete = false;
+    while (status.isOk() && !complete && batches < maximumBuildBatches) {
+      status = buildUniqueValueIndexBatch(
+          session, tableName, lowerKey, outcome);
+      if (status.isOk()) {
+        complete = !buildBatchFull
+            || buildLastKey == RelationalKey.MAXIMUM_USER_KEY;
+        lowerKey = buildLastKey == RelationalKey.MAXIMUM_USER_KEY
+            ? RelationalKey.USER_KEY_MASK : buildLastKey + 1;
+        batches++;
+      }
+    }
+    if (status.isOk() && !complete) {
+      session.releasePersistentSchemaChange();
+      return StatusCode.RETRY;
+    }
+    if (status.isOk()) {
+      return publishUniqueValueIndex(
+          session, indexName, tableName, outcome);
+    }
+    if (status == StatusCode.CONFLICT && buildReserved) {
+      StatusCode cleanup = cleanupUniqueValueIndex(
+          session, indexName, tableName, outcome);
+      return cleanup.isOk() ? status : cleanup;
+    }
+    session.releasePersistentSchemaChange();
+    return status;
+  }
+
+  private StatusCode reserveOrResumeUniqueValueIndex(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName) {
+    StatusCode status = session.resolveTable(tableName, indexedTable);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (indexedTable.hasUniqueValueIndex()) {
+      return StatusCode.CONFLICT;
+    }
+    status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    int indexTableId = 0;
+    if (status.isOk()) {
+      status = CatalogRecord.decodeIndex(
+          catalogRow, catalogScratch, indexName, indexRecord);
+      if (status.isOk()
+          && (indexRecord.state() != TableDefinition.INDEX_BUILDING
+              || indexRecord.tableId() != indexedTable.tableId()
+              || !indexedTable.hasBuildingUniqueValueIndex()
+              || indexedTable.uniqueValueIndexTableId() != indexRecord.indexTableId())) {
+        status = StatusCode.CONFLICT;
+      }
+      indexTableId = status.isOk() ? indexRecord.indexTableId() : 0;
+    } else if (status == StatusCode.CONFLICT) {
+      if (indexedTable.hasBuildingUniqueValueIndex()) {
+        return StatusCode.CORRUPTION;
+      }
+      status = session.indexedSession().fetchByKey(
+          RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
+      if (status.isOk()) {
+        status = CatalogRecord.decodeSequence(catalogRow, catalogScratch, nextTableId);
+      }
+      indexTableId = nextTableId.value();
+      if (status.isOk() && indexTableId > RelationalKey.MAXIMUM_TABLE_ID) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
+      if (status.isOk()) {
+        CatalogRecord.encodeSequence(catalogOutput, indexTableId + 1);
+        status = session.indexedSession().update(
+            RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
+      }
+      if (status.isOk()) {
+        status = RelationalKey.catalogTableKey(tableName, catalogKey);
+      }
+      if (status.isOk()) {
+        CatalogRecord.encodeTable(
+            catalogOutput,
+            indexedTable.tableId(),
+            indexTableId,
+            TableDefinition.INDEX_BUILDING,
+            tableName);
+        status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      }
+      if (status.isOk()) {
+        status = RelationalKey.catalogTableKey(indexName, catalogKey);
+      }
+      if (status.isOk()) {
+        CatalogRecord.encodeIndex(
+            catalogOutput,
+            indexedTable.tableId(),
+            indexTableId,
+            TableDefinition.INDEX_BUILDING,
+            indexName);
+        status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
+      }
+      if (status.isOk()) {
+        indexedTable.set(
+            this,
+            indexedTable.tableId(),
+            indexTableId,
+            TableDefinition.INDEX_BUILDING);
+      }
+    }
+    if (status.isOk()) {
+      indexStorageTable.set(
+          this, indexTableId, 0, TableDefinition.INDEX_NONE);
+    }
+    return status;
+  }
+
+  private StatusCode buildUniqueValueIndexBatch(
+      RelationalSession session,
+      CharSequence tableName,
+      long lowerKey,
+      TransactionOutcome outcome) {
+    StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
+    if (status.isOk()) {
+      status = session.resolveTable(tableName, indexedTable);
+    }
+    if (status.isOk()
+        && (!indexedTable.hasBuildingUniqueValueIndex()
+            || indexedTable.uniqueValueIndexTableId() != indexStorageTable.tableId())) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) {
+      status = session.beginScan(
+          indexedTable,
+          lowerKey,
+          RelationalKey.USER_KEY_MASK,
+          indexBuildCursor);
+    }
+    int rows = 0;
+    boolean exhausted = false;
+    while (status.isOk() && rows < INDEX_BUILD_BATCH_ROWS) {
+      status = session.nextScan(indexBuildCursor, indexBuildRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        exhausted = true;
+        break;
+      }
+      if (status.isOk() && indexBuildRow.row().length() != Long.BYTES) {
+        status = StatusCode.CORRUPTION;
+      }
+      if (status.isOk()) {
+        catalogScratch.clear();
+        status = indexBuildRow.row().copyTo(catalogScratch);
+      }
+      if (status.isOk()) {
+        status = session.ensureIndexedValue(
+            indexStorageTable,
+            catalogScratch.getLong(0),
+            indexBuildRow.key());
+      }
+      if (status.isOk()) {
+        buildLastKey = indexBuildRow.key();
+        rows++;
+      }
+    }
+    if (indexBuildCursor.isActive()) {
+      StatusCode close = session.closeScan(indexBuildCursor);
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    indexBuildCursor.reset();
+    buildBatchFull = status.isOk() && !exhausted && rows == INDEX_BUILD_BATCH_ROWS;
+    if (status.isOk()) {
+      status = session.commitBuildPhase(outcome);
+    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abortBuildPhase(outcome);
       if (!abort.isOk()) {
         return abort;
       }
     }
-    indexBuildCursor.reset();
+    return status;
+  }
+
+  private StatusCode publishUniqueValueIndex(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName,
+      TransactionOutcome outcome) {
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.resolveTable(tableName, indexedTable);
+    }
+    if (status.isOk()
+        && (!indexedTable.hasBuildingUniqueValueIndex()
+            || indexedTable.uniqueValueIndexTableId() != indexStorageTable.tableId())) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(tableName, catalogKey);
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeTable(
+          catalogOutput,
+          indexedTable.tableId(),
+          indexStorageTable.tableId(),
+          TableDefinition.INDEX_READY,
+          tableName);
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeIndex(
+          catalogOutput,
+          indexedTable.tableId(),
+          indexStorageTable.tableId(),
+          TableDefinition.INDEX_READY,
+          indexName);
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    } else {
+      session.releasePersistentSchemaChange();
+    }
+    return status;
+  }
+
+  private StatusCode cleanupUniqueValueIndex(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName,
+      TransactionOutcome outcome) {
+    StatusCode status = StatusCode.OK;
+    boolean complete = false;
+    while (status.isOk() && !complete) {
+      status = session.begin(IsolationLevel.REPEATABLE_READ);
+      if (status.isOk()) {
+        status = session.beginScan(indexStorageTable, indexBuildCursor);
+      }
+      int count = 0;
+      boolean exhausted = false;
+      while (status.isOk() && count < cleanupIndexKeys.length) {
+        status = session.nextScan(indexBuildCursor, indexBuildRow);
+        if (status == StatusCode.CONFLICT) {
+          status = StatusCode.OK;
+          exhausted = true;
+          break;
+        }
+        if (status.isOk()) {
+          cleanupIndexKeys[count++] = indexBuildRow.key();
+        }
+      }
+      if (indexBuildCursor.isActive()) {
+        StatusCode close = session.closeScan(indexBuildCursor);
+        if (status.isOk()) {
+          status = close;
+        }
+      }
+      indexBuildCursor.reset();
+      for (int index = 0; status.isOk() && index < count; index++) {
+        status = session.delete(indexStorageTable, cleanupIndexKeys[index]);
+        cleanupIndexKeys[index] = 0;
+      }
+      if (status.isOk()) {
+        status = session.commitBuildPhase(outcome);
+      } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+        StatusCode abort = session.abortBuildPhase(outcome);
+        if (!abort.isOk()) {
+          status = abort;
+        }
+      }
+      complete = status.isOk() && exhausted;
+    }
+    if (status.isOk()) {
+      status = session.begin(IsolationLevel.SERIALIZABLE);
+    }
+    if (status.isOk()) {
+      status = session.resolveTable(tableName, indexedTable);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(tableName, catalogKey);
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeTable(
+          catalogOutput,
+          indexedTable.tableId(),
+          0,
+          TableDefinition.INDEX_NONE,
+          tableName);
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().delete(catalogKey.key());
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    } else {
+      session.releasePersistentSchemaChange();
+    }
     return status;
   }
 
@@ -169,7 +508,8 @@ public final class RelationalDatabase {
       status = StatusCode.RESOURCE_EXHAUSTED;
     }
     if (status.isOk()) {
-      indexStorageTable.set(this, indexTableId, 0);
+      indexStorageTable.set(
+          this, indexTableId, 0, TableDefinition.INDEX_NONE);
       status = session.beginScan(indexedTable, indexBuildCursor);
     }
     boolean scanActive = status.isOk();
@@ -295,8 +635,11 @@ public final class RelationalDatabase {
     return status.isOk() ? new RelationalSession(this, result.session()) : null;
   }
 
-  synchronized StatusCode enterTransaction() {
-    if (schemaChangeOwner != null) {
+  synchronized StatusCode enterTransaction(RelationalSession requester) {
+    if (requester == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (schemaChangeOwner != null && schemaChangeOwner != requester) {
       return StatusCode.RETRY;
     }
     activeTransactions++;
@@ -322,6 +665,19 @@ public final class RelationalDatabase {
       }
       schemaChangeOwner = null;
     }
+  }
+
+  private synchronized StatusCode publishBuildingSchema(RelationalSession owner) {
+    if (schemaChangeOwner != owner) {
+      return StatusCode.NOT_OWNER;
+    }
+    schemaVersion++;
+    indexStorageTable.set(
+        this,
+        indexedTable.uniqueValueIndexTableId(),
+        0,
+        TableDefinition.INDEX_NONE);
+    return StatusCode.OK;
   }
 
   long schemaVersion() {
