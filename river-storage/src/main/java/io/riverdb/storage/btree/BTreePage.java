@@ -167,6 +167,22 @@ public final class BTreePage {
     return StatusCode.OK;
   }
 
+  public static StatusCode updateLeaf(ByteBuffer page, long key, int rowId) {
+    if (!hasCapacity(page)
+        || key == Long.MAX_VALUE
+        || rowId <= 0
+        || getInt(page, 12) != TYPE_LEAF) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int count = getInt(page, 16);
+    int index = insertionPoint(page, key, count);
+    if (index >= count || getLong(page, entryOffset(index)) != key) {
+      return StatusCode.CONFLICT;
+    }
+    putInt(page, entryOffset(index) + 8, rowId);
+    return StatusCode.OK;
+  }
+
   public static StatusCode splitLeaf(
       ByteBuffer left,
       ByteBuffer right,

@@ -251,6 +251,143 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void mixedMutationsPreserveOldSnapshotAndRecoverBeforeFlush(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 6);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(manager, table);
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(60, row(600)));
+    assertEquals(StatusCode.OK, seed.insert(61, row(610)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+
+    IndexedTransactionSession oldReader = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, oldReader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.update(60, row(601)));
+    assertEquals(StatusCode.OK, writer.delete(61));
+    assertEquals(StatusCode.OK, writer.insert(62, row(620)));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, writer.fetchByKey(60, fetched));
+    assertEquals(601, value(fetched));
+    assertEquals(StatusCode.CONFLICT, writer.fetchByKey(61, fetched));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    long mutatedAt = outcome.commitSequence();
+
+    assertEquals(StatusCode.OK, oldReader.fetchByKey(60, fetched));
+    assertEquals(600, value(fetched));
+    assertEquals(StatusCode.OK, oldReader.fetchByKey(61, fetched));
+    assertEquals(610, value(fetched));
+    assertEquals(StatusCode.CONFLICT, oldReader.fetchByKey(62, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(60, fetched));
+    assertEquals(601, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(61, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(62, fetched));
+    assertEquals(620, value(fetched));
+    assertEquals(StatusCode.OK, oldReader.abort(outcome));
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt - 1, 60, fetched));
+    assertEquals(600, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt - 1, 61, fetched));
+    assertEquals(610, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt, 60, fetched));
+    assertEquals(601, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(mutatedAt, 61, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt, 62, fetched));
+    assertEquals(620, value(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void staleRepeatableReadCannotOverwriteNewerVersion(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(manager, table);
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(75, row(750)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+    IndexedTransactionSession stale = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, stale.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.update(75, row(751)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.CONFLICT, stale.update(75, row(752)));
+    assertEquals(StatusCode.OK, stale.abort(outcome));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(75, fetched));
+    assertEquals(751, value(fetched));
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
+  void deleteThenReinsertPreservesEachSnapshotVersion(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 7);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(manager, table);
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(85, row(850)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+    long insertedAt = outcome.commitSequence();
+
+    IndexedTransactionSession beforeDelete = session(manager, table);
+    assertEquals(StatusCode.OK, beforeDelete.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedTransactionSession deleter = session(manager, table);
+    assertEquals(StatusCode.OK, deleter.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, deleter.delete(85));
+    assertEquals(StatusCode.OK, deleter.commit(outcome));
+    long deletedAt = outcome.commitSequence();
+
+    IndexedTransactionSession afterDelete = session(manager, table);
+    assertEquals(StatusCode.OK, afterDelete.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedTransactionSession reinserter = session(manager, table);
+    assertEquals(StatusCode.OK, reinserter.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, reinserter.insert(85, row(851)));
+    assertEquals(StatusCode.OK, reinserter.commit(outcome));
+    long reinsertedAt = outcome.commitSequence();
+
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, beforeDelete.fetchByKey(85, fetched));
+    assertEquals(850, value(fetched));
+    assertEquals(StatusCode.CONFLICT, afterDelete.fetchByKey(85, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(85, fetched));
+    assertEquals(851, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(insertedAt, 85, fetched));
+    assertEquals(850, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(deletedAt, 85, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(reinsertedAt, 85, fetched));
+    assertEquals(851, value(fetched));
+    assertEquals(StatusCode.OK, beforeDelete.abort(outcome));
+    assertEquals(StatusCode.OK, afterDelete.abort(outcome));
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void commitsDistinctTransactionsFromConcurrentSessions(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

@@ -127,6 +127,27 @@ final class IndexedTableAllocationTest {
         batchAllocated <= 512,
         "warmed two-write transaction allocated bytes: " + batchAllocated);
     assertEquals(0, manager.activeLockCount());
+
+    for (int value = 500; value < 508; value++) {
+      exerciseTwoUpdates(session, row, outcome, value);
+    }
+    writeSetCopiedBefore = session.copiedWriteSetBytes();
+    walCopiedBefore = table.walCopyBytes();
+    long stagedBeforeUpdate = table.stagedCopyBytes();
+    before = bean.getThreadAllocatedBytes(threadId);
+    for (int value = 508; value < 516; value++) {
+      exerciseTwoUpdates(session, row, outcome, value);
+    }
+    long updateAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(
+        16L * Long.BYTES,
+        session.copiedWriteSetBytes() - writeSetCopiedBefore);
+    assertEquals(16L * Long.BYTES, table.walCopyBytes() - walCopiedBefore);
+    assertEquals(stagedBeforeUpdate, table.stagedCopyBytes());
+    assertTrue(
+        updateAllocated <= 512,
+        "warmed two-update transaction allocated bytes: " + updateAllocated);
+    assertEquals(0, manager.activeLockCount());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -161,6 +182,24 @@ final class IndexedTableAllocationTest {
     row.position(0);
     row.limit(Long.BYTES);
     allocationGuard += session.insert(key + 1L, row).ordinal();
+    allocationGuard += session.commit(outcome).ordinal();
+    allocationGuard += outcome.commitSequence();
+  }
+
+  private static void exerciseTwoUpdates(
+      IndexedTransactionSession session,
+      ByteBuffer row,
+      TransactionOutcome outcome,
+      int value) {
+    allocationGuard += session.begin(IsolationLevel.REPEATABLE_READ).ordinal();
+    row.putLong(0, value);
+    row.position(0);
+    row.limit(Long.BYTES);
+    allocationGuard += session.update(416, row).ordinal();
+    row.putLong(0, value + 1L);
+    row.position(0);
+    row.limit(Long.BYTES);
+    allocationGuard += session.update(417, row).ordinal();
     allocationGuard += session.commit(outcome).ordinal();
     allocationGuard += outcome.commitSequence();
   }

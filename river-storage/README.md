@@ -3,14 +3,17 @@
 The first indexed-table format is deliberately narrow and versioned:
 
 - B+tree leaf, internal, and root-metadata payloads are version 1.
-- Local WAL format `1002/1` records compact committed single inserts and
-  bounded insert batches. Bootstrap and structural leaf splits use atomic
-  groups of checksummed 16 KiB page images.
+- Local WAL format `1002/1` records compact committed single inserts, bounded
+  insert batches, and mixed insert/update/delete version batches. Bootstrap
+  and structural leaf splits use atomic groups of checksummed 16 KiB page
+  images.
 - Unknown operation, page, or payload versions fail closed as corruption; no
   implicit upgrade is attempted.
 - Recovery currently replays retained WAL from the indexed-table bootstrap
   record. WAL truncation for this format is forbidden until a checkpoint
   records an independently durable page-set base and recovery boundary.
 
-Phase 1 entries are single-version. MVCC index entries, deletion, merge, and
-page reuse are later transaction-stage formats and must use new versions.
+Heap updates are append-only versions; the B+tree points to the newest row and
+WAL-reconstructed previous-row links provide snapshot traversal. Deletes are
+tombstone versions and a later insert can reuse the key without hiding older
+snapshots. Version pruning, index merge, and page reuse remain later formats.

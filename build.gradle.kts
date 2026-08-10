@@ -238,6 +238,8 @@ val lockModeDescriptor = "Lio/riverdb/tx/api/lock/LockMode;"
 val lockScopeDescriptor = "Lio/riverdb/tx/api/lock/LockScope;"
 val lockTokenDescriptor = "Lio/riverdb/tx/api/lock/LockToken;"
 val indexedCommitResultDescriptor = "Lio/riverdb/engine/table/IndexedCommitResult;"
+val indexedMutationTargetDescriptor = "Lio/riverdb/engine/table/IndexedMutationTarget;"
+val indexedPageStoreDescriptor = "Lio/riverdb/engine/page/IndexedPageStore;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val longArrayDescriptor = "[J"
@@ -471,6 +473,11 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
+    "updateLeaf",
+    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.storage.btree.BTreePage",
     "splitLeaf",
     "($byteBufferDescriptor$byteBufferDescriptor"
         + "IJI$btreeSplitResultDescriptor)$statusCodeDescriptor"
@@ -493,6 +500,13 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.engine.page.IndexedPageStore",
+    "commitMutationBatch",
+    "(JJ$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+        + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
+        + "$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
     "applyInsertOperation",
     "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
@@ -510,6 +524,36 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.page.IndexedPageStore",
     "countEarlierBatchEntriesInLeaf",
     "($byteBufferDescriptor" + "II)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "applyMutationBatchOperation",
+    "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "mutationContainsEarlierKey",
+    "($byteBufferDescriptor" + "IJ)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "countEarlierMutationInsertsInLeaf",
+    "($byteBufferDescriptor" + "II)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "rowCommitSequence",
+    "(I)J"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "previousRowId",
+    "(I)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "isDeletedRow",
+    "(I)Z"
   ),
   hotMethod(
     "io.riverdb.engine.page.IndexedPageStore",
@@ -539,6 +583,38 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTable",
+    "commitMutations",
+    "(J$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+        + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
+        + "$indexedCommitResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "prepareMutation",
+    "(JJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "prepareInsert",
+    "(JJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedMutationTarget",
+    "rowId",
+    "()I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedMutationTarget",
+    "set",
+    "(I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedMutationTarget",
+    "reset",
+    "()V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
     "insertCommitted",
     "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
@@ -551,6 +627,11 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.table.IndexedTable",
     "findOperationLeafPageId",
     "(J)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "versionRowsInLeaf",
+    "($indexedPageStoreDescriptor$byteBufferDescriptor" + "I)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTable",
@@ -657,6 +738,21 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
+    "update",
+    "(J$byteBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "delete",
+    "(J)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "appendPending",
+    "(IJI$byteBufferDescriptor" + "IIZ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
     "fetchByKey",
     "(J$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
@@ -679,6 +775,21 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "findHeldLock",
     "(J)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "acquireExclusiveKey",
+    "(J)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "refreshForWrite",
+    "()$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "containsNonInsertMutation",
+    "()Z"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

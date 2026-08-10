@@ -15,6 +15,10 @@ import java.nio.ByteBuffer;
 
 /** Single-owner heap plus authoritative unique long-key B+tree committed atomically. */
 public final class IndexedTable implements CommitSequenceSource {
+  static final int MUTATION_INSERT = 1;
+  static final int MUTATION_UPDATE = 2;
+  static final int MUTATION_DELETE = 3;
+
   private static final int HEAP_PAGE_ID = 1;
   private static final int ROOT_META_PAGE_ID = 2;
   private static final int INITIAL_LEAF_PAGE_ID = 3;
@@ -215,6 +219,38 @@ public final class IndexedTable implements CommitSequenceSource {
     return status;
   }
 
+  public synchronized StatusCode commitMutations(
+      long transactionId,
+      int[] operations,
+      long[] keys,
+      int[] previousRowIds,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int mutationCount,
+      IndexedCommitResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    long commitSequence = store.nextCommitSequence();
+    StatusCode status = store.commitMutationBatch(
+        transactionId,
+        commitSequence,
+        operations,
+        keys,
+        previousRowIds,
+        rows,
+        rowStride,
+        rowLengths,
+        mutationCount,
+        heapInsert);
+    if (status.isOk()) {
+      result.set(heapInsert.rowId(), commitSequence);
+    }
+    return status;
+  }
+
   public synchronized StatusCode insertCommitted(
       long transactionId,
       long commitSequence,
@@ -295,15 +331,75 @@ public final class IndexedTable implements CommitSequenceSource {
     if (!status.isOk()) {
       return status;
     }
-    long rowCommitSequence = store.rowCommitSequence(indexLookup.rowId());
-    if (rowCommitSequence <= 0) {
+    int rowId = indexLookup.rowId();
+    while (rowId > 0) {
+      long rowCommitSequence = store.rowCommitSequence(rowId);
+      if (rowCommitSequence <= 0) {
+        return StatusCode.CORRUPTION;
+      }
+      if (rowCommitSequence <= visibleCommitSequence) {
+        if (store.isDeletedRow(rowId)) {
+          result.reset();
+          return StatusCode.CONFLICT;
+        }
+        return HeapPage.fetch(store.currentPayload(HEAP_PAGE_ID), rowId, result);
+      }
+      rowId = store.previousRowId(rowId);
+    }
+    result.reset();
+    return StatusCode.CONFLICT;
+  }
+
+  public synchronized StatusCode prepareMutation(
+      long visibleCommitSequence,
+      long key,
+      IndexedMutationTarget result) {
+    if (visibleCommitSequence < 0 || key == Long.MAX_VALUE || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = lookupRowId(key);
+    if (!status.isOk()) {
+      return status;
+    }
+    int latestRowId = indexLookup.rowId();
+    long latestCommitSequence = store.rowCommitSequence(latestRowId);
+    if (latestCommitSequence <= 0) {
       return StatusCode.CORRUPTION;
     }
-    if (rowCommitSequence > visibleCommitSequence) {
-      result.reset();
+    if (latestCommitSequence > visibleCommitSequence || store.isDeletedRow(latestRowId)) {
       return StatusCode.CONFLICT;
     }
-    return HeapPage.fetch(store.currentPayload(HEAP_PAGE_ID), indexLookup.rowId(), result);
+    result.set(latestRowId);
+    return StatusCode.OK;
+  }
+
+  public synchronized StatusCode prepareInsert(
+      long visibleCommitSequence,
+      long key,
+      IndexedMutationTarget result) {
+    if (visibleCommitSequence < 0 || key == Long.MAX_VALUE || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = lookupRowId(key);
+    if (status == StatusCode.CONFLICT) {
+      return StatusCode.OK;
+    }
+    if (!status.isOk()) {
+      return status;
+    }
+    int latestRowId = indexLookup.rowId();
+    long latestCommitSequence = store.rowCommitSequence(latestRowId);
+    if (latestCommitSequence <= 0) {
+      return StatusCode.CORRUPTION;
+    }
+    if (latestCommitSequence > visibleCommitSequence
+        || !store.isDeletedRow(latestRowId)) {
+      return StatusCode.CONFLICT;
+    }
+    result.set(latestRowId);
+    return StatusCode.OK;
   }
 
   public synchronized int rowCount() {
@@ -479,14 +575,16 @@ public final class IndexedTable implements CommitSequenceSource {
     ByteBuffer root = store.currentPayload(rootPageId);
     int heapRows = HeapPage.rowCount(heap);
     if (BTreePage.type(root) == BTreePage.TYPE_LEAF) {
-      return BTreePage.rightSiblingPageId(root) == 0
-          && BTreePage.highKey(root) == Long.MAX_VALUE
-          && BTreePage.entryCount(root) == heapRows
-          ? StatusCode.OK : StatusCode.CORRUPTION;
+      if (BTreePage.rightSiblingPageId(root) != 0
+          || BTreePage.highKey(root) != Long.MAX_VALUE) {
+        return StatusCode.CORRUPTION;
+      }
+      int versionRows = versionRowsInLeaf(store, root, heapRows);
+      return versionRows == heapRows ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     int separatorCount = BTreePage.entryCount(root);
     int childPageId = BTreePage.firstChildPageId(root);
-    int indexedRows = 0;
+    int versionRows = 0;
     for (int childIndex = 0; childIndex <= separatorCount; childIndex++) {
       ByteBuffer child = store.currentPayload(childPageId);
       if (child == null || BTreePage.type(child) != BTreePage.TYPE_LEAF) {
@@ -496,7 +594,11 @@ public final class IndexedTable implements CommitSequenceSource {
       if (childEntries <= 0) {
         return StatusCode.CORRUPTION;
       }
-      indexedRows += childEntries;
+      int childVersionRows = versionRowsInLeaf(store, child, heapRows);
+      if (childVersionRows < 0) {
+        return StatusCode.CORRUPTION;
+      }
+      versionRows += childVersionRows;
       if (childIndex == separatorCount) {
         if (BTreePage.rightSiblingPageId(child) != 0
             || BTreePage.highKey(child) != Long.MAX_VALUE) {
@@ -517,6 +619,38 @@ public final class IndexedTable implements CommitSequenceSource {
       }
       childPageId = rightChildPageId;
     }
-    return indexedRows == heapRows ? StatusCode.OK : StatusCode.CORRUPTION;
+    return versionRows == heapRows ? StatusCode.OK : StatusCode.CORRUPTION;
+  }
+
+  private static int versionRowsInLeaf(
+      IndexedPageStore store,
+      ByteBuffer leaf,
+      int heapRows) {
+    int versionRows = 0;
+    int entryCount = BTreePage.entryCount(leaf);
+    for (int entry = 0; entry < entryCount; entry++) {
+      int rowId = BTreePage.valueAt(leaf, entry);
+      long newerCommitSequence = 0;
+      while (rowId > 0) {
+        long commitSequence = store.rowCommitSequence(rowId);
+        if (rowId > heapRows
+            || commitSequence <= 0
+            || (newerCommitSequence != 0
+                && commitSequence >= newerCommitSequence)) {
+          return -1;
+        }
+        int previousRowId = store.previousRowId(rowId);
+        if (previousRowId < 0 || previousRowId >= rowId) {
+          return -1;
+        }
+        versionRows++;
+        if (versionRows > heapRows) {
+          return -1;
+        }
+        newerCommitSequence = commitSequence;
+        rowId = previousRowId;
+      }
+    }
+    return versionRows;
   }
 }
