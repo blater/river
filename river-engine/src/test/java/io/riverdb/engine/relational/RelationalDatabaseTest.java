@@ -153,9 +153,9 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, database.createSession(sessions));
     RelationalSession session = sessions.session();
     TransactionOutcome outcome = new TransactionOutcome();
-    for (int first = 0; first < 120; first += 40) {
+    for (int first = 0; first < 300; first += 40) {
       assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-      for (int key = first; key < first + 40; key++) {
+      for (int key = first; key < Math.min(first + 40, 300); key++) {
         assertEquals(StatusCode.OK, session.insertLong(events, key, key * 10L, row(key * 10L)));
       }
       assertEquals(StatusCode.OK, session.commit(outcome));
@@ -201,8 +201,8 @@ final class RelationalDatabaseTest {
     assertEquals(0, indexed.key());
     assertEquals(StatusCode.OK, session.fetchByUniqueValue(events, 470, indexed));
     assertEquals(47, indexed.key());
-    assertEquals(StatusCode.OK, session.fetchByUniqueValue(events, 1190, indexed));
-    assertEquals(119, indexed.key());
+    assertEquals(StatusCode.OK, session.fetchByUniqueValue(events, 2990, indexed));
+    assertEquals(299, indexed.key());
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
   }
