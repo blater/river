@@ -234,6 +234,9 @@ val commitSequenceSourceDescriptor = "Lio/riverdb/tx/CommitSequenceSource;"
 val transactionParticipantDescriptor = "Lio/riverdb/tx/TransactionCommitParticipant;"
 val transactionOutcomeDescriptor = "Lio/riverdb/tx/api/TransactionOutcome;"
 val isolationLevelDescriptor = "Lio/riverdb/tx/api/IsolationLevel;"
+val lockModeDescriptor = "Lio/riverdb/tx/api/lock/LockMode;"
+val lockScopeDescriptor = "Lio/riverdb/tx/api/lock/LockScope;"
+val lockTokenDescriptor = "Lio/riverdb/tx/api/lock/LockToken;"
 val indexedCommitResultDescriptor = "Lio/riverdb/engine/table/IndexedCommitResult;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
@@ -541,6 +544,32 @@ val liveHotPathMethods = setOf(
     "io.riverdb.tx.TransactionManager",
     "abort",
     "($transactionDescriptor$transactionOutcomeDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.LockManager",
+    "tryAcquire",
+    "(J$lockScopeDescriptor" + "JJ$lockModeDescriptor"
+        + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.LockManager",
+    "release",
+    "($lockTokenDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.LockManager",
+    "conflicts",
+    "(II)Z"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "tryAcquireKey",
+    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "release",
+    "($lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

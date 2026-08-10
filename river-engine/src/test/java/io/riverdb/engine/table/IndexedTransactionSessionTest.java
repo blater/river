@@ -73,18 +73,47 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, first.insert(9, row(91)));
-    assertEquals(StatusCode.OK, second.insert(9, row(92)));
+    assertEquals(StatusCode.RETRY, second.insert(9, row(92)));
+    assertEquals(1, manager.activeLockCount());
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, first.commit(outcome));
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(StatusCode.OK, second.insert(9, row(92)));
     assertEquals(StatusCode.CONFLICT, second.commit(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
     assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.activeLockCount());
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey(9, fetched));
     assertEquals(91, value(fetched));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session(manager, table).begin(IsolationLevel.SERIALIZABLE));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void abortDiscardsPendingInsertAndReleasesKey(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession first = session(manager, table);
+    IndexedTransactionSession second = session(manager, table);
+    assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, first.insert(17, row(171)));
+    assertEquals(StatusCode.RETRY, second.insert(17, row(172)));
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, first.abort(outcome));
+    assertEquals(TransactionState.ABORTED, outcome.state());
+    assertEquals(StatusCode.OK, second.insert(17, row(172)));
+    assertEquals(StatusCode.OK, second.commit(outcome));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(17, fetched));
+    assertEquals(172, value(fetched));
+    assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
   }
 

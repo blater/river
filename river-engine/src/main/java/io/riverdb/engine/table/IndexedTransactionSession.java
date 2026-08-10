@@ -8,15 +8,19 @@ import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
+import io.riverdb.tx.api.lock.LockToken;
 import java.nio.ByteBuffer;
 
 /** One reusable transaction/session write set over the first indexed table. */
 public final class IndexedTransactionSession implements TransactionCommitParticipant {
+  private static final long TABLE_LOCK_ID = 1;
+
   private final TransactionManager manager;
   private final IndexedTable table;
   private final Transaction transaction;
   private final ByteBuffer pendingRow;
   private final IndexedCommitResult commitResult = new IndexedCommitResult();
+  private final LockToken keyLock = new LockToken();
   private long pendingKey;
   private long committedSequence;
   private long copiedWriteSetBytes;
@@ -51,6 +55,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     pendingInsert = false;
     pendingRowBytes = 0;
     committedSequence = 0;
+    StatusCode status = keyLock.reset();
+    if (!status.isOk()) {
+      return status;
+    }
     return manager.begin(isolationLevel, table, transaction);
   }
 
@@ -62,6 +70,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         || !row.hasRemaining()
         || row.remaining() > pendingRow.capacity()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = manager.tryAcquireKey(
+        transaction, TABLE_LOCK_ID, key, keyLock);
+    if (!status.isOk()) {
+      return status;
     }
     int sourceStart = row.position();
     pendingRowBytes = row.remaining();
@@ -101,6 +114,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (!transaction.isActiveHandle()) {
       pendingInsert = false;
       pendingRowBytes = 0;
+      StatusCode release = manager.release(keyLock);
+      if (status.isOk() && !release.isOk()) {
+        return release;
+      }
     }
     return status;
   }
@@ -110,6 +127,12 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (status.isOk()) {
       pendingInsert = false;
       pendingRowBytes = 0;
+      if (keyLock.isActive()) {
+        StatusCode release = manager.release(keyLock);
+        if (!release.isOk()) {
+          return release;
+        }
+      }
     }
     return status;
   }

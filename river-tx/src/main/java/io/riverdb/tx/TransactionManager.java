@@ -4,12 +4,16 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
+import io.riverdb.tx.api.lock.LockMode;
+import io.riverdb.tx.api.lock.LockScope;
+import io.riverdb.tx.api.lock.LockToken;
 
 /** Bounded lifecycle manager and commit/snapshot publication barrier. */
 public final class TransactionManager {
   private final long databaseHigh;
   private final long databaseLow;
   private final long[] activeTransactionIds;
+  private final LockManager locks;
   private int activeTransactionCount;
   private long nextTransactionId;
   private long nextSnapshotSequence = 1;
@@ -23,6 +27,7 @@ public final class TransactionManager {
     databaseLow = databaseIncarnationLow;
     nextTransactionId = firstTransactionId;
     activeTransactionIds = new long[maximumActive];
+    locks = new LockManager(maximumActive * 8);
   }
 
   public int maximumActiveTransactions() {
@@ -31,6 +36,33 @@ public final class TransactionManager {
 
   public synchronized int activeTransactionCount() {
     return activeTransactionCount;
+  }
+
+  public int activeLockCount() {
+    return locks.activeLockCount();
+  }
+
+  public synchronized StatusCode tryAcquireKey(
+      Transaction transaction,
+      long tableId,
+      long key,
+      LockToken token) {
+    if (!validActive(transaction) || key == Long.MAX_VALUE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return locks.tryAcquire(
+        transaction.transactionId(),
+        LockScope.KEY,
+        tableId,
+        key,
+        LockMode.EXCLUSIVE,
+        0,
+        0,
+        token);
+  }
+
+  public StatusCode release(LockToken token) {
+    return locks.release(token);
   }
 
   public synchronized StatusCode begin(

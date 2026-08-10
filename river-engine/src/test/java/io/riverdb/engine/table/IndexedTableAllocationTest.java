@@ -105,6 +105,7 @@ final class IndexedTableAllocationTest {
     assertTrue(
         transactionAllocated <= 512,
         "warmed transaction commit allocated bytes: " + transactionAllocated);
+    assertEquals(0, manager.activeLockCount());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
