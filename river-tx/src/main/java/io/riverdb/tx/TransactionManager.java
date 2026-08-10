@@ -224,6 +224,114 @@ public final class TransactionManager {
     return StatusCode.OK;
   }
 
+  /** Moves a validated fixed group to COMMITTING while retaining it in captured active sets. */
+  public synchronized StatusCode beginCommitGroup(
+      Transaction[] transactions,
+      int count) {
+    if (transactions == null || count <= 0 || count > transactions.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < count; index++) {
+      if (!validActive(transactions[index])) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transactions[index]) {
+          return StatusCode.CONFLICT;
+        }
+      }
+    }
+    for (int index = 0; index < count; index++) {
+      transactions[index].transition(TransactionState.COMMITTING, 0, false);
+    }
+    return StatusCode.OK;
+  }
+
+  /** Publishes one forced group and its transaction outcomes as one snapshot-barrier action. */
+  public synchronized StatusCode publishCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      long[] commitSequences,
+      int count,
+      TransactionGroupCommitParticipant participant) {
+    if (!validCommitGroup(transactions, results, commitSequences, count)
+        || participant == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long previousCommitSequence = 0;
+    for (int index = 0; index < count; index++) {
+      long commitSequence = commitSequences[index];
+      if (commitSequence <= previousCommitSequence
+          || commitSequence <= transactions[index].snapshot().visibleCommitSequence()) {
+        return failCommitGroup(
+            transactions,
+            results,
+            count,
+            StatusCode.INVARIANT_BROKEN);
+      }
+      previousCommitSequence = commitSequence;
+    }
+    StatusCode status = participant.publishForcedGroup();
+    if (!status.isOk()) {
+      return failCommitGroup(transactions, results, count, status);
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      removeActive(transaction.transactionId());
+      transaction.transition(
+          TransactionState.COMMITTED,
+          commitSequences[index],
+          true);
+      results[index].set(
+          databaseHigh,
+          databaseLow,
+          transaction.transactionId(),
+          TransactionState.COMMITTED,
+          commitSequences[index]);
+    }
+    return StatusCode.OK;
+  }
+
+  /** Finalizes a group that could not establish or publish its durability outcome. */
+  public synchronized StatusCode failCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (failure == null
+        || failure.isOk()
+        || transactions == null
+        || results == null
+        || count <= 0
+        || count > transactions.length
+        || count > results.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    TransactionState state = indeterminate(failure)
+        ? TransactionState.INDETERMINATE : TransactionState.ABORTED;
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      if (transaction == null
+          || !transaction.isOwnedBy(this)
+          || transaction.state() != TransactionState.COMMITTING
+          || results[index] == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      removeActive(transaction.transactionId());
+      transaction.transition(state, 0, true);
+      results[index].set(
+          databaseHigh,
+          databaseLow,
+          transaction.transactionId(),
+          state,
+          0);
+    }
+    return failure;
+  }
+
   public synchronized StatusCode commitReadOnly(
       Transaction transaction,
       TransactionOutcome result) {
@@ -333,6 +441,33 @@ public final class TransactionManager {
     return transaction != null
         && transaction.isOwnedBy(this)
         && transaction.state() == TransactionState.ACTIVE;
+  }
+
+  private boolean validCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      long[] commitSequences,
+      int count) {
+    if (transactions == null
+        || results == null
+        || commitSequences == null
+        || count <= 0
+        || count > transactions.length
+        || count > results.length
+        || count > commitSequences.length) {
+      return false;
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      if (transaction == null
+          || !transaction.isOwnedBy(this)
+          || transaction.state() != TransactionState.COMMITTING
+          || results[index] == null) {
+        return false;
+      }
+      results[index].reset();
+    }
+    return true;
   }
 
   private void removeActive(long transactionId) {

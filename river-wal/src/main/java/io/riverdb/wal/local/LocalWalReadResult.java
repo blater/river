@@ -17,7 +17,9 @@ public final class LocalWalReadResult {
     return nextOffset;
   }
 
-  /** Provider-owned read view, valid until the next read/recovery operation on this WAL. */
+  /**
+   * Provider-owned view, valid until the next ordinary read or until the forced batch is released.
+   */
   public ByteBuffer payload() {
     return payload;
   }

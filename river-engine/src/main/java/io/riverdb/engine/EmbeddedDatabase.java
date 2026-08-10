@@ -14,6 +14,7 @@ import io.riverdb.engine.page.IndexedPageStore;
 import io.riverdb.engine.page.IndexedPageStoreOpenResult;
 import io.riverdb.engine.table.IndexedTable;
 import io.riverdb.engine.table.IndexedTableOpenResult;
+import io.riverdb.engine.table.IndexedGroupCommitCoordinator;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedVacuum;
 import io.riverdb.format.control.ControlFile;
@@ -35,6 +36,7 @@ public final class EmbeddedDatabase {
   private final LocalWal wal;
   private final IndexedTable table;
   private final TransactionManager transactions;
+  private final IndexedGroupCommitCoordinator groupCommit;
   private final IndexedVacuum vacuum;
   private final EmbeddedCheckpoint checkpoint;
   private boolean closed;
@@ -55,6 +57,7 @@ public final class EmbeddedDatabase {
         openedWal.databaseIncarnation().low(),
         openedTable.nextTransactionId(),
         maximumActiveTransactions);
+    groupCommit = new IndexedGroupCommitCoordinator(transactions, openedTable);
     vacuum = new IndexedVacuum(transactions, table);
     checkpoint = new EmbeddedCheckpoint(
         transactions,
@@ -107,7 +110,8 @@ public final class EmbeddedDatabase {
     if (checkpoint.isFenced()) {
       return StatusCode.FENCED;
     }
-    result.set(new IndexedTransactionSession(transactions, table, maximumRowBytes));
+    result.set(new IndexedTransactionSession(
+        transactions, table, maximumRowBytes, groupCommit));
     return StatusCode.OK;
   }
 

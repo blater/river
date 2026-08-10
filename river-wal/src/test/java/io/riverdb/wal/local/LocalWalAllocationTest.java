@@ -81,6 +81,51 @@ final class LocalWalAllocationTest {
     assertEquals(StatusCode.OK, directory.close());
   }
 
+  @Test
+  void warmedBatchedAppendForceAndBorrowedReadAllocateNothing(@TempDir Path root) {
+    ThreadMXBean bean = allocationBean();
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        NioDurableDirectory.openExisting(
+            root,
+            new FatalStateFence(),
+            new NioIoCounters(),
+            4,
+            directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    LocalWalOpenResult open = new LocalWalOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        LocalWal.open(
+            directory,
+            DatabaseIncarnation.of(3, 4),
+            WalGeneration.of(1),
+            open));
+    LocalWal wal = open.wal();
+    LocalWalReservation reservation = new LocalWalReservation();
+    LocalWalAppendResult appended = new LocalWalAppendResult();
+    LocalWalForceResult forced = new LocalWalForceResult();
+    LocalWalReadResult read = new LocalWalReadResult();
+
+    for (int batch = 0; batch < 20; batch++) {
+      exerciseBatch(wal, reservation, appended, forced, read, batch);
+    }
+    long threadId = Thread.currentThread().threadId();
+    long before = bean.getThreadAllocatedBytes(threadId);
+    for (int batch = 20; batch < 60; batch++) {
+      exerciseBatch(wal, reservation, appended, forced, read, batch);
+    }
+    long allocated = bean.getThreadAllocatedBytes(threadId) - before;
+
+    assertEquals(0, wal.copiedPayloadBytes());
+    assertTrue(
+        allocated <= 512,
+        "warmed production WAL batch allocated bytes: " + allocated);
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
   private static void exerciseRead(
       LocalWal wal,
       long offset,
@@ -99,6 +144,33 @@ final class LocalWalAllocationTest {
     reservation.writablePayload().putLong(value);
     allocationGuard += wal.publish(reservation, value, 0, 0, 1, 1, appended).ordinal();
     allocationGuard += appended.endOffset();
+  }
+
+  private static void exerciseBatch(
+      LocalWal wal,
+      LocalWalReservation reservation,
+      LocalWalAppendResult appended,
+      LocalWalForceResult forced,
+      LocalWalReadResult read,
+      long batch) {
+    for (int index = 0; index < 4; index++) {
+      allocationGuard += wal.reserve(Long.BYTES, reservation).ordinal();
+      reservation.writablePayload().putLong((batch << 2) + index);
+      allocationGuard += wal.appendUnforced(
+          reservation,
+          batch + 1,
+          0,
+          0,
+          1,
+          1,
+          appended).ordinal();
+    }
+    allocationGuard += wal.forcePending(forced).ordinal();
+    for (int index = 0; index < 4; index++) {
+      allocationGuard += wal.readForcedRecord(index, read).ordinal();
+      allocationGuard += read.payload().getLong(0);
+    }
+    allocationGuard += wal.releaseForcedBatch().ordinal();
   }
 
   private static ThreadMXBean allocationBean() {

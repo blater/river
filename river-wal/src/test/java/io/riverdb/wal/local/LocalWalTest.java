@@ -7,6 +7,7 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
@@ -117,6 +118,61 @@ final class LocalWalTest {
   }
 
   @Test
+  void appendsSeveralRecordsBeforeOneDurableForce(@TempDir Path root) {
+    NioIoCounters counters = new NioIoCounters();
+    NioDurableDirectory directory = openDirectory(root, counters);
+    LocalWal wal = openWal(directory);
+    long initialForces = counters.forceCalls();
+    LocalWalReservation reservation = new LocalWalReservation();
+    LocalWalAppendResult appended = new LocalWalAppendResult();
+    long firstStart = 0;
+    for (int index = 0; index < 3; index++) {
+      assertEquals(StatusCode.OK, wal.reserve(Long.BYTES, reservation));
+      reservation.writablePayload().putLong(index + 10L);
+      assertEquals(
+          StatusCode.OK,
+          wal.appendUnforced(reservation, index + 20L, index + 1L, 1, 7, 1, appended));
+      if (index == 0) {
+        firstStart = appended.startOffset();
+      }
+      assertEquals(WalFileHeaderCodec.HEADER_BYTES, wal.durableEnd());
+      assertEquals(0, wal.currentCommitSequence());
+      assertEquals(
+          StatusCode.INVALID_EXTERNAL_INPUT,
+          wal.read(firstStart, new LocalWalReadResult()));
+    }
+    assertEquals(StatusCode.CONFLICT, wal.close());
+    assertEquals(initialForces, counters.forceCalls());
+    LocalWalForceResult forced = new LocalWalForceResult();
+    assertEquals(StatusCode.OK, wal.forcePending(forced));
+    assertEquals(3, forced.recordCount());
+    assertEquals(firstStart, forced.startOffset());
+    assertEquals(appended.endOffset(), forced.durableEnd());
+    assertEquals(3, forced.commitSequence());
+    assertEquals(appended.endOffset(), wal.durableEnd());
+    assertEquals(3, wal.currentCommitSequence());
+    assertEquals(initialForces + 1, counters.forceCalls());
+
+    LocalWalReadResult forcedRead = new LocalWalReadResult();
+    for (int index = 0; index < 3; index++) {
+      assertEquals(StatusCode.OK, wal.readForcedRecord(index, forcedRead));
+      assertEquals(index + 10L, forcedRead.payload().getLong(0));
+    }
+    assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+
+    long offset = firstStart;
+    LocalWalReadResult read = new LocalWalReadResult();
+    for (int index = 0; index < 3; index++) {
+      assertEquals(StatusCode.OK, wal.read(offset, read));
+      assertEquals(index + 10L, read.payload().getLong(0));
+      assertEquals(index + 1L, read.header().commitSequence());
+      offset = read.nextOffset();
+    }
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
   void enforcesCommitSequenceOrderWithoutConsumingReservation(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
@@ -155,13 +211,17 @@ final class LocalWalTest {
   }
 
   private static NioDurableDirectory openDirectory(Path root) {
+    return openDirectory(root, new NioIoCounters());
+  }
+
+  private static NioDurableDirectory openDirectory(Path root, NioIoCounters counters) {
     NioDirectoryOpenResult result = new NioDirectoryOpenResult();
     assertEquals(
         StatusCode.OK,
         NioDurableDirectory.openExisting(
             root,
             new FatalStateFence(),
-            new NioIoCounters(),
+            counters,
             8,
             result));
     return result.directory();

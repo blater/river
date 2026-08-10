@@ -220,6 +220,7 @@ val statusCodeDescriptor = "Lio/riverdb/base/error/StatusCode;"
 val localWalPackage = "io.riverdb.wal.local"
 val localWalReservationDescriptor = "Lio/riverdb/wal/local/LocalWalReservation;"
 val localWalAppendResultDescriptor = "Lio/riverdb/wal/local/LocalWalAppendResult;"
+val localWalForceResultDescriptor = "Lio/riverdb/wal/local/LocalWalForceResult;"
 val localWalReadResultDescriptor = "Lio/riverdb/wal/local/LocalWalReadResult;"
 val walRecordHeaderDescriptor = "Lio/riverdb/format/wal/WalRecordHeader;"
 val databaseIncarnationDescriptor = "Lio/riverdb/base/id/DatabaseIncarnation;"
@@ -234,6 +235,8 @@ val btreeSplitResultDescriptor = "Lio/riverdb/storage/btree/BTreeSplitResult;"
 val transactionDescriptor = "Lio/riverdb/tx/Transaction;"
 val commitSequenceSourceDescriptor = "Lio/riverdb/tx/CommitSequenceSource;"
 val transactionParticipantDescriptor = "Lio/riverdb/tx/TransactionCommitParticipant;"
+val transactionGroupParticipantDescriptor =
+  "Lio/riverdb/tx/TransactionGroupCommitParticipant;"
 val transactionOutcomeDescriptor = "Lio/riverdb/tx/api/TransactionOutcome;"
 val isolationLevelDescriptor = "Lio/riverdb/tx/api/IsolationLevel;"
 val lockModeDescriptor = "Lio/riverdb/tx/api/lock/LockMode;"
@@ -254,6 +257,9 @@ val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val longArrayDescriptor = "[J"
 val intArrayDescriptor = "[I"
+val transactionArrayDescriptor = "[Lio/riverdb/tx/Transaction;"
+val transactionOutcomeArrayDescriptor =
+  "[Lio/riverdb/tx/api/TransactionOutcome;"
 val liveHotPathMethods = setOf(
   hotMethod(
     "$eventPackage.BoundedEventRing",
@@ -331,6 +337,27 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "$localWalPackage.LocalWal",
+    "appendUnforced",
+    "($localWalReservationDescriptor"
+        + "JJIII$localWalAppendResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "$localWalPackage.LocalWal",
+    "forcePending",
+    "($localWalForceResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "$localWalPackage.LocalWal",
+    "readForcedRecord",
+    "(I$localWalReadResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "$localWalPackage.LocalWal",
+    "releaseForcedBatch",
+    "()$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "$localWalPackage.LocalWal",
     "read",
     "(J$localWalReadResultDescriptor)$statusCodeDescriptor"
   ),
@@ -365,6 +392,39 @@ val liveHotPathMethods = setOf(
     "encode",
     "($databaseIncarnationDescriptor$walGenerationDescriptor"
         + "JJJJI$byteBufferDescriptor$crc32cDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "appendPreparedInsertBatch",
+    "(JJ$longArrayDescriptor$byteBufferDescriptor"
+        + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "forcePreparedInserts",
+    "()$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "publishForcedInserts",
+    "()$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedGroupCommitCoordinator",
+    "process",
+    "(I)V"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "beginCommitGroup",
+    "($transactionArrayDescriptor" + "I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "publishCommitGroup",
+    "($transactionArrayDescriptor$transactionOutcomeArrayDescriptor"
+        + "$longArrayDescriptor" + "I$transactionGroupParticipantDescriptor)"
+        + statusCodeDescriptor
   ),
   hotMethod(
     "io.riverdb.format.page.PageCodec",

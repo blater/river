@@ -1,6 +1,8 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.page.IndexedPageStore;
+import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.Transaction;
 import io.riverdb.tx.TransactionCommitParticipant;
@@ -20,6 +22,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   private final TransactionManager manager;
   private final IndexedTable table;
+  private final IndexedGroupCommitCoordinator groupCommit;
   private final Transaction transaction;
   private final ByteBuffer pendingRows;
   private final int[] pendingOperations = new int[MAXIMUM_PENDING_INSERTS];
@@ -31,6 +34,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final boolean[] exclusiveLocks = new boolean[MAXIMUM_HELD_LOCKS];
   private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
   private final IndexedCommitResult commitResult = new IndexedCommitResult();
+  private final HeapInsertResult preparedInsertResult = new HeapInsertResult();
   private final IndexedMutationTarget mutationTarget = new IndexedMutationTarget();
   private final int rowStride;
   private long committedSequence;
@@ -46,8 +50,17 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       TransactionManager transactionManager,
       IndexedTable indexedTable,
       int maximumRowBytes) {
+    this(transactionManager, indexedTable, maximumRowBytes, null);
+  }
+
+  public IndexedTransactionSession(
+      TransactionManager transactionManager,
+      IndexedTable indexedTable,
+      int maximumRowBytes,
+      IndexedGroupCommitCoordinator groupCommitCoordinator) {
     manager = transactionManager;
     table = indexedTable;
+    groupCommit = groupCommitCoordinator;
     transaction = new Transaction(transactionManager.maximumActiveTransactions());
     rowStride = maximumRowBytes;
     pendingRows = ByteBuffer.allocateDirect(maximumRowBytes * MAXIMUM_PENDING_INSERTS);
@@ -430,7 +443,55 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
       return status;
     }
-    StatusCode status = manager.commit(transaction, this, result);
+    if (groupCommit != null && eligibleForInsertGroup()) {
+      return groupCommit.commit(this, result);
+    }
+    return completeCoordinatedCommit(manager.commit(transaction, this, result));
+  }
+
+  boolean eligibleForInsertGroup() {
+    return transaction.state() == TransactionState.ACTIVE
+        && activeScan == null
+        && pendingInsertCount > 0
+        && !serializableScan
+        && !containsNonInsertMutation();
+  }
+
+  Transaction groupTransaction() {
+    return transaction;
+  }
+
+  StatusCode preflightPreparedInserts(IndexedPageStore store) {
+    return store.preflightPreparedInsertBatch(
+        pendingKeys,
+        pendingRows,
+        rowStride,
+        pendingRowLengths,
+        pendingInsertCount);
+  }
+
+  StatusCode appendPreparedInserts(IndexedPageStore store, long commitSequence) {
+    StatusCode status = store.appendPreparedInsertBatch(
+        transaction.transactionId(),
+        commitSequence,
+        pendingKeys,
+        pendingRows,
+        rowStride,
+        pendingRowLengths,
+        pendingInsertCount,
+        preparedInsertResult);
+    if (status.isOk()) {
+      commitResult.set(preparedInsertResult.rowId(), commitSequence);
+      committedSequence = commitSequence;
+    }
+    return status;
+  }
+
+  StatusCode commitDirect(TransactionOutcome result) {
+    return manager.commit(transaction, this, result);
+  }
+
+  StatusCode completeCoordinatedCommit(StatusCode status) {
     if (!transaction.isActiveHandle()) {
       StatusCode release = releaseLocks();
       clearWriteSet();

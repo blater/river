@@ -1,6 +1,6 @@
 package io.riverdb.wal.local;
 
-/** Caller-owned local byte range and logical sequence of a forced WAL record. */
+/** Caller-owned local byte range and logical sequence of an appended WAL record. */
 public final class LocalWalAppendResult {
   private long startOffset;
   private long endOffset;

@@ -11,10 +11,12 @@ import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.CommitSequenceSource;
+import io.riverdb.tx.TransactionGroupCommitParticipant;
 import java.nio.ByteBuffer;
 
 /** Single-owner heap plus authoritative unique long-key B+tree committed atomically. */
-public final class IndexedTable implements CommitSequenceSource {
+public final class IndexedTable
+    implements CommitSequenceSource, TransactionGroupCommitParticipant {
   static final int MUTATION_INSERT = 1;
   static final int MUTATION_UPDATE = 2;
   static final int MUTATION_DELETE = 3;
@@ -244,6 +246,47 @@ public final class IndexedTable implements CommitSequenceSource {
       result.set(heapInsert.rowId(), commitSequence);
     }
     return status;
+  }
+
+  synchronized StatusCode preflightPreparedInsertGroup(
+      IndexedTransactionSession[] sessions,
+      int count) {
+    if (sessions == null || count <= 0 || count > sessions.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = store.beginPreparedInsertGroup();
+    for (int index = 0; status.isOk() && index < count; index++) {
+      status = sessions[index].preflightPreparedInserts(store);
+    }
+    if (status.isOk()) {
+      status = store.finishPreparedInsertPreflight(count);
+    }
+    if (!status.isOk()) {
+      StatusCode cancel = store.cancelPreparedInsertPreflight();
+      if (!cancel.isOk()) {
+        return cancel;
+      }
+    }
+    return status;
+  }
+
+  synchronized StatusCode appendPreparedInserts(
+      IndexedTransactionSession session,
+      long commitSequence) {
+    return session.appendPreparedInserts(store, commitSequence);
+  }
+
+  synchronized StatusCode cancelPreparedInsertGroup() {
+    return store.cancelPreparedInsertPreflight();
+  }
+
+  StatusCode forcePreparedInserts() {
+    return store.forcePreparedInserts();
+  }
+
+  @Override
+  public synchronized StatusCode publishForcedGroup() {
+    return store.publishForcedInserts();
   }
 
   /** Compacts obsolete row versions; caller must hold the transaction publication barrier. */

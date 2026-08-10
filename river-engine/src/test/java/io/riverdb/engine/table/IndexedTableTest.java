@@ -32,6 +32,41 @@ final class IndexedTableTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void forcedWalDoesNotAdvancePublishedTableSnapshot(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedPageStore store = createStore(directory, wal);
+    IndexedTable table = createTable(store);
+    long[] keys = {77};
+    int[] rowLengths = {Long.BYTES};
+    ByteBuffer rows = ByteBuffer.allocateDirect(Long.BYTES);
+    rows.putLong(0, 770);
+    HeapInsertResult inserted = new HeapInsertResult();
+
+    assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
+    assertEquals(
+        StatusCode.OK,
+        store.preflightPreparedInsertBatch(
+            keys, rows, Long.BYTES, rowLengths, 1));
+    assertEquals(StatusCode.OK, store.finishPreparedInsertPreflight(1));
+    assertEquals(
+        StatusCode.OK,
+        store.appendPreparedInsertBatch(
+            2, 2, keys, rows, Long.BYTES, rowLengths, 1, inserted));
+    assertEquals(StatusCode.OK, store.forcePreparedInserts());
+    assertEquals(2, wal.currentCommitSequence());
+    assertEquals(1, store.currentCommitSequence());
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(77, new HeapRowResult()));
+
+    assertEquals(StatusCode.OK, store.publishForcedInserts());
+    assertEquals(2, store.currentCommitSequence());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(77, fetched));
+    assertEquals(770, rowValue(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void insertsSplitsLooksUpAndReopens(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

@@ -647,6 +647,67 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void forcesConcurrentInsertCommitsOnceAndRecoversEveryRecord(@TempDir Path root)
+      throws Exception {
+    NioIoCounters counters = new NioIoCounters();
+    NioDurableDirectory directory = openDirectory(root, counters);
+    LocalWal wal = openWal(directory);
+    IndexedPageStore store = createStore(directory, wal);
+    IndexedTable table = createTable(store);
+    IndexedTable committingTable = table;
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, 50_000_000);
+    CountDownLatch ready = new CountDownLatch(4);
+    CountDownLatch start = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(4);
+    long forcesBefore = counters.forceCalls();
+    long walCopiesBefore = store.walCopyBytes();
+    try {
+      Future<StatusCode> first = executor.submit(
+          () -> commitDistinct(manager, committingTable, coordinator, 301, ready, start));
+      Future<StatusCode> second = executor.submit(
+          () -> commitDistinct(manager, committingTable, coordinator, 302, ready, start));
+      Future<StatusCode> third = executor.submit(
+          () -> commitDistinct(manager, committingTable, coordinator, 303, ready, start));
+      Future<StatusCode> fourth = executor.submit(
+          () -> commitDistinct(manager, committingTable, coordinator, 304, ready, start));
+      ready.await();
+      start.countDown();
+      assertEquals(StatusCode.OK, first.get());
+      assertEquals(StatusCode.OK, second.get());
+      assertEquals(StatusCode.OK, third.get());
+      assertEquals(StatusCode.OK, fourth.get());
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(1, counters.forceCalls() - forcesBefore);
+    assertEquals(4L * Long.BYTES, store.walCopyBytes() - walCopiesBefore);
+    assertEquals(0, wal.copiedPayloadBytes());
+    assertEquals(0, manager.activeTransactionCount());
+    assertEquals(5, table.currentCommitSequence());
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    HeapRowResult fetched = new HeapRowResult();
+    for (int key = 301; key <= 304; key++) {
+      assertEquals(StatusCode.OK, table.fetchByKey(key, fetched));
+      assertEquals(key * 10L, value(fetched));
+    }
+    close(table, wal, directory);
+  }
+
+  @Test
   void recoversCommittedVisibilityBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
@@ -769,6 +830,24 @@ final class IndexedTransactionSessionTest {
     return status.isOk() ? session.commit(new TransactionOutcome()) : status;
   }
 
+  private static StatusCode commitDistinct(
+      TransactionManager manager,
+      IndexedTable table,
+      IndexedGroupCommitCoordinator coordinator,
+      int key,
+      CountDownLatch ready,
+      CountDownLatch start) throws InterruptedException {
+    IndexedTransactionSession session =
+        new IndexedTransactionSession(manager, table, 128, coordinator);
+    StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
+    if (status.isOk()) {
+      status = session.insert(key, row(key * 10L));
+    }
+    ready.countDown();
+    start.await();
+    return status.isOk() ? session.commit(new TransactionOutcome()) : status;
+  }
+
   private static ByteBuffer row(long value) {
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     row.putLong(0, value);
@@ -790,13 +869,19 @@ final class IndexedTransactionSessionTest {
   }
 
   private static NioDurableDirectory openDirectory(Path root) {
+    return openDirectory(root, new NioIoCounters());
+  }
+
+  private static NioDurableDirectory openDirectory(
+      Path root,
+      NioIoCounters counters) {
     NioDirectoryOpenResult result = new NioDirectoryOpenResult();
     assertEquals(
         StatusCode.OK,
         NioDurableDirectory.openExisting(
             root,
             new FatalStateFence(),
-            new NioIoCounters(),
+            counters,
             8,
             result));
     return result.directory();
