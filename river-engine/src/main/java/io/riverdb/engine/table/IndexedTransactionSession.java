@@ -16,6 +16,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private static final long TABLE_LOCK_ID = 1;
   private static final int MAXIMUM_PENDING_INSERTS = 64;
   private static final int MAXIMUM_HELD_LOCKS = 64;
+  private static final int MAXIMUM_SAVEPOINTS = 4;
 
   private final TransactionManager manager;
   private final IndexedTable table;
@@ -28,6 +29,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final LockToken[] keyLocks = new LockToken[MAXIMUM_HELD_LOCKS];
   private final long[] lockedKeys = new long[MAXIMUM_HELD_LOCKS];
   private final boolean[] exclusiveLocks = new boolean[MAXIMUM_HELD_LOCKS];
+  private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
   private final IndexedCommitResult commitResult = new IndexedCommitResult();
   private final IndexedMutationTarget mutationTarget = new IndexedMutationTarget();
   private final int rowStride;
@@ -37,7 +39,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private int pendingInsertCount;
   private int heldLockCount;
   private IndexedScanCursor activeScan;
-  private IndexedSavepoint activeSavepoint;
+  private int savepointCount;
   private boolean serializableScan;
 
   public IndexedTransactionSession(
@@ -63,7 +65,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode begin(IsolationLevel isolationLevel) {
-    if (transaction.isActiveHandle() || activeScan != null || activeSavepoint != null) {
+    if (transaction.isActiveHandle() || activeScan != null || savepointCount != 0) {
       return StatusCode.CONFLICT;
     }
     pendingInsertCount = 0;
@@ -343,13 +345,13 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (transaction.state() != TransactionState.ACTIVE || activeScan != null) {
       return StatusCode.CONFLICT;
     }
-    if (activeSavepoint != null) {
+    if (savepointCount >= savepoints.length) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = savepoint.claim(
         this, transaction.transactionId(), pendingInsertCount);
     if (status.isOk()) {
-      activeSavepoint = savepoint;
+      savepoints[savepointCount++] = savepoint;
     }
     return status;
   }
@@ -361,12 +363,16 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     }
     if (transaction.state() != TransactionState.ACTIVE
         || activeScan != null
-        || activeSavepoint != savepoint
         || !savepoint.isOwnedBy(this, transaction.transactionId())
         || savepoint.pendingMutationCount() > pendingInsertCount) {
       return StatusCode.CONFLICT;
     }
+    int savepointIndex = findSavepoint(savepoint);
+    if (savepointIndex < 0) {
+      return StatusCode.NOT_OWNER;
+    }
     clearPendingFrom(savepoint.pendingMutationCount());
+    completeSavepointsAfter(savepointIndex + 1);
     return StatusCode.OK;
   }
 
@@ -374,12 +380,14 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (savepoint == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (activeSavepoint != savepoint
-        || !savepoint.isOwnedBy(this, transaction.transactionId())) {
+    if (!savepoint.isOwnedBy(this, transaction.transactionId())) {
       return StatusCode.NOT_OWNER;
     }
-    savepoint.complete();
-    activeSavepoint = null;
+    int savepointIndex = findSavepoint(savepoint);
+    if (savepointIndex < 0) {
+      return StatusCode.NOT_OWNER;
+    }
+    completeSavepointsAfter(savepointIndex);
     return StatusCode.OK;
   }
 
@@ -505,10 +513,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     clearPendingFrom(0);
     serializableScanSequence = 0;
     serializableScan = false;
-    if (activeSavepoint != null) {
-      activeSavepoint.complete();
-      activeSavepoint = null;
-    }
+    completeSavepointsAfter(0);
   }
 
   private void clearPendingFrom(int first) {
@@ -519,6 +524,23 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       pendingRowLengths[index] = 0;
     }
     pendingInsertCount = first;
+  }
+
+  private int findSavepoint(IndexedSavepoint savepoint) {
+    for (int index = savepointCount - 1; index >= 0; index--) {
+      if (savepoints[index] == savepoint) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private void completeSavepointsAfter(int first) {
+    for (int index = savepointCount - 1; index >= first; index--) {
+      savepoints[index].complete();
+      savepoints[index] = null;
+    }
+    savepointCount = first;
   }
 
   private int findHeldLock(long key) {

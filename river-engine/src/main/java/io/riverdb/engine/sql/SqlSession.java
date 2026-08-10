@@ -10,6 +10,7 @@ import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
+import io.riverdb.sql.SqlIdentifier;
 import io.riverdb.sql.SqlParser;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
@@ -26,12 +27,16 @@ public final class SqlSession {
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final CheckpointResult checkpoint = new CheckpointResult();
   private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
+  private final IndexedSavepoint userSavepoint = new IndexedSavepoint();
+  private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean transactionActive;
+  private boolean userSavepointActive;
   private boolean scanActive;
+  private int userSavepointNameLength;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -65,7 +70,9 @@ public final class SqlSession {
     if (!status.isOk()) {
       return status;
     }
-    if (scanActive || command.type() == SqlCommandType.SCAN) {
+    if (scanActive
+        || command.type() == SqlCommandType.SCAN
+        || command.type() == SqlCommandType.VALUE_SCAN) {
       return StatusCode.CONFLICT;
     }
     if (command.type() == SqlCommandType.BEGIN) {
@@ -80,12 +87,48 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.SAVEPOINT) {
+      if (!transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      if (userSavepointActive) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      status = session.createSavepoint(userSavepoint);
+      if (status.isOk()) {
+        rememberUserSavepoint(command.savepointName());
+        result.setTransaction(true, session.visibleCommitSequence());
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.ROLLBACK_TO_SAVEPOINT) {
+      if (!transactionActive || !matchesUserSavepoint(command.savepointName())) {
+        return StatusCode.CONFLICT;
+      }
+      status = session.rollbackToSavepoint(userSavepoint);
+      if (status.isOk()) {
+        result.setTransaction(true, session.visibleCommitSequence());
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.RELEASE_SAVEPOINT) {
+      if (!transactionActive || !matchesUserSavepoint(command.savepointName())) {
+        return StatusCode.CONFLICT;
+      }
+      status = session.releaseSavepoint(userSavepoint);
+      if (status.isOk()) {
+        clearUserSavepoint();
+        result.setTransaction(true, session.visibleCommitSequence());
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.COMMIT) {
       if (!transactionActive) {
         return StatusCode.CONFLICT;
       }
       status = session.commit(outcome);
       transactionActive = false;
+      clearUserSavepoint();
       if (status.isOk()) {
         result.setTransaction(false, outcome.commitSequence());
       }
@@ -97,6 +140,7 @@ public final class SqlSession {
       }
       status = session.abort(outcome);
       transactionActive = false;
+      clearUserSavepoint();
       if (status.isOk()) {
         result.setTransaction(false, 0);
       }
@@ -339,5 +383,33 @@ public final class SqlSession {
   private boolean isSelect() {
     return command.type() == SqlCommandType.SELECT
         || command.type() == SqlCommandType.SELECT_BY_VALUE;
+  }
+
+  private void rememberUserSavepoint(CharSequence name) {
+    userSavepointNameLength = name.length();
+    for (int index = 0; index < userSavepointNameLength; index++) {
+      userSavepointName[index] = name.charAt(index);
+    }
+    userSavepointActive = true;
+  }
+
+  private boolean matchesUserSavepoint(CharSequence name) {
+    if (!userSavepointActive || name.length() != userSavepointNameLength) {
+      return false;
+    }
+    for (int index = 0; index < userSavepointNameLength; index++) {
+      if (name.charAt(index) != userSavepointName[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private void clearUserSavepoint() {
+    for (int index = 0; index < userSavepointNameLength; index++) {
+      userSavepointName[index] = 0;
+    }
+    userSavepointNameLength = 0;
+    userSavepointActive = false;
   }
 }

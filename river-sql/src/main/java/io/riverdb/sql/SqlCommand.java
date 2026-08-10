@@ -4,6 +4,7 @@ package io.riverdb.sql;
 public final class SqlCommand {
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
+  private final SqlIdentifier savepointName = new SqlIdentifier();
   private SqlCommandType type;
   private long key;
   private long value;
@@ -16,6 +17,7 @@ public final class SqlCommand {
   public void reset() {
     tableName.reset();
     indexName.reset();
+    savepointName.reset();
     type = null;
     key = 0;
     value = 0;
@@ -63,6 +65,10 @@ public final class SqlCommand {
     return indexName;
   }
 
+  SqlIdentifier writableSavepointName() {
+    return savepointName;
+  }
+
   public SqlCommandType type() {
     return type;
   }
@@ -73,6 +79,10 @@ public final class SqlCommand {
 
   public SqlIdentifier indexName() {
     return indexName;
+  }
+
+  public SqlIdentifier savepointName() {
+    return savepointName;
   }
 
   public long key() {

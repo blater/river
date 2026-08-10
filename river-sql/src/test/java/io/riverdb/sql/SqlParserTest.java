@@ -70,6 +70,18 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("BEGIN SERIALIZABLE", command));
     assertEquals(SqlCommandType.BEGIN, command.type());
     assertEquals(true, command.isSerializableTransaction());
+    assertEquals(StatusCode.OK, parser.parse("SAVEPOINT before_update", command));
+    assertEquals(SqlCommandType.SAVEPOINT, command.type());
+    assertName("before_update", command.savepointName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("ROLLBACK TO SAVEPOINT before_update", command));
+    assertEquals(SqlCommandType.ROLLBACK_TO_SAVEPOINT, command.type());
+    assertName("before_update", command.savepointName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("RELEASE SAVEPOINT before_update", command));
+    assertEquals(SqlCommandType.RELEASE_SAVEPOINT, command.type());
     assertEquals(StatusCode.OK, parser.parse("COMMIT", command));
     assertEquals(SqlCommandType.COMMIT, command.type());
     assertEquals(StatusCode.OK, parser.parse("ROLLBACK", command));

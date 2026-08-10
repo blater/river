@@ -29,12 +29,27 @@ public final class SqlParser {
       if (consumeKeyword(sql, "SERIALIZABLE")) {
         serializableTransaction = true;
       }
+    } else if (consumeKeyword(sql, "SAVEPOINT")) {
+      type = SqlCommandType.SAVEPOINT;
+      status = identifier(sql, result.writableSavepointName());
     } else if (consumeKeyword(sql, "COMMIT")) {
       type = SqlCommandType.COMMIT;
       status = StatusCode.OK;
     } else if (consumeKeyword(sql, "ROLLBACK")) {
-      type = SqlCommandType.ROLLBACK;
-      status = StatusCode.OK;
+      if (consumeKeyword(sql, "TO")) {
+        type = SqlCommandType.ROLLBACK_TO_SAVEPOINT;
+        consumeKeyword(sql, "SAVEPOINT");
+        status = identifier(sql, result.writableSavepointName());
+      } else {
+        type = SqlCommandType.ROLLBACK;
+        status = StatusCode.OK;
+      }
+    } else if (consumeKeyword(sql, "RELEASE")) {
+      type = SqlCommandType.RELEASE_SAVEPOINT;
+      status = requireKeyword(sql, "SAVEPOINT");
+      if (status.isOk()) {
+        status = identifier(sql, result.writableSavepointName());
+      }
     } else if (consumeKeyword(sql, "CHECKPOINT")) {
       type = SqlCommandType.CHECKPOINT;
       status = StatusCode.OK;

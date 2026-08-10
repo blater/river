@@ -281,6 +281,66 @@ final class SqlSessionTest {
   }
 
   @Test
+  void namedSavepointCoexistsWithStatementRollback(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute("CREATE TABLE accounts", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO accounts VALUES (1, 100)", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT middle", result));
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        session.execute("SAVEPOINT second", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO accounts VALUES (2, 200)", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO accounts VALUES (2, 201)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO accounts VALUES (3, 300)", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("ROLLBACK TO SAVEPOINT unknown", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("ROLLBACK TO SAVEPOINT middle", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT value FROM accounts WHERE key=2", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT value FROM accounts WHERE key=3", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO accounts VALUES (4, 400)", result));
+    assertEquals(StatusCode.OK, session.execute("RELEASE SAVEPOINT middle", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT value FROM accounts WHERE key=1", result));
+    assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT value FROM accounts WHERE key=2", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT value FROM accounts WHERE key=4", result));
+    assertEquals(400, result.value());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void scansOrderedSnapshotRowsAndCanCloseEarly(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(

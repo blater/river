@@ -236,6 +236,35 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void outerSavepointInvalidatesNestedSavepoints(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(10, row(100)));
+    IndexedSavepoint outer = new IndexedSavepoint();
+    IndexedSavepoint inner = new IndexedSavepoint();
+    assertEquals(StatusCode.OK, session.createSavepoint(outer));
+    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.createSavepoint(inner));
+    assertEquals(StatusCode.OK, session.insert(30, row(300)));
+    assertEquals(StatusCode.OK, session.rollbackToSavepoint(outer));
+    assertEquals(false, inner.isActive());
+    assertEquals(StatusCode.NOT_OWNER, session.releaseSavepoint(inner));
+    assertEquals(StatusCode.OK, session.releaseSavepoint(outer));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(10, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(20, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(30, fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void publishesMultipleRowsAtOneCommitSequence(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
