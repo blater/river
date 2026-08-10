@@ -100,43 +100,12 @@ public final class RelationalDatabase {
     TransactionOutcome outcome = new TransactionOutcome();
     StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
     if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(name, catalogKey);
-    }
-    if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
-      if (status.isOk()) {
-        status = StatusCode.CONFLICT;
-      } else if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-      }
-    }
-    if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(
-          RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
-    }
-    if (status.isOk()) {
-      status = CatalogRecord.decodeSequence(catalogRow, catalogScratch, nextTableId);
-    }
-    int tableId = nextTableId.value();
-    if (status.isOk() && tableId > RelationalKey.MAXIMUM_TABLE_ID) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeSequence(catalogOutput, tableId + 1);
-      status = session.indexedSession().update(
-          RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeTable(catalogOutput, tableId, 0, name);
-      status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
+      status = session.createTable(name, result);
     }
     if (status.isOk()) {
       status = session.commit(outcome);
     } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
       session.abort(outcome);
-    }
-    if (status.isOk()) {
-      result.set(this, tableId, 0);
     }
     return status;
   }

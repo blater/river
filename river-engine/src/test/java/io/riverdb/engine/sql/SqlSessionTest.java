@@ -293,6 +293,67 @@ final class SqlSessionTest {
   }
 
   @Test
+  void tableCreationCommitsAndRollsBackWithItsTransaction(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession writer = sessionResult.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession observer = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(StatusCode.OK, writer.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE staged", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO staged VALUES (1, 100)", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        observer.execute("SELECT value FROM staged WHERE key=1", result));
+    assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT value FROM staged WHERE key=1", result));
+    assertEquals(100, result.value());
+
+    assertEquals(StatusCode.OK, writer.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, writer.execute("SAVEPOINT before_ddl", result));
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE discarded", result));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO discarded VALUES (2, 200)", result));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("ROLLBACK TO SAVEPOINT before_ddl", result));
+    assertEquals(StatusCode.OK, writer.execute("RELEASE SAVEPOINT before_ddl", result));
+    assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        observer.execute("SELECT value FROM discarded WHERE key=2", result));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    observer = sessionResult.session();
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT value FROM staged WHERE key=1", result));
+    assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.CONFLICT,
+        observer.execute("SELECT value FROM discarded WHERE key=2", result));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void namedSavepointCoexistsWithStatementRollback(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(

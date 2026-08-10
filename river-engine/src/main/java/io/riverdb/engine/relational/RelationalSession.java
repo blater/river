@@ -20,6 +20,8 @@ public final class RelationalSession {
   private final RelationalKey.LongKeyResult physicalKey = new RelationalKey.LongKeyResult();
   private final HeapRowResult catalogRow = new HeapRowResult();
   private final ByteBuffer catalogScratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
+  private final ByteBuffer catalogOutput = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
+  private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
   private final TableDefinition valueIndexTable = new TableDefinition();
   private final HeapRowResult indexedKeyRow = new HeapRowResult();
   private final ByteBuffer valueScratch = ByteBuffer.allocateDirect(Long.BYTES);
@@ -61,6 +63,45 @@ public final class RelationalSession {
         ? CatalogRecord.decodeTable(
             catalogRow, catalogScratch, name, database, result)
         : status;
+  }
+
+  /** Adds one catalog table entry within this session's active transaction. */
+  public StatusCode createTable(CharSequence name, TableDefinition result) {
+    if (!RelationalKey.validName(name) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = RelationalKey.catalogTableKey(name, physicalKey);
+    if (status.isOk()) {
+      status = session.fetchByKey(physicalKey.key(), catalogRow);
+      if (status.isOk()) {
+        status = StatusCode.CONFLICT;
+      } else if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+      }
+    }
+    if (status.isOk()) {
+      status = session.fetchByKey(RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
+    }
+    if (status.isOk()) {
+      status = CatalogRecord.decodeSequence(catalogRow, catalogScratch, nextTableId);
+    }
+    int tableId = nextTableId.value();
+    if (status.isOk() && tableId > RelationalKey.MAXIMUM_TABLE_ID) {
+      status = StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeSequence(catalogOutput, tableId + 1);
+      status = session.update(RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeTable(catalogOutput, tableId, 0, name);
+      status = session.insert(physicalKey.key(), catalogOutput);
+    }
+    if (status.isOk()) {
+      result.set(database, tableId, 0);
+    }
+    return status;
   }
 
   public StatusCode insert(TableDefinition table, long key, ByteBuffer row) {

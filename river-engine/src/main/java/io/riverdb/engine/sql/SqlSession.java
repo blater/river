@@ -151,12 +151,32 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.CREATE_TABLE) {
-      if (transactionActive) {
-        return StatusCode.CONFLICT;
+      if (!transactionActive) {
+        status = database.createTable(command.tableName(), table);
+        if (status.isOk()) {
+          result.setUpdate(0, 0);
+        }
+        return status;
       }
-      status = database.createTable(command.tableName(), table);
+      status = session.createSavepoint(statementSavepoint);
+      if (status.isOk()) {
+        status = session.createTable(command.tableName(), table);
+      }
+      if (!status.isOk() && statementSavepoint.isActive()) {
+        StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
+        if (!rollback.isOk()) {
+          status = rollback;
+        }
+      }
+      if (statementSavepoint.isActive()) {
+        StatusCode release = session.releaseSavepoint(statementSavepoint);
+        if (!release.isOk()) {
+          status = release;
+        }
+      }
       if (status.isOk()) {
         result.setUpdate(0, 0);
+        result.setTransaction(true, session.visibleCommitSequence());
       }
       return status;
     }
