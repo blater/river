@@ -205,6 +205,63 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void repeatedKeyMutationsReadLatestAndCommitOneEffectiveVersion(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(10, row(100)));
+    assertEquals(StatusCode.OK, session.update(10, row(101)));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, session.fetchByKey(10, fetched));
+    assertEquals(101, value(fetched));
+    IndexedSavepoint savepoint = new IndexedSavepoint();
+    assertEquals(StatusCode.OK, session.createSavepoint(savepoint));
+    assertEquals(StatusCode.OK, session.update(10, row(102)));
+    assertEquals(StatusCode.OK, session.delete(10));
+    assertEquals(StatusCode.CONFLICT, session.fetchByKey(10, fetched));
+    assertEquals(StatusCode.OK, session.rollbackToSavepoint(savepoint));
+    assertEquals(StatusCode.OK, session.fetchByKey(10, fetched));
+    assertEquals(101, value(fetched));
+    assertEquals(StatusCode.OK, session.releaseSavepoint(savepoint));
+
+    assertEquals(StatusCode.OK, session.update(20, row(201)));
+    assertEquals(StatusCode.OK, session.update(20, row(202)));
+    assertEquals(StatusCode.OK, session.delete(20));
+    assertEquals(StatusCode.OK, session.insert(20, row(203)));
+    assertEquals(StatusCode.OK, session.insert(30, row(300)));
+    assertEquals(StatusCode.OK, session.delete(30));
+
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult scanned = new IndexedScanResult();
+    assertEquals(StatusCode.OK, session.beginScan(0, 40, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanned));
+    assertEquals(10, scanned.key());
+    assertEquals(101, value(scanned.row()));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanned));
+    assertEquals(20, scanned.key());
+    assertEquals(203, value(scanned.row()));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanned));
+    assertEquals(StatusCode.OK, session.closeScan(cursor));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    assertEquals(StatusCode.OK, table.fetchByKey(10, fetched));
+    assertEquals(101, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(20, fetched));
+    assertEquals(203, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(30, fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void savepointRollsBackPendingRowsButRetainsLocks(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

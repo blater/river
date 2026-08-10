@@ -16,6 +16,7 @@ import java.nio.ByteBuffer;
 /** One reusable transaction/session write set over the first indexed table. */
 public final class IndexedTransactionSession implements TransactionCommitParticipant {
   private static final long TABLE_LOCK_ID = 1;
+  private static final int MUTATION_NONE = 0;
   private static final int MAXIMUM_PENDING_INSERTS = 384;
   private static final int MAXIMUM_HELD_LOCKS = 384;
   private static final int MAXIMUM_SAVEPOINTS = 4;
@@ -32,6 +33,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final LockToken[] keyLocks = new LockToken[MAXIMUM_HELD_LOCKS];
   private final long[] lockedKeys = new long[MAXIMUM_HELD_LOCKS];
   private final boolean[] exclusiveLocks = new boolean[MAXIMUM_HELD_LOCKS];
+  private final boolean[] retainedMutations = new boolean[MAXIMUM_PENDING_INSERTS];
   private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
   private final IndexedCommitResult commitResult = new IndexedCommitResult();
   private final HeapInsertResult preparedInsertResult = new HeapInsertResult();
@@ -115,6 +117,24 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (!status.isOk()) {
       return status;
     }
+    int pendingIndex = findLatestPendingIndex(key);
+    if (pendingIndex >= 0) {
+      int pendingOperation = pendingOperations[pendingIndex];
+      if (pendingOperation != IndexedTable.MUTATION_DELETE
+          && pendingOperation != MUTATION_NONE) {
+        return StatusCode.CONFLICT;
+      }
+      appendPending(
+          pendingOperation == IndexedTable.MUTATION_DELETE
+              ? IndexedTable.MUTATION_UPDATE : IndexedTable.MUTATION_INSERT,
+          key,
+          pendingPreviousRowIds[pendingIndex],
+          row,
+          row.position(),
+          row.remaining(),
+          true);
+      return StatusCode.OK;
+    }
     status = refreshForWrite();
     if (status.isOk()) {
       status = table.prepareInsert(
@@ -149,6 +169,23 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (!status.isOk()) {
       return status;
     }
+    int pendingIndex = findLatestPendingIndex(key);
+    if (pendingIndex >= 0) {
+      int pendingOperation = pendingOperations[pendingIndex];
+      if (pendingOperation != IndexedTable.MUTATION_INSERT
+          && pendingOperation != IndexedTable.MUTATION_UPDATE) {
+        return StatusCode.CONFLICT;
+      }
+      appendPending(
+          pendingOperation,
+          key,
+          pendingPreviousRowIds[pendingIndex],
+          row,
+          row.position(),
+          row.remaining(),
+          true);
+      return StatusCode.OK;
+    }
     status = refreshForWrite();
     if (status.isOk()) {
       status = table.prepareMutation(
@@ -179,6 +216,20 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (!status.isOk()) {
       return status;
     }
+    int pendingIndex = findLatestPendingIndex(key);
+    if (pendingIndex >= 0) {
+      int pendingOperation = pendingOperations[pendingIndex];
+      if (pendingOperation != IndexedTable.MUTATION_INSERT
+          && pendingOperation != IndexedTable.MUTATION_UPDATE) {
+        return StatusCode.CONFLICT;
+      }
+      appendPendingDeletion(
+          pendingOperation == IndexedTable.MUTATION_INSERT
+              ? MUTATION_NONE : IndexedTable.MUTATION_DELETE,
+          key,
+          pendingPreviousRowIds[pendingIndex]);
+      return StatusCode.OK;
+    }
     status = refreshForWrite();
     if (status.isOk()) {
       status = table.prepareMutation(
@@ -187,15 +238,20 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (!status.isOk()) {
       return status;
     }
+    appendPendingDeletion(
+        IndexedTable.MUTATION_DELETE, key, mutationTarget.rowId());
+    return StatusCode.OK;
+  }
+
+  private void appendPendingDeletion(int operation, long key, int previousRowId) {
     int destinationStart = pendingInsertCount * rowStride;
     pendingRows.limit(pendingRows.capacity());
     pendingRows.put(destinationStart, (byte) 0);
-    pendingOperations[pendingInsertCount] = IndexedTable.MUTATION_DELETE;
+    pendingOperations[pendingInsertCount] = operation;
     pendingKeys[pendingInsertCount] = key;
-    pendingPreviousRowIds[pendingInsertCount] = mutationTarget.rowId();
+    pendingPreviousRowIds[pendingInsertCount] = previousRowId;
     pendingRowLengths[pendingInsertCount] = 1;
     pendingInsertCount++;
-    return StatusCode.OK;
   }
 
   private void appendPending(
@@ -225,9 +281,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (transaction.state() != TransactionState.ACTIVE || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int index = 0; index < pendingInsertCount; index++) {
+    for (int index = pendingInsertCount - 1; index >= 0; index--) {
       if (pendingKeys[index] == key) {
-        if (pendingOperations[index] == IndexedTable.MUTATION_DELETE) {
+        if (pendingOperations[index] == IndexedTable.MUTATION_DELETE
+            || pendingOperations[index] == MUTATION_NONE) {
           result.reset();
           return StatusCode.CONFLICT;
         }
@@ -327,7 +384,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
           cursor.setCommittedLookahead(false);
         }
         cursor.returned(pendingKey);
-        if (pendingOperations[pendingIndex] == IndexedTable.MUTATION_DELETE) {
+        if (pendingOperations[pendingIndex] == IndexedTable.MUTATION_DELETE
+            || pendingOperations[pendingIndex] == MUTATION_NONE) {
           continue;
         }
         result.row().set(
@@ -414,7 +472,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     long selectedKey = Long.MAX_VALUE;
     for (int index = 0; index < pendingInsertCount; index++) {
       long key = pendingKeys[index];
-      if (key >= cursor.lowerKey()
+      if (findLatestPendingIndex(key) == index
+          && key >= cursor.lowerKey()
           && key < cursor.upperKey()
           && cursor.afterLastReturned(key)
           && key < selectedKey) {
@@ -429,6 +488,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (activeScan != null) {
       return StatusCode.CONFLICT;
     }
+    compactWriteSet();
     if (pendingInsertCount == 0) {
       StatusCode status = serializableScan
           ? manager.commitReadOnlyValidated(
@@ -639,11 +699,6 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   private StatusCode acquireExclusiveKey(long key) {
-    for (int index = 0; index < pendingInsertCount; index++) {
-      if (pendingKeys[index] == key) {
-        return StatusCode.CONFLICT;
-      }
-    }
     int lockIndex = findHeldLock(key);
     if (lockIndex >= 0) {
       if (exclusiveLocks[lockIndex]) {
@@ -683,5 +738,57 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
     }
     return false;
+  }
+
+  private int findLatestPendingIndex(long key) {
+    for (int index = pendingInsertCount - 1; index >= 0; index--) {
+      if (pendingKeys[index] == key) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private void compactWriteSet() {
+    int originalCount = pendingInsertCount;
+    for (int index = 0; index < originalCount; index++) {
+      boolean latest = true;
+      for (int later = index + 1; later < originalCount; later++) {
+        if (pendingKeys[later] == pendingKeys[index]) {
+          latest = false;
+          break;
+        }
+      }
+      retainedMutations[index] = latest && pendingOperations[index] != MUTATION_NONE;
+    }
+    int output = 0;
+    for (int index = 0; index < originalCount; index++) {
+      if (!retainedMutations[index]) {
+        continue;
+      }
+      if (output != index) {
+        int sourceOffset = index * rowStride;
+        int targetOffset = output * rowStride;
+        int rowBytes = pendingRowLengths[index];
+        for (int byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
+          pendingRows.put(targetOffset + byteIndex, pendingRows.get(sourceOffset + byteIndex));
+        }
+        pendingOperations[output] = pendingOperations[index];
+        pendingKeys[output] = pendingKeys[index];
+        pendingPreviousRowIds[output] = pendingPreviousRowIds[index];
+        pendingRowLengths[output] = rowBytes;
+      }
+      output++;
+    }
+    for (int index = 0; index < originalCount; index++) {
+      retainedMutations[index] = false;
+      if (index >= output) {
+        pendingOperations[index] = 0;
+        pendingKeys[index] = 0;
+        pendingPreviousRowIds[index] = 0;
+        pendingRowLengths[index] = 0;
+      }
+    }
+    pendingInsertCount = output;
   }
 }
