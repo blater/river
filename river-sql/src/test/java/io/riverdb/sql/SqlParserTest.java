@@ -152,8 +152,23 @@ final class SqlParserTest {
     assertName("region", command.columnName(1));
     assertEquals(12, command.updateValue(0));
     assertEquals(-3, command.updateValue(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE accounts SET region=9 WHERE balance >= 100 AND balance < 500",
+            command));
+    assertEquals(false, command.isEqualityPredicate());
+    assertEquals(100, command.scanLowerInclusive());
+    assertEquals(500, command.scanUpperExclusive());
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
+    assertEquals(true, command.isEqualityPredicate());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("DELETE FROM accounts WHERE key >= 10 AND key < 20", command));
+    assertEquals(false, command.isEqualityPredicate());
+    assertEquals(10, command.scanLowerInclusive());
+    assertEquals(20, command.scanUpperExclusive());
     assertEquals(StatusCode.OK, parser.parse("BEGIN;", command));
     assertEquals(SqlCommandType.BEGIN, command.type());
     assertEquals(false, command.isSerializableTransaction());

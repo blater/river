@@ -468,7 +468,8 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.UPDATE) {
-      if (predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
+      if (!command.isEqualityPredicate()
+          || predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
         StatusCode status = collectMatchedKeys();
         for (int index = 0; status.isOk() && index < matchedRowCount; index++) {
           status = updatePrimaryKey(matchedKeys[index]);
@@ -489,7 +490,8 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.DELETE) {
-      if (predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
+      if (!command.isEqualityPredicate()
+          || predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
         StatusCode status = collectMatchedKeys();
         for (int index = 0; status.isOk() && index < matchedRowCount; index++) {
           status = session.deleteLong(table, matchedKeys[index]);
@@ -812,18 +814,28 @@ public final class SqlSession {
 
   private StatusCode collectMatchedKeys() {
     matchedRowCount = 0;
-    boolean indexed = table.hasIndexOn(predicateColumn);
-    if (indexed && command.key() == Long.MAX_VALUE) {
+    boolean equality = command.isEqualityPredicate();
+    boolean indexed = predicateColumn > 0 && table.hasIndexOn(predicateColumn);
+    boolean primaryRange = predicateColumn == 0 && !equality;
+    if (indexed && equality && command.key() == Long.MAX_VALUE) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (!equality
+        && command.scanUpperExclusive() <= command.scanLowerInclusive()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long lower = equality ? command.key() : command.scanLowerInclusive();
+    long upper = equality ? command.key() + 1 : command.scanUpperExclusive();
     StatusCode status = indexed
         ? session.beginValueScan(
             table,
             predicateColumn,
-            command.key(),
-            command.key() + 1,
+            lower,
+            upper,
             aggregateCursor)
-        : session.beginScan(table, aggregateCursor);
+        : primaryRange
+            ? session.beginScan(table, lower, upper, aggregateCursor)
+            : session.beginScan(table, aggregateCursor);
     boolean active = status.isOk();
     while (status.isOk()) {
       status = indexed
@@ -834,13 +846,20 @@ public final class SqlSession {
         status = StatusCode.OK;
         break;
       }
-      if (status.isOk() && !indexed) {
+      if (status.isOk() && !indexed && predicateColumn > 0) {
         status = copyRow(aggregateRow.row());
       }
       if (status.isOk()
           && !indexed
-          && row.getLong((predicateColumn - 1) * Long.BYTES) != command.key()) {
-        continue;
+          && predicateColumn > 0) {
+        long value = row.getLong((predicateColumn - 1) * Long.BYTES);
+        boolean matches = equality
+            ? value == command.key()
+            : value >= command.scanLowerInclusive()
+                && value < command.scanUpperExclusive();
+        if (!matches) {
+          continue;
+        }
       }
       if (status.isOk() && matchedRowCount >= matchedKeys.length) {
         status = StatusCode.RESOURCE_EXHAUSTED;

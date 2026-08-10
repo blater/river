@@ -1379,6 +1379,62 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void updatesAndDeletesBoundedPredicateRanges(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE events "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, amount BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO events VALUES "
+                + "(1, 10, 100), (2, 15, 200), (3, 20, 300), "
+                + "(4, 25, 400), (5, 30, 500), (6, 35, 600)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE INDEX events_category ON events(category)", result));
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "UPDATE events SET amount=999 "
+                + "WHERE category >= 15 AND category < 31",
+            result));
+    assertEquals(4, result.affectedRows());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "DELETE FROM events WHERE amount >= 900 AND amount < 1000",
+            result));
+    assertEquals(4, result.affectedRows());
+    assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM events", result));
+    assertEquals(2, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE events SET amount=777 WHERE id >= 1 AND id < 7", result));
+    assertEquals(2, result.affectedRows());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "DELETE FROM events WHERE id >= 7 AND id < 7", result));
+    assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM events", result));
+    assertEquals(2, result.value());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static void assertDuplicateIndexRows(
       SqlSession session,
       SqlExecutionResult result,

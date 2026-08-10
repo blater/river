@@ -274,12 +274,33 @@ public final class SqlParser {
       if (status.isOk()) {
         status = identifier(sql, result.writablePredicateColumnName());
       }
-      if (status.isOk()) {
-        status = requireCharacter(sql, '=');
-      }
-      if (status.isOk()) {
+      if (status.isOk() && consumeCharacter(sql, '=')) {
+        equalityPredicate = true;
         status = number(sql, numberResult);
         key = numberResult.value;
+      } else if (status.isOk()) {
+        boundedScan = true;
+        status = requireCharacter(sql, '>');
+        if (status.isOk()) {
+          status = requireCharacter(sql, '=');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          scanLower = numberResult.value;
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "AND");
+        }
+        if (status.isOk()) {
+          status = matchingIdentifier(sql, result.predicateColumnName());
+        }
+        if (status.isOk()) {
+          status = requireCharacter(sql, '<');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          scanUpper = numberResult.value;
+        }
       }
     } else if (consumeKeyword(sql, "DELETE")) {
       type = SqlCommandType.DELETE;
@@ -293,12 +314,33 @@ public final class SqlParser {
       if (status.isOk()) {
         status = identifier(sql, result.writablePredicateColumnName());
       }
-      if (status.isOk()) {
-        status = requireCharacter(sql, '=');
-      }
-      if (status.isOk()) {
+      if (status.isOk() && consumeCharacter(sql, '=')) {
+        equalityPredicate = true;
         status = number(sql, numberResult);
         key = numberResult.value;
+      } else if (status.isOk()) {
+        boundedScan = true;
+        status = requireCharacter(sql, '>');
+        if (status.isOk()) {
+          status = requireCharacter(sql, '=');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          scanLower = numberResult.value;
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "AND");
+        }
+        if (status.isOk()) {
+          status = matchingIdentifier(sql, result.predicateColumnName());
+        }
+        if (status.isOk()) {
+          status = requireCharacter(sql, '<');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          scanUpper = numberResult.value;
+        }
       }
     } else {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -315,7 +357,9 @@ public final class SqlParser {
     } else {
       result.set(type, key, value);
     }
-    if (type == SqlCommandType.COUNT) {
+    if (type == SqlCommandType.COUNT
+        || type == SqlCommandType.UPDATE
+        || type == SqlCommandType.DELETE) {
       result.setPredicate(
           key, scanLower, scanUpper, boundedScan, equalityPredicate);
     }
