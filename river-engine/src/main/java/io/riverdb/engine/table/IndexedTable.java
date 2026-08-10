@@ -248,7 +248,7 @@ public final class IndexedTable
     return status;
   }
 
-  synchronized StatusCode preflightPreparedInsertGroup(
+  synchronized StatusCode preflightPreparedCommitGroup(
       IndexedTransactionSession[] sessions,
       int count) {
     if (sessions == null || count <= 0 || count > sessions.length) {
@@ -256,7 +256,7 @@ public final class IndexedTable
     }
     StatusCode status = store.beginPreparedInsertGroup();
     for (int index = 0; status.isOk() && index < count; index++) {
-      status = sessions[index].preflightPreparedInserts(store);
+      status = sessions[index].preflightPreparedWrites(store);
     }
     if (status.isOk()) {
       status = store.finishPreparedInsertPreflight(count);
@@ -270,10 +270,10 @@ public final class IndexedTable
     return status;
   }
 
-  synchronized StatusCode appendPreparedInserts(
+  synchronized StatusCode appendPreparedWrites(
       IndexedTransactionSession session,
       long commitSequence) {
-    return session.appendPreparedInserts(store, commitSequence);
+    return session.appendPreparedWrites(store, commitSequence);
   }
 
   synchronized StatusCode cancelPreparedInsertGroup() {

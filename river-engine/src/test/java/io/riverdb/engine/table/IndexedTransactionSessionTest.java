@@ -708,6 +708,75 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void forcesConcurrentUpdatesAndDeletesOnceAndRecoversEveryDecision(@TempDir Path root)
+      throws Exception {
+    NioIoCounters counters = new NioIoCounters();
+    NioDurableDirectory directory = openDirectory(root, counters);
+    LocalWal wal = openWal(directory);
+    IndexedPageStore store = createStore(directory, wal);
+    IndexedTable table = createTable(store);
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedTransactionSession seed = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    for (int key = 401; key <= 404; key++) {
+      assertEquals(StatusCode.OK, seed.insert(key, row(key * 10L)));
+    }
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+
+    IndexedTable committingTable = table;
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, 50_000_000);
+    CountDownLatch ready = new CountDownLatch(4);
+    CountDownLatch start = new CountDownLatch(1);
+    ExecutorService executor = Executors.newFixedThreadPool(4);
+    long forcesBefore = counters.forceCalls();
+    long walCopiesBefore = store.walCopyBytes();
+    try {
+      Future<StatusCode> first = executor.submit(
+          () -> commitMutation(
+              manager, committingTable, coordinator, 401, false, ready, start));
+      Future<StatusCode> second = executor.submit(
+          () -> commitMutation(
+              manager, committingTable, coordinator, 402, false, ready, start));
+      Future<StatusCode> third = executor.submit(
+          () -> commitMutation(
+              manager, committingTable, coordinator, 403, true, ready, start));
+      Future<StatusCode> fourth = executor.submit(
+          () -> commitMutation(
+              manager, committingTable, coordinator, 404, true, ready, start));
+      ready.await();
+      start.countDown();
+      assertEquals(StatusCode.OK, first.get());
+      assertEquals(StatusCode.OK, second.get());
+      assertEquals(StatusCode.OK, third.get());
+      assertEquals(StatusCode.OK, fourth.get());
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(1, counters.forceCalls() - forcesBefore);
+    assertEquals(2L * Long.BYTES + 2, store.walCopyBytes() - walCopiesBefore);
+    assertEquals(0, wal.copiedPayloadBytes());
+    assertEquals(6, table.currentCommitSequence());
+    assertMutationResults(table);
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertMutationResults(table);
+    close(table, wal, directory);
+  }
+
+  @Test
   void recoversCommittedVisibilityBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
@@ -828,6 +897,35 @@ final class IndexedTransactionSessionTest {
     ready.countDown();
     start.await();
     return status.isOk() ? session.commit(new TransactionOutcome()) : status;
+  }
+
+  private static StatusCode commitMutation(
+      TransactionManager manager,
+      IndexedTable table,
+      IndexedGroupCommitCoordinator coordinator,
+      int key,
+      boolean delete,
+      CountDownLatch ready,
+      CountDownLatch start) throws InterruptedException {
+    IndexedTransactionSession session =
+        new IndexedTransactionSession(manager, table, 128, coordinator);
+    StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
+    if (status.isOk()) {
+      status = delete ? session.delete(key) : session.update(key, row(key * 100L));
+    }
+    ready.countDown();
+    start.await();
+    return status.isOk() ? session.commit(new TransactionOutcome()) : status;
+  }
+
+  private static void assertMutationResults(IndexedTable table) {
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(401, fetched));
+    assertEquals(40_100, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(402, fetched));
+    assertEquals(40_200, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(403, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(404, fetched));
   }
 
   private static StatusCode commitDistinct(

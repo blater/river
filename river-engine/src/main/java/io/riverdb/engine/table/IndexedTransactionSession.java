@@ -443,43 +443,63 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
       return status;
     }
-    if (groupCommit != null && eligibleForInsertGroup()) {
+    if (groupCommit != null && eligibleForCommitGroup()) {
       return groupCommit.commit(this, result);
     }
     return completeCoordinatedCommit(manager.commit(transaction, this, result));
   }
 
-  boolean eligibleForInsertGroup() {
+  boolean eligibleForCommitGroup() {
     return transaction.state() == TransactionState.ACTIVE
         && activeScan == null
         && pendingInsertCount > 0
-        && !serializableScan
-        && !containsNonInsertMutation();
+        && !serializableScan;
   }
 
   Transaction groupTransaction() {
     return transaction;
   }
 
-  StatusCode preflightPreparedInserts(IndexedPageStore store) {
-    return store.preflightPreparedInsertBatch(
-        pendingKeys,
-        pendingRows,
-        rowStride,
-        pendingRowLengths,
-        pendingInsertCount);
+  StatusCode preflightPreparedWrites(IndexedPageStore store) {
+    return containsNonInsertMutation()
+        ? store.preflightPreparedMutationBatch(
+            pendingOperations,
+            pendingKeys,
+            pendingPreviousRowIds,
+            pendingRows,
+            rowStride,
+            pendingRowLengths,
+            pendingInsertCount)
+        : store.preflightPreparedInsertBatch(
+            pendingKeys,
+            pendingRows,
+            rowStride,
+            pendingRowLengths,
+            pendingInsertCount);
   }
 
-  StatusCode appendPreparedInserts(IndexedPageStore store, long commitSequence) {
-    StatusCode status = store.appendPreparedInsertBatch(
-        transaction.transactionId(),
-        commitSequence,
-        pendingKeys,
-        pendingRows,
-        rowStride,
-        pendingRowLengths,
-        pendingInsertCount,
-        preparedInsertResult);
+  StatusCode appendPreparedWrites(IndexedPageStore store, long commitSequence) {
+    StatusCode status = containsNonInsertMutation()
+        ? store.appendPreparedMutationBatch(
+            transaction.transactionId(),
+            commitSequence,
+            pendingOperations,
+            pendingKeys,
+            pendingPreviousRowIds,
+            pendingRows,
+            rowStride,
+            pendingRowLengths,
+            pendingInsertCount,
+            preparedInsertResult)
+        : store.appendPreparedInsertBatch(
+            transaction.transactionId(),
+            commitSequence,
+            pendingKeys,
+            pendingRows,
+            rowStride,
+            pendingRowLengths,
+            pendingInsertCount,
+            preparedInsertResult);
     if (status.isOk()) {
       commitResult.set(preparedInsertResult.rowId(), commitSequence);
       committedSequence = commitSequence;

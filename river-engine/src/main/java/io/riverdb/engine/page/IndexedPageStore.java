@@ -80,6 +80,7 @@ public final class IndexedPageStore {
   private final int[] recoveryPageIds = new int[MAX_CHANGED_PAGES];
   private final long[] preparedKeys = new long[MAX_PREPARED_INSERT_ROWS];
   private final int[] preparedLeafPageIds = new int[MAX_PREPARED_INSERT_ROWS];
+  private final boolean[] preparedNewIndexEntries = new boolean[MAX_PREPARED_INSERT_ROWS];
   private final long[] preparedRecordStarts = new long[LocalWal.MAX_PENDING_RECORDS];
   private final long[] preparedCommitSequences = new long[LocalWal.MAX_PENDING_RECORDS];
   private final long[] preparedTransactionIds = new long[LocalWal.MAX_PENDING_RECORDS];
@@ -765,6 +766,7 @@ public final class IndexedPageStore {
       if (status.isOk()) {
         preparedKeys[preparedKeyCount] = key;
         preparedLeafPageIds[preparedKeyCount] = leafPageId;
+        preparedNewIndexEntries[preparedKeyCount] = true;
         preparedKeyCount++;
         preparedHeapBytes += required;
       }
@@ -773,6 +775,116 @@ public final class IndexedPageStore {
       for (int index = originalKeyCount; index < preparedKeyCount; index++) {
         preparedKeys[index] = 0;
         preparedLeafPageIds[index] = 0;
+        preparedNewIndexEntries[index] = false;
+      }
+      preparedKeyCount = originalKeyCount;
+      preparedHeapBytes = originalHeapBytes;
+    }
+    return status;
+  }
+
+  /** Adds one transaction's mixed write set to cumulative group validation. */
+  public StatusCode preflightPreparedMutationBatch(
+      int[] operations,
+      long[] keys,
+      int[] expectedPreviousRowIds,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int mutationCount) {
+    if (!preparedInsertGroupActive
+        || preparedInsertEncoding
+        || operations == null
+        || keys == null
+        || expectedPreviousRowIds == null
+        || rows == null
+        || rowStride <= 0
+        || rowLengths == null
+        || mutationCount <= 0
+        || mutationCount > operations.length
+        || mutationCount > keys.length
+        || mutationCount > expectedPreviousRowIds.length
+        || mutationCount > rowLengths.length
+        || preparedKeyCount + mutationCount > preparedKeys.length
+        || rowCount + preparedKeyCount + mutationCount > MAX_ROWS) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int originalKeyCount = preparedKeyCount;
+    int originalHeapBytes = preparedHeapBytes;
+    StatusCode status = StatusCode.OK;
+    for (int index = 0; status.isOk() && index < mutationCount; index++) {
+      int operation = operations[index];
+      long key = keys[index];
+      int previousRowId = expectedPreviousRowIds[index];
+      int rowBytes = rowLengths[index];
+      int rowOffset = index * rowStride;
+      if ((operation != MUTATION_INSERT
+              && operation != MUTATION_UPDATE
+              && operation != MUTATION_DELETE)
+          || key == Long.MAX_VALUE
+          || rowBytes <= 0
+          || rowBytes > rowStride
+          || rows.limit() - rowOffset < rowBytes) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+        break;
+      }
+      for (int previous = 0; previous < preparedKeyCount; previous++) {
+        if (preparedKeys[previous] == key) {
+          status = StatusCode.CONFLICT;
+          break;
+        }
+      }
+      int leafPageId = status.isOk() ? findLeafPageId(key) : 0;
+      if (status.isOk() && (!present[HEAP_PAGE_ID] || leafPageId <= 0)) {
+        status = StatusCode.CORRUPTION;
+      }
+      if (status.isOk()) {
+        StatusCode lookup = BTreePage.lookupLeaf(
+            currentPayloads[leafPageId], key, lookupResult);
+        if (operation == MUTATION_INSERT && previousRowId == 0) {
+          status = lookup == StatusCode.CONFLICT ? StatusCode.OK
+              : lookup.isOk() ? StatusCode.CONFLICT : lookup;
+        } else if (!lookup.isOk()
+            || lookupResult.rowId() != previousRowId
+            || previousRowId <= 0
+            || (operation == MUTATION_INSERT
+                ? !isDeletedRow(previousRowId) : isDeletedRow(previousRowId))) {
+          status = StatusCode.CONFLICT;
+        }
+      }
+      boolean newIndexEntry = operation == MUTATION_INSERT && previousRowId == 0;
+      int entriesInLeaf = 0;
+      for (int previous = 0; status.isOk() && previous < preparedKeyCount; previous++) {
+        if (preparedNewIndexEntries[previous]
+            && preparedLeafPageIds[previous] == leafPageId) {
+          entriesInLeaf++;
+        }
+      }
+      if (status.isOk()
+          && newIndexEntry
+          && BTreePage.entryCount(currentPayloads[leafPageId]) + entriesInLeaf
+              >= BTreePage.MAX_ENTRIES) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
+      int required = HeapPage.SLOT_BYTES + rowBytes;
+      if (status.isOk()
+          && preparedHeapBytes + required
+              > HeapPage.availableBytes(currentPayloads[lastHeapPageId])) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
+      if (status.isOk()) {
+        preparedKeys[preparedKeyCount] = key;
+        preparedLeafPageIds[preparedKeyCount] = leafPageId;
+        preparedNewIndexEntries[preparedKeyCount] = newIndexEntry;
+        preparedKeyCount++;
+        preparedHeapBytes += required;
+      }
+    }
+    if (!status.isOk()) {
+      for (int index = originalKeyCount; index < preparedKeyCount; index++) {
+        preparedKeys[index] = 0;
+        preparedLeafPageIds[index] = 0;
+        preparedNewIndexEntries[index] = false;
       }
       preparedKeyCount = originalKeyCount;
       preparedHeapBytes = originalHeapBytes;
@@ -881,6 +993,91 @@ public final class IndexedPageStore {
     preparedRecordCount++;
     preparedRowCount += insertCount;
     result.setRowId(firstRowId + insertCount - 1);
+    return StatusCode.OK;
+  }
+
+  /** Encodes and appends one preflighted mixed write set without forcing or publishing. */
+  public StatusCode appendPreparedMutationBatch(
+      long transactionId,
+      long commitSequence,
+      int[] operations,
+      long[] keys,
+      int[] expectedPreviousRowIds,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int mutationCount,
+      HeapInsertResult result) {
+    if (!preparedInsertGroupActive
+        || !preparedInsertEncoding
+        || preparedRecordCount >= LocalWal.MAX_PENDING_RECORDS
+        || transactionId <= 0
+        || commitSequence != wal.nextCommitSequence()
+        || operations == null
+        || keys == null
+        || expectedPreviousRowIds == null
+        || rows == null
+        || rowLengths == null
+        || mutationCount <= 0
+        || mutationCount > operations.length
+        || mutationCount > keys.length
+        || mutationCount > expectedPreviousRowIds.length
+        || mutationCount > rowLengths.length
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    int operationBytes = MUTATION_BATCH_HEADER_BYTES;
+    for (int index = 0; index < mutationCount; index++) {
+      operationBytes += MUTATION_BATCH_ENTRY_BYTES + rowLengths[index];
+    }
+    StatusCode status = wal.reserve(operationBytes, walReservation);
+    if (!status.isOk()) {
+      failed = true;
+      return status;
+    }
+    ByteBuffer payload = walReservation.writablePayload();
+    putLong(payload, 0, OPERATION_MAGIC);
+    putInt(payload, 8, WAL_FORMAT_VERSION);
+    putInt(payload, 12, OPERATION_TYPE_MUTATION_BATCH);
+    putInt(payload, 16, mutationCount);
+    putInt(payload, 20, 0);
+    int outputOffset = MUTATION_BATCH_HEADER_BYTES;
+    int firstRowId = rowCount + preparedRowCount + 1;
+    for (int index = 0; index < mutationCount; index++) {
+      int rowBytes = rowLengths[index];
+      putInt(payload, outputOffset, operations[index]);
+      putLong(payload, outputOffset + 4, keys[index]);
+      putInt(payload, outputOffset + 12, firstRowId + index);
+      putInt(payload, outputOffset + 16, expectedPreviousRowIds[index]);
+      putInt(payload, outputOffset + 20, rowBytes);
+      copyPreparedRow(
+          rows,
+          index * rowStride,
+          payload,
+          outputOffset + MUTATION_BATCH_ENTRY_BYTES,
+          rowBytes);
+      outputOffset += MUTATION_BATCH_ENTRY_BYTES + rowBytes;
+    }
+    payload.position(operationBytes);
+    status = wal.appendUnforced(
+        walReservation,
+        transactionId,
+        commitSequence,
+        1,
+        WAL_FORMAT_ID,
+        WAL_FORMAT_VERSION,
+        walAppendResult);
+    if (!status.isOk()) {
+      failed = true;
+      return status;
+    }
+    preparedRecordStarts[preparedRecordCount] = walAppendResult.startOffset();
+    preparedCommitSequences[preparedRecordCount] = commitSequence;
+    preparedTransactionIds[preparedRecordCount] = transactionId;
+    preparedRecordCount++;
+    preparedRowCount += mutationCount;
+    result.setRowId(firstRowId + mutationCount - 1);
     return StatusCode.OK;
   }
 
@@ -2482,6 +2679,7 @@ public final class IndexedPageStore {
     for (int index = 0; index < preparedKeyCount; index++) {
       preparedKeys[index] = 0;
       preparedLeafPageIds[index] = 0;
+      preparedNewIndexEntries[index] = false;
     }
     for (int index = 0; index < preparedRecordCount; index++) {
       preparedRecordStarts[index] = 0;

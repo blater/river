@@ -46,7 +46,7 @@ public final class IndexedGroupCommitCoordinator {
   }
 
   public StatusCode commit(IndexedTransactionSession session, TransactionOutcome result) {
-    if (session == null || result == null || !session.eligibleForInsertGroup()) {
+    if (session == null || result == null || !session.eligibleForCommitGroup()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int slot = -1;
@@ -121,7 +121,7 @@ public final class IndexedGroupCommitCoordinator {
   }
 
   private void process(int count) {
-    StatusCode status = table.preflightPreparedInsertGroup(sessions, count);
+    StatusCode status = table.preflightPreparedCommitGroup(sessions, count);
     if (!status.isOk()) {
       commitDirectly(count);
       return;
@@ -135,7 +135,7 @@ public final class IndexedGroupCommitCoordinator {
     for (int index = 0; status.isOk() && index < count; index++) {
       long commitSequence = table.nextCommitSequence();
       commitSequences[index] = commitSequence;
-      status = table.appendPreparedInserts(sessions[index], commitSequence);
+      status = table.appendPreparedWrites(sessions[index], commitSequence);
     }
     if (status.isOk()) {
       status = table.forcePreparedInserts();

@@ -401,6 +401,13 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.engine.page.IndexedPageStore",
+    "appendPreparedMutationBatch",
+    "(JJ$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+        + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
+        + "$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
     "forcePreparedInserts",
     "()$statusCodeDescriptor"
   ),
