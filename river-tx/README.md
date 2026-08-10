@@ -9,7 +9,9 @@ the publication barrier across WAL force, heap/index publication, active-set
 removal, and the final outcome. Transaction IDs and commit CSNs resume from the
 recovered WAL.
 
-Serializable sessions are rejected until row and range locks are integrated.
-Physical undo/savepoints, durable non-final outcomes, MVCC update chains, and
-vacuum remain the next transaction stages; abort currently discards only the
-deferred insert set and releases its key locks.
+Serializable point reads and inserts are supported with retained shared and
+exclusive key locks, including missing-key protection and in-transaction lock
+upgrade. Range scans are not yet exposed transactionally, so this does not
+claim phantom protection for scans. Physical undo/savepoints, durable non-final
+outcomes, MVCC update chains, and vacuum remain the next transaction stages;
+abort currently discards only the deferred insert set and releases its locks.

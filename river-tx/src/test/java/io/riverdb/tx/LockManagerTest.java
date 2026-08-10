@@ -54,4 +54,25 @@ final class LockManagerTest {
     assertEquals(StatusCode.OK, locks.release(first));
     assertEquals(StatusCode.OK, locks.release(second));
   }
+
+  @Test
+  void upgradeWaitsForOtherReaderThenBecomesExclusive() {
+    LockManager locks = new LockManager(3);
+    LockToken first = new LockToken();
+    LockToken second = new LockToken();
+    LockToken writer = new LockToken();
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(31, LockScope.KEY, 1, 7, LockMode.SHARED, 0, 0, first));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(32, LockScope.KEY, 1, 7, LockMode.SHARED, 0, 0, second));
+    assertEquals(StatusCode.RETRY, locks.upgrade(first, LockMode.EXCLUSIVE, 0, 0));
+    assertEquals(StatusCode.OK, locks.release(second));
+    assertEquals(StatusCode.OK, locks.upgrade(first, LockMode.EXCLUSIVE, 0, 0));
+    assertEquals(
+        StatusCode.RETRY,
+        locks.tryAcquire(33, LockScope.KEY, 1, 7, LockMode.SHARED, 0, 0, writer));
+    assertEquals(StatusCode.OK, locks.release(first));
+  }
 }

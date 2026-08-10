@@ -61,6 +61,36 @@ public final class TransactionManager {
         token);
   }
 
+  public synchronized StatusCode tryAcquireSharedKey(
+      Transaction transaction,
+      long tableId,
+      long key,
+      LockToken token) {
+    if (!validActive(transaction) || key == Long.MAX_VALUE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return locks.tryAcquire(
+        transaction.transactionId(),
+        LockScope.KEY,
+        tableId,
+        key,
+        LockMode.SHARED,
+        0,
+        0,
+        token);
+  }
+
+  public synchronized StatusCode upgradeKey(
+      Transaction transaction,
+      LockToken token) {
+    if (!validActive(transaction)
+        || token == null
+        || token.transactionId() != transaction.transactionId()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return locks.upgrade(token, LockMode.EXCLUSIVE, 0, 0);
+  }
+
   public StatusCode release(LockToken token) {
     return locks.release(token);
   }
@@ -191,6 +221,25 @@ public final class TransactionManager {
         transaction.transactionId(),
         TransactionState.ABORTED,
         0);
+    return StatusCode.OK;
+  }
+
+  public synchronized StatusCode commitReadOnly(
+      Transaction transaction,
+      TransactionOutcome result) {
+    if (!validActive(transaction) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    long commitSequence = transaction.snapshot().visibleCommitSequence();
+    removeActive(transaction.transactionId());
+    transaction.transition(TransactionState.COMMITTED, commitSequence, true);
+    result.set(
+        databaseHigh,
+        databaseLow,
+        transaction.transactionId(),
+        TransactionState.COMMITTED,
+        commitSequence);
     return StatusCode.OK;
   }
 

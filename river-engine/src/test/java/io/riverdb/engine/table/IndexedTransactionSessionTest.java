@@ -88,9 +88,52 @@ final class IndexedTransactionSessionTest {
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey(9, fetched));
     assertEquals(91, value(fetched));
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session(manager, table).begin(IsolationLevel.SERIALIZABLE));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void serializableMissingKeyReadBlocksInsertUntilReadOnlyCommit(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession reader = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(88, fetched));
+    assertEquals(StatusCode.RETRY, writer.insert(88, row(880)));
+    assertEquals(1, manager.activeLockCount());
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(TransactionState.COMMITTED, outcome.state());
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(StatusCode.OK, writer.insert(88, row(880)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, table.fetchByKey(88, fetched));
+    assertEquals(880, value(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void serializableReaderCanUpgradeMissingKeyToInsert(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = session(manager, table);
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.CONFLICT, session.fetchByKey(99, fetched));
+    assertEquals(StatusCode.OK, session.insert(99, row(990)));
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, table.fetchByKey(99, fetched));
+    assertEquals(990, value(fetched));
+    assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
   }
 

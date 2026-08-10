@@ -607,6 +607,16 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.tx.LockManager",
+    "upgrade",
+    "($lockTokenDescriptor$lockModeDescriptor" + "JJ)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.LockManager",
+    "validToken",
+    "($lockTokenDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.tx.LockManager",
     "conflicts",
     "(II)Z"
   ),
@@ -619,6 +629,21 @@ val liveHotPathMethods = setOf(
     "io.riverdb.tx.TransactionManager",
     "release",
     "($lockTokenDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "tryAcquireSharedKey",
+    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "upgradeKey",
+    "($transactionDescriptor$lockTokenDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
+    "commitReadOnly",
+    "($transactionDescriptor$transactionOutcomeDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -649,6 +674,11 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "clearWriteSet",
     "()V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "findHeldLock",
+    "(J)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

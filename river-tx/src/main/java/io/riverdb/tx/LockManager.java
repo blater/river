@@ -140,14 +140,7 @@ public final class LockManager implements LockService {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int slot = token.slot();
-    if (!token.isActive()
-        || !token.isOwnedBy(OWNER_HIGH, ownerLow)
-        || token.providerGeneration() != 1
-        || slot < 0
-        || slot >= occupied.length
-        || !occupied[slot]
-        || capabilityTokens[slot] != token.capabilityToken()
-        || transactionIds[slot] != token.transactionId()) {
+    if (!validToken(token, slot)) {
       return StatusCode.NOT_OWNER;
     }
     StatusCode status = token.complete(OWNER_HIGH, ownerLow);
@@ -163,6 +156,51 @@ public final class LockManager implements LockService {
     modes[slot] = 0;
     activeLockCount--;
     return StatusCode.OK;
+  }
+
+  public synchronized StatusCode upgrade(
+      LockToken token,
+      LockMode requestedMode,
+      long deadlineNanos,
+      long nowNanos) {
+    if (token == null || requestedMode == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int slot = token.slot();
+    if (!validToken(token, slot)) {
+      return StatusCode.NOT_OWNER;
+    }
+    int requested = requestedMode.ordinal();
+    int held = modes[slot];
+    if (held >= requested) {
+      return StatusCode.OK;
+    }
+    for (int other = 0; other < occupied.length; other++) {
+      if (other == slot
+          || !occupied[other]
+          || scopes[other] != scopes[slot]
+          || resourceHighs[other] != resourceHighs[slot]
+          || resourceLows[other] != resourceLows[slot]) {
+        continue;
+      }
+      if (conflicts(requested, modes[other]) || conflicts(modes[other], requested)) {
+        return deadlineNanos > 0 && nowNanos >= deadlineNanos
+            ? StatusCode.TIMEOUT : StatusCode.RETRY;
+      }
+    }
+    modes[slot] = (byte) requested;
+    return StatusCode.OK;
+  }
+
+  private boolean validToken(LockToken token, int slot) {
+    return token.isActive()
+        && token.isOwnedBy(OWNER_HIGH, ownerLow)
+        && token.providerGeneration() == 1
+        && slot >= 0
+        && slot < occupied.length
+        && occupied[slot]
+        && capabilityTokens[slot] == token.capabilityToken()
+        && transactionIds[slot] == token.transactionId();
   }
 
   private static boolean conflicts(int left, int right) {
