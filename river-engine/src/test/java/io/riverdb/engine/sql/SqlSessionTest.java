@@ -86,4 +86,61 @@ final class SqlSessionTest {
     assertEquals(10, result.value());
     assertEquals(StatusCode.OK, database.close());
   }
+
+  @Test
+  void explicitTransactionCommitsOrRollsBackMultipleStatements(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession writer = sessionResult.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession observer = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE accounts", result));
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE papers", result));
+    assertEquals(StatusCode.OK, writer.execute("BEGIN", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO accounts VALUES (1, 100)", result));
+    assertEquals(0, result.commitSequence());
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO papers VALUES (1, 200)", result));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("SELECT value FROM accounts WHERE key=1", result));
+    assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.CONFLICT,
+        observer.execute("SELECT value FROM accounts WHERE key=1", result));
+    assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
+    assertEquals(false, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT value FROM accounts WHERE key=1", result));
+    assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT value FROM papers WHERE key=1", result));
+    assertEquals(200, result.value());
+
+    assertEquals(StatusCode.OK, writer.execute("BEGIN", result));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, writer.execute("SELECT nope", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO accounts VALUES (2, 101)", result));
+    assertEquals(StatusCode.OK, writer.execute("ROLLBACK", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        observer.execute("SELECT value FROM accounts WHERE key=2", result));
+    assertEquals(StatusCode.CONFLICT, writer.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, database.close());
+  }
 }

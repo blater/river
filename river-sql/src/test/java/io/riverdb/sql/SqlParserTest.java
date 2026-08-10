@@ -30,6 +30,12 @@ final class SqlParserTest {
     assertEquals(11, command.value());
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
+    assertEquals(StatusCode.OK, parser.parse("BEGIN;", command));
+    assertEquals(SqlCommandType.BEGIN, command.type());
+    assertEquals(StatusCode.OK, parser.parse("COMMIT", command));
+    assertEquals(SqlCommandType.COMMIT, command.type());
+    assertEquals(StatusCode.OK, parser.parse("ROLLBACK", command));
+    assertEquals(SqlCommandType.ROLLBACK, command.type());
   }
 
   @Test

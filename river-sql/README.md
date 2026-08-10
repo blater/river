@@ -6,7 +6,10 @@ for a named table with a non-negative 48-bit `KEY` and one `BIGINT` `VALUE`.
 Each statement uses the durable catalog, transaction manager, authoritative
 index, MVCC versions, and WAL recovery.
 
+`BEGIN`, `COMMIT`, and `ROLLBACK` group point statements into one atomic write
+set. DDL remains outside explicit transactions in this first slice.
+
 `SqlParser` writes into a reusable command and identifier buffer. It does not
 build an allocating object tree. Joins, scans, expressions, explicit SQL
-transaction control, general schemas/types, constraints, and secondary indexes
-are not claimed by this subset.
+savepoints, scans, general schemas/types, constraints, and secondary indexes are
+not claimed by this subset.

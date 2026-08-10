@@ -19,7 +19,16 @@ public final class SqlParser {
     SqlCommandType type;
     long key = 0;
     long value = 0;
-    if (consumeKeyword(sql, "CREATE")) {
+    if (consumeKeyword(sql, "BEGIN")) {
+      type = SqlCommandType.BEGIN;
+      status = StatusCode.OK;
+    } else if (consumeKeyword(sql, "COMMIT")) {
+      type = SqlCommandType.COMMIT;
+      status = StatusCode.OK;
+    } else if (consumeKeyword(sql, "ROLLBACK")) {
+      type = SqlCommandType.ROLLBACK;
+      status = StatusCode.OK;
+    } else if (consumeKeyword(sql, "CREATE")) {
       type = SqlCommandType.CREATE_TABLE;
       status = requireKeyword(sql, "TABLE");
       if (status.isOk()) {

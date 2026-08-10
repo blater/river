@@ -6,12 +6,14 @@ public final class SqlExecutionResult {
   private long value;
   private int affectedRows;
   private boolean hasValue;
+  private boolean transactionActive;
 
   public void reset() {
     commitSequence = 0;
     value = 0;
     affectedRows = 0;
     hasValue = false;
+    transactionActive = false;
   }
 
   void setUpdate(int rows, long committedAt) {
@@ -23,6 +25,11 @@ public final class SqlExecutionResult {
     value = selectedValue;
     hasValue = true;
     affectedRows = 1;
+    commitSequence = committedAt;
+  }
+
+  void setTransaction(boolean active, long committedAt) {
+    transactionActive = active;
     commitSequence = committedAt;
   }
 
@@ -40,5 +47,9 @@ public final class SqlExecutionResult {
 
   public long commitSequence() {
     return commitSequence;
+  }
+
+  public boolean transactionActive() {
+    return transactionActive;
   }
 }

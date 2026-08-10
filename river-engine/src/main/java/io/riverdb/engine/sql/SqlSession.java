@@ -24,6 +24,7 @@ public final class SqlSession {
   private final HeapRowResult fetched = new HeapRowResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
+  private boolean transactionActive;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -50,26 +51,68 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
+    if (transactionActive) {
+      result.setTransaction(true, session.visibleCommitSequence());
+    }
     StatusCode status = parser.parse(sql, command);
     if (!status.isOk()) {
       return status;
     }
+    if (command.type() == SqlCommandType.BEGIN) {
+      if (transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = session.begin(IsolationLevel.REPEATABLE_READ);
+      if (status.isOk()) {
+        transactionActive = true;
+        result.setTransaction(true, 0);
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.COMMIT) {
+      if (!transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = session.commit(outcome);
+      transactionActive = false;
+      if (status.isOk()) {
+        result.setTransaction(false, outcome.commitSequence());
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.ROLLBACK) {
+      if (!transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = session.abort(outcome);
+      transactionActive = false;
+      if (status.isOk()) {
+        result.setTransaction(false, 0);
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CREATE_TABLE) {
+      if (transactionActive) {
+        return StatusCode.CONFLICT;
+      }
       status = database.createTable(command.tableName(), table);
       if (status.isOk()) {
         result.setUpdate(0, 0);
       }
       return status;
     }
-    status = session.begin(IsolationLevel.READ_COMMITTED);
-    boolean active = status.isOk();
+    boolean implicit = !transactionActive;
+    if (implicit) {
+      status = session.begin(IsolationLevel.READ_COMMITTED);
+    }
+    boolean active = status.isOk() && implicit;
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
       status = executeDataCommand(result);
     }
-    if (status.isOk()) {
+    if (status.isOk() && implicit) {
       status = session.commit(outcome);
       active = false;
       if (status.isOk()) {
@@ -79,6 +122,13 @@ public final class SqlSession {
           result.setUpdate(1, outcome.commitSequence());
         }
       }
+    } else if (status.isOk()) {
+      if (command.type() == SqlCommandType.SELECT) {
+        result.setValue(selected.getLong(0), session.visibleCommitSequence());
+      } else {
+        result.setUpdate(1, 0);
+      }
+      result.setTransaction(true, result.commitSequence());
     }
     if (!status.isOk() && active) {
       StatusCode abort = session.abort(outcome);

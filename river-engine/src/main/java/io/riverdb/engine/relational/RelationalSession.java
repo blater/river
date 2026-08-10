@@ -68,6 +68,10 @@ public final class RelationalSession {
     return session.abort(result);
   }
 
+  public long visibleCommitSequence() {
+    return session.transaction().snapshot().visibleCommitSequence();
+  }
+
   IndexedTransactionSession indexedSession() {
     return session;
   }

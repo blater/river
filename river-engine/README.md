@@ -20,6 +20,6 @@ with a non-negative 48-bit primary key; SQL types, secondary-index namespaces,
 and broader key encodings are the next relational layers.
 
 `SqlSession` executes the initial `KEY`/`VALUE` point-statement SQL subset using
-implicit transactions. It is a real end-to-end path through the durable catalog
-and storage kernel, while explicit SQL transactions, scans, general schemas,
+implicit or explicit multi-statement transactions. It is a real end-to-end path
+through the durable catalog and storage kernel, while scans, general schemas,
 and secondary indexes remain subsequent vertical slices.
