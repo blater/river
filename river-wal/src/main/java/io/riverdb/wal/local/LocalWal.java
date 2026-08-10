@@ -63,6 +63,32 @@ public final class LocalWal {
       DatabaseIncarnation databaseIncarnation,
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
+    return open(directory, databaseIncarnation, walGeneration, true, false, result);
+  }
+
+  public static StatusCode create(
+      DurableDirectory directory,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration walGeneration,
+      LocalWalOpenResult result) {
+    return open(directory, databaseIncarnation, walGeneration, false, true, result);
+  }
+
+  public static StatusCode openExisting(
+      DurableDirectory directory,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration walGeneration,
+      LocalWalOpenResult result) {
+    return open(directory, databaseIncarnation, walGeneration, false, false, result);
+  }
+
+  private static StatusCode open(
+      DurableDirectory directory,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration walGeneration,
+      boolean createWhenMissing,
+      boolean requireCreate,
+      LocalWalOpenResult result) {
     if (directory == null
         || databaseIncarnation == null
         || !databaseIncarnation.isValid()
@@ -73,9 +99,13 @@ public final class LocalWal {
     }
     result.reset();
     DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.reopen(FILE_NAME, operation);
+    StatusCode status = requireCreate
+        ? directory.createFile(FILE_NAME, operation)
+        : directory.reopen(FILE_NAME, operation);
     boolean created = false;
-    if (status == StatusCode.CONFLICT) {
+    if (requireCreate && status.isOk()) {
+      created = true;
+    } else if (status == StatusCode.CONFLICT && createWhenMissing) {
       status = directory.createFile(FILE_NAME, operation);
       created = status.isOk();
     }

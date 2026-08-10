@@ -133,13 +133,32 @@ public final class IndexedPageStore {
       DatabaseIncarnation database,
       WalGeneration walGeneration,
       IndexedPageStoreOpenResult result) {
+    return open(directory, wal, database, walGeneration, true, result);
+  }
+
+  public static StatusCode openExisting(
+      DurableDirectory directory,
+      LocalWal wal,
+      DatabaseIncarnation database,
+      WalGeneration walGeneration,
+      IndexedPageStoreOpenResult result) {
+    return open(directory, wal, database, walGeneration, false, result);
+  }
+
+  private static StatusCode open(
+      DurableDirectory directory,
+      LocalWal wal,
+      DatabaseIncarnation database,
+      WalGeneration walGeneration,
+      boolean createWhenMissing,
+      IndexedPageStoreOpenResult result) {
     if (!validInput(directory, wal, database, walGeneration, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     DirectoryOperationResult operation = new DirectoryOperationResult();
     StatusCode status = directory.reopen(FILE_NAME, operation);
-    if (status == StatusCode.CONFLICT) {
+    if (status == StatusCode.CONFLICT && createWhenMissing) {
       status = directory.createFile(FILE_NAME, operation);
     }
     if (!status.isOk()) {
