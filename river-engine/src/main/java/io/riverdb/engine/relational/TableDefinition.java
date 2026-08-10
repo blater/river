@@ -1,22 +1,25 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.base.error.StatusCode;
 import java.nio.ByteBuffer;
 
 /** Caller-owned resolved logical table identity. */
 public final class TableDefinition {
+  public static final int MAXIMUM_INDEXES = 4;
   static final int INDEX_NONE = 0;
   static final int INDEX_BUILDING = 1;
   static final int INDEX_READY = 2;
 
   private RelationalDatabase owner;
   private int tableId;
-  private int uniqueValueIndexTableId;
-  private int uniqueValueIndexState;
+  private final int[] uniqueIndexTableIds = new int[MAXIMUM_INDEXES];
+  private final int[] uniqueIndexStates = new int[MAXIMUM_INDEXES];
+  private final int[] uniqueIndexColumns = new int[MAXIMUM_INDEXES];
   private final ColumnName keyColumnName = new ColumnName();
   private final ColumnName valueColumnName = new ColumnName();
   private final ColumnName[] additionalColumns =
       new ColumnName[TableSchema.MAXIMUM_COLUMNS - 2];
-  private int uniqueValueIndexColumn = -1;
+  private int uniqueIndexCount;
   private int columnCount;
   private long schemaVersion;
   private boolean available;
@@ -30,9 +33,12 @@ public final class TableDefinition {
   public void reset() {
     owner = null;
     tableId = 0;
-    uniqueValueIndexTableId = 0;
-    uniqueValueIndexState = INDEX_NONE;
-    uniqueValueIndexColumn = -1;
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      uniqueIndexTableIds[index] = 0;
+      uniqueIndexStates[index] = INDEX_NONE;
+      uniqueIndexColumns[index] = 0;
+    }
+    uniqueIndexCount = 0;
     keyColumnName.reset();
     valueColumnName.reset();
     for (int index = 0; index < columnCount - 2; index++) {
@@ -60,12 +66,14 @@ public final class TableDefinition {
       CharSequence valueName) {
     owner = database;
     tableId = id;
-    uniqueValueIndexTableId = valueIndexTableId;
-    uniqueValueIndexState = valueIndexState;
-    uniqueValueIndexColumn = valueIndexTableId == 0 ? -1 : 1;
+    columnCount = 2;
+    uniqueIndexCount = 0;
+    if (valueIndexTableId > 0) {
+      setIndex(0, valueIndexTableId, valueIndexState, 1);
+      uniqueIndexCount = 1;
+    }
     keyColumnName.set(keyName);
     valueColumnName.set(valueName);
-    columnCount = 2;
     schemaVersion = database.schemaVersion();
     available = true;
   }
@@ -79,12 +87,13 @@ public final class TableDefinition {
       TableDefinition schema) {
     owner = database;
     tableId = id;
-    uniqueValueIndexTableId = valueIndexTableId;
-    uniqueValueIndexState = valueIndexState;
-    uniqueValueIndexColumn = indexColumn;
     columnCount = schema.columnCount();
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
+    }
+    copyIndexes(schema);
+    if (valueIndexTableId > 0) {
+      upsertIndex(valueIndexTableId, valueIndexState, indexColumn);
     }
     schemaVersion = database.schemaVersion();
     available = true;
@@ -99,10 +108,12 @@ public final class TableDefinition {
       TableSchema schema) {
     owner = database;
     tableId = id;
-    uniqueValueIndexTableId = valueIndexTableId;
-    uniqueValueIndexState = valueIndexState;
-    uniqueValueIndexColumn = indexColumn;
     columnCount = schema.columnCount();
+    uniqueIndexCount = 0;
+    if (valueIndexTableId > 0) {
+      setIndex(0, valueIndexTableId, valueIndexState, indexColumn);
+      uniqueIndexCount = 1;
+    }
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
     }
@@ -121,10 +132,12 @@ public final class TableDefinition {
       int columns) {
     owner = database;
     tableId = id;
-    uniqueValueIndexTableId = valueIndexTableId;
-    uniqueValueIndexState = valueIndexState;
-    uniqueValueIndexColumn = indexColumn;
     columnCount = columns;
+    uniqueIndexCount = 0;
+    if (valueIndexTableId > 0) {
+      setIndex(0, valueIndexTableId, valueIndexState, indexColumn);
+      uniqueIndexCount = 1;
+    }
     int offset = columnsOffset;
     for (int index = 0; index < columns; index++) {
       int length = source.getInt(offset);
@@ -145,15 +158,15 @@ public final class TableDefinition {
   }
 
   public boolean hasUniqueValueIndex() {
-    return uniqueValueIndexTableId > 0 && uniqueValueIndexState == INDEX_READY;
+    return readyIndexCount() > 0;
   }
 
   public boolean hasBuildingUniqueValueIndex() {
-    return uniqueValueIndexTableId > 0 && uniqueValueIndexState == INDEX_BUILDING;
+    return buildingIndexSlot() >= 0;
   }
 
   public boolean hasUniqueIndexOn(int column) {
-    return hasUniqueValueIndex() && uniqueValueIndexColumn == column;
+    return readyIndexSlotOn(column) >= 0;
   }
 
   public CharSequence keyColumnName() {
@@ -194,15 +207,110 @@ public final class TableDefinition {
   }
 
   int uniqueValueIndexTableId() {
-    return uniqueValueIndexTableId;
+    int slot = buildingIndexSlot();
+    if (slot < 0) {
+      slot = firstReadyIndexSlot();
+    }
+    return slot < 0 ? 0 : uniqueIndexTableIds[slot];
   }
 
   int uniqueValueIndexState() {
-    return uniqueValueIndexState;
+    int slot = buildingIndexSlot();
+    if (slot < 0) {
+      slot = firstReadyIndexSlot();
+    }
+    return slot < 0 ? INDEX_NONE : uniqueIndexStates[slot];
   }
 
   int uniqueValueIndexColumn() {
-    return uniqueValueIndexColumn;
+    int slot = buildingIndexSlot();
+    if (slot < 0) {
+      slot = firstReadyIndexSlot();
+    }
+    return slot < 0 ? -1 : uniqueIndexColumns[slot];
+  }
+
+  int uniqueIndexCount() {
+    return uniqueIndexCount;
+  }
+
+  int uniqueIndexTableId(int slot) {
+    return slot >= 0 && slot < uniqueIndexCount ? uniqueIndexTableIds[slot] : 0;
+  }
+
+  int uniqueIndexState(int slot) {
+    return slot >= 0 && slot < uniqueIndexCount ? uniqueIndexStates[slot] : INDEX_NONE;
+  }
+
+  int uniqueIndexColumn(int slot) {
+    return slot >= 0 && slot < uniqueIndexCount ? uniqueIndexColumns[slot] : -1;
+  }
+
+  int readyIndexSlotOn(int column) {
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      if (uniqueIndexStates[index] == INDEX_READY && uniqueIndexColumns[index] == column) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  int readyIndexCount() {
+    int count = 0;
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      if (uniqueIndexStates[index] == INDEX_READY) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  int buildingIndexSlot() {
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      if (uniqueIndexStates[index] == INDEX_BUILDING) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  StatusCode upsertIndex(int tableId, int state, int column) {
+    if (tableId <= 0
+        || (state != INDEX_BUILDING && state != INDEX_READY)
+        || column <= 0
+        || column >= columnCount) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      if (uniqueIndexTableIds[index] == tableId || uniqueIndexColumns[index] == column) {
+        setIndex(index, tableId, state, column);
+        return StatusCode.OK;
+      }
+    }
+    if (uniqueIndexCount >= MAXIMUM_INDEXES) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    setIndex(uniqueIndexCount++, tableId, state, column);
+    return StatusCode.OK;
+  }
+
+  StatusCode removeIndex(int tableId) {
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      if (uniqueIndexTableIds[index] != tableId) {
+        continue;
+      }
+      for (int move = index; move < uniqueIndexCount - 1; move++) {
+        setIndex(
+            move,
+            uniqueIndexTableIds[move + 1],
+            uniqueIndexStates[move + 1],
+            uniqueIndexColumns[move + 1]);
+      }
+      uniqueIndexCount--;
+      setIndex(uniqueIndexCount, 0, INDEX_NONE, 0);
+      return StatusCode.OK;
+    }
+    return StatusCode.CONFLICT;
   }
 
   boolean isOwnedBy(RelationalDatabase database) {
@@ -214,6 +322,32 @@ public final class TableDefinition {
   private ColumnName writableColumn(int index) {
     return index == 0
         ? keyColumnName : index == 1 ? valueColumnName : additionalColumns[index - 2];
+  }
+
+  private int firstReadyIndexSlot() {
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      if (uniqueIndexStates[index] == INDEX_READY) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private void copyIndexes(TableDefinition source) {
+    uniqueIndexCount = source.uniqueIndexCount;
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      setIndex(
+          index,
+          source.uniqueIndexTableIds[index],
+          source.uniqueIndexStates[index],
+          source.uniqueIndexColumns[index]);
+    }
+  }
+
+  private void setIndex(int slot, int tableId, int state, int column) {
+    uniqueIndexTableIds[slot] = tableId;
+    uniqueIndexStates[slot] = state;
+    uniqueIndexColumns[slot] = column;
   }
 
   private static final class ColumnName implements CharSequence {

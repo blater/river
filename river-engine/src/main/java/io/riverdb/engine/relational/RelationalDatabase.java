@@ -28,6 +28,7 @@ public final class RelationalDatabase {
   private final CatalogRecord.IndexResult indexRecord = new CatalogRecord.IndexResult();
   private final TableDefinition indexedTable = new TableDefinition();
   private final TableDefinition indexStorageTable = new TableDefinition();
+  private final TableDefinition updatedTable = new TableDefinition();
   private final RelationalScanCursor indexBuildCursor = new RelationalScanCursor();
   private final RelationalScanResult indexBuildRow = new RelationalScanResult();
   private final ByteBuffer indexKeyOutput = ByteBuffer.allocateDirect(Long.BYTES);
@@ -258,8 +259,12 @@ public final class RelationalDatabase {
     if (!status.isOk()) {
       return status;
     }
-    if (indexedTable.hasUniqueValueIndex()) {
+    if (indexedTable.hasUniqueIndexOn(indexColumn)) {
       return StatusCode.CONFLICT;
+    }
+    if (indexedTable.uniqueIndexCount() >= TableDefinition.MAXIMUM_INDEXES
+        && !indexedTable.hasBuildingUniqueValueIndex()) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     status = RelationalKey.catalogTableKey(indexName, catalogKey);
     if (!status.isOk()) {
@@ -515,6 +520,16 @@ public final class RelationalDatabase {
       status = session.resolveTable(tableName, indexedTable);
     }
     if (status.isOk()) {
+      updatedTable.set(
+          this,
+          indexedTable.tableId(),
+          0,
+          TableDefinition.INDEX_NONE,
+          -1,
+          indexedTable);
+      status = updatedTable.removeIndex(indexStorageTable.tableId());
+    }
+    if (status.isOk()) {
       status = RelationalKey.catalogTableKey(tableName, catalogKey);
     }
     if (status.isOk()) {
@@ -525,7 +540,7 @@ public final class RelationalDatabase {
           TableDefinition.INDEX_NONE,
           -1,
           tableName,
-          indexedTable);
+          updatedTable);
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
@@ -558,8 +573,15 @@ public final class RelationalDatabase {
     if (status.isOk() && indexColumn <= 0) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (status.isOk() && indexedTable.hasUniqueValueIndex()) {
+    if (status.isOk() && indexedTable.hasUniqueIndexOn(indexColumn)) {
       status = StatusCode.CONFLICT;
+    }
+    if (status.isOk() && indexedTable.hasBuildingUniqueValueIndex()) {
+      status = StatusCode.RETRY;
+    }
+    if (status.isOk()
+        && indexedTable.uniqueIndexCount() >= TableDefinition.MAXIMUM_INDEXES) {
+      status = StatusCode.RESOURCE_EXHAUSTED;
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);

@@ -16,8 +16,8 @@ import java.nio.ByteBuffer;
 /** One reusable transaction/session write set over the first indexed table. */
 public final class IndexedTransactionSession implements TransactionCommitParticipant {
   private static final long TABLE_LOCK_ID = 1;
-  private static final int MAXIMUM_PENDING_INSERTS = 64;
-  private static final int MAXIMUM_HELD_LOCKS = 64;
+  private static final int MAXIMUM_PENDING_INSERTS = 384;
+  private static final int MAXIMUM_HELD_LOCKS = 384;
   private static final int MAXIMUM_SAVEPOINTS = 4;
 
   private final TransactionManager manager;

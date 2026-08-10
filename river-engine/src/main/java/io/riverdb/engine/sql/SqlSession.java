@@ -313,6 +313,7 @@ public final class SqlSession {
       if (valueIndex) {
         status = session.beginValueScan(
             table,
+            table.findColumn(command.predicateColumnName()),
             command.scanLowerInclusive(),
             command.scanUpperExclusive(),
             cursor.relational());
@@ -471,7 +472,8 @@ public final class SqlSession {
       status = session.fetch(table, primaryKey, fetched);
       source = fetched;
     } else {
-      status = session.fetchByUniqueValue(table, command.key(), indexed);
+      status = session.fetchByUniqueValue(
+          table, predicateColumn, command.key(), indexed);
       primaryKey = indexed.key();
       source = indexed.row();
     }

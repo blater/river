@@ -889,6 +889,15 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX accounts_region ON accounts(region)", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX accounts_balance ON accounts(balance)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=300", result));
+    assertEquals(3, result.key());
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT id, region FROM accounts WHERE region=8", result));
@@ -904,6 +913,9 @@ final class SqlSessionTest {
         StatusCode.CONFLICT,
         session.execute("INSERT INTO accounts VALUES (4, 400, 8)", result));
     assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO accounts VALUES (4, 250, 10)", result));
+    assertEquals(
         StatusCode.OK,
         session.execute("UPDATE accounts SET region=9 WHERE id=2", result));
     assertEquals(
@@ -913,6 +925,10 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT id, region FROM accounts WHERE region=9", result));
     assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=250", result));
+    assertEquals(2, result.key());
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(
         StatusCode.OK,
@@ -920,6 +936,10 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         session.execute("UPDATE accounts SET balance=999 WHERE id=1", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=999", result));
+    assertEquals(1, result.key());
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
     assertEquals(
         StatusCode.CONFLICT,
@@ -928,6 +948,13 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT balance FROM accounts WHERE id=1", result));
     assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=999", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=100", result));
+    assertEquals(1, result.key());
 
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
@@ -942,6 +969,20 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(2, row.key());
     assertEquals(250, row.value());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, region FROM accounts WHERE balance >= 200 AND balance < 301",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.key());
+    assertEquals(9, row.value());
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(3, row.key());
+    assertEquals(6, row.value());
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, cursor.reset());
@@ -981,6 +1022,81 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT id, region FROM accounts WHERE region=9", result));
     assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=250", result));
+    assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("DELETE FROM accounts WHERE id=3", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT id, balance FROM accounts WHERE balance=300", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT id, region FROM accounts WHERE region=6", result));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void insertsMaximumStatementAcrossFourIndexes(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE events (id BIGINT PRIMARY KEY, a BIGINT, b BIGINT, "
+                + "c BIGINT, d BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX events_a ON events(a)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX events_b ON events(b)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX events_c ON events(c)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX events_d ON events(d)", result));
+
+    StringBuilder insert = new StringBuilder("INSERT INTO events VALUES ");
+    for (int row = 0; row < 64; row++) {
+      if (row > 0) {
+        insert.append(", ");
+      }
+      insert.append('(').append(row)
+          .append(',').append(1_000 + row)
+          .append(',').append(2_000 + row)
+          .append(',').append(3_000 + row)
+          .append(',').append(4_000 + row).append(')');
+    }
+    assertEquals(StatusCode.OK, session.execute(insert.toString(), result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, a FROM events WHERE a=1063", result));
+    assertEquals(63, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, b FROM events WHERE b=2063", result));
+    assertEquals(63, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, c FROM events WHERE c=3063", result));
+    assertEquals(63, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, d FROM events WHERE d=4063", result));
+    assertEquals(63, result.key());
     assertEquals(StatusCode.OK, database.close());
   }
 }

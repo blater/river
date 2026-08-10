@@ -7,6 +7,7 @@ import io.riverdb.engine.table.IndexedScanCursor;
 public final class RelationalScanCursor {
   private final IndexedScanCursor indexed = new IndexedScanCursor();
   private RelationalSession owner;
+  private int indexedColumn = -1;
   private boolean active;
 
   public StatusCode reset() {
@@ -14,6 +15,7 @@ public final class RelationalScanCursor {
       return StatusCode.CONFLICT;
     }
     owner = null;
+    indexedColumn = -1;
     return indexed.reset();
   }
 
@@ -32,6 +34,18 @@ public final class RelationalScanCursor {
 
   boolean isOwnedBy(RelationalSession session) {
     return active && owner == session;
+  }
+
+  StatusCode setIndexedColumn(RelationalSession session, int column) {
+    if (!isOwnedBy(session) || column <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    indexedColumn = column;
+    return StatusCode.OK;
+  }
+
+  int indexedColumn() {
+    return indexedColumn;
   }
 
   void complete() {
