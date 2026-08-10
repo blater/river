@@ -32,10 +32,12 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final IndexedMutationTarget mutationTarget = new IndexedMutationTarget();
   private final int rowStride;
   private long committedSequence;
+  private long serializableScanSequence;
   private long copiedWriteSetBytes;
   private int pendingInsertCount;
   private int heldLockCount;
   private IndexedScanCursor activeScan;
+  private boolean serializableScan;
 
   public IndexedTransactionSession(
       TransactionManager transactionManager,
@@ -66,6 +68,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     pendingInsertCount = 0;
     heldLockCount = 0;
     committedSequence = 0;
+    serializableScanSequence = 0;
+    serializableScan = false;
     for (LockToken keyLock : keyLocks) {
       StatusCode status = keyLock.reset();
       if (!status.isOk()) {
@@ -246,8 +250,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       long lowerKey,
       long upperKey,
       IndexedScanCursor cursor) {
-    if (transaction.state() != TransactionState.ACTIVE
-        || transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
+    if (cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (transaction.state() != TransactionState.ACTIVE) {
       return StatusCode.CONFLICT;
     }
     if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED) {
@@ -263,6 +269,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     }
     if (status.isOk()) {
       activeScan = cursor;
+      if (transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
+        serializableScan = true;
+        serializableScanSequence = transaction.snapshot().visibleCommitSequence();
+      }
     }
     return status;
   }
@@ -349,13 +359,18 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return StatusCode.CONFLICT;
     }
     if (pendingInsertCount == 0) {
-      StatusCode status = manager.commitReadOnly(transaction, result);
-      if (!status.isOk()) {
-        return status;
+      StatusCode status = serializableScan
+          ? manager.commitReadOnlyValidated(
+              transaction, table, serializableScanSequence, result)
+          : manager.commitReadOnly(transaction, result);
+      if (!transaction.isActiveHandle()) {
+        StatusCode release = releaseLocks();
+        clearWriteSet();
+        if (status.isOk() && !release.isOk()) {
+          return release;
+        }
       }
-      StatusCode release = releaseLocks();
-      clearWriteSet();
-      return release;
+      return status;
     }
     StatusCode status = manager.commit(transaction, this, result);
     if (!transaction.isActiveHandle()) {
@@ -385,6 +400,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   @Override
   public StatusCode commit(long transactionId) {
+    if (serializableScan
+        && table.currentCommitSequence() != serializableScanSequence) {
+      committedSequence = 0;
+      return StatusCode.CONFLICT;
+    }
     pendingRows.position(0);
     pendingRows.limit(pendingRows.capacity());
     StatusCode status;
@@ -444,6 +464,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       pendingRowLengths[index] = 0;
     }
     pendingInsertCount = 0;
+    serializableScanSequence = 0;
+    serializableScan = false;
   }
 
   private int findHeldLock(long key) {

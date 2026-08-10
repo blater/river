@@ -66,7 +66,8 @@ public final class SqlSession {
       if (transactionActive) {
         return StatusCode.CONFLICT;
       }
-      status = session.begin(IsolationLevel.REPEATABLE_READ);
+      status = session.begin(command.isSerializableTransaction()
+          ? IsolationLevel.SERIALIZABLE : IsolationLevel.REPEATABLE_READ);
       if (status.isOk()) {
         transactionActive = true;
         result.setTransaction(true, 0);

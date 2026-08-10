@@ -22,9 +22,13 @@ public final class SqlParser {
     long scanLower = 0;
     long scanUpper = 0;
     boolean boundedScan = false;
+    boolean serializableTransaction = false;
     if (consumeKeyword(sql, "BEGIN")) {
       type = SqlCommandType.BEGIN;
       status = StatusCode.OK;
+      if (consumeKeyword(sql, "SERIALIZABLE")) {
+        serializableTransaction = true;
+      }
     } else if (consumeKeyword(sql, "COMMIT")) {
       type = SqlCommandType.COMMIT;
       status = StatusCode.OK;
@@ -170,6 +174,8 @@ public final class SqlParser {
     }
     if (type == SqlCommandType.SCAN) {
       result.setScan(scanLower, scanUpper, boundedScan);
+    } else if (type == SqlCommandType.BEGIN) {
+      result.setBegin(serializableTransaction);
     } else {
       result.set(type, key, value);
     }

@@ -277,4 +277,39 @@ final class SqlSessionTest {
     assertEquals(40, execution.value());
     assertEquals(StatusCode.OK, database.close());
   }
+
+  @Test
+  void serializableSqlRangeAbortsOnConcurrentPhantom(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession reader = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession writer = sessions.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE items", execution));
+    assertEquals(StatusCode.OK, reader.execute("BEGIN SERIALIZABLE", execution));
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        reader.beginScan(
+            "SELECT key, value FROM items WHERE key >= 10 AND key < 20",
+            cursor));
+    assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO items VALUES (15, 150)", execution));
+    assertEquals(StatusCode.CONFLICT, reader.execute("COMMIT", execution));
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("SELECT value FROM items WHERE key=15", execution));
+    assertEquals(150, execution.value());
+    assertEquals(StatusCode.OK, database.close());
+  }
 }

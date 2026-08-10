@@ -45,6 +45,10 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.DELETE, command.type());
     assertEquals(StatusCode.OK, parser.parse("BEGIN;", command));
     assertEquals(SqlCommandType.BEGIN, command.type());
+    assertEquals(false, command.isSerializableTransaction());
+    assertEquals(StatusCode.OK, parser.parse("BEGIN SERIALIZABLE", command));
+    assertEquals(SqlCommandType.BEGIN, command.type());
+    assertEquals(true, command.isSerializableTransaction());
     assertEquals(StatusCode.OK, parser.parse("COMMIT", command));
     assertEquals(SqlCommandType.COMMIT, command.type());
     assertEquals(StatusCode.OK, parser.parse("ROLLBACK", command));

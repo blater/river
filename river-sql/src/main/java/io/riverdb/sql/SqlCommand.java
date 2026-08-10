@@ -9,6 +9,7 @@ public final class SqlCommand {
   private long scanLowerInclusive;
   private long scanUpperExclusive;
   private boolean boundedScan;
+  private boolean serializableTransaction;
   private boolean available;
 
   public void reset() {
@@ -19,6 +20,7 @@ public final class SqlCommand {
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
     boundedScan = false;
+    serializableTransaction = false;
     available = false;
   }
 
@@ -34,6 +36,12 @@ public final class SqlCommand {
     scanLowerInclusive = lowerInclusive;
     scanUpperExclusive = upperExclusive;
     boundedScan = bounded;
+    available = true;
+  }
+
+  void setBegin(boolean serializable) {
+    type = SqlCommandType.BEGIN;
+    serializableTransaction = serializable;
     available = true;
   }
 
@@ -67,6 +75,10 @@ public final class SqlCommand {
 
   public boolean isBoundedScan() {
     return boundedScan;
+  }
+
+  public boolean isSerializableTransaction() {
+    return serializableTransaction;
   }
 
   public boolean isAvailable() {

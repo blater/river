@@ -244,6 +244,36 @@ public final class TransactionManager {
   }
 
   /**
+   * Commits a read-only optimistic transaction only if its validated source is unchanged.
+   * The manager monitor makes validation atomic with every participant publication.
+   */
+  public synchronized StatusCode commitReadOnlyValidated(
+      Transaction transaction,
+      CommitSequenceSource source,
+      long expectedCommitSequence,
+      TransactionOutcome result) {
+    if (!validActive(transaction)
+        || source == null
+        || expectedCommitSequence < 0
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (source.currentCommitSequence() != expectedCommitSequence) {
+      result.reset();
+      removeActive(transaction.transactionId());
+      transaction.transition(TransactionState.ABORTED, 0, true);
+      result.set(
+          databaseHigh,
+          databaseLow,
+          transaction.transactionId(),
+          TransactionState.ABORTED,
+          0);
+      return StatusCode.CONFLICT;
+    }
+    return commitReadOnly(transaction, result);
+  }
+
+  /**
    * Publishes a maintenance transaction only while no user transaction can retain a snapshot.
    */
   public synchronized StatusCode commitMaintenance(

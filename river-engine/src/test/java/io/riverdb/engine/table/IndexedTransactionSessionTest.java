@@ -138,6 +138,47 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void serializableScanValidatesPhantomsAtPublication(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession reader = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult scanned = new IndexedScanResult();
+    TransactionOutcome outcome = new TransactionOutcome();
+
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, reader.beginScan(0, 100, cursor));
+    assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, scanned));
+    assertEquals(StatusCode.OK, reader.closeScan(cursor));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(50, row(500)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.CONFLICT, reader.commit(outcome));
+    assertEquals(TransactionState.ABORTED, outcome.state());
+    assertEquals(0, manager.activeTransactionCount());
+
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, reader.beginScan(0, 100, cursor));
+    assertEquals(StatusCode.OK, reader.nextScan(cursor, scanned));
+    assertEquals(50, scanned.key());
+    assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, scanned));
+    assertEquals(StatusCode.OK, reader.closeScan(cursor));
+    assertEquals(StatusCode.OK, reader.insert(60, row(600)));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(TransactionState.COMMITTED, outcome.state());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(60, fetched));
+    assertEquals(600, value(fetched));
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void abortDiscardsPendingInsertAndReleasesKey(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
