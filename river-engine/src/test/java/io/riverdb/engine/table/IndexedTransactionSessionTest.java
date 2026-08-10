@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
@@ -11,6 +12,7 @@ import io.riverdb.engine.page.IndexedPageStoreOpenResult;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
@@ -118,6 +120,94 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void publishesMultipleRowsAtOneCommitSequence(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession reader = session(manager, table);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(31, row(311)));
+    assertEquals(StatusCode.OK, writer.insert(32, row(322)));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, writer.fetchByKey(31, fetched));
+    assertEquals(311, value(fetched));
+    assertEquals(StatusCode.OK, writer.fetchByKey(32, fetched));
+    assertEquals(322, value(fetched));
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(31, fetched));
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    long committedAt = outcome.commitSequence();
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 31, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 32, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 31, fetched));
+    assertEquals(311, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 32, fetched));
+    assertEquals(322, value(fetched));
+    assertEquals(StatusCode.OK, reader.abort(outcome));
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
+  void duplicateInWriteSetRollsBackEveryStagedRow(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession seed = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(40, row(400)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(41, row(410)));
+    assertEquals(StatusCode.OK, writer.insert(40, row(401)));
+    assertEquals(StatusCode.CONFLICT, writer.commit(outcome));
+    assertEquals(TransactionState.ABORTED, outcome.state());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(41, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(40, fetched));
+    assertEquals(400, value(fetched));
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
+  void multiWriteCommitCanPublishLeafSplit(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    HeapInsertResult inserted = new HeapInsertResult();
+    for (int key = 0; key < 255; key++) {
+      assertEquals(StatusCode.OK, table.insert(key + 2L, key, row(key), inserted));
+    }
+    int oldRoot = table.rootPageId();
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(1000, row(10000)));
+    assertEquals(StatusCode.OK, writer.insert(1001, row(10010)));
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(1000, fetched));
+    assertEquals(10000, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(1001, fetched));
+    assertEquals(10010, value(fetched));
+    assertNotEquals(oldRoot, table.rootPageId());
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void commitsDistinctTransactionsFromConcurrentSessions(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
@@ -164,6 +254,7 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert(501, row(5010)));
+    assertEquals(StatusCode.OK, writer.insert(502, row(5020)));
     long committedTransactionId = writer.transaction().transactionId();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.commit(outcome));
@@ -184,6 +275,9 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 501, fetched));
     assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 501, fetched));
     assertEquals(5010, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 502, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 502, fetched));
+    assertEquals(5020, value(fetched));
     TransactionManager restartedManager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedTransactionSession restarted = session(restartedManager, table);

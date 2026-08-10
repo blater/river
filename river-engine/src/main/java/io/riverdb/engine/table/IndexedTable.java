@@ -110,6 +110,111 @@ public final class IndexedTable implements CommitSequenceSource {
     return status;
   }
 
+  /** Atomically commits a bounded write set; one-row transactions retain the compact WAL path. */
+  public synchronized StatusCode commitInserts(
+      long transactionId,
+      long[] keys,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int insertCount,
+      IndexedCommitResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID
+        || keys == null
+        || rows == null
+        || rowStride <= 0
+        || rowLengths == null
+        || insertCount <= 0
+        || insertCount > keys.length
+        || insertCount > rowLengths.length
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    if (insertCount == 1) {
+      rows.position(0);
+      rows.limit(rowLengths[0]);
+      return commitInsert(transactionId, keys[0], rows, result);
+    }
+    long commitSequence = store.nextCommitSequence();
+    StatusCode status = store.commitInsertBatch(
+        transactionId,
+        commitSequence,
+        keys,
+        rows,
+        rowStride,
+        rowLengths,
+        insertCount,
+        heapInsert);
+    if (status.isOk()) {
+      result.set(heapInsert.rowId(), commitSequence);
+      return StatusCode.OK;
+    }
+    if (status != StatusCode.RESOURCE_EXHAUSTED) {
+      return status;
+    }
+    status = store.beginOperation();
+    if (!status.isOk()) {
+      return status;
+    }
+    ByteBuffer heap = store.stageExisting(HEAP_PAGE_ID);
+    if (heap == null) {
+      store.cancelOperation();
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int lastRowId = 0;
+    for (int index = 0; index < insertCount; index++) {
+      int rowBytes = rowLengths[index];
+      int rowOffset = index * rowStride;
+      long key = keys[index];
+      if (key == Long.MAX_VALUE
+          || rowBytes <= 0
+          || rowBytes > rowStride
+          || rows.limit() - rowOffset < rowBytes) {
+        store.cancelOperation();
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      int leafPageId = findOperationLeafPageId(key);
+      if (leafPageId <= 0) {
+        store.cancelOperation();
+        return StatusCode.CORRUPTION;
+      }
+      ByteBuffer leaf = store.stageExisting(leafPageId);
+      if (leaf == null) {
+        store.cancelOperation();
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      status = BTreePage.lookupLeaf(leaf, key, indexLookup);
+      if (status.isOk()) {
+        store.cancelOperation();
+        return StatusCode.CONFLICT;
+      }
+      if (status != StatusCode.CONFLICT) {
+        store.cancelOperation();
+        return status;
+      }
+      status = HeapPage.insertFrom(heap, rows, rowOffset, rowBytes, heapInsert);
+      if (!status.isOk()) {
+        store.cancelOperation();
+        return status;
+      }
+      status = BTreePage.insertLeaf(leaf, key, heapInsert.rowId());
+      if (status == StatusCode.RESOURCE_EXHAUSTED) {
+        status = splitAndInsert(leafPageId, leaf, key, heapInsert.rowId());
+      }
+      if (!status.isOk()) {
+        store.cancelOperation();
+        return status;
+      }
+      lastRowId = heapInsert.rowId();
+    }
+    status = store.commit(transactionId, commitSequence);
+    if (status.isOk()) {
+      result.set(lastRowId, commitSequence);
+    }
+    return status;
+  }
+
   public synchronized StatusCode insertCommitted(
       long transactionId,
       long commitSequence,
@@ -251,7 +356,7 @@ public final class IndexedTable implements CommitSequenceSource {
       ByteBuffer left,
       long key,
       int rowId) {
-    ByteBuffer currentMetadata = store.currentPayload(ROOT_META_PAGE_ID);
+    ByteBuffer currentMetadata = store.operationPayload(ROOT_META_PAGE_ID);
     int currentRootPageId = BTreeRootPage.rootPageId(currentMetadata);
     ByteBuffer metadata = store.stageExisting(ROOT_META_PAGE_ID);
     if (metadata == null) {
@@ -267,7 +372,7 @@ public final class IndexedTable implements CommitSequenceSource {
     if (!status.isOk()) {
       return status;
     }
-    if (BTreePage.type(store.currentPayload(currentRootPageId)) == BTreePage.TYPE_LEAF) {
+    if (BTreePage.type(store.operationPayload(currentRootPageId)) == BTreePage.TYPE_LEAF) {
       int newRootPageId = BTreeRootPage.allocatePage(metadata);
       ByteBuffer root = store.stageNew(newRootPageId);
       if (root == null) {
@@ -312,6 +417,24 @@ public final class IndexedTable implements CommitSequenceSource {
     }
     int leafPageId = BTreePage.childForKey(root, key);
     ByteBuffer leaf = store.currentPayload(leafPageId);
+    return leaf != null && BTreePage.type(leaf) == BTreePage.TYPE_LEAF ? leafPageId : 0;
+  }
+
+  private int findOperationLeafPageId(long key) {
+    ByteBuffer metadata = store.operationPayload(ROOT_META_PAGE_ID);
+    if (metadata == null) {
+      return 0;
+    }
+    int rootPageId = BTreeRootPage.rootPageId(metadata);
+    ByteBuffer root = store.operationPayload(rootPageId);
+    if (root == null) {
+      return 0;
+    }
+    if (BTreePage.type(root) == BTreePage.TYPE_LEAF) {
+      return rootPageId;
+    }
+    int leafPageId = BTreePage.childForKey(root, key);
+    ByteBuffer leaf = store.operationPayload(leafPageId);
     return leaf != null && BTreePage.type(leaf) == BTreePage.TYPE_LEAF ? leafPageId : 0;
   }
 

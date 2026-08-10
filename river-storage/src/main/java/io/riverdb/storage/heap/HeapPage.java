@@ -120,6 +120,13 @@ public final class HeapPage {
     return getInt(page, 16) + SLOT_BYTES <= getInt(page, 20) - rowBytes;
   }
 
+  public static int availableBytes(ByteBuffer page) {
+    if (page == null) {
+      return 0;
+    }
+    return getInt(page, 20) - getInt(page, 16);
+  }
+
   public static StatusCode fetch(
       ByteBuffer page,
       int rowId,

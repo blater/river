@@ -35,8 +35,11 @@ public final class IndexedPageStore {
   private static final long OPERATION_MAGIC = 0x5249564552494458L; // RIVERIDX
   private static final int OPERATION_TYPE_PAGE_IMAGES = 1;
   private static final int OPERATION_TYPE_INSERT = 2;
+  private static final int OPERATION_TYPE_INSERT_BATCH = 3;
   private static final int PAGE_OPERATION_HEADER_BYTES = 20;
   private static final int INSERT_OPERATION_HEADER_BYTES = 40;
+  private static final int INSERT_BATCH_HEADER_BYTES = 24;
+  private static final int INSERT_BATCH_ENTRY_BYTES = 16;
   private static final int HEAP_PAGE_ID = 1;
   private static final int ROOT_META_PAGE_ID = 2;
 
@@ -163,11 +166,14 @@ public final class IndexedPageStore {
   }
 
   public ByteBuffer stageExisting(int pageId) {
-    if (!operationActive || !validPresentPage(pageId)) {
+    if (!operationActive || pageId <= 0 || pageId > MAX_PAGES) {
       return null;
     }
     if (staged[pageId]) {
       return stagingPayloads[pageId];
+    }
+    if (!validPresentPage(pageId)) {
+      return null;
     }
     if (!addChangedPage(pageId)) {
       return null;
@@ -175,6 +181,17 @@ public final class IndexedPageStore {
     copyPage(currentPages[pageId], stagingPages[pageId]);
     stagedCopyBytes += PageCodec.PAGE_BYTES;
     return stagingPayloads[pageId];
+  }
+
+  /** Mutable operation view: staged state when present, otherwise current committed state. */
+  public ByteBuffer operationPayload(int pageId) {
+    if (!operationActive || pageId <= 0 || pageId > MAX_PAGES) {
+      return null;
+    }
+    if (staged[pageId]) {
+      return stagingPayloads[pageId];
+    }
+    return present[pageId] ? currentPayloads[pageId] : null;
   }
 
   public ByteBuffer stageNew(int pageId) {
@@ -345,6 +362,132 @@ public final class IndexedPageStore {
     return StatusCode.OK;
   }
 
+  /** Commits multiple non-splitting inserts as one compact logical WAL record. */
+  public StatusCode commitInsertBatch(
+      long transactionId,
+      long commitSequence,
+      long[] keys,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int insertCount,
+      HeapInsertResult result) {
+    if (transactionId <= 0
+        || commitSequence <= lastCommitSequence
+        || keys == null
+        || rows == null
+        || rowStride <= 0
+        || rowLengths == null
+        || insertCount <= 1
+        || insertCount > keys.length
+        || insertCount > rowLengths.length
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = admission();
+    if (!status.isOk()) {
+      return status;
+    }
+    if (operationActive) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int operationBytes = INSERT_BATCH_HEADER_BYTES;
+    int requiredHeapBytes = 0;
+    for (int index = 0; index < insertCount; index++) {
+      int rowBytes = rowLengths[index];
+      int rowOffset = index * rowStride;
+      long key = keys[index];
+      if (key == Long.MAX_VALUE
+          || rowBytes <= 0
+          || rowBytes > rowStride
+          || rows.limit() - rowOffset < rowBytes) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (keys[previous] == key) {
+          return StatusCode.CONFLICT;
+        }
+      }
+      int leafPageId = findLeafPageId(key);
+      if (!present[HEAP_PAGE_ID] || leafPageId <= 0) {
+        return StatusCode.CORRUPTION;
+      }
+      status = BTreePage.lookupLeaf(currentPayloads[leafPageId], key, lookupResult);
+      if (status.isOk()) {
+        return StatusCode.CONFLICT;
+      }
+      if (status != StatusCode.CONFLICT) {
+        return status;
+      }
+      int earlierInLeaf = 0;
+      for (int previous = 0; previous < index; previous++) {
+        if (findLeafPageId(keys[previous]) == leafPageId) {
+          earlierInLeaf++;
+        }
+      }
+      if (BTreePage.entryCount(currentPayloads[leafPageId]) + earlierInLeaf
+          >= BTreePage.MAX_ENTRIES) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      requiredHeapBytes += HeapPage.SLOT_BYTES + rowBytes;
+      operationBytes += INSERT_BATCH_ENTRY_BYTES + rowBytes;
+    }
+    if (requiredHeapBytes > HeapPage.availableBytes(currentPayloads[HEAP_PAGE_ID])) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    status = wal.reserve(operationBytes, walReservation);
+    if (!status.isOk()) {
+      return status;
+    }
+    ByteBuffer recordPayload = walReservation.writablePayload();
+    putLong(recordPayload, 0, OPERATION_MAGIC);
+    putInt(recordPayload, 8, WAL_FORMAT_VERSION);
+    putInt(recordPayload, 12, OPERATION_TYPE_INSERT_BATCH);
+    putInt(recordPayload, 16, insertCount);
+    putInt(recordPayload, 20, 0);
+    int outputOffset = INSERT_BATCH_HEADER_BYTES;
+    int firstRowId = HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) + 1;
+    for (int index = 0; index < insertCount; index++) {
+      int rowBytes = rowLengths[index];
+      putLong(recordPayload, outputOffset, keys[index]);
+      putInt(recordPayload, outputOffset + 8, firstRowId + index);
+      putInt(recordPayload, outputOffset + 12, rowBytes);
+      int sourceOffset = index * rowStride;
+      int rowOffset = outputOffset + INSERT_BATCH_ENTRY_BYTES;
+      for (int byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
+        recordPayload.put(rowOffset + byteIndex, rows.get(sourceOffset + byteIndex));
+      }
+      walCopyBytes += rowBytes;
+      outputOffset = rowOffset + rowBytes;
+    }
+    recordPayload.position(operationBytes);
+    status = wal.publish(
+        walReservation,
+        transactionId,
+        commitSequence,
+        1,
+        WAL_FORMAT_ID,
+        WAL_FORMAT_VERSION,
+        walAppendResult);
+    if (!status.isOk()) {
+      failed = true;
+      return status;
+    }
+    status = applyInsertBatchOperation(
+        recordPayload,
+        walAppendResult.startOffset(),
+        walAppendResult.endOffset(),
+        commitSequence);
+    if (!status.isOk()) {
+      failed = true;
+      return status;
+    }
+    lastCommitSequence = commitSequence;
+    result.setRowId(firstRowId + insertCount - 1);
+    return StatusCode.OK;
+  }
+
   public StatusCode cancelOperation() {
     if (!operationActive) {
       return StatusCode.CONFLICT;
@@ -472,6 +615,10 @@ public final class IndexedPageStore {
     int operationType = getInt(payload, 12);
     if (operationType == OPERATION_TYPE_INSERT) {
       return applyInsertOperation(
+          payload, recordStart, record.nextOffset(), commitSequence);
+    }
+    if (operationType == OPERATION_TYPE_INSERT_BATCH) {
+      return applyInsertBatchOperation(
           payload, recordStart, record.nextOffset(), commitSequence);
     }
     if (operationType != OPERATION_TYPE_PAGE_IMAGES) {
@@ -606,6 +753,119 @@ public final class IndexedPageStore {
     dirty[HEAP_PAGE_ID] = true;
     dirty[leafPageId] = true;
     return StatusCode.OK;
+  }
+
+  private StatusCode applyInsertBatchOperation(
+      ByteBuffer payload,
+      long recordStart,
+      long recordEnd,
+      long commitSequence) {
+    if (payload.limit() < INSERT_BATCH_HEADER_BYTES
+        || getLong(payload, 0) != OPERATION_MAGIC
+        || getInt(payload, 8) != WAL_FORMAT_VERSION
+        || getInt(payload, 12) != OPERATION_TYPE_INSERT_BATCH
+        || getInt(payload, 20) != 0
+        || !present[HEAP_PAGE_ID]) {
+      return StatusCode.CORRUPTION;
+    }
+    int insertCount = getInt(payload, 16);
+    if (insertCount <= 1 || insertCount > MAX_ROWS) {
+      return StatusCode.CORRUPTION;
+    }
+    ByteBuffer heap = currentPayloads[HEAP_PAGE_ID];
+    int firstRowId = HeapPage.rowCount(heap) + 1;
+    int requiredHeapBytes = 0;
+    int entryOffset = INSERT_BATCH_HEADER_BYTES;
+    for (int index = 0; index < insertCount; index++) {
+      if (payload.limit() - entryOffset < INSERT_BATCH_ENTRY_BYTES) {
+        return StatusCode.CORRUPTION;
+      }
+      long key = getLong(payload, entryOffset);
+      int rowId = getInt(payload, entryOffset + 8);
+      int rowBytes = getInt(payload, entryOffset + 12);
+      if (key == Long.MAX_VALUE
+          || rowId != firstRowId + index
+          || rowBytes <= 0
+          || payload.limit() - entryOffset - INSERT_BATCH_ENTRY_BYTES < rowBytes
+          || batchContainsEarlierKey(payload, entryOffset, key)) {
+        return StatusCode.CORRUPTION;
+      }
+      int leafPageId = findLeafPageId(key);
+      if (leafPageId <= 0) {
+        return StatusCode.CORRUPTION;
+      }
+      StatusCode status = BTreePage.lookupLeaf(
+          currentPayloads[leafPageId], key, lookupResult);
+      if (status != StatusCode.CONFLICT) {
+        return StatusCode.CORRUPTION;
+      }
+      int earlierInLeaf = countEarlierBatchEntriesInLeaf(
+          payload, entryOffset, leafPageId);
+      if (BTreePage.entryCount(currentPayloads[leafPageId]) + earlierInLeaf
+          >= BTreePage.MAX_ENTRIES) {
+        return StatusCode.CORRUPTION;
+      }
+      requiredHeapBytes += HeapPage.SLOT_BYTES + rowBytes;
+      entryOffset += INSERT_BATCH_ENTRY_BYTES + rowBytes;
+    }
+    if (entryOffset != payload.limit()
+        || requiredHeapBytes > HeapPage.availableBytes(heap)) {
+      return StatusCode.CORRUPTION;
+    }
+    entryOffset = INSERT_BATCH_HEADER_BYTES;
+    for (int index = 0; index < insertCount; index++) {
+      long key = getLong(payload, entryOffset);
+      int rowId = getInt(payload, entryOffset + 8);
+      int rowBytes = getInt(payload, entryOffset + 12);
+      int rowOffset = entryOffset + INSERT_BATCH_ENTRY_BYTES;
+      int leafPageId = findLeafPageId(key);
+      StatusCode status = HeapPage.insertFrom(
+          heap, payload, rowOffset, rowBytes, appliedInsert);
+      if (status.isOk()) {
+        status = BTreePage.insertLeaf(currentPayloads[leafPageId], key, rowId);
+      }
+      if (!status.isOk() || appliedInsert.rowId() != rowId) {
+        return StatusCode.INVARIANT_BROKEN;
+      }
+      pageRecordStarts[leafPageId] = recordStart;
+      pageRecordEnds[leafPageId] = recordEnd;
+      dirty[leafPageId] = true;
+      rowCommitSequences[rowId] = commitSequence;
+      entryOffset = rowOffset + rowBytes;
+    }
+    pageRecordStarts[HEAP_PAGE_ID] = recordStart;
+    pageRecordEnds[HEAP_PAGE_ID] = recordEnd;
+    dirty[HEAP_PAGE_ID] = true;
+    return StatusCode.OK;
+  }
+
+  private boolean batchContainsEarlierKey(
+      ByteBuffer payload,
+      int targetEntryOffset,
+      long key) {
+    int entryOffset = INSERT_BATCH_HEADER_BYTES;
+    while (entryOffset < targetEntryOffset) {
+      if (getLong(payload, entryOffset) == key) {
+        return true;
+      }
+      entryOffset += INSERT_BATCH_ENTRY_BYTES + getInt(payload, entryOffset + 12);
+    }
+    return false;
+  }
+
+  private int countEarlierBatchEntriesInLeaf(
+      ByteBuffer payload,
+      int targetEntryOffset,
+      int leafPageId) {
+    int count = 0;
+    int entryOffset = INSERT_BATCH_HEADER_BYTES;
+    while (entryOffset < targetEntryOffset) {
+      if (findLeafPageId(getLong(payload, entryOffset)) == leafPageId) {
+        count++;
+      }
+      entryOffset += INSERT_BATCH_ENTRY_BYTES + getInt(payload, entryOffset + 12);
+    }
+    return count;
   }
 
   private void recordNewRowCommits(int previousRowCount, long commitSequence) {

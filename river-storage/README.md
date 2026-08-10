@@ -3,8 +3,9 @@
 The first indexed-table format is deliberately narrow and versioned:
 
 - B+tree leaf, internal, and root-metadata payloads are version 1.
-- Local WAL format `1002/1` records compact committed inserts. Bootstrap and
-  structural leaf splits use atomic groups of checksummed 16 KiB page images.
+- Local WAL format `1002/1` records compact committed single inserts and
+  bounded insert batches. Bootstrap and structural leaf splits use atomic
+  groups of checksummed 16 KiB page images.
 - Unknown operation, page, or payload versions fail closed as corruption; no
   implicit upgrade is attempted.
 - Recovery currently replays retained WAL from the indexed-table bootstrap

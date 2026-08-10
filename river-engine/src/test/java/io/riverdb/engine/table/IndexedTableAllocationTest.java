@@ -106,6 +106,27 @@ final class IndexedTableAllocationTest {
         transactionAllocated <= 512,
         "warmed transaction commit allocated bytes: " + transactionAllocated);
     assertEquals(0, manager.activeLockCount());
+
+    for (int key = 400; key < 416; key += 2) {
+      exerciseTwoWriteTransaction(session, row, outcome, key);
+    }
+    writeSetCopiedBefore = session.copiedWriteSetBytes();
+    walCopiedBefore = table.walCopyBytes();
+    long stagedBeforeBatch = table.stagedCopyBytes();
+    before = bean.getThreadAllocatedBytes(threadId);
+    for (int key = 416; key < 432; key += 2) {
+      exerciseTwoWriteTransaction(session, row, outcome, key);
+    }
+    long batchAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(
+        16L * Long.BYTES,
+        session.copiedWriteSetBytes() - writeSetCopiedBefore);
+    assertEquals(16L * Long.BYTES, table.walCopyBytes() - walCopiedBefore);
+    assertEquals(stagedBeforeBatch, table.stagedCopyBytes());
+    assertTrue(
+        batchAllocated <= 512,
+        "warmed two-write transaction allocated bytes: " + batchAllocated);
+    assertEquals(0, manager.activeLockCount());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -122,6 +143,24 @@ final class IndexedTableAllocationTest {
     row.limit(Long.BYTES);
     allocationGuard += session.begin(IsolationLevel.REPEATABLE_READ).ordinal();
     allocationGuard += session.insert(value, row).ordinal();
+    allocationGuard += session.commit(outcome).ordinal();
+    allocationGuard += outcome.commitSequence();
+  }
+
+  private static void exerciseTwoWriteTransaction(
+      IndexedTransactionSession session,
+      ByteBuffer row,
+      TransactionOutcome outcome,
+      int key) {
+    allocationGuard += session.begin(IsolationLevel.REPEATABLE_READ).ordinal();
+    row.putLong(0, key);
+    row.position(0);
+    row.limit(Long.BYTES);
+    allocationGuard += session.insert(key, row).ordinal();
+    row.putLong(0, key + 1L);
+    row.position(0);
+    row.limit(Long.BYTES);
+    allocationGuard += session.insert(key + 1L, row).ordinal();
     allocationGuard += session.commit(outcome).ordinal();
     allocationGuard += outcome.commitSequence();
   }
