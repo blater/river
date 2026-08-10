@@ -14,6 +14,7 @@ import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapInsertResult;
+import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -28,6 +29,70 @@ import org.junit.jupiter.api.io.TempDir;
 
 final class IndexedTableAllocationTest {
   private static volatile long allocationGuard;
+
+  @Test
+  void warmedWideRowsCrossHeapPagesWithoutPerOperationAllocation(@TempDir Path root) {
+    ThreadMXBean bean = allocationBean();
+    DatabaseIncarnation database = DatabaseIncarnation.of(449, 457);
+    WalGeneration generation = WalGeneration.of(1);
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        NioDurableDirectory.openExisting(
+            root,
+            new FatalStateFence(),
+            new NioIoCounters(),
+            4,
+            directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    LocalWalOpenResult walResult = new LocalWalOpenResult();
+    assertEquals(StatusCode.OK, LocalWal.open(directory, database, generation, walResult));
+    LocalWal wal = walResult.wal();
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.create(directory, wal, database, generation, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
+    IndexedTable table = tableResult.table();
+    HeapInsertResult inserted = new HeapInsertResult();
+    HeapRowResult fetched = new HeapRowResult();
+    ByteBuffer row = ByteBuffer.allocateDirect(256);
+    for (int index = 0; index < row.capacity(); index++) {
+      row.put(index, (byte) index);
+    }
+    for (int index = 0; index < 52; index++) {
+      exerciseWide(table, row, inserted, index);
+    }
+
+    long threadId = Thread.currentThread().threadId();
+    long before = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 52; index < 68; index++) {
+      exerciseWide(table, row, inserted, index);
+    }
+    long insertAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertTrue(table.pageCount() >= 4, "wide rows did not allocate another heap page");
+    assertTrue(insertAllocated <= 512, "multipage insert allocated bytes: " + insertAllocated);
+
+    for (int index = 0; index < 64; index++) {
+      int rowId = 1 + index % 68;
+      allocationGuard += table.fetchByKey(10_000L + rowId - 1L, fetched).ordinal();
+      allocationGuard += fetched.length();
+    }
+    before = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 256; index++) {
+      int rowId = 1 + index % 68;
+      allocationGuard += table.fetchByKey(10_000L + rowId - 1L, fetched).ordinal();
+      allocationGuard += fetched.length();
+    }
+    long fetchAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertTrue(fetchAllocated <= 256, "multipage fetch allocated bytes: " + fetchAllocated);
+
+    assertEquals(StatusCode.OK, table.flush());
+    assertEquals(StatusCode.OK, table.close());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
 
   @Test
   void warmedCompactHeapIndexCommitReusesProductionState(@TempDir Path root) {
@@ -213,6 +278,18 @@ final class IndexedTableAllocationTest {
     row.position(0);
     row.limit(Long.BYTES);
     allocationGuard += table.insert(value + 2L, value, row, inserted).ordinal();
+    allocationGuard += inserted.rowId();
+  }
+
+  private static void exerciseWide(
+      IndexedTable table,
+      ByteBuffer row,
+      HeapInsertResult inserted,
+      int value) {
+    row.putLong(0, value);
+    row.position(0);
+    row.limit(row.capacity());
+    allocationGuard += table.insert(2L + value, 10_000L + value, row, inserted).ordinal();
     allocationGuard += inserted.rowId();
   }
 

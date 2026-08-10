@@ -70,6 +70,8 @@ public final class IndexedPageStore {
   private final long[] pageRecordEnds = new long[MAX_PAGES + 1];
   private final long[] rowCommitSequences = new long[MAX_ROWS + 1];
   private final int[] previousRowIds = new int[MAX_ROWS + 1];
+  private final int[] rowPageIds = new int[MAX_ROWS + 1];
+  private final int[] rowSlots = new int[MAX_ROWS + 1];
   private final boolean[] deletedRows = new boolean[MAX_ROWS + 1];
   private final int[] changedPageIds = new int[MAX_CHANGED_PAGES];
   private final int[] recoveryPageIds = new int[MAX_CHANGED_PAGES];
@@ -84,6 +86,10 @@ public final class IndexedPageStore {
   private final BTreeLookupResult lookupResult = new BTreeLookupResult();
   private int changedPageCount;
   private int highestPageId;
+  private int rowCount;
+  private int lastHeapPageId = HEAP_PAGE_ID;
+  private int operationRowCount;
+  private int operationLastHeapPageId = HEAP_PAGE_ID;
   private boolean operationActive;
   private boolean failed;
   private boolean closed;
@@ -234,6 +240,8 @@ public final class IndexedPageStore {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     changedPageCount = 0;
+    operationRowCount = rowCount;
+    operationLastHeapPageId = lastHeapPageId;
     operationActive = true;
     return StatusCode.OK;
   }
@@ -291,6 +299,97 @@ public final class IndexedPageStore {
     return payload;
   }
 
+  /** Appends one row into the staged heap set and returns its global MVCC row id. */
+  public StatusCode stageRow(
+      ByteBuffer source,
+      int sourceOffset,
+      int rowBytes,
+      HeapInsertResult result) {
+    if (!operationActive
+        || source == null
+        || sourceOffset < 0
+        || rowBytes <= 0
+        || source.limit() - sourceOffset < rowBytes
+        || result == null
+        || operationRowCount >= MAX_ROWS) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    ByteBuffer heap = operationPayload(operationLastHeapPageId);
+    if (heap == null || !HeapPage.isHeap(heap)) {
+      return StatusCode.CORRUPTION;
+    }
+    if (!HeapPage.canInsert(heap, rowBytes)) {
+      ByteBuffer metadata = stageExisting(ROOT_META_PAGE_ID);
+      if (metadata == null
+          || BTreeRootPage.nextPageId(metadata) > MAX_PAGES) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      int heapPageId = BTreeRootPage.allocatePage(metadata);
+      heap = stageNew(heapPageId);
+      if (heap == null) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      StatusCode status = HeapPage.initialize(heap);
+      if (!status.isOk()) {
+        return status;
+      }
+      operationLastHeapPageId = heapPageId;
+    } else {
+      heap = stageExisting(operationLastHeapPageId);
+      if (heap == null) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+    }
+    StatusCode status = HeapPage.insertFrom(
+        heap, source, sourceOffset, rowBytes, appliedInsert);
+    if (status.isOk()) {
+      operationRowCount++;
+      result.setRowId(operationRowCount);
+    }
+    return status;
+  }
+
+  public boolean canAppendRow(int rowBytes) {
+    if (rowBytes <= 0 || rowCount >= MAX_ROWS || !present[lastHeapPageId]) {
+      return false;
+    }
+    if (HeapPage.canInsert(currentPayloads[lastHeapPageId], rowBytes)) {
+      return true;
+    }
+    ByteBuffer metadata = currentPayloads[ROOT_META_PAGE_ID];
+    return rowBytes + HeapPage.SLOT_BYTES
+            <= currentPayloads[HEAP_PAGE_ID].limit() - HeapPage.HEADER_BYTES
+        && BTreeRootPage.nextPageId(metadata) <= MAX_PAGES;
+  }
+
+  public StatusCode fetchRow(int rowId, io.riverdb.storage.heap.HeapRowResult result) {
+    if (result == null || rowId <= 0 || rowId > rowCount) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return HeapPage.fetch(currentPayloads[rowPageIds[rowId]], rowSlots[rowId], result);
+  }
+
+  public int rowLength(int rowId) {
+    return rowId > 0 && rowId <= rowCount
+        ? HeapPage.rowLength(currentPayloads[rowPageIds[rowId]], rowSlots[rowId]) : 0;
+  }
+
+  public StatusCode copyRowTo(int rowId, ByteBuffer destination, int destinationOffset) {
+    if (rowId <= 0 || rowId > rowCount) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return HeapPage.copyRowTo(
+        currentPayloads[rowPageIds[rowId]],
+        rowSlots[rowId],
+        destination,
+        destinationOffset);
+  }
+
+  public int rowCount() {
+    return rowCount;
+  }
+
   public StatusCode commit(long transactionId, long commitSequence) {
     if (!operationActive
         || transactionId <= 0
@@ -342,9 +441,13 @@ public final class IndexedPageStore {
       failed = true;
       return status;
     }
-    int previousRowCount = present[HEAP_PAGE_ID]
-        ? HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) : 0;
+    int previousRowCount = rowCount;
     publishStagedPages();
+    StatusCode locations = rebuildRowLocations();
+    if (!locations.isOk() || rowCount != operationRowCount) {
+      failed = true;
+      return locations.isOk() ? StatusCode.INVARIANT_BROKEN : locations;
+    }
     recordNewRowCommits(previousRowCount, commitSequence);
     lastCommitSequence = commitSequence;
     operationActive = false;
@@ -375,7 +478,6 @@ public final class IndexedPageStore {
     if (operationActive) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    ByteBuffer heap = currentPayloads[HEAP_PAGE_ID];
     int leafPageId = findLeafPageId(key);
     if (!present[HEAP_PAGE_ID] || leafPageId <= 0) {
       return StatusCode.CORRUPTION;
@@ -389,11 +491,11 @@ public final class IndexedPageStore {
       return status;
     }
     int rowBytes = row.remaining();
-    if (!HeapPage.canInsert(heap, rowBytes)
+    if (!canAppendRow(rowBytes)
         || BTreePage.entryCount(leaf) >= BTreePage.MAX_ENTRIES) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    int rowId = HeapPage.rowCount(heap) + 1;
+    int rowId = rowCount + 1;
     int operationBytes = INSERT_OPERATION_HEADER_BYTES + rowBytes;
     status = wal.reserve(operationBytes, walReservation);
     if (!status.isOk()) {
@@ -470,7 +572,6 @@ public final class IndexedPageStore {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     int operationBytes = INSERT_BATCH_HEADER_BYTES;
-    int requiredHeapBytes = 0;
     for (int index = 0; index < insertCount; index++) {
       int rowBytes = rowLengths[index];
       int rowOffset = index * rowStride;
@@ -507,10 +608,9 @@ public final class IndexedPageStore {
           >= BTreePage.MAX_ENTRIES) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      requiredHeapBytes += HeapPage.SLOT_BYTES + rowBytes;
       operationBytes += INSERT_BATCH_ENTRY_BYTES + rowBytes;
     }
-    if (requiredHeapBytes > HeapPage.availableBytes(currentPayloads[HEAP_PAGE_ID])) {
+    if (!canAppendRows(rowLengths, insertCount)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     status = wal.reserve(operationBytes, walReservation);
@@ -524,7 +624,7 @@ public final class IndexedPageStore {
     putInt(recordPayload, 16, insertCount);
     putInt(recordPayload, 20, 0);
     int outputOffset = INSERT_BATCH_HEADER_BYTES;
-    int firstRowId = HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) + 1;
+    int firstRowId = rowCount + 1;
     for (int index = 0; index < insertCount; index++) {
       int rowBytes = rowLengths[index];
       putLong(recordPayload, outputOffset, keys[index]);
@@ -602,7 +702,6 @@ public final class IndexedPageStore {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     int operationBytes = MUTATION_BATCH_HEADER_BYTES;
-    int requiredHeapBytes = 0;
     for (int index = 0; index < mutationCount; index++) {
       int operation = operations[index];
       long key = keys[index];
@@ -656,10 +755,9 @@ public final class IndexedPageStore {
           || isDeletedRow(previousRowId)) {
         return StatusCode.CONFLICT;
       }
-      requiredHeapBytes += HeapPage.SLOT_BYTES + rowBytes;
       operationBytes += MUTATION_BATCH_ENTRY_BYTES + rowBytes;
     }
-    if (requiredHeapBytes > HeapPage.availableBytes(currentPayloads[HEAP_PAGE_ID])) {
+    if (!canAppendRows(rowLengths, mutationCount)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     status = wal.reserve(operationBytes, walReservation);
@@ -673,7 +771,7 @@ public final class IndexedPageStore {
     putInt(recordPayload, 16, mutationCount);
     putInt(recordPayload, 20, 0);
     int outputOffset = MUTATION_BATCH_HEADER_BYTES;
-    int firstRowId = HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) + 1;
+    int firstRowId = rowCount + 1;
     for (int index = 0; index < mutationCount; index++) {
       int rowBytes = rowLengths[index];
       putInt(recordPayload, outputOffset, operations[index]);
@@ -734,7 +832,7 @@ public final class IndexedPageStore {
     if (operationActive || !present[HEAP_PAGE_ID]) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    int rowsBefore = HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]);
+    int rowsBefore = rowCount;
     int retainedRows = indexedEntryCount();
     if (retainedRows < 0 || retainedRows > rowsBefore) {
       return StatusCode.CORRUPTION;
@@ -745,16 +843,14 @@ public final class IndexedPageStore {
     int operationBytes = VACUUM_HEADER_BYTES + retainedRows * VACUUM_ENTRY_BYTES;
     for (int pageId = 1; pageId <= highestPageId; pageId++) {
       if (!present[pageId]
-          || pageId == HEAP_PAGE_ID
+          || HeapPage.isHeap(currentPayloads[pageId])
           || pageId == ROOT_META_PAGE_ID
           || BTreePage.type(currentPayloads[pageId]) != BTreePage.TYPE_LEAF) {
         continue;
       }
       int entryCount = BTreePage.entryCount(currentPayloads[pageId]);
       for (int entry = 0; entry < entryCount; entry++) {
-        int rowBytes = HeapPage.rowLength(
-            currentPayloads[HEAP_PAGE_ID],
-            BTreePage.valueAt(currentPayloads[pageId], entry));
+        int rowBytes = rowLength(BTreePage.valueAt(currentPayloads[pageId], entry));
         if (rowBytes <= 0 || operationBytes > Integer.MAX_VALUE - rowBytes) {
           return StatusCode.CORRUPTION;
         }
@@ -774,7 +870,7 @@ public final class IndexedPageStore {
     int outputOffset = VACUUM_HEADER_BYTES;
     for (int pageId = 1; pageId <= highestPageId; pageId++) {
       if (!present[pageId]
-          || pageId == HEAP_PAGE_ID
+          || HeapPage.isHeap(currentPayloads[pageId])
           || pageId == ROOT_META_PAGE_ID
           || BTreePage.type(currentPayloads[pageId]) != BTreePage.TYPE_LEAF) {
         continue;
@@ -783,17 +879,13 @@ public final class IndexedPageStore {
       int entryCount = BTreePage.entryCount(leaf);
       for (int entry = 0; entry < entryCount; entry++) {
         int rowId = BTreePage.valueAt(leaf, entry);
-        int rowBytes = HeapPage.rowLength(currentPayloads[HEAP_PAGE_ID], rowId);
+        int rowBytes = rowLength(rowId);
         putLong(payload, outputOffset, BTreePage.keyAt(leaf, entry));
         putInt(payload, outputOffset + 8, rowId);
         putInt(payload, outputOffset + 12, rowBytes);
         putInt(payload, outputOffset + 16, isDeletedRow(rowId) ? 1 : 0);
         putInt(payload, outputOffset + 20, 0);
-        status = HeapPage.copyRowTo(
-            currentPayloads[HEAP_PAGE_ID],
-            rowId,
-            payload,
-            outputOffset + VACUUM_ENTRY_BYTES);
+        status = copyRowTo(rowId, payload, outputOffset + VACUUM_ENTRY_BYTES);
         if (!status.isOk()) {
           wal.cancel(walReservation);
           return status;
@@ -972,7 +1064,7 @@ public final class IndexedPageStore {
         || hasDirtyPages()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int rowCount = HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]);
+    int checkpointRows = rowCount;
     state.reset();
     StatusCode status = state.set(
         database,
@@ -981,11 +1073,11 @@ public final class IndexedPageStore {
         wal.currentCommitSequence(),
         maximumTransactionId,
         highestPageId,
-        rowCount);
+        checkpointRows);
     if (!status.isOk()) {
       return status;
     }
-    for (int rowId = 1; rowId <= rowCount; rowId++) {
+    for (int rowId = 1; rowId <= checkpointRows; rowId++) {
       if (deletedRows[rowId]) {
         status = state.setDeleted(rowId);
         if (!status.isOk()) {
@@ -1118,7 +1210,7 @@ public final class IndexedPageStore {
       }
       present[pageId] = true;
       highestPageId = pageId;
-      if (pageId == HEAP_PAGE_ID) {
+      if (HeapPage.isHeap(currentPayloads[pageId])) {
         status = HeapPage.validate(currentPayloads[pageId]);
       } else if (pageId == ROOT_META_PAGE_ID) {
         status = BTreeRootPage.validate(currentPayloads[pageId]);
@@ -1130,7 +1222,8 @@ public final class IndexedPageStore {
         return status;
       }
     }
-    if (HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) != checkpoint.rowCount()) {
+    status = rebuildRowLocations();
+    if (!status.isOk() || rowCount != checkpoint.rowCount()) {
       checkpointFile.close();
       return StatusCode.CORRUPTION;
     }
@@ -1198,8 +1291,7 @@ public final class IndexedPageStore {
         || payloadBytes != PAGE_OPERATION_HEADER_BYTES + pageCount * PageCodec.PAGE_BYTES) {
       return StatusCode.CORRUPTION;
     }
-    int previousRowCount = present[HEAP_PAGE_ID]
-        ? HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]) : 0;
+    int previousRowCount = rowCount;
     for (int index = 0; index < pageCount; index++) {
       int pageOffset = PAGE_OPERATION_HEADER_BYTES + index * PageCodec.PAGE_BYTES;
       StatusCode status = PageCodec.validateAt(payload, pageOffset, pageHeader, checksum);
@@ -1230,6 +1322,9 @@ public final class IndexedPageStore {
     }
     StatusCode status = validateAppliedPages(pageCount);
     if (status.isOk()) {
+      status = rebuildRowLocations();
+    }
+    if (status.isOk()) {
       recordNewRowCommits(previousRowCount, commitSequence);
     }
     return status;
@@ -1239,7 +1334,7 @@ public final class IndexedPageStore {
     for (int index = 0; index < pageCount; index++) {
       int pageId = recoveryPageIds[index];
       StatusCode status;
-      if (pageId == HEAP_PAGE_ID) {
+      if (HeapPage.isHeap(currentPayloads[pageId])) {
         status = HeapPage.validate(currentPayloads[pageId]);
       } else if (pageId == ROOT_META_PAGE_ID) {
         status = BTreeRootPage.validate(currentPayloads[pageId]);
@@ -1275,11 +1370,10 @@ public final class IndexedPageStore {
         || !present[HEAP_PAGE_ID]) {
       return StatusCode.CORRUPTION;
     }
-    ByteBuffer heap = currentPayloads[HEAP_PAGE_ID];
     int leafPageId = findLeafPageId(key);
     if (leafPageId <= 0
-        || HeapPage.rowCount(heap) + 1 != rowId
-        || !HeapPage.canInsert(heap, rowBytes)
+        || rowCount + 1 != rowId
+        || !canAppendRow(rowBytes)
         || BTreePage.entryCount(currentPayloads[leafPageId]) >= BTreePage.MAX_ENTRIES) {
       return StatusCode.CORRUPTION;
     }
@@ -1287,26 +1381,24 @@ public final class IndexedPageStore {
     if (status != StatusCode.CONFLICT) {
       return StatusCode.CORRUPTION;
     }
-    status = HeapPage.insertFrom(
-        heap,
+    status = appendCurrentRow(
         payload,
         INSERT_OPERATION_HEADER_BYTES,
         rowBytes,
-        appliedInsert);
+        rowId,
+        recordStart,
+        recordEnd,
+        commitSequence,
+        0,
+        false);
     if (status.isOk()) {
       status = BTreePage.insertLeaf(currentPayloads[leafPageId], key, rowId);
     }
-    if (!status.isOk() || appliedInsert.rowId() != rowId) {
+    if (!status.isOk()) {
       return StatusCode.INVARIANT_BROKEN;
     }
-    pageRecordStarts[HEAP_PAGE_ID] = recordStart;
-    pageRecordEnds[HEAP_PAGE_ID] = recordEnd;
     pageRecordStarts[leafPageId] = recordStart;
     pageRecordEnds[leafPageId] = recordEnd;
-    rowCommitSequences[rowId] = commitSequence;
-    previousRowIds[rowId] = 0;
-    deletedRows[rowId] = false;
-    dirty[HEAP_PAGE_ID] = true;
     dirty[leafPageId] = true;
     return StatusCode.OK;
   }
@@ -1328,9 +1420,7 @@ public final class IndexedPageStore {
     if (insertCount <= 1 || insertCount > MAX_ROWS) {
       return StatusCode.CORRUPTION;
     }
-    ByteBuffer heap = currentPayloads[HEAP_PAGE_ID];
-    int firstRowId = HeapPage.rowCount(heap) + 1;
-    int requiredHeapBytes = 0;
+    int firstRowId = rowCount + 1;
     int entryOffset = INSERT_BATCH_HEADER_BYTES;
     for (int index = 0; index < insertCount; index++) {
       if (payload.limit() - entryOffset < INSERT_BATCH_ENTRY_BYTES) {
@@ -1361,11 +1451,11 @@ public final class IndexedPageStore {
           >= BTreePage.MAX_ENTRIES) {
         return StatusCode.CORRUPTION;
       }
-      requiredHeapBytes += HeapPage.SLOT_BYTES + rowBytes;
       entryOffset += INSERT_BATCH_ENTRY_BYTES + rowBytes;
     }
     if (entryOffset != payload.limit()
-        || requiredHeapBytes > HeapPage.availableBytes(heap)) {
+        || !canAppendEncodedRows(payload, INSERT_BATCH_HEADER_BYTES, insertCount, 12,
+            INSERT_BATCH_ENTRY_BYTES)) {
       return StatusCode.CORRUPTION;
     }
     entryOffset = INSERT_BATCH_HEADER_BYTES;
@@ -1375,25 +1465,27 @@ public final class IndexedPageStore {
       int rowBytes = getInt(payload, entryOffset + 12);
       int rowOffset = entryOffset + INSERT_BATCH_ENTRY_BYTES;
       int leafPageId = findLeafPageId(key);
-      StatusCode status = HeapPage.insertFrom(
-          heap, payload, rowOffset, rowBytes, appliedInsert);
+      StatusCode status = appendCurrentRow(
+          payload,
+          rowOffset,
+          rowBytes,
+          rowId,
+          recordStart,
+          recordEnd,
+          commitSequence,
+          0,
+          false);
       if (status.isOk()) {
         status = BTreePage.insertLeaf(currentPayloads[leafPageId], key, rowId);
       }
-      if (!status.isOk() || appliedInsert.rowId() != rowId) {
+      if (!status.isOk()) {
         return StatusCode.INVARIANT_BROKEN;
       }
       pageRecordStarts[leafPageId] = recordStart;
       pageRecordEnds[leafPageId] = recordEnd;
       dirty[leafPageId] = true;
-      rowCommitSequences[rowId] = commitSequence;
-      previousRowIds[rowId] = 0;
-      deletedRows[rowId] = false;
       entryOffset = rowOffset + rowBytes;
     }
-    pageRecordStarts[HEAP_PAGE_ID] = recordStart;
-    pageRecordEnds[HEAP_PAGE_ID] = recordEnd;
-    dirty[HEAP_PAGE_ID] = true;
     return StatusCode.OK;
   }
 
@@ -1428,9 +1520,7 @@ public final class IndexedPageStore {
     if (mutationCount <= 0 || mutationCount > MAX_ROWS) {
       return StatusCode.CORRUPTION;
     }
-    ByteBuffer heap = currentPayloads[HEAP_PAGE_ID];
-    int firstRowId = HeapPage.rowCount(heap) + 1;
-    int requiredHeapBytes = 0;
+    int firstRowId = rowCount + 1;
     int entryOffset = MUTATION_BATCH_HEADER_BYTES;
     for (int index = 0; index < mutationCount; index++) {
       if (payload.limit() - entryOffset < MUTATION_BATCH_ENTRY_BYTES) {
@@ -1479,11 +1569,11 @@ public final class IndexedPageStore {
           || isDeletedRow(previousRowId)) {
         return StatusCode.CORRUPTION;
       }
-      requiredHeapBytes += HeapPage.SLOT_BYTES + rowBytes;
       entryOffset += MUTATION_BATCH_ENTRY_BYTES + rowBytes;
     }
     if (entryOffset != payload.limit()
-        || requiredHeapBytes > HeapPage.availableBytes(heap)) {
+        || !canAppendEncodedRows(payload, MUTATION_BATCH_HEADER_BYTES, mutationCount, 20,
+            MUTATION_BATCH_ENTRY_BYTES)) {
       return StatusCode.CORRUPTION;
     }
     entryOffset = MUTATION_BATCH_HEADER_BYTES;
@@ -1495,27 +1585,29 @@ public final class IndexedPageStore {
       int rowBytes = getInt(payload, entryOffset + 20);
       int rowOffset = entryOffset + MUTATION_BATCH_ENTRY_BYTES;
       int leafPageId = findLeafPageId(key);
-      StatusCode status = HeapPage.insertFrom(
-          heap, payload, rowOffset, rowBytes, appliedInsert);
+      StatusCode status = appendCurrentRow(
+          payload,
+          rowOffset,
+          rowBytes,
+          rowId,
+          recordStart,
+          recordEnd,
+          commitSequence,
+          previousRowId,
+          operation == MUTATION_DELETE);
       if (status.isOk()) {
         status = operation == MUTATION_INSERT && previousRowId == 0
             ? BTreePage.insertLeaf(currentPayloads[leafPageId], key, rowId)
             : BTreePage.updateLeaf(currentPayloads[leafPageId], key, rowId);
       }
-      if (!status.isOk() || appliedInsert.rowId() != rowId) {
+      if (!status.isOk()) {
         return StatusCode.INVARIANT_BROKEN;
       }
       pageRecordStarts[leafPageId] = recordStart;
       pageRecordEnds[leafPageId] = recordEnd;
       dirty[leafPageId] = true;
-      rowCommitSequences[rowId] = commitSequence;
-      previousRowIds[rowId] = previousRowId;
-      deletedRows[rowId] = operation == MUTATION_DELETE;
       entryOffset = rowOffset + rowBytes;
     }
-    pageRecordStarts[HEAP_PAGE_ID] = recordStart;
-    pageRecordEnds[HEAP_PAGE_ID] = recordEnd;
-    dirty[HEAP_PAGE_ID] = true;
     return StatusCode.OK;
   }
 
@@ -1538,7 +1630,6 @@ public final class IndexedPageStore {
         || indexedEntryCount() != retainedRows) {
       return StatusCode.CORRUPTION;
     }
-    int requiredHeapBytes = 0;
     int entryOffset = VACUUM_HEADER_BYTES;
     for (int index = 0; index < retainedRows; index++) {
       if (payload.limit() - entryOffset < VACUUM_ENTRY_BYTES) {
@@ -1555,7 +1646,7 @@ public final class IndexedPageStore {
           || getInt(payload, entryOffset + 20) != 0
           || payload.limit() - entryOffset - VACUUM_ENTRY_BYTES < rowBytes
           || vacuumContainsEarlierKey(payload, entryOffset, key)
-          || HeapPage.rowLength(currentPayloads[HEAP_PAGE_ID], oldRowId) != rowBytes
+          || rowLength(oldRowId) != rowBytes
           || isDeletedRow(oldRowId) != (deleted == 1)) {
         return StatusCode.CORRUPTION;
       }
@@ -1566,23 +1657,26 @@ public final class IndexedPageStore {
       if (!status.isOk() || lookupResult.rowId() != oldRowId) {
         return StatusCode.CORRUPTION;
       }
-      requiredHeapBytes += HeapPage.SLOT_BYTES + rowBytes;
       entryOffset += VACUUM_ENTRY_BYTES + rowBytes;
     }
     if (entryOffset != payload.limit()
-        || requiredHeapBytes > PageCodec.MAX_PAYLOAD_BYTES - HeapPage.HEADER_BYTES) {
+        || !canPackVacuumRows(payload, retainedRows)) {
       return StatusCode.CORRUPTION;
     }
     StatusCode status = beginOperation();
     if (!status.isOk()) {
       return status;
     }
-    ByteBuffer heap = stageExisting(HEAP_PAGE_ID);
-    if (heap == null) {
-      cancelOperation();
-      return StatusCode.RESOURCE_EXHAUSTED;
+    for (int pageId = 1; status.isOk() && pageId <= highestPageId; pageId++) {
+      if (!present[pageId] || !HeapPage.isHeap(currentPayloads[pageId])) {
+        continue;
+      }
+      ByteBuffer stagedHeap = stageExisting(pageId);
+      status = stagedHeap == null
+          ? StatusCode.RESOURCE_EXHAUSTED : HeapPage.initialize(stagedHeap);
     }
-    status = HeapPage.initialize(heap);
+    int heapPageId = HEAP_PAGE_ID;
+    ByteBuffer heap = operationPayload(heapPageId);
     entryOffset = VACUUM_HEADER_BYTES;
     for (int index = 0; status.isOk() && index < retainedRows; index++) {
       long key = getLong(payload, entryOffset);
@@ -1593,6 +1687,14 @@ public final class IndexedPageStore {
         status = StatusCode.RESOURCE_EXHAUSTED;
         break;
       }
+      if (!HeapPage.canInsert(heap, rowBytes)) {
+        heapPageId = nextHeapPageId(heapPageId);
+        heap = heapPageId == 0 ? null : operationPayload(heapPageId);
+        if (heap == null) {
+          status = StatusCode.RESOURCE_EXHAUSTED;
+          break;
+        }
+      }
       status = HeapPage.insertFrom(
           heap,
           payload,
@@ -1600,7 +1702,7 @@ public final class IndexedPageStore {
           rowBytes,
           appliedInsert);
       if (status.isOk()) {
-        status = BTreePage.updateLeaf(leaf, key, appliedInsert.rowId());
+        status = BTreePage.updateLeaf(leaf, key, index + 1);
       }
       entryOffset += VACUUM_ENTRY_BYTES + rowBytes;
     }
@@ -1609,6 +1711,10 @@ public final class IndexedPageStore {
       return status;
     }
     publishStagedPages(recordStart, recordEnd);
+    status = rebuildRowLocations();
+    if (!status.isOk() || rowCount != retainedRows) {
+      return status.isOk() ? StatusCode.CORRUPTION : status;
+    }
     for (int rowId = 1; rowId <= MAX_ROWS; rowId++) {
       rowCommitSequences[rowId] = 0;
       previousRowIds[rowId] = 0;
@@ -1640,6 +1746,37 @@ public final class IndexedPageStore {
     return false;
   }
 
+  private boolean canPackVacuumRows(ByteBuffer payload, int retainedRows) {
+    int heapPageId = HEAP_PAGE_ID;
+    int available = currentPayloads[heapPageId].limit() - HeapPage.HEADER_BYTES;
+    int entryOffset = VACUUM_HEADER_BYTES;
+    for (int index = 0; index < retainedRows; index++) {
+      int required = HeapPage.SLOT_BYTES + getInt(payload, entryOffset + 12);
+      if (required > available) {
+        heapPageId = nextHeapPageId(heapPageId);
+        if (heapPageId == 0) {
+          return false;
+        }
+        available = currentPayloads[heapPageId].limit() - HeapPage.HEADER_BYTES;
+      }
+      if (required > available) {
+        return false;
+      }
+      available -= required;
+      entryOffset += VACUUM_ENTRY_BYTES + getInt(payload, entryOffset + 12);
+    }
+    return true;
+  }
+
+  private int nextHeapPageId(int afterPageId) {
+    for (int pageId = afterPageId + 1; pageId <= highestPageId; pageId++) {
+      if (present[pageId] && HeapPage.isHeap(currentPayloads[pageId])) {
+        return pageId;
+      }
+    }
+    return 0;
+  }
+
   private int indexedEntryCount() {
     int count = 0;
     for (int pageId = 1; pageId <= highestPageId; pageId++) {
@@ -1647,7 +1784,7 @@ public final class IndexedPageStore {
         continue;
       }
       ByteBuffer page = currentPayloads[pageId];
-      if (pageId == HEAP_PAGE_ID) {
+      if (HeapPage.isHeap(page)) {
         continue;
       }
       int type = BTreePage.type(page);
@@ -1706,12 +1843,145 @@ public final class IndexedPageStore {
     return count;
   }
 
+  private boolean canAppendRows(int[] rowLengths, int count) {
+    if (rowCount > MAX_ROWS - count || !present[lastHeapPageId]) {
+      return false;
+    }
+    int available = HeapPage.availableBytes(currentPayloads[lastHeapPageId]);
+    int newPages = 0;
+    int pageCapacity = currentPayloads[HEAP_PAGE_ID].limit() - HeapPage.HEADER_BYTES;
+    for (int index = 0; index < count; index++) {
+      int required = HeapPage.SLOT_BYTES + rowLengths[index];
+      if (required > pageCapacity) {
+        return false;
+      }
+      if (required > available) {
+        newPages++;
+        available = pageCapacity;
+      }
+      available -= required;
+    }
+    return BTreeRootPage.nextPageId(currentPayloads[ROOT_META_PAGE_ID])
+        <= MAX_PAGES - newPages + 1;
+  }
+
+  private boolean canAppendEncodedRows(
+      ByteBuffer payload,
+      int firstEntryOffset,
+      int count,
+      int rowLengthOffset,
+      int entryBytes) {
+    if (rowCount > MAX_ROWS - count || !present[lastHeapPageId]) {
+      return false;
+    }
+    int available = HeapPage.availableBytes(currentPayloads[lastHeapPageId]);
+    int newPages = 0;
+    int pageCapacity = currentPayloads[HEAP_PAGE_ID].limit() - HeapPage.HEADER_BYTES;
+    int entryOffset = firstEntryOffset;
+    for (int index = 0; index < count; index++) {
+      int rowBytes = getInt(payload, entryOffset + rowLengthOffset);
+      int required = HeapPage.SLOT_BYTES + rowBytes;
+      if (required > pageCapacity) {
+        return false;
+      }
+      if (required > available) {
+        newPages++;
+        available = pageCapacity;
+      }
+      available -= required;
+      entryOffset += entryBytes + rowBytes;
+    }
+    return BTreeRootPage.nextPageId(currentPayloads[ROOT_META_PAGE_ID])
+        <= MAX_PAGES - newPages + 1;
+  }
+
+  private StatusCode appendCurrentRow(
+      ByteBuffer source,
+      int sourceOffset,
+      int rowBytes,
+      int expectedRowId,
+      long recordStart,
+      long recordEnd,
+      long commitSequence,
+      int previousRowId,
+      boolean deleted) {
+    if (expectedRowId != rowCount + 1 || expectedRowId > MAX_ROWS) {
+      return StatusCode.CORRUPTION;
+    }
+    ByteBuffer heap = currentPayloads[lastHeapPageId];
+    if (!HeapPage.canInsert(heap, rowBytes)) {
+      ByteBuffer metadata = currentPayloads[ROOT_META_PAGE_ID];
+      if (BTreeRootPage.nextPageId(metadata) > MAX_PAGES) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      int pageId = BTreeRootPage.allocatePage(metadata);
+      if (present[pageId]) {
+        return StatusCode.CORRUPTION;
+      }
+      heap = currentPayloads[pageId];
+      StatusCode status = HeapPage.initialize(heap);
+      if (!status.isOk()) {
+        return status;
+      }
+      present[pageId] = true;
+      highestPageId = Math.max(highestPageId, pageId);
+      lastHeapPageId = pageId;
+      pageRecordStarts[ROOT_META_PAGE_ID] = recordStart;
+      pageRecordEnds[ROOT_META_PAGE_ID] = recordEnd;
+      dirty[ROOT_META_PAGE_ID] = true;
+    }
+    StatusCode status = HeapPage.insertFrom(
+        heap, source, sourceOffset, rowBytes, appliedInsert);
+    if (!status.isOk()) {
+      return status;
+    }
+    rowCount++;
+    rowPageIds[rowCount] = lastHeapPageId;
+    rowSlots[rowCount] = appliedInsert.rowId();
+    rowCommitSequences[rowCount] = commitSequence;
+    previousRowIds[rowCount] = previousRowId;
+    deletedRows[rowCount] = deleted;
+    pageRecordStarts[lastHeapPageId] = recordStart;
+    pageRecordEnds[lastHeapPageId] = recordEnd;
+    dirty[lastHeapPageId] = true;
+    return StatusCode.OK;
+  }
+
+  private StatusCode rebuildRowLocations() {
+    int rebuiltRows = 0;
+    int rebuiltLastHeap = 0;
+    for (int pageId = 1; pageId <= highestPageId; pageId++) {
+      if (!present[pageId] || !HeapPage.isHeap(currentPayloads[pageId])) {
+        continue;
+      }
+      int pageRows = HeapPage.rowCount(currentPayloads[pageId]);
+      if (pageRows < 0 || rebuiltRows > MAX_ROWS - pageRows) {
+        return StatusCode.CORRUPTION;
+      }
+      for (int slot = 1; slot <= pageRows; slot++) {
+        rebuiltRows++;
+        rowPageIds[rebuiltRows] = pageId;
+        rowSlots[rebuiltRows] = slot;
+      }
+      rebuiltLastHeap = pageId;
+    }
+    if (rebuiltLastHeap == 0) {
+      return StatusCode.CORRUPTION;
+    }
+    for (int rowId = rebuiltRows + 1; rowId <= rowCount; rowId++) {
+      rowPageIds[rowId] = 0;
+      rowSlots[rowId] = 0;
+    }
+    rowCount = rebuiltRows;
+    lastHeapPageId = rebuiltLastHeap;
+    return StatusCode.OK;
+  }
+
   private void recordNewRowCommits(int previousRowCount, long commitSequence) {
     if (!present[HEAP_PAGE_ID]) {
       return;
     }
-    int currentRowCount = HeapPage.rowCount(currentPayloads[HEAP_PAGE_ID]);
-    for (int rowId = previousRowCount + 1; rowId <= currentRowCount; rowId++) {
+    for (int rowId = previousRowCount + 1; rowId <= rowCount; rowId++) {
       rowCommitSequences[rowId] = commitSequence;
       previousRowIds[rowId] = 0;
       deletedRows[rowId] = false;

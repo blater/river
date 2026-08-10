@@ -138,6 +138,47 @@ final class IndexedTableTest {
   }
 
   @Test
+  void appendsAndRecoversRowsAcrossHeapPages(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    HeapInsertResult inserted = new HeapInsertResult();
+    ByteBuffer row = ByteBuffer.allocateDirect(256);
+    int rows = 130;
+    for (int index = 0; index < rows; index++) {
+      row.clear();
+      row.putLong(0, index * 10L);
+      row.position(0);
+      row.limit(row.capacity());
+      assertEquals(StatusCode.OK, table.insert(index + 2L, index, row, inserted));
+      assertEquals(index + 1, inserted.rowId());
+    }
+    assertEquals(rows, table.rowCount());
+    assertEquals(true, table.pageCount() >= 5);
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(0, rowValue(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(64, fetched));
+    assertEquals(640, rowValue(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(129, fetched));
+    assertEquals(1_290, rowValue(fetched));
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    table = openTable(openStore(directory, wal));
+    assertEquals(rows, table.rowCount());
+    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(0, rowValue(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(64, fetched));
+    assertEquals(640, rowValue(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(129, fetched));
+    assertEquals(1_290, rowValue(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void snapshotHidesRowsCommittedAfterItsBoundary(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
@@ -234,7 +275,7 @@ final class IndexedTableTest {
   }
 
   private static long rowValue(HeapRowResult row) {
-    ByteBuffer value = ByteBuffer.allocate(Long.BYTES);
+    ByteBuffer value = ByteBuffer.allocate(row.length());
     assertEquals(StatusCode.OK, row.copyTo(value));
     return value.getLong(0);
   }

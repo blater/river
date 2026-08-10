@@ -161,11 +161,6 @@ public final class IndexedTable implements CommitSequenceSource {
     if (!status.isOk()) {
       return status;
     }
-    ByteBuffer heap = store.stageExisting(HEAP_PAGE_ID);
-    if (heap == null) {
-      store.cancelOperation();
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
     int lastRowId = 0;
     for (int index = 0; index < insertCount; index++) {
       int rowBytes = rowLengths[index];
@@ -197,7 +192,7 @@ public final class IndexedTable implements CommitSequenceSource {
         store.cancelOperation();
         return status;
       }
-      status = HeapPage.insertFrom(heap, rows, rowOffset, rowBytes, heapInsert);
+      status = store.stageRow(rows, rowOffset, rowBytes, heapInsert);
       if (!status.isOk()) {
         store.cancelOperation();
         return status;
@@ -290,9 +285,8 @@ public final class IndexedTable implements CommitSequenceSource {
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
-    ByteBuffer currentHeap = store.currentPayload(HEAP_PAGE_ID);
     ByteBuffer currentLeaf = store.currentPayload(leafPageId);
-    if (!HeapPage.canInsert(currentHeap, row.remaining())) {
+    if (!store.canAppendRow(row.remaining())) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (BTreePage.entryCount(currentLeaf) < BTreePage.MAX_ENTRIES) {
@@ -303,13 +297,12 @@ public final class IndexedTable implements CommitSequenceSource {
     if (!status.isOk()) {
       return status;
     }
-    ByteBuffer heap = store.stageExisting(HEAP_PAGE_ID);
     ByteBuffer leaf = store.stageExisting(leafPageId);
-    if (heap == null || leaf == null) {
+    if (leaf == null) {
       store.cancelOperation();
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    status = HeapPage.insert(heap, row, heapInsert);
+    status = store.stageRow(row, row.position(), row.remaining(), heapInsert);
     if (!status.isOk()) {
       store.cancelOperation();
       return status;
@@ -355,7 +348,7 @@ public final class IndexedTable implements CommitSequenceSource {
           result.reset();
           return StatusCode.CONFLICT;
         }
-        return HeapPage.fetch(store.currentPayload(HEAP_PAGE_ID), rowId, result);
+        return store.fetchRow(rowId, result);
       }
       rowId = store.previousRowId(rowId);
     }
@@ -413,8 +406,7 @@ public final class IndexedTable implements CommitSequenceSource {
         if (rowId <= 0 || store.isDeletedRow(rowId)) {
           continue;
         }
-        StatusCode status = HeapPage.fetch(
-            store.currentPayload(HEAP_PAGE_ID), rowId, result.row());
+        StatusCode status = store.fetchRow(rowId, result.row());
         if (!status.isOk()) {
           return status;
         }
@@ -487,7 +479,7 @@ public final class IndexedTable implements CommitSequenceSource {
   }
 
   public synchronized int rowCount() {
-    return HeapPage.rowCount(store.currentPayload(HEAP_PAGE_ID));
+    return store.rowCount();
   }
 
   public int rootPageId() {
@@ -640,7 +632,8 @@ public final class IndexedTable implements CommitSequenceSource {
       if (page == null) {
         return StatusCode.CORRUPTION;
       }
-      status = BTreePage.validate(page);
+      status = HeapPage.isHeap(page)
+          ? HeapPage.validate(page) : BTreePage.validate(page);
       if (!status.isOk()) {
         return status;
       }
@@ -649,15 +642,14 @@ public final class IndexedTable implements CommitSequenceSource {
     if (rootPageId < INITIAL_LEAF_PAGE_ID || rootPageId >= nextPageId) {
       return StatusCode.CORRUPTION;
     }
-    return validateTreeLinks(store, heap, rootPageId);
+    return validateTreeLinks(store, rootPageId);
   }
 
   private static StatusCode validateTreeLinks(
       IndexedPageStore store,
-      ByteBuffer heap,
       int rootPageId) {
     ByteBuffer root = store.currentPayload(rootPageId);
-    int heapRows = HeapPage.rowCount(heap);
+    int heapRows = store.rowCount();
     if (BTreePage.type(root) == BTreePage.TYPE_LEAF) {
       if (BTreePage.rightSiblingPageId(root) != 0
           || BTreePage.highKey(root) != Long.MAX_VALUE) {

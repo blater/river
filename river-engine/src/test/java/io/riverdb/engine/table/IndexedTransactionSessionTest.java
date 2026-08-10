@@ -298,6 +298,50 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void commitsOneBatchAcrossHeapPagesAndRecoversIt(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession writer = new IndexedTransactionSession(manager, table, 256);
+    ByteBuffer row = ByteBuffer.allocateDirect(256);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    for (int key = 0; key < 64; key++) {
+      row.clear();
+      row.putLong(0, key * 10L);
+      row.position(0);
+      row.limit(row.capacity());
+      assertEquals(StatusCode.OK, writer.insert(key, row));
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(64, table.rowCount());
+    assertEquals(true, table.pageCount() >= 4);
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(63, fetched));
+    assertEquals(630, value(fetched));
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertEquals(64, table.rowCount());
+    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(0, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(63, fetched));
+    assertEquals(630, value(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void duplicateInWriteSetRollsBackEveryStagedRow(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
@@ -734,7 +778,7 @@ final class IndexedTransactionSessionTest {
   }
 
   private static long value(HeapRowResult result) {
-    ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
+    ByteBuffer row = ByteBuffer.allocate(result.length());
     assertEquals(StatusCode.OK, result.copyTo(row));
     return row.getLong(0);
   }

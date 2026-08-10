@@ -575,6 +575,46 @@ val liveHotPathMethods = setOf(
     "(I)$byteBufferDescriptor"
   ),
   hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "stageRow",
+    "($byteBufferDescriptor" + "II$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "canAppendRow",
+    "(I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "fetchRow",
+    "(I$heapRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "rowLength",
+    "(I)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "copyRowTo",
+    "(I$byteBufferDescriptor" + "I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "canAppendRows",
+    "(${intArrayDescriptor}I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "canAppendEncodedRows",
+    "($byteBufferDescriptor" + "IIII)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.page.IndexedPageStore",
+    "appendCurrentRow",
+    "($byteBufferDescriptor" + "IIIJJJIZ)$statusCodeDescriptor"
+  ),
+  hotMethod(
     "io.riverdb.engine.table.IndexedTable",
     "insert",
     "(JJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"

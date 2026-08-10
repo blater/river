@@ -198,6 +198,14 @@ public final class HeapPage {
     return getInt(page, 12);
   }
 
+  /** Identifies this page type before invoking its full structural validator. */
+  public static boolean isHeap(ByteBuffer page) {
+    return page != null
+        && page.limit() >= HEADER_BYTES
+        && getLong(page, 0) == MAGIC
+        && getInt(page, 8) == VERSION;
+  }
+
   private static void putInt(ByteBuffer target, int offset, int value) {
     target.put(offset, (byte) value);
     target.put(offset + 1, (byte) (value >>> 8));
