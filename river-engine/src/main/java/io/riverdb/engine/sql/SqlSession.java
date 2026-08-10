@@ -6,6 +6,7 @@ import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.relational.TableDefinition;
+import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlParser;
@@ -23,6 +24,7 @@ public final class SqlSession {
   private final TableDefinition table = new TableDefinition();
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final CheckpointResult checkpoint = new CheckpointResult();
+  private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
   private final HeapRowResult fetched = new HeapRowResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
@@ -123,11 +125,27 @@ public final class SqlSession {
       status = session.begin(IsolationLevel.READ_COMMITTED);
     }
     boolean active = status.isOk() && implicit;
+    boolean savepointActive = false;
+    if (status.isOk() && !implicit) {
+      status = session.createSavepoint(statementSavepoint);
+      savepointActive = status.isOk();
+    }
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
       status = executeDataCommand(result);
+    }
+    if (savepointActive) {
+      StatusCode savepointStatus = status.isOk()
+          ? StatusCode.OK : session.rollbackToSavepoint(statementSavepoint);
+      StatusCode release = session.releaseSavepoint(statementSavepoint);
+      if (!savepointStatus.isOk()) {
+        status = savepointStatus;
+      }
+      if (!release.isOk()) {
+        status = release;
+      }
     }
     if (status.isOk() && implicit) {
       status = session.commit(outcome);

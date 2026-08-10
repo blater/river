@@ -204,6 +204,38 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void savepointRollsBackPendingRowsButRetainsLocks(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = session(manager, table);
+    IndexedTransactionSession contender = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(10, row(100)));
+    IndexedSavepoint savepoint = new IndexedSavepoint();
+    assertEquals(StatusCode.OK, session.createSavepoint(savepoint));
+    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.rollbackToSavepoint(savepoint));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.CONFLICT, session.fetchByKey(20, fetched));
+    assertEquals(StatusCode.OK, contender.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.RETRY, contender.insert(20, row(201)));
+    assertEquals(StatusCode.OK, session.releaseSavepoint(savepoint));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, contender.insert(20, row(201)));
+    assertEquals(StatusCode.OK, contender.commit(outcome));
+    assertEquals(StatusCode.OK, table.fetchByKey(10, fetched));
+    assertEquals(100, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(20, fetched));
+    assertEquals(201, value(fetched));
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void publishesMultipleRowsAtOneCommitSequence(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

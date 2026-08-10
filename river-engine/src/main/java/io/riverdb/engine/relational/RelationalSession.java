@@ -2,6 +2,7 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.table.IndexedTransactionSession;
+import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -108,6 +109,18 @@ public final class RelationalSession {
       cursor.complete();
     }
     return status;
+  }
+
+  public StatusCode createSavepoint(IndexedSavepoint savepoint) {
+    return session.createSavepoint(savepoint);
+  }
+
+  public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
+    return session.rollbackToSavepoint(savepoint);
+  }
+
+  public StatusCode releaseSavepoint(IndexedSavepoint savepoint) {
+    return session.releaseSavepoint(savepoint);
   }
 
   public StatusCode commit(TransactionOutcome result) {

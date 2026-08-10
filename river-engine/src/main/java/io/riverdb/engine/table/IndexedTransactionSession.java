@@ -37,6 +37,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private int pendingInsertCount;
   private int heldLockCount;
   private IndexedScanCursor activeScan;
+  private IndexedSavepoint activeSavepoint;
   private boolean serializableScan;
 
   public IndexedTransactionSession(
@@ -62,7 +63,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode begin(IsolationLevel isolationLevel) {
-    if (transaction.isActiveHandle() || activeScan != null) {
+    if (transaction.isActiveHandle() || activeScan != null || activeSavepoint != null) {
       return StatusCode.CONFLICT;
     }
     pendingInsertCount = 0;
@@ -338,6 +339,53 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return status;
   }
 
+  public StatusCode createSavepoint(IndexedSavepoint savepoint) {
+    if (savepoint == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (transaction.state() != TransactionState.ACTIVE || activeScan != null) {
+      return StatusCode.CONFLICT;
+    }
+    if (activeSavepoint != null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = savepoint.claim(
+        this, transaction.transactionId(), pendingInsertCount);
+    if (status.isOk()) {
+      activeSavepoint = savepoint;
+    }
+    return status;
+  }
+
+  /** Rolls back pending mutations but deliberately retains acquired locks until transaction end. */
+  public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
+    if (savepoint == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (transaction.state() != TransactionState.ACTIVE
+        || activeScan != null
+        || activeSavepoint != savepoint
+        || !savepoint.isOwnedBy(this, transaction.transactionId())
+        || savepoint.pendingMutationCount() > pendingInsertCount) {
+      return StatusCode.CONFLICT;
+    }
+    clearPendingFrom(savepoint.pendingMutationCount());
+    return StatusCode.OK;
+  }
+
+  public StatusCode releaseSavepoint(IndexedSavepoint savepoint) {
+    if (savepoint == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (activeSavepoint != savepoint
+        || !savepoint.isOwnedBy(this, transaction.transactionId())) {
+      return StatusCode.NOT_OWNER;
+    }
+    savepoint.complete();
+    activeSavepoint = null;
+    return StatusCode.OK;
+  }
+
   private int nextPendingIndex(IndexedScanCursor cursor) {
     int selected = -1;
     long selectedKey = Long.MAX_VALUE;
@@ -457,15 +505,23 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   private void clearWriteSet() {
-    for (int index = 0; index < pendingInsertCount; index++) {
+    clearPendingFrom(0);
+    serializableScanSequence = 0;
+    serializableScan = false;
+    if (activeSavepoint != null) {
+      activeSavepoint.complete();
+      activeSavepoint = null;
+    }
+  }
+
+  private void clearPendingFrom(int first) {
+    for (int index = first; index < pendingInsertCount; index++) {
       pendingKeys[index] = 0;
       pendingOperations[index] = 0;
       pendingPreviousRowIds[index] = 0;
       pendingRowLengths[index] = 0;
     }
-    pendingInsertCount = 0;
-    serializableScanSequence = 0;
-    serializableScan = false;
+    pendingInsertCount = first;
   }
 
   private int findHeldLock(long key) {
