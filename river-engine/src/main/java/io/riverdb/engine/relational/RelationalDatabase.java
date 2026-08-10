@@ -30,6 +30,7 @@ public final class RelationalDatabase {
   private final RelationalScanResult indexBuildRow = new RelationalScanResult();
   private final ByteBuffer indexKeyOutput = ByteBuffer.allocateDirect(Long.BYTES);
   private volatile long schemaVersion = 1;
+  private RelationalSession schemaChangeOwner;
   private int activeTransactions;
 
   private RelationalDatabase(EmbeddedDatabase database) {
@@ -116,9 +117,6 @@ public final class RelationalDatabase {
     if (!RelationalKey.validName(indexName) || !RelationalKey.validName(tableName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (activeTransactions != 0) {
-      return StatusCode.RETRY;
-    }
     RelationalSession session = newSession();
     if (session == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -126,8 +124,25 @@ public final class RelationalDatabase {
     TransactionOutcome outcome = new TransactionOutcome();
     StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
     if (status.isOk()) {
-      status = session.resolveTable(tableName, indexedTable);
+      status = session.createUniqueValueIndex(indexName, tableName);
     }
+    if (status.isOk()) {
+      status = session.commit(outcome);
+    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    indexBuildCursor.reset();
+    return status;
+  }
+
+  StatusCode buildUniqueValueIndex(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName) {
+    StatusCode status = session.resolveTable(tableName, indexedTable);
     if (status.isOk() && indexedTable.hasUniqueValueIndex()) {
       status = StatusCode.CONFLICT;
     }
@@ -207,17 +222,6 @@ public final class RelationalDatabase {
           catalogOutput, indexedTable.tableId(), indexTableId, indexName);
       status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
     }
-    if (status.isOk()) {
-      status = session.commit(outcome);
-      if (status.isOk()) {
-        schemaVersion++;
-      }
-    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode abort = session.abort(outcome);
-      if (!abort.isOk()) {
-        return abort;
-      }
-    }
     indexBuildCursor.reset();
     return status;
   }
@@ -292,12 +296,32 @@ public final class RelationalDatabase {
   }
 
   synchronized StatusCode enterTransaction() {
+    if (schemaChangeOwner != null) {
+      return StatusCode.RETRY;
+    }
     activeTransactions++;
     return StatusCode.OK;
   }
 
   synchronized void leaveTransaction() {
     activeTransactions--;
+  }
+
+  synchronized StatusCode beginSchemaChange(RelationalSession owner) {
+    if (owner == null || schemaChangeOwner != null || activeTransactions != 1) {
+      return StatusCode.RETRY;
+    }
+    schemaChangeOwner = owner;
+    return StatusCode.OK;
+  }
+
+  synchronized void completeSchemaChange(RelationalSession owner, boolean committed) {
+    if (schemaChangeOwner == owner) {
+      if (committed) {
+        schemaVersion++;
+      }
+      schemaChangeOwner = null;
+    }
   }
 
   long schemaVersion() {

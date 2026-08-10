@@ -651,4 +651,84 @@ final class SqlSessionTest {
     assertEquals(2, result.key());
     assertEquals(StatusCode.OK, database.close());
   }
+
+  @Test
+  void uniqueIndexCreationCommitsWithItsExplicitTransaction(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession writer = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession reader = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE ledger", result));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO ledger VALUES (1, 101), (2, 202)", result));
+
+    assertEquals(StatusCode.OK, writer.execute("BEGIN SERIALIZABLE", result));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("CREATE UNIQUE INDEX ledger_value ON ledger(value)", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("SELECT key, value FROM ledger WHERE value=202", result));
+    assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.RETRY,
+        reader.execute("SELECT value FROM ledger WHERE key=1", result));
+    assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
+
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("SELECT key, value FROM ledger WHERE value=101", result));
+    assertEquals(1, result.key());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void uniqueIndexRollbackRemovesCatalogAndReleasesSchemaBarrier(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession second = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute("CREATE TABLE events", result));
+    assertEquals(StatusCode.OK, session.execute("INSERT INTO events VALUES (1, 11)", result));
+
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT before_index", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX events_value ON events(value)", result));
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK TO before_index", result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("SELECT key, value FROM events WHERE value=11", result));
+    assertEquals(
+        StatusCode.OK,
+        second.execute("SELECT value FROM events WHERE key=1", result));
+    assertEquals(11, result.value());
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+
+    assertEquals(
+        StatusCode.OK,
+        second.execute("CREATE UNIQUE INDEX events_value ON events(value)", result));
+    assertEquals(
+        StatusCode.OK,
+        second.execute("SELECT key, value FROM events WHERE value=11", result));
+    assertEquals(1, result.key());
+    assertEquals(StatusCode.OK, database.close());
+  }
 }

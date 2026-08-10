@@ -64,6 +64,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return copiedWriteSetBytes;
   }
 
+  /** Current write-set position for higher-level transactional metadata coordination. */
+  public int pendingMutationCount() {
+    return pendingInsertCount;
+  }
+
   public StatusCode begin(IsolationLevel isolationLevel) {
     if (transaction.isActiveHandle() || activeScan != null || savepointCount != 0) {
       return StatusCode.CONFLICT;

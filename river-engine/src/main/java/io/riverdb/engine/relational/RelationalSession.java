@@ -6,6 +6,7 @@ import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
+import io.riverdb.tx.api.TransactionState;
 import java.nio.ByteBuffer;
 
 /** Transaction session over catalog-resolved logical tables in one physical keyspace. */
@@ -27,6 +28,8 @@ public final class RelationalSession {
   private final ByteBuffer valueScratch = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer indexRow = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean registeredTransaction;
+  private boolean schemaChangeActive;
+  private int schemaChangeMutationStart;
 
   RelationalSession(RelationalDatabase owner, IndexedTransactionSession indexedSession) {
     database = owner;
@@ -107,6 +110,36 @@ public final class RelationalSession {
   public StatusCode insert(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = resolveKey(table, key);
     return status.isOk() ? session.insert(physicalKey.key(), row) : status;
+  }
+
+  /** Builds and publishes a unique value index as part of this transaction. */
+  public StatusCode createUniqueValueIndex(
+      CharSequence indexName,
+      CharSequence tableName) {
+    if (!registeredTransaction
+        || !RelationalKey.validName(indexName)
+        || !RelationalKey.validName(tableName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    if (status.isOk()) {
+      status = database.buildUniqueValueIndex(this, indexName, tableName);
+    }
+    if (!status.isOk() && acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
   }
 
   public StatusCode update(TableDefinition table, long key, ByteBuffer row) {
@@ -336,7 +369,15 @@ public final class RelationalSession {
   }
 
   public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
-    return session.rollbackToSavepoint(savepoint);
+    StatusCode status = session.rollbackToSavepoint(savepoint);
+    if (status.isOk()
+        && schemaChangeActive
+        && session.pendingMutationCount() <= schemaChangeMutationStart) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
   }
 
   public StatusCode releaseSavepoint(IndexedSavepoint savepoint) {
@@ -345,12 +386,16 @@ public final class RelationalSession {
 
   public StatusCode commit(TransactionOutcome result) {
     StatusCode status = session.commit(result);
+    completeTerminalSchemaChange(status.isOk()
+        && result.isAvailable()
+        && result.state() == TransactionState.COMMITTED);
     releaseTerminalTransaction();
     return status;
   }
 
   public StatusCode abort(TransactionOutcome result) {
     StatusCode status = session.abort(result);
+    completeTerminalSchemaChange(false);
     releaseTerminalTransaction();
     return status;
   }
@@ -428,6 +473,14 @@ public final class RelationalSession {
     if (registeredTransaction && !session.transaction().isActiveHandle()) {
       registeredTransaction = false;
       database.leaveTransaction();
+    }
+  }
+
+  private void completeTerminalSchemaChange(boolean committed) {
+    if (schemaChangeActive && !session.transaction().isActiveHandle()) {
+      database.completeSchemaChange(this, committed);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
     }
   }
 }
