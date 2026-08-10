@@ -151,6 +151,56 @@ final class SqlSessionTest {
   }
 
   @Test
+  void multiRowInsertCommitsOnceAndRollsBackAtomically(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute("CREATE TABLE batch_rows", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO batch_rows VALUES (1, 10), (2, 20), (3, 30)",
+            result));
+    assertEquals(3, result.affectedRows());
+    long batchCommit = result.commitSequence();
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute(
+            "INSERT INTO batch_rows VALUES (4, 40), (2, 21), (5, 50)",
+            result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT value FROM batch_rows WHERE key=4", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT value FROM batch_rows WHERE key=5", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT COUNT(*) FROM batch_rows", result));
+    assertEquals(3, result.value());
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    session = sessionResult.session();
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT value FROM batch_rows WHERE key=3", result));
+    assertEquals(30, result.value());
+    assertEquals(batchCommit, result.commitSequence());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void scansUniqueIndexInSignedValueOrder(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(

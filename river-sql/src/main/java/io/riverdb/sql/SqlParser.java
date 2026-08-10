@@ -95,6 +95,19 @@ public final class SqlParser {
         status = pair(sql, pairResult);
         key = pairResult.first;
         value = pairResult.second;
+        if (status.isOk()) {
+          result.appendInsert(key, value);
+        }
+      }
+      while (status.isOk() && consumeCharacter(sql, ',')) {
+        if (result.insertRowCount() >= SqlCommand.MAXIMUM_INSERT_ROWS) {
+          status = StatusCode.RESOURCE_EXHAUSTED;
+        } else {
+          status = pair(sql, pairResult);
+          if (status.isOk()) {
+            result.appendInsert(pairResult.first, pairResult.second);
+          }
+        }
       }
     } else if (consumeKeyword(sql, "SELECT")) {
       if (consumeKeyword(sql, "COUNT")) {
@@ -258,7 +271,9 @@ public final class SqlParser {
     if (!status.isOk() || !finish(sql)) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    if (type == SqlCommandType.SCAN) {
+    if (type == SqlCommandType.INSERT) {
+      result.setInsert();
+    } else if (type == SqlCommandType.SCAN) {
       result.setScan(scanLower, scanUpper, boundedScan);
     } else if (type == SqlCommandType.VALUE_SCAN) {
       result.setValueScan(scanLower, scanUpper);

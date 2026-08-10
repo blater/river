@@ -28,6 +28,13 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());
     assertEquals(-9, command.value());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("INSERT INTO accounts VALUES (1, 10), (2, 20), (3, 30)", command));
+    assertEquals(3, command.insertRowCount());
+    assertEquals(1, command.insertKey(0));
+    assertEquals(20, command.insertValue(1));
+    assertEquals(3, command.insertKey(2));
     assertEquals(StatusCode.OK, parser.parse("select value from accounts where key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertEquals(7, command.key());
@@ -111,6 +118,17 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key, value FROM x WHERE key > 1", command));
+    StringBuilder tooManyRows = new StringBuilder("INSERT INTO x VALUES ");
+    for (int index = 0; index <= SqlCommand.MAXIMUM_INSERT_ROWS; index++) {
+      if (index > 0) {
+        tooManyRows.append(',');
+      }
+      tooManyRows.append('(').append(index).append(',').append(index).append(')');
+    }
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(tooManyRows.toString(), command));
+    assertFalse(command.isAvailable());
   }
 
   @Test

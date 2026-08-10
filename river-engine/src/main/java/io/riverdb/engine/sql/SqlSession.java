@@ -235,14 +235,14 @@ public final class SqlSession {
         if (isSelect()) {
           result.setRow(result.key(), selected.getLong(0), outcome.commitSequence());
         } else {
-          result.setUpdate(1, outcome.commitSequence());
+          result.setUpdate(affectedRows(), outcome.commitSequence());
         }
       }
     } else if (status.isOk()) {
       if (isSelect()) {
         result.setRow(result.key(), selected.getLong(0), session.visibleCommitSequence());
       } else {
-        result.setUpdate(1, 0);
+        result.setUpdate(affectedRows(), 0);
       }
       result.setTransaction(true, result.commitSequence());
     }
@@ -364,15 +364,24 @@ public final class SqlSession {
   }
 
   private StatusCode executeDataCommand(SqlExecutionResult result) {
-    if (command.type() == SqlCommandType.INSERT
-        || command.type() == SqlCommandType.UPDATE) {
+    if (command.type() == SqlCommandType.INSERT) {
+      StatusCode status = StatusCode.OK;
+      for (int index = 0; status.isOk() && index < command.insertRowCount(); index++) {
+        long value = command.insertValue(index);
+        row.clear();
+        row.putLong(0, value);
+        row.position(0);
+        row.limit(Long.BYTES);
+        status = session.insertLong(table, command.insertKey(index), value, row);
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.UPDATE) {
       row.clear();
       row.putLong(0, command.value());
       row.position(0);
       row.limit(Long.BYTES);
-      return command.type() == SqlCommandType.INSERT
-          ? session.insertLong(table, command.key(), command.value(), row)
-          : session.updateLong(table, command.key(), command.value(), row);
+      return session.updateLong(table, command.key(), command.value(), row);
     }
     if (command.type() == SqlCommandType.DELETE) {
       return session.deleteLong(table, command.key());
@@ -442,6 +451,10 @@ public final class SqlSession {
     return command.type() == SqlCommandType.SELECT
         || command.type() == SqlCommandType.SELECT_BY_VALUE
         || command.type() == SqlCommandType.COUNT;
+  }
+
+  private int affectedRows() {
+    return command.type() == SqlCommandType.INSERT ? command.insertRowCount() : 1;
   }
 
   private void rememberUserSavepoint(CharSequence name) {
