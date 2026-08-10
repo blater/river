@@ -18,6 +18,7 @@ public final class SqlCommand {
   private long scanLowerInclusive;
   private long scanUpperExclusive;
   private boolean boundedScan;
+  private boolean selectAll;
   private boolean serializableTransaction;
   private int insertRowCount;
   private int insertColumnCount;
@@ -44,6 +45,7 @@ public final class SqlCommand {
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
     boundedScan = false;
+    selectAll = false;
     serializableTransaction = false;
     insertRowCount = 0;
     insertColumnCount = 0;
@@ -66,12 +68,8 @@ public final class SqlCommand {
     available = true;
   }
 
-  void setValueScan(long lowerInclusive, long upperExclusive) {
-    type = SqlCommandType.VALUE_SCAN;
-    scanLowerInclusive = lowerInclusive;
-    scanUpperExclusive = upperExclusive;
-    boundedScan = true;
-    available = true;
+  void setSelectAll() {
+    selectAll = true;
   }
 
   void setBegin(boolean serializable) {
@@ -194,6 +192,10 @@ public final class SqlCommand {
 
   public boolean isBoundedScan() {
     return boundedScan;
+  }
+
+  public boolean isSelectAll() {
+    return selectAll;
   }
 
   public boolean isSerializableTransaction() {

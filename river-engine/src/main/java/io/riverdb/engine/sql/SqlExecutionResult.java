@@ -1,11 +1,15 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.engine.relational.TableSchema;
+
 /** Caller-owned result for one implicit-transaction SQL statement. */
 public final class SqlExecutionResult {
+  private final long[] values = new long[TableSchema.MAXIMUM_COLUMNS];
   private long commitSequence;
   private long value;
   private long key;
   private int affectedRows;
+  private int columnCount;
   private boolean hasValue;
   private boolean transactionActive;
 
@@ -14,6 +18,7 @@ public final class SqlExecutionResult {
     value = 0;
     key = 0;
     affectedRows = 0;
+    columnCount = 0;
     hasValue = false;
     transactionActive = false;
   }
@@ -23,18 +28,23 @@ public final class SqlExecutionResult {
     commitSequence = committedAt;
   }
 
-  void setValue(long selectedValue, long committedAt) {
-    value = selectedValue;
-    hasValue = true;
+  void setProjection(
+      long selectedKey,
+      long[] projectedValues,
+      int projectedColumnCount,
+      long committedAt) {
+    key = selectedKey;
+    columnCount = projectedColumnCount;
+    for (int index = 0; index < projectedColumnCount; index++) {
+      values[index] = projectedValues[index];
+    }
+    value = projectedColumnCount == 0 ? 0 : values[projectedColumnCount - 1];
+    hasValue = projectedColumnCount > 0;
     affectedRows = 1;
     commitSequence = committedAt;
   }
 
-  void setRow(long selectedKey, long selectedValue, long committedAt) {
-    key = selectedKey;
-    value = selectedValue;
-    hasValue = true;
-    affectedRows = 1;
+  void setCommitSequence(long committedAt) {
     commitSequence = committedAt;
   }
 
@@ -57,6 +67,14 @@ public final class SqlExecutionResult {
 
   public long key() {
     return key;
+  }
+
+  public int columnCount() {
+    return columnCount;
+  }
+
+  public long valueAt(int index) {
+    return index >= 0 && index < columnCount ? values[index] : 0;
   }
 
   public long commitSequence() {

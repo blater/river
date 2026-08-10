@@ -34,18 +34,20 @@ public final class SqlSession {
   private final IndexedSavepoint userSavepoint = new IndexedSavepoint();
   private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
   private final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(
       (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
-  private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
   private int userSavepointNameLength;
   private int selectedColumn;
+  private int projectedColumnCount;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -79,9 +81,7 @@ public final class SqlSession {
     if (!status.isOk()) {
       return status;
     }
-    if (scanActive
-        || command.type() == SqlCommandType.SCAN
-        || command.type() == SqlCommandType.VALUE_SCAN) {
+    if (scanActive || command.type() == SqlCommandType.SCAN) {
       return StatusCode.CONFLICT;
     }
     if (command.type() == SqlCommandType.BEGIN) {
@@ -268,14 +268,14 @@ public final class SqlSession {
       active = false;
       if (status.isOk()) {
         if (isSelect()) {
-          result.setRow(result.key(), selected.getLong(0), outcome.commitSequence());
+          result.setCommitSequence(outcome.commitSequence());
         } else {
           result.setUpdate(affectedRows(), outcome.commitSequence());
         }
       }
     } else if (status.isOk()) {
       if (isSelect()) {
-        result.setRow(result.key(), selected.getLong(0), session.visibleCommitSequence());
+        result.setCommitSequence(session.visibleCommitSequence());
       } else {
         result.setUpdate(affectedRows(), 0);
       }
@@ -295,9 +295,7 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = parser.parse(sql, command);
-    if (!status.isOk()
-        || (command.type() != SqlCommandType.SCAN
-            && command.type() != SqlCommandType.VALUE_SCAN)) {
+    if (!status.isOk() || command.type() != SqlCommandType.SCAN) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
     boolean implicit = !transactionActive;
@@ -330,7 +328,11 @@ public final class SqlSession {
     }
     if (status.isOk()) {
       status = cursor.claim(
-          this, implicit, valueIndex, selectedColumn);
+          this,
+          implicit,
+          valueIndex,
+          projectedColumns,
+          projectedColumnCount);
     }
     if (status.isOk()) {
       scanActive = true;
@@ -358,18 +360,18 @@ public final class SqlSession {
       return status;
     }
     if (cursor.valueIndex()) {
-      status = copyProjectedValue(
-          indexed.row(), cursor.projectedColumn(), result.valueBytes());
+      status = projectScanRow(indexed.key(), indexed.row(), cursor, projectedValues);
       if (status.isOk()) {
-        result.set(indexed.key(), result.valueBytes().getLong(0));
+        result.set(indexed.key(), projectedValues, cursor.projectedColumnCount());
         cursor.rowReturned();
       }
       return status;
     }
-    status = copyProjectedValue(
-        result.relational().row(), cursor.projectedColumn(), result.valueBytes());
+    status = projectScanRow(
+        result.relational().key(), result.relational().row(), cursor, projectedValues);
     if (status.isOk()) {
-      result.set(result.relational().key(), result.valueBytes().getLong(0));
+      result.set(
+          result.relational().key(), projectedValues, cursor.projectedColumnCount());
       cursor.rowReturned();
     }
     return status;
@@ -424,17 +426,6 @@ public final class SqlSession {
     if (command.type() == SqlCommandType.DELETE) {
       return session.deleteLong(table, command.key());
     }
-    if (command.type() == SqlCommandType.SELECT_BY_VALUE) {
-      StatusCode status = session.fetchByUniqueValue(table, command.value(), indexed);
-      selected.clear();
-      if (status.isOk()) {
-        status = copyProjectedValue(indexed.row(), selectedColumn, selected);
-      }
-      if (status.isOk()) {
-        result.setRow(indexed.key(), selected.getLong(0), 0);
-      }
-      return status;
-    }
     if (command.type() == SqlCommandType.COUNT) {
       long count = 0;
       StatusCode status = session.beginScan(table, aggregateCursor);
@@ -463,34 +454,45 @@ public final class SqlSession {
         }
       }
       if (status.isOk()) {
-        selected.clear();
-        selected.putLong(0, count);
-        result.setRow(0, count, 0);
+        projectedValues[0] = count;
+        result.setProjection(0, projectedValues, 1, 0);
       }
       return status;
     }
     if (command.type() != SqlCommandType.SELECT) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = session.fetch(table, command.key(), fetched);
-    selected.clear();
-    if (status.isOk()) {
-      status = copyProjectedValue(fetched, selectedColumn, selected);
+    int predicateColumn = table.findColumn(command.predicateColumnName());
+    StatusCode status;
+    long primaryKey;
+    HeapRowResult source;
+    if (predicateColumn == 0) {
+      primaryKey = command.key();
+      status = session.fetch(table, primaryKey, fetched);
+      source = fetched;
+    } else {
+      status = session.fetchByUniqueValue(table, command.key(), indexed);
+      primaryKey = indexed.key();
+      source = indexed.row();
     }
     if (status.isOk()) {
-      result.setRow(command.key(), selected.getLong(0), 0);
+      status = projectRow(
+          primaryKey, source, projectedColumns, projectedColumnCount, projectedValues);
+    }
+    if (status.isOk()) {
+      result.setProjection(primaryKey, projectedValues, projectedColumnCount, 0);
     }
     return status;
   }
 
   private boolean isSelect() {
     return command.type() == SqlCommandType.SELECT
-        || command.type() == SqlCommandType.SELECT_BY_VALUE
         || command.type() == SqlCommandType.COUNT;
   }
 
   private StatusCode bindDataCommand() {
     selectedColumn = -1;
+    projectedColumnCount = 0;
     if (command.type() == SqlCommandType.COUNT) {
       return StatusCode.OK;
     }
@@ -498,24 +500,15 @@ public final class SqlSession {
       return bindInsertColumns();
     }
     if (command.type() == SqlCommandType.SELECT) {
-      selectedColumn = table.findColumn(command.firstColumnName());
-      return selectedColumn > 0
-              && table.findColumn(command.predicateColumnName()) == 0
+      StatusCode status = bindProjections();
+      int predicate = table.findColumn(command.predicateColumnName());
+      return status.isOk() && (predicate == 0 || table.hasUniqueIndexOn(predicate))
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (command.type() == SqlCommandType.SELECT_BY_VALUE) {
-      selectedColumn = table.findColumn(command.secondColumnName());
-      return table.findColumn(command.firstColumnName()) == 0
-              && selectedColumn > 0
-              && table.findColumn(command.predicateColumnName()) == selectedColumn
-              && table.hasUniqueIndexOn(selectedColumn)
-          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (command.type() == SqlCommandType.SCAN
-        || command.type() == SqlCommandType.VALUE_SCAN) {
-      selectedColumn = table.findColumn(command.secondColumnName());
-      if (table.findColumn(command.firstColumnName()) != 0 || selectedColumn <= 0) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (command.type() == SqlCommandType.SCAN) {
+      StatusCode status = bindProjections();
+      if (!status.isOk()) {
+        return status;
       }
       if (!command.isBoundedScan()) {
         return StatusCode.OK;
@@ -540,6 +533,28 @@ public final class SqlSession {
   private boolean scanUsesValueIndex() {
     int predicate = table.findColumn(command.predicateColumnName());
     return command.isBoundedScan() && table.hasUniqueIndexOn(predicate);
+  }
+
+  private StatusCode bindProjections() {
+    int count = command.isSelectAll() ? table.columnCount() : command.columnCount();
+    if (count <= 0 || count > projectedColumns.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < count; index++) {
+      int column = command.isSelectAll()
+          ? index : table.findColumn(command.columnName(index));
+      if (column < 0) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (projectedColumns[previous] == column) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      }
+      projectedColumns[index] = column;
+    }
+    projectedColumnCount = count;
+    return StatusCode.OK;
   }
 
   private StatusCode prepareCreateSchema() {
@@ -601,16 +616,33 @@ public final class SqlSession {
     return status;
   }
 
-  private StatusCode copyProjectedValue(
+  private StatusCode projectRow(
+      long primaryKey,
       HeapRowResult source,
-      int column,
-      ByteBuffer destination) {
+      int[] columns,
+      int columnCount,
+      long[] destination) {
     StatusCode status = copyRow(source);
     if (status.isOk()) {
-      destination.clear();
-      destination.putLong(0, row.getLong((column - 1) * Long.BYTES));
-      destination.position(0);
-      destination.limit(Long.BYTES);
+      for (int index = 0; index < columnCount; index++) {
+        int column = columns[index];
+        destination[index] = column == 0
+            ? primaryKey : row.getLong((column - 1) * Long.BYTES);
+      }
+    }
+    return status;
+  }
+
+  private StatusCode projectScanRow(
+      long primaryKey,
+      HeapRowResult source,
+      SqlScanCursor cursor,
+      long[] destination) {
+    StatusCode status = copyRow(source);
+    for (int index = 0; status.isOk() && index < cursor.projectedColumnCount(); index++) {
+      int column = cursor.projectedColumn(index);
+      destination[index] = column == 0
+          ? primaryKey : row.getLong((column - 1) * Long.BYTES);
     }
     return status;
   }

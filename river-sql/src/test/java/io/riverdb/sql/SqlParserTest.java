@@ -82,6 +82,13 @@ final class SqlParserTest {
     assertEquals(false, command.isBoundedScan());
     assertEquals(
         StatusCode.OK,
+        parser.parse("SELECT region, key, value FROM accounts WHERE key=7", command));
+    assertEquals(SqlCommandType.SELECT, command.type());
+    assertEquals(3, command.columnCount());
+    assertName("region", command.columnName(0));
+    assertName("value", command.columnName(2));
+    assertEquals(
+        StatusCode.OK,
         parser.parse(
             "SELECT key, value FROM accounts WHERE key >= 11 AND key < 29",
             command));
@@ -94,8 +101,8 @@ final class SqlParserTest {
         parser.parse(
             "SELECT key, value FROM accounts WHERE value = 701",
             command));
-    assertEquals(SqlCommandType.SELECT_BY_VALUE, command.type());
-    assertEquals(701, command.value());
+    assertEquals(SqlCommandType.SELECT, command.type());
+    assertEquals(701, command.key());
     assertName("key", command.firstColumnName());
     assertName("value", command.secondColumnName());
     assertName("value", command.predicateColumnName());
@@ -104,7 +111,7 @@ final class SqlParserTest {
         parser.parse(
             "SELECT key, value FROM accounts WHERE value >= -50 AND value < 75",
             command));
-    assertEquals(SqlCommandType.VALUE_SCAN, command.type());
+    assertEquals(SqlCommandType.SCAN, command.type());
     assertEquals(-50, command.scanLowerInclusive());
     assertEquals(75, command.scanUpperExclusive());
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
@@ -142,8 +149,9 @@ final class SqlParserTest {
   void rejectsMalformedUnsupportedAndOverflowInput() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("SELECT * FROM x", command));
-    assertFalse(command.isAvailable());
+    assertEquals(StatusCode.OK, parser.parse("SELECT * FROM x", command));
+    assertTrue(command.isSelectAll());
+    assertEquals(SqlCommandType.SCAN, command.type());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("CREATE TABLE bad-name", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,

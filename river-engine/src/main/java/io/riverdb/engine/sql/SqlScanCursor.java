@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalScanCursor;
+import io.riverdb.engine.relational.TableSchema;
 
 /** Caller-owned capability for one ordered SQL table scan. */
 public final class SqlScanCursor {
@@ -9,7 +10,8 @@ public final class SqlScanCursor {
   private SqlSession owner;
   private boolean implicitTransaction;
   private boolean valueIndex;
-  private int projectedColumn;
+  private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
+  private int projectedColumnCount;
   private boolean active;
   private long rowsReturned;
 
@@ -20,7 +22,7 @@ public final class SqlScanCursor {
     owner = null;
     implicitTransaction = false;
     valueIndex = false;
-    projectedColumn = 0;
+    projectedColumnCount = 0;
     rowsReturned = 0;
     return relational.reset();
   }
@@ -33,14 +35,21 @@ public final class SqlScanCursor {
       SqlSession session,
       boolean implicit,
       boolean indexedValue,
-      int projection) {
-    if (active) {
+      int[] projections,
+      int projectionCount) {
+    if (active
+        || projections == null
+        || projectionCount <= 0
+        || projectionCount > projectedColumns.length) {
       return StatusCode.CONFLICT;
     }
     owner = session;
     implicitTransaction = implicit;
     valueIndex = indexedValue;
-    projectedColumn = projection;
+    projectedColumnCount = projectionCount;
+    for (int index = 0; index < projectionCount; index++) {
+      projectedColumns[index] = projections[index];
+    }
     active = true;
     rowsReturned = 0;
     return StatusCode.OK;
@@ -58,8 +67,12 @@ public final class SqlScanCursor {
     return valueIndex;
   }
 
-  int projectedColumn() {
-    return projectedColumn;
+  int projectedColumn(int index) {
+    return projectedColumns[index];
+  }
+
+  int projectedColumnCount() {
+    return projectedColumnCount;
   }
 
   void complete() {

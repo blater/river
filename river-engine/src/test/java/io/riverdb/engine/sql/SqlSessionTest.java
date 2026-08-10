@@ -864,6 +864,13 @@ final class SqlSessionTest {
         session.execute("SELECT balance FROM accounts WHERE id=3", result));
     assertEquals(300, result.value());
     assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT region, id, balance FROM accounts WHERE id=3", result));
+    assertEquals(3, result.columnCount());
+    assertEquals(6, result.valueAt(0));
+    assertEquals(3, result.valueAt(1));
+    assertEquals(300, result.valueAt(2));
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.execute(
             "INSERT INTO accounts (id, balance, balance) VALUES (4, 400, 9)",
@@ -886,6 +893,13 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT id, region FROM accounts WHERE region=8", result));
     assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT * FROM accounts WHERE region=8", result));
+    assertEquals(3, result.columnCount());
+    assertEquals(2, result.valueAt(0));
+    assertEquals(250, result.valueAt(1));
+    assertEquals(8, result.valueAt(2));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("INSERT INTO accounts VALUES (4, 400, 8)", result));
@@ -928,6 +942,27 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(2, row.key());
     assertEquals(250, row.value());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT region, id, balance FROM accounts WHERE id >= 1 AND id < 4",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(3, row.columnCount());
+    assertEquals(7, row.valueAt(0));
+    assertEquals(1, row.valueAt(1));
+    assertEquals(100, row.valueAt(2));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(9, row.valueAt(0));
+    assertEquals(2, row.valueAt(1));
+    assertEquals(250, row.valueAt(2));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(6, row.valueAt(0));
+    assertEquals(3, row.valueAt(1));
+    assertEquals(300, row.valueAt(2));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, database.close());
