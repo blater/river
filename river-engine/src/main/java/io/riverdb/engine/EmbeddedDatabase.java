@@ -8,12 +8,15 @@ import io.riverdb.engine.checkpoint.CheckpointControlStore;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.engine.checkpoint.EmbeddedCheckpoint;
+import io.riverdb.engine.control.DatabaseControlResult;
+import io.riverdb.engine.control.DatabaseControlStore;
 import io.riverdb.engine.page.IndexedPageStore;
 import io.riverdb.engine.page.IndexedPageStoreOpenResult;
 import io.riverdb.engine.table.IndexedTable;
 import io.riverdb.engine.table.IndexedTableOpenResult;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedVacuum;
+import io.riverdb.format.control.ControlFile;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
@@ -185,11 +188,21 @@ public final class EmbeddedDatabase {
       return status;
     }
     NioDurableDirectory directory = directoryResult.directory();
+    DatabaseControlResult databaseControl = new DatabaseControlResult();
+    StatusCode controlStatus = DatabaseControlStore.open(directory, databaseControl);
     CheckpointControlStore checkpointControl = new CheckpointControlStore();
     CheckpointState checkpointState = new CheckpointState();
     boolean checkpointAvailable = false;
     status = checkpointControl.read(directory, checkpointState);
     if (create) {
+      if (controlStatus.isOk()) {
+        directory.close();
+        return StatusCode.CONFLICT;
+      }
+      if (controlStatus != StatusCode.CONFLICT) {
+        directory.close();
+        return controlStatus;
+      }
       if (status.isOk()) {
         directory.close();
         return StatusCode.CONFLICT;
@@ -200,6 +213,16 @@ public final class EmbeddedDatabase {
       }
       status = StatusCode.OK;
     } else {
+      if (!controlStatus.isOk()) {
+        directory.close();
+        return controlStatus;
+      }
+      ControlFile control = databaseControl.controlFile();
+      if (!database.equals(control.databaseIncarnation())
+          || !generation.equals(control.walGeneration())) {
+        directory.close();
+        return StatusCode.FENCED;
+      }
       if (status.isOk()) {
         if (!database.equals(checkpointState.database())) {
           directory.close();
@@ -265,6 +288,16 @@ public final class EmbeddedDatabase {
       wal.close();
       directory.close();
       return status;
+    }
+    if (create) {
+      status = DatabaseControlStore.create(
+          directory, new ControlFile(database, generation), databaseControl);
+      if (!status.isOk()) {
+        tableResult.table().close();
+        wal.close();
+        directory.close();
+        return status;
+      }
     }
     result.set(new EmbeddedDatabase(
         directory,

@@ -8,6 +8,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointControlStore;
 import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.control.DatabaseControlStore;
 import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -44,6 +45,7 @@ final class EmbeddedDatabaseTest {
     long committedAt = outcome.commitSequence();
     assertEquals(committedAt, database.currentCommitSequence());
     assertEquals(StatusCode.OK, database.close());
+    assertEquals(true, Files.exists(root.resolve(DatabaseControlStore.CONTROL_FILE_NAME)));
 
     assertEquals(
         StatusCode.OK,
@@ -81,9 +83,31 @@ final class EmbeddedDatabaseTest {
             2,
             opened));
     assertEquals(
+        StatusCode.FENCED,
+        EmbeddedDatabase.openExisting(
+            root,
+            DATABASE,
+            WalGeneration.of(2),
+            2,
+            opened));
+    assertEquals(
         StatusCode.OK,
         EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
     assertEquals(StatusCode.OK, opened.database().close());
+  }
+
+  @Test
+  void refusesDatabaseWithCorruptCompletionControl(@TempDir Path root) throws Exception {
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, opened.database().close());
+    Path controlPath = root.resolve(DatabaseControlStore.CONTROL_FILE_NAME);
+    byte[] control = Files.readAllBytes(controlPath);
+    control[31] ^= 1;
+    Files.write(controlPath, control);
+    assertEquals(
+        StatusCode.CORRUPTION,
+        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
   }
 
   @Test
