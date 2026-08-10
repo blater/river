@@ -259,6 +259,10 @@ public final class IndexedTable implements CommitSequenceSource {
         result);
   }
 
+  public synchronized StatusCode vacuumPreflight() {
+    return store.vacuumPreflight();
+  }
+
   public synchronized StatusCode insertCommitted(
       long transactionId,
       long commitSequence,

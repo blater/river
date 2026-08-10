@@ -4,11 +4,13 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 
-/** Caller-owned decoded checkpoint authority and compacted-row tombstone map. */
+/** Caller-owned checkpoint authority with the MVCC metadata needed by its stable page base. */
 public final class CheckpointState {
-  public static final int MAXIMUM_ROWS = 2048;
+  public static final int MAXIMUM_ROWS = 32 * 1024;
 
   private final long[] deletedWords = new long[MAXIMUM_ROWS / Long.SIZE];
+  private final long[] rowCommitSequences = new long[MAXIMUM_ROWS + 1];
+  private final int[] previousRowIds = new int[MAXIMUM_ROWS + 1];
   private DatabaseIncarnation database;
   private WalGeneration walGeneration;
   private long checkpointId;
@@ -19,6 +21,7 @@ public final class CheckpointState {
   private boolean available;
 
   public void reset() {
+    int previousRows = rowCount;
     database = null;
     walGeneration = null;
     checkpointId = 0;
@@ -27,7 +30,12 @@ public final class CheckpointState {
     pageCount = 0;
     rowCount = 0;
     available = false;
-    for (int index = 0; index < deletedWords.length; index++) {
+    for (int rowId = 1; rowId <= previousRows; rowId++) {
+      rowCommitSequences[rowId] = 0;
+      previousRowIds[rowId] = 0;
+    }
+    int previousWords = (previousRows + Long.SIZE - 1) / Long.SIZE;
+    for (int index = 0; index < previousWords; index++) {
       deletedWords[index] = 0;
     }
   }
@@ -52,6 +60,7 @@ public final class CheckpointState {
         || rows > MAXIMUM_ROWS) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    reset();
     database = incarnation;
     walGeneration = generation;
     checkpointId = id;
@@ -60,6 +69,36 @@ public final class CheckpointState {
     pageCount = pages;
     rowCount = rows;
     available = true;
+    for (int rowId = 1; rowId <= rows; rowId++) {
+      rowCommitSequences[rowId] = committedAt;
+      previousRowIds[rowId] = 0;
+    }
+    return StatusCode.OK;
+  }
+
+  public StatusCode setRowVersion(
+      int rowId,
+      long committedAt,
+      int previousRowId,
+      boolean deleted) {
+    if (!available
+        || rowId <= 0
+        || rowId > rowCount
+        || committedAt <= 0
+        || committedAt > commitSequence
+        || previousRowId < 0
+        || previousRowId >= rowId) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    rowCommitSequences[rowId] = committedAt;
+    previousRowIds[rowId] = previousRowId;
+    int bit = rowId - 1;
+    long mask = 1L << (bit & 63);
+    if (deleted) {
+      deletedWords[bit >>> 6] |= mask;
+    } else {
+      deletedWords[bit >>> 6] &= ~mask;
+    }
     return StatusCode.OK;
   }
 
@@ -80,30 +119,12 @@ public final class CheckpointState {
     return (deletedWords[bit >>> 6] & 1L << (bit & 63)) != 0;
   }
 
-  long deletedWord(int index) {
-    return deletedWords[index];
+  public long rowCommitSequence(int rowId) {
+    return rowId > 0 && rowId <= rowCount ? rowCommitSequences[rowId] : 0;
   }
 
-  void setDeletedWord(int index, long value) {
-    deletedWords[index] = value;
-  }
-
-  boolean hasDeletedRowsBeyond(int rows) {
-    int completeWords = rows >>> 6;
-    int remainingBits = rows & 63;
-    if (remainingBits != 0) {
-      long validMask = (1L << remainingBits) - 1;
-      if ((deletedWords[completeWords] & ~validMask) != 0) {
-        return true;
-      }
-      completeWords++;
-    }
-    for (int index = completeWords; index < deletedWords.length; index++) {
-      if (deletedWords[index] != 0) {
-        return true;
-      }
-    }
-    return false;
+  public int previousRowId(int rowId) {
+    return rowId > 0 && rowId <= rowCount ? previousRowIds[rowId] : 0;
   }
 
   public DatabaseIncarnation database() {

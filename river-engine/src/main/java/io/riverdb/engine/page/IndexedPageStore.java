@@ -7,6 +7,7 @@ import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.page.PageHeader;
 import io.riverdb.format.wal.WalFileHeaderCodec;
+import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
@@ -30,9 +31,9 @@ public final class IndexedPageStore {
   public static final String FILE_NAME = "river.indexed.pages";
   public static final int WAL_FORMAT_ID = 1002;
   public static final int WAL_FORMAT_VERSION = 1;
-  public static final int MAX_PAGES = 12;
-  public static final int MAX_CHANGED_PAGES = MAX_PAGES;
-  public static final int MAX_ROWS = 2048;
+  public static final int MAX_PAGES = 256;
+  public static final int MAX_CHANGED_PAGES = 63;
+  public static final int MAX_ROWS = CheckpointState.MAXIMUM_ROWS;
 
   private static final long OPERATION_MAGIC = 0x5249564552494458L; // RIVERIDX
   private static final int OPERATION_TYPE_PAGE_IMAGES = 1;
@@ -109,12 +110,6 @@ public final class IndexedPageStore {
     wal = localWal;
     database = databaseIncarnation;
     walGeneration = generation;
-    for (int pageId = 1; pageId <= MAX_PAGES; pageId++) {
-      currentPages[pageId] = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
-      currentPayloads[pageId] = payloadView(currentPages[pageId]);
-      stagingPages[pageId] = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
-      stagingPayloads[pageId] = payloadView(stagingPages[pageId]);
-    }
   }
 
   public static StatusCode create(
@@ -289,6 +284,7 @@ public final class IndexedPageStore {
     if (!addChangedPage(pageId)) {
       return null;
     }
+    ensurePageBuffers(pageId);
     ByteBuffer page = stagingPages[pageId];
     page.clear();
     for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
@@ -832,6 +828,10 @@ public final class IndexedPageStore {
     if (operationActive || !present[HEAP_PAGE_ID]) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    status = vacuumPreflight();
+    if (!status.isOk()) {
+      return status;
+    }
     int rowsBefore = rowCount;
     int retainedRows = indexedEntryCount();
     if (retainedRows < 0 || retainedRows > rowsBefore) {
@@ -919,6 +919,51 @@ public final class IndexedPageStore {
     lastCommitSequence = commitSequence;
     result.set(rowsBefore, retainedRows, commitSequence);
     return StatusCode.OK;
+  }
+
+  /** Checks whether the current quiescent compaction fits one atomic WAL operation. */
+  public StatusCode vacuumPreflight() {
+    StatusCode status = admission();
+    if (!status.isOk()) {
+      return status;
+    }
+    if (operationActive || !present[HEAP_PAGE_ID]) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int retainedRows = indexedEntryCount();
+    if (retainedRows < 0 || retainedRows > rowCount) {
+      return StatusCode.CORRUPTION;
+    }
+    if (retainedRows == rowCount) {
+      return StatusCode.CONFLICT;
+    }
+    int changedPages = 0;
+    long operationBytes = VACUUM_HEADER_BYTES + (long) retainedRows * VACUUM_ENTRY_BYTES;
+    for (int pageId = 1; pageId <= highestPageId; pageId++) {
+      if (!present[pageId]) {
+        continue;
+      }
+      ByteBuffer page = currentPayloads[pageId];
+      if (HeapPage.isHeap(page)) {
+        changedPages++;
+        continue;
+      }
+      if (pageId == ROOT_META_PAGE_ID || BTreePage.type(page) != BTreePage.TYPE_LEAF) {
+        continue;
+      }
+      changedPages++;
+      int entryCount = BTreePage.entryCount(page);
+      for (int entry = 0; entry < entryCount; entry++) {
+        int rowBytes = rowLength(BTreePage.valueAt(page, entry));
+        if (rowBytes <= 0) {
+          return StatusCode.CORRUPTION;
+        }
+        operationBytes += rowBytes;
+      }
+    }
+    return changedPages <= MAX_CHANGED_PAGES
+            && operationBytes <= WalRecordCodec.MAX_PAYLOAD_BYTES
+        ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
   }
 
   public StatusCode cancelOperation() {
@@ -1078,11 +1123,13 @@ public final class IndexedPageStore {
       return status;
     }
     for (int rowId = 1; rowId <= checkpointRows; rowId++) {
-      if (deletedRows[rowId]) {
-        status = state.setDeleted(rowId);
-        if (!status.isOk()) {
-          return status;
-        }
+      status = state.setRowVersion(
+          rowId,
+          rowCommitSequences[rowId],
+          previousRowIds[rowId],
+          deletedRows[rowId]);
+      if (!status.isOk()) {
+        return status;
       }
     }
     return StatusCode.OK;
@@ -1186,6 +1233,7 @@ public final class IndexedPageStore {
       return status.isOk() ? StatusCode.CORRUPTION : status;
     }
     for (int pageId = 1; pageId <= checkpoint.pageCount(); pageId++) {
+      ensurePageBuffers(pageId);
       ByteBuffer page = currentPages[pageId];
       page.clear();
       status = checkpointFile.read(
@@ -1232,8 +1280,8 @@ public final class IndexedPageStore {
       return status;
     }
     for (int rowId = 1; rowId <= checkpoint.rowCount(); rowId++) {
-      rowCommitSequences[rowId] = checkpoint.commitSequence();
-      previousRowIds[rowId] = 0;
+      rowCommitSequences[rowId] = checkpoint.rowCommitSequence(rowId);
+      previousRowIds[rowId] = checkpoint.previousRowId(rowId);
       deletedRows[rowId] = checkpoint.isDeleted(rowId);
     }
     lastCommitSequence = checkpoint.commitSequence();
@@ -1313,6 +1361,7 @@ public final class IndexedPageStore {
     for (int index = 0; index < pageCount; index++) {
       int pageId = recoveryPageIds[index];
       int pageOffset = PAGE_OPERATION_HEADER_BYTES + index * PageCodec.PAGE_BYTES;
+      ensurePageBuffers(pageId);
       copyFromRecord(payload, pageOffset, currentPages[pageId]);
       present[pageId] = true;
       dirty[pageId] = true;
@@ -1918,6 +1967,7 @@ public final class IndexedPageStore {
       if (present[pageId]) {
         return StatusCode.CORRUPTION;
       }
+      ensurePageBuffers(pageId);
       heap = currentPayloads[pageId];
       StatusCode status = HeapPage.initialize(heap);
       if (!status.isOk()) {
@@ -2105,6 +2155,16 @@ public final class IndexedPageStore {
     page.position(PageCodec.HEADER_BYTES);
     page.limit(PageCodec.PAGE_BYTES);
     return page.slice();
+  }
+
+  private void ensurePageBuffers(int pageId) {
+    if (currentPages[pageId] != null) {
+      return;
+    }
+    currentPages[pageId] = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
+    currentPayloads[pageId] = payloadView(currentPages[pageId]);
+    stagingPages[pageId] = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
+    stagingPayloads[pageId] = payloadView(stagingPages[pageId]);
   }
 
   private static void copyPage(ByteBuffer source, ByteBuffer target) {

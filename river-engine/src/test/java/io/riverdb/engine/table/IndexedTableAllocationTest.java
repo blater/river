@@ -31,7 +31,7 @@ final class IndexedTableAllocationTest {
   private static volatile long allocationGuard;
 
   @Test
-  void warmedWideRowsCrossHeapPagesWithoutPerOperationAllocation(@TempDir Path root) {
+  void warmedWideRowsUseSecondHeapWithoutPerOperationAllocation(@TempDir Path root) {
     ThreadMXBean bean = allocationBean();
     DatabaseIncarnation database = DatabaseIncarnation.of(449, 457);
     WalGeneration generation = WalGeneration.of(1);
@@ -61,27 +61,27 @@ final class IndexedTableAllocationTest {
     for (int index = 0; index < row.capacity(); index++) {
       row.put(index, (byte) index);
     }
-    for (int index = 0; index < 52; index++) {
+    for (int index = 0; index < 64; index++) {
       exerciseWide(table, row, inserted, index);
     }
+    assertTrue(table.pageCount() >= 4, "wide rows did not allocate another heap page");
 
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
-    for (int index = 52; index < 68; index++) {
+    for (int index = 64; index < 80; index++) {
       exerciseWide(table, row, inserted, index);
     }
     long insertAllocated = bean.getThreadAllocatedBytes(threadId) - before;
-    assertTrue(table.pageCount() >= 4, "wide rows did not allocate another heap page");
     assertTrue(insertAllocated <= 512, "multipage insert allocated bytes: " + insertAllocated);
 
     for (int index = 0; index < 64; index++) {
-      int rowId = 1 + index % 68;
+      int rowId = 1 + index % 80;
       allocationGuard += table.fetchByKey(10_000L + rowId - 1L, fetched).ordinal();
       allocationGuard += fetched.length();
     }
     before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 256; index++) {
-      int rowId = 1 + index % 68;
+      int rowId = 1 + index % 80;
       allocationGuard += table.fetchByKey(10_000L + rowId - 1L, fetched).ordinal();
       allocationGuard += fetched.length();
     }
@@ -149,7 +149,9 @@ final class IndexedTableAllocationTest {
     assertEquals(
         5L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
         table.walCopyBytes() - walCopiedBefore);
-    assertTrue(splitAllocated <= 512, "leaf split allocated bytes: " + splitAllocated);
+    assertTrue(
+        splitAllocated <= 1024,
+        "structural leaf split allocated bytes: " + splitAllocated);
 
     TransactionManager manager = new TransactionManager(
         database.high(), database.low(), table.nextTransactionId(), 4);

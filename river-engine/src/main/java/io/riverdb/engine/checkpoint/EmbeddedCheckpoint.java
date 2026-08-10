@@ -83,9 +83,13 @@ public final class EmbeddedCheckpoint implements TransactionCommitParticipant {
     String nextFileName = LocalWal.generationFileName(nextGeneration);
     long nextCheckpointId = lastCheckpointId + 1;
 
-    StatusCode status = table.vacuum(transactionId, vacuumResult);
-    boolean vacuumed = status.isOk();
-    if (status == StatusCode.CONFLICT) {
+    StatusCode status = table.vacuumPreflight();
+    boolean vacuumed = false;
+    if (status.isOk()) {
+      status = table.vacuum(transactionId, vacuumResult);
+      vacuumed = status.isOk();
+    } else if (status == StatusCode.CONFLICT
+        || status == StatusCode.RESOURCE_EXHAUSTED) {
       status = StatusCode.OK;
     }
     if (!status.isOk()) {

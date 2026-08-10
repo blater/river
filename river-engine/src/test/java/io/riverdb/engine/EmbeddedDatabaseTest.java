@@ -246,6 +246,102 @@ final class EmbeddedDatabaseTest {
   }
 
   @Test
+  void checkpointsAndReopensBeyondLegacyPageAndRowLimits(@TempDir Path root) {
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    EmbeddedDatabase database = opened.database();
+    EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
+    IndexedTransactionSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    ByteBuffer wideRow = ByteBuffer.allocateDirect(128);
+    int rows = 35 * 64;
+    for (int batch = 0; batch < 35; batch++) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      for (int index = 0; index < 64; index++) {
+        int key = batch * 64 + index;
+        prepareWideRow(wideRow, key + 10_000L);
+        assertEquals(StatusCode.OK, session.insert(key, wideRow));
+      }
+      assertEquals(StatusCode.OK, session.commit(outcome));
+    }
+    CheckpointResult checkpoint = new CheckpointResult();
+    assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
+    assertEquals(rows, checkpoint.rowCount());
+    assertEquals(0, checkpoint.rowsReclaimed());
+    assertEquals(true, checkpoint.pageCount() > 12);
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
+    session = sessionResult.session();
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, fetched));
+    assertEquals(10_000, value(fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(2048, fetched));
+    assertEquals(12_048, value(fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(rows - 1L, fetched));
+    assertEquals(10_000L + rows - 1L, value(fetched));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void checkpointPreservesVersionChainsWhenWholeVacuumIsTooLarge(@TempDir Path root) {
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    EmbeddedDatabase database = opened.database();
+    EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(4096, sessionResult));
+    IndexedTransactionSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    ByteBuffer wideRow = ByteBuffer.allocateDirect(4096);
+    for (int batch = 0; batch < 3; batch++) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      for (int index = 0; index < 64; index++) {
+        int key = batch * 64 + index;
+        prepareWideRow(wideRow, key * 10L);
+        assertEquals(StatusCode.OK, session.insert(key, wideRow));
+      }
+      assertEquals(StatusCode.OK, session.commit(outcome));
+    }
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    for (int key = 0; key < 8; key++) {
+      prepareWideRow(wideRow, key * 10L + 1);
+      assertEquals(StatusCode.OK, session.update(key, wideRow));
+    }
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    CheckpointResult checkpoint = new CheckpointResult();
+    assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
+    assertEquals(200, checkpoint.rowCount());
+    assertEquals(0, checkpoint.rowsReclaimed());
+    assertEquals(true, checkpoint.pageCount() > 63);
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, database.createSession(4096, sessionResult));
+    session = sessionResult.session();
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, fetched));
+    assertEquals(1, value(fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(7, fetched));
+    assertEquals(71, value(fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(191, fetched));
+    assertEquals(1910, value(fetched));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void ignoresUnreferencedNextGenerationAndCompletesRetry(@TempDir Path root) throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
