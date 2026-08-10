@@ -5,6 +5,8 @@ import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
+import io.riverdb.engine.relational.RelationalScanCursor;
+import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.engine.table.IndexedSavepoint;
@@ -31,6 +33,8 @@ public final class SqlSession {
   private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
+  private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
+  private final RelationalScanResult aggregateRow = new RelationalScanResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean transactionActive;
@@ -365,6 +369,40 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.COUNT) {
+      long count = 0;
+      StatusCode status = session.beginScan(table, aggregateCursor);
+      boolean aggregateActive = status.isOk();
+      while (status.isOk()) {
+        status = session.nextScan(aggregateCursor, aggregateRow);
+        if (status == StatusCode.CONFLICT) {
+          status = StatusCode.OK;
+          break;
+        }
+        if (status.isOk()) {
+          if (count == Long.MAX_VALUE) {
+            status = StatusCode.RESOURCE_EXHAUSTED;
+          } else {
+            count++;
+          }
+        }
+      }
+      if (aggregateActive) {
+        StatusCode close = session.closeScan(aggregateCursor);
+        if (close.isOk()) {
+          aggregateCursor.reset();
+        }
+        if (status.isOk()) {
+          status = close;
+        }
+      }
+      if (status.isOk()) {
+        selected.clear();
+        selected.putLong(0, count);
+        result.setRow(0, count, 0);
+      }
+      return status;
+    }
     if (command.type() != SqlCommandType.SELECT) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -382,7 +420,8 @@ public final class SqlSession {
 
   private boolean isSelect() {
     return command.type() == SqlCommandType.SELECT
-        || command.type() == SqlCommandType.SELECT_BY_VALUE;
+        || command.type() == SqlCommandType.SELECT_BY_VALUE
+        || command.type() == SqlCommandType.COUNT;
   }
 
   private void rememberUserSavepoint(CharSequence name) {

@@ -41,6 +41,10 @@ final class SqlSessionTest {
     assertEquals(insertSequence, result.commitSequence());
     assertEquals(
         StatusCode.OK,
+        session.execute("SELECT COUNT(*) FROM accounts", result));
+    assertEquals(1, result.value());
+    assertEquals(
+        StatusCode.OK,
         session.execute("UPDATE accounts SET value = 701 WHERE key = 7", result));
     assertEquals(
         StatusCode.OK,
@@ -236,6 +240,14 @@ final class SqlSessionTest {
         StatusCode.OK,
         writer.execute("SELECT value FROM accounts WHERE key=1", result));
     assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("SELECT COUNT(*) FROM accounts", result));
+    assertEquals(1, result.value());
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT COUNT(*) FROM accounts", result));
+    assertEquals(0, result.value());
     assertEquals(
         StatusCode.CONFLICT,
         observer.execute("SELECT value FROM accounts WHERE key=1", result));

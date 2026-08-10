@@ -31,6 +31,9 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("select value from accounts where key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertEquals(7, command.key());
+    assertEquals(StatusCode.OK, parser.parse("SELECT COUNT(*) FROM accounts", command));
+    assertEquals(SqlCommandType.COUNT, command.type());
+    assertName("accounts", command.tableName());
     assertEquals(StatusCode.OK, parser.parse("SELECT key, value FROM accounts", command));
     assertEquals(SqlCommandType.SCAN, command.type());
     assertName("accounts", command.tableName());

@@ -97,7 +97,22 @@ public final class SqlParser {
         value = pairResult.second;
       }
     } else if (consumeKeyword(sql, "SELECT")) {
-      if (consumeKeyword(sql, "KEY")) {
+      if (consumeKeyword(sql, "COUNT")) {
+        type = SqlCommandType.COUNT;
+        status = requireCharacter(sql, '(');
+        if (status.isOk()) {
+          status = requireCharacter(sql, '*');
+        }
+        if (status.isOk()) {
+          status = requireCharacter(sql, ')');
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "FROM");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableTableName());
+        }
+      } else if (consumeKeyword(sql, "KEY")) {
         type = SqlCommandType.SCAN;
         status = requireCharacter(sql, ',');
         if (status.isOk()) {
