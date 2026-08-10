@@ -9,5 +9,6 @@ public enum SqlCommandType {
   DELETE,
   BEGIN,
   COMMIT,
-  ROLLBACK
+  ROLLBACK,
+  CHECKPOINT
 }

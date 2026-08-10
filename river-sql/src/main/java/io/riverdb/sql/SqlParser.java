@@ -35,6 +35,9 @@ public final class SqlParser {
     } else if (consumeKeyword(sql, "ROLLBACK")) {
       type = SqlCommandType.ROLLBACK;
       status = StatusCode.OK;
+    } else if (consumeKeyword(sql, "CHECKPOINT")) {
+      type = SqlCommandType.CHECKPOINT;
+      status = StatusCode.OK;
     } else if (consumeKeyword(sql, "CREATE")) {
       type = SqlCommandType.CREATE_TABLE;
       status = requireKeyword(sql, "TABLE");

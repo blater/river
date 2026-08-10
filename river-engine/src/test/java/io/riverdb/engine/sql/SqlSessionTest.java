@@ -46,6 +46,9 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT value FROM accounts WHERE key = 7", result));
     assertEquals(701, result.value());
+    assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
+    assertEquals(0, result.affectedRows());
+    assertEquals(true, result.commitSequence() > insertSequence);
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(

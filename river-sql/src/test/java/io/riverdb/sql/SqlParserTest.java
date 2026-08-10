@@ -53,6 +53,8 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.COMMIT, command.type());
     assertEquals(StatusCode.OK, parser.parse("ROLLBACK", command));
     assertEquals(SqlCommandType.ROLLBACK, command.type());
+    assertEquals(StatusCode.OK, parser.parse("CHECKPOINT", command));
+    assertEquals(SqlCommandType.CHECKPOINT, command.type());
   }
 
   @Test

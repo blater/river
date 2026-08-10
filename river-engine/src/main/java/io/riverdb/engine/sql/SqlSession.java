@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
@@ -21,6 +22,7 @@ public final class SqlSession {
   private final SqlCommand command = new SqlCommand();
   private final TableDefinition table = new TableDefinition();
   private final TransactionOutcome outcome = new TransactionOutcome();
+  private final CheckpointResult checkpoint = new CheckpointResult();
   private final HeapRowResult fetched = new HeapRowResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
@@ -103,6 +105,16 @@ public final class SqlSession {
       status = database.createTable(command.tableName(), table);
       if (status.isOk()) {
         result.setUpdate(0, 0);
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.CHECKPOINT) {
+      if (transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = database.checkpoint(checkpoint);
+      if (status.isOk()) {
+        result.setUpdate(0, checkpoint.commitSequence());
       }
       return status;
     }
