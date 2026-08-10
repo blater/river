@@ -35,6 +35,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private long copiedWriteSetBytes;
   private int pendingInsertCount;
   private int heldLockCount;
+  private IndexedScanCursor activeScan;
 
   public IndexedTransactionSession(
       TransactionManager transactionManager,
@@ -59,7 +60,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode begin(IsolationLevel isolationLevel) {
-    if (transaction.isActiveHandle()) {
+    if (transaction.isActiveHandle() || activeScan != null) {
       return StatusCode.CONFLICT;
     }
     pendingInsertCount = 0;
@@ -241,7 +242,112 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         transaction.snapshot().visibleCommitSequence(), key, result);
   }
 
+  public StatusCode beginScan(
+      long lowerKey,
+      long upperKey,
+      IndexedScanCursor cursor) {
+    if (transaction.state() != TransactionState.ACTIVE
+        || transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
+      return StatusCode.CONFLICT;
+    }
+    if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED) {
+      StatusCode status = manager.refreshReadCommitted(transaction, table);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    StatusCode status = table.beginScan(
+        transaction.snapshot().visibleCommitSequence(), lowerKey, upperKey, cursor);
+    if (status.isOk()) {
+      status = cursor.attach(this);
+    }
+    if (status.isOk()) {
+      activeScan = cursor;
+    }
+    return status;
+  }
+
+  public StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
+    if (transaction.state() != TransactionState.ACTIVE
+        || cursor == null
+        || cursor != activeScan
+        || !cursor.isSessionOwnedBy(this)
+        || result == null) {
+      return StatusCode.CONFLICT;
+    }
+    result.reset();
+    while (true) {
+      if (!cursor.hasCommittedLookahead() && !cursor.committedExhausted()) {
+        StatusCode status = table.nextScan(cursor, cursor.committedLookahead());
+        if (status.isOk()) {
+          cursor.setCommittedLookahead(true);
+        } else if (status == StatusCode.CONFLICT) {
+          cursor.setCommittedExhausted();
+        } else {
+          return status;
+        }
+      }
+      int pendingIndex = nextPendingIndex(cursor);
+      long pendingKey = pendingIndex >= 0 ? pendingKeys[pendingIndex] : Long.MAX_VALUE;
+      long committedKey = cursor.hasCommittedLookahead()
+          ? cursor.committedLookahead().key() : Long.MAX_VALUE;
+      if (pendingIndex < 0 && !cursor.hasCommittedLookahead()) {
+        return StatusCode.CONFLICT;
+      }
+      if (pendingKey <= committedKey) {
+        if (pendingKey == committedKey) {
+          cursor.setCommittedLookahead(false);
+        }
+        cursor.returned(pendingKey);
+        if (pendingOperations[pendingIndex] == IndexedTable.MUTATION_DELETE) {
+          continue;
+        }
+        result.row().set(
+            pendingRows,
+            0,
+            pendingIndex * rowStride,
+            pendingRowLengths[pendingIndex]);
+        result.set(pendingKey);
+        return StatusCode.OK;
+      }
+      result.copyFrom(cursor.committedLookahead());
+      cursor.setCommittedLookahead(false);
+      cursor.returned(committedKey);
+      return StatusCode.OK;
+    }
+  }
+
+  public StatusCode closeScan(IndexedScanCursor cursor) {
+    if (cursor == null || cursor != activeScan || !cursor.isSessionOwnedBy(this)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = table.closeScan(cursor);
+    if (status.isOk()) {
+      activeScan = null;
+    }
+    return status;
+  }
+
+  private int nextPendingIndex(IndexedScanCursor cursor) {
+    int selected = -1;
+    long selectedKey = Long.MAX_VALUE;
+    for (int index = 0; index < pendingInsertCount; index++) {
+      long key = pendingKeys[index];
+      if (key >= cursor.lowerKey()
+          && key < cursor.upperKey()
+          && cursor.afterLastReturned(key)
+          && key < selectedKey) {
+        selected = index;
+        selectedKey = key;
+      }
+    }
+    return selected;
+  }
+
   public StatusCode commit(TransactionOutcome result) {
+    if (activeScan != null) {
+      return StatusCode.CONFLICT;
+    }
     if (pendingInsertCount == 0) {
       StatusCode status = manager.commitReadOnly(transaction, result);
       if (!status.isOk()) {
@@ -263,6 +369,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode abort(TransactionOutcome result) {
+    if (activeScan != null) {
+      return StatusCode.CONFLICT;
+    }
     StatusCode status = manager.abort(transaction, result);
     if (status.isOk()) {
       StatusCode release = releaseLocks();

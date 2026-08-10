@@ -25,6 +25,9 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("select value from accounts where key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertEquals(7, command.key());
+    assertEquals(StatusCode.OK, parser.parse("SELECT key, value FROM accounts", command));
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertName("accounts", command.tableName());
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());

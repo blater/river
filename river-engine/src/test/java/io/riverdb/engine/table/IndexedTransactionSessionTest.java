@@ -543,6 +543,70 @@ final class IndexedTransactionSessionTest {
     close(table, wal, directory);
   }
 
+  @Test
+  void orderedScanCrossesLeavesAndRetainsSnapshotVersions(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 6);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(manager, table);
+    for (int batch = 0; batch < 5; batch++) {
+      assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+      int first = batch * 52;
+      for (int key = first; key < first + 52; key++) {
+        assertEquals(StatusCode.OK, seed.insert(key, row(key * 10L)));
+      }
+      assertEquals(StatusCode.OK, seed.commit(outcome));
+    }
+    IndexedTransactionSession snapshot = session(manager, table);
+    assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.update(10, row(101)));
+    assertEquals(StatusCode.OK, writer.delete(20));
+    assertEquals(StatusCode.OK, writer.insert(1000, row(10_000)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult scanned = new IndexedScanResult();
+    assertEquals(StatusCode.OK, snapshot.beginScan(0, Long.MAX_VALUE, cursor));
+    int count = 0;
+    StatusCode scanStatus;
+    while ((scanStatus = snapshot.nextScan(cursor, scanned)).isOk()) {
+      assertEquals(count, scanned.key());
+      assertEquals(count * 10L, value(scanned.row()));
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, scanStatus);
+    assertEquals(260, count);
+    assertEquals(StatusCode.OK, snapshot.closeScan(cursor));
+    assertEquals(StatusCode.OK, snapshot.abort(outcome));
+
+    IndexedTransactionSession current = session(manager, table);
+    assertEquals(StatusCode.OK, current.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, current.beginScan(0, Long.MAX_VALUE, cursor));
+    count = 0;
+    long previous = -1;
+    while ((scanStatus = current.nextScan(cursor, scanned)).isOk()) {
+      assertEquals(true, scanned.key() > previous);
+      previous = scanned.key();
+      if (scanned.key() == 10) {
+        assertEquals(101, value(scanned.row()));
+      }
+      assertNotEquals(20, scanned.key());
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, scanStatus);
+    assertEquals(260, count);
+    assertEquals(1000, previous);
+    assertEquals(StatusCode.OK, current.closeScan(cursor));
+    assertEquals(StatusCode.OK, current.commit(outcome));
+    close(table, wal, directory);
+  }
+
   private static StatusCode commitDistinct(
       TransactionManager manager,
       IndexedTable table,

@@ -51,11 +51,37 @@ final class SqlSessionAllocationTest {
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL point select allocated bytes: " + allocated);
+
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult scanRow = new SqlScanRowResult();
+    for (int index = 0; index < 100; index++) {
+      exerciseScan(session, cursor, scanRow, result);
+    }
+    before = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseScan(session, cursor, scanRow, result);
+    }
+    allocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertTrue(allocated <= 512, "warmed SQL scan allocated bytes: " + allocated);
     assertEquals(StatusCode.OK, database.close());
   }
 
   private static void exercise(SqlSession session, SqlExecutionResult result) {
     allocationGuard += session.execute("SELECT value FROM t WHERE key=1", result).ordinal();
     allocationGuard += result.value();
+  }
+
+  private static void exerciseScan(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan("SELECT KEY, VALUE FROM t", cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.key();
+    allocationGuard += row.value();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
   }
 }

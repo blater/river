@@ -21,5 +21,7 @@ and broader key encodings are the next relational layers.
 
 `SqlSession` executes the initial `KEY`/`VALUE` point-statement SQL subset using
 implicit or explicit multi-statement transactions. It is a real end-to-end path
-through the durable catalog and storage kernel, while scans, general schemas,
-and secondary indexes remain subsequent vertical slices.
+through the durable catalog and storage kernel. Ordered table scans traverse
+authoritative B+tree leaves under one MVCC statement or transaction snapshot
+and return rows through a reusable cursor. General schemas, predicates, and
+secondary indexes remain subsequent vertical slices.

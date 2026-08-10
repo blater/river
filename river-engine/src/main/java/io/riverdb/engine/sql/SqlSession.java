@@ -25,6 +25,7 @@ public final class SqlSession {
   private final ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer selected = ByteBuffer.allocateDirect(Long.BYTES);
   private boolean transactionActive;
+  private boolean scanActive;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -57,6 +58,9 @@ public final class SqlSession {
     StatusCode status = parser.parse(sql, command);
     if (!status.isOk()) {
       return status;
+    }
+    if (scanActive || command.type() == SqlCommandType.SCAN) {
+      return StatusCode.CONFLICT;
     }
     if (command.type() == SqlCommandType.BEGIN) {
       if (transactionActive) {
@@ -135,6 +139,80 @@ public final class SqlSession {
       if (!abort.isOk()) {
         return abort;
       }
+    }
+    return status;
+  }
+
+  public StatusCode beginScan(String sql, SqlScanCursor cursor) {
+    if (cursor == null || scanActive) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = parser.parse(sql, command);
+    if (!status.isOk() || command.type() != SqlCommandType.SCAN) {
+      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    }
+    boolean implicit = !transactionActive;
+    if (implicit) {
+      status = session.begin(IsolationLevel.READ_COMMITTED);
+    }
+    if (status.isOk()) {
+      status = session.resolveTable(command.tableName(), table);
+    }
+    if (status.isOk()) {
+      status = session.beginScan(table, cursor.relational());
+    }
+    if (status.isOk()) {
+      status = cursor.claim(this, implicit);
+    }
+    if (status.isOk()) {
+      scanActive = true;
+      return StatusCode.OK;
+    }
+    if (implicit) {
+      session.abort(outcome);
+    }
+    return status;
+  }
+
+  public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
+    if (cursor == null || !cursor.isOwnedBy(this) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = session.nextScan(cursor.relational(), result.relational());
+    if (!status.isOk()) {
+      return status;
+    }
+    if (result.relational().row().length() != Long.BYTES) {
+      return StatusCode.CORRUPTION;
+    }
+    status = result.relational().row().copyTo(result.valueBytes());
+    if (status.isOk()) {
+      result.set(result.relational().key(), result.valueBytes().getLong(0));
+      cursor.rowReturned();
+    }
+    return status;
+  }
+
+  public StatusCode closeScan(SqlScanCursor cursor, SqlExecutionResult result) {
+    if (cursor == null || !cursor.isOwnedBy(this) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = session.closeScan(cursor.relational());
+    if (!status.isOk()) {
+      return status;
+    }
+    boolean implicit = cursor.implicitTransaction();
+    cursor.complete();
+    scanActive = false;
+    if (implicit) {
+      status = session.commit(outcome);
+      if (status.isOk()) {
+        result.setTransaction(false, outcome.commitSequence());
+      }
+    } else {
+      result.setTransaction(true, session.visibleCommitSequence());
     }
     return status;
   }

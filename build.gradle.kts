@@ -241,8 +241,14 @@ val lockTokenDescriptor = "Lio/riverdb/tx/api/lock/LockToken;"
 val indexedCommitResultDescriptor = "Lio/riverdb/engine/table/IndexedCommitResult;"
 val indexedMutationTargetDescriptor = "Lio/riverdb/engine/table/IndexedMutationTarget;"
 val indexedPageStoreDescriptor = "Lio/riverdb/engine/page/IndexedPageStore;"
+val indexedScanCursorDescriptor = "Lio/riverdb/engine/table/IndexedScanCursor;"
+val indexedScanResultDescriptor = "Lio/riverdb/engine/table/IndexedScanResult;"
+val relationalScanCursorDescriptor = "Lio/riverdb/engine/relational/RelationalScanCursor;"
+val relationalScanResultDescriptor = "Lio/riverdb/engine/relational/RelationalScanResult;"
 val sqlCommandDescriptor = "Lio/riverdb/sql/SqlCommand;"
 val sqlExecutionResultDescriptor = "Lio/riverdb/engine/sql/SqlExecutionResult;"
+val sqlScanCursorDescriptor = "Lio/riverdb/engine/sql/SqlScanCursor;"
+val sqlScanRowResultDescriptor = "Lio/riverdb/engine/sql/SqlScanRowResult;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val longArrayDescriptor = "[J"
@@ -574,6 +580,16 @@ val liveHotPathMethods = setOf(
     "(JJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
+    "io.riverdb.storage.heap.HeapRowResult",
+    "copyFrom",
+    "($heapRowResultDescriptor)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedScanResult",
+    "copyFrom",
+    "($indexedScanResultDescriptor)V"
+  ),
+  hotMethod(
     "io.riverdb.engine.table.IndexedTable",
     "commitInsert",
     "(JJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
@@ -743,6 +759,47 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.sql.SqlSession",
     "execute",
     "(Ljava/lang/String;$sqlExecutionResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "beginScan",
+    "(JJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "nextScan",
+    "($indexedScanCursorDescriptor$indexedScanResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "beginScan",
+    "(JJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "nextScan",
+    "($indexedScanCursorDescriptor$indexedScanResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.relational.RelationalSession",
+    "beginScan",
+    "(Lio/riverdb/engine/relational/TableDefinition;$relationalScanCursorDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.engine.relational.RelationalSession",
+    "nextScan",
+    "($relationalScanCursorDescriptor$relationalScanResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.sql.SqlSession",
+    "beginScan",
+    "(Ljava/lang/String;$sqlScanCursorDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.sql.SqlSession",
+    "nextScan",
+    "($sqlScanCursorDescriptor$sqlScanRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

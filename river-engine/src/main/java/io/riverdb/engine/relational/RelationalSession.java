@@ -60,6 +60,44 @@ public final class RelationalSession {
     return status.isOk() ? session.fetchByKey(physicalKey.key(), result) : status;
   }
 
+  public StatusCode beginScan(TableDefinition table, RelationalScanCursor cursor) {
+    if (table == null
+        || !table.isOwnedBy(database)
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long lowerKey = (long) table.tableId() << 48;
+    long upperKey = table.tableId() == RelationalKey.MAXIMUM_TABLE_ID
+        ? Long.MAX_VALUE : (long) (table.tableId() + 1) << 48;
+    StatusCode status = session.beginScan(lowerKey, upperKey, cursor.indexed());
+    return status.isOk() ? cursor.claim(this) : status;
+  }
+
+  public StatusCode nextScan(
+      RelationalScanCursor cursor,
+      RelationalScanResult result) {
+    if (cursor == null || !cursor.isOwnedBy(this) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = session.nextScan(cursor.indexed(), result.indexed());
+    if (status.isOk()) {
+      result.set(result.indexed().key() & RelationalKey.USER_KEY_MASK);
+    }
+    return status;
+  }
+
+  public StatusCode closeScan(RelationalScanCursor cursor) {
+    if (cursor == null || !cursor.isOwnedBy(this)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = session.closeScan(cursor.indexed());
+    if (status.isOk()) {
+      cursor.complete();
+    }
+    return status;
+  }
+
   public StatusCode commit(TransactionOutcome result) {
     return session.commit(result);
   }

@@ -363,6 +363,77 @@ public final class IndexedTable implements CommitSequenceSource {
     return StatusCode.CONFLICT;
   }
 
+  public synchronized StatusCode beginScan(
+      long visibleCommitSequence,
+      long lowerKey,
+      long upperKey,
+      IndexedScanCursor cursor) {
+    if (visibleCommitSequence < 0
+        || lowerKey >= upperKey
+        || upperKey == Long.MIN_VALUE
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int leafPageId = findLeafPageId(lowerKey);
+    if (leafPageId <= 0) {
+      return StatusCode.CORRUPTION;
+    }
+    return cursor.claim(this, visibleCommitSequence, lowerKey, upperKey, leafPageId);
+  }
+
+  public synchronized StatusCode nextScan(
+      IndexedScanCursor cursor,
+      IndexedScanResult result) {
+    if (cursor == null || !cursor.isOwnedBy(this) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    while (cursor.leafPageId() > 0) {
+      ByteBuffer leaf = store.currentPayload(cursor.leafPageId());
+      if (leaf == null || BTreePage.type(leaf) != BTreePage.TYPE_LEAF) {
+        return StatusCode.CORRUPTION;
+      }
+      int entryCount = BTreePage.entryCount(leaf);
+      while (cursor.entryIndex() < entryCount) {
+        int entry = cursor.entryIndex();
+        cursor.advanceEntry();
+        long key = BTreePage.keyAt(leaf, entry);
+        if (key < cursor.lowerKey()) {
+          continue;
+        }
+        if (key >= cursor.upperKey()) {
+          cursor.advanceLeaf(0);
+          return StatusCode.CONFLICT;
+        }
+        int rowId = BTreePage.valueAt(leaf, entry);
+        while (rowId > 0
+            && store.rowCommitSequence(rowId) > cursor.visibleCommitSequence()) {
+          rowId = store.previousRowId(rowId);
+        }
+        if (rowId <= 0 || store.isDeletedRow(rowId)) {
+          continue;
+        }
+        StatusCode status = HeapPage.fetch(
+            store.currentPayload(HEAP_PAGE_ID), rowId, result.row());
+        if (!status.isOk()) {
+          return status;
+        }
+        result.set(key);
+        return StatusCode.OK;
+      }
+      cursor.advanceLeaf(BTreePage.rightSiblingPageId(leaf));
+    }
+    return StatusCode.CONFLICT;
+  }
+
+  public synchronized StatusCode closeScan(IndexedScanCursor cursor) {
+    if (cursor == null || !cursor.isOwnedBy(this)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    cursor.complete();
+    return StatusCode.OK;
+  }
+
   public synchronized StatusCode prepareMutation(
       long visibleCommitSequence,
       long key,

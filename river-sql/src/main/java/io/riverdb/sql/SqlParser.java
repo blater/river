@@ -49,26 +49,40 @@ public final class SqlParser {
         value = pairResult.second;
       }
     } else if (consumeKeyword(sql, "SELECT")) {
-      type = SqlCommandType.SELECT;
-      status = requireKeyword(sql, "VALUE");
-      if (status.isOk()) {
-        status = requireKeyword(sql, "FROM");
-      }
-      if (status.isOk()) {
-        status = identifier(sql, result.writableTableName());
-      }
-      if (status.isOk()) {
-        status = requireKeyword(sql, "WHERE");
-      }
-      if (status.isOk()) {
-        status = requireKeyword(sql, "KEY");
-      }
-      if (status.isOk()) {
-        status = requireCharacter(sql, '=');
-      }
-      if (status.isOk()) {
-        status = number(sql, numberResult);
-        key = numberResult.value;
+      if (consumeKeyword(sql, "KEY")) {
+        type = SqlCommandType.SCAN;
+        status = requireCharacter(sql, ',');
+        if (status.isOk()) {
+          status = requireKeyword(sql, "VALUE");
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "FROM");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableTableName());
+        }
+      } else {
+        type = SqlCommandType.SELECT;
+        status = requireKeyword(sql, "VALUE");
+        if (status.isOk()) {
+          status = requireKeyword(sql, "FROM");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableTableName());
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "WHERE");
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "KEY");
+        }
+        if (status.isOk()) {
+          status = requireCharacter(sql, '=');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          key = numberResult.value;
+        }
       }
     } else if (consumeKeyword(sql, "UPDATE")) {
       type = SqlCommandType.UPDATE;

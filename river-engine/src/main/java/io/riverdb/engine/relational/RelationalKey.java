@@ -5,6 +5,7 @@ import io.riverdb.base.error.StatusCode;
 /** Disjoint catalog and logical-table key encoding for the first physical keyspace. */
 final class RelationalKey {
   static final long CATALOG_SEQUENCE_KEY = Long.MIN_VALUE;
+  static final long USER_KEY_MASK = (1L << 48) - 1;
   static final long MAXIMUM_USER_KEY = (1L << 48) - 2;
   static final int MAXIMUM_TABLE_ID = 0x7fff;
 

@@ -4,6 +4,7 @@ public enum SqlCommandType {
   CREATE_TABLE,
   INSERT,
   SELECT,
+  SCAN,
   UPDATE,
   DELETE,
   BEGIN,

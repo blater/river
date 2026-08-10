@@ -43,4 +43,11 @@ public final class HeapRowResult {
     offset = 0;
     length = 0;
   }
+
+  public void copyFrom(HeapRowResult source) {
+    page = source.page;
+    rowId = source.rowId;
+    offset = source.offset;
+    length = source.length;
+  }
 }

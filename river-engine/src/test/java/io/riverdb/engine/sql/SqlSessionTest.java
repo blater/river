@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
@@ -157,6 +158,95 @@ final class SqlSessionTest {
         observer.execute("SELECT value FROM accounts WHERE key=25", result));
     assertEquals(250, result.value());
     assertEquals(batchSequence, result.commitSequence());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void scansOrderedSnapshotRowsAndCanCloseEarly(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession reader = sessionResult.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession writer = sessionResult.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE items", execution));
+    assertEquals(StatusCode.OK, writer.execute("BEGIN", execution));
+    for (int key = 0; key < 20; key++) {
+      assertEquals(
+          StatusCode.OK,
+          writer.execute(
+              "INSERT INTO items VALUES (" + key + ", " + key * 10 + ")",
+              execution));
+    }
+    assertEquals(StatusCode.OK, writer.execute("COMMIT", execution));
+
+    assertEquals(StatusCode.OK, reader.execute("BEGIN", execution));
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        reader.beginScan("SELECT key, value FROM items", cursor));
+    assertEquals(StatusCode.OK, writer.execute("UPDATE items SET value=999 WHERE key=5", execution));
+    assertEquals(StatusCode.OK, writer.execute("DELETE FROM items WHERE key=6", execution));
+    int count = 0;
+    StatusCode scanStatus;
+    while ((scanStatus = reader.nextScan(cursor, row)).isOk()) {
+      assertEquals(count, row.key());
+      assertEquals(count * 10L, row.value());
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, scanStatus);
+    assertEquals(20, count);
+    assertEquals(20, cursor.rowsReturned());
+    assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
+    assertEquals(true, execution.transactionActive());
+    assertEquals(StatusCode.OK, reader.execute("COMMIT", execution));
+
+    assertEquals(StatusCode.OK, reader.execute("BEGIN", execution));
+    assertEquals(StatusCode.OK, reader.execute("UPDATE items SET value=555 WHERE key=5", execution));
+    assertEquals(StatusCode.OK, reader.execute("DELETE FROM items WHERE key=7", execution));
+    assertEquals(StatusCode.OK, reader.execute("INSERT INTO items VALUES (30, 300)", execution));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        reader.beginScan("SELECT KEY, VALUE FROM items", cursor));
+    count = 0;
+    boolean sawFive = false;
+    boolean sawThirty = false;
+    while ((scanStatus = reader.nextScan(cursor, row)).isOk()) {
+      assertNotEquals(6, row.key());
+      assertNotEquals(7, row.key());
+      if (row.key() == 5) {
+        assertEquals(555, row.value());
+        sawFive = true;
+      }
+      if (row.key() == 30) {
+        assertEquals(300, row.value());
+        sawThirty = true;
+      }
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, scanStatus);
+    assertEquals(true, sawFive);
+    assertEquals(true, sawThirty);
+    assertEquals(19, count);
+    assertEquals(19, cursor.rowsReturned());
+    assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, reader.execute("ROLLBACK", execution));
+
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        reader.beginScan("SELECT KEY, VALUE FROM items", cursor));
+    assertEquals(StatusCode.OK, reader.nextScan(cursor, row));
+    assertEquals(0, row.key());
+    assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
+    assertEquals(false, execution.transactionActive());
     assertEquals(StatusCode.OK, database.close());
   }
 }
