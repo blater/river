@@ -83,6 +83,24 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("SELECT COUNT(*) FROM accounts", command));
     assertEquals(SqlCommandType.COUNT, command.type());
     assertName("accounts", command.tableName());
+    assertEquals(false, command.hasPredicate());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT COUNT(*) FROM accounts WHERE region=7", command));
+    assertEquals(SqlCommandType.COUNT, command.type());
+    assertEquals(true, command.hasPredicate());
+    assertEquals(true, command.isEqualityPredicate());
+    assertName("region", command.predicateColumnName());
+    assertEquals(7, command.key());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT COUNT(*) FROM accounts WHERE region >= -2 AND region < 9",
+            command));
+    assertEquals(true, command.hasPredicate());
+    assertEquals(false, command.isEqualityPredicate());
+    assertEquals(-2, command.scanLowerInclusive());
+    assertEquals(9, command.scanUpperExclusive());
     assertEquals(StatusCode.OK, parser.parse("SELECT key, value FROM accounts", command));
     assertEquals(SqlCommandType.SCAN, command.type());
     assertName("accounts", command.tableName());

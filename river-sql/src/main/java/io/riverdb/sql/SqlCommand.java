@@ -19,6 +19,7 @@ public final class SqlCommand {
   private long scanLowerInclusive;
   private long scanUpperExclusive;
   private boolean boundedScan;
+  private boolean equalityPredicate;
   private boolean selectAll;
   private boolean serializableTransaction;
   private int insertRowCount;
@@ -47,6 +48,7 @@ public final class SqlCommand {
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
     boundedScan = false;
+    equalityPredicate = false;
     selectAll = false;
     serializableTransaction = false;
     insertRowCount = 0;
@@ -69,6 +71,19 @@ public final class SqlCommand {
     scanUpperExclusive = upperExclusive;
     boundedScan = bounded;
     available = true;
+  }
+
+  void setPredicate(
+      long equalityValue,
+      long lowerInclusive,
+      long upperExclusive,
+      boolean bounded,
+      boolean equality) {
+    key = equalityValue;
+    scanLowerInclusive = lowerInclusive;
+    scanUpperExclusive = upperExclusive;
+    boundedScan = bounded;
+    equalityPredicate = equality;
   }
 
   void setSelectAll() {
@@ -208,6 +223,14 @@ public final class SqlCommand {
 
   public boolean isBoundedScan() {
     return boundedScan;
+  }
+
+  public boolean hasPredicate() {
+    return predicateColumnName.length() > 0;
+  }
+
+  public boolean isEqualityPredicate() {
+    return equalityPredicate;
   }
 
   public boolean isSelectAll() {

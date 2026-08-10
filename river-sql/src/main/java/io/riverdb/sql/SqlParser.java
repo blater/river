@@ -22,6 +22,7 @@ public final class SqlParser {
     long scanLower = 0;
     long scanUpper = 0;
     boolean boundedScan = false;
+    boolean equalityPredicate = false;
     boolean serializableTransaction = false;
     if (consumeKeyword(sql, "BEGIN")) {
       type = SqlCommandType.BEGIN;
@@ -162,6 +163,37 @@ public final class SqlParser {
         if (status.isOk()) {
           status = identifier(sql, result.writableTableName());
         }
+        if (status.isOk() && consumeKeyword(sql, "WHERE")) {
+          status = identifier(sql, result.writablePredicateColumnName());
+          if (status.isOk() && consumeCharacter(sql, '=')) {
+            equalityPredicate = true;
+            status = number(sql, numberResult);
+            key = numberResult.value;
+          } else if (status.isOk()) {
+            boundedScan = true;
+            status = requireCharacter(sql, '>');
+            if (status.isOk()) {
+              status = requireCharacter(sql, '=');
+            }
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+              scanLower = numberResult.value;
+            }
+            if (status.isOk()) {
+              status = requireKeyword(sql, "AND");
+            }
+            if (status.isOk()) {
+              status = matchingIdentifier(sql, result.predicateColumnName());
+            }
+            if (status.isOk()) {
+              status = requireCharacter(sql, '<');
+            }
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+              scanUpper = numberResult.value;
+            }
+          }
+        }
       } else {
         type = SqlCommandType.SCAN;
         if (consumeCharacter(sql, '*')) {
@@ -183,6 +215,7 @@ public final class SqlParser {
           status = identifier(sql, result.writablePredicateColumnName());
           if (status.isOk() && consumeCharacter(sql, '=')) {
             type = SqlCommandType.SELECT;
+            equalityPredicate = true;
             status = number(sql, numberResult);
             key = numberResult.value;
           } else if (status.isOk()) {
@@ -281,6 +314,10 @@ public final class SqlParser {
       result.setBegin(serializableTransaction);
     } else {
       result.set(type, key, value);
+    }
+    if (type == SqlCommandType.COUNT) {
+      result.setPredicate(
+          key, scanLower, scanUpper, boundedScan, equalityPredicate);
     }
     return StatusCode.OK;
   }

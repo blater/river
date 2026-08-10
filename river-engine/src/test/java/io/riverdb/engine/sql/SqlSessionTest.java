@@ -1165,6 +1165,16 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE INDEX events_category ON events(category)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT COUNT(*) FROM events WHERE category=10", result));
+    assertEquals(3, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT COUNT(*) FROM events WHERE category >= 10 AND category < 21",
+            result));
+    assertEquals(5, result.value());
 
     assertDuplicateIndexRows(session, result, new long[] {1, 2, 3, 4, 5});
     assertDuplicateIndexEquality(session, result, 10, new long[] {1, 2, 3});
@@ -1328,6 +1338,23 @@ final class SqlSessionTest {
         "SELECT id, amount FROM events WHERE category >= 10 AND category < 21",
         new long[] {1, 2, 3, 4},
         new long[] {100, 200, 300, 400});
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT COUNT(*) FROM events WHERE category=10", result));
+    assertEquals(3, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT COUNT(*) FROM events WHERE category >= 10 AND category < 21",
+            result));
+    assertEquals(4, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT COUNT(*) FROM events WHERE id >= 2 AND id < 5", result));
+    assertEquals(3, result.value());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("SELECT COUNT(*) FROM events WHERE missing=10", result));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.execute("SELECT id, amount FROM events WHERE category=10", result));

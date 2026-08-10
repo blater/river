@@ -47,11 +47,13 @@ final class SqlSessionAllocationTest {
     assertEquals(StatusCode.OK, session.execute("INSERT INTO t VALUES (1, 10, 7)", result));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
+      exerciseCount(session, result);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
+      exerciseCount(session, result);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL point select allocated bytes: " + allocated);
@@ -72,6 +74,12 @@ final class SqlSessionAllocationTest {
 
   private static void exercise(SqlSession session, SqlExecutionResult result) {
     allocationGuard += session.execute("SELECT region FROM t WHERE id=1", result).ordinal();
+    allocationGuard += result.value();
+  }
+
+  private static void exerciseCount(SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT COUNT(*) FROM t WHERE region=7", result).ordinal();
     allocationGuard += result.value();
   }
 

@@ -328,6 +328,12 @@ public final class SqlSession {
       }
     }
     boolean bounded = equality || command.isBoundedScan();
+    if (status.isOk()
+        && !equality
+        && bounded
+        && command.scanUpperExclusive() <= command.scanLowerInclusive()) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     boolean valueIndex = status.isOk()
         && predicateColumn > 0
         && table.hasIndexOn(predicateColumn);
@@ -505,13 +511,57 @@ public final class SqlSession {
     }
     if (command.type() == SqlCommandType.COUNT) {
       long count = 0;
-      StatusCode status = session.beginScan(table, aggregateCursor);
+      boolean predicate = command.hasPredicate();
+      boolean equality = command.isEqualityPredicate();
+      boolean indexed = predicate
+          && predicateColumn > 0
+          && table.hasIndexOn(predicateColumn);
+      boolean boundedPrimaryKey = predicate && predicateColumn == 0;
+      if (predicate
+          && !equality
+          && command.scanUpperExclusive() <= command.scanLowerInclusive()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if ((indexed || boundedPrimaryKey)
+          && equality
+          && command.key() == Long.MAX_VALUE) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      long lower = equality ? command.key() : command.scanLowerInclusive();
+      long upper = equality ? command.key() + 1 : command.scanUpperExclusive();
+      StatusCode status = indexed
+          ? session.beginValueScan(
+              table, predicateColumn, lower, upper, aggregateCursor)
+          : boundedPrimaryKey
+              ? session.beginScan(table, lower, upper, aggregateCursor)
+              : session.beginScan(table, aggregateCursor);
       boolean aggregateActive = status.isOk();
       while (status.isOk()) {
-        status = session.nextScan(aggregateCursor, aggregateRow);
+        HeapRowResult source;
+        if (indexed) {
+          status = session.nextValueScan(
+              table, aggregateCursor, aggregateRow, this.indexed);
+          source = this.indexed.row();
+        } else {
+          status = session.nextScan(aggregateCursor, aggregateRow);
+          source = aggregateRow.row();
+        }
         if (status == StatusCode.CONFLICT) {
           status = StatusCode.OK;
           break;
+        }
+        if (status.isOk() && predicate && predicateColumn > 0 && !indexed) {
+          status = copyRow(source);
+        }
+        if (status.isOk() && predicate && predicateColumn > 0 && !indexed) {
+          long value = row.getLong((predicateColumn - 1) * Long.BYTES);
+          boolean matches = equality
+              ? value == command.key()
+              : value >= command.scanLowerInclusive()
+                  && value < command.scanUpperExclusive();
+          if (!matches) {
+            continue;
+          }
         }
         if (status.isOk()) {
           if (count == Long.MAX_VALUE) {
@@ -573,7 +623,12 @@ public final class SqlSession {
     predicateColumn = -1;
     projectedColumnCount = 0;
     if (command.type() == SqlCommandType.COUNT) {
-      return StatusCode.OK;
+      if (!command.hasPredicate()) {
+        return StatusCode.OK;
+      }
+      predicateColumn = table.findColumn(command.predicateColumnName());
+      return predicateColumn >= 0
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.INSERT) {
       return bindInsertColumns();
