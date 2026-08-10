@@ -12,6 +12,7 @@ import io.riverdb.engine.page.IndexedPageStoreOpenResult;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
@@ -456,6 +457,67 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(mutatedAt, 61, fetched));
     assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt, 62, fetched));
     assertEquals(620, value(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void mixedMutationCommitSplitsFullLeafAndRecoversVersions(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    HeapInsertResult inserted = new HeapInsertResult();
+    for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
+      assertEquals(StatusCode.OK, table.insert(index + 2L, index, row(index * 10L), inserted));
+    }
+    int leafRoot = table.rootPageId();
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession oldReader = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
+    assertEquals(StatusCode.OK, oldReader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.update(0, row(9_000)));
+    assertEquals(StatusCode.OK, writer.delete(1));
+    assertEquals(StatusCode.OK, writer.insert(1_000, row(10_000)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    long committedAt = outcome.commitSequence();
+    assertNotEquals(leafRoot, table.rootPageId());
+
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, oldReader.fetchByKey(0, fetched));
+    assertEquals(0, value(fetched));
+    assertEquals(StatusCode.OK, oldReader.fetchByKey(1, fetched));
+    assertEquals(10, value(fetched));
+    assertEquals(StatusCode.CONFLICT, oldReader.fetchByKey(1_000, fetched));
+    assertEquals(StatusCode.OK, oldReader.abort(outcome));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(9_000, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(1, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(1_000, fetched));
+    assertEquals(10_000, value(fetched));
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt - 1, 0, fetched));
+    assertEquals(0, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt - 1, 1, fetched));
+    assertEquals(10, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 1_000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, fetched));
+    assertEquals(9_000, value(fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt, 1, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 1_000, fetched));
+    assertEquals(10_000, value(fetched));
     close(table, wal, directory);
   }
 

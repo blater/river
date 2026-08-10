@@ -31,7 +31,7 @@ import java.util.zip.CRC32C;
 public final class IndexedPageStore {
   public static final String FILE_NAME = "river.indexed.pages";
   public static final int WAL_FORMAT_ID = 1002;
-  public static final int WAL_FORMAT_VERSION = 1;
+  public static final int WAL_FORMAT_VERSION = 2;
   public static final int MAX_PAGES = 512;
   public static final int MAX_CHANGED_PAGES = 63;
   public static final int MAX_ROWS = CheckpointState.MAXIMUM_ROWS;
@@ -45,7 +45,8 @@ public final class IndexedPageStore {
   private static final int MUTATION_INSERT = 1;
   private static final int MUTATION_UPDATE = 2;
   private static final int MUTATION_DELETE = 3;
-  private static final int PAGE_OPERATION_HEADER_BYTES = 20;
+  private static final int PAGE_OPERATION_HEADER_BYTES = 24;
+  private static final int PAGE_OPERATION_VERSION_BYTES = 8;
   private static final int INSERT_OPERATION_HEADER_BYTES = 40;
   private static final int INSERT_BATCH_HEADER_BYTES = 24;
   private static final int INSERT_BATCH_ENTRY_BYTES = 16;
@@ -56,6 +57,7 @@ public final class IndexedPageStore {
   private static final int HEAP_PAGE_ID = 1;
   private static final int ROOT_META_PAGE_ID = 2;
   private static final int MAX_PREPARED_INSERT_ROWS = LocalWal.MAX_PENDING_RECORDS * 64;
+  private static final int MAX_OPERATION_ROWS = MAX_PREPARED_INSERT_ROWS;
   private static final int MAXIMUM_TREE_HEIGHT = 8;
 
   private final DurableDirectory directory;
@@ -79,6 +81,8 @@ public final class IndexedPageStore {
   private final boolean[] deletedRows = new boolean[MAX_ROWS + 1];
   private final int[] changedPageIds = new int[MAX_CHANGED_PAGES];
   private final int[] recoveryPageIds = new int[MAX_CHANGED_PAGES];
+  private final int[] operationPreviousRowIds = new int[MAX_OPERATION_ROWS];
+  private final boolean[] operationDeletedRows = new boolean[MAX_OPERATION_ROWS];
   private final long[] preparedKeys = new long[MAX_PREPARED_INSERT_ROWS];
   private final int[] preparedLeafPageIds = new int[MAX_PREPARED_INSERT_ROWS];
   private final boolean[] preparedNewIndexEntries = new boolean[MAX_PREPARED_INSERT_ROWS];
@@ -104,6 +108,7 @@ public final class IndexedPageStore {
   private int rowCount;
   private int lastHeapPageId = HEAP_PAGE_ID;
   private int operationRowCount;
+  private int operationVersionCount;
   private int operationLastHeapPageId = HEAP_PAGE_ID;
   private boolean operationActive;
   private boolean preparedInsertGroupActive;
@@ -253,6 +258,7 @@ public final class IndexedPageStore {
     }
     changedPageCount = 0;
     operationRowCount = rowCount;
+    operationVersionCount = 0;
     operationLastHeapPageId = lastHeapPageId;
     operationActive = true;
     return StatusCode.OK;
@@ -318,13 +324,28 @@ public final class IndexedPageStore {
       int sourceOffset,
       int rowBytes,
       HeapInsertResult result) {
+    return stageVersionRow(source, sourceOffset, rowBytes, 0, false, result);
+  }
+
+  /** Appends one staged MVCC version and records its predecessor/deletion state for WAL replay. */
+  public StatusCode stageVersionRow(
+      ByteBuffer source,
+      int sourceOffset,
+      int rowBytes,
+      int previousRowId,
+      boolean deleted,
+      HeapInsertResult result) {
     if (!operationActive
         || source == null
         || sourceOffset < 0
         || rowBytes <= 0
         || source.limit() - sourceOffset < rowBytes
         || result == null
-        || operationRowCount >= MAX_ROWS) {
+        || operationRowCount >= MAX_ROWS
+        || operationVersionCount >= MAX_OPERATION_ROWS
+        || previousRowId < 0
+        || previousRowId > rowCount
+        || (deleted && previousRowId == 0)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -358,6 +379,9 @@ public final class IndexedPageStore {
         heap, source, sourceOffset, rowBytes, appliedInsert);
     if (status.isOk()) {
       operationRowCount++;
+      operationPreviousRowIds[operationVersionCount] = previousRowId;
+      operationDeletedRows[operationVersionCount] = deleted;
+      operationVersionCount++;
       result.setRowId(operationRowCount);
     }
     return status;
@@ -410,7 +434,9 @@ public final class IndexedPageStore {
         || changedPageCount <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int operationBytes = PAGE_OPERATION_HEADER_BYTES + changedPageCount * PageCodec.PAGE_BYTES;
+    int operationBytes = PAGE_OPERATION_HEADER_BYTES
+        + changedPageCount * PageCodec.PAGE_BYTES
+        + operationVersionCount * PAGE_OPERATION_VERSION_BYTES;
     StatusCode status = wal.reserve(operationBytes, walReservation);
     if (!status.isOk()) {
       return status;
@@ -420,6 +446,7 @@ public final class IndexedPageStore {
     putInt(recordPayload, 8, WAL_FORMAT_VERSION);
     putInt(recordPayload, 12, OPERATION_TYPE_PAGE_IMAGES);
     putInt(recordPayload, 16, changedPageCount);
+    putInt(recordPayload, 20, operationVersionCount);
     int outputOffset = PAGE_OPERATION_HEADER_BYTES;
     for (int index = 0; index < changedPageCount; index++) {
       int pageId = changedPageIds[index];
@@ -441,6 +468,11 @@ public final class IndexedPageStore {
       walCopyBytes += PageCodec.PAGE_BYTES;
       outputOffset += PageCodec.PAGE_BYTES;
     }
+    for (int index = 0; index < operationVersionCount; index++) {
+      putInt(recordPayload, outputOffset, operationPreviousRowIds[index]);
+      putInt(recordPayload, outputOffset + 4, operationDeletedRows[index] ? 1 : 0);
+      outputOffset += PAGE_OPERATION_VERSION_BYTES;
+    }
     recordPayload.position(operationBytes);
     status = wal.publish(
         walReservation,
@@ -457,14 +489,17 @@ public final class IndexedPageStore {
     int previousRowCount = rowCount;
     publishStagedPages();
     StatusCode locations = rebuildRowLocations();
-    if (!locations.isOk() || rowCount != operationRowCount) {
+    if (!locations.isOk()
+        || rowCount != operationRowCount
+        || rowCount - previousRowCount != operationVersionCount) {
       failed = true;
       return locations.isOk() ? StatusCode.INVARIANT_BROKEN : locations;
     }
-    recordNewRowCommits(previousRowCount, commitSequence);
+    recordOperationVersions(previousRowCount, commitSequence);
     lastCommitSequence = commitSequence;
     operationActive = false;
     changedPageCount = 0;
+    clearOperationVersions();
     return StatusCode.OK;
   }
 
@@ -1459,6 +1494,7 @@ public final class IndexedPageStore {
     clearStagedFlags();
     operationActive = false;
     changedPageCount = 0;
+    clearOperationVersions();
     return StatusCode.OK;
   }
 
@@ -1894,9 +1930,14 @@ public final class IndexedPageStore {
       int payloadBytes,
       long commitSequence) {
     int pageCount = getInt(payload, 16);
+    int versionCount = getInt(payload, 20);
     if (pageCount <= 0
         || pageCount > MAX_CHANGED_PAGES
-        || payloadBytes != PAGE_OPERATION_HEADER_BYTES + pageCount * PageCodec.PAGE_BYTES) {
+        || versionCount < 0
+        || versionCount > MAX_OPERATION_ROWS
+        || payloadBytes != PAGE_OPERATION_HEADER_BYTES
+            + pageCount * PageCodec.PAGE_BYTES
+            + versionCount * PAGE_OPERATION_VERSION_BYTES) {
       return StatusCode.CORRUPTION;
     }
     int previousRowCount = rowCount;
@@ -1933,8 +1974,25 @@ public final class IndexedPageStore {
     if (status.isOk()) {
       status = rebuildRowLocations();
     }
-    if (status.isOk()) {
-      recordNewRowCommits(previousRowCount, commitSequence);
+    if (status.isOk() && rowCount - previousRowCount != versionCount) {
+      status = StatusCode.CORRUPTION;
+    }
+    int versionOffset = PAGE_OPERATION_HEADER_BYTES + pageCount * PageCodec.PAGE_BYTES;
+    for (int index = 0; status.isOk() && index < versionCount; index++) {
+      int previousRowId = getInt(payload, versionOffset);
+      int deleted = getInt(payload, versionOffset + 4);
+      int rowId = previousRowCount + index + 1;
+      if (previousRowId < 0
+          || previousRowId >= rowId
+          || (deleted != 0 && deleted != 1)
+          || (deleted == 1 && previousRowId == 0)) {
+        status = StatusCode.CORRUPTION;
+      } else {
+        rowCommitSequences[rowId] = commitSequence;
+        previousRowIds[rowId] = previousRowId;
+        deletedRows[rowId] = deleted == 1;
+      }
+      versionOffset += PAGE_OPERATION_VERSION_BYTES;
     }
     return status;
   }
@@ -2596,6 +2654,23 @@ public final class IndexedPageStore {
       previousRowIds[rowId] = 0;
       deletedRows[rowId] = false;
     }
+  }
+
+  private void recordOperationVersions(int previousRowCount, long commitSequence) {
+    for (int index = 0; index < operationVersionCount; index++) {
+      int rowId = previousRowCount + index + 1;
+      rowCommitSequences[rowId] = commitSequence;
+      previousRowIds[rowId] = operationPreviousRowIds[index];
+      deletedRows[rowId] = operationDeletedRows[index];
+    }
+  }
+
+  private void clearOperationVersions() {
+    for (int index = 0; index < operationVersionCount; index++) {
+      operationPreviousRowIds[index] = 0;
+      operationDeletedRows[index] = false;
+    }
+    operationVersionCount = 0;
   }
 
   private StatusCode encodeCurrentPage(int pageId, long recordStart, long recordEnd) {

@@ -247,6 +247,83 @@ public final class IndexedTable
         heapInsert);
     if (status.isOk()) {
       result.set(heapInsert.rowId(), commitSequence);
+      return StatusCode.OK;
+    }
+    if (status != StatusCode.RESOURCE_EXHAUSTED) {
+      return status;
+    }
+    status = store.beginOperation();
+    if (!status.isOk()) {
+      return status;
+    }
+    int lastRowId = 0;
+    for (int index = 0; index < mutationCount; index++) {
+      int operation = operations[index];
+      long key = keys[index];
+      int previousRowId = previousRowIds[index];
+      int rowBytes = rowLengths[index];
+      int rowOffset = index * rowStride;
+      if ((operation != MUTATION_INSERT
+              && operation != MUTATION_UPDATE
+              && operation != MUTATION_DELETE)
+          || key == Long.MAX_VALUE
+          || rowBytes <= 0
+          || rowBytes > rowStride
+          || rows.limit() - rowOffset < rowBytes) {
+        store.cancelOperation();
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      int leafPageId = findOperationLeafPageId(key);
+      if (leafPageId <= 0) {
+        store.cancelOperation();
+        return StatusCode.CORRUPTION;
+      }
+      ByteBuffer leaf = store.stageExisting(leafPageId);
+      if (leaf == null) {
+        store.cancelOperation();
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      status = BTreePage.lookupLeaf(leaf, key, indexLookup);
+      boolean newIndexEntry = operation == MUTATION_INSERT && previousRowId == 0;
+      if (newIndexEntry) {
+        if (status != StatusCode.CONFLICT) {
+          store.cancelOperation();
+          return status.isOk() ? StatusCode.CONFLICT : status;
+        }
+      } else if (!status.isOk()
+          || indexLookup.rowId() != previousRowId
+          || previousRowId <= 0
+          || (operation == MUTATION_INSERT
+              ? !store.isDeletedRow(previousRowId) : store.isDeletedRow(previousRowId))) {
+        store.cancelOperation();
+        return StatusCode.CONFLICT;
+      }
+      status = store.stageVersionRow(
+          rows,
+          rowOffset,
+          rowBytes,
+          previousRowId,
+          operation == MUTATION_DELETE,
+          heapInsert);
+      if (!status.isOk()) {
+        store.cancelOperation();
+        return status;
+      }
+      status = newIndexEntry
+          ? BTreePage.insertLeaf(leaf, key, heapInsert.rowId())
+          : BTreePage.updateLeaf(leaf, key, heapInsert.rowId());
+      if (newIndexEntry && status == StatusCode.RESOURCE_EXHAUSTED) {
+        status = splitAndInsert(leafPageId, leaf, key, heapInsert.rowId());
+      }
+      if (!status.isOk()) {
+        store.cancelOperation();
+        return status;
+      }
+      lastRowId = heapInsert.rowId();
+    }
+    status = store.commit(transactionId, commitSequence);
+    if (status.isOk()) {
+      result.set(lastRowId, commitSequence);
     }
     return status;
   }
