@@ -2,6 +2,7 @@ package io.riverdb.sql;
 
 public enum SqlCommandType {
   CREATE_TABLE,
+  CREATE_INDEX,
   CREATE_UNIQUE_INDEX,
   INSERT,
   SELECT,

@@ -207,6 +207,63 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void resumesDuplicateIndexBuildWithoutRepeatingEntries(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 9, opened));
+    RelationalDatabase database = opened.database();
+    TableDefinition events = new TableDefinition();
+    assertEquals(StatusCode.OK, database.createTable("events", events));
+    RelationalSessionOpenResult sessions = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    RelationalSession session = sessions.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    for (int first = 0; first < 150; first += 50) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      for (int key = first; key < first + 50; key++) {
+        assertEquals(StatusCode.OK, session.insertLong(events, key, 10, row(10)));
+      }
+      assertEquals(StatusCode.OK, session.commit(outcome));
+    }
+
+    assertEquals(
+        StatusCode.RETRY,
+        database.createValueIndex("events_value", "events", 1));
+    assertEquals(StatusCode.OK, database.close());
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 9, opened));
+    database = opened.database();
+    assertEquals(
+        StatusCode.OK,
+        database.createValueIndex("events_value", "events", 4));
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    session = sessions.session();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    events.reset();
+    assertEquals(StatusCode.OK, session.resolveTable("events", events));
+    RelationalScanCursor cursor = new RelationalScanCursor();
+    RelationalScanResult scan = new RelationalScanResult();
+    ValueIndexLookupResult indexed = new ValueIndexLookupResult();
+    assertEquals(StatusCode.OK, session.beginValueScan(events, 1, 10, 11, cursor));
+    boolean[] seen = new boolean[150];
+    int count = 0;
+    StatusCode status;
+    while ((status = session.nextValueScan(events, cursor, scan, indexed)).isOk()) {
+      assertEquals(10, value(indexed.row()));
+      assertEquals(false, seen[(int) indexed.key()]);
+      seen[(int) indexed.key()] = true;
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, status);
+    assertEquals(150, count);
+    assertEquals(StatusCode.OK, session.closeScan(cursor));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static ByteBuffer row(long value) {
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     row.putLong(0, value);

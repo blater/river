@@ -42,6 +42,13 @@ final class SqlParserTest {
     assertName("accounts_value", command.indexName());
     assertName("accounts", command.tableName());
     assertName("value", command.firstColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("CREATE INDEX accounts_region ON accounts(region)", command));
+    assertEquals(SqlCommandType.CREATE_INDEX, command.type());
+    assertName("accounts_region", command.indexName());
+    assertName("accounts", command.tableName());
+    assertName("region", command.firstColumnName());
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());

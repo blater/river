@@ -7,15 +7,15 @@ import java.nio.ByteBuffer;
 /** Current catalog encoding for bounded BIGINT schemas and index-build state. */
 final class CatalogRecord {
   static final int MAXIMUM_BYTES =
-      28 + TableDefinition.MAXIMUM_INDEXES * 12
+      28 + TableDefinition.MAXIMUM_INDEXES * 16
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
 
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
   private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
   private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
   private static final int SEQUENCE_VERSION = 1;
-  private static final int TABLE_VERSION = 2;
-  private static final int INDEX_VERSION = 1;
+  private static final int TABLE_VERSION = 3;
+  private static final int INDEX_VERSION = 2;
 
   private CatalogRecord() {
   }
@@ -95,7 +95,8 @@ final class CatalogRecord {
         indexColumn,
         name,
         2,
-        null);
+        null,
+        true);
     offset = encodeColumn(target, offset, keyColumnName);
     offset = encodeColumn(target, offset, valueColumnName);
     target.position(0);
@@ -118,7 +119,8 @@ final class CatalogRecord {
         indexColumn,
         name,
         schema.columnCount(),
-        null);
+        null,
+        true);
     for (int index = 0; index < schema.columnCount(); index++) {
       offset = encodeColumn(target, offset, schema.columnName(index));
     }
@@ -134,15 +136,36 @@ final class CatalogRecord {
       int indexColumn,
       CharSequence name,
       TableDefinition schema) {
-    int offset = encodeTableHeader(
+    encodeTable(
         target,
         tableId,
         uniqueValueIndexTableId,
         uniqueValueIndexState,
         indexColumn,
         name,
+        schema,
+        true);
+  }
+
+  static void encodeTable(
+      ByteBuffer target,
+      int tableId,
+      int valueIndexTableId,
+      int valueIndexState,
+      int indexColumn,
+      CharSequence name,
+      TableDefinition schema,
+      boolean unique) {
+    int offset = encodeTableHeader(
+        target,
+        tableId,
+        valueIndexTableId,
+        valueIndexState,
+        indexColumn,
+        name,
         schema.columnCount(),
-        schema);
+        schema,
+        unique);
     for (int index = 0; index < schema.columnCount(); index++) {
       offset = encodeColumn(target, offset, schema.columnName(index));
     }
@@ -160,7 +183,8 @@ final class CatalogRecord {
         tableId,
         indexTableId,
         TableDefinition.INDEX_READY,
-        name);
+        name,
+        true);
   }
 
   static void encodeIndex(
@@ -169,18 +193,29 @@ final class CatalogRecord {
       int indexTableId,
       int indexState,
       CharSequence name) {
+    encodeIndex(target, tableId, indexTableId, indexState, name, true);
+  }
+
+  static void encodeIndex(
+      ByteBuffer target,
+      int tableId,
+      int indexTableId,
+      int indexState,
+      CharSequence name,
+      boolean unique) {
     clear(target);
     target.putLong(0, INDEX_MAGIC);
     target.putInt(8, INDEX_VERSION);
     target.putInt(12, tableId);
     target.putInt(16, indexTableId);
     target.putInt(20, indexState);
-    target.putInt(24, name.length());
+    target.putInt(24, unique ? 1 : 0);
+    target.putInt(28, name.length());
     for (int index = 0; index < name.length(); index++) {
-      target.put(28 + index, (byte) name.charAt(index));
+      target.put(32 + index, (byte) name.charAt(index));
     }
     target.position(0);
-    target.limit(28 + name.length());
+    target.limit(32 + name.length());
   }
 
   static StatusCode decodeTable(
@@ -197,7 +232,7 @@ final class CatalogRecord {
     int indexCount = source.length() >= 28 ? scratch.getInt(24) : -1;
     boolean validIndexCount = indexCount >= 0
         && indexCount <= TableDefinition.MAXIMUM_INDEXES;
-    int nameOffset = validIndexCount ? 28 + indexCount * 12 : -1;
+    int nameOffset = validIndexCount ? 28 + indexCount * 16 : -1;
     int columnsOffset = nameOffset < 0 ? -1 : nameOffset + nameBytes;
     int expectedBytes = columnsOffset;
     if (validIndexCount
@@ -254,10 +289,11 @@ final class CatalogRecord {
         columnCount);
     int buildingIndexes = 0;
     for (int index = 0; status.isOk() && index < indexCount; index++) {
-      int offset = 28 + index * 12;
+      int offset = 28 + index * 16;
       int indexTableId = scratch.getInt(offset);
       int indexState = scratch.getInt(offset + 4);
       int indexColumn = scratch.getInt(offset + 8);
+      int unique = scratch.getInt(offset + 12);
       if (indexTableId <= 0
           || indexTableId > RelationalKey.MAXIMUM_TABLE_ID
           || indexTableId == scratch.getInt(12)
@@ -265,11 +301,13 @@ final class CatalogRecord {
               && indexState != TableDefinition.INDEX_READY)
           || indexColumn <= 0
           || indexColumn >= columnCount
+          || (unique != 0 && unique != 1)
           || duplicateIndex(scratch, index, indexTableId, indexColumn)
           || (indexState == TableDefinition.INDEX_BUILDING && ++buildingIndexes > 1)) {
         status = StatusCode.CORRUPTION;
       } else {
-        status = result.upsertIndex(indexTableId, indexState, indexColumn);
+        status = result.upsertIndex(
+            indexTableId, indexState, indexColumn, unique == 1);
         if (status == StatusCode.CONFLICT
             || status == StatusCode.RESOURCE_EXHAUSTED
             || status == StatusCode.INVALID_EXTERNAL_INPUT) {
@@ -293,8 +331,9 @@ final class CatalogRecord {
     StatusCode status = source.copyTo(scratch);
     int version = source.length() >= 12 ? scratch.getInt(8) : -1;
     int state = source.length() >= 24 ? scratch.getInt(20) : -1;
-    int nameOffset = 28;
-    int nameBytes = source.length() >= 28 ? scratch.getInt(24) : -1;
+    int unique = source.length() >= 28 ? scratch.getInt(24) : -1;
+    int nameOffset = 32;
+    int nameBytes = source.length() >= 32 ? scratch.getInt(28) : -1;
     if (!status.isOk()
         || version != INDEX_VERSION
         || source.length() < nameOffset + 1
@@ -306,6 +345,7 @@ final class CatalogRecord {
         || scratch.getInt(16) > RelationalKey.MAXIMUM_TABLE_ID
         || (state != TableDefinition.INDEX_BUILDING
             && state != TableDefinition.INDEX_READY)
+        || (unique != 0 && unique != 1)
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
@@ -314,7 +354,7 @@ final class CatalogRecord {
         return StatusCode.CONFLICT;
       }
     }
-    result.set(scratch.getInt(12), scratch.getInt(16), state);
+    result.set(scratch.getInt(12), scratch.getInt(16), state, unique == 1);
     return StatusCode.OK;
   }
 
@@ -326,7 +366,8 @@ final class CatalogRecord {
       int indexColumn,
       CharSequence name,
       int columnCount,
-      TableDefinition existing) {
+      TableDefinition existing,
+      boolean unique) {
     clear(target);
     int existingCount = existing == null ? 0 : existing.uniqueIndexCount();
     int overrideSlot = -1;
@@ -351,7 +392,7 @@ final class CatalogRecord {
     target.putInt(20, columnCount);
     target.putInt(24, indexCount);
     for (int index = 0; index < indexCount; index++) {
-      int output = 28 + index * 12;
+      int output = 28 + index * 16;
       boolean override = index == overrideSlot
           || existing == null && index == 0
           || existing != null && index == existingCount;
@@ -364,8 +405,11 @@ final class CatalogRecord {
       target.putInt(
           output + 8,
           override ? indexColumn : existing.uniqueIndexColumn(index));
+      target.putInt(
+          output + 12,
+          (override ? unique : existing.indexIsUnique(index)) ? 1 : 0);
     }
-    int nameOffset = 28 + indexCount * 12;
+    int nameOffset = 28 + indexCount * 16;
     for (int index = 0; index < name.length(); index++) {
       target.put(nameOffset + index, (byte) name.charAt(index));
     }
@@ -402,7 +446,7 @@ final class CatalogRecord {
       int tableId,
       int column) {
     for (int prior = 0; prior < slot; prior++) {
-      int offset = 28 + prior * 12;
+      int offset = 28 + prior * 16;
       if (source.getInt(offset) == tableId || source.getInt(offset + 8) == column) {
         return true;
       }
@@ -445,11 +489,13 @@ final class CatalogRecord {
     private int tableId;
     private int indexTableId;
     private int state;
+    private boolean unique;
 
-    void set(int ownerTableId, int storageTableId, int indexState) {
+    void set(int ownerTableId, int storageTableId, int indexState, boolean isUnique) {
       tableId = ownerTableId;
       indexTableId = storageTableId;
       state = indexState;
+      unique = isUnique;
     }
 
     int tableId() {
@@ -462,6 +508,10 @@ final class CatalogRecord {
 
     int state() {
       return state;
+    }
+
+    boolean isUnique() {
+      return unique;
     }
   }
 }

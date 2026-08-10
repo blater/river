@@ -1135,4 +1135,215 @@ final class SqlSessionTest {
     assertEquals(63, result.key());
     assertEquals(StatusCode.OK, database.close());
   }
+
+  @Test
+  void scansAndMaintainsDuplicateSecondaryIndexEntries(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE events "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, amount BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO events VALUES "
+                + "(1, 10, 100), (2, 10, 200), (3, 10, 300), "
+                + "(4, 20, 400), (5, 20, 500)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE INDEX events_category ON events(category)", result));
+
+    assertDuplicateIndexRows(session, result, new long[] {1, 2, 3, 4, 5});
+    assertDuplicateIndexEquality(session, result, 10, new long[] {1, 2, 3});
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("SELECT id, category FROM events WHERE category=10", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE events SET amount=999 WHERE category=10", result));
+    assertEquals(3, result.affectedRows());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT amount FROM events WHERE id=1", result));
+    assertEquals(999, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE events SET category=20 WHERE id=2", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("DELETE FROM events WHERE id=3", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO events VALUES (6, 10, 600)", result));
+    assertDuplicateIndexRows(session, result, new long[] {1, 2, 4, 5, 6});
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE events SET category=30 WHERE category=10", result));
+    assertEquals(2, result.affectedRows());
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
+    assertDuplicateIndexEquality(session, result, 10, new long[] {1, 6});
+    assertEquals(
+        StatusCode.OK,
+        session.execute("DELETE FROM events WHERE category=20", result));
+    assertEquals(3, result.affectedRows());
+    assertDuplicateIndexRows(session, result, new long[] {1, 6});
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    session = sessions.session();
+    assertDuplicateIndexRows(session, result, new long[] {1, 6});
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE INDEX events_amount ON events(amount)", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, amount FROM events WHERE amount >= 500 AND amount < 1000",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(6, row.key());
+    assertEquals(600, row.value());
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.key());
+    assertEquals(999, row.value());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void boundsDuplicateIndexMutationsBeforeChangingRows(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 10, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE events "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, amount BIGINT)",
+            result));
+
+    StringBuilder insert = new StringBuilder("INSERT INTO events VALUES ");
+    for (int row = 1; row <= 64; row++) {
+      if (row > 1) {
+        insert.append(", ");
+      }
+      insert.append('(').append(row).append(",10,").append(row * 100).append(')');
+    }
+    assertEquals(StatusCode.OK, session.execute(insert.toString(), result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO events VALUES (65, 10, 6500)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE INDEX events_category ON events(category)", result));
+
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        session.execute("UPDATE events SET amount=999 WHERE category=10", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT amount FROM events WHERE id=1", result));
+    assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT amount FROM events WHERE id=65", result));
+    assertEquals(6500, result.value());
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        session.execute("DELETE FROM events WHERE category=10", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT amount FROM events WHERE id=1", result));
+    assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT amount FROM events WHERE id=65", result));
+    assertEquals(6500, result.value());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertDuplicateIndexRows(
+      SqlSession session,
+      SqlExecutionResult result,
+      long[] expectedKeys) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, category FROM events "
+                + "WHERE category >= 10 AND category < 21",
+            cursor));
+    boolean[] seen = new boolean[7];
+    long previousCategory = Long.MIN_VALUE;
+    int count = 0;
+    StatusCode status;
+    while ((status = session.nextScan(cursor, row)).isOk()) {
+      assertEquals(true, row.value() >= previousCategory);
+      previousCategory = row.value();
+      seen[(int) row.key()] = true;
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, status);
+    assertEquals(expectedKeys.length, count);
+    for (long key : expectedKeys) {
+      assertEquals(true, seen[(int) key]);
+    }
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertDuplicateIndexEquality(
+      SqlSession session,
+      SqlExecutionResult result,
+      long value,
+      long[] expectedKeys) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, category FROM events WHERE category=" + value,
+            cursor));
+    boolean[] seen = new boolean[7];
+    int count = 0;
+    StatusCode status;
+    while ((status = session.nextScan(cursor, row)).isOk()) {
+      assertEquals(value, row.value());
+      seen[(int) row.key()] = true;
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, status);
+    assertEquals(expectedKeys.length, count);
+    for (long key : expectedKeys) {
+      assertEquals(true, seen[(int) key]);
+    }
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
 }

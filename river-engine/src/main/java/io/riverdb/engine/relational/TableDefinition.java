@@ -15,6 +15,7 @@ public final class TableDefinition {
   private final int[] uniqueIndexTableIds = new int[MAXIMUM_INDEXES];
   private final int[] uniqueIndexStates = new int[MAXIMUM_INDEXES];
   private final int[] uniqueIndexColumns = new int[MAXIMUM_INDEXES];
+  private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
   private final ColumnName keyColumnName = new ColumnName();
   private final ColumnName valueColumnName = new ColumnName();
   private final ColumnName[] additionalColumns =
@@ -37,6 +38,7 @@ public final class TableDefinition {
       uniqueIndexTableIds[index] = 0;
       uniqueIndexStates[index] = INDEX_NONE;
       uniqueIndexColumns[index] = 0;
+      uniqueIndexes[index] = false;
     }
     uniqueIndexCount = 0;
     keyColumnName.reset();
@@ -69,7 +71,7 @@ public final class TableDefinition {
     columnCount = 2;
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
-      setIndex(0, valueIndexTableId, valueIndexState, 1);
+      setIndex(0, valueIndexTableId, valueIndexState, 1, true);
       uniqueIndexCount = 1;
     }
     keyColumnName.set(keyName);
@@ -85,6 +87,24 @@ public final class TableDefinition {
       int valueIndexState,
       int indexColumn,
       TableDefinition schema) {
+    set(
+        database,
+        id,
+        valueIndexTableId,
+        valueIndexState,
+        indexColumn,
+        schema,
+        true);
+  }
+
+  void set(
+      RelationalDatabase database,
+      int id,
+      int valueIndexTableId,
+      int valueIndexState,
+      int indexColumn,
+      TableDefinition schema,
+      boolean unique) {
     owner = database;
     tableId = id;
     columnCount = schema.columnCount();
@@ -93,7 +113,7 @@ public final class TableDefinition {
     }
     copyIndexes(schema);
     if (valueIndexTableId > 0) {
-      upsertIndex(valueIndexTableId, valueIndexState, indexColumn);
+      upsertIndex(valueIndexTableId, valueIndexState, indexColumn, unique);
     }
     schemaVersion = database.schemaVersion();
     available = true;
@@ -111,7 +131,7 @@ public final class TableDefinition {
     columnCount = schema.columnCount();
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
-      setIndex(0, valueIndexTableId, valueIndexState, indexColumn);
+      setIndex(0, valueIndexTableId, valueIndexState, indexColumn, true);
       uniqueIndexCount = 1;
     }
     for (int index = 0; index < columnCount; index++) {
@@ -135,7 +155,7 @@ public final class TableDefinition {
     columnCount = columns;
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
-      setIndex(0, valueIndexTableId, valueIndexState, indexColumn);
+      setIndex(0, valueIndexTableId, valueIndexState, indexColumn, true);
       uniqueIndexCount = 1;
     }
     int offset = columnsOffset;
@@ -166,6 +186,11 @@ public final class TableDefinition {
   }
 
   public boolean hasUniqueIndexOn(int column) {
+    int slot = readyIndexSlotOn(column);
+    return slot >= 0 && uniqueIndexes[slot];
+  }
+
+  public boolean hasIndexOn(int column) {
     return readyIndexSlotOn(column) >= 0;
   }
 
@@ -246,6 +271,10 @@ public final class TableDefinition {
     return slot >= 0 && slot < uniqueIndexCount ? uniqueIndexColumns[slot] : -1;
   }
 
+  boolean indexIsUnique(int slot) {
+    return slot >= 0 && slot < uniqueIndexCount && uniqueIndexes[slot];
+  }
+
   int readyIndexSlotOn(int column) {
     for (int index = 0; index < uniqueIndexCount; index++) {
       if (uniqueIndexStates[index] == INDEX_READY && uniqueIndexColumns[index] == column) {
@@ -275,6 +304,10 @@ public final class TableDefinition {
   }
 
   StatusCode upsertIndex(int tableId, int state, int column) {
+    return upsertIndex(tableId, state, column, true);
+  }
+
+  StatusCode upsertIndex(int tableId, int state, int column, boolean unique) {
     if (tableId <= 0
         || (state != INDEX_BUILDING && state != INDEX_READY)
         || column <= 0
@@ -283,14 +316,14 @@ public final class TableDefinition {
     }
     for (int index = 0; index < uniqueIndexCount; index++) {
       if (uniqueIndexTableIds[index] == tableId || uniqueIndexColumns[index] == column) {
-        setIndex(index, tableId, state, column);
+        setIndex(index, tableId, state, column, unique);
         return StatusCode.OK;
       }
     }
     if (uniqueIndexCount >= MAXIMUM_INDEXES) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    setIndex(uniqueIndexCount++, tableId, state, column);
+    setIndex(uniqueIndexCount++, tableId, state, column, unique);
     return StatusCode.OK;
   }
 
@@ -304,10 +337,11 @@ public final class TableDefinition {
             move,
             uniqueIndexTableIds[move + 1],
             uniqueIndexStates[move + 1],
-            uniqueIndexColumns[move + 1]);
+            uniqueIndexColumns[move + 1],
+            uniqueIndexes[move + 1]);
       }
       uniqueIndexCount--;
-      setIndex(uniqueIndexCount, 0, INDEX_NONE, 0);
+      setIndex(uniqueIndexCount, 0, INDEX_NONE, 0, false);
       return StatusCode.OK;
     }
     return StatusCode.CONFLICT;
@@ -340,14 +374,16 @@ public final class TableDefinition {
           index,
           source.uniqueIndexTableIds[index],
           source.uniqueIndexStates[index],
-          source.uniqueIndexColumns[index]);
+          source.uniqueIndexColumns[index],
+          source.uniqueIndexes[index]);
     }
   }
 
-  private void setIndex(int slot, int tableId, int state, int column) {
+  private void setIndex(int slot, int tableId, int state, int column, boolean unique) {
     uniqueIndexTableIds[slot] = tableId;
     uniqueIndexStates[slot] = state;
     uniqueIndexColumns[slot] = column;
+    uniqueIndexes[slot] = unique;
   }
 
   private static final class ColumnName implements CharSequence {

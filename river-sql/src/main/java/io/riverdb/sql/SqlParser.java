@@ -85,11 +85,9 @@ public final class SqlParser {
           setIdentifier(result.writableNextColumnName(), "value");
         }
       } else {
-        type = SqlCommandType.CREATE_UNIQUE_INDEX;
-        status = requireKeyword(sql, "UNIQUE");
-        if (status.isOk()) {
-          status = requireKeyword(sql, "INDEX");
-        }
+        boolean unique = consumeKeyword(sql, "UNIQUE");
+        type = unique ? SqlCommandType.CREATE_UNIQUE_INDEX : SqlCommandType.CREATE_INDEX;
+        status = requireKeyword(sql, "INDEX");
         if (status.isOk()) {
           status = identifier(sql, result.writableIndexName());
         }

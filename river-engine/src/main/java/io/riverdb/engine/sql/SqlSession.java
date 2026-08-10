@@ -35,6 +35,7 @@ public final class SqlSession {
   private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
   private final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final HeapRowResult fetched = new HeapRowResult();
@@ -49,6 +50,7 @@ public final class SqlSession {
   private int userSavepointNameLength;
   private int predicateColumn;
   private int updatedColumnCount;
+  private int matchedRowCount;
   private int projectedColumnCount;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
@@ -193,10 +195,15 @@ public final class SqlSession {
       }
       return status;
     }
-    if (command.type() == SqlCommandType.CREATE_UNIQUE_INDEX) {
+    if (command.type() == SqlCommandType.CREATE_UNIQUE_INDEX
+        || command.type() == SqlCommandType.CREATE_INDEX) {
+      boolean unique = command.type() == SqlCommandType.CREATE_UNIQUE_INDEX;
       if (!transactionActive) {
-        status = database.createUniqueValueIndex(
-            command.indexName(), command.tableName(), command.firstColumnName());
+        status = unique
+            ? database.createUniqueValueIndex(
+                command.indexName(), command.tableName(), command.firstColumnName())
+            : database.createValueIndex(
+                command.indexName(), command.tableName(), command.firstColumnName());
         if (status.isOk()) {
           result.setUpdate(0, 0);
         }
@@ -204,8 +211,8 @@ public final class SqlSession {
       }
       status = session.createSavepoint(statementSavepoint);
       if (status.isOk()) {
-        status = session.createUniqueValueIndex(
-            command.indexName(), command.tableName(), command.firstColumnName());
+        status = session.createValueIndex(
+            command.indexName(), command.tableName(), command.firstColumnName(), unique);
       }
       if (!status.isOk() && statementSavepoint.isActive()) {
         StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
@@ -297,7 +304,9 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = parser.parse(sql, command);
-    if (!status.isOk() || command.type() != SqlCommandType.SCAN) {
+    boolean equality = status.isOk() && command.type() == SqlCommandType.SELECT;
+    if (!status.isOk()
+        || command.type() != SqlCommandType.SCAN && !equality) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
     boolean implicit = !transactionActive;
@@ -308,17 +317,30 @@ public final class SqlSession {
       status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
-      status = bindDataCommand();
+      if (equality) {
+        status = bindProjections();
+        predicateColumn = table.findColumn(command.predicateColumnName());
+        if (status.isOk()
+            && (predicateColumn <= 0 || !table.hasIndexOn(predicateColumn))) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      } else {
+        status = bindDataCommand();
+      }
     }
-    boolean valueIndex = status.isOk() && scanUsesValueIndex();
+    boolean valueIndex = status.isOk() && (equality || scanUsesValueIndex());
     if (status.isOk()) {
       if (valueIndex) {
-        status = session.beginValueScan(
-            table,
-            table.findColumn(command.predicateColumnName()),
-            command.scanLowerInclusive(),
-            command.scanUpperExclusive(),
-            cursor.relational());
+        long lower = equality ? command.key() : command.scanLowerInclusive();
+        long upper = equality ? command.key() + 1 : command.scanUpperExclusive();
+        status = command.key() == Long.MAX_VALUE && equality
+            ? StatusCode.INVALID_EXTERNAL_INPUT
+            : session.beginValueScan(
+                table,
+                table.findColumn(command.predicateColumnName()),
+                lower,
+                upper,
+                cursor.relational());
       } else {
         status = command.isBoundedScan()
             ? session.beginScan(
@@ -404,6 +426,7 @@ public final class SqlSession {
   }
 
   private StatusCode executeDataCommand(SqlExecutionResult result) {
+    matchedRowCount = 0;
     if (command.type() == SqlCommandType.INSERT) {
       StatusCode status = StatusCode.OK;
       for (int index = 0; status.isOk() && index < command.insertRowCount(); index++) {
@@ -416,32 +439,13 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.UPDATE) {
-      long primaryKey = command.key();
-      StatusCode status;
-      HeapRowResult source;
-      if (predicateColumn == 0) {
-        status = session.fetch(table, primaryKey, fetched);
-        source = fetched;
-      } else {
-        status = session.fetchByUniqueValue(
-            table, predicateColumn, command.key(), indexed);
-        primaryKey = indexed.key();
-        source = indexed.row();
-      }
-      if (status.isOk()) {
-        status = copyRow(source);
-      }
-      if (status.isOk()) {
-        for (int index = 0; index < updatedColumnCount; index++) {
-          row.putLong(
-              (updatedColumns[index] - 1) * Long.BYTES,
-              command.updateValue(index));
+      if (predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
+        StatusCode status = collectMatchedKeys();
+        for (int index = 0; status.isOk() && index < matchedRowCount; index++) {
+          status = updatePrimaryKey(matchedKeys[index]);
         }
-        status = session.updateRow(table, primaryKey, row);
+        return status;
       }
-      return status;
-    }
-    if (command.type() == SqlCommandType.DELETE) {
       long primaryKey = command.key();
       StatusCode status = StatusCode.OK;
       if (predicateColumn > 0) {
@@ -449,7 +453,32 @@ public final class SqlSession {
             table, predicateColumn, command.key(), indexed);
         primaryKey = indexed.key();
       }
-      return status.isOk() ? session.deleteLong(table, primaryKey) : status;
+      if (status.isOk()) {
+        status = updatePrimaryKey(primaryKey);
+        matchedRowCount = status.isOk() ? 1 : 0;
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.DELETE) {
+      if (predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
+        StatusCode status = collectMatchedKeys();
+        for (int index = 0; status.isOk() && index < matchedRowCount; index++) {
+          status = session.deleteLong(table, matchedKeys[index]);
+        }
+        return status;
+      }
+      long primaryKey = command.key();
+      StatusCode status = StatusCode.OK;
+      if (predicateColumn > 0) {
+        status = session.fetchByUniqueValue(
+            table, predicateColumn, command.key(), indexed);
+        primaryKey = indexed.key();
+      }
+      if (status.isOk()) {
+        status = session.deleteLong(table, primaryKey);
+        matchedRowCount = status.isOk() ? 1 : 0;
+      }
+      return status;
     }
     if (command.type() == SqlCommandType.COUNT) {
       long count = 0;
@@ -541,7 +570,7 @@ public final class SqlSession {
         return StatusCode.OK;
       }
       int predicate = table.findColumn(command.predicateColumnName());
-      return predicate == 0 || table.hasUniqueIndexOn(predicate)
+      return predicate == 0 || table.hasIndexOn(predicate)
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (command.type() == SqlCommandType.UPDATE) {
@@ -549,7 +578,7 @@ public final class SqlSession {
       if (command.updateColumnCount() <= 0
           || command.updateColumnCount() != command.columnCount()
           || predicateColumn < 0
-          || predicateColumn > 0 && !table.hasUniqueIndexOn(predicateColumn)) {
+          || predicateColumn > 0 && !table.hasIndexOn(predicateColumn)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int index = 0; index < command.updateColumnCount(); index++) {
@@ -570,7 +599,7 @@ public final class SqlSession {
     if (command.type() == SqlCommandType.DELETE) {
       predicateColumn = table.findColumn(command.predicateColumnName());
       return predicateColumn == 0
-              || predicateColumn > 0 && table.hasUniqueIndexOn(predicateColumn)
+              || predicateColumn > 0 && table.hasIndexOn(predicateColumn)
           ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -578,7 +607,7 @@ public final class SqlSession {
 
   private boolean scanUsesValueIndex() {
     int predicate = table.findColumn(command.predicateColumnName());
-    return command.isBoundedScan() && table.hasUniqueIndexOn(predicate);
+    return command.isBoundedScan() && table.hasIndexOn(predicate);
   }
 
   private StatusCode bindProjections() {
@@ -694,7 +723,60 @@ public final class SqlSession {
   }
 
   private int affectedRows() {
-    return command.type() == SqlCommandType.INSERT ? command.insertRowCount() : 1;
+    return command.type() == SqlCommandType.INSERT
+        ? command.insertRowCount() : matchedRowCount;
+  }
+
+  private StatusCode updatePrimaryKey(long primaryKey) {
+    StatusCode status = session.fetch(table, primaryKey, fetched);
+    if (status.isOk()) {
+      status = copyRow(fetched);
+    }
+    if (status.isOk()) {
+      for (int index = 0; index < updatedColumnCount; index++) {
+        row.putLong(
+            (updatedColumns[index] - 1) * Long.BYTES,
+            command.updateValue(index));
+      }
+      status = session.updateRow(table, primaryKey, row);
+    }
+    return status;
+  }
+
+  private StatusCode collectMatchedKeys() {
+    matchedRowCount = 0;
+    if (command.key() == Long.MAX_VALUE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = session.beginValueScan(
+        table,
+        predicateColumn,
+        command.key(),
+        command.key() + 1,
+        aggregateCursor);
+    boolean active = status.isOk();
+    while (status.isOk()) {
+      status = session.nextValueScan(
+          table, aggregateCursor, aggregateRow, indexed);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (status.isOk() && matchedRowCount >= matchedKeys.length) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
+      if (status.isOk()) {
+        matchedKeys[matchedRowCount++] = indexed.key();
+      }
+    }
+    if (active) {
+      StatusCode close = session.closeScan(aggregateCursor);
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    aggregateCursor.reset();
+    return status;
   }
 
   private void rememberUserSavepoint(CharSequence name) {
