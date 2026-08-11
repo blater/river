@@ -205,8 +205,7 @@ public final class SessionEndpoint {
         response,
         frame.requestId(),
         status,
-        query == null ? 0 : query.columnCount(),
-        state == QUERY);
+        state == QUERY ? query : null);
   }
 
   private StatusCode fetch(ByteBuffer response) {

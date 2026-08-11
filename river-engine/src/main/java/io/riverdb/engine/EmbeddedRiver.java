@@ -281,6 +281,11 @@ public final class EmbeddedRiver {
       }
 
       @Override
+      public CharSequence columnName(int index) {
+        return session.scanColumnName(scan, index);
+      }
+
+      @Override
       public long rowsReturned() {
         return scan.rowsReturned();
       }

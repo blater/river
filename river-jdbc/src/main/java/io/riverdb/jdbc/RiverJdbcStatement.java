@@ -39,7 +39,7 @@ class RiverJdbcStatement extends AbstractStatement {
     openedQuery.reset();
     JdbcExceptions.require(session.beginQuery(sql, openedQuery), "execute query");
     RiverQuery query = openedQuery.query();
-    resultSet = new RiverJdbcResultSet(this, query, query.columnCount());
+    resultSet = new RiverJdbcResultSet(this, query);
     updateCount = -1;
     return resultSet;
   }

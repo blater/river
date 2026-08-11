@@ -2,6 +2,7 @@ package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -12,8 +13,9 @@ public final class ProtocolFrameCodec {
   public static final int HEADER_BYTES = 32;
   public static final int MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
+  public static final int MAXIMUM_COLUMN_NAME_BYTES = 64;
   public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 56
-      + CommandResult.MAXIMUM_COLUMNS * Long.BYTES;
+      + CommandResult.MAXIMUM_COLUMNS * (1 + MAXIMUM_COLUMN_NAME_BYTES);
   public static final int FLAG_ROW_AVAILABLE = 1;
   public static final int FLAG_TRANSACTION_ACTIVE = 1 << 1;
   public static final int FLAG_QUERY_ACTIVE = 1 << 2;
@@ -207,31 +209,73 @@ public final class ProtocolFrameCodec {
       ByteBuffer target,
       long requestId,
       StatusCode status,
-      int columnCount,
-      boolean queryActive) {
+      RiverQuery query) {
     if (status == null
-        || columnCount < 0
-        || columnCount > CommandResult.MAXIMUM_COLUMNS
-        || status.isOk() != queryActive
-        || queryActive != (columnCount > 0)) {
+        || status.isOk() && (query == null || !query.isActive())
+        || !status.isOk() && query != null) {
       return invalidTarget(target);
     }
-    int flags = queryActive ? FLAG_QUERY_ACTIVE | FLAG_COLUMN_METADATA : 0;
-    return encodeResponse(
+    if (!status.isOk()) {
+      return encodeResponse(
+          target,
+          ProtocolMessageType.BEGIN_QUERY,
+          requestId,
+          status,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          null,
+          null);
+    }
+    int columns = query.columnCount();
+    if (columns <= 0 || columns > CommandResult.MAXIMUM_COLUMNS) {
+      return invalidTarget(target);
+    }
+    int metadataBytes = 0;
+    for (int index = 0; index < columns; index++) {
+      CharSequence name = query.columnName(index);
+      if (!validColumnName(name)) {
+        return invalidTarget(target);
+      }
+      metadataBytes += 1 + name.length();
+    }
+    int payloadBytes = RESPONSE_FIXED_BYTES + metadataBytes;
+    StatusCode encoded = beginFrame(
         target,
         ProtocolMessageType.BEGIN_QUERY,
         requestId,
+        payloadBytes,
+        FRAME_RESPONSE);
+    if (!encoded.isOk()) {
+      return encoded;
+    }
+    writeResponseFixed(
+        target,
         status,
-        flags,
+        FLAG_QUERY_ACTIVE | FLAG_COLUMN_METADATA,
         0,
-        columnCount,
-        0,
-        0,
+        columns,
         0,
         0,
         0,
-        null,
-        null);
+        0,
+        0);
+    int offset = HEADER_BYTES + RESPONSE_FIXED_BYTES;
+    for (int index = 0; index < columns; index++) {
+      CharSequence name = query.columnName(index);
+      target.put(offset++, (byte) name.length());
+      for (int character = 0; character < name.length(); character++) {
+        target.put(offset++, (byte) name.charAt(character));
+      }
+    }
+    target.position(0);
+    target.limit(HEADER_BYTES + payloadBytes);
+    return StatusCode.OK;
   }
 
   public StatusCode encodeCommandResponse(
@@ -319,6 +363,8 @@ public final class ProtocolFrameCodec {
     long returned = bytes.getLong(offset + 32);
     long challengeHigh = bytes.getLong(offset + 40);
     long challengeLow = bytes.getLong(offset + 48);
+    boolean metadata = (flags & FLAG_COLUMN_METADATA) != 0;
+    boolean rowAvailable = (flags & FLAG_ROW_AVAILABLE) != 0;
     if (status == null
         || (flags & ~(FLAG_ROW_AVAILABLE
             | FLAG_TRANSACTION_ACTIVE
@@ -327,13 +373,14 @@ public final class ProtocolFrameCodec {
         || rows < 0
         || columns < 0
         || columns > CommandResult.MAXIMUM_COLUMNS
-        || columns > 0
-            != ((flags & (FLAG_ROW_AVAILABLE | FLAG_COLUMN_METADATA)) != 0)
-        || (flags & FLAG_ROW_AVAILABLE) != 0 && (flags & FLAG_COLUMN_METADATA) != 0
-        || (flags & FLAG_COLUMN_METADATA) != 0 && (flags & FLAG_QUERY_ACTIVE) == 0
         || commitSequence < 0
         || returned < 0
-        || frame.payloadBytes() != RESPONSE_FIXED_BYTES + columns * Long.BYTES) {
+        || metadata && (frame.type() != ProtocolMessageType.BEGIN_QUERY
+            || !status.isOk()
+            || flags != (FLAG_QUERY_ACTIVE | FLAG_COLUMN_METADATA)
+            || columns <= 0)
+        || !metadata && (rowAvailable != (columns > 0)
+            || frame.payloadBytes() != RESPONSE_FIXED_BYTES + columns * Long.BYTES)) {
       frame.reset();
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -347,8 +394,38 @@ public final class ProtocolFrameCodec {
         returned,
         challengeHigh,
         challengeLow);
-    for (int index = 0; index < columns; index++) {
-      result.valueAt(index, bytes.getLong(offset + RESPONSE_FIXED_BYTES + index * Long.BYTES));
+    if (metadata) {
+      int metadataOffset = offset + RESPONSE_FIXED_BYTES;
+      int end = offset + frame.payloadBytes();
+      for (int index = 0; index < columns; index++) {
+        if (metadataOffset >= end) {
+          frame.reset();
+          result.reset();
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        int length = bytes.get(metadataOffset++) & 0xff;
+        if (length <= 0
+            || length > MAXIMUM_COLUMN_NAME_BYTES
+            || metadataOffset + length > end
+            || !validColumnName(bytes, metadataOffset, length)) {
+          frame.reset();
+          result.reset();
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        result.columnNameAt(index, bytes, metadataOffset, length);
+        metadataOffset += length;
+      }
+      if (metadataOffset != end) {
+        frame.reset();
+        result.reset();
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+    } else {
+      for (int index = 0; index < columns; index++) {
+        result.valueAt(
+            index,
+            bytes.getLong(offset + RESPONSE_FIXED_BYTES + index * Long.BYTES));
+      }
     }
     return StatusCode.OK;
   }
@@ -376,6 +453,38 @@ public final class ProtocolFrameCodec {
     if (!encoded.isOk()) {
       return encoded;
     }
+    writeResponseFixed(
+        target,
+        status,
+        flags,
+        rows,
+        columns,
+        commitSequence,
+        key,
+        returned,
+        challengeHigh,
+        challengeLow);
+    for (int index = 0; index < columns; index++) {
+      long value = command != null
+          ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
+      target.putLong(HEADER_BYTES + RESPONSE_FIXED_BYTES + index * Long.BYTES, value);
+    }
+    target.position(0);
+    target.limit(HEADER_BYTES + payloadBytes);
+    return StatusCode.OK;
+  }
+
+  private static void writeResponseFixed(
+      ByteBuffer target,
+      StatusCode status,
+      int flags,
+      int rows,
+      int columns,
+      long commitSequence,
+      long key,
+      long returned,
+      long challengeHigh,
+      long challengeLow) {
     target.putInt(HEADER_BYTES, status.stableCode());
     target.putInt(HEADER_BYTES + 4, flags);
     target.putInt(HEADER_BYTES + 8, rows);
@@ -385,14 +494,43 @@ public final class ProtocolFrameCodec {
     target.putLong(HEADER_BYTES + 32, returned);
     target.putLong(HEADER_BYTES + 40, challengeHigh);
     target.putLong(HEADER_BYTES + 48, challengeLow);
-    for (int index = 0; index < columns; index++) {
-      long value = command != null
-          ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
-      target.putLong(HEADER_BYTES + RESPONSE_FIXED_BYTES + index * Long.BYTES, value);
+  }
+
+  private static boolean validColumnName(CharSequence name) {
+    if (name == null
+        || name.length() <= 0
+        || name.length() > MAXIMUM_COLUMN_NAME_BYTES
+        || !identifierStart(name.charAt(0))) {
+      return false;
     }
-    target.position(0);
-    target.limit(HEADER_BYTES + payloadBytes);
-    return StatusCode.OK;
+    for (int index = 1; index < name.length(); index++) {
+      if (!identifierPart(name.charAt(index))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean validColumnName(ByteBuffer source, int offset, int length) {
+    if (!identifierStart((char) (source.get(offset) & 0xff))) {
+      return false;
+    }
+    for (int index = 1; index < length; index++) {
+      if (!identifierPart((char) (source.get(offset + index) & 0xff))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean identifierStart(char value) {
+    return value >= 'a' && value <= 'z'
+        || value >= 'A' && value <= 'Z'
+        || value == '_';
+  }
+
+  private static boolean identifierPart(char value) {
+    return identifierStart(value) || value >= '0' && value <= '9';
   }
 
   private StatusCode beginFrame(

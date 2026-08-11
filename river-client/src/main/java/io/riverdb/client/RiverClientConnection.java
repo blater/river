@@ -388,6 +388,9 @@ public final class RiverClientConnection implements RiverDatabase {
         query.active = true;
         query.rowsReturned = 0;
         query.columnCount = response.columnCount();
+        for (int index = 0; index < query.columnCount; index++) {
+          query.columnNames[index] = response.columnName(index);
+        }
         status = result.complete(query);
       }
       return status;
@@ -405,6 +408,8 @@ public final class RiverClientConnection implements RiverDatabase {
       if (status.isOk()) {
         active = false;
         query.active = false;
+        query.clearColumnNames();
+        query.columnCount = 0;
         sessionClosed();
       }
       return status;
@@ -414,10 +419,12 @@ public final class RiverClientConnection implements RiverDatabase {
       active = true;
       query.active = false;
       query.rowsReturned = 0;
+      query.clearColumnNames();
       query.columnCount = 0;
     }
 
     private final class RemoteQuery implements RiverQuery {
+      private final String[] columnNames = new String[CommandResult.MAXIMUM_COLUMNS];
       private long rowsReturned;
       private int columnCount;
       private boolean active;
@@ -464,6 +471,7 @@ public final class RiverClientConnection implements RiverDatabase {
         }
         if (status.isOk()) {
           active = false;
+          clearColumnNames();
           columnCount = 0;
           status = copyCommand(result);
         }
@@ -481,8 +489,19 @@ public final class RiverClientConnection implements RiverDatabase {
       }
 
       @Override
+      public CharSequence columnName(int index) {
+        return index >= 0 && index < columnCount ? columnNames[index] : null;
+      }
+
+      @Override
       public long rowsReturned() {
         return rowsReturned;
+      }
+
+      private void clearColumnNames() {
+        for (int index = 0; index < columnNames.length; index++) {
+          columnNames[index] = null;
+        }
       }
     }
   }

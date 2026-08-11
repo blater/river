@@ -61,6 +61,9 @@ final class RiverClientConnectionTest {
             "SELECT id, balance FROM accounts WHERE id >= 1 AND id < 4",
             queryResult));
     RiverQuery query = queryResult.query();
+    assertEquals(2, query.columnCount());
+    assertEquals("id", query.columnName(0));
+    assertEquals("balance", query.columnName(1));
     RowResult row = new RowResult();
     assertRow(query, row, 1, 1, 100);
     assertRow(query, row, 2, 2, 200);

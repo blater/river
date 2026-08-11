@@ -97,8 +97,8 @@ public final class SqlScanCursor {
         : value >= filterLowerInclusive && value < filterUpperExclusive;
   }
 
-  int projectedColumn(int index) {
-    return projectedColumns[index];
+  public int projectedColumn(int index) {
+    return index >= 0 && index < projectedColumnCount ? projectedColumns[index] : -1;
   }
 
   public int projectedColumnCount() {

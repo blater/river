@@ -23,14 +23,14 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   RiverJdbcResultSet(
       RiverJdbcStatement owner,
-      RiverQuery remoteQuery,
-      int columnCount) throws SQLException {
+      RiverQuery remoteQuery) throws SQLException {
+    int columnCount = remoteQuery.columnCount();
     if (columnCount <= 0 || columnCount > CommandResult.MAXIMUM_COLUMNS) {
       throw JdbcExceptions.invalid("query column count is invalid");
     }
     statement = owner;
     query = remoteQuery;
-    metadata = new RiverResultSetMetaData(columnCount);
+    metadata = new RiverResultSetMetaData(remoteQuery);
   }
 
   @Override
@@ -181,19 +181,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   @Override
   public int findColumn(String label) throws SQLException {
     requireOpen();
-    if (label == null || !label.regionMatches(true, 0, "column", 0, 6)) {
-      throw JdbcExceptions.invalid("column labels use column1 through column8");
-    }
-    int column = 0;
-    for (int index = 6; index < label.length(); index++) {
-      char digit = label.charAt(index);
-      if (digit < '0' || digit > '9') {
-        throw JdbcExceptions.invalid("column label is invalid");
-      }
-      column = column * 10 + digit - '0';
-    }
-    metadata.getColumnName(column);
-    return column;
+    return metadata.findColumn(label);
   }
 
   @Override

@@ -1,15 +1,33 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.engine.api.RiverQuery;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 
 /** Metadata for River's current bounded BIGINT projection. */
 final class RiverResultSetMetaData implements ResultSetMetaData {
+  private final String[] columnNames;
   private final int columnCount;
 
-  RiverResultSetMetaData(int columns) {
-    columnCount = columns;
+  RiverResultSetMetaData(RiverQuery query) throws SQLException {
+    columnCount = query.columnCount();
+    columnNames = new String[columnCount];
+    for (int index = 0; index < columnCount; index++) {
+      CharSequence name = query.columnName(index);
+      if (name == null || name.length() <= 0) {
+        throw JdbcExceptions.invalid("query column name is missing");
+      }
+      if (name instanceof String text) {
+        columnNames[index] = text;
+      } else {
+        char[] characters = new char[name.length()];
+        for (int character = 0; character < name.length(); character++) {
+          characters[character] = name.charAt(character);
+        }
+        columnNames[index] = new String(characters);
+      }
+    }
   }
 
   @Override
@@ -62,7 +80,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public String getColumnLabel(int column) throws SQLException {
     requireColumn(column);
-    return "column" + column;
+    return columnNames[column - 1];
   }
 
   @Override
@@ -153,5 +171,16 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     if (column <= 0 || column > columnCount) {
       throw JdbcExceptions.invalid("column index is out of range");
     }
+  }
+
+  int findColumn(String label) throws SQLException {
+    if (label != null) {
+      for (int index = 0; index < columnNames.length; index++) {
+        if (columnNames[index].equalsIgnoreCase(label)) {
+          return index + 1;
+        }
+      }
+    }
+    throw JdbcExceptions.invalid("column label is not in the result projection");
   }
 }

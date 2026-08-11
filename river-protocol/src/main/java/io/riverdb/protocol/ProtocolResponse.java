@@ -2,10 +2,14 @@ package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
+import java.nio.ByteBuffer;
 
 /** Reusable decoded response with at most the engine API's bounded value count. */
 public final class ProtocolResponse {
   private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
+  private final char[][] columnNames =
+      new char[CommandResult.MAXIMUM_COLUMNS][ProtocolFrameCodec.MAXIMUM_COLUMN_NAME_BYTES];
+  private final int[] columnNameLengths = new int[CommandResult.MAXIMUM_COLUMNS];
   private StatusCode status;
   private int flags;
   private int affectedRows;
@@ -26,6 +30,9 @@ public final class ProtocolResponse {
     rowsReturned = 0;
     challengeHigh = 0;
     challengeLow = 0;
+    for (int index = 0; index < columnNameLengths.length; index++) {
+      columnNameLengths[index] = 0;
+    }
   }
 
   void complete(
@@ -51,6 +58,13 @@ public final class ProtocolResponse {
 
   void valueAt(int index, long value) {
     values[index] = value;
+  }
+
+  void columnNameAt(int index, ByteBuffer source, int offset, int length) {
+    for (int character = 0; character < length; character++) {
+      columnNames[index][character] = (char) (source.get(offset + character) & 0xff);
+    }
+    columnNameLengths[index] = length;
   }
 
   public StatusCode status() {
@@ -103,5 +117,10 @@ public final class ProtocolResponse {
 
   public long valueAt(int index) {
     return index >= 0 && index < columnCount ? values[index] : 0;
+  }
+
+  public String columnName(int index) {
+    return index >= 0 && index < columnCount && columnNameLengths[index] > 0
+        ? new String(columnNames[index], 0, columnNameLengths[index]) : null;
   }
 }

@@ -14,5 +14,7 @@ public interface RiverQuery {
 
   int columnCount();
 
+  CharSequence columnName(int index);
+
   long rowsReturned();
 }

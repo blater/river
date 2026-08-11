@@ -453,6 +453,14 @@ public final class SqlSession {
     return status;
   }
 
+  public CharSequence scanColumnName(SqlScanCursor cursor, int index) {
+    if (cursor == null || !cursor.isOwnedBy(this)) {
+      return null;
+    }
+    int column = cursor.projectedColumn(index);
+    return column < 0 ? null : table.columnName(column);
+  }
+
   public StatusCode closeScan(SqlScanCursor cursor, SqlExecutionResult result) {
     if (cursor == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

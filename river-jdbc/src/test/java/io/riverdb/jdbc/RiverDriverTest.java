@@ -61,10 +61,11 @@ final class RiverDriverTest {
         ResultSetMetaData metadata = rows.getMetaData();
         assertEquals(2, metadata.getColumnCount());
         assertEquals(Types.BIGINT, metadata.getColumnType(1));
-        assertEquals("column1", metadata.getColumnLabel(1));
+        assertEquals("id", metadata.getColumnLabel(1));
+        assertEquals("balance", metadata.getColumnLabel(2));
         assertTrue(rows.next());
         assertEquals(1, rows.getLong(1));
-        assertEquals(100, rows.getLong("column2"));
+        assertEquals(100, rows.getLong("balance"));
         assertTrue(rows.next());
         assertEquals(2, rows.getInt(1));
         assertEquals(200L, rows.getObject(2, Long.class));
@@ -182,8 +183,9 @@ final class RiverDriverTest {
       select.setLong(1, 2);
       try (ResultSet result = select.executeQuery()) {
         assertEquals(1, result.getMetaData().getColumnCount());
+        assertEquals("value", result.getMetaData().getColumnName(1));
         assertTrue(result.next());
-        assertEquals(200, result.getLong(1));
+        assertEquals(200, result.getLong("value"));
         assertFalse(result.next());
       }
       select.setLong(1, 1);
