@@ -700,13 +700,33 @@ public final class SqlParser {
       long value = 0;
       long lower = 0;
       long upper = 0;
+      boolean columnEquality = false;
       if (equality) {
         skipSpaces(sql);
         if (sql == scalarSourceView && scalarSourceView.isReplacement(offset)) {
           scalarPredicateIndex = result.predicateCount();
+          status = number(sql, numberResult);
+          value = numberResult.value;
+        } else if (startsNumber(sql)) {
+          status = number(sql, numberResult);
+          value = numberResult.value;
+        } else {
+          SqlIdentifier valueTable = result.writableNextPredicateValueTableName();
+          SqlIdentifier valueColumn = result.writableNextPredicateValueColumnName();
+          if (valueTable == null || valueColumn == null) {
+            return StatusCode.RESOURCE_EXHAUSTED;
+          }
+          identifierScratch.reset();
+          status = identifier(sql, identifierScratch);
+          boolean valueQualified = status.isOk() && consumeCharacter(sql, '.');
+          if (status.isOk() && valueQualified) {
+            valueTable.copyFrom(identifierScratch);
+            status = identifier(sql, valueColumn);
+          } else if (status.isOk()) {
+            valueColumn.copyFrom(identifierScratch);
+          }
+          columnEquality = status.isOk();
         }
-        status = number(sql, numberResult);
-        value = numberResult.value;
       } else if (!nullPredicate && status.isOk()) {
         status = requireCharacter(sql, '>');
         if (status.isOk()) {
@@ -739,6 +759,8 @@ public final class SqlParser {
       if (status.isOk()) {
         if (nullPredicate) {
           result.appendNullPredicate(nullPredicateNegated);
+        } else if (columnEquality) {
+          result.appendColumnPredicate();
         } else {
           result.appendPredicate(value, lower, upper, equality);
         }
@@ -873,6 +895,18 @@ public final class SqlParser {
     }
     result.value = negative ? value : -value;
     return StatusCode.OK;
+  }
+
+  private boolean startsNumber(CharSequence sql) {
+    skipSpaces(sql);
+    if (offset >= sql.length()) {
+      return false;
+    }
+    char first = sql.charAt(offset);
+    return digit(first)
+        || first == '-'
+            && offset + 1 < sql.length()
+            && digit(sql.charAt(offset + 1));
   }
 
   private StatusCode requireKeyword(CharSequence sql, String keyword) {

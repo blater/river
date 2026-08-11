@@ -254,6 +254,18 @@ final class RiverDriverTest {
           statement.executeUpdate(
               "INSERT INTO regions VALUES (7, 7000), (8, 8000)"));
       assertEquals(
+          1,
+          statement.executeUpdate(
+              "UPDATE nullable_values SET rank=7 WHERE id=1"));
+      try (ResultSet correlatedNull = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE EXISTS "
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=nullable_values.rank)")) {
+        assertTrue(correlatedNull.next());
+        assertEquals(1, correlatedNull.getLong(1));
+        assertFalse(correlatedNull.next());
+      }
+      assertEquals(
           0,
           statement.executeUpdate(
               "CREATE TABLE region_labels "
@@ -320,6 +332,25 @@ final class RiverDriverTest {
           "SELECT id FROM accounts WHERE NOT EXISTS "
               + "(SELECT id FROM regions WHERE code=7000)")) {
         assertFalse(notExists.next());
+      }
+      try (ResultSet correlated = statement.executeQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=accounts.region AND regions.code=7000) "
+              + "ORDER BY balance")) {
+        assertTrue(correlated.next());
+        assertEquals(1, correlated.getLong(1));
+        assertTrue(correlated.next());
+        assertEquals(2, correlated.getLong(1));
+        assertFalse(correlated.next());
+      }
+      try (ResultSet correlated = statement.executeQuery(
+          "SELECT id FROM accounts WHERE NOT EXISTS "
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=accounts.region AND regions.code=7000)")) {
+        assertTrue(correlated.next());
+        assertEquals(3, correlated.getLong(1));
+        assertFalse(correlated.next());
       }
       String nested = "SELECT id FROM accounts";
       for (int depth = 1; depth < 32; depth++) {

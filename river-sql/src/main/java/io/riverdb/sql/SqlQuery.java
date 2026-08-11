@@ -87,6 +87,12 @@ public final class SqlQuery {
         if (block.isNullPredicate(predicate)) {
           destination.appendNullPredicate(
               block.isNullPredicateNegated(predicate));
+        } else if (block.isColumnPredicate(predicate)) {
+          destination.writableNextPredicateValueTableName().copyFrom(
+              block.predicateValueTableName(predicate));
+          destination.writableNextPredicateValueColumnName().copyFrom(
+              block.predicateValueColumnName(predicate));
+          destination.appendColumnPredicate();
         } else {
           destination.appendPredicate(
               block.predicateValue(predicate),

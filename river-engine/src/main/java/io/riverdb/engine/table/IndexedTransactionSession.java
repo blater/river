@@ -20,6 +20,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private static final int MAXIMUM_PENDING_INSERTS = 384;
   private static final int MAXIMUM_HELD_LOCKS = 384;
   private static final int MAXIMUM_SAVEPOINTS = 4;
+  private static final int MAXIMUM_ACTIVE_SCANS = 32;
   private static final int AUTOMATIC_VACUUM_OBSOLETE_VERSIONS = MAXIMUM_PENDING_INSERTS;
 
   private final TransactionManager manager;
@@ -50,7 +51,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private long copiedWriteSetBytes;
   private int pendingInsertCount;
   private int heldLockCount;
-  private IndexedScanCursor activeScan;
+  private final IndexedScanCursor[] activeScans =
+      new IndexedScanCursor[MAXIMUM_ACTIVE_SCANS];
+  private int activeScanCount;
   private int savepointCount;
   private boolean serializableScan;
 
@@ -138,7 +141,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode begin(IsolationLevel isolationLevel) {
-    if (transaction.isActiveHandle() || activeScan != null || savepointCount != 0) {
+    if (transaction.isActiveHandle() || activeScanCount != 0 || savepointCount != 0) {
       return StatusCode.CONFLICT;
     }
     pendingInsertCount = 0;
@@ -419,7 +422,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (transaction.state() != TransactionState.ACTIVE) {
       return StatusCode.CONFLICT;
     }
-    if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED) {
+    if (activeScanCount >= activeScans.length) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED
+        && activeScanCount == 0) {
       StatusCode status = manager.refreshReadCommitted(transaction, table);
       if (!status.isOk()) {
         return status;
@@ -440,7 +447,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
     }
     if (status.isOk()) {
-      activeScan = cursor;
+      activeScans[activeScanCount++] = cursor;
       if (transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
         serializableScan = true;
       }
@@ -451,7 +458,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   public StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
     if (transaction.state() != TransactionState.ACTIVE
         || cursor == null
-        || cursor != activeScan
+        || findActiveScan(cursor) < 0
         || !cursor.isSessionOwnedBy(this)
         || result == null) {
       return StatusCode.CONFLICT;
@@ -500,12 +507,15 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode closeScan(IndexedScanCursor cursor) {
-    if (cursor == null || cursor != activeScan || !cursor.isSessionOwnedBy(this)) {
+    int active = findActiveScan(cursor);
+    if (cursor == null || active < 0 || !cursor.isSessionOwnedBy(this)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = table.closeScan(cursor);
     if (status.isOk()) {
-      activeScan = null;
+      activeScanCount--;
+      activeScans[active] = activeScans[activeScanCount];
+      activeScans[activeScanCount] = null;
     }
     return status;
   }
@@ -514,7 +524,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (savepoint == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (transaction.state() != TransactionState.ACTIVE || activeScan != null) {
+    if (transaction.state() != TransactionState.ACTIVE || activeScanCount != 0) {
       return StatusCode.CONFLICT;
     }
     if (savepointCount >= savepoints.length) {
@@ -534,7 +544,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (transaction.state() != TransactionState.ACTIVE
-        || activeScan != null
+        || activeScanCount != 0
         || !savepoint.isOwnedBy(this, transaction.transactionId())
         || savepoint.pendingMutationCount() > pendingInsertCount) {
       return StatusCode.CONFLICT;
@@ -584,8 +594,17 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return selected;
   }
 
+  private int findActiveScan(IndexedScanCursor cursor) {
+    for (int index = 0; index < activeScanCount; index++) {
+      if (activeScans[index] == cursor) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
   public StatusCode commit(TransactionOutcome result) {
-    if (activeScan != null) {
+    if (activeScanCount != 0) {
       return StatusCode.CONFLICT;
     }
     compactWriteSet();
@@ -611,7 +630,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   boolean eligibleForCommitGroup() {
     return transaction.state() == TransactionState.ACTIVE
-        && activeScan == null
+        && activeScanCount == 0
         && pendingInsertCount > 0
         && !manager.hasLockConflict(transaction)
         && !serializableScan;
@@ -684,7 +703,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode abort(TransactionOutcome result) {
-    if (activeScan != null) {
+    if (activeScanCount != 0) {
       return StatusCode.CONFLICT;
     }
     StatusCode status = manager.abort(transaction, result);

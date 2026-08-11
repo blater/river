@@ -163,6 +163,7 @@ final class IndexedTransactionSessionTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedTransactionSession session = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.CONFLICT, session.fetchByKey(99, fetched));
@@ -217,6 +218,44 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, table.fetchByKey(60, fetched));
     assertEquals(600, value(fetched));
     assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
+  void nestedScansRetainIndependentCursorOwnership(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insert(10, row(100)));
+    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    IndexedScanCursor outer = new IndexedScanCursor();
+    IndexedScanCursor inner = new IndexedScanCursor();
+    IndexedScanResult result = new IndexedScanResult();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.READ_COMMITTED));
+    assertEquals(StatusCode.OK, session.beginScan(0, 100, outer));
+    assertEquals(StatusCode.OK, session.nextScan(outer, result));
+    assertEquals(10, result.key());
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(30, row(300)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, session.beginScan(15, 100, inner));
+    assertEquals(StatusCode.OK, session.nextScan(inner, result));
+    assertEquals(20, result.key());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(inner, result));
+    assertEquals(StatusCode.OK, session.closeScan(inner));
+    assertEquals(StatusCode.OK, session.nextScan(outer, result));
+    assertEquals(20, result.key());
+    assertEquals(StatusCode.CONFLICT, session.nextScan(outer, result));
+    assertEquals(StatusCode.OK, session.closeScan(outer));
+    assertEquals(StatusCode.OK, session.commit(outcome));
     close(table, wal, directory);
   }
 

@@ -58,6 +58,10 @@ public final class SqlSession {
   private final int[] predicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
   private final int[] scalarPredicateColumns =
       new int[SqlCommand.MAXIMUM_PREDICATES];
+  private final int[] scalarPredicateValueColumns =
+      new int[SqlCommand.MAXIMUM_PREDICATES];
+  private final boolean[] scalarPredicateValueOuter =
+      new boolean[SqlCommand.MAXIMUM_PREDICATES];
   private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
   private final long[] membershipValues = new long[MAXIMUM_MEMBERSHIP_VALUES];
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -80,7 +84,10 @@ public final class SqlSession {
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
   private final RelationalScanCursor scalarCursor = new RelationalScanCursor();
   private final RelationalScanResult scalarRow = new RelationalScanResult();
+  private final HeapRowResult correlatedOuterRow = new HeapRowResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(
+      TableSchema.MAXIMUM_COLUMNS * Long.BYTES);
+  private final ByteBuffer correlatedOuterBuffer = ByteBuffer.allocateDirect(
       TableSchema.MAXIMUM_COLUMNS * Long.BYTES);
   private final ByteBuffer sortRecord = ByteBuffer.allocateDirect(
       MAXIMUM_SORT_RECORD_BYTES);
@@ -103,6 +110,8 @@ public final class SqlSession {
   private boolean scanActive;
   private boolean subqueryPredicateFalse;
   private boolean membershipHasNull;
+  private boolean nestedCorrelated;
+  private boolean correlatedExistence;
   private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
@@ -385,6 +394,8 @@ public final class SqlSession {
     subqueryPredicateFalse = false;
     membershipValueCount = 0;
     membershipHasNull = false;
+    nestedCorrelated = false;
+    correlatedExistence = false;
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk() && command.type() == SqlCommandType.COUNT) {
       status = execute(sql, aggregateExecution);
@@ -543,15 +554,15 @@ public final class SqlSession {
     if (implicit) {
       status = session.begin(IsolationLevel.READ_COMMITTED);
     }
+    if (status.isOk()) {
+      status = session.resolveTable(command.tableName(), table);
+    }
     if (status.isOk() && query.hasScalarPredicate()) {
       status = evaluateScalarPredicate();
     } else if (status.isOk() && query.hasExistencePredicate()) {
       status = evaluateExistencePredicate();
     } else if (status.isOk() && query.hasMembershipPredicate()) {
       status = evaluateMembershipPredicate();
-    }
-    if (status.isOk()) {
-      status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
       status = bindDataCommand();
@@ -714,8 +725,22 @@ public final class SqlSession {
         return status;
       }
       status = validateRow(source);
+      if (correlatedExistence) {
+        subqueryPredicateFalse = false;
+      }
       if (status.isOk() && !matchesPredicates(primaryKey, source)) {
         continue;
+      }
+      if (status.isOk() && correlatedExistence) {
+        status = copyCorrelatedOuterRow(source);
+        if (status.isOk()) {
+          status = evaluateCorrelatedExistence(
+              primaryKey, correlatedOuterRow);
+          source = correlatedOuterRow;
+        }
+        if (status.isOk() && subqueryPredicateFalse) {
+          continue;
+        }
       }
       if (status.isOk()) {
         long nullMask = projectScanRow(
@@ -1143,6 +1168,7 @@ public final class SqlSession {
       int column = definition == null
           ? -1 : definition.findColumn(command.predicateColumnName(index));
       if (column < 0
+          || command.isColumnPredicate(index)
           || !command.isNullPredicate(index)
               && !command.isEqualityPredicate(index)
               && command.predicateUpperExclusive(index)
@@ -1179,6 +1205,7 @@ public final class SqlSession {
       }
       int column = table.findColumn(command.predicateColumnName(index));
       if (column < 0
+          || command.isColumnPredicate(index)
           || !command.isNullPredicate(index)
               && !command.isEqualityPredicate(index)
               && command.predicateUpperExclusive(index)
@@ -1585,6 +1612,17 @@ public final class SqlSession {
         ? primaryKey : source.getLong((column - 1) * Long.BYTES);
   }
 
+  private StatusCode copyCorrelatedOuterRow(HeapRowResult source) {
+    correlatedOuterBuffer.clear();
+    correlatedOuterBuffer.limit(source.length());
+    StatusCode status = source.copyTo(correlatedOuterBuffer);
+    if (status.isOk()) {
+      correlatedOuterBuffer.position(0);
+      correlatedOuterRow.set(correlatedOuterBuffer, 0, 0, source.length());
+    }
+    return status;
+  }
+
   private static boolean isNull(
       HeapRowResult source,
       TableDefinition definition,
@@ -1641,6 +1679,9 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = bindNestedCommand(scalar);
+    if (status.isOk() && nestedCorrelated) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (status.isOk() && scalar.rowLimit() == 0) {
       subqueryPredicateFalse = true;
       return StatusCode.OK;
@@ -1661,7 +1702,8 @@ public final class SqlSession {
         status = validateRow(scalarRow.row(), scalarTable);
       }
       if (status.isOk()
-          && !matchesScalarPredicates(scalar, scalarRow.key(), scalarRow.row())) {
+          && !matchesScalarPredicates(
+              scalar, scalarRow.key(), scalarRow.row(), 0, null)) {
         continue;
       }
       if (status.isOk()) {
@@ -1705,6 +1747,30 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = bindNestedCommand(nested);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (nestedCorrelated) {
+      correlatedExistence = true;
+      return StatusCode.OK;
+    }
+    return evaluateExistenceRows(nested, 0, null);
+  }
+
+  private StatusCode evaluateCorrelatedExistence(
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    SqlCommand nested = query.existenceCommand();
+    return nested == null
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : evaluateExistenceRows(nested, outerPrimaryKey, outerSource);
+  }
+
+  private StatusCode evaluateExistenceRows(
+      SqlCommand nested,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    StatusCode status = StatusCode.OK;
     boolean exists = false;
     if (status.isOk() && nested.rowLimit() > 0) {
       status = session.beginScan(scalarTable, scalarCursor);
@@ -1720,7 +1786,12 @@ public final class SqlSession {
         status = validateRow(scalarRow.row(), scalarTable);
       }
       if (status.isOk()
-          && matchesScalarPredicates(nested, scalarRow.key(), scalarRow.row())) {
+          && matchesScalarPredicates(
+              nested,
+              scalarRow.key(),
+              scalarRow.row(),
+              outerPrimaryKey,
+              outerSource)) {
         exists = true;
         break;
       }
@@ -1747,6 +1818,9 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = bindNestedCommand(nested);
+    if (status.isOk() && nestedCorrelated) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (status.isOk() && nested.rowLimit() == 0) {
       return StatusCode.OK;
     }
@@ -1765,7 +1839,8 @@ public final class SqlSession {
         status = validateRow(scalarRow.row(), scalarTable);
       }
       if (status.isOk()
-          && !matchesScalarPredicates(nested, scalarRow.key(), scalarRow.row())) {
+          && !matchesScalarPredicates(
+              nested, scalarRow.key(), scalarRow.row(), 0, null)) {
         continue;
       }
       if (status.isOk()) {
@@ -1798,6 +1873,7 @@ public final class SqlSession {
   }
 
   private StatusCode bindNestedCommand(SqlCommand nested) {
+    nestedCorrelated = false;
     if (nested.columnCount() != 1 || nested.isSelectAll()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -1831,6 +1907,31 @@ public final class SqlSession {
         break;
       }
       scalarPredicateColumns[index] = column;
+      scalarPredicateValueColumns[index] = -1;
+      scalarPredicateValueOuter[index] = false;
+      if (status.isOk() && nested.isColumnPredicate(index)) {
+        CharSequence valueTable = nested.predicateValueTableName(index);
+        int valueColumn;
+        if (valueTable.length() == 0) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+          break;
+        } else if (sameName(valueTable, nested.tableName())) {
+          valueColumn = scalarTable.findColumn(
+              nested.predicateValueColumnName(index));
+        } else if (sameName(valueTable, command.tableName())) {
+          valueColumn = table.findColumn(nested.predicateValueColumnName(index));
+          scalarPredicateValueOuter[index] = true;
+          nestedCorrelated = true;
+        } else {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+          break;
+        }
+        if (valueColumn < 0) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+          break;
+        }
+        scalarPredicateValueColumns[index] = valueColumn;
+      }
     }
     return status;
   }
@@ -1838,7 +1939,9 @@ public final class SqlSession {
   private boolean matchesScalarPredicates(
       SqlCommand scalar,
       long primaryKey,
-      HeapRowResult source) {
+      HeapRowResult source,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
     for (int index = 0; index < scalar.predicateCount(); index++) {
       long value = readColumn(primaryKey, source, scalarPredicateColumns[index]);
       boolean nullValue = isNull(
@@ -1851,6 +1954,21 @@ public final class SqlSession {
       }
       if (nullValue) {
         return false;
+      }
+      if (scalar.isColumnPredicate(index)) {
+        boolean outer = scalarPredicateValueOuter[index];
+        HeapRowResult valueSource = outer ? outerSource : source;
+        TableDefinition valueTable = outer ? table : scalarTable;
+        int valueColumn = scalarPredicateValueColumns[index];
+        if (valueSource == null
+            || isNull(valueSource, valueTable, valueColumn)
+            || value != readColumn(
+                outer ? outerPrimaryKey : primaryKey,
+                valueSource,
+                valueColumn)) {
+          return false;
+        }
+        continue;
       }
       boolean matches = scalar.isEqualityPredicate(index)
           ? value == scalar.predicateValue(index)
@@ -2008,8 +2126,22 @@ public final class SqlSession {
       if (status.isOk()) {
         status = validateRow(source);
       }
+      if (correlatedExistence) {
+        subqueryPredicateFalse = false;
+      }
       if (status.isOk() && !matchesPredicates(primaryKey, source)) {
         continue;
+      }
+      if (status.isOk() && correlatedExistence) {
+        status = copyCorrelatedOuterRow(source);
+        if (status.isOk()) {
+          status = evaluateCorrelatedExistence(
+              primaryKey, correlatedOuterRow);
+          source = correlatedOuterRow;
+        }
+        if (status.isOk() && subqueryPredicateFalse) {
+          continue;
+        }
       }
       if (status.isOk() && sortedRowCount >= MAXIMUM_SORT_ROWS) {
         status = spillSortedRun();

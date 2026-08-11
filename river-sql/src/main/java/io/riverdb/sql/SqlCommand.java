@@ -18,6 +18,10 @@ public final class SqlCommand {
       new SqlIdentifier[MAXIMUM_PREDICATES];
   private final SqlIdentifier[] predicateColumnNames =
       new SqlIdentifier[MAXIMUM_PREDICATES];
+  private final SqlIdentifier[] predicateValueTableNames =
+      new SqlIdentifier[MAXIMUM_PREDICATES];
+  private final SqlIdentifier[] predicateValueColumnNames =
+      new SqlIdentifier[MAXIMUM_PREDICATES];
   private final SqlIdentifier orderColumnName = new SqlIdentifier();
   private final long[] insertValues =
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
@@ -28,6 +32,7 @@ public final class SqlCommand {
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
   private final boolean[] equalityPredicates = new boolean[MAXIMUM_PREDICATES];
+  private final boolean[] columnPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] negatedNullPredicates =
       new boolean[MAXIMUM_PREDICATES];
@@ -55,6 +60,8 @@ public final class SqlCommand {
       columnTableNames[index] = new SqlIdentifier();
       predicateTableNames[index] = new SqlIdentifier();
       predicateColumnNames[index] = new SqlIdentifier();
+      predicateValueTableNames[index] = new SqlIdentifier();
+      predicateValueColumnNames[index] = new SqlIdentifier();
     }
   }
 
@@ -77,10 +84,13 @@ public final class SqlCommand {
     for (int index = 0; index < predicateColumnNames.length; index++) {
       predicateTableNames[index].reset();
       predicateColumnNames[index].reset();
+      predicateValueTableNames[index].reset();
+      predicateValueColumnNames[index].reset();
       predicateValues[index] = 0;
       predicateLowerInclusive[index] = 0;
       predicateUpperExclusive[index] = 0;
       equalityPredicates[index] = false;
+      columnPredicates[index] = false;
       nullPredicates[index] = false;
       negatedNullPredicates[index] = false;
     }
@@ -157,6 +167,16 @@ public final class SqlCommand {
     }
   }
 
+  void appendColumnPredicate() {
+    int index = predicateCount++;
+    equalityPredicates[index] = true;
+    columnPredicates[index] = true;
+    if (index == 0) {
+      equalityPredicate = true;
+      boundedScan = false;
+    }
+  }
+
   void setSelectAll() {
     selectAll = true;
   }
@@ -187,6 +207,12 @@ public final class SqlCommand {
       writableNextPredicateColumnName().copyFrom(source.predicateColumnNames[index]);
       if (source.nullPredicates[index]) {
         appendNullPredicate(source.negatedNullPredicates[index]);
+      } else if (source.columnPredicates[index]) {
+        writableNextPredicateValueTableName().copyFrom(
+            source.predicateValueTableNames[index]);
+        writableNextPredicateValueColumnName().copyFrom(
+            source.predicateValueColumnNames[index]);
+        appendColumnPredicate();
       } else {
         appendPredicate(
             source.predicateValues[index],
@@ -283,6 +309,16 @@ public final class SqlCommand {
         ? predicateTableNames[predicateCount] : null;
   }
 
+  SqlIdentifier writableNextPredicateValueColumnName() {
+    return predicateCount < predicateValueColumnNames.length
+        ? predicateValueColumnNames[predicateCount] : null;
+  }
+
+  SqlIdentifier writableNextPredicateValueTableName() {
+    return predicateCount < predicateValueTableNames.length
+        ? predicateValueTableNames[predicateCount] : null;
+  }
+
   SqlIdentifier writableOrderColumnName() {
     return orderColumnName;
   }
@@ -357,6 +393,16 @@ public final class SqlCommand {
 
   public SqlIdentifier predicateTableName(int index) {
     return index >= 0 && index < predicateCount ? predicateTableNames[index] : null;
+  }
+
+  public SqlIdentifier predicateValueColumnName(int index) {
+    return index >= 0 && index < predicateCount
+        ? predicateValueColumnNames[index] : null;
+  }
+
+  public SqlIdentifier predicateValueTableName(int index) {
+    return index >= 0 && index < predicateCount
+        ? predicateValueTableNames[index] : null;
   }
 
   public SqlIdentifier orderColumnName() {
@@ -446,6 +492,10 @@ public final class SqlCommand {
 
   public boolean isNullPredicate(int index) {
     return index >= 0 && index < predicateCount && nullPredicates[index];
+  }
+
+  public boolean isColumnPredicate(int index) {
+    return index >= 0 && index < predicateCount && columnPredicates[index];
   }
 
   public boolean isNullPredicateNegated(int index) {

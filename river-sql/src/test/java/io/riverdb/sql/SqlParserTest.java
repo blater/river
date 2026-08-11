@@ -475,6 +475,20 @@ final class SqlParserTest {
             query,
             command));
     assertTrue(query.existenceNegated());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE EXISTS "
+                + "(SELECT id FROM regions "
+                + "WHERE regions.id=accounts.region)",
+            query,
+            command));
+    SqlCommand correlated = query.existenceCommand();
+    assertTrue(correlated.isColumnPredicate(0));
+    assertName("regions", correlated.predicateTableName(0));
+    assertName("id", correlated.predicateColumnName(0));
+    assertName("accounts", correlated.predicateValueTableName(0));
+    assertName("region", correlated.predicateValueColumnName(0));
   }
 
   @Test
@@ -568,6 +582,11 @@ final class SqlParserTest {
           "SELECT id FROM nullable_values WHERE value IS NOT NULL",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -595,6 +614,11 @@ final class SqlParserTest {
           command).ordinal();
       allocationGuard += parser.parseQuery(
           "SELECT id FROM nullable_values WHERE value IS NOT NULL",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
           query,
           command).ordinal();
     }
