@@ -522,6 +522,7 @@ public final class SqlSession {
             this,
             aggregateExecution.value(),
             aggregateExecution.isNull(0),
+            aggregateExecution.isVarchar(0),
             aggregateExecution.transactionActive(),
             aggregateExecution.commitSequence());
       }
@@ -560,6 +561,9 @@ public final class SqlSession {
         } else {
           aggregateColumn = table.findColumn(command.columnName(1));
           if (aggregateColumn < 0) {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
+          } else if (command.type() == SqlCommandType.GROUP_SUM
+              && table.isVarchar(aggregateColumn)) {
             status = StatusCode.INVALID_EXTERNAL_INPUT;
           }
         }
@@ -909,7 +913,12 @@ public final class SqlSession {
         return StatusCode.CONFLICT;
       }
       projectedValues[0] = cursor.aggregateValue();
-      result.set(0, projectedValues, cursor.aggregateNull() ? 1 : 0, 1);
+      result.set(
+          0,
+          projectedValues,
+          cursor.aggregateNull() ? 1 : 0,
+          cursor.aggregateVarchar() ? 1 : 0,
+          1);
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -940,7 +949,11 @@ public final class SqlSession {
         long nullMask = sortSpilled
             ? sortedOutputNullMask : sortedNullMasks[sortedRow];
         result.set(
-            primaryKey, projectedValues, nullMask, cursor.projectedColumnCount());
+            primaryKey,
+            projectedValues,
+            nullMask,
+            scanProjectionVarcharMask(cursor),
+            cursor.projectedColumnCount());
         cursor.advanceSortedRow();
         cursor.rowReturned();
       }
@@ -1032,7 +1045,11 @@ public final class SqlSession {
         long nullMask = projectScanRow(
             primaryKey, source, cursor, projectedValues);
         result.set(
-            primaryKey, projectedValues, nullMask, cursor.projectedColumnCount());
+            primaryKey,
+            projectedValues,
+            nullMask,
+            scanProjectionVarcharMask(cursor),
+            cursor.projectedColumnCount());
         cursor.rowReturned();
       }
       return status;
@@ -1078,6 +1095,28 @@ public final class SqlSession {
     int column = cursor.projectedColumn(index);
     return column == NULL_PROJECTION
         ? NULL_COLUMN_NAME : column < 0 ? null : table.columnName(column);
+  }
+
+  public boolean scanColumnIsVarchar(SqlScanCursor cursor, int index) {
+    if (cursor == null
+        || !cursor.isOwnedBy(this)
+        || index < 0
+        || index >= cursor.projectedColumnCount()) {
+      return false;
+    }
+    if (cursor.aggregate()) {
+      return index == 0 && cursor.aggregateVarchar();
+    }
+    if (cursor.groupAggregate()) {
+      return (groupProjectionVarcharMask(cursor) & 1L << index) != 0;
+    }
+    if (cursor.distinct()) {
+      return index == 0 && table.isVarchar(cursor.groupColumn());
+    }
+    int projection = cursor.projectedColumn(index);
+    return projection >= 0
+        ? table.isVarchar(projection)
+        : cursor.join() && joinTable.isVarchar(-projection - 1);
   }
 
   private CharSequence groupAggregateColumnName(SqlScanCursor cursor) {
@@ -1330,7 +1369,12 @@ public final class SqlSession {
       if (status.isOk()) {
         projectedValues[0] = aggregate;
         result.setProjection(
-            0, projectedValues, valueAggregate && !aggregatePresent ? 1 : 0, 1, 0);
+            0,
+            projectedValues,
+            valueAggregate && !aggregatePresent ? 1 : 0,
+            aggregateProjectionVarcharMask(),
+            1,
+            0);
       }
       return status;
     }
@@ -1370,6 +1414,7 @@ public final class SqlSession {
           projectedValues,
           projectionNullMask(
               source, table, projectedColumns, projectedColumnCount),
+          projectionVarcharMask(projectedColumns, projectedColumnCount),
           projectedColumnCount,
           0);
     }
@@ -1395,6 +1440,11 @@ public final class SqlSession {
     if (command.type() == SqlCommandType.COUNT_VALUE
         || isValueAggregate(command.type())) {
       StatusCode status = bindProjections();
+      if (status.isOk()
+          && command.type() == SqlCommandType.SUM
+          && table.isVarchar(projectedColumns[0])) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       return status.isOk() ? bindPredicates(false) : status;
     }
     if (command.type() == SqlCommandType.INSERT) {
@@ -1437,10 +1487,18 @@ public final class SqlSession {
         if (command.updateIsDefault(index) && !table.hasDefault(column)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
+        if (!command.updateIsNull(index)
+            && !command.updateIsDefault(index)
+            && !command.isRelativeUpdate(index)
+            && command.updateIsVarchar(index) != table.isVarchar(column)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
         updatedColumns[index] = column;
         if (command.isRelativeUpdate(index)) {
           int sourceColumn = table.findColumn(command.updateSourceColumnName(index));
-          if (sourceColumn < 0) {
+          if (sourceColumn < 0
+              || table.isVarchar(column)
+              || table.isVarchar(sourceColumn)) {
             return StatusCode.INVALID_EXTERNAL_INPUT;
           }
           updateSourceColumns[index] = sourceColumn;
@@ -1505,6 +1563,49 @@ public final class SqlSession {
     return StatusCode.OK;
   }
 
+  private long projectionVarcharMask(int[] projections, int count) {
+    long mask = 0;
+    for (int index = 0; index < count; index++) {
+      int column = projections[index];
+      if (column >= 0 && table.isVarchar(column)) {
+        mask |= 1L << index;
+      }
+    }
+    return mask;
+  }
+
+  private long scanProjectionVarcharMask(SqlScanCursor cursor) {
+    long mask = 0;
+    for (int index = 0; index < cursor.projectedColumnCount(); index++) {
+      int projection = cursor.projectedColumn(index);
+      boolean varchar = projection >= 0
+          ? table.isVarchar(projection)
+          : joinTable.isVarchar(-projection - 1);
+      if (varchar) {
+        mask |= 1L << index;
+      }
+    }
+    return mask;
+  }
+
+  private long aggregateProjectionVarcharMask() {
+    return (command.type() == SqlCommandType.MIN
+            || command.type() == SqlCommandType.MAX)
+        && projectedColumnCount > 0
+        && table.isVarchar(projectedColumns[0])
+        ? 1 : 0;
+  }
+
+  private long groupProjectionVarcharMask(SqlScanCursor cursor) {
+    long mask = table.isVarchar(cursor.groupColumn()) ? 1 : 0;
+    if ((cursor.groupAggregateType() == SqlCommandType.GROUP_MIN
+            || cursor.groupAggregateType() == SqlCommandType.GROUP_MAX)
+        && table.isVarchar(cursor.groupAggregateColumn())) {
+      mask |= 1L << 1;
+    }
+    return mask;
+  }
+
   private int resolveOrderColumn() {
     int column = table.findColumn(command.orderColumnName());
     if (column >= 0) {
@@ -1532,6 +1633,7 @@ public final class SqlSession {
     int innerJoinColumn = joinTable.findColumn(command.joinInnerColumnName());
     if (outerJoinColumn < 0
         || innerJoinColumn < 0
+        || table.isVarchar(outerJoinColumn) != joinTable.isVarchar(innerJoinColumn)
         || innerJoinColumn > 0 && !joinTable.hasIndexOn(innerJoinColumn)
         || command.columnCount() <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1577,6 +1679,10 @@ public final class SqlSession {
           ? -1 : definition.findColumn(command.predicateColumnName(index));
       if (column < 0
           || command.isColumnPredicate(index)
+          || !command.isNullPredicate(index)
+              && !(command.isLiteralMembership(index)
+                  && command.literalMembershipCount(index) == 0)
+              && definition.isVarchar(column) != command.predicateIsVarchar(index)
           || command.isRangePredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
@@ -1617,6 +1723,10 @@ public final class SqlSession {
       int column = table.findColumn(command.predicateColumnName(index));
       if (column < 0
           || command.isColumnPredicate(index)
+          || !command.isNullPredicate(index)
+              && !(command.isLiteralMembership(index)
+                  && command.literalMembershipCount(index) == 0)
+              && table.isVarchar(column) != command.predicateIsVarchar(index)
           || command.isRangePredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
@@ -1659,8 +1769,11 @@ public final class SqlSession {
     createSchema.reset();
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < command.columnCount(); index++) {
-      status = createSchema.addBigint(
-          command.columnName(index), !command.columnIsNotNull(index));
+      status = command.columnIsVarchar(index)
+          ? createSchema.addVarchar7(
+              command.columnName(index), !command.columnIsNotNull(index))
+          : createSchema.addBigint(
+              command.columnName(index), !command.columnIsNotNull(index));
       if (status.isOk() && command.columnHasDefault(index)) {
         status = createSchema.setLastDefault(command.columnDefaultValue(index));
       }
@@ -1720,7 +1833,8 @@ public final class SqlSession {
       int keySource = insertSourceByColumn[0];
       if (keySource < 0
           || command.insertIsNull(rowIndex, keySource)
-          || command.insertIsDefault(rowIndex, keySource)) {
+          || command.insertIsDefault(rowIndex, keySource)
+          || command.insertIsVarchar(rowIndex, keySource)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int column = 1; column < table.columnCount(); column++) {
@@ -1728,6 +1842,12 @@ public final class SqlSession {
         if (source >= 0
             && command.insertIsDefault(rowIndex, source)
             && !table.hasDefault(column)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        if (source >= 0
+            && !command.insertIsNull(rowIndex, source)
+            && !command.insertIsDefault(rowIndex, source)
+            && command.insertIsVarchar(rowIndex, source) != table.isVarchar(column)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
         boolean nullValue = source < 0
@@ -1857,7 +1977,12 @@ public final class SqlSession {
     if (aggregateNull) {
       nullMask |= 1L << 1;
     }
-    result.set(groupValue, projectedValues, nullMask, 2);
+    result.set(
+        groupValue,
+        projectedValues,
+        nullMask,
+        groupProjectionVarcharMask(cursor),
+        2);
     cursor.rowReturned();
     return StatusCode.OK;
   }
@@ -1876,7 +2001,12 @@ public final class SqlSession {
         continue;
       }
       cursor.setDistinctValue(value, nullValue);
-      result.set(value, projectedValues, nullValue ? 1 : 0, 1);
+      result.set(
+          value,
+          projectedValues,
+          nullValue ? 1 : 0,
+          table.isVarchar(cursor.groupColumn()) ? 1 : 0,
+          1);
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -1929,6 +2059,7 @@ public final class SqlSession {
             cursor.joinOuterKey(),
             projectedValues,
             nullMask,
+            scanProjectionVarcharMask(cursor),
             cursor.projectedColumnCount());
         cursor.rowReturned();
         return StatusCode.OK;
@@ -2028,7 +2159,11 @@ public final class SqlSession {
         }
       }
       result.set(
-          outerKey, projectedValues, nullMask, cursor.projectedColumnCount());
+          outerKey,
+          projectedValues,
+          nullMask,
+          scanProjectionVarcharMask(cursor),
+          cursor.projectedColumnCount());
       cursor.rowReturned();
       return StatusCode.OK;
     }

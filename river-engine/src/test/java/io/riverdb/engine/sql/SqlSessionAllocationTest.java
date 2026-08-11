@@ -60,15 +60,28 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE INDEX labels_region ON labels(region)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE texts (id BIGINT PRIMARY KEY, label VARCHAR(7) NOT NULL)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO texts VALUES (1, 'alpha')", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX texts_label ON texts(label)", result));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
       exerciseCount(session, result);
+      exerciseText(session, result);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
       exerciseCount(session, result);
+      exerciseText(session, result);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL point select allocated bytes: " + allocated);
@@ -106,6 +119,12 @@ final class SqlSessionAllocationTest {
   private static void exerciseCount(SqlSession session, SqlExecutionResult result) {
     allocationGuard += session.execute(
         "SELECT COUNT(*) FROM t WHERE region=7 AND balance=10", result).ordinal();
+    allocationGuard += result.value();
+  }
+
+  private static void exerciseText(SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT label FROM texts WHERE label='alpha'", result).ordinal();
     allocationGuard += result.value();
   }
 

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.PackedText;
 import java.lang.management.ManagementFactory;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -67,11 +68,38 @@ final class SqlParserTest {
     assertEquals(0, command.columnDefaultValue(3));
     assertEquals(
         StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE labels "
+                + "(id BIGINT PRIMARY KEY, code VARCHAR(7) NOT NULL DEFAULT 'new', "
+                + "note VARCHAR(7))",
+            command));
+    assertTrue(command.columnIsVarchar(1));
+    assertTrue(command.columnIsNotNull(1));
+    assertEquals(PackedText.pack("new"), command.columnDefaultValue(1));
+    assertTrue(command.columnIsVarchar(2));
+    assertEquals(
+        StatusCode.OK,
         parser.parse("CREATE UNIQUE INDEX accounts_value ON accounts(value)", command));
     assertEquals(SqlCommandType.CREATE_UNIQUE_INDEX, command.type());
     assertName("accounts_value", command.indexName());
     assertName("accounts", command.tableName());
     assertName("value", command.firstColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM labels WHERE code >= 'alpha' AND code < 'omega'",
+            command));
+    assertEquals(2, command.predicateCount());
+    assertTrue(command.predicateIsVarchar(0));
+    assertTrue(command.predicateIsVarchar(1));
+    assertEquals(PackedText.pack("alpha"), command.predicateValue(0));
+    assertEquals(PackedText.pack("omega"), command.predicateValue(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM labels WHERE code IN ('beta', 'alpha')", command));
+    assertTrue(command.predicateIsVarchar(0));
+    assertEquals(PackedText.pack("alpha"), command.literalMembershipValue(0, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id, NULL FROM accounts WHERE id=1", command));
@@ -118,6 +146,22 @@ final class SqlParserTest {
     assertTrue(command.insertIsDefault(0, 1));
     assertFalse(command.insertIsDefault(0, 2));
     assertTrue(command.insertIsNull(0, 2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "INSERT INTO labels VALUES (1, 'river', 'it''s')", command));
+    assertTrue(command.insertIsVarchar(0, 1));
+    assertEquals(PackedText.pack("river"), command.insertValue(0, 1));
+    assertEquals(PackedText.pack("it's"), command.insertValue(0, 2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "INSERT INTO products (id, code, qty) VALUES "
+                + "(1, 'beta', 10), (2, 'alpha', 20)",
+            command));
+    assertEquals(3, command.columnCount());
+    assertTrue(command.insertIsVarchar(0, 1));
+    assertFalse(command.insertIsVarchar(0, 2));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -485,6 +529,11 @@ final class SqlParserTest {
     assertTrue(command.updateIsNull(1));
     assertEquals(
         StatusCode.OK,
+        parser.parse("UPDATE labels SET code='fresh' WHERE id=1", command));
+    assertTrue(command.updateIsVarchar(0));
+    assertEquals(PackedText.pack("fresh"), command.updateValue(0));
+    assertEquals(
+        StatusCode.OK,
         parser.parse(
             "UPDATE accounts SET region=9 WHERE balance >= 100 AND balance < 500",
             command));
@@ -571,6 +620,22 @@ final class SqlParserTest {
             "CREATE TABLE bad_primary_default "
                 + "(id BIGINT DEFAULT 1 PRIMARY KEY, value BIGINT)",
             command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE text_key (id VARCHAR(7) PRIMARY KEY, value BIGINT)",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE wide_text (id BIGINT PRIMARY KEY, value VARCHAR(8))",
+            command));
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse("INSERT INTO labels VALUES (1, 'ninechars', NULL)", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM labels WHERE code IN ('one', 2)", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("INSERT INTO x VALUES (9223372036854775808, 1)", command));

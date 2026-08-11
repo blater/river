@@ -35,10 +35,12 @@ public final class SqlCommand {
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
   private final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] insertDefaultMasks = new long[MAXIMUM_INSERT_ROWS];
+  private final long[] insertVarcharMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
   private final long[] columnDefaultValues = new long[MAXIMUM_COLUMNS];
   private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] defaultUpdates = new boolean[MAXIMUM_COLUMNS];
+  private final boolean[] varcharUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] relativeUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] subtractUpdates = new boolean[MAXIMUM_COLUMNS];
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
@@ -55,6 +57,7 @@ public final class SqlCommand {
   private final boolean[] nullPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] negatedNullPredicates =
       new boolean[MAXIMUM_PREDICATES];
+  private final boolean[] varcharPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
   private SqlCommandType type;
   private long key;
@@ -63,6 +66,7 @@ public final class SqlCommand {
   private long scanUpperExclusive;
   private long columnNotNullMask;
   private long columnDefaultMask;
+  private long columnVarcharMask;
   private long rowLimit = Long.MAX_VALUE;
   private boolean boundedScan;
   private boolean equalityPredicate;
@@ -130,6 +134,7 @@ public final class SqlCommand {
       columnPredicates[index] = false;
       nullPredicates[index] = false;
       negatedNullPredicates[index] = false;
+      varcharPredicates[index] = false;
     }
     orderColumnName.reset();
     type = null;
@@ -139,6 +144,7 @@ public final class SqlCommand {
     scanUpperExclusive = 0;
     columnNotNullMask = 0;
     columnDefaultMask = 0;
+    columnVarcharMask = 0;
     rowLimit = Long.MAX_VALUE;
     boundedScan = false;
     equalityPredicate = false;
@@ -156,10 +162,12 @@ public final class SqlCommand {
     for (int index = 0; index < insertNullMasks.length; index++) {
       insertNullMasks[index] = 0;
       insertDefaultMasks[index] = 0;
+      insertVarcharMasks[index] = 0;
     }
     for (int index = 0; index < nullUpdates.length; index++) {
       nullUpdates[index] = false;
       defaultUpdates[index] = false;
+      varcharUpdates[index] = false;
       relativeUpdates[index] = false;
       subtractUpdates[index] = false;
     }
@@ -352,6 +360,9 @@ public final class SqlCommand {
           appendComparison(source.predicateValues[index], source.comparisons[index]);
         }
       }
+      if (source.varcharPredicates[index]) {
+        markLastPredicateVarchar();
+      }
     }
     orderColumnName.copyFrom(source.orderColumnName);
     descendingOrder = source.descendingOrder;
@@ -377,6 +388,7 @@ public final class SqlCommand {
       long[] values,
       long nullMask,
       long defaultMask,
+      long varcharMask,
       int count) {
     int destination = insertRowCount * MAXIMUM_COLUMNS;
     for (int index = 0; index < count; index++) {
@@ -385,6 +397,7 @@ public final class SqlCommand {
     insertColumnCount = count;
     insertNullMasks[insertRowCount] = nullMask;
     insertDefaultMasks[insertRowCount] = defaultMask;
+    insertVarcharMasks[insertRowCount] = varcharMask;
     insertRowCount++;
   }
 
@@ -399,11 +412,13 @@ public final class SqlCommand {
       long updateValue,
       boolean isNull,
       boolean isDefault,
+      boolean isVarchar,
       boolean relative,
       boolean subtract) {
     updateValues[updateColumnCount] = updateValue;
     nullUpdates[updateColumnCount] = isNull;
     defaultUpdates[updateColumnCount] = isDefault;
+    varcharUpdates[updateColumnCount] = isVarchar;
     relativeUpdates[updateColumnCount] = relative;
     subtractUpdates[updateColumnCount++] = subtract;
   }
@@ -460,6 +475,18 @@ public final class SqlCommand {
       int column = columnCount - 1;
       columnDefaultMask |= 1L << column;
       columnDefaultValues[column] = value;
+    }
+  }
+
+  void markLastColumnVarchar() {
+    if (columnCount > 1) {
+      columnVarcharMask |= 1L << columnCount - 1;
+    }
+  }
+
+  void markLastPredicateVarchar() {
+    if (predicateCount > 0) {
+      varcharPredicates[predicateCount - 1] = true;
     }
   }
 
@@ -567,6 +594,12 @@ public final class SqlCommand {
 
   public long columnDefaultValue(int index) {
     return columnHasDefault(index) ? columnDefaultValues[index] : 0;
+  }
+
+  public boolean columnIsVarchar(int index) {
+    return index > 0
+        && index < columnCount
+        && (columnVarcharMask & 1L << index) != 0;
   }
 
   public SqlIdentifier columnTableName(int index) {
@@ -705,12 +738,24 @@ public final class SqlCommand {
         && (insertDefaultMasks[rowIndex] & 1L << columnIndex) != 0;
   }
 
+  public boolean insertIsVarchar(int rowIndex, int columnIndex) {
+    return rowIndex >= 0
+        && rowIndex < insertRowCount
+        && columnIndex >= 0
+        && columnIndex < insertColumnCount
+        && (insertVarcharMasks[rowIndex] & 1L << columnIndex) != 0;
+  }
+
   public boolean updateIsNull(int index) {
     return index >= 0 && index < updateColumnCount && nullUpdates[index];
   }
 
   public boolean updateIsDefault(int index) {
     return index >= 0 && index < updateColumnCount && defaultUpdates[index];
+  }
+
+  public boolean updateIsVarchar(int index) {
+    return index >= 0 && index < updateColumnCount && varcharUpdates[index];
   }
 
   public long scanLowerInclusive() {
@@ -768,6 +813,10 @@ public final class SqlCommand {
 
   public boolean isNullPredicate(int index) {
     return index >= 0 && index < predicateCount && nullPredicates[index];
+  }
+
+  public boolean predicateIsVarchar(int index) {
+    return index >= 0 && index < predicateCount && varcharPredicates[index];
   }
 
   public boolean isColumnPredicate(int index) {

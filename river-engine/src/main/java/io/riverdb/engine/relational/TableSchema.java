@@ -2,7 +2,7 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Caller-owned bounded schema for the current all-BIGINT relational slice. */
+/** Caller-owned bounded schema for the current BIGINT and VARCHAR(7) relational slice. */
 public final class TableSchema {
   public static final int MAXIMUM_COLUMNS = 8;
   static final int MAXIMUM_NAME_LENGTH = 64;
@@ -12,6 +12,7 @@ public final class TableSchema {
   private int columnCount;
   private long notNullMask;
   private long defaultMask;
+  private long varcharMask;
 
   public TableSchema() {
     for (int index = 0; index < columns.length; index++) {
@@ -26,6 +27,7 @@ public final class TableSchema {
     columnCount = 0;
     notNullMask = 0;
     defaultMask = 0;
+    varcharMask = 0;
   }
 
   public StatusCode addBigint(CharSequence name) {
@@ -33,6 +35,17 @@ public final class TableSchema {
   }
 
   public StatusCode addBigint(CharSequence name, boolean nullable) {
+    return addColumn(name, nullable, false);
+  }
+
+  public StatusCode addVarchar7(CharSequence name, boolean nullable) {
+    return addColumn(name, nullable, true);
+  }
+
+  private StatusCode addColumn(
+      CharSequence name,
+      boolean nullable,
+      boolean varchar) {
     if (!RelationalKey.validName(name)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -48,6 +61,9 @@ public final class TableSchema {
     columns[columnCount].set(name);
     if (!nullable) {
       notNullMask |= 1L << columnCount;
+    }
+    if (varchar) {
+      varcharMask |= 1L << columnCount;
     }
     columnCount++;
     return StatusCode.OK;
@@ -97,6 +113,16 @@ public final class TableSchema {
             && column < columnCount
             && (defaultMask & 1L << column) != 0
         ? defaultValues[column] : 0;
+  }
+
+  boolean isVarchar(int column) {
+    return column > 0
+        && column < columnCount
+        && (varcharMask & 1L << column) != 0;
+  }
+
+  long varcharMask() {
+    return varcharMask;
   }
 
   static final class ColumnName implements CharSequence {

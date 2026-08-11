@@ -1,6 +1,7 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.PackedText;
 
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
 public final class SqlParser {
@@ -11,6 +12,7 @@ public final class SqlParser {
   private final SqlScalarSourceView scalarSourceView = new SqlScalarSourceView();
   private final long[] literalMembershipValues =
       new long[SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES];
+  private final char[] textCharacters = new char[PackedText.MAXIMUM_LENGTH];
   private int offset;
   private int scalarPredicateIndex = -1;
   private int existenceWhereStart = -1;
@@ -475,7 +477,27 @@ public final class SqlParser {
               status = columnIdentifier(sql, result);
             }
             if (status.isOk()) {
-              status = requireKeyword(sql, "BIGINT");
+              if (consumeKeyword(sql, "BIGINT")) {
+                status = StatusCode.OK;
+              } else {
+                status = requireKeyword(sql, "VARCHAR");
+                if (status.isOk()) {
+                  status = requireCharacter(sql, '(');
+                }
+                if (status.isOk()) {
+                  status = number(sql, numberResult);
+                }
+                if (status.isOk()
+                    && numberResult.value != PackedText.MAXIMUM_LENGTH) {
+                  status = StatusCode.INVALID_EXTERNAL_INPUT;
+                }
+                if (status.isOk()) {
+                  status = requireCharacter(sql, ')');
+                }
+                if (status.isOk()) {
+                  result.markLastColumnVarchar();
+                }
+              }
             }
             boolean notNull = false;
             boolean hasDefault = false;
@@ -495,7 +517,8 @@ public final class SqlParser {
                 if (hasDefault) {
                   status = StatusCode.INVALID_EXTERNAL_INPUT;
                 } else {
-                  status = number(sql, numberResult);
+                  status = result.columnIsVarchar(result.columnCount() - 1)
+                      ? packedText(sql, numberResult) : number(sql, numberResult);
                   hasDefault = status.isOk();
                   if (status.isOk()) {
                     result.markLastColumnDefault(numberResult.value);
@@ -564,6 +587,7 @@ public final class SqlParser {
               rowResult.values,
               rowResult.nullMask,
               rowResult.defaultMask,
+              rowResult.varcharMask,
               rowResult.count);
         }
       }
@@ -580,6 +604,7 @@ public final class SqlParser {
                 rowResult.values,
                 rowResult.nullMask,
                 rowResult.defaultMask,
+                rowResult.varcharMask,
                 rowResult.count);
           }
         }
@@ -770,9 +795,15 @@ public final class SqlParser {
         boolean defaultValue = status.isOk()
             && !nullValue
             && consumeKeyword(sql, "DEFAULT");
+        boolean varchar = status.isOk()
+            && !nullValue
+            && !defaultValue
+            && startsText(sql);
         boolean relative = false;
         boolean subtract = false;
-        if (status.isOk() && !nullValue && !defaultValue) {
+        if (status.isOk() && varchar) {
+          status = packedText(sql, numberResult);
+        } else if (status.isOk() && !nullValue && !defaultValue) {
           if (startsNumber(sql)) {
             status = number(sql, numberResult);
           } else {
@@ -802,6 +833,7 @@ public final class SqlParser {
               nullValue || defaultValue ? 0 : numberResult.value,
               nullValue,
               defaultValue,
+              varchar,
               relative,
               subtract);
           if (result.updateColumnCount() == 1) {
@@ -891,17 +923,22 @@ public final class SqlParser {
       long lower = 0;
       long upper = 0;
       boolean columnEquality = false;
+      boolean varchar = false;
       int membershipCount = 0;
       boolean membershipHasNull = false;
       if (betweenPredicate) {
-        status = number(sql, numberResult);
+        status = literal(sql, numberResult);
         lower = numberResult.value;
+        varchar = numberResult.varchar;
         if (status.isOk()) {
           status = requireKeyword(sql, "AND");
         }
         if (status.isOk()) {
-          status = number(sql, numberResult);
+          status = literal(sql, numberResult);
           upper = numberResult.value;
+          if (status.isOk() && varchar != numberResult.varchar) {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
+          }
         }
         if (status.isOk() && lower > upper) {
           status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -915,6 +952,7 @@ public final class SqlParser {
       } else if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
         status = requireCharacter(sql, '(');
         boolean complete = false;
+        boolean membershipTypeSet = false;
         while (status.isOk() && !complete) {
           if (status.isOk() && consumeKeyword(sql, "NULL")) {
             membershipHasNull = true;
@@ -922,7 +960,15 @@ public final class SqlParser {
             if (membershipCount >= literalMembershipValues.length) {
               status = StatusCode.RESOURCE_EXHAUSTED;
             } else {
-              status = number(sql, numberResult);
+              status = literal(sql, numberResult);
+              if (status.isOk()) {
+                if (membershipTypeSet && varchar != numberResult.varchar) {
+                  status = StatusCode.INVALID_EXTERNAL_INPUT;
+                } else {
+                  varchar = numberResult.varchar;
+                  membershipTypeSet = true;
+                }
+              }
               if (status.isOk()) {
                 literalMembershipValues[membershipCount++] = numberResult.value;
               }
@@ -941,9 +987,10 @@ public final class SqlParser {
           scalarPredicateIndex = result.predicateCount();
           status = number(sql, numberResult);
           value = numberResult.value;
-        } else if (startsNumber(sql)) {
-          status = number(sql, numberResult);
+        } else if (startsNumber(sql) || startsText(sql)) {
+          status = literal(sql, numberResult);
           value = numberResult.value;
+          varchar = numberResult.varchar;
         } else {
           SqlIdentifier valueTable = result.writableNextPredicateValueTableName();
           SqlIdentifier valueColumn = result.writableNextPredicateValueColumnName();
@@ -962,10 +1009,12 @@ public final class SqlParser {
           columnEquality = status.isOk();
         }
       } else if (!nullPredicate && status.isOk()) {
-        status = number(sql, numberResult);
+        status = literal(sql, numberResult);
         if (status.isOk()) {
           value = numberResult.value;
+          varchar = numberResult.varchar;
           if (comparison == SqlComparison.GREATER_OR_EQUAL
+              && !varchar
               && consumeHalfOpenUpper(
                   sql, table, column, predicateQualified)) {
             lower = value;
@@ -990,6 +1039,9 @@ public final class SqlParser {
           result.appendPredicate(0, lower, upper, false);
         } else {
           result.appendComparison(value, comparison);
+        }
+        if (varchar && !columnEquality && !nullPredicate) {
+          result.markLastPredicateVarchar();
         }
       }
       if (!status.isOk() || !consumeKeyword(sql, "AND")) {
@@ -1072,6 +1124,7 @@ public final class SqlParser {
     result.count = 0;
     result.nullMask = 0;
     result.defaultMask = 0;
+    result.varcharMask = 0;
     StatusCode status = requireCharacter(sql, '(');
     while (status.isOk()) {
       if (result.count >= SqlCommand.MAXIMUM_COLUMNS) {
@@ -1079,7 +1132,10 @@ public final class SqlParser {
       }
       boolean nullValue = consumeKeyword(sql, "NULL");
       boolean defaultValue = !nullValue && consumeKeyword(sql, "DEFAULT");
-      if (!nullValue && !defaultValue) {
+      boolean varchar = !nullValue && !defaultValue && startsText(sql);
+      if (varchar) {
+        status = packedText(sql, numberResult);
+      } else if (!nullValue && !defaultValue) {
         status = number(sql, numberResult);
       }
       if (status.isOk()) {
@@ -1088,6 +1144,8 @@ public final class SqlParser {
           result.nullMask |= 1L << result.count;
         } else if (defaultValue) {
           result.defaultMask |= 1L << result.count;
+        } else if (varchar) {
+          result.varcharMask |= 1L << result.count;
         }
         result.count++;
       }
@@ -1096,8 +1154,10 @@ public final class SqlParser {
       }
       status = requireCharacter(sql, ',');
     }
-    return status.isOk() && result.count >= 1
-        ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!status.isOk()) {
+      return status;
+    }
+    return result.count >= 1 ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
   private StatusCode columnIdentifier(CharSequence sql, SqlCommand result) {
@@ -1323,6 +1383,7 @@ public final class SqlParser {
   }
 
   private StatusCode number(CharSequence sql, LongResult result) {
+    result.varchar = false;
     skipSpaces(sql);
     if (offset >= sql.length()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1350,6 +1411,47 @@ public final class SqlParser {
     }
     result.value = negative ? value : -value;
     return StatusCode.OK;
+  }
+
+  private StatusCode literal(CharSequence sql, LongResult result) {
+    return startsText(sql) ? packedText(sql, result) : number(sql, result);
+  }
+
+  private StatusCode packedText(CharSequence sql, LongResult result) {
+    skipSpaces(sql);
+    result.varchar = true;
+    if (offset >= sql.length() || sql.charAt(offset) != '\'') {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    offset++;
+    int length = 0;
+    while (offset < sql.length()) {
+      char character = sql.charAt(offset++);
+      if (character == '\'') {
+        if (offset < sql.length() && sql.charAt(offset) == '\'') {
+          offset++;
+        } else {
+          result.value = PackedText.pack(textCharacters, 0, length);
+          return StatusCode.OK;
+        }
+      }
+      if (character < 0x20 || character > 0x7e) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (length >= PackedText.MAXIMUM_LENGTH) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      textCharacters[length++] = character;
+    }
+    return StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private boolean startsText(CharSequence sql) {
+    int start = offset;
+    skipSpaces(sql);
+    boolean text = offset < sql.length() && sql.charAt(offset) == '\'';
+    offset = start;
+    return text;
   }
 
   private boolean startsNumber(CharSequence sql) {
@@ -1443,6 +1545,7 @@ public final class SqlParser {
 
   private static final class LongResult {
     private long value;
+    private boolean varchar;
   }
 
   private static final class LongRow {
@@ -1451,6 +1554,7 @@ public final class SqlParser {
     private int count;
     private long nullMask;
     private long defaultMask;
+    private long varcharMask;
   }
 
   private static final class SqlSourceView implements CharSequence {

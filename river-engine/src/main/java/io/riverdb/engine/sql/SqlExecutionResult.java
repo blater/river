@@ -9,6 +9,7 @@ public final class SqlExecutionResult {
   private long value;
   private long key;
   private long nullMask;
+  private long varcharMask;
   private int affectedRows;
   private int columnCount;
   private boolean hasValue;
@@ -19,6 +20,7 @@ public final class SqlExecutionResult {
     value = 0;
     key = 0;
     nullMask = 0;
+    varcharMask = 0;
     affectedRows = 0;
     columnCount = 0;
     hasValue = false;
@@ -34,10 +36,12 @@ public final class SqlExecutionResult {
       long selectedKey,
       long[] projectedValues,
       long projectedNullMask,
+      long projectedVarcharMask,
       int projectedColumnCount,
       long committedAt) {
     key = selectedKey;
     nullMask = projectedNullMask;
+    varcharMask = projectedVarcharMask;
     columnCount = projectedColumnCount;
     for (int index = 0; index < projectedColumnCount; index++) {
       values[index] = projectedValues[index];
@@ -87,6 +91,16 @@ public final class SqlExecutionResult {
 
   public long nullMask() {
     return nullMask;
+  }
+
+  public boolean isVarchar(int index) {
+    return index >= 0
+        && index < columnCount
+        && (varcharMask & 1L << index) != 0;
+  }
+
+  public long varcharMask() {
+    return varcharMask;
   }
 
   public long commitSequence() {

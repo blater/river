@@ -10,6 +10,7 @@ public final class SqlScanRowResult {
   private long key;
   private long value;
   private long nullMask;
+  private long varcharMask;
   private int columnCount;
   private boolean available;
 
@@ -18,6 +19,7 @@ public final class SqlScanRowResult {
     key = 0;
     value = 0;
     nullMask = 0;
+    varcharMask = 0;
     columnCount = 0;
     available = false;
   }
@@ -30,10 +32,12 @@ public final class SqlScanRowResult {
       long rowKey,
       long[] projectedValues,
       long projectedNullMask,
+      long projectedVarcharMask,
       int projectedColumnCount) {
     key = rowKey;
     columnCount = projectedColumnCount;
     nullMask = projectedNullMask;
+    varcharMask = projectedVarcharMask;
     for (int index = 0; index < projectedColumnCount; index++) {
       values[index] = projectedValues[index];
     }
@@ -63,6 +67,16 @@ public final class SqlScanRowResult {
 
   public long nullMask() {
     return nullMask;
+  }
+
+  public boolean isVarchar(int index) {
+    return index >= 0
+        && index < columnCount
+        && (varcharMask & 1L << index) != 0;
+  }
+
+  public long varcharMask() {
+    return varcharMask;
   }
 
   public boolean isAvailable() {

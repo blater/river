@@ -219,6 +219,7 @@ public final class EmbeddedRiver {
           execution.key(),
           values,
           execution.nullMask(),
+          execution.varcharMask(),
           columns);
     }
 
@@ -248,7 +249,12 @@ public final class EmbeddedRiver {
         for (int index = 0; index < columns; index++) {
           values[index] = scanRow.valueAt(index);
         }
-        return result.complete(scanRow.key(), values, scanRow.nullMask(), columns);
+        return result.complete(
+            scanRow.key(),
+            values,
+            scanRow.nullMask(),
+            scanRow.varcharMask(),
+            columns);
       }
 
       @Override
@@ -284,6 +290,11 @@ public final class EmbeddedRiver {
       @Override
       public CharSequence columnName(int index) {
         return session.scanColumnName(scan, index);
+      }
+
+      @Override
+      public boolean columnIsVarchar(int index) {
+        return session.scanColumnIsVarchar(scan, index);
       }
 
       @Override

@@ -16,5 +16,9 @@ public interface RiverQuery {
 
   CharSequence columnName(int index);
 
+  default boolean columnIsVarchar(int index) {
+    return false;
+  }
+
   long rowsReturned();
 }

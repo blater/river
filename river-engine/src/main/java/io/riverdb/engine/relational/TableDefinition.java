@@ -25,6 +25,7 @@ public final class TableDefinition {
   private int columnCount;
   private long notNullMask;
   private long defaultMask;
+  private long varcharMask;
   private long schemaVersion;
   private boolean available;
 
@@ -52,6 +53,7 @@ public final class TableDefinition {
     columnCount = 0;
     notNullMask = 0;
     defaultMask = 0;
+    varcharMask = 0;
     schemaVersion = 0;
     available = false;
   }
@@ -76,6 +78,7 @@ public final class TableDefinition {
     columnCount = 2;
     notNullMask = 1;
     defaultMask = 0;
+    varcharMask = 0;
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, 1, true);
@@ -116,6 +119,7 @@ public final class TableDefinition {
     tableId = id;
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask;
+    varcharMask = schema.varcharMask;
     copyDefaults(schema);
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
@@ -140,6 +144,7 @@ public final class TableDefinition {
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask();
     defaultMask = schema.defaultMask();
+    varcharMask = schema.varcharMask();
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = schema.defaultValue(index);
     }
@@ -166,12 +171,14 @@ public final class TableDefinition {
       int columns,
       long requiredNotNullMask,
       long requiredDefaultMask,
+      long requiredVarcharMask,
       int defaultsOffset) {
     owner = database;
     tableId = id;
     columnCount = columns;
     notNullMask = requiredNotNullMask;
     defaultMask = requiredDefaultMask;
+    varcharMask = requiredVarcharMask;
     for (int index = 0; index < columns; index++) {
       defaultValues[index] = source.getLong(defaultsOffset + index * Long.BYTES);
     }
@@ -252,6 +259,12 @@ public final class TableDefinition {
         && (defaultMask & 1L << column) != 0;
   }
 
+  public boolean isVarchar(int column) {
+    return column > 0
+        && column < columnCount
+        && (varcharMask & 1L << column) != 0;
+  }
+
   public long defaultValue(int column) {
     return hasDefault(column) ? defaultValues[column] : 0;
   }
@@ -294,6 +307,10 @@ public final class TableDefinition {
 
   long defaultMask() {
     return defaultMask;
+  }
+
+  long varcharMask() {
+    return varcharMask;
   }
 
   int uniqueValueIndexTableId() {
@@ -446,6 +463,7 @@ public final class TableDefinition {
 
   private void copyDefaults(TableDefinition source) {
     defaultMask = source.defaultMask;
+    varcharMask = source.varcharMask;
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = source.defaultValues[index];
     }
