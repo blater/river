@@ -694,7 +694,7 @@ public final class SqlSession {
       status = bindDataCommand();
     }
     int orderColumn = status.isOk() && command.isOrdered()
-        ? table.findColumn(command.orderColumnName()) : -1;
+        ? resolveOrderColumn() : -1;
     if (status.isOk()
         && command.isOrdered()
         && orderColumn < 0) {
@@ -1279,6 +1279,23 @@ public final class SqlSession {
     }
     projectedColumnCount = count;
     return StatusCode.OK;
+  }
+
+  private int resolveOrderColumn() {
+    int column = table.findColumn(command.orderColumnName());
+    if (column >= 0) {
+      return column;
+    }
+    int resolved = -1;
+    for (int index = 0; index < command.columnCount(); index++) {
+      if (sameName(command.columnOutputName(index), command.orderColumnName())) {
+        if (resolved >= 0 || command.isNullProjection(index)) {
+          return -1;
+        }
+        resolved = table.findColumn(command.columnName(index));
+      }
+    }
+    return resolved;
   }
 
   private StatusCode bindJoin() {

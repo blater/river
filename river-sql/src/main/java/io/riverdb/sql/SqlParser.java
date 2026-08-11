@@ -660,7 +660,10 @@ public final class SqlParser {
           if (status.isOk()) {
             status = type == SqlCommandType.GROUP_COUNT
                     || type == SqlCommandType.DISTINCT_SCAN
-                ? matchingIdentifier(sql, result.firstColumnName())
+                ? matchingEitherIdentifier(
+                    sql,
+                    result.firstColumnName(),
+                    result.columnOutputName(0))
                 : identifier(sql, result.writableOrderColumnName());
           }
           if (status.isOk()) {
@@ -980,15 +983,39 @@ public final class SqlParser {
     SqlIdentifier actual = rowResult.identifier;
     actual.reset();
     StatusCode status = identifier(sql, actual);
-    if (!status.isOk() || actual.length() != expected.length()) {
-      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    if (!status.isOk()) {
+      return status;
     }
-    for (int index = 0; index < actual.length(); index++) {
-      if (actual.charAt(index) != expected.charAt(index)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
+    return sameIdentifier(actual, expected)
+        ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private StatusCode matchingEitherIdentifier(
+      CharSequence sql,
+      CharSequence first,
+      CharSequence second) {
+    SqlIdentifier actual = rowResult.identifier;
+    actual.reset();
+    StatusCode status = identifier(sql, actual);
+    if (!status.isOk()) {
+      return status;
+    }
+    return sameIdentifier(actual, first) || sameIdentifier(actual, second)
+        ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private static boolean sameIdentifier(
+      CharSequence left,
+      CharSequence right) {
+    if (left.length() != right.length()) {
+      return false;
+    }
+    for (int index = 0; index < left.length(); index++) {
+      if (left.charAt(index) != right.charAt(index)) {
+        return false;
       }
     }
-    return StatusCode.OK;
+    return true;
   }
 
   private static void setIdentifier(SqlIdentifier target, String value) {

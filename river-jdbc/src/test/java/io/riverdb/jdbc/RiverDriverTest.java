@@ -296,6 +296,18 @@ final class RiverDriverTest {
         }
         assertFalse(ordered.next());
       }
+      try (ResultSet aliased = statement.executeQuery(
+          "SELECT id AS account_id, balance funds FROM accounts "
+              + "ORDER BY account_id")) {
+        assertEquals("account_id", aliased.getMetaData().getColumnName(1));
+        assertEquals("funds", aliased.getMetaData().getColumnName(2));
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(aliased.next());
+          assertEquals(expected, aliased.getLong("account_id"));
+          assertEquals(expected * 100, aliased.getLong("funds"));
+        }
+        assertFalse(aliased.next());
+      }
       try (ResultSet derived = statement.executeQuery(
           "SELECT d.id, d.balance FROM "
               + "(SELECT id, balance, region FROM accounts WHERE accounts.region=7) d "
@@ -714,13 +726,13 @@ final class RiverDriverTest {
         assertFalse(ordered.next());
       }
       try (ResultSet grouped = statement.executeQuery(
-          "SELECT region, COUNT(*) FROM accounts "
+          "SELECT region AS area, COUNT(*) FROM accounts "
               + "WHERE balance >= 150 AND balance < 350 "
-              + "GROUP BY region ORDER BY region")) {
-        assertEquals("region", grouped.getMetaData().getColumnLabel(1));
+              + "GROUP BY region ORDER BY area")) {
+        assertEquals("area", grouped.getMetaData().getColumnLabel(1));
         assertEquals("count", grouped.getMetaData().getColumnLabel(2));
         assertTrue(grouped.next());
-        assertEquals(7, grouped.getLong("region"));
+        assertEquals(7, grouped.getLong("area"));
         assertEquals(1, grouped.getLong("count"));
         assertTrue(grouped.next());
         assertEquals(8, grouped.getLong(1));
@@ -728,28 +740,28 @@ final class RiverDriverTest {
         assertFalse(grouped.next());
       }
       try (ResultSet distinct = statement.executeQuery(
-          "SELECT DISTINCT region FROM accounts "
+          "SELECT DISTINCT region AS area FROM accounts "
               + "WHERE balance >= 150 AND balance < 350 "
-              + "ORDER BY region")) {
+              + "ORDER BY area")) {
         assertTrue(distinct.next());
-        assertEquals(7, distinct.getLong("region"));
+        assertEquals(7, distinct.getLong("area"));
         assertTrue(distinct.next());
         assertEquals(8, distinct.getLong(1));
         assertFalse(distinct.next());
       }
       try (ResultSet joined = statement.executeQuery(
-          "SELECT accounts.id, regions.code FROM accounts "
+          "SELECT accounts.id AS account_id, regions.code region_code FROM accounts "
               + "JOIN regions ON accounts.region=regions.id "
               + "WHERE accounts.id >= 1 AND accounts.id < 4 "
               + "AND accounts.region=7 LIMIT 2")) {
-        assertEquals("id", joined.getMetaData().getColumnLabel(1));
-        assertEquals("code", joined.getMetaData().getColumnLabel(2));
+        assertEquals("account_id", joined.getMetaData().getColumnLabel(1));
+        assertEquals("region_code", joined.getMetaData().getColumnLabel(2));
         assertTrue(joined.next());
-        long firstId = joined.getLong("id");
-        assertEquals(7000, joined.getLong("code"));
+        long firstId = joined.getLong("account_id");
+        assertEquals(7000, joined.getLong("region_code"));
         assertTrue(joined.next());
-        long secondId = joined.getLong("id");
-        assertEquals(7000, joined.getLong("code"));
+        long secondId = joined.getLong("account_id");
+        assertEquals(7000, joined.getLong("region_code"));
         assertEquals(3, firstId + secondId);
         assertEquals(2, firstId * secondId);
         assertFalse(joined.next());
