@@ -9,6 +9,8 @@ public final class SqlParser {
   private final SqlIdentifier identifierScratch = new SqlIdentifier();
   private final SqlSourceView sourceView = new SqlSourceView();
   private final SqlScalarSourceView scalarSourceView = new SqlScalarSourceView();
+  private final long[] literalMembershipValues =
+      new long[SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES];
   private int offset;
   private int scalarPredicateIndex = -1;
   private int existenceWhereStart = -1;
@@ -794,7 +796,32 @@ public final class SqlParser {
       long lower = 0;
       long upper = 0;
       boolean columnEquality = false;
-      if (comparison == SqlComparison.EQUAL) {
+      int membershipCount = 0;
+      boolean membershipHasNull = false;
+      if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
+        status = requireCharacter(sql, '(');
+        boolean complete = false;
+        while (status.isOk() && !complete) {
+          if (status.isOk() && consumeKeyword(sql, "NULL")) {
+            membershipHasNull = true;
+          } else if (status.isOk()) {
+            if (membershipCount >= literalMembershipValues.length) {
+              status = StatusCode.RESOURCE_EXHAUSTED;
+            } else {
+              status = number(sql, numberResult);
+              if (status.isOk()) {
+                literalMembershipValues[membershipCount++] = numberResult.value;
+              }
+            }
+          }
+          if (status.isOk()) {
+            complete = consumeCharacter(sql, ')');
+            if (!complete) {
+              status = requireCharacter(sql, ',');
+            }
+          }
+        }
+      } else if (comparison == SqlComparison.EQUAL) {
         skipSpaces(sql);
         if (sql == scalarSourceView && scalarSourceView.isReplacement(offset)) {
           scalarPredicateIndex = result.predicateCount();
@@ -836,6 +863,13 @@ public final class SqlParser {
       if (status.isOk()) {
         if (nullPredicate) {
           result.appendNullPredicate(nullPredicateNegated);
+        } else if (comparison == SqlComparison.IN
+            || comparison == SqlComparison.NOT_IN) {
+          status = result.appendLiteralMembership(
+              literalMembershipValues,
+              membershipCount,
+              membershipHasNull,
+              comparison == SqlComparison.NOT_IN);
         } else if (columnEquality) {
           result.appendColumnPredicate();
         } else if (comparison == SqlComparison.HALF_OPEN_RANGE) {
@@ -852,6 +886,12 @@ public final class SqlParser {
   }
 
   private SqlComparison comparisonOperator(CharSequence sql) {
+    if (consumeKeyword(sql, "NOT")) {
+      return consumeKeyword(sql, "IN") ? SqlComparison.NOT_IN : null;
+    }
+    if (consumeKeyword(sql, "IN")) {
+      return SqlComparison.IN;
+    }
     if (consumeCharacter(sql, '=')) {
       return SqlComparison.EQUAL;
     }

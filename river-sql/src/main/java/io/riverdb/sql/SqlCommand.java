@@ -1,10 +1,13 @@
 package io.riverdb.sql;
 
+import io.riverdb.base.error.StatusCode;
+
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
 public final class SqlCommand {
   public static final int MAXIMUM_INSERT_ROWS = 64;
   public static final int MAXIMUM_COLUMNS = 8;
   public static final int MAXIMUM_PREDICATES = MAXIMUM_COLUMNS;
+  public static final int MAXIMUM_LITERAL_MEMBERSHIP_VALUES = 256;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier tableAlias = new SqlIdentifier();
@@ -34,6 +37,12 @@ public final class SqlCommand {
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
+  private final long[] literalMembershipValues =
+      new long[MAXIMUM_LITERAL_MEMBERSHIP_VALUES];
+  private final int[] literalMembershipOffsets = new int[MAXIMUM_PREDICATES];
+  private final int[] literalMembershipCounts = new int[MAXIMUM_PREDICATES];
+  private final boolean[] literalMembershipHasNull =
+      new boolean[MAXIMUM_PREDICATES];
   private final SqlComparison[] comparisons = new SqlComparison[MAXIMUM_PREDICATES];
   private final boolean[] columnPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullPredicates = new boolean[MAXIMUM_PREDICATES];
@@ -56,6 +65,7 @@ public final class SqlCommand {
   private int insertColumnCount;
   private int updateColumnCount;
   private int predicateCount;
+  private int literalMembershipValueCount;
   private int columnCount;
   private boolean available;
 
@@ -100,6 +110,9 @@ public final class SqlCommand {
       predicateValues[index] = 0;
       predicateLowerInclusive[index] = 0;
       predicateUpperExclusive[index] = 0;
+      literalMembershipOffsets[index] = 0;
+      literalMembershipCounts[index] = 0;
+      literalMembershipHasNull[index] = false;
       comparisons[index] = null;
       columnPredicates[index] = false;
       nullPredicates[index] = false;
@@ -122,6 +135,7 @@ public final class SqlCommand {
     insertColumnCount = 0;
     updateColumnCount = 0;
     predicateCount = 0;
+    literalMembershipValueCount = 0;
     columnCount = 0;
     available = false;
     for (int index = 0; index < insertNullMasks.length; index++) {
@@ -180,6 +194,63 @@ public final class SqlCommand {
       equalityPredicate = comparison == SqlComparison.EQUAL;
       boundedScan = false;
     }
+  }
+
+  StatusCode appendLiteralMembership(
+      long[] values,
+      int count,
+      boolean hasNull,
+      boolean negated) {
+    return appendLiteralMembership(values, 0, count, hasNull, negated);
+  }
+
+  private StatusCode appendLiteralMembership(
+      long[] values,
+      int valueOffset,
+      int count,
+      boolean hasNull,
+      boolean negated) {
+    if (values == null
+        || valueOffset < 0
+        || count < 0
+        || valueOffset + count > values.length
+        || count == 0 && !hasNull
+        || literalMembershipValueCount + count > literalMembershipValues.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int index = predicateCount++;
+    literalMembershipOffsets[index] = literalMembershipValueCount;
+    literalMembershipHasNull[index] = hasNull;
+    comparisons[index] = negated ? SqlComparison.NOT_IN : SqlComparison.IN;
+    for (int value = 0; value < count; value++) {
+      long candidate = values[valueOffset + value];
+      int lower = literalMembershipOffsets[index];
+      int upper = literalMembershipValueCount;
+      while (lower < upper) {
+        int middle = (lower + upper) >>> 1;
+        if (literalMembershipValues[middle] < candidate) {
+          lower = middle + 1;
+        } else {
+          upper = middle;
+        }
+      }
+      if (lower < literalMembershipValueCount
+          && literalMembershipValues[lower] == candidate) {
+        continue;
+      }
+      for (int moved = literalMembershipValueCount; moved > lower; moved--) {
+        literalMembershipValues[moved] = literalMembershipValues[moved - 1];
+      }
+      literalMembershipValues[lower] = candidate;
+      literalMembershipValueCount++;
+    }
+    literalMembershipCounts[index] =
+        literalMembershipValueCount - literalMembershipOffsets[index];
+    if (index == 0) {
+      equalityPredicate = false;
+      boundedScan = false;
+    }
+    return StatusCode.OK;
   }
 
   void appendNullPredicate(boolean negated) {
@@ -243,7 +314,16 @@ public final class SqlCommand {
             source.predicateValueColumnNames[index]);
         appendColumnPredicate();
       } else {
-        if (source.comparisons[index] == SqlComparison.HALF_OPEN_RANGE) {
+        if (source.isLiteralMembership(index)) {
+          int offset = source.literalMembershipOffsets[index];
+          int count = source.literalMembershipCounts[index];
+          appendLiteralMembership(
+              source.literalMembershipValues,
+              offset,
+              count,
+              source.literalMembershipHasNull[index],
+              source.comparisons[index] == SqlComparison.NOT_IN);
+        } else if (source.comparisons[index] == SqlComparison.HALF_OPEN_RANGE) {
           appendPredicate(
               source.predicateValues[index],
               source.predicateLowerInclusive[index],
@@ -571,6 +651,27 @@ public final class SqlCommand {
 
   public SqlComparison comparison(int index) {
     return index >= 0 && index < predicateCount ? comparisons[index] : null;
+  }
+
+  public boolean isLiteralMembership(int index) {
+    SqlComparison comparison = comparison(index);
+    return comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN;
+  }
+
+  public int literalMembershipCount(int index) {
+    return isLiteralMembership(index) ? literalMembershipCounts[index] : 0;
+  }
+
+  public long literalMembershipValue(int index, int valueIndex) {
+    return isLiteralMembership(index)
+            && valueIndex >= 0
+            && valueIndex < literalMembershipCounts[index]
+        ? literalMembershipValues[literalMembershipOffsets[index] + valueIndex]
+        : 0;
+  }
+
+  public boolean literalMembershipHasNull(int index) {
+    return isLiteralMembership(index) && literalMembershipHasNull[index];
   }
 
   public boolean isNullPredicate(int index) {

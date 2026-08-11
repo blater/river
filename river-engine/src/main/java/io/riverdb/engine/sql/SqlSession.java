@@ -3024,7 +3024,32 @@ public final class SqlSession {
       case HALF_OPEN_RANGE ->
         actual >= source.predicateLowerInclusive(predicate)
             && actual < source.predicateUpperExclusive(predicate);
+      case IN, NOT_IN -> matchesLiteralMembership(actual, source, predicate);
     };
+  }
+
+  private static boolean matchesLiteralMembership(
+      long actual,
+      SqlCommand source,
+      int predicate) {
+    boolean equal = false;
+    int lower = 0;
+    int upper = source.literalMembershipCount(predicate);
+    while (lower < upper) {
+      int middle = (lower + upper) >>> 1;
+      long candidate = source.literalMembershipValue(predicate, middle);
+      if (candidate < actual) {
+        lower = middle + 1;
+      } else if (candidate > actual) {
+        upper = middle;
+      } else {
+        equal = true;
+        break;
+      }
+    }
+    return source.comparison(predicate) == SqlComparison.IN
+        ? equal
+        : !equal && !source.literalMembershipHasNull(predicate);
   }
 
   private long accessValue() {

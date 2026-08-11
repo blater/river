@@ -8,5 +8,7 @@ public enum SqlComparison {
   LESS_OR_EQUAL,
   GREATER_THAN,
   GREATER_OR_EQUAL,
-  HALF_OPEN_RANGE
+  HALF_OPEN_RANGE,
+  IN,
+  NOT_IN
 }

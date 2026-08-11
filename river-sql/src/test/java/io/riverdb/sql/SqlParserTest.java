@@ -176,6 +176,26 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
+            "SELECT id FROM accounts WHERE region IN (7, -2, 7, NULL) AND id NOT IN (9)",
+            command));
+    assertEquals(SqlComparison.IN, command.comparison(0));
+    assertEquals(2, command.literalMembershipCount(0));
+    assertEquals(-2, command.literalMembershipValue(0, 0));
+    assertEquals(7, command.literalMembershipValue(0, 1));
+    assertTrue(command.literalMembershipHasNull(0));
+    assertEquals(SqlComparison.NOT_IN, command.comparison(1));
+    assertEquals(1, command.literalMembershipCount(1));
+    assertEquals(9, command.literalMembershipValue(1, 0));
+    assertFalse(command.literalMembershipHasNull(1));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM accounts WHERE region IN ()", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM accounts WHERE region IN (1,)", command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
             "SELECT region, COUNT(*) FROM accounts "
                 + "WHERE value >= 100 AND value < 300 AND region=7 "
                 + "GROUP BY region ORDER BY region ASC",

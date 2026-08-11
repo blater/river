@@ -1081,6 +1081,41 @@ final class RiverDriverTest {
         assertFalse(rows.next());
       }
       try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value IN (-1, 1, 99) ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(2, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(4, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value NOT IN (-1, 1) ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(3, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value NOT IN (-1, NULL)")) {
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value IN (NULL)")) {
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE id IN "
+              + "(SELECT id FROM comparison_values WHERE kind IN (1)) ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(2, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
           "SELECT id FROM comparison_values "
               + "WHERE value>=-1 AND value<=1 ORDER BY id")) {
         for (long expected = 2; expected <= 4; expected++) {
@@ -1400,6 +1435,19 @@ final class RiverDriverTest {
         assertEquals(1, result.getLong(1));
         assertTrue(result.next());
         assertEquals(2, result.getLong(1));
+        assertFalse(result.next());
+      }
+    }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        PreparedStatement select = connection.prepareStatement(
+            "SELECT id FROM prepared_values WHERE id IN (?, ?) ORDER BY id")) {
+      select.setLong(1, 3);
+      select.setLong(2, 1);
+      try (ResultSet result = select.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(1, result.getLong(1));
+        assertTrue(result.next());
+        assertEquals(3, result.getLong(1));
         assertFalse(result.next());
       }
     }
