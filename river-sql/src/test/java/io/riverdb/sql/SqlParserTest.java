@@ -416,7 +416,7 @@ final class SqlParserTest {
   }
 
   @Test
-  void parsesScalarPredicateAsTwoQueryBlocks() {
+  void parsesScalarPredicatesAsBoundedQueryBlocks() {
     SqlParser parser = new SqlParser();
     SqlQuery query = new SqlQuery();
     SqlCommand command = new SqlCommand();
@@ -454,6 +454,19 @@ final class SqlParserTest {
     assertName("id", scalar.predicateColumnName(0));
     assertName("accounts", scalar.predicateValueTableName(0));
     assertName("region", scalar.predicateValueColumnName(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(nestedScalarQuery(3), query, command));
+    assertEquals(3, query.blockCount());
+    assertEquals(0, query.scalarPredicate(0));
+    assertEquals(0, query.scalarPredicate(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(nestedScalarQuery(32), query, command));
+    assertEquals(32, query.blockCount());
+    assertEquals(
+        StatusCode.QUERY_TOO_COMPLEX,
+        parser.parseQuery(nestedScalarQuery(33), query, command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parseQuery(
@@ -646,6 +659,11 @@ final class SqlParserTest {
               + "(SELECT b.id FROM accounts b WHERE b.region=a.region)",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE id=(SELECT id FROM accounts "
+              + "WHERE id=(SELECT id FROM accounts WHERE id=1))",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -695,6 +713,11 @@ final class SqlParserTest {
               + "(SELECT b.id FROM accounts b WHERE b.region=a.region)",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE id=(SELECT id FROM accounts "
+              + "WHERE id=(SELECT id FROM accounts WHERE id=1))",
+          query,
+          command).ordinal();
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 256, "warmed SQL parse allocated bytes: " + allocated);
@@ -704,6 +727,14 @@ final class SqlParserTest {
     String query = "SELECT id FROM accounts";
     for (int depth = 1; depth < blocks; depth++) {
       query = "SELECT d" + depth + ".id FROM (" + query + ") d" + depth;
+    }
+    return query;
+  }
+
+  private static String nestedScalarQuery(int blocks) {
+    String query = "SELECT id FROM accounts WHERE id=1";
+    for (int depth = 1; depth < blocks; depth++) {
+      query = "SELECT id FROM accounts WHERE id=(" + query + ")";
     }
     return query;
   }

@@ -327,6 +327,18 @@ final class RiverDriverTest {
               "SELECT id FROM accounts WHERE balance="
                   + "(SELECT region FROM accounts WHERE region=7)"));
       assertEquals("21000", cardinality.getSQLState());
+      for (int depth : new int[] {3, 8, 32}) {
+        try (ResultSet nestedScalar = statement.executeQuery(
+            nestedScalarQuery(depth))) {
+          assertTrue(nestedScalar.next());
+          assertEquals(1, nestedScalar.getLong(1));
+          assertFalse(nestedScalar.next());
+        }
+      }
+      SQLException scalarDepthFailure = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(nestedScalarQuery(33)));
+      assertEquals("54001", scalarDepthFailure.getSQLState());
       try (ResultSet exists = statement.executeQuery(
           "SELECT id FROM accounts WHERE EXISTS "
               + "(SELECT id FROM regions WHERE code=7000) ORDER BY id")) {
@@ -621,6 +633,14 @@ final class RiverDriverTest {
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static String nestedScalarQuery(int blocks) {
+    String query = "SELECT id FROM accounts WHERE id=1";
+    for (int depth = 1; depth < blocks; depth++) {
+      query = "SELECT id FROM accounts WHERE id=(" + query + ")";
+    }
+    return query;
   }
 
   @Test

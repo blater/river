@@ -76,27 +76,50 @@ public final class SqlParser {
       int open,
       SqlQuery query,
       SqlCommand result) {
-    int close = matchingCloseParenthesis(sql, open, sql.length());
-    if (close < 0) {
+    StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : parseScalarBlocks(sql, 0, sql.length(), query);
+    return status.isOk()
+        ? query.compileScalarPredicate(result, query.scalarPredicate()) : status;
+  }
+
+  private StatusCode parseScalarBlocks(
+      String sql,
+      int start,
+      int end,
+      SqlQuery query) {
+    int open = findScalarSource(sql, start, end);
+    int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
+    if (open < 0 || close < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlCommand outer = query.nextBlock();
-    SqlCommand scalar = query.nextBlock();
-    if (outer == null || scalar == null) {
+    int parentIndex = query.blockCount();
+    SqlCommand parent = query.nextBlock();
+    if (parent == null) {
       return StatusCode.QUERY_TOO_COMPLEX;
     }
-    scalarSourceView.set(sql, 0, open, close + 1, sql.length(), false);
+    scalarSourceView.set(sql, start, open, close + 1, end, false);
     scalarPredicateIndex = -1;
-    StatusCode status = parseText(scalarSourceView, outer);
+    StatusCode status = parseText(scalarSourceView, parent);
     if (status.isOk() && scalarPredicateIndex < 0) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (status.isOk()) {
-      sourceView.set(sql, open + 1, close, close, close);
-      status = parseText(sourceView, scalar);
+      query.setScalarPredicate(parentIndex, scalarPredicateIndex);
+      int nestedOpen = findScalarSource(sql, open + 1, close);
+      if (nestedOpen >= 0) {
+        status = parseScalarBlocks(sql, open + 1, close, query);
+      } else {
+        SqlCommand scalar = query.nextBlock();
+        if (scalar == null) {
+          status = StatusCode.QUERY_TOO_COMPLEX;
+        } else {
+          sourceView.set(sql, open + 1, close, close, close);
+          status = parseText(sourceView, scalar);
+        }
+      }
     }
-    return status.isOk()
-        ? query.compileScalarPredicate(result, scalarPredicateIndex) : status;
+    return status;
   }
 
   private StatusCode parseMembershipPredicate(

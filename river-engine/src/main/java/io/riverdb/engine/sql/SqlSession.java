@@ -1703,19 +1703,29 @@ public final class SqlSession {
   }
 
   private StatusCode evaluateScalarPredicate() {
-    SqlCommand scalar = query.scalarCommand();
-    if (scalar == null || scalar.isOrdered()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = StatusCode.OK;
+    for (int block = query.blockCount() - 1;
+        status.isOk() && block > 0 && !subqueryPredicateFalse;
+        block--) {
+      SqlCommand scalar = query.block(block);
+      if (scalar == null || scalar.isOrdered()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      status = bindNestedCommand(scalar);
+      if (status.isOk() && nestedCorrelated) {
+        if (query.blockCount() != 2) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        correlatedScalar = true;
+        return StatusCode.OK;
+      }
+      if (status.isOk()) {
+        SqlCommand destination = block == 1 ? command : query.block(block - 1);
+        status = evaluateScalarRows(
+            scalar, 0, null, destination, block - 1);
+      }
     }
-    StatusCode status = bindNestedCommand(scalar);
-    if (!status.isOk()) {
-      return status;
-    }
-    if (nestedCorrelated) {
-      correlatedScalar = true;
-      return StatusCode.OK;
-    }
-    return evaluateScalarRows(scalar, 0, null);
+    return status;
   }
 
   private StatusCode evaluateCorrelatedScalar(
@@ -1724,13 +1734,16 @@ public final class SqlSession {
     SqlCommand scalar = query.scalarCommand();
     return scalar == null
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : evaluateScalarRows(scalar, outerPrimaryKey, outerSource);
+        : evaluateScalarRows(
+            scalar, outerPrimaryKey, outerSource, command, 0);
   }
 
   private StatusCode evaluateScalarRows(
       SqlCommand scalar,
       long outerPrimaryKey,
-      HeapRowResult outerSource) {
+      HeapRowResult outerSource,
+      SqlCommand destination,
+      int destinationBlock) {
     StatusCode status = StatusCode.OK;
     if (scalar.rowLimit() == 0) {
       subqueryPredicateFalse = true;
@@ -1788,7 +1801,7 @@ public final class SqlSession {
     if (status.isOk() && rows == 0) {
       subqueryPredicateFalse = true;
     } else if (status.isOk() && !subqueryPredicateFalse) {
-      status = query.bindScalarValue(command, value);
+      status = query.bindScalarValue(destination, destinationBlock, value);
     }
     return status;
   }

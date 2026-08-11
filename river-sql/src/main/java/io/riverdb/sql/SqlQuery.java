@@ -7,23 +7,24 @@ public final class SqlQuery {
   public static final int MAXIMUM_QUERY_BLOCKS = 32;
 
   private final SqlCommand[] blocks = new SqlCommand[MAXIMUM_QUERY_BLOCKS];
+  private final int[] scalarPredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private int blockCount;
-  private int scalarPredicate = -1;
   private int existencePredicate;
   private int membershipPredicate;
 
   public SqlQuery() {
     for (int index = 0; index < blocks.length; index++) {
       blocks[index] = new SqlCommand();
+      scalarPredicates[index] = -1;
     }
   }
 
   public void reset() {
     for (int index = 0; index < blockCount; index++) {
       blocks[index].reset();
+      scalarPredicates[index] = -1;
     }
     blockCount = 0;
-    scalarPredicate = -1;
     existencePredicate = 0;
     membershipPredicate = 0;
   }
@@ -34,7 +35,12 @@ public final class SqlQuery {
     }
     SqlCommand block = blocks[blockCount++];
     block.reset();
+    scalarPredicates[blockCount - 1] = -1;
     return block;
+  }
+
+  void setScalarPredicate(int block, int predicate) {
+    scalarPredicates[block] = predicate;
   }
 
   StatusCode compileDerived(SqlCommand destination) {
@@ -112,23 +118,23 @@ public final class SqlQuery {
 
   StatusCode compileScalarPredicate(SqlCommand destination, int predicate) {
     if (destination == null
-        || blockCount != 2
-        || predicate < 0
-        || predicate >= blocks[0].predicateCount()
-        || !blocks[0].isEqualityPredicate(predicate)
-        || blocks[0].type() != SqlCommandType.SCAN
-            && blocks[0].type() != SqlCommandType.SELECT) {
+        || blockCount < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlCommand scalar = blocks[1];
-    if (scalar.type() != SqlCommandType.SCAN
-        && scalar.type() != SqlCommandType.SELECT
-        || scalar.isSelectAll()
-        || scalar.columnCount() != 1) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    scalarPredicates[0] = predicate;
+    for (int index = 0; index < blockCount; index++) {
+      SqlCommand block = blocks[index];
+      if (block.type() != SqlCommandType.SCAN
+          && block.type() != SqlCommandType.SELECT
+          || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
+          || index + 1 < blockCount
+              && (scalarPredicates[index] < 0
+                  || scalarPredicates[index] >= block.predicateCount()
+                  || !block.isEqualityPredicate(scalarPredicates[index]))) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
     }
     destination.copyQueryFrom(blocks[0]);
-    scalarPredicate = predicate;
     return StatusCode.OK;
   }
 
@@ -250,11 +256,15 @@ public final class SqlQuery {
   }
 
   public boolean hasScalarPredicate() {
-    return scalarPredicate >= 0;
+    return blockCount > 1 && scalarPredicates[0] >= 0;
   }
 
   public int scalarPredicate() {
-    return scalarPredicate;
+    return scalarPredicate(0);
+  }
+
+  public int scalarPredicate(int block) {
+    return block >= 0 && block < blockCount ? scalarPredicates[block] : -1;
   }
 
   public SqlCommand scalarCommand() {
@@ -262,10 +272,18 @@ public final class SqlQuery {
   }
 
   public StatusCode bindScalarValue(SqlCommand destination, long value) {
-    if (destination == null || !hasScalarPredicate()) {
+    return bindScalarValue(destination, 0, value);
+  }
+
+  public StatusCode bindScalarValue(
+      SqlCommand destination,
+      int block,
+      long value) {
+    int predicate = scalarPredicate(block);
+    if (destination == null || predicate < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    destination.setPredicateValue(scalarPredicate, value);
+    destination.setPredicateValue(predicate, value);
     return StatusCode.OK;
   }
 
