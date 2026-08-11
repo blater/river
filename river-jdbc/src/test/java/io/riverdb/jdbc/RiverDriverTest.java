@@ -104,6 +104,14 @@ final class RiverDriverTest {
         assertEquals(1, grouped.getLong(2));
         assertFalse(grouped.next());
       }
+      try (ResultSet distinct = statement.executeQuery(
+          "SELECT DISTINCT region FROM accounts ORDER BY region")) {
+        assertTrue(distinct.next());
+        assertEquals(7, distinct.getLong("region"));
+        assertTrue(distinct.next());
+        assertEquals(8, distinct.getLong(1));
+        assertFalse(distinct.next());
+      }
       try (ResultSet joined = statement.executeQuery(
           "SELECT accounts.id, regions.code FROM accounts "
               + "JOIN regions ON accounts.region=regions.id "

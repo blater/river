@@ -196,13 +196,14 @@ public final class SqlParser {
           }
         }
       } else {
-        type = SqlCommandType.SCAN;
-        if (consumeCharacter(sql, '*')) {
+        boolean distinct = consumeKeyword(sql, "DISTINCT");
+        type = distinct ? SqlCommandType.DISTINCT_SCAN : SqlCommandType.SCAN;
+        if (!distinct && consumeCharacter(sql, '*')) {
           result.setSelectAll();
           status = StatusCode.OK;
         } else {
           status = selectColumnIdentifier(sql, result);
-          if (status.isOk() && consumeCharacter(sql, ',')) {
+          if (!distinct && status.isOk() && consumeCharacter(sql, ',')) {
             if (consumeKeyword(sql, "COUNT")) {
               type = SqlCommandType.GROUP_COUNT;
               status = requireCharacter(sql, '(');
@@ -311,6 +312,7 @@ public final class SqlParser {
           }
         } else if (status.isOk()
             && type != SqlCommandType.JOIN_SCAN
+            && type != SqlCommandType.DISTINCT_SCAN
             && consumeKeyword(sql, "WHERE")) {
           status = identifier(sql, result.writablePredicateColumnName());
           if (status.isOk() && consumeCharacter(sql, '=')) {
@@ -349,6 +351,7 @@ public final class SqlParser {
           status = requireKeyword(sql, "BY");
           if (status.isOk()) {
             status = type == SqlCommandType.GROUP_COUNT
+                    || type == SqlCommandType.DISTINCT_SCAN
                 ? matchingIdentifier(sql, result.firstColumnName())
                 : identifier(sql, result.writableOrderColumnName());
           }

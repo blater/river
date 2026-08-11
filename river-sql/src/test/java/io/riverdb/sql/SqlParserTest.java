@@ -144,6 +144,15 @@ final class SqlParserTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key FROM accounts LIMIT -1", command));
     assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT DISTINCT region FROM accounts ORDER BY region LIMIT 2", command));
+    assertEquals(SqlCommandType.DISTINCT_SCAN, command.type());
+    assertName("region", command.firstColumnName());
+    assertEquals(2, command.rowLimit());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT DISTINCT region, key FROM accounts", command));
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key FROM accounts ORDER BY key DESC", command));
     assertEquals(

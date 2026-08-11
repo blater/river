@@ -10,13 +10,16 @@ public final class SqlScanCursor {
   private SqlSession owner;
   private boolean aggregate;
   private boolean groupCount;
+  private boolean distinct;
   private boolean join;
   private boolean groupLookahead;
   private boolean groupInputExhausted;
+  private boolean distinctValueAvailable;
   private boolean aggregateTransactionActive;
   private long aggregateValue;
   private long aggregateCommitSequence;
   private long groupLookaheadValue;
+  private long distinctValue;
   private int groupColumn = -1;
   private int joinOuterColumn = -1;
   private int joinInnerColumn = -1;
@@ -39,13 +42,16 @@ public final class SqlScanCursor {
     owner = null;
     aggregate = false;
     groupCount = false;
+    distinct = false;
     join = false;
     groupLookahead = false;
     groupInputExhausted = false;
+    distinctValueAvailable = false;
     aggregateTransactionActive = false;
     aggregateValue = 0;
     aggregateCommitSequence = 0;
     groupLookaheadValue = 0;
+    distinctValue = 0;
     groupColumn = -1;
     joinOuterColumn = -1;
     joinInnerColumn = -1;
@@ -141,6 +147,28 @@ public final class SqlScanCursor {
     return StatusCode.OK;
   }
 
+  StatusCode claimDistinct(
+      SqlSession session,
+      boolean implicit,
+      int column,
+      boolean indexedValue,
+      long rowLimit) {
+    if (active || session == null || column < 0 || rowLimit < 0) {
+      return StatusCode.CONFLICT;
+    }
+    owner = session;
+    implicitTransaction = implicit;
+    valueIndex = indexedValue;
+    distinct = true;
+    groupColumn = column;
+    maximumRows = rowLimit;
+    projectedColumns[0] = column;
+    projectedColumnCount = 1;
+    active = true;
+    rowsReturned = 0;
+    return StatusCode.OK;
+  }
+
   StatusCode claimJoin(
       SqlSession session,
       boolean implicit,
@@ -204,6 +232,10 @@ public final class SqlScanCursor {
     return groupCount;
   }
 
+  boolean distinct() {
+    return distinct;
+  }
+
   boolean join() {
     return join;
   }
@@ -240,6 +272,19 @@ public final class SqlScanCursor {
   void setGroupLookahead(long value) {
     groupLookaheadValue = value;
     groupLookahead = true;
+  }
+
+  boolean hasDistinctValue() {
+    return distinctValueAvailable;
+  }
+
+  long distinctValue() {
+    return distinctValue;
+  }
+
+  void setDistinctValue(long value) {
+    distinctValue = value;
+    distinctValueAvailable = true;
   }
 
   long aggregateValue() {

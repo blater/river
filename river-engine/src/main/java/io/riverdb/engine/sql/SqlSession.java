@@ -375,6 +375,42 @@ public final class SqlSession {
       }
       return status;
     }
+    if (status.isOk() && command.type() == SqlCommandType.DISTINCT_SCAN) {
+      boolean implicit = !transactionActive;
+      if (implicit) {
+        status = session.begin(IsolationLevel.READ_COMMITTED);
+      }
+      if (status.isOk()) {
+        status = session.resolveTable(command.tableName(), table);
+      }
+      if (status.isOk()
+          && command.columnTableName(0).length() > 0
+          && !sameName(command.columnTableName(0), command.tableName())) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      int distinctColumn = status.isOk()
+          ? table.findColumn(command.firstColumnName()) : -1;
+      boolean valueIndex = distinctColumn > 0 && table.hasIndexOn(distinctColumn);
+      if (status.isOk()
+          && (distinctColumn < 0 || distinctColumn > 0 && !valueIndex)) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (status.isOk()) {
+        status = valueIndex
+            ? session.beginValueScan(table, distinctColumn, cursor.relational())
+            : session.beginScan(table, cursor.relational());
+      }
+      if (status.isOk()) {
+        status = cursor.claimDistinct(
+            this, implicit, distinctColumn, valueIndex, command.rowLimit());
+      }
+      if (status.isOk()) {
+        scanActive = true;
+      } else if (implicit) {
+        session.abort(outcome);
+      }
+      return status;
+    }
     if (status.isOk() && command.type() == SqlCommandType.JOIN_SCAN) {
       boolean implicit = !transactionActive;
       if (implicit) {
@@ -567,6 +603,9 @@ public final class SqlSession {
     if (cursor.groupCount()) {
       return nextGroupCount(cursor, result);
     }
+    if (cursor.distinct()) {
+      return nextDistinct(cursor, result);
+    }
     if (cursor.join()) {
       return nextJoin(cursor, result);
     }
@@ -615,6 +654,9 @@ public final class SqlSession {
       return index == 0
           ? table.columnName(cursor.groupColumn())
           : index == 1 ? COUNT_COLUMN_NAME : null;
+    }
+    if (cursor.distinct()) {
+      return index == 0 ? table.columnName(cursor.groupColumn()) : null;
     }
     if (cursor.join()) {
       int projection = cursor.projectedColumn(index);
@@ -1101,6 +1143,23 @@ public final class SqlSession {
     result.set(groupValue, projectedValues, 2);
     cursor.rowReturned();
     return StatusCode.OK;
+  }
+
+  private StatusCode nextDistinct(SqlScanCursor cursor, SqlScanRowResult result) {
+    while (true) {
+      StatusCode status = nextGroupValue(cursor);
+      if (!status.isOk()) {
+        return status;
+      }
+      long value = projectedValues[0];
+      if (cursor.hasDistinctValue() && cursor.distinctValue() == value) {
+        continue;
+      }
+      cursor.setDistinctValue(value);
+      result.set(value, projectedValues, 1);
+      cursor.rowReturned();
+      return StatusCode.OK;
+    }
   }
 
   private StatusCode nextJoin(SqlScanCursor cursor, SqlScanRowResult result) {

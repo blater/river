@@ -1449,6 +1449,24 @@ final class SqlSessionTest {
     assertEquals(1, group.valueAt(1));
     assertEquals(StatusCode.CONFLICT, session.nextScan(groups, group));
     assertEquals(StatusCode.OK, session.closeScan(groups, result));
+    SqlScanCursor distinct = new SqlScanCursor();
+    SqlScanRowResult distinctRow = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT DISTINCT category FROM events ORDER BY category LIMIT 2",
+            distinct));
+    assertEquals(true, "category".contentEquals(session.scanColumnName(distinct, 0)));
+    assertEquals(StatusCode.OK, session.nextScan(distinct, distinctRow));
+    assertEquals(10, distinctRow.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(distinct, distinctRow));
+    assertEquals(20, distinctRow.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(distinct, distinctRow));
+    assertEquals(StatusCode.OK, session.closeScan(distinct, result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT DISTINCT amount FROM events", new SqlScanCursor()));
     assertEquals(StatusCode.OK, groups.reset());
     assertEquals(
         StatusCode.OK,
