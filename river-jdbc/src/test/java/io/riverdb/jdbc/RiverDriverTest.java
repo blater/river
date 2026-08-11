@@ -11,9 +11,12 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
+import io.riverdb.protocol.auth.TokenAuthenticator;
+import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerOpenResult;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -24,6 +27,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.Arrays;
+import javax.net.ssl.SSLContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -272,9 +276,79 @@ final class RiverDriverTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void dataSourceExecutesJdbcInsideTlsBoundTokenAuthentication(@TempDir Path root)
+      throws Exception {
+    byte[] token = "river-jdbc-auth-token-0001".getBytes(StandardCharsets.UTF_8);
+    TokenAuthenticatorOpenResult authenticator = new TokenAuthenticatorOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        TokenAuthenticator.create(token, token.length, authenticator));
+    SSLContext serverContext = TestTlsContexts.server();
+    SSLContext clientContext = TestTlsContexts.trustedClient();
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = startAuthenticated(
+        database, serverContext, authenticator.authenticator());
+
+    RiverDataSource source = new RiverDataSource();
+    source.setPort(server.port());
+    assertEquals(5, source.getLoginTimeout());
+    source.setLoginTimeout(5);
+    assertThrows(
+        java.sql.SQLFeatureNotSupportedException.class,
+        () -> source.setLoginTimeout(0));
+    source.setAuthentication(clientContext, token, token.length);
+    Arrays.fill(token, (byte) 0);
+    try (Connection connection = source.getConnection();
+        Statement statement = connection.createStatement()) {
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE secure_jdbc (id BIGINT PRIMARY KEY, value BIGINT)"));
+      assertEquals(
+          1,
+          statement.executeUpdate("INSERT INTO secure_jdbc VALUES (1, 700)"));
+      try (ResultSet result = statement.executeQuery(
+          "SELECT value FROM secure_jdbc WHERE id=1")) {
+        assertTrue(result.next());
+        assertEquals(700, result.getLong("value"));
+      }
+    }
+    source.close();
+    SQLException closed = assertThrows(SQLException.class, source::getConnection);
+    assertEquals("08003", closed.getSQLState());
+
+    byte[] wrongToken =
+        "wrong-jdbc-auth-token-0001".getBytes(StandardCharsets.UTF_8);
+    RiverDataSource wrong = new RiverDataSource();
+    wrong.setPort(server.port());
+    wrong.setAuthentication(clientContext, wrongToken, wrongToken.length);
+    SQLException rejected = assertThrows(SQLException.class, wrong::getConnection);
+    assertEquals("28000", rejected.getSQLState());
+    wrong.close();
+    Arrays.fill(wrongToken, (byte) 0);
+
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static LoopbackRiverServer start(RiverDatabase database) {
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, result));
+    return result.server();
+  }
+
+  private static LoopbackRiverServer startAuthenticated(
+      RiverDatabase database,
+      SSLContext context,
+      TokenAuthenticator authenticator) {
+    LoopbackServerOpenResult result = new LoopbackServerOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        LoopbackRiverServer.startAuthenticated(
+            database, 0, context, authenticator, result));
     return result.server();
   }
 

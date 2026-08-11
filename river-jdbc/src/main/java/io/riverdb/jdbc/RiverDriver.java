@@ -13,6 +13,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.Properties;
 import java.util.logging.Logger;
+import javax.net.ssl.SSLContext;
 
 /** Driver for the pre-V1 loopback URL {@code jdbc:river://localhost:PORT}. */
 public final class RiverDriver implements Driver {
@@ -38,10 +39,32 @@ public final class RiverDriver implements Driver {
     if (port <= 0) {
       throw JdbcExceptions.invalid("River JDBC URL must end with a valid port");
     }
+    return openLoopback(port, null, null, 0);
+  }
+
+  static Connection openLoopback(
+      int port,
+      SSLContext context,
+      byte[] token,
+      int tokenBytes) throws SQLException {
+    if (port <= 0
+        || port > 65_535
+        || (context == null) != (token == null)
+        || token == null && tokenBytes != 0
+        || token != null && (tokenBytes <= 0 || tokenBytes > token.length)) {
+      throw JdbcExceptions.invalid("loopback connection configuration is invalid");
+    }
     RiverClientOpenResult connected = new RiverClientOpenResult();
-    JdbcExceptions.require(
-        RiverClientConnection.connectLoopback(port, connected),
-        "connect");
+    StatusCode connectStatus = context == null
+        ? RiverClientConnection.connectLoopback(port, connected)
+        : RiverClientConnection.connectAuthenticatedLoopback(
+            port, context, token, tokenBytes, connected);
+    if (context != null
+        && (connectStatus == StatusCode.INVALID_EXTERNAL_INPUT
+            || connectStatus == StatusCode.FENCED)) {
+      throw JdbcExceptions.authentication(connectStatus);
+    }
+    JdbcExceptions.require(connectStatus, "connect");
     RiverClientConnection client = connected.connection();
     SessionOpenResult opened = new SessionOpenResult();
     StatusCode status = client.createSession(opened);

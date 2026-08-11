@@ -31,6 +31,9 @@ import javax.net.ssl.SSLSocket;
  * embedded engine. One owning thread may use one active session and query.
  */
 public final class RiverClientConnection implements RiverDatabase {
+  public static final int MINIMUM_TOKEN_BYTES = TokenProof.MINIMUM_TOKEN_BYTES;
+  public static final int MAXIMUM_TOKEN_BYTES = TokenProof.MAXIMUM_TOKEN_BYTES;
+
   private static final int CONNECT_TIMEOUT_MILLIS = 5_000;
   private static final int READ_TIMEOUT_MILLIS = 30_000;
 

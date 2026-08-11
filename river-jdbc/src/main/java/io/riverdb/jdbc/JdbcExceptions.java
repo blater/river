@@ -33,6 +33,13 @@ final class JdbcExceptions {
         StatusCode.INVALID_EXTERNAL_INPUT.stableCode());
   }
 
+  static SQLException authentication(StatusCode status) {
+    return new SQLException(
+        "River token authentication failed",
+        "28000",
+        status.stableCode());
+  }
+
   static SQLFeatureNotSupportedException unsupported() {
     return new SQLFeatureNotSupportedException("JDBC feature is not supported", "0A000");
   }
