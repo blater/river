@@ -363,6 +363,28 @@ final class RiverDriverTest {
           SQLException.class,
           () -> statement.executeQuery(nestedExistenceQuery(33)));
       assertEquals("54001", existenceDepthFailure.getSQLState());
+      for (int depth : new int[] {3, 8, 32}) {
+        try (ResultSet nestedMembership = statement.executeQuery(
+            nestedMembershipQuery(depth))) {
+          assertTrue(nestedMembership.next());
+          assertEquals(1, nestedMembership.getLong(1));
+          assertFalse(nestedMembership.next());
+        }
+      }
+      try (ResultSet nestedNotMembership = statement.executeQuery(
+          "SELECT id FROM accounts WHERE id NOT IN "
+              + "(SELECT id FROM accounts WHERE id IN "
+              + "(SELECT NULL FROM accounts WHERE id=1)) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(nestedNotMembership.next());
+          assertEquals(expected, nestedNotMembership.getLong(1));
+        }
+        assertFalse(nestedNotMembership.next());
+      }
+      SQLException membershipDepthFailure = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(nestedMembershipQuery(33)));
+      assertEquals("54001", membershipDepthFailure.getSQLState());
       try (ResultSet exists = statement.executeQuery(
           "SELECT id FROM accounts WHERE EXISTS "
               + "(SELECT id FROM regions WHERE code=7000) ORDER BY id")) {
@@ -671,6 +693,14 @@ final class RiverDriverTest {
     String query = "SELECT id FROM accounts WHERE id=1";
     for (int depth = 1; depth < blocks; depth++) {
       query = "SELECT id FROM accounts WHERE EXISTS (" + query + ")";
+    }
+    return query;
+  }
+
+  private static String nestedMembershipQuery(int blocks) {
+    String query = "SELECT id FROM accounts WHERE id=1";
+    for (int depth = 1; depth < blocks; depth++) {
+      query = "SELECT id FROM accounts WHERE id IN (" + query + ")";
     }
     return query;
   }

@@ -9,8 +9,8 @@ public final class SqlQuery {
   private final SqlCommand[] blocks = new SqlCommand[MAXIMUM_QUERY_BLOCKS];
   private final int[] scalarPredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private final int[] existencePredicates = new int[MAXIMUM_QUERY_BLOCKS];
+  private final int[] membershipPredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private int blockCount;
-  private int membershipPredicate;
 
   public SqlQuery() {
     for (int index = 0; index < blocks.length; index++) {
@@ -24,9 +24,9 @@ public final class SqlQuery {
       blocks[index].reset();
       scalarPredicates[index] = -1;
       existencePredicates[index] = 0;
+      membershipPredicates[index] = 0;
     }
     blockCount = 0;
-    membershipPredicate = 0;
   }
 
   SqlCommand nextBlock() {
@@ -37,6 +37,7 @@ public final class SqlQuery {
     block.reset();
     scalarPredicates[blockCount - 1] = -1;
     existencePredicates[blockCount - 1] = 0;
+    membershipPredicates[blockCount - 1] = 0;
     return block;
   }
 
@@ -46,6 +47,10 @@ public final class SqlQuery {
 
   void setExistencePredicate(int block, boolean negated) {
     existencePredicates[block] = negated ? -1 : 1;
+  }
+
+  void setMembershipPredicate(int block, int predicate, boolean negated) {
+    membershipPredicates[block] = negated ? -predicate - 1 : predicate + 1;
   }
 
   StatusCode compileDerived(SqlCommand destination) {
@@ -167,23 +172,24 @@ public final class SqlQuery {
       int predicate,
       boolean negated) {
     if (destination == null
-        || blockCount != 2
-        || predicate < 0
-        || predicate >= blocks[0].predicateCount()
-        || !blocks[0].isEqualityPredicate(predicate)
-        || blocks[0].type() != SqlCommandType.SCAN
-            && blocks[0].type() != SqlCommandType.SELECT) {
+        || blockCount < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlCommand nested = blocks[1];
-    if (nested.type() != SqlCommandType.SCAN
-        && nested.type() != SqlCommandType.SELECT
-        || nested.isSelectAll()
-        || nested.columnCount() != 1) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    setMembershipPredicate(0, predicate, negated);
+    for (int index = 0; index < blockCount; index++) {
+      SqlCommand block = blocks[index];
+      int membership = membershipPredicate(index);
+      if (block.type() != SqlCommandType.SCAN
+          && block.type() != SqlCommandType.SELECT
+          || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
+          || index + 1 < blockCount
+              && (membership < 0
+                  || membership >= block.predicateCount()
+                  || !block.isEqualityPredicate(membership))) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
     }
     destination.copyQueryFrom(blocks[0]);
-    membershipPredicate = negated ? -predicate - 1 : predicate + 1;
     return StatusCode.OK;
   }
 
@@ -311,15 +317,27 @@ public final class SqlQuery {
   }
 
   public boolean hasMembershipPredicate() {
-    return membershipPredicate != 0;
+    return blockCount > 1 && membershipPredicates[0] != 0;
   }
 
   public boolean membershipNegated() {
-    return membershipPredicate < 0;
+    return membershipNegated(0);
+  }
+
+  public boolean membershipNegated(int block) {
+    return block >= 0
+        && block < blockCount
+        && membershipPredicates[block] < 0;
   }
 
   public int membershipPredicate() {
-    return Math.abs(membershipPredicate) - 1;
+    return membershipPredicate(0);
+  }
+
+  public int membershipPredicate(int block) {
+    return block >= 0 && block < blockCount
+        && membershipPredicates[block] != 0
+            ? Math.abs(membershipPredicates[block]) - 1 : -1;
   }
 
   public SqlCommand membershipCommand() {

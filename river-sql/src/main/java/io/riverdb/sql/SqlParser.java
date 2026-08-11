@@ -152,30 +152,54 @@ public final class SqlParser {
       int open,
       SqlQuery query,
       SqlCommand result) {
-    int close = matchingCloseParenthesis(sql, open, sql.length());
-    if (close < 0 || membershipOperatorStart < 0) {
+    StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : parseMembershipBlocks(sql, 0, sql.length(), query);
+    return status.isOk()
+        ? query.compileMembershipPredicate(
+            result, query.membershipPredicate(), query.membershipNegated())
+        : status;
+  }
+
+  private StatusCode parseMembershipBlocks(
+      String sql,
+      int start,
+      int end,
+      SqlQuery query) {
+    int open = findMembershipSource(sql, start, end);
+    int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
+    int operatorStart = membershipOperatorStart;
+    boolean negated = membershipNegated;
+    if (open < 0 || close < 0 || operatorStart < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlCommand outer = query.nextBlock();
-    SqlCommand nested = query.nextBlock();
-    if (outer == null || nested == null) {
+    int parentIndex = query.blockCount();
+    SqlCommand parent = query.nextBlock();
+    if (parent == null) {
       return StatusCode.QUERY_TOO_COMPLEX;
     }
-    scalarSourceView.set(
-        sql, 0, membershipOperatorStart, close + 1, sql.length(), true);
+    scalarSourceView.set(sql, start, operatorStart, close + 1, end, true);
     scalarPredicateIndex = -1;
-    StatusCode status = parseText(scalarSourceView, outer);
+    StatusCode status = parseText(scalarSourceView, parent);
     if (status.isOk() && scalarPredicateIndex < 0) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (status.isOk()) {
-      sourceView.set(sql, open + 1, close, close, close);
-      status = parseText(sourceView, nested);
+      query.setMembershipPredicate(parentIndex, scalarPredicateIndex, negated);
+      int nestedOpen = findMembershipSource(sql, open + 1, close);
+      if (nestedOpen >= 0) {
+        status = parseMembershipBlocks(sql, open + 1, close, query);
+      } else {
+        SqlCommand nested = query.nextBlock();
+        if (nested == null) {
+          status = StatusCode.QUERY_TOO_COMPLEX;
+        } else {
+          sourceView.set(sql, open + 1, close, close, close);
+          status = parseText(sourceView, nested);
+        }
+      }
     }
-    return status.isOk()
-        ? query.compileMembershipPredicate(
-            result, scalarPredicateIndex, membershipNegated)
-        : status;
+    return status;
   }
 
   private StatusCode parseDerivedBlocks(

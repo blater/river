@@ -64,6 +64,9 @@ public final class SqlSession {
       new boolean[SqlCommand.MAXIMUM_PREDICATES];
   private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
   private final long[] membershipValues = new long[MAXIMUM_MEMBERSHIP_VALUES];
+  private final long[] membershipScratchValues =
+      new long[MAXIMUM_MEMBERSHIP_VALUES];
+  private long[] membershipCandidates = membershipValues;
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final long[] sortRunOffsets = new long[MAXIMUM_SORT_RUNS];
@@ -397,6 +400,7 @@ public final class SqlSession {
     subqueryPredicateFalse = false;
     membershipValueCount = 0;
     membershipHasNull = false;
+    membershipCandidates = membershipValues;
     nestedCorrelated = false;
     correlatedScalar = false;
     correlatedExistence = false;
@@ -1681,7 +1685,7 @@ public final class SqlSession {
           && query.membershipPredicate() == index) {
         boolean equal = false;
         for (int candidate = 0; candidate < membershipValueCount; candidate++) {
-          if (value == membershipValues[candidate]) {
+          if (value == membershipCandidates[candidate]) {
             equal = true;
             break;
           }
@@ -1769,7 +1773,12 @@ public final class SqlSession {
               scalarRow.key(),
               scalarRow.row(),
               outerPrimaryKey,
-              outerSource)) {
+              outerSource,
+              -1,
+              false,
+              membershipScratchValues,
+              0,
+              false)) {
         continue;
       }
       if (status.isOk()) {
@@ -1884,7 +1893,12 @@ public final class SqlSession {
               scalarRow.key(),
               scalarRow.row(),
               outerPrimaryKey,
-              outerSource)) {
+              outerSource,
+              -1,
+              false,
+              membershipScratchValues,
+              0,
+              false)) {
         existenceResult = true;
         break;
       }
@@ -1903,34 +1917,80 @@ public final class SqlSession {
   }
 
   private StatusCode evaluateMembershipPredicate() {
-    SqlCommand nested = query.membershipCommand();
-    if (nested == null || nested.isOrdered()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = StatusCode.OK;
+    long[] input = membershipValues;
+    int inputCount = 0;
+    boolean inputHasNull = false;
+    for (int block = query.blockCount() - 1;
+        status.isOk() && block > 0;
+        block--) {
+      SqlCommand nested = query.block(block);
+      if (nested == null || nested.isOrdered()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      status = bindNestedCommand(nested);
+      if (status.isOk() && nestedCorrelated) {
+        if (query.blockCount() != 2) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        correlatedMembership = true;
+        membershipCandidates = membershipValues;
+        return StatusCode.OK;
+      }
+      long[] output = input == membershipValues
+          ? membershipScratchValues : membershipValues;
+      membershipValueCount = 0;
+      membershipHasNull = false;
+      if (status.isOk()) {
+        status = evaluateMembershipRows(
+            nested,
+            0,
+            null,
+            output,
+            query.membershipPredicate(block),
+            query.membershipNegated(block),
+            input,
+            inputCount,
+            inputHasNull);
+      }
+      input = output;
+      inputCount = membershipValueCount;
+      inputHasNull = membershipHasNull;
     }
-    StatusCode status = bindNestedCommand(nested);
-    if (!status.isOk()) {
-      return status;
-    }
-    if (nestedCorrelated) {
-      correlatedMembership = true;
-      return StatusCode.OK;
-    }
-    return evaluateMembershipRows(nested, 0, null);
+    membershipCandidates = input;
+    return status;
   }
 
   private StatusCode evaluateCorrelatedMembership(
       long outerPrimaryKey,
       HeapRowResult outerSource) {
     SqlCommand nested = query.membershipCommand();
-    return nested == null
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : evaluateMembershipRows(nested, outerPrimaryKey, outerSource);
+    if (nested == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    membershipCandidates = membershipValues;
+    return evaluateMembershipRows(
+        nested,
+        outerPrimaryKey,
+        outerSource,
+        membershipValues,
+        -1,
+        false,
+        membershipScratchValues,
+        0,
+        false);
   }
 
   private StatusCode evaluateMembershipRows(
       SqlCommand nested,
       long outerPrimaryKey,
-      HeapRowResult outerSource) {
+      HeapRowResult outerSource,
+      long[] output,
+      int nestedMembershipPredicate,
+      boolean nestedMembershipNegated,
+      long[] input,
+      int inputCount,
+      boolean inputHasNull) {
     if (nested.rowLimit() == 0) {
       return StatusCode.OK;
     }
@@ -1952,7 +2012,12 @@ public final class SqlSession {
               scalarRow.key(),
               scalarRow.row(),
               outerPrimaryKey,
-              outerSource)) {
+              outerSource,
+              nestedMembershipPredicate,
+              nestedMembershipNegated,
+              input,
+              inputCount,
+              inputHasNull)) {
         continue;
       }
       if (status.isOk()) {
@@ -1960,10 +2025,10 @@ public final class SqlSession {
         if (nestedProjection == NULL_PROJECTION
             || isNull(scalarRow.row(), scalarTable, nestedProjection)) {
           membershipHasNull = true;
-        } else if (membershipValueCount >= membershipValues.length) {
+        } else if (membershipValueCount >= output.length) {
           status = StatusCode.RESOURCE_EXHAUSTED;
         } else {
-          membershipValues[membershipValueCount++] = readColumn(
+          output[membershipValueCount++] = readColumn(
               scalarRow.key(), scalarRow.row(), nestedProjection);
         }
         if (status.isOk() && matchedRows >= nested.rowLimit()) {
@@ -2053,7 +2118,12 @@ public final class SqlSession {
       long primaryKey,
       HeapRowResult source,
       long outerPrimaryKey,
-      HeapRowResult outerSource) {
+      HeapRowResult outerSource,
+      int nestedMembershipPredicate,
+      boolean nestedMembershipNegated,
+      long[] nestedMembershipValues,
+      int nestedMembershipValueCount,
+      boolean nestedMembershipHasNull) {
     for (int index = 0; index < scalar.predicateCount(); index++) {
       long value = readColumn(primaryKey, source, scalarPredicateColumns[index]);
       boolean nullValue = isNull(
@@ -2066,6 +2136,22 @@ public final class SqlSession {
       }
       if (nullValue) {
         return false;
+      }
+      if (index == nestedMembershipPredicate) {
+        boolean equal = false;
+        for (int candidate = 0;
+            candidate < nestedMembershipValueCount;
+            candidate++) {
+          if (value == nestedMembershipValues[candidate]) {
+            equal = true;
+            break;
+          }
+        }
+        if (equal == nestedMembershipNegated
+            || !equal && nestedMembershipHasNull) {
+          return false;
+        }
+        continue;
       }
       if (scalar.isColumnPredicate(index)) {
         boolean outer = scalarPredicateValueOuter[index];
