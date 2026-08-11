@@ -106,6 +106,7 @@ final class SqlSessionAllocationTest {
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
+      exerciseLeftJoin(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
@@ -117,6 +118,7 @@ final class SqlSessionAllocationTest {
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
+      exerciseLeftJoin(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
@@ -271,6 +273,22 @@ final class SqlSessionAllocationTest {
     allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseLeftJoin(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT t.id, raw_labels.code FROM t "
+            + "LEFT JOIN raw_labels ON t.balance=raw_labels.region WHERE t.id=1",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.nullMask();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

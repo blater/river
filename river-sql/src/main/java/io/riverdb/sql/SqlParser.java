@@ -852,10 +852,20 @@ public final class SqlParser {
         if (status.isOk()) {
           status = optionalTableAlias(sql, result);
         }
+        boolean leftJoin = status.isOk()
+            && !isGroupAggregate(type)
+            && consumeKeyword(sql, "LEFT");
+        if (leftJoin) {
+          consumeKeyword(sql, "OUTER");
+          status = requireKeyword(sql, "JOIN");
+        }
         if (status.isOk()
             && !isGroupAggregate(type)
-            && consumeKeyword(sql, "JOIN")) {
+            && (leftJoin || consumeKeyword(sql, "JOIN"))) {
           type = SqlCommandType.JOIN_SCAN;
+          if (leftJoin) {
+            result.setLeftJoin();
+          }
           status = identifier(sql, result.writableJoinTableName());
           if (status.isOk()) {
             status = optionalJoinTableAlias(sql, result);
@@ -1606,6 +1616,7 @@ public final class SqlParser {
     if (offset >= sql.length()
         || sql.charAt(offset) == ';'
         || sql.charAt(offset) == ')'
+        || nextKeyword(sql, "LEFT")
         || nextKeyword(sql, "JOIN")
         || nextKeyword(sql, "WHERE")
         || nextKeyword(sql, "GROUP")

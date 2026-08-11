@@ -1900,7 +1900,7 @@ final class RiverDriverTest {
       statement.executeUpdate(
           "CREATE INDEX planned_category ON planned(category)");
       statement.executeUpdate(
-          "INSERT INTO planned VALUES (1,7,10),(2,7,20),(3,8,30)");
+          "INSERT INTO planned VALUES (1,7,10),(2,7,20),(3,8,30),(4,9,40)");
       statement.executeUpdate(
           "CREATE TABLE plan_labels "
               + "(id BIGINT PRIMARY KEY, category BIGINT, code BIGINT)");
@@ -1914,6 +1914,15 @@ final class RiverDriverTest {
         assertEquals(70, joined.getLong(2));
         assertTrue(joined.next());
         assertEquals(71, joined.getLong(2));
+        assertFalse(joined.next());
+      }
+      try (ResultSet joined = statement.executeQuery(
+          "SELECT planned.id, plan_labels.code FROM planned "
+              + "LEFT JOIN plan_labels ON planned.category=plan_labels.category "
+              + "WHERE planned.id=4")) {
+        assertTrue(joined.next());
+        assertEquals(4, joined.getLong(1));
+        assertNull(joined.getObject(2));
         assertFalse(joined.next());
       }
       try (ResultSet plan = statement.executeQuery(

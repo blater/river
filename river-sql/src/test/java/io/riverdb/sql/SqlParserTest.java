@@ -575,6 +575,16 @@ final class SqlParserTest {
     assertName("key", command.columnName(0));
     assertName("regions", command.columnTableName(1));
     assertName("code", command.columnName(1));
+    assertFalse(command.isLeftJoin());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT accounts.key, regions.code FROM accounts "
+                + "LEFT OUTER JOIN regions ON accounts.region=regions.id",
+            command));
+    assertEquals(SqlCommandType.JOIN_SCAN, command.type());
+    assertTrue(command.isLeftJoin());
+    assertName("regions", command.joinTableName());
     assertEquals(
         StatusCode.OK,
         parser.parse(

@@ -26,6 +26,8 @@ public final class SqlScanCursor {
   private boolean joinInnerScanActive;
   private boolean joinInnerIndexed;
   private boolean joinInnerUnique;
+  private boolean leftJoin;
+  private boolean joinMatched;
   private boolean groupLookahead;
   private boolean groupLookaheadNull;
   private boolean groupInputExhausted;
@@ -77,6 +79,8 @@ public final class SqlScanCursor {
     joinInnerScanActive = false;
     joinInnerIndexed = false;
     joinInnerUnique = false;
+    leftJoin = false;
+    joinMatched = false;
     groupLookahead = false;
     groupLookaheadNull = false;
     groupInputExhausted = false;
@@ -279,6 +283,7 @@ public final class SqlScanCursor {
       boolean indexedOuter,
       boolean indexedInner,
       boolean uniqueInner,
+      boolean preserveUnmatchedOuter,
       int[] projections,
       int projectionCount,
       long rowLimit) {
@@ -300,6 +305,7 @@ public final class SqlScanCursor {
     joinInnerColumn = innerColumn;
     joinInnerIndexed = indexedInner;
     joinInnerUnique = uniqueInner;
+    leftJoin = preserveUnmatchedOuter;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
@@ -435,14 +441,31 @@ public final class SqlScanCursor {
     return joinInnerIndexed;
   }
 
+  boolean leftJoin() {
+    return leftJoin;
+  }
+
+  boolean joinMatched() {
+    return joinMatched;
+  }
+
+  void matchJoin() {
+    joinMatched = true;
+  }
+
   boolean joinInnerScanActive() {
     return joinInnerScanActive;
   }
 
   void beginJoinInnerScan(long outerKey, long matchValue) {
-    joinOuterKey = outerKey;
+    rememberJoinOuter(outerKey);
     joinMatchValue = matchValue;
+    joinMatched = false;
     joinInnerScanActive = true;
+  }
+
+  void rememberJoinOuter(long outerKey) {
+    joinOuterKey = outerKey;
   }
 
   void completeJoinInnerScan() {

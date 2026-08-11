@@ -91,6 +91,7 @@ public final class SqlCommand {
   private boolean readCommittedTransaction;
   private boolean serializableTransaction;
   private boolean descendingOrder;
+  private boolean leftJoin;
   private boolean primaryKeyIdentity;
   private int insertRowCount;
   private int insertColumnCount;
@@ -185,6 +186,7 @@ public final class SqlCommand {
     readCommittedTransaction = false;
     serializableTransaction = false;
     descendingOrder = false;
+    leftJoin = false;
     primaryKeyIdentity = false;
     insertRowCount = 0;
     insertColumnCount = 0;
@@ -214,6 +216,10 @@ public final class SqlCommand {
     }
     value = rowValue;
     available = true;
+  }
+
+  void setLeftJoin() {
+    leftJoin = true;
   }
 
   void setScan(long lowerInclusive, long upperExclusive, boolean bounded) {
@@ -663,6 +669,10 @@ public final class SqlCommand {
 
   public SqlIdentifier joinInnerColumnName() {
     return joinInnerColumnName;
+  }
+
+  public boolean isLeftJoin() {
+    return leftJoin;
   }
 
   public SqlIdentifier indexName() {
