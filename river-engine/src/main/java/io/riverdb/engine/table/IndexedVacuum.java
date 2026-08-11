@@ -11,13 +11,46 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
   private final IndexedTable table;
   private final IndexedVacuumResult result = new IndexedVacuumResult();
   private long committedSequence;
+  private long automaticRuns;
+  private long automaticDeferrals;
+  private long automaticRowsReclaimed;
 
   public IndexedVacuum(TransactionManager transactionManager, IndexedTable indexedTable) {
     manager = transactionManager;
     table = indexedTable;
   }
 
-  public StatusCode run(TransactionOutcome outcome) {
+  public synchronized StatusCode run(TransactionOutcome outcome) {
+    return runMaintenance(outcome);
+  }
+
+  public synchronized StatusCode runAutomatic(TransactionOutcome outcome) {
+    StatusCode status = table.vacuumPreflight();
+    if (status.isOk()) {
+      status = runMaintenance(outcome);
+    }
+    if (status.isOk()) {
+      automaticRuns++;
+      automaticRowsReclaimed += result.rowsReclaimed();
+    } else if (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED) {
+      automaticDeferrals++;
+    }
+    return status;
+  }
+
+  public synchronized long automaticRuns() {
+    return automaticRuns;
+  }
+
+  public synchronized long automaticDeferrals() {
+    return automaticDeferrals;
+  }
+
+  public synchronized long automaticRowsReclaimed() {
+    return automaticRowsReclaimed;
+  }
+
+  private StatusCode runMaintenance(TransactionOutcome outcome) {
     committedSequence = 0;
     result.reset();
     return manager.commitMaintenance(this, outcome);

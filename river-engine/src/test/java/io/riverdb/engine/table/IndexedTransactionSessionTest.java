@@ -712,6 +712,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, reinserter.insert(202, row(2021)));
     assertEquals(StatusCode.OK, reinserter.commit(outcome));
     assertEquals(7, table.rowCount());
+    assertEquals(4, table.obsoleteVersionCount());
 
     IndexedTransactionSession snapshot = session(manager, table);
     assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
@@ -728,6 +729,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(3, vacuum.result().rowsAfter());
     assertEquals(4, vacuum.result().rowsReclaimed());
     assertEquals(3, table.rowCount());
+    assertEquals(0, table.obsoleteVersionCount());
     assertEquals(
         2L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
         table.stagedCopyBytes() - stagedBefore);
@@ -754,11 +756,77 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
     assertEquals(3, table.rowCount());
+    assertEquals(0, table.obsoleteVersionCount());
     assertEquals(StatusCode.OK, table.fetchByKey(201, fetched));
     assertEquals(2011, value(fetched));
     assertEquals(StatusCode.OK, table.fetchByKey(202, fetched));
     assertEquals(2021, value(fetched));
     assertEquals(StatusCode.CONFLICT, table.fetchByKey(203, fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void automaticVacuumDefersForSnapshotThenReclaimsAndRecovers(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(manager, table);
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(301, row(3010)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+
+    IndexedTransactionSession snapshot = session(manager, table);
+    assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedTransactionSession writer = new IndexedTransactionSession(
+        manager,
+        table,
+        128,
+        null,
+        vacuum,
+        2);
+    for (long value = 3011; value <= 3013; value++) {
+      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+      assertEquals(StatusCode.OK, writer.update(301, row(value)));
+      assertEquals(StatusCode.OK, writer.commit(outcome));
+    }
+    assertEquals(4, table.rowCount());
+    assertEquals(3, table.obsoleteVersionCount());
+    assertEquals(1, vacuum.automaticDeferrals());
+    assertEquals(0, vacuum.automaticRuns());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, snapshot.fetchByKey(301, fetched));
+    assertEquals(3010, value(fetched));
+    assertEquals(StatusCode.OK, snapshot.abort(outcome));
+
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(1, table.rowCount());
+    assertEquals(0, table.obsoleteVersionCount());
+    assertEquals(1, vacuum.automaticRuns());
+    assertEquals(3, vacuum.automaticRowsReclaimed());
+    assertEquals(StatusCode.OK, writer.update(301, row(3014)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(2, table.rowCount());
+    assertEquals(1, table.obsoleteVersionCount());
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertEquals(2, table.rowCount());
+    assertEquals(1, table.obsoleteVersionCount());
+    assertEquals(StatusCode.OK, table.fetchByKey(301, fetched));
+    assertEquals(3014, value(fetched));
     close(table, wal, directory);
   }
 

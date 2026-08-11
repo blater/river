@@ -111,7 +111,7 @@ public final class EmbeddedDatabase {
       return StatusCode.FENCED;
     }
     result.set(new IndexedTransactionSession(
-        transactions, table, maximumRowBytes, groupCommit));
+        transactions, table, maximumRowBytes, groupCommit, vacuum));
     return StatusCode.OK;
   }
 
@@ -138,6 +138,18 @@ public final class EmbeddedDatabase {
 
   public long currentCommitSequence() {
     return table.currentCommitSequence();
+  }
+
+  public long automaticVacuumRuns() {
+    return vacuum.automaticRuns();
+  }
+
+  public long automaticVacuumDeferrals() {
+    return vacuum.automaticDeferrals();
+  }
+
+  public long automaticVacuumRowsReclaimed() {
+    return vacuum.automaticRowsReclaimed();
   }
 
   public StatusCode close() {

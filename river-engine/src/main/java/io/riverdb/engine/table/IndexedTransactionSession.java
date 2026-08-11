@@ -20,10 +20,13 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private static final int MAXIMUM_PENDING_INSERTS = 384;
   private static final int MAXIMUM_HELD_LOCKS = 384;
   private static final int MAXIMUM_SAVEPOINTS = 4;
+  private static final int AUTOMATIC_VACUUM_OBSOLETE_VERSIONS = MAXIMUM_PENDING_INSERTS;
 
   private final TransactionManager manager;
   private final IndexedTable table;
   private final IndexedGroupCommitCoordinator groupCommit;
+  private final IndexedVacuum automaticVacuum;
+  private final int automaticVacuumThreshold;
   private final Transaction transaction;
   private final ByteBuffer pendingRows;
   private final int[] pendingOperations = new int[MAXIMUM_PENDING_INSERTS];
@@ -36,6 +39,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final boolean[] retainedMutations = new boolean[MAXIMUM_PENDING_INSERTS];
   private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
   private final IndexedCommitResult commitResult = new IndexedCommitResult();
+  private final TransactionOutcome maintenanceOutcome = new TransactionOutcome();
   private final HeapInsertResult preparedInsertResult = new HeapInsertResult();
   private final IndexedMutationTarget mutationTarget = new IndexedMutationTarget();
   private final int rowStride;
@@ -52,7 +56,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       TransactionManager transactionManager,
       IndexedTable indexedTable,
       int maximumRowBytes) {
-    this(transactionManager, indexedTable, maximumRowBytes, null);
+    this(transactionManager, indexedTable, maximumRowBytes, null, null);
   }
 
   public IndexedTransactionSession(
@@ -60,9 +64,36 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       IndexedTable indexedTable,
       int maximumRowBytes,
       IndexedGroupCommitCoordinator groupCommitCoordinator) {
+    this(transactionManager, indexedTable, maximumRowBytes, groupCommitCoordinator, null);
+  }
+
+  public IndexedTransactionSession(
+      TransactionManager transactionManager,
+      IndexedTable indexedTable,
+      int maximumRowBytes,
+      IndexedGroupCommitCoordinator groupCommitCoordinator,
+      IndexedVacuum versionVacuum) {
+    this(
+        transactionManager,
+        indexedTable,
+        maximumRowBytes,
+        groupCommitCoordinator,
+        versionVacuum,
+        AUTOMATIC_VACUUM_OBSOLETE_VERSIONS);
+  }
+
+  IndexedTransactionSession(
+      TransactionManager transactionManager,
+      IndexedTable indexedTable,
+      int maximumRowBytes,
+      IndexedGroupCommitCoordinator groupCommitCoordinator,
+      IndexedVacuum versionVacuum,
+      int vacuumThreshold) {
     manager = transactionManager;
     table = indexedTable;
     groupCommit = groupCommitCoordinator;
+    automaticVacuum = versionVacuum;
+    automaticVacuumThreshold = vacuumThreshold;
     transaction = new Transaction(transactionManager.maximumActiveTransactions());
     rowStride = maximumRowBytes;
     pendingRows = ByteBuffer.allocateDirect(maximumRowBytes * MAXIMUM_PENDING_INSERTS);
@@ -99,7 +130,32 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         return status;
       }
     }
+    StatusCode maintenance = maintainVersions();
+    if (!maintenance.isOk()) {
+      return maintenance;
+    }
     return manager.begin(isolationLevel, table, transaction);
+  }
+
+  private StatusCode maintainVersions() {
+    if (automaticVacuum == null) {
+      return StatusCode.OK;
+    }
+    int obsoleteVersions = table.obsoleteVersionCount();
+    if (obsoleteVersions < 0) {
+      return StatusCode.CORRUPTION;
+    }
+    if (obsoleteVersions < automaticVacuumThreshold) {
+      return StatusCode.OK;
+    }
+    StatusCode status = automaticVacuum.runAutomatic(maintenanceOutcome);
+    if (status.isOk()
+        || status == StatusCode.CONFLICT
+        || status == StatusCode.RETRY
+        || status == StatusCode.RESOURCE_EXHAUSTED) {
+      return StatusCode.OK;
+    }
+    return status;
   }
 
   public StatusCode insert(long key, ByteBuffer row) {

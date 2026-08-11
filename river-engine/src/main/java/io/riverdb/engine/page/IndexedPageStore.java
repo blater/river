@@ -106,6 +106,7 @@ public final class IndexedPageStore {
   private int preparedHeapBytes;
   private int highestPageId;
   private int rowCount;
+  private int obsoleteVersionCount;
   private int lastHeapPageId = HEAP_PAGE_ID;
   private int operationRowCount;
   private int operationVersionCount;
@@ -425,6 +426,11 @@ public final class IndexedPageStore {
 
   public int rowCount() {
     return rowCount;
+  }
+
+  /** Returns the number of superseded heap versions in constant time. */
+  public int obsoleteVersionCount() {
+    return obsoleteVersionCount;
   }
 
   public StatusCode commit(long transactionId, long commitSequence) {
@@ -1808,10 +1814,14 @@ public final class IndexedPageStore {
     if (!status.isOk()) {
       return status;
     }
+    obsoleteVersionCount = 0;
     for (int rowId = 1; rowId <= checkpoint.rowCount(); rowId++) {
       rowCommitSequences[rowId] = checkpoint.rowCommitSequence(rowId);
       previousRowIds[rowId] = checkpoint.previousRowId(rowId);
       deletedRows[rowId] = checkpoint.isDeleted(rowId);
+      if (previousRowIds[rowId] > 0) {
+        obsoleteVersionCount++;
+      }
     }
     lastCommitSequence = checkpoint.commitSequence();
     baseLoaded = true;
@@ -1978,6 +1988,7 @@ public final class IndexedPageStore {
       status = StatusCode.CORRUPTION;
     }
     int versionOffset = PAGE_OPERATION_HEADER_BYTES + pageCount * PageCodec.PAGE_BYTES;
+    int recoveredObsoleteVersions = 0;
     for (int index = 0; status.isOk() && index < versionCount; index++) {
       int previousRowId = getInt(payload, versionOffset);
       int deleted = getInt(payload, versionOffset + 4);
@@ -1991,8 +2002,14 @@ public final class IndexedPageStore {
         rowCommitSequences[rowId] = commitSequence;
         previousRowIds[rowId] = previousRowId;
         deletedRows[rowId] = deleted == 1;
+        if (previousRowId > 0) {
+          recoveredObsoleteVersions++;
+        }
       }
       versionOffset += PAGE_OPERATION_VERSION_BYTES;
+    }
+    if (status.isOk()) {
+      obsoleteVersionCount += recoveredObsoleteVersions;
     }
     return status;
   }
@@ -2394,6 +2411,7 @@ public final class IndexedPageStore {
       deletedRows[rowId] = getInt(payload, entryOffset + 16) == 1;
       entryOffset += VACUUM_ENTRY_BYTES + rowBytes;
     }
+    obsoleteVersionCount = 0;
     operationActive = false;
     changedPageCount = 0;
     return StatusCode.OK;
@@ -2609,6 +2627,9 @@ public final class IndexedPageStore {
     rowCommitSequences[rowCount] = commitSequence;
     previousRowIds[rowCount] = previousRowId;
     deletedRows[rowCount] = deleted;
+    if (previousRowId > 0) {
+      obsoleteVersionCount++;
+    }
     pageRecordStarts[lastHeapPageId] = recordStart;
     pageRecordEnds[lastHeapPageId] = recordEnd;
     dirty[lastHeapPageId] = true;
@@ -2662,6 +2683,9 @@ public final class IndexedPageStore {
       rowCommitSequences[rowId] = commitSequence;
       previousRowIds[rowId] = operationPreviousRowIds[index];
       deletedRows[rowId] = operationDeletedRows[index];
+      if (operationPreviousRowIds[index] > 0) {
+        obsoleteVersionCount++;
+      }
     }
   }
 
