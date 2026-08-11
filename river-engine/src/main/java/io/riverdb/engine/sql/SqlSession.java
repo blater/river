@@ -32,6 +32,8 @@ import java.util.zip.CRC32C;
 public final class SqlSession {
   private static final String COUNT_COLUMN_NAME = "count";
   private static final String SUM_COLUMN_NAME = "sum";
+  private static final String MIN_COLUMN_NAME = "min";
+  private static final String MAX_COLUMN_NAME = "max";
   private static final String NULL_COLUMN_NAME = "null";
   private static final int NULL_PROJECTION = Integer.MIN_VALUE;
   private static final int NESTED_SCALAR = 1;
@@ -509,7 +511,7 @@ public final class SqlSession {
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk()
         && (command.type() == SqlCommandType.COUNT
-            || command.type() == SqlCommandType.SUM)) {
+            || isValueAggregate(command.type()))) {
       status = execute(sql, aggregateExecution);
       if (status.isOk()) {
         status = cursor.claimAggregate(
@@ -933,9 +935,15 @@ public final class SqlSession {
       if (index != 0) {
         return null;
       }
-      if (command.type() == SqlCommandType.SUM) {
+      if (isValueAggregate(command.type())) {
         SqlIdentifier alias = command.columnAlias(0);
-        return alias != null && alias.length() > 0 ? alias : SUM_COLUMN_NAME;
+        if (alias != null && alias.length() > 0) {
+          return alias;
+        }
+        return command.type() == SqlCommandType.SUM
+            ? SUM_COLUMN_NAME
+            : command.type() == SqlCommandType.MIN
+                ? MIN_COLUMN_NAME : MAX_COLUMN_NAME;
       }
       return COUNT_COLUMN_NAME;
     }
@@ -1087,8 +1095,10 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.COUNT
-        || command.type() == SqlCommandType.SUM) {
+        || isValueAggregate(command.type())) {
       boolean sum = command.type() == SqlCommandType.SUM;
+      boolean minimum = command.type() == SqlCommandType.MIN;
+      boolean valueAggregate = isValueAggregate(command.type());
       long aggregate = 0;
       long aggregateHigh = 0;
       boolean aggregatePresent = false;
@@ -1132,21 +1142,27 @@ public final class SqlSession {
           status = StatusCode.OK;
           break;
         }
-        if (status.isOk() && (filtered || sum)) {
+        if (status.isOk() && (filtered || valueAggregate)) {
           status = validateRow(source);
         }
         if (status.isOk() && filtered && !matchesPredicates(primaryKey, source)) {
           continue;
         }
         if (status.isOk()) {
-          if (sum) {
+          if (valueAggregate) {
             int column = projectedColumns[0];
             if (!isNull(source, table, column)) {
               long value = readColumn(primaryKey, source, column);
-              long previous = aggregate;
-              aggregate += value;
-              aggregateHigh += (value < 0 ? -1 : 0)
-                  + (Long.compareUnsigned(aggregate, previous) < 0 ? 1 : 0);
+              if (sum) {
+                long previous = aggregate;
+                aggregate += value;
+                aggregateHigh += (value < 0 ? -1 : 0)
+                    + (Long.compareUnsigned(aggregate, previous) < 0 ? 1 : 0);
+              } else if (!aggregatePresent
+                  || minimum && value < aggregate
+                  || !minimum && value > aggregate) {
+                aggregate = value;
+              }
               aggregatePresent = true;
             }
           } else if (aggregate == Long.MAX_VALUE) {
@@ -1175,7 +1191,7 @@ public final class SqlSession {
       if (status.isOk()) {
         projectedValues[0] = aggregate;
         result.setProjection(
-            0, projectedValues, sum && !aggregatePresent ? 1 : 0, 1, 0);
+            0, projectedValues, valueAggregate && !aggregatePresent ? 1 : 0, 1, 0);
       }
       return status;
     }
@@ -1224,7 +1240,7 @@ public final class SqlSession {
   private boolean isSelect() {
     return command.type() == SqlCommandType.SELECT
         || command.type() == SqlCommandType.COUNT
-        || command.type() == SqlCommandType.SUM;
+        || isValueAggregate(command.type());
   }
 
   private StatusCode bindDataCommand() {
@@ -1236,7 +1252,7 @@ public final class SqlSession {
     if (command.type() == SqlCommandType.COUNT) {
       return bindPredicates(false);
     }
-    if (command.type() == SqlCommandType.SUM) {
+    if (isValueAggregate(command.type())) {
       StatusCode status = bindProjections();
       return status.isOk() ? bindPredicates(false) : status;
     }
@@ -1286,6 +1302,12 @@ public final class SqlSession {
       return bindPredicates(false);
     }
     return StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private static boolean isValueAggregate(SqlCommandType type) {
+    return type == SqlCommandType.SUM
+        || type == SqlCommandType.MIN
+        || type == SqlCommandType.MAX;
   }
 
   private StatusCode bindProjections() {

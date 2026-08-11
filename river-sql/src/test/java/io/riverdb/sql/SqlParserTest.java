@@ -131,6 +131,19 @@ final class SqlParserTest {
     assertName("total", command.columnAlias(0));
     assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
     assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT MIN(a.balance) AS lowest FROM accounts a", command));
+    assertEquals(SqlCommandType.MIN, command.type());
+    assertName("a", command.columnTableName(0));
+    assertName("balance", command.columnName(0));
+    assertName("lowest", command.columnAlias(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT MAX(balance) highest FROM accounts", command));
+    assertEquals(SqlCommandType.MAX, command.type());
+    assertName("balance", command.columnName(0));
+    assertName("highest", command.columnAlias(0));
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT SUM(*) FROM accounts", command));
     assertEquals(
@@ -139,6 +152,12 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT SUM(balance AS total) FROM accounts", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT MIN(*) FROM accounts", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT MAX(balance, region) FROM accounts", command));
     assertEquals(
         StatusCode.OK,
         parser.parse(

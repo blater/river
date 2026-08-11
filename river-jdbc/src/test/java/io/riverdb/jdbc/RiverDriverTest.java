@@ -1182,6 +1182,36 @@ final class RiverDriverTest {
         assertTrue(sum.wasNull());
         assertFalse(sum.next());
       }
+      try (ResultSet minimum = statement.executeQuery(
+          "SELECT MIN(value) AS lowest FROM comparison_values")) {
+        assertEquals("lowest", minimum.getMetaData().getColumnLabel(1));
+        assertTrue(minimum.next());
+        assertEquals(Long.MIN_VALUE, minimum.getLong(1));
+        assertFalse(minimum.wasNull());
+        assertFalse(minimum.next());
+      }
+      try (ResultSet maximum = statement.executeQuery(
+          "SELECT MAX(value) FROM comparison_values WHERE kind=1")) {
+        assertEquals("max", maximum.getMetaData().getColumnLabel(1));
+        assertTrue(maximum.next());
+        assertEquals(-1, maximum.getLong(1));
+        assertFalse(maximum.wasNull());
+        assertFalse(maximum.next());
+      }
+      try (ResultSet minimum = statement.executeQuery(
+          "SELECT MIN(value) FROM comparison_values WHERE id=6")) {
+        assertTrue(minimum.next());
+        assertNull(minimum.getObject(1));
+        assertTrue(minimum.wasNull());
+        assertFalse(minimum.next());
+      }
+      try (ResultSet maximum = statement.executeQuery(
+          "SELECT MAX(value) FROM comparison_values WHERE id=99")) {
+        assertTrue(maximum.next());
+        assertNull(maximum.getObject(1));
+        assertTrue(maximum.wasNull());
+        assertFalse(maximum.next());
+      }
       SQLException positiveOverflow = assertThrows(
           SQLException.class,
           () -> statement.executeQuery(

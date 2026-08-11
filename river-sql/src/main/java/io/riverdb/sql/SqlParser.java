@@ -565,33 +565,13 @@ public final class SqlParser {
         }
       } else if (consumeKeyword(sql, "SUM")) {
         type = SqlCommandType.SUM;
-        status = requireCharacter(sql, '(');
-        if (status.isOk()) {
-          status = selectColumnIdentifier(sql, result);
-        }
-        if (status.isOk()
-            && (result.isNullProjection(0)
-                || result.columnAlias(0).length() > 0)) {
-          status = StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-        if (status.isOk()) {
-          status = requireCharacter(sql, ')');
-        }
-        if (status.isOk()) {
-          status = optionalColumnAlias(sql, result, 0);
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "FROM");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-        if (status.isOk()) {
-          status = optionalTableAlias(sql, result);
-        }
-        if (status.isOk() && consumeKeyword(sql, "WHERE")) {
-          status = predicates(sql, result, false);
-        }
+        status = valueAggregate(sql, result);
+      } else if (consumeKeyword(sql, "MIN")) {
+        type = SqlCommandType.MIN;
+        status = valueAggregate(sql, result);
+      } else if (consumeKeyword(sql, "MAX")) {
+        type = SqlCommandType.MAX;
+        status = valueAggregate(sql, result);
       } else {
         boolean distinct = consumeKeyword(sql, "DISTINCT");
         type = distinct ? SqlCommandType.DISTINCT_SCAN : SqlCommandType.SCAN;
@@ -1004,6 +984,37 @@ public final class SqlParser {
     }
     return status.isOk()
         ? optionalColumnAlias(sql, result, columnIndex) : status;
+  }
+
+  private StatusCode valueAggregate(CharSequence sql, SqlCommand result) {
+    StatusCode status = requireCharacter(sql, '(');
+    if (status.isOk()) {
+      status = selectColumnIdentifier(sql, result);
+    }
+    if (status.isOk()
+        && (result.isNullProjection(0)
+            || result.columnAlias(0).length() > 0)) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      status = requireCharacter(sql, ')');
+    }
+    if (status.isOk()) {
+      status = optionalColumnAlias(sql, result, 0);
+    }
+    if (status.isOk()) {
+      status = requireKeyword(sql, "FROM");
+    }
+    if (status.isOk()) {
+      status = identifier(sql, result.writableTableName());
+    }
+    if (status.isOk()) {
+      status = optionalTableAlias(sql, result);
+    }
+    if (status.isOk() && consumeKeyword(sql, "WHERE")) {
+      status = predicates(sql, result, false);
+    }
+    return status;
   }
 
   private StatusCode optionalColumnAlias(
