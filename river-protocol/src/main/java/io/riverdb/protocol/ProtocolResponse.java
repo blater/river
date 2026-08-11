@@ -13,6 +13,8 @@ public final class ProtocolResponse {
   private long commitSequence;
   private long key;
   private long rowsReturned;
+  private long challengeHigh;
+  private long challengeLow;
 
   public void reset() {
     status = null;
@@ -22,6 +24,8 @@ public final class ProtocolResponse {
     commitSequence = 0;
     key = 0;
     rowsReturned = 0;
+    challengeHigh = 0;
+    challengeLow = 0;
   }
 
   void complete(
@@ -31,7 +35,9 @@ public final class ProtocolResponse {
       int columns,
       long committedAt,
       long rowKey,
-      long returned) {
+      long returned,
+      long nonceHigh,
+      long nonceLow) {
     status = responseStatus;
     flags = responseFlags;
     affectedRows = rows;
@@ -39,6 +45,8 @@ public final class ProtocolResponse {
     commitSequence = committedAt;
     key = rowKey;
     rowsReturned = returned;
+    challengeHigh = nonceHigh;
+    challengeLow = nonceLow;
   }
 
   void valueAt(int index, long value) {
@@ -83,6 +91,14 @@ public final class ProtocolResponse {
 
   public long rowsReturned() {
     return rowsReturned;
+  }
+
+  public long challengeHigh() {
+    return challengeHigh;
+  }
+
+  public long challengeLow() {
+    return challengeLow;
   }
 
   public long valueAt(int index) {

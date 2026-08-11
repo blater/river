@@ -12,14 +12,19 @@ import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolResponse;
+import io.riverdb.protocol.auth.TokenProof;
+import io.riverdb.protocol.auth.TlsChannelBinding;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSocket;
 
 /**
  * Reusable ordered client connection exposing the same bounded API as the
@@ -59,16 +64,60 @@ public final class RiverClientConnection implements RiverDatabase {
   }
 
   public static StatusCode connectLoopback(int port, RiverClientOpenResult result) {
+    return connect(port, null, null, 0, result);
+  }
+
+  public static StatusCode connectAuthenticatedLoopback(
+      int port,
+      SSLContext context,
+      byte[] token,
+      int tokenBytes,
+      RiverClientOpenResult result) {
+    if (context == null
+        || token == null
+        || tokenBytes < TokenProof.MINIMUM_TOKEN_BYTES
+        || tokenBytes > TokenProof.MAXIMUM_TOKEN_BYTES
+        || tokenBytes > token.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return connect(port, context, token, tokenBytes, result);
+  }
+
+  private static StatusCode connect(
+      int port,
+      SSLContext context,
+      byte[] token,
+      int tokenBytes,
+      RiverClientOpenResult result) {
     if (port <= 0 || port > 65535 || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    Socket socket = new Socket();
+    Socket socket = null;
+    byte[] proof = null;
+    byte[] channelBinding = null;
     try {
+      socket = context == null
+          ? new Socket()
+          : context.getSocketFactory().createSocket();
       socket.connect(
-          new InetSocketAddress(InetAddress.getLoopbackAddress(), port),
+          new InetSocketAddress("localhost", port),
           CONNECT_TIMEOUT_MILLIS);
       socket.setSoTimeout(READ_TIMEOUT_MILLIS);
+      if (socket instanceof SSLSocket secure) {
+        secure.setEnabledProtocols(new String[] {"TLSv1.3"});
+        SSLParameters parameters = secure.getSSLParameters();
+        parameters.setEndpointIdentificationAlgorithm("HTTPS");
+        secure.setSSLParameters(parameters);
+        secure.startHandshake();
+        channelBinding = new byte[TlsChannelBinding.BINDING_BYTES];
+        StatusCode bindingStatus = TlsChannelBinding.export(
+            secure.getSession(), channelBinding);
+        if (!bindingStatus.isOk()) {
+          closeQuietly(socket);
+          return bindingStatus;
+        }
+      }
       RiverClientConnection connection = new RiverClientConnection(
           socket,
           socket.getInputStream(),
@@ -76,6 +125,25 @@ public final class RiverClientConnection implements RiverDatabase {
       StatusCode status = connection.exchange(ProtocolMessageType.HELLO, null);
       if (status.isOk()) {
         status = connection.response.status();
+      }
+      if (status.isOk() && context != null) {
+        proof = new byte[TokenProof.PROOF_BYTES];
+        status = TokenProof.compute(
+            token,
+            tokenBytes,
+            connection.response.challengeHigh(),
+            connection.response.challengeLow(),
+            channelBinding,
+            proof);
+        if (status.isOk()) {
+          status = connection.exchangeBinary(
+              ProtocolMessageType.AUTHENTICATE,
+              proof,
+              proof.length);
+        }
+        if (status.isOk()) {
+          status = connection.response.status();
+        }
       }
       if (!status.isOk()) {
         connection.fail(status);
@@ -87,8 +155,17 @@ public final class RiverClientConnection implements RiverDatabase {
       }
       return status;
     } catch (IOException failure) {
-      closeQuietly(socket);
+      if (socket != null) {
+        closeQuietly(socket);
+      }
       return StatusCode.IO_FAILURE;
+    } finally {
+      if (proof != null) {
+        Arrays.fill(proof, (byte) 0);
+      }
+      if (channelBinding != null) {
+        Arrays.fill(channelBinding, (byte) 0);
+      }
     }
   }
 
@@ -146,6 +223,21 @@ public final class RiverClientConnection implements RiverDatabase {
   }
 
   private synchronized StatusCode exchange(ProtocolMessageType type, String text) {
+    return exchange(type, text, null, 0);
+  }
+
+  private synchronized StatusCode exchangeBinary(
+      ProtocolMessageType type,
+      byte[] payload,
+      int payloadBytes) {
+    return exchange(type, null, payload, payloadBytes);
+  }
+
+  private StatusCode exchange(
+      ProtocolMessageType type,
+      String text,
+      byte[] payload,
+      int payloadBytes) {
     if (closed) {
       return StatusCode.CLOSED;
     }
@@ -153,23 +245,38 @@ public final class RiverClientConnection implements RiverDatabase {
       return fail(StatusCode.FENCED);
     }
     long requestId = nextRequestId;
-    StatusCode status = text == null
-        ? codec.encodeRequest(request, type, requestId)
-        : codec.encodeTextRequest(request, type, requestId, text);
+    StatusCode status;
+    if (payload != null) {
+      status = codec.encodeBinaryRequest(request, type, requestId, payload, payloadBytes);
+    } else if (text != null) {
+      status = codec.encodeTextRequest(request, type, requestId, text);
+    } else {
+      status = codec.encodeRequest(request, type, requestId);
+    }
     if (!status.isOk()) {
       return status;
     }
     try {
       int requestBytes = request.remaining();
-      output.write(request.array(), 0, requestBytes);
-      output.flush();
+      try {
+        output.write(request.array(), 0, requestBytes);
+        output.flush();
+      } finally {
+        if (payload != null) {
+          Arrays.fill(
+              request.array(),
+              ProtocolFrameCodec.HEADER_BYTES,
+              ProtocolFrameCodec.HEADER_BYTES + payloadBytes,
+              (byte) 0);
+        }
+      }
       bytesSent += requestBytes;
       if (!readExact(input, responseBytes, 0, ProtocolFrameCodec.HEADER_BYTES)) {
         return fail(StatusCode.IO_FAILURE);
       }
-      int payloadBytes = readInt(responseBytes, 24);
-      if (payloadBytes < 0
-          || payloadBytes > ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES
+      int responsePayloadBytes = readInt(responseBytes, 24);
+      if (responsePayloadBytes < 0
+          || responsePayloadBytes > ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES
               - ProtocolFrameCodec.HEADER_BYTES) {
         return fail(StatusCode.CORRUPTION);
       }
@@ -177,11 +284,11 @@ public final class RiverClientConnection implements RiverDatabase {
           input,
           responseBytes,
           ProtocolFrameCodec.HEADER_BYTES,
-          payloadBytes)) {
+          responsePayloadBytes)) {
         return fail(StatusCode.IO_FAILURE);
       }
       responseBuffer.position(0);
-      responseBuffer.limit(ProtocolFrameCodec.HEADER_BYTES + payloadBytes);
+      responseBuffer.limit(ProtocolFrameCodec.HEADER_BYTES + responsePayloadBytes);
       status = codec.decodeResponse(responseBuffer, frame, response);
       if (!status.isOk()
           || frame.type() != type
@@ -190,7 +297,7 @@ public final class RiverClientConnection implements RiverDatabase {
       }
       nextRequestId++;
       completedRequests++;
-      bytesReceived += ProtocolFrameCodec.HEADER_BYTES + payloadBytes;
+      bytesReceived += ProtocolFrameCodec.HEADER_BYTES + responsePayloadBytes;
       lastStatus = response.status();
       return StatusCode.OK;
     } catch (IOException failure) {

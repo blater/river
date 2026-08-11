@@ -12,17 +12,25 @@ import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolTextDecoder;
+import io.riverdb.protocol.auth.TokenAuthenticator;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 /** One ordered protocol connection bound to at most one engine session and query. */
 public final class SessionEndpoint {
   private static final int NEW = 0;
-  private static final int READY = 1;
-  private static final int SESSION = 2;
-  private static final int QUERY = 3;
-  private static final int CLOSED = 4;
+  private static final int AUTHENTICATING = 1;
+  private static final int READY = 2;
+  private static final int SESSION = 3;
+  private static final int QUERY = 4;
+  private static final int CLOSED = 5;
+  private static final int MAXIMUM_AUTHENTICATION_ATTEMPTS = 3;
 
   private final RiverDatabase database;
+  private final TokenAuthenticator authenticator;
+  private final long challengeHigh;
+  private final long challengeLow;
+  private final byte[] channelBinding;
   private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
   private final ProtocolFrame frame = new ProtocolFrame();
   private final ProtocolTextDecoder text =
@@ -33,10 +41,24 @@ public final class SessionEndpoint {
   private final RowResult row = new RowResult();
   private RiverSession session;
   private RiverQuery query;
+  private int authenticationAttempts;
   private int state;
 
   public SessionEndpoint(RiverDatabase engineDatabase) {
+    this(engineDatabase, null, 0, 0, null);
+  }
+
+  SessionEndpoint(
+      RiverDatabase engineDatabase,
+      TokenAuthenticator tokenAuthenticator,
+      long nonceHigh,
+      long nonceLow,
+      byte[] binding) {
     database = engineDatabase;
+    authenticator = tokenAuthenticator;
+    challengeHigh = nonceHigh;
+    challengeLow = nonceLow;
+    channelBinding = binding;
   }
 
   /**
@@ -60,12 +82,13 @@ public final class SessionEndpoint {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     ProtocolMessageType type = frame.type();
-    if (type.hasTextPayload() != (frame.payloadBytes() > 0)) {
+    if (type.requiresPayload() != (frame.payloadBytes() > 0)) {
       return codec.encodeStatusResponse(
           response, type, frame.requestId(), StatusCode.INVALID_EXTERNAL_INPUT, state == QUERY);
     }
     return switch (type) {
       case HELLO -> hello(response);
+      case AUTHENTICATE -> authenticate(response);
       case OPEN_SESSION -> openSession(response);
       case EXECUTE -> execute(response);
       case BEGIN_QUERY -> beginQuery(response);
@@ -87,6 +110,7 @@ public final class SessionEndpoint {
       session = null;
       query = null;
       state = CLOSED;
+      clearChannelBinding();
       return StatusCode.OK;
     }
     return status;
@@ -96,12 +120,53 @@ public final class SessionEndpoint {
     return state == CLOSED;
   }
 
+  int authenticationFailures() {
+    return authenticationAttempts;
+  }
+
+  boolean authenticationComplete() {
+    return authenticator == null || state >= READY && state < CLOSED;
+  }
+
   private StatusCode hello(ByteBuffer response) {
     StatusCode status = state == NEW ? StatusCode.OK : StatusCode.CONFLICT;
     if (status.isOk()) {
-      state = READY;
+      state = authenticator == null ? READY : AUTHENTICATING;
+    }
+    return codec.encodeHelloResponse(
+        response,
+        frame.requestId(),
+        status,
+        authenticator == null ? 0 : challengeHigh,
+        authenticator == null ? 0 : challengeLow);
+  }
+
+  private StatusCode authenticate(ByteBuffer response) {
+    StatusCode status;
+    if (state == AUTHENTICATING) {
+      status = authenticator.verify(frame, challengeHigh, challengeLow, channelBinding);
+      if (status.isOk()) {
+        state = READY;
+        clearChannelBinding();
+      } else {
+        authenticationAttempts++;
+        if (authenticationAttempts >= MAXIMUM_AUTHENTICATION_ATTEMPTS) {
+          state = CLOSED;
+          status = StatusCode.FENCED;
+          clearChannelBinding();
+        }
+      }
+    } else {
+      frame.erasePayload();
+      status = state == CLOSED ? StatusCode.CLOSED : StatusCode.CONFLICT;
     }
     return codec.encodeStatusResponse(response, frame.type(), frame.requestId(), status, false);
+  }
+
+  private void clearChannelBinding() {
+    if (channelBinding != null) {
+      Arrays.fill(channelBinding, (byte) 0);
+    }
   }
 
   private StatusCode openSession(ByteBuffer response) {

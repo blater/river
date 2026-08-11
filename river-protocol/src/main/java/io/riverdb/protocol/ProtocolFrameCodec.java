@@ -12,7 +12,7 @@ public final class ProtocolFrameCodec {
   public static final int HEADER_BYTES = 32;
   public static final int MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
-  public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 40
+  public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 56
       + CommandResult.MAXIMUM_COLUMNS * Long.BYTES;
   public static final int FLAG_ROW_AVAILABLE = 1;
   public static final int FLAG_TRANSACTION_ACTIVE = 1 << 1;
@@ -20,7 +20,7 @@ public final class ProtocolFrameCodec {
 
   private static final int MAGIC = 0x52495652;
   private static final int FRAME_RESPONSE = 1;
-  private static final int RESPONSE_FIXED_BYTES = 40;
+  private static final int RESPONSE_FIXED_BYTES = 56;
 
   public StatusCode decode(ByteBuffer source, ProtocolFrame result) {
     if (source == null || result == null) {
@@ -71,7 +71,7 @@ public final class ProtocolFrameCodec {
       ByteBuffer target,
       ProtocolMessageType type,
       long requestId) {
-    if (type == null || type.hasTextPayload()) {
+    if (type == null || type.requiresPayload()) {
       return invalidTarget(target);
     }
     return beginFrame(target, type, requestId, 0, 0);
@@ -124,6 +124,38 @@ public final class ProtocolFrameCodec {
     return StatusCode.OK;
   }
 
+  public StatusCode encodeBinaryRequest(
+      ByteBuffer target,
+      ProtocolMessageType type,
+      long requestId,
+      byte[] payload,
+      int payloadBytes) {
+    if (target == null
+        || type == null
+        || !type.requiresPayload()
+        || type.hasTextPayload()
+        || requestId <= 0
+        || payload == null
+        || payloadBytes <= 0
+        || payloadBytes > payload.length) {
+      return invalidTarget(target);
+    }
+    if (payloadBytes > MAXIMUM_PAYLOAD_BYTES) {
+      empty(target);
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = beginFrame(target, type, requestId, payloadBytes, 0);
+    if (!status.isOk()) {
+      return status;
+    }
+    for (int index = 0; index < payloadBytes; index++) {
+      target.put(HEADER_BYTES + index, payload[index]);
+    }
+    target.position(0);
+    target.limit(HEADER_BYTES + payloadBytes);
+    return StatusCode.OK;
+  }
+
   public StatusCode encodeStatusResponse(
       ByteBuffer target,
       ProtocolMessageType type,
@@ -141,6 +173,31 @@ public final class ProtocolFrameCodec {
         0,
         0,
         0,
+        0,
+        0,
+        null,
+        null);
+  }
+
+  public StatusCode encodeHelloResponse(
+      ByteBuffer target,
+      long requestId,
+      StatusCode status,
+      long challengeHigh,
+      long challengeLow) {
+    return encodeResponse(
+        target,
+        ProtocolMessageType.HELLO,
+        requestId,
+        status,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        challengeHigh,
+        challengeLow,
         null,
         null);
   }
@@ -170,6 +227,8 @@ public final class ProtocolFrameCodec {
         command.commitSequence(),
         command.key(),
         0,
+        0,
+        0,
         command,
         null);
   }
@@ -195,6 +254,8 @@ public final class ProtocolFrameCodec {
         0,
         row.key(),
         rowsReturned,
+        0,
+        0,
         null,
         row);
   }
@@ -224,6 +285,8 @@ public final class ProtocolFrameCodec {
     long commitSequence = bytes.getLong(offset + 16);
     long key = bytes.getLong(offset + 24);
     long returned = bytes.getLong(offset + 32);
+    long challengeHigh = bytes.getLong(offset + 40);
+    long challengeLow = bytes.getLong(offset + 48);
     if (status == null
         || (flags & ~(FLAG_ROW_AVAILABLE | FLAG_TRANSACTION_ACTIVE | FLAG_QUERY_ACTIVE)) != 0
         || rows < 0
@@ -236,7 +299,16 @@ public final class ProtocolFrameCodec {
       frame.reset();
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    result.complete(status, flags, rows, columns, commitSequence, key, returned);
+    result.complete(
+        status,
+        flags,
+        rows,
+        columns,
+        commitSequence,
+        key,
+        returned,
+        challengeHigh,
+        challengeLow);
     for (int index = 0; index < columns; index++) {
       result.valueAt(index, bytes.getLong(offset + RESPONSE_FIXED_BYTES + index * Long.BYTES));
     }
@@ -254,6 +326,8 @@ public final class ProtocolFrameCodec {
       long commitSequence,
       long key,
       long returned,
+      long challengeHigh,
+      long challengeLow,
       CommandResult command,
       RowResult row) {
     if (status == null || columns < 0 || columns > CommandResult.MAXIMUM_COLUMNS) {
@@ -271,6 +345,8 @@ public final class ProtocolFrameCodec {
     target.putLong(HEADER_BYTES + 16, commitSequence);
     target.putLong(HEADER_BYTES + 24, key);
     target.putLong(HEADER_BYTES + 32, returned);
+    target.putLong(HEADER_BYTES + 40, challengeHigh);
+    target.putLong(HEADER_BYTES + 48, challengeLow);
     for (int index = 0; index < columns; index++) {
       long value = command != null ? command.valueAt(index) : row.valueAt(index);
       target.putLong(HEADER_BYTES + RESPONSE_FIXED_BYTES + index * Long.BYTES, value);

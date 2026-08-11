@@ -1,5 +1,6 @@
 package io.riverdb.protocol;
 
+import io.riverdb.base.error.StatusCode;
 import java.nio.ByteBuffer;
 
 /** Caller-owned decoded frame view, valid while its source buffer is unchanged. */
@@ -37,6 +38,26 @@ public final class ProtocolFrame {
 
   byte payloadByteAt(int index) {
     return source.get(payloadOffset + index);
+  }
+
+  public StatusCode copyPayloadTo(byte[] target) {
+    if (source == null || target == null || target.length < payloadBytes) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < payloadBytes; index++) {
+      target[index] = source.get(payloadOffset + index);
+    }
+    return StatusCode.OK;
+  }
+
+  public StatusCode erasePayload() {
+    if (source == null || source.isReadOnly()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < payloadBytes; index++) {
+      source.put(payloadOffset + index, (byte) 0);
+    }
+    return StatusCode.OK;
   }
 
   int payloadOffset() {
