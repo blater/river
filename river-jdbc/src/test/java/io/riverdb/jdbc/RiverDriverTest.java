@@ -25,6 +25,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.Savepoint;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
@@ -995,6 +996,8 @@ final class RiverDriverTest {
       assertTrue(metadata.supportsTransactionIsolationLevel(
           Connection.TRANSACTION_SERIALIZABLE));
       assertTrue(metadata.supportsBatchUpdates());
+      assertTrue(metadata.supportsSavepoints());
+      assertTrue(metadata.supportsGetGeneratedKeys());
       assertTrue(metadata.supportsResultSetConcurrency(
           ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
       assertFalse(metadata.supportsResultSetConcurrency(
@@ -1015,6 +1018,62 @@ final class RiverDriverTest {
       assertThrows(java.sql.SQLFeatureNotSupportedException.class, () -> {
         connection.setReadOnly(true);
       });
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void rollsBackAndReleasesJdbcSavepoints(@TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE savepoint_rows (id BIGINT PRIMARY KEY, value BIGINT)"));
+      connection.setAutoCommit(false);
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "INSERT INTO savepoint_rows VALUES (1, 10)"));
+      Savepoint named = connection.setSavepoint("before second row");
+      assertEquals("before second row", named.getSavepointName());
+      assertThrows(SQLException.class, named::getSavepointId);
+      assertThrows(SQLException.class, () -> connection.setSavepoint("another"));
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "INSERT INTO savepoint_rows VALUES (2, 20)"));
+      connection.rollback(named);
+      assertQueryKeys(
+          statement,
+          "SELECT id FROM savepoint_rows ORDER BY id",
+          1);
+      connection.releaseSavepoint(named);
+      assertThrows(SQLException.class, () -> connection.rollback(named));
+
+      Savepoint unnamed = connection.setSavepoint();
+      assertTrue(unnamed.getSavepointId() > 0);
+      assertThrows(SQLException.class, unnamed::getSavepointName);
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "INSERT INTO savepoint_rows VALUES (3, 30)"));
+      connection.rollback(unnamed);
+      connection.releaseSavepoint(unnamed);
+      connection.commit();
+      assertThrows(SQLException.class, () -> connection.rollback(unnamed));
+      assertQueryKeys(
+          statement,
+          "SELECT id FROM savepoint_rows ORDER BY id",
+          1);
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());

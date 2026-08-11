@@ -227,7 +227,7 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   @Override
   public boolean supportsSavepoints() throws SQLException {
     connection.requireOpen();
-    return false;
+    return true;
   }
 
   @Override
@@ -239,7 +239,7 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   @Override
   public boolean supportsGetGeneratedKeys() throws SQLException {
     connection.requireOpen();
-    return false;
+    return true;
   }
 
   @Override
