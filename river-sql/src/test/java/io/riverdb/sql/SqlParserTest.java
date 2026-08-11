@@ -230,11 +230,13 @@ final class SqlParserTest {
             "SELECT accounts.key FROM accounts "
                 + "JOIN regions ON accounts.region=regions.id "
                 + "WHERE accounts.region=7 AND accounts.value >= 100 "
-                + "AND accounts.value < 300",
+                + "AND accounts.value < 300 AND regions.code=7000",
             command));
-    assertEquals(2, command.predicateCount());
+    assertEquals(3, command.predicateCount());
     assertName("accounts", command.predicateTableName(1));
     assertName("value", command.predicateColumnName(1));
+    assertName("regions", command.predicateTableName(2));
+    assertName("code", command.predicateColumnName(2));
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());

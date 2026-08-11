@@ -430,7 +430,7 @@ public final class SqlSession {
       if (status.isOk()) {
         status = bindJoin();
       }
-      boolean predicate = status.isOk() && predicateCount > 0;
+      boolean predicate = status.isOk() && accessPredicate >= 0;
       boolean equality = predicate && accessEquality();
       boolean indexedOuter = predicate
           && predicateColumn > 0
@@ -992,7 +992,44 @@ public final class SqlSession {
       projectedColumns[index] = descriptor;
     }
     projectedColumnCount = command.columnCount();
-    return bindPredicates(true);
+    return bindJoinPredicates();
+  }
+
+  private StatusCode bindJoinPredicates() {
+    predicateCount = command.predicateCount();
+    accessPredicate = -1;
+    predicateColumn = -1;
+    int accessScore = -1;
+    for (int index = 0; index < predicateCount; index++) {
+      boolean outer = sameName(
+          command.predicateTableName(index), command.tableName());
+      boolean inner = sameName(
+          command.predicateTableName(index), command.joinTableName());
+      TableDefinition definition = outer ? table : inner ? joinTable : null;
+      int column = definition == null
+          ? -1 : definition.findColumn(command.predicateColumnName(index));
+      if (column < 0
+          || !command.isEqualityPredicate(index)
+              && command.predicateUpperExclusive(index)
+                  <= command.predicateLowerInclusive(index)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      predicateColumns[index] = outer ? column : -column - 1;
+      if (!outer) {
+        continue;
+      }
+      boolean indexed = column == 0 || table.hasIndexOn(column);
+      int score = !indexed ? 0
+          : command.isEqualityPredicate(index)
+              ? column == 0 || table.hasUniqueIndexOn(column) ? 3 : 2
+              : 1;
+      if (score > accessScore) {
+        accessScore = score;
+        accessPredicate = index;
+        predicateColumn = column;
+      }
+    }
+    return StatusCode.OK;
   }
 
   private StatusCode bindPredicates(boolean qualified) {
@@ -1186,6 +1223,9 @@ public final class SqlSession {
         if (!inner.isOk()) {
           return inner;
         }
+        if (!matchesJoinPredicates(indexed.key(), innerRow, false)) {
+          continue;
+        }
         for (int index = 0; index < cursor.projectedColumnCount(); index++) {
           int projection = cursor.projectedColumn(index);
           projectedValues[index] = projection >= 0
@@ -1217,7 +1257,7 @@ public final class SqlSession {
       if (!status.isOk()) {
         return status;
       }
-      if (!matchesPredicates(outerKey, outerRow)) {
+      if (!matchesJoinPredicates(outerKey, outerRow, true)) {
         continue;
       }
       long joinValue = readColumn(outerKey, outerRow, cursor.joinOuterColumn());
@@ -1266,6 +1306,9 @@ public final class SqlSession {
       status = validateRow(innerRow, joinTable);
       if (!status.isOk()) {
         return status;
+      }
+      if (!matchesJoinPredicates(innerKey, innerRow, false)) {
+        continue;
       }
       for (int index = 0; index < cursor.projectedColumnCount(); index++) {
         int projection = cursor.projectedColumn(index);
@@ -1353,6 +1396,28 @@ public final class SqlSession {
   private boolean matchesPredicates(long primaryKey, HeapRowResult source) {
     for (int index = 0; index < predicateCount; index++) {
       long value = readColumn(primaryKey, source, predicateColumns[index]);
+      boolean matches = command.isEqualityPredicate(index)
+          ? value == command.predicateValue(index)
+          : value >= command.predicateLowerInclusive(index)
+              && value < command.predicateUpperExclusive(index);
+      if (!matches) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private boolean matchesJoinPredicates(
+      long primaryKey,
+      HeapRowResult source,
+      boolean outer) {
+    for (int index = 0; index < predicateCount; index++) {
+      int descriptor = predicateColumns[index];
+      if (outer != (descriptor >= 0)) {
+        continue;
+      }
+      int column = outer ? descriptor : -descriptor - 1;
+      long value = readColumn(primaryKey, source, column);
       boolean matches = command.isEqualityPredicate(index)
           ? value == command.predicateValue(index)
           : value >= command.predicateLowerInclusive(index)

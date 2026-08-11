@@ -160,6 +160,15 @@ final class RiverDriverTest {
         assertEquals(49021002, firstCode * secondCode);
         assertFalse(joined.next());
       }
+      try (ResultSet joined = statement.executeQuery(
+          "SELECT accounts.id, region_labels.code FROM accounts "
+              + "JOIN region_labels ON accounts.region=region_labels.region "
+              + "WHERE accounts.id=1 AND region_labels.code=7002")) {
+        assertTrue(joined.next());
+        assertEquals(1, joined.getLong("id"));
+        assertEquals(7002, joined.getLong("code"));
+        assertFalse(joined.next());
+      }
 
       try (ResultSet rows = statement.executeQuery(
           "SELECT id, balance FROM accounts WHERE id >= 1 AND id < 4")) {
