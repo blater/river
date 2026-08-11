@@ -41,7 +41,9 @@ final class RiverSqlMainTest {
         CREATE TABLE regions (id BIGINT PRIMARY KEY, code BIGINT);
         INSERT INTO regions VALUES (7, 7000), (8, 8000);
         SELECT accounts.id, regions.code FROM accounts
-          JOIN regions ON accounts.region=regions.id LIMIT 2;
+          JOIN regions ON accounts.region=regions.id
+          WHERE accounts.id >= 1 AND accounts.id < 4
+            AND accounts.region=7 LIMIT 2;
         SELECT region, COUNT(*) FROM accounts GROUP BY region ORDER BY region;
         """;
     ByteArrayOutputStream standardOutput = new ByteArrayOutputStream();
@@ -55,7 +57,9 @@ final class RiverSqlMainTest {
     assertEquals(0, exit);
     assertEquals("", standardError.toString(StandardCharsets.UTF_8));
     String output = standardOutput.toString(StandardCharsets.UTF_8);
-    assertTrue(output.contains("id\tcode\n1\t7000\n2\t7000\nROWS\t2\n"));
+    assertTrue(
+        output.contains("id\tcode\n1\t7000\n2\t7000\nROWS\t2\n")
+            || output.contains("id\tcode\n2\t7000\n1\t7000\nROWS\t2\n"));
     assertTrue(output.contains("region\tcount\n7\t2\n8\t1\nROWS\t2\n"));
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());

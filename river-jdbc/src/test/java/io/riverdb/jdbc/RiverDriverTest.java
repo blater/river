@@ -115,14 +115,18 @@ final class RiverDriverTest {
       try (ResultSet joined = statement.executeQuery(
           "SELECT accounts.id, regions.code FROM accounts "
               + "JOIN regions ON accounts.region=regions.id "
-              + "WHERE accounts.id >= 1 AND accounts.id < 4 LIMIT 2")) {
+              + "WHERE accounts.id >= 1 AND accounts.id < 4 "
+              + "AND accounts.region=7 LIMIT 2")) {
         assertEquals("id", joined.getMetaData().getColumnLabel(1));
         assertEquals("code", joined.getMetaData().getColumnLabel(2));
-        for (long expected = 1; expected <= 2; expected++) {
-          assertTrue(joined.next());
-          assertEquals(expected, joined.getLong("id"));
-          assertEquals(expected < 3 ? 7000 : 8000, joined.getLong("code"));
-        }
+        assertTrue(joined.next());
+        long firstId = joined.getLong("id");
+        assertEquals(7000, joined.getLong("code"));
+        assertTrue(joined.next());
+        long secondId = joined.getLong("id");
+        assertEquals(7000, joined.getLong("code"));
+        assertEquals(3, firstId + secondId);
+        assertEquals(2, firstId * secondId);
         assertFalse(joined.next());
       }
 

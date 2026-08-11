@@ -1242,6 +1242,47 @@ final class SqlSessionTest {
             "SELECT COUNT(*) FROM events WHERE category >= 10 AND category < 21",
             result));
     assertEquals(5, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT COUNT(*) FROM events WHERE amount >= 150 AND amount < 350 "
+                + "AND category=10",
+            result));
+    assertEquals(2, result.value());
+
+    SqlScanCursor conjunction = new SqlScanCursor();
+    SqlScanRowResult conjunctionRow = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, amount FROM events WHERE amount=200 AND category=10",
+            conjunction));
+    assertEquals(StatusCode.OK, session.nextScan(conjunction, conjunctionRow));
+    assertEquals(2, conjunctionRow.valueAt(0));
+    assertEquals(200, conjunctionRow.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(conjunction, conjunctionRow));
+    assertEquals(StatusCode.OK, session.closeScan(conjunction, result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "UPDATE events SET amount=250 WHERE category=10 AND id=2",
+            result));
+    assertEquals(1, result.affectedRows());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT amount FROM events WHERE id=2", result));
+    assertEquals(250, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "DELETE FROM events WHERE category=20 AND id=99",
+            result));
+    assertEquals(0, result.affectedRows());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "SELECT COUNT(*) FROM events WHERE category=10 AND missing=1",
+            result));
 
     assertDuplicateIndexRows(session, result, new long[] {1, 2, 3, 4, 5});
     assertDuplicateIndexEquality(session, result, 10, new long[] {1, 2, 3});
@@ -1530,7 +1571,8 @@ final class SqlSessionTest {
         session.beginScan(
             "SELECT events.id, categories.code FROM events "
                 + "JOIN categories ON events.category=categories.id "
-                + "WHERE events.category=20",
+                + "WHERE events.category=20 AND events.amount >= 250 "
+                + "AND events.amount < 350",
             joined));
     assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
     assertEquals(3, joinedRow.valueAt(0));

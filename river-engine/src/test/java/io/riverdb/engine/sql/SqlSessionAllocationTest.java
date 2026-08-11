@@ -73,13 +73,14 @@ final class SqlSessionAllocationTest {
   }
 
   private static void exercise(SqlSession session, SqlExecutionResult result) {
-    allocationGuard += session.execute("SELECT region FROM t WHERE id=1", result).ordinal();
+    allocationGuard += session.execute(
+        "SELECT region FROM t WHERE id=1 AND region=7", result).ordinal();
     allocationGuard += result.value();
   }
 
   private static void exerciseCount(SqlSession session, SqlExecutionResult result) {
     allocationGuard += session.execute(
-        "SELECT COUNT(*) FROM t WHERE region=7", result).ordinal();
+        "SELECT COUNT(*) FROM t WHERE region=7 AND balance=10", result).ordinal();
     allocationGuard += result.value();
   }
 
@@ -90,7 +91,7 @@ final class SqlSessionAllocationTest {
       SqlExecutionResult result) {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
-        "SELECT id, balance FROM t WHERE region=7", cursor).ordinal();
+        "SELECT id, balance FROM t WHERE region=7 AND balance=10", cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.key();
     allocationGuard += row.value();

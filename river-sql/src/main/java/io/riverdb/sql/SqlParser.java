@@ -23,7 +23,6 @@ public final class SqlParser {
     long scanLower = 0;
     long scanUpper = 0;
     boolean boundedScan = false;
-    boolean equalityPredicate = false;
     boolean serializableTransaction = false;
     if (consumeKeyword(sql, "BEGIN")) {
       type = SqlCommandType.BEGIN;
@@ -165,35 +164,7 @@ public final class SqlParser {
           status = identifier(sql, result.writableTableName());
         }
         if (status.isOk() && consumeKeyword(sql, "WHERE")) {
-          status = identifier(sql, result.writablePredicateColumnName());
-          if (status.isOk() && consumeCharacter(sql, '=')) {
-            equalityPredicate = true;
-            status = number(sql, numberResult);
-            key = numberResult.value;
-          } else if (status.isOk()) {
-            boundedScan = true;
-            status = requireCharacter(sql, '>');
-            if (status.isOk()) {
-              status = requireCharacter(sql, '=');
-            }
-            if (status.isOk()) {
-              status = number(sql, numberResult);
-              scanLower = numberResult.value;
-            }
-            if (status.isOk()) {
-              status = requireKeyword(sql, "AND");
-            }
-            if (status.isOk()) {
-              status = matchingIdentifier(sql, result.predicateColumnName());
-            }
-            if (status.isOk()) {
-              status = requireCharacter(sql, '<');
-            }
-            if (status.isOk()) {
-              status = number(sql, numberResult);
-              scanUpper = numberResult.value;
-            }
-          }
+          status = predicates(sql, result, false);
         }
       } else {
         boolean distinct = consumeKeyword(sql, "DISTINCT");
@@ -260,47 +231,7 @@ public final class SqlParser {
         if (status.isOk()
             && type == SqlCommandType.JOIN_SCAN
             && consumeKeyword(sql, "WHERE")) {
-          status = identifier(sql, result.writablePredicateTableName());
-          if (status.isOk()) {
-            status = requireCharacter(sql, '.');
-          }
-          if (status.isOk()) {
-            status = identifier(sql, result.writablePredicateColumnName());
-          }
-          if (status.isOk() && consumeCharacter(sql, '=')) {
-            equalityPredicate = true;
-            status = number(sql, numberResult);
-            key = numberResult.value;
-          } else if (status.isOk()) {
-            boundedScan = true;
-            status = requireCharacter(sql, '>');
-            if (status.isOk()) {
-              status = requireCharacter(sql, '=');
-            }
-            if (status.isOk()) {
-              status = number(sql, numberResult);
-              scanLower = numberResult.value;
-            }
-            if (status.isOk()) {
-              status = requireKeyword(sql, "AND");
-            }
-            if (status.isOk()) {
-              status = matchingIdentifier(sql, result.predicateTableName());
-            }
-            if (status.isOk()) {
-              status = requireCharacter(sql, '.');
-            }
-            if (status.isOk()) {
-              status = matchingIdentifier(sql, result.predicateColumnName());
-            }
-            if (status.isOk()) {
-              status = requireCharacter(sql, '<');
-            }
-            if (status.isOk()) {
-              status = number(sql, numberResult);
-              scanUpper = numberResult.value;
-            }
-          }
+          status = predicates(sql, result, true);
         }
         if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
           status = requireKeyword(sql, "GROUP");
@@ -314,35 +245,9 @@ public final class SqlParser {
             && type != SqlCommandType.JOIN_SCAN
             && type != SqlCommandType.DISTINCT_SCAN
             && consumeKeyword(sql, "WHERE")) {
-          status = identifier(sql, result.writablePredicateColumnName());
-          if (status.isOk() && consumeCharacter(sql, '=')) {
+          status = predicates(sql, result, false);
+          if (status.isOk() && result.isEqualityPredicate()) {
             type = SqlCommandType.SELECT;
-            equalityPredicate = true;
-            status = number(sql, numberResult);
-            key = numberResult.value;
-          } else if (status.isOk()) {
-            boundedScan = true;
-            status = requireCharacter(sql, '>');
-            if (status.isOk()) {
-              status = requireCharacter(sql, '=');
-            }
-            if (status.isOk()) {
-              status = number(sql, numberResult);
-              scanLower = numberResult.value;
-            }
-            if (status.isOk()) {
-              status = requireKeyword(sql, "AND");
-            }
-            if (status.isOk()) {
-              status = matchingIdentifier(sql, result.predicateColumnName());
-            }
-            if (status.isOk()) {
-              status = requireCharacter(sql, '<');
-            }
-            if (status.isOk()) {
-              status = number(sql, numberResult);
-              scanUpper = numberResult.value;
-            }
           }
         }
         if (status.isOk()
@@ -397,35 +302,7 @@ public final class SqlParser {
         status = requireKeyword(sql, "WHERE");
       }
       if (status.isOk()) {
-        status = identifier(sql, result.writablePredicateColumnName());
-      }
-      if (status.isOk() && consumeCharacter(sql, '=')) {
-        equalityPredicate = true;
-        status = number(sql, numberResult);
-        key = numberResult.value;
-      } else if (status.isOk()) {
-        boundedScan = true;
-        status = requireCharacter(sql, '>');
-        if (status.isOk()) {
-          status = requireCharacter(sql, '=');
-        }
-        if (status.isOk()) {
-          status = number(sql, numberResult);
-          scanLower = numberResult.value;
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "AND");
-        }
-        if (status.isOk()) {
-          status = matchingIdentifier(sql, result.predicateColumnName());
-        }
-        if (status.isOk()) {
-          status = requireCharacter(sql, '<');
-        }
-        if (status.isOk()) {
-          status = number(sql, numberResult);
-          scanUpper = numberResult.value;
-        }
+        status = predicates(sql, result, false);
       }
     } else if (consumeKeyword(sql, "DELETE")) {
       type = SqlCommandType.DELETE;
@@ -437,35 +314,7 @@ public final class SqlParser {
         status = requireKeyword(sql, "WHERE");
       }
       if (status.isOk()) {
-        status = identifier(sql, result.writablePredicateColumnName());
-      }
-      if (status.isOk() && consumeCharacter(sql, '=')) {
-        equalityPredicate = true;
-        status = number(sql, numberResult);
-        key = numberResult.value;
-      } else if (status.isOk()) {
-        boundedScan = true;
-        status = requireCharacter(sql, '>');
-        if (status.isOk()) {
-          status = requireCharacter(sql, '=');
-        }
-        if (status.isOk()) {
-          status = number(sql, numberResult);
-          scanLower = numberResult.value;
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "AND");
-        }
-        if (status.isOk()) {
-          status = matchingIdentifier(sql, result.predicateColumnName());
-        }
-        if (status.isOk()) {
-          status = requireCharacter(sql, '<');
-        }
-        if (status.isOk()) {
-          status = number(sql, numberResult);
-          scanUpper = numberResult.value;
-        }
+        status = predicates(sql, result, false);
       }
     } else {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -482,14 +331,73 @@ public final class SqlParser {
     } else {
       result.set(type, key, value);
     }
-    if (type == SqlCommandType.COUNT
-        || type == SqlCommandType.JOIN_SCAN
-        || type == SqlCommandType.UPDATE
-        || type == SqlCommandType.DELETE) {
-      result.setPredicate(
-          key, scanLower, scanUpper, boundedScan, equalityPredicate);
-    }
     return StatusCode.OK;
+  }
+
+  private StatusCode predicates(
+      String sql,
+      SqlCommand result,
+      boolean qualified) {
+    StatusCode status = StatusCode.OK;
+    while (status.isOk()) {
+      SqlIdentifier table = result.writableNextPredicateTableName();
+      SqlIdentifier column = result.writableNextPredicateColumnName();
+      if (table == null || column == null) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      if (qualified) {
+        status = identifier(sql, table);
+        if (status.isOk()) {
+          status = requireCharacter(sql, '.');
+        }
+      }
+      if (status.isOk()) {
+        status = identifier(sql, column);
+      }
+      boolean equality = status.isOk() && consumeCharacter(sql, '=');
+      long value = 0;
+      long lower = 0;
+      long upper = 0;
+      if (equality) {
+        status = number(sql, numberResult);
+        value = numberResult.value;
+      } else if (status.isOk()) {
+        status = requireCharacter(sql, '>');
+        if (status.isOk()) {
+          status = requireCharacter(sql, '=');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          lower = numberResult.value;
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "AND");
+        }
+        if (status.isOk() && qualified) {
+          status = matchingIdentifier(sql, table);
+          if (status.isOk()) {
+            status = requireCharacter(sql, '.');
+          }
+        }
+        if (status.isOk()) {
+          status = matchingIdentifier(sql, column);
+        }
+        if (status.isOk()) {
+          status = requireCharacter(sql, '<');
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          upper = numberResult.value;
+        }
+      }
+      if (status.isOk()) {
+        result.appendPredicate(value, lower, upper, equality);
+      }
+      if (!status.isOk() || !consumeKeyword(sql, "AND")) {
+        return status;
+      }
+    }
+    return status;
   }
 
   private StatusCode row(String sql, LongRow result) {

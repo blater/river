@@ -4,6 +4,7 @@ package io.riverdb.sql;
 public final class SqlCommand {
   public static final int MAXIMUM_INSERT_ROWS = 64;
   public static final int MAXIMUM_COLUMNS = 8;
+  public static final int MAXIMUM_PREDICATES = MAXIMUM_COLUMNS;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier joinTableName = new SqlIdentifier();
@@ -13,12 +14,18 @@ public final class SqlCommand {
   private final SqlIdentifier savepointName = new SqlIdentifier();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
-  private final SqlIdentifier predicateTableName = new SqlIdentifier();
-  private final SqlIdentifier predicateColumnName = new SqlIdentifier();
+  private final SqlIdentifier[] predicateTableNames =
+      new SqlIdentifier[MAXIMUM_PREDICATES];
+  private final SqlIdentifier[] predicateColumnNames =
+      new SqlIdentifier[MAXIMUM_PREDICATES];
   private final SqlIdentifier orderColumnName = new SqlIdentifier();
   private final long[] insertValues =
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
+  private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
+  private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
+  private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
+  private final boolean[] equalityPredicates = new boolean[MAXIMUM_PREDICATES];
   private SqlCommandType type;
   private long key;
   private long value;
@@ -32,6 +39,7 @@ public final class SqlCommand {
   private int insertRowCount;
   private int insertColumnCount;
   private int updateColumnCount;
+  private int predicateCount;
   private int columnCount;
   private boolean available;
 
@@ -39,6 +47,8 @@ public final class SqlCommand {
     for (int index = 0; index < columnNames.length; index++) {
       columnNames[index] = new SqlIdentifier();
       columnTableNames[index] = new SqlIdentifier();
+      predicateTableNames[index] = new SqlIdentifier();
+      predicateColumnNames[index] = new SqlIdentifier();
     }
   }
 
@@ -55,8 +65,14 @@ public final class SqlCommand {
     for (SqlIdentifier columnTableName : columnTableNames) {
       columnTableName.reset();
     }
-    predicateTableName.reset();
-    predicateColumnName.reset();
+    for (int index = 0; index < predicateColumnNames.length; index++) {
+      predicateTableNames[index].reset();
+      predicateColumnNames[index].reset();
+      predicateValues[index] = 0;
+      predicateLowerInclusive[index] = 0;
+      predicateUpperExclusive[index] = 0;
+      equalityPredicates[index] = false;
+    }
     orderColumnName.reset();
     type = null;
     key = 0;
@@ -71,36 +87,47 @@ public final class SqlCommand {
     insertRowCount = 0;
     insertColumnCount = 0;
     updateColumnCount = 0;
+    predicateCount = 0;
     columnCount = 0;
     available = false;
   }
 
   void set(SqlCommandType commandType, long primaryKey, long rowValue) {
     type = commandType;
-    key = primaryKey;
+    if (predicateCount == 0) {
+      key = primaryKey;
+    }
     value = rowValue;
     available = true;
   }
 
   void setScan(long lowerInclusive, long upperExclusive, boolean bounded) {
     type = SqlCommandType.SCAN;
-    scanLowerInclusive = lowerInclusive;
-    scanUpperExclusive = upperExclusive;
-    boundedScan = bounded;
+    if (predicateCount == 0) {
+      scanLowerInclusive = lowerInclusive;
+      scanUpperExclusive = upperExclusive;
+      boundedScan = bounded;
+    }
     available = true;
   }
 
-  void setPredicate(
+  void appendPredicate(
       long equalityValue,
       long lowerInclusive,
       long upperExclusive,
-      boolean bounded,
       boolean equality) {
-    key = equalityValue;
-    scanLowerInclusive = lowerInclusive;
-    scanUpperExclusive = upperExclusive;
-    boundedScan = bounded;
-    equalityPredicate = equality;
+    int index = predicateCount++;
+    predicateValues[index] = equalityValue;
+    predicateLowerInclusive[index] = lowerInclusive;
+    predicateUpperExclusive[index] = upperExclusive;
+    equalityPredicates[index] = equality;
+    if (index == 0) {
+      key = equalityValue;
+      scanLowerInclusive = lowerInclusive;
+      scanUpperExclusive = upperExclusive;
+      boundedScan = !equality;
+      equalityPredicate = equality;
+    }
   }
 
   void setSelectAll() {
@@ -169,12 +196,14 @@ public final class SqlCommand {
     return index >= 0 && index < columnCount ? columnTableNames[index] : null;
   }
 
-  SqlIdentifier writablePredicateColumnName() {
-    return predicateColumnName;
+  SqlIdentifier writableNextPredicateColumnName() {
+    return predicateCount < predicateColumnNames.length
+        ? predicateColumnNames[predicateCount] : null;
   }
 
-  SqlIdentifier writablePredicateTableName() {
-    return predicateTableName;
+  SqlIdentifier writableNextPredicateTableName() {
+    return predicateCount < predicateTableNames.length
+        ? predicateTableNames[predicateCount] : null;
   }
 
   SqlIdentifier writableOrderColumnName() {
@@ -230,11 +259,23 @@ public final class SqlCommand {
   }
 
   public SqlIdentifier predicateColumnName() {
-    return predicateColumnName;
+    return predicateColumnName(0);
   }
 
   public SqlIdentifier predicateTableName() {
-    return predicateTableName;
+    return predicateTableName(0);
+  }
+
+  public int predicateCount() {
+    return predicateCount;
+  }
+
+  public SqlIdentifier predicateColumnName(int index) {
+    return index >= 0 && index < predicateCount ? predicateColumnNames[index] : null;
+  }
+
+  public SqlIdentifier predicateTableName(int index) {
+    return index >= 0 && index < predicateCount ? predicateTableNames[index] : null;
   }
 
   public SqlIdentifier orderColumnName() {
@@ -299,11 +340,27 @@ public final class SqlCommand {
   }
 
   public boolean hasPredicate() {
-    return predicateColumnName.length() > 0;
+    return predicateCount > 0;
   }
 
   public boolean isEqualityPredicate() {
     return equalityPredicate;
+  }
+
+  public boolean isEqualityPredicate(int index) {
+    return index >= 0 && index < predicateCount && equalityPredicates[index];
+  }
+
+  public long predicateValue(int index) {
+    return index >= 0 && index < predicateCount ? predicateValues[index] : 0;
+  }
+
+  public long predicateLowerInclusive(int index) {
+    return index >= 0 && index < predicateCount ? predicateLowerInclusive[index] : 0;
+  }
+
+  public long predicateUpperExclusive(int index) {
+    return index >= 0 && index < predicateCount ? predicateUpperExclusive[index] : 0;
   }
 
   public boolean isSelectAll() {

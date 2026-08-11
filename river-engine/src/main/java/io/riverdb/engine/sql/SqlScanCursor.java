@@ -25,10 +25,6 @@ public final class SqlScanCursor {
   private int joinInnerColumn = -1;
   private boolean implicitTransaction;
   private boolean valueIndex;
-  private int filterColumn = -1;
-  private long filterLowerInclusive;
-  private long filterUpperExclusive;
-  private boolean equalityFilter;
   private long maximumRows = Long.MAX_VALUE;
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private int projectedColumnCount;
@@ -57,10 +53,6 @@ public final class SqlScanCursor {
     joinInnerColumn = -1;
     implicitTransaction = false;
     valueIndex = false;
-    filterColumn = -1;
-    filterLowerInclusive = 0;
-    filterUpperExclusive = 0;
-    equalityFilter = false;
     maximumRows = Long.MAX_VALUE;
     projectedColumnCount = 0;
     rowsReturned = 0;
@@ -75,10 +67,6 @@ public final class SqlScanCursor {
       SqlSession session,
       boolean implicit,
       boolean indexedValue,
-      int scanFilterColumn,
-      long lowerInclusive,
-      long upperExclusive,
-      boolean equality,
       int[] projections,
       int projectionCount,
       long rowLimit) {
@@ -92,10 +80,6 @@ public final class SqlScanCursor {
     owner = session;
     implicitTransaction = implicit;
     valueIndex = indexedValue;
-    filterColumn = scanFilterColumn;
-    filterLowerInclusive = lowerInclusive;
-    filterUpperExclusive = upperExclusive;
-    equalityFilter = equality;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
@@ -175,10 +159,6 @@ public final class SqlScanCursor {
       int outerColumn,
       int innerColumn,
       boolean indexedOuter,
-      int scanFilterColumn,
-      long lowerInclusive,
-      long upperExclusive,
-      boolean equality,
       int[] projections,
       int projectionCount,
       long rowLimit) {
@@ -198,10 +178,6 @@ public final class SqlScanCursor {
     valueIndex = indexedOuter;
     joinOuterColumn = outerColumn;
     joinInnerColumn = innerColumn;
-    filterColumn = scanFilterColumn;
-    filterLowerInclusive = lowerInclusive;
-    filterUpperExclusive = upperExclusive;
-    equalityFilter = equality;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
@@ -297,20 +273,6 @@ public final class SqlScanCursor {
 
   long aggregateCommitSequence() {
     return aggregateCommitSequence;
-  }
-
-  boolean filtersRows() {
-    return filterColumn >= 0;
-  }
-
-  int filterColumn() {
-    return filterColumn;
-  }
-
-  boolean matches(long value) {
-    return equalityFilter
-        ? value == filterLowerInclusive
-        : value >= filterLowerInclusive && value < filterUpperExclusive;
   }
 
   boolean limitReached() {

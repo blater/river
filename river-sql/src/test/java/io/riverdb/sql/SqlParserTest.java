@@ -204,6 +204,31 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.SCAN, command.type());
     assertEquals(-50, command.scanLowerInclusive());
     assertEquals(75, command.scanUpperExclusive());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT key FROM accounts WHERE region=7 "
+                + "AND value >= 100 AND value < 300 AND key=2",
+            command));
+    assertEquals(3, command.predicateCount());
+    assertName("region", command.predicateColumnName(0));
+    assertEquals(7, command.predicateValue(0));
+    assertName("value", command.predicateColumnName(1));
+    assertEquals(100, command.predicateLowerInclusive(1));
+    assertEquals(300, command.predicateUpperExclusive(1));
+    assertName("key", command.predicateColumnName(2));
+    assertEquals(2, command.predicateValue(2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT accounts.key FROM accounts "
+                + "JOIN regions ON accounts.region=regions.id "
+                + "WHERE accounts.region=7 AND accounts.value >= 100 "
+                + "AND accounts.value < 300",
+            command));
+    assertEquals(2, command.predicateCount());
+    assertName("accounts", command.predicateTableName(1));
+    assertName("value", command.predicateColumnName(1));
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());
@@ -282,6 +307,12 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key, value FROM x WHERE key > 1", command));
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(
+            "SELECT key FROM x WHERE a=1 AND b=2 AND c=3 AND d=4 "
+                + "AND e=5 AND f=6 AND g=7 AND h=8 AND i=9",
+            command));
     StringBuilder tooManyRows = new StringBuilder("INSERT INTO x VALUES ");
     for (int index = 0; index <= SqlCommand.MAXIMUM_INSERT_ROWS; index++) {
       if (index > 0) {
@@ -305,14 +336,16 @@ final class SqlParserTest {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
     for (int index = 0; index < 1_000; index++) {
-      parser.parse("UPDATE accounts SET value=11 WHERE key=7", command);
+      parser.parse(
+          "UPDATE accounts SET value=11 WHERE key=7 AND region=3", command);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 1_000; index++) {
       assertEquals(
           StatusCode.OK,
-          parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
+          parser.parse(
+              "UPDATE accounts SET value=11 WHERE key=7 AND region=3", command));
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 256, "warmed SQL parse allocated bytes: " + allocated);
