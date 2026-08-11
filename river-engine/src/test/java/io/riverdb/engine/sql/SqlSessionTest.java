@@ -1528,6 +1528,37 @@ final class SqlSessionTest {
             "SELECT id FROM events WHERE amount="
                 + "(SELECT category FROM events WHERE category=10)",
             unindexedOrder));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id FROM events WHERE EXISTS "
+                + "(SELECT id FROM events WHERE category=999)",
+            unindexedOrder));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id FROM events WHERE NOT EXISTS "
+                + "(SELECT id FROM events WHERE id=999)",
+            unindexedOrder));
+    int existenceRows = 0;
+    while (session.nextScan(unindexedOrder, orderedRow).isOk()) {
+      existenceRows++;
+    }
+    assertEquals(5, existenceRows);
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id FROM events WHERE NOT EXISTS "
+                + "(SELECT id FROM events WHERE category=10)",
+            unindexedOrder));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
     String nested = "SELECT id FROM events";
     for (int depth = 1; depth < SqlQuery.MAXIMUM_QUERY_BLOCKS; depth++) {
       nested = "SELECT d" + depth + ".id FROM (" + nested + ") d" + depth;

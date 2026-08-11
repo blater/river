@@ -122,6 +122,20 @@ final class RiverDriverTest {
               "SELECT id FROM accounts WHERE balance="
                   + "(SELECT region FROM accounts WHERE region=7)"));
       assertEquals("21000", cardinality.getSQLState());
+      try (ResultSet exists = statement.executeQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM regions WHERE code=7000) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(exists.next());
+          assertEquals(expected, exists.getLong("id"));
+        }
+        assertFalse(exists.next());
+      }
+      try (ResultSet notExists = statement.executeQuery(
+          "SELECT id FROM accounts WHERE NOT EXISTS "
+              + "(SELECT id FROM regions WHERE code=7000)")) {
+        assertFalse(notExists.next());
+      }
       String nested = "SELECT id FROM accounts";
       for (int depth = 1; depth < 32; depth++) {
         nested = "SELECT d" + depth + ".id FROM (" + nested + ") d" + depth;

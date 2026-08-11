@@ -9,6 +9,7 @@ public final class SqlQuery {
   private final SqlCommand[] blocks = new SqlCommand[MAXIMUM_QUERY_BLOCKS];
   private int blockCount;
   private int scalarPredicate = -1;
+  private int existencePredicate;
 
   public SqlQuery() {
     for (int index = 0; index < blocks.length; index++) {
@@ -22,6 +23,7 @@ public final class SqlQuery {
     }
     blockCount = 0;
     scalarPredicate = -1;
+    existencePredicate = 0;
   }
 
   SqlCommand nextBlock() {
@@ -114,6 +116,25 @@ public final class SqlQuery {
     return StatusCode.OK;
   }
 
+  StatusCode compileExistencePredicate(SqlCommand destination, boolean negated) {
+    if (destination == null
+        || blockCount != 2
+        || blocks[0].type() != SqlCommandType.SCAN
+            && blocks[0].type() != SqlCommandType.SELECT) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SqlCommand nested = blocks[1];
+    if (nested.type() != SqlCommandType.SCAN
+        && nested.type() != SqlCommandType.SELECT
+        || nested.isSelectAll()
+        || nested.columnCount() != 1) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.copyQueryFrom(blocks[0]);
+    existencePredicate = negated ? -1 : 1;
+    return StatusCode.OK;
+  }
+
   private static StatusCode validateOuterBlock(
       SqlCommand outer,
       SqlCommand inner) {
@@ -202,5 +223,17 @@ public final class SqlQuery {
     }
     destination.setPredicateValue(scalarPredicate, value);
     return StatusCode.OK;
+  }
+
+  public boolean hasExistencePredicate() {
+    return existencePredicate != 0;
+  }
+
+  public boolean existenceNegated() {
+    return existencePredicate < 0;
+  }
+
+  public SqlCommand existenceCommand() {
+    return hasExistencePredicate() ? blocks[1] : null;
   }
 }

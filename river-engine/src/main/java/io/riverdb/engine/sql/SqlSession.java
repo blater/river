@@ -92,7 +92,7 @@ public final class SqlSession {
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
-  private boolean scalarPredicateNull;
+  private boolean subqueryPredicateFalse;
   private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
@@ -102,6 +102,7 @@ public final class SqlSession {
   private int matchedRowCount;
   private int projectedColumnCount;
   private int sortedRowCount;
+  private int nestedProjection;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -368,7 +369,7 @@ public final class SqlSession {
     if (scanActive) {
       return StatusCode.CONFLICT;
     }
-    scalarPredicateNull = false;
+    subqueryPredicateFalse = false;
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk() && command.type() == SqlCommandType.COUNT) {
       status = execute(sql, aggregateExecution);
@@ -529,6 +530,8 @@ public final class SqlSession {
     }
     if (status.isOk() && query.hasScalarPredicate()) {
       status = evaluateScalarPredicate();
+    } else if (status.isOk() && query.hasExistencePredicate()) {
+      status = evaluateExistencePredicate();
     }
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
@@ -1483,7 +1486,7 @@ public final class SqlSession {
   }
 
   private boolean matchesPredicates(long primaryKey, HeapRowResult source) {
-    if (scalarPredicateNull) {
+    if (subqueryPredicateFalse) {
       return false;
     }
     for (int index = 0; index < predicateCount; index++) {
@@ -1501,41 +1504,12 @@ public final class SqlSession {
 
   private StatusCode evaluateScalarPredicate() {
     SqlCommand scalar = query.scalarCommand();
-    if (scalar == null
-        || scalar.isOrdered()
-        || scalar.columnCount() != 1
-        || scalar.isSelectAll()) {
+    if (scalar == null || scalar.isOrdered()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = session.resolveTable(scalar.tableName(), scalarTable);
-    if (status.isOk()
-        && scalar.columnTableName(0).length() > 0
-        && !sameName(scalar.columnTableName(0), scalar.tableName())) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int projection = status.isOk()
-        ? scalarTable.findColumn(scalar.firstColumnName()) : -1;
-    if (status.isOk() && projection < 0) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int index = 0; status.isOk() && index < scalar.predicateCount(); index++) {
-      if (scalar.predicateTableName(index).length() > 0
-          && !sameName(scalar.predicateTableName(index), scalar.tableName())) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-        break;
-      }
-      int column = scalarTable.findColumn(scalar.predicateColumnName(index));
-      if (column < 0
-          || !scalar.isEqualityPredicate(index)
-              && scalar.predicateUpperExclusive(index)
-                  <= scalar.predicateLowerInclusive(index)) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-        break;
-      }
-      scalarPredicateColumns[index] = column;
-    }
+    StatusCode status = bindNestedCommand(scalar);
     if (status.isOk() && scalar.rowLimit() == 0) {
-      scalarPredicateNull = true;
+      subqueryPredicateFalse = true;
       return StatusCode.OK;
     }
     if (status.isOk()) {
@@ -1562,7 +1536,7 @@ public final class SqlSession {
         if (rows > 1) {
           status = StatusCode.CARDINALITY_VIOLATION;
         } else {
-          value = readColumn(scalarRow.key(), scalarRow.row(), projection);
+          value = readColumn(scalarRow.key(), scalarRow.row(), nestedProjection);
           if (scalar.rowLimit() == 1) {
             break;
           }
@@ -1580,9 +1554,85 @@ public final class SqlSession {
       }
     }
     if (status.isOk() && rows == 0) {
-      scalarPredicateNull = true;
+      subqueryPredicateFalse = true;
     } else if (status.isOk()) {
       status = query.bindScalarValue(command, value);
+    }
+    return status;
+  }
+
+  private StatusCode evaluateExistencePredicate() {
+    SqlCommand nested = query.existenceCommand();
+    if (nested == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = bindNestedCommand(nested);
+    boolean exists = false;
+    if (status.isOk() && nested.rowLimit() > 0) {
+      status = session.beginScan(scalarTable, scalarCursor);
+    }
+    boolean cursorActive = status.isOk() && nested.rowLimit() > 0;
+    while (status.isOk() && cursorActive) {
+      status = session.nextScan(scalarCursor, scalarRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (status.isOk()) {
+        status = validateRow(scalarRow.row(), scalarTable);
+      }
+      if (status.isOk()
+          && matchesScalarPredicates(nested, scalarRow.key(), scalarRow.row())) {
+        exists = true;
+        break;
+      }
+    }
+    if (cursorActive) {
+      StatusCode close = session.closeScan(scalarCursor);
+      if (close.isOk()) {
+        scalarCursor.reset();
+        scalarRow.reset();
+      }
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    if (status.isOk()) {
+      subqueryPredicateFalse = query.existenceNegated() ? exists : !exists;
+    }
+    return status;
+  }
+
+  private StatusCode bindNestedCommand(SqlCommand nested) {
+    if (nested.columnCount() != 1 || nested.isSelectAll()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = session.resolveTable(nested.tableName(), scalarTable);
+    if (status.isOk()
+        && nested.columnTableName(0).length() > 0
+        && !sameName(nested.columnTableName(0), nested.tableName())) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    nestedProjection = status.isOk()
+        ? scalarTable.findColumn(nested.firstColumnName()) : -1;
+    if (status.isOk() && nestedProjection < 0) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; status.isOk() && index < nested.predicateCount(); index++) {
+      if (nested.predicateTableName(index).length() > 0
+          && !sameName(nested.predicateTableName(index), nested.tableName())) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+        break;
+      }
+      int column = scalarTable.findColumn(nested.predicateColumnName(index));
+      if (column < 0
+          || !nested.isEqualityPredicate(index)
+              && nested.predicateUpperExclusive(index)
+                  <= nested.predicateLowerInclusive(index)) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+        break;
+      }
+      scalarPredicateColumns[index] = column;
     }
     return status;
   }

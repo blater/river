@@ -11,6 +11,8 @@ public final class SqlParser {
   private final SqlScalarSourceView scalarSourceView = new SqlScalarSourceView();
   private int offset;
   private int scalarPredicateIndex = -1;
+  private int existenceWhereStart = -1;
+  private boolean existenceNegated;
 
   public StatusCode parse(String sql, SqlCommand result) {
     return parseText(sql, result);
@@ -29,10 +31,38 @@ public final class SqlParser {
       StatusCode status = parseDerivedBlocks(sql, 0, sql.length(), query);
       return status.isOk() ? query.compileDerived(result) : status;
     }
+    int exists = findExistenceSource(sql, 0, sql.length());
+    if (exists >= 0) {
+      return parseExistencePredicate(sql, exists, query, result);
+    }
     int scalar = findScalarSource(sql, 0, sql.length());
     return scalar < 0
         ? parseText(sql, result)
         : parseScalarPredicate(sql, scalar, query, result);
+  }
+
+  private StatusCode parseExistencePredicate(
+      String sql,
+      int open,
+      SqlQuery query,
+      SqlCommand result) {
+    int close = matchingCloseParenthesis(sql, open, sql.length());
+    if (close < 0 || existenceWhereStart < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SqlCommand outer = query.nextBlock();
+    SqlCommand nested = query.nextBlock();
+    if (outer == null || nested == null) {
+      return StatusCode.QUERY_TOO_COMPLEX;
+    }
+    sourceView.set(sql, 0, existenceWhereStart, close + 1, sql.length());
+    StatusCode status = parseText(sourceView, outer);
+    if (status.isOk()) {
+      sourceView.set(sql, open + 1, close, close, close);
+      status = parseText(sourceView, nested);
+    }
+    return status.isOk()
+        ? query.compileExistencePredicate(result, existenceNegated) : status;
   }
 
   private StatusCode parseScalarPredicate(
@@ -149,6 +179,55 @@ public final class SqlParser {
         if (matchesKeyword(sql, select, end, "SELECT")) {
           return open;
         }
+      }
+    }
+    return -1;
+  }
+
+  private int findExistenceSource(String sql, int start, int end) {
+    existenceWhereStart = -1;
+    existenceNegated = false;
+    int depth = 0;
+    for (int index = start; index < end; index++) {
+      char character = sql.charAt(index);
+      if (character == '(') {
+        depth++;
+      } else if (character == ')') {
+        if (depth <= 0) {
+          return -1;
+        }
+        depth--;
+      } else if (depth == 0 && matchesKeyword(sql, index, end, "WHERE")) {
+        int predicate = index + 5;
+        while (predicate < end && Character.isWhitespace(sql.charAt(predicate))) {
+          predicate++;
+        }
+        if (matchesKeyword(sql, predicate, end, "NOT")) {
+          existenceNegated = true;
+          predicate += 3;
+          while (predicate < end && Character.isWhitespace(sql.charAt(predicate))) {
+            predicate++;
+          }
+        }
+        if (!matchesKeyword(sql, predicate, end, "EXISTS")) {
+          return -1;
+        }
+        int open = predicate + 6;
+        while (open < end && Character.isWhitespace(sql.charAt(open))) {
+          open++;
+        }
+        if (open >= end || sql.charAt(open) != '(') {
+          return -1;
+        }
+        int select = open + 1;
+        while (select < end && Character.isWhitespace(sql.charAt(select))) {
+          select++;
+        }
+        if (matchesKeyword(sql, select, end, "SELECT")) {
+          existenceWhereStart = index;
+          return open;
+        }
+        return -1;
       }
     }
     return -1;

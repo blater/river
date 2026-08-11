@@ -427,6 +427,34 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesExistencePredicatesAsTwoQueryBlocks() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE EXISTS "
+                + "(SELECT id FROM lookup WHERE lookup.region=7) ORDER BY id",
+            query,
+            command));
+    assertEquals(2, query.blockCount());
+    assertTrue(query.hasExistencePredicate());
+    assertFalse(query.existenceNegated());
+    assertName("accounts", command.tableName());
+    assertName("id", command.orderColumnName());
+    assertName("lookup", query.existenceCommand().tableName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE NOT EXISTS "
+                + "(SELECT id FROM lookup WHERE lookup.region=7)",
+            query,
+            command));
+    assertTrue(query.existenceNegated());
+  }
+
+  @Test
   void warmedParseReusesCommandAndParserState() {
     java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
     Assumptions.assumeTrue(standard instanceof ThreadMXBean);
@@ -448,6 +476,11 @@ final class SqlParserTest {
               + "(SELECT value FROM lookup WHERE lookup.key=7)",
           query,
           command);
+      parser.parseQuery(
+          "SELECT key FROM accounts WHERE EXISTS "
+              + "(SELECT key FROM lookup WHERE lookup.key=7)",
+          query,
+          command);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -458,6 +491,13 @@ final class SqlParserTest {
               "SELECT d.key FROM "
                   + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
                   + "WHERE d.key=7",
+              query,
+              command));
+      assertEquals(
+          StatusCode.OK,
+          parser.parseQuery(
+              "SELECT key FROM accounts WHERE EXISTS "
+                  + "(SELECT key FROM lookup WHERE lookup.key=7)",
               query,
               command));
       assertEquals(

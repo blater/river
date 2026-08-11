@@ -79,6 +79,7 @@ final class SqlSessionAllocationTest {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
+      exerciseExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
     }
@@ -87,6 +88,7 @@ final class SqlSessionAllocationTest {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
+      exerciseExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
     }
@@ -168,6 +170,21 @@ final class SqlSessionAllocationTest {
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseExists(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id FROM t WHERE EXISTS (SELECT id FROM labels WHERE labels.region=7)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }
