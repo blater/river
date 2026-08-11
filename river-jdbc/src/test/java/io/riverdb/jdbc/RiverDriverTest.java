@@ -265,6 +265,14 @@ final class RiverDriverTest {
         assertEquals(1, correlatedNull.getLong(1));
         assertFalse(correlatedNull.next());
       }
+      try (ResultSet correlatedNull = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE rank NOT IN "
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=nullable_values.rank)")) {
+        assertTrue(correlatedNull.next());
+        assertEquals(3, correlatedNull.getLong(1));
+        assertFalse(correlatedNull.next());
+      }
       assertEquals(
           0,
           statement.executeUpdate(
@@ -362,6 +370,16 @@ final class RiverDriverTest {
         }
         assertFalse(correlated.next());
       }
+      try (ResultSet correlatedPrimary = statement.executeQuery(
+          "SELECT id FROM accounts WHERE id="
+              + "(SELECT id FROM region_labels "
+              + "WHERE region_labels.id=accounts.id) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(correlatedPrimary.next());
+          assertEquals(expected, correlatedPrimary.getLong(1));
+        }
+        assertFalse(correlatedPrimary.next());
+      }
       try (ResultSet correlated = statement.executeQuery(
           "SELECT id FROM accounts WHERE region="
               + "(SELECT id FROM regions "
@@ -377,6 +395,31 @@ final class RiverDriverTest {
         SQLException cardinalityFailure = assertThrows(
             SQLException.class, correlatedCardinality::next);
         assertEquals("21000", cardinalityFailure.getSQLState());
+      }
+      try (ResultSet correlated = statement.executeQuery(
+          "SELECT id FROM accounts WHERE region IN "
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=accounts.region AND regions.code=7000) "
+              + "ORDER BY balance")) {
+        assertTrue(correlated.next());
+        assertEquals(1, correlated.getLong(1));
+        assertTrue(correlated.next());
+        assertEquals(2, correlated.getLong(1));
+        assertFalse(correlated.next());
+      }
+      try (ResultSet correlated = statement.executeQuery(
+          "SELECT id FROM accounts WHERE region NOT IN "
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=accounts.region AND regions.code=7000)")) {
+        assertTrue(correlated.next());
+        assertEquals(3, correlated.getLong(1));
+        assertFalse(correlated.next());
+      }
+      try (ResultSet correlatedUnknown = statement.executeQuery(
+          "SELECT id FROM accounts WHERE region NOT IN "
+              + "(SELECT NULL FROM regions "
+              + "WHERE regions.id=accounts.region)")) {
+        assertFalse(correlatedUnknown.next());
       }
       String nested = "SELECT id FROM accounts";
       for (int depth = 1; depth < 32; depth++) {
