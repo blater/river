@@ -42,6 +42,7 @@ public final class RelationalDatabase {
   private long buildLastKey;
   private boolean buildBatchFull;
   private boolean cleanupBatchComplete;
+  private boolean droppingIndexAlreadyMarked;
   private volatile long schemaVersion = 1;
   private RelationalSession schemaChangeOwner;
   private int activeTransactions;
@@ -325,8 +326,32 @@ public final class RelationalDatabase {
       status = session.beginPersistentSchemaChange();
     }
     if (status.isOk()) {
-      status = session.resolveTable(tableName, indexedTable);
+      status = markDroppingValueIndex(session, indexName, tableName);
     }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode terminal = status.isOk() && !droppingIndexAlreadyMarked
+          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
+      if (status.isOk()) {
+        status = terminal;
+      }
+    }
+    if (status.isOk() && !droppingIndexAlreadyMarked) {
+      status = publishDroppingSchema(session);
+    }
+    if (!status.isOk()) {
+      session.releasePersistentSchemaChange();
+      return status;
+    }
+    return cleanupUniqueValueIndex(
+        session, indexName, tableName, outcome, maximumCleanupBatches);
+  }
+
+  StatusCode markDroppingValueIndex(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName) {
+    droppingIndexAlreadyMarked = false;
+    StatusCode status = session.resolveTable(tableName, indexedTable);
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);
     }
@@ -355,13 +380,13 @@ public final class RelationalDatabase {
     }
     if (status.isOk()) {
       indexStorageTable.set(this, indexTableId, 0, TableDefinition.INDEX_NONE);
+      droppingIndexAlreadyMarked =
+          indexRecord.state() == TableDefinition.INDEX_DROPPING;
     }
-    boolean alreadyDropping = status.isOk()
-        && indexRecord.state() == TableDefinition.INDEX_DROPPING;
-    if (status.isOk() && !alreadyDropping) {
+    if (status.isOk() && !droppingIndexAlreadyMarked) {
       status = RelationalKey.catalogTableKey(tableName, catalogKey);
     }
-    if (status.isOk() && !alreadyDropping) {
+    if (status.isOk() && !droppingIndexAlreadyMarked) {
       CatalogRecord.encodeTable(
           catalogOutput,
           indexedTable.tableId(),
@@ -373,10 +398,10 @@ public final class RelationalDatabase {
           indexedTable.indexIsUnique(indexSlot));
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
-    if (status.isOk() && !alreadyDropping) {
+    if (status.isOk() && !droppingIndexAlreadyMarked) {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);
     }
-    if (status.isOk() && !alreadyDropping) {
+    if (status.isOk() && !droppingIndexAlreadyMarked) {
       CatalogRecord.encodeIndex(
           catalogOutput,
           indexedTable.tableId(),
@@ -386,22 +411,19 @@ public final class RelationalDatabase {
           indexedTable.indexIsUnique(indexSlot));
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
-    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode terminal = status.isOk() && !alreadyDropping
-          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
-      if (status.isOk()) {
-        status = terminal;
-      }
-    }
-    if (status.isOk() && !alreadyDropping) {
-      status = publishDroppingSchema(session);
-    }
-    if (!status.isOk()) {
-      session.releasePersistentSchemaChange();
-      return status;
-    }
-    return cleanupUniqueValueIndex(
-        session, indexName, tableName, outcome, maximumCleanupBatches);
+    return status;
+  }
+
+  StatusCode finishDroppingValueIndex(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName,
+      TransactionOutcome outcome) {
+    StatusCode status = publishDroppingSchema(session);
+    return status.isOk()
+        ? cleanupUniqueValueIndex(
+            session, indexName, tableName, outcome, Integer.MAX_VALUE)
+        : status;
   }
 
   synchronized StatusCode createUniqueValueIndex(

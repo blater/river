@@ -69,13 +69,32 @@ final class EmbeddedRiverDropIndexTest {
     assertEquals(2, countRows(session, "SELECT id FROM items WHERE category=7"));
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.OK,
         session.execute("DROP INDEX items_code ON items", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
-
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT before_drop", result));
     assertEquals(
         StatusCode.OK,
         session.execute("DROP INDEX items_code ON items", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("ROLLBACK TO SAVEPOINT before_drop", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("DROP INDEX items_code ON items", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("DROP INDEX items_code ON items", result));

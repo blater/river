@@ -47,9 +47,16 @@ public final class RelationalSession {
   private final long[] previousIndexedValues = new long[TableDefinition.MAXIMUM_INDEXES];
   private final boolean[] previousIndexedNulls =
       new boolean[TableDefinition.MAXIMUM_INDEXES];
+  private final TableSchema.ColumnName pendingDropIndexName =
+      new TableSchema.ColumnName();
+  private final TableSchema.ColumnName pendingDropTableName =
+      new TableSchema.ColumnName();
+  private final TransactionOutcome schemaCleanupOutcome = new TransactionOutcome();
   private boolean registeredTransaction;
   private boolean schemaChangeActive;
   private int schemaChangeMutationStart;
+  private int pendingDropMutationStart;
+  private boolean pendingDropIndex;
 
   RelationalSession(RelationalDatabase owner, IndexedTransactionSession indexedSession) {
     database = owner;
@@ -206,6 +213,9 @@ public final class RelationalSession {
         || !RelationalKey.validName(columnName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (pendingDropIndex) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     boolean acquired = false;
     StatusCode status = StatusCode.OK;
     if (!schemaChangeActive) {
@@ -228,6 +238,44 @@ public final class RelationalSession {
     return status;
   }
 
+  public StatusCode dropValueIndex(
+      CharSequence indexName,
+      CharSequence tableName) {
+    if (!registeredTransaction
+        || !RelationalKey.validName(indexName)
+        || !RelationalKey.validName(tableName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropIndex) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    int mutationStart = session.pendingMutationCount();
+    if (status.isOk()) {
+      status = database.markDroppingValueIndex(this, indexName, tableName);
+    }
+    if (status.isOk()) {
+      pendingDropIndexName.set(indexName);
+      pendingDropTableName.set(tableName);
+      pendingDropMutationStart = mutationStart;
+      pendingDropIndex = true;
+    } else if (acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
+  }
+
   public StatusCode renameTable(
       CharSequence currentName,
       CharSequence renamedName) {
@@ -236,6 +284,9 @@ public final class RelationalSession {
         || !RelationalKey.validName(renamedName)
         || sameName(currentName, renamedName)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropIndex) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     boolean acquired = false;
     StatusCode status = StatusCode.OK;
@@ -718,6 +769,11 @@ public final class RelationalSession {
   public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
     StatusCode status = session.rollbackToSavepoint(savepoint);
     if (status.isOk()
+        && pendingDropIndex
+        && session.pendingMutationCount() <= pendingDropMutationStart) {
+      clearPendingDropIndex();
+    }
+    if (status.isOk()
         && schemaChangeActive
         && session.pendingMutationCount() <= schemaChangeMutationStart) {
       database.completeSchemaChange(this, false);
@@ -737,15 +793,27 @@ public final class RelationalSession {
 
   public StatusCode commit(TransactionOutcome result) {
     StatusCode status = session.commit(result);
-    completeTerminalSchemaChange(status.isOk()
+    boolean committed = status.isOk()
         && result.isAvailable()
-        && result.state() == TransactionState.COMMITTED);
+        && result.state() == TransactionState.COMMITTED;
     releaseTerminalTransaction();
+    if (committed && pendingDropIndex) {
+      pendingDropIndex = false;
+      schemaCleanupOutcome.reset();
+      status = database.finishDroppingValueIndex(
+          this,
+          pendingDropIndexName,
+          pendingDropTableName,
+          schemaCleanupOutcome);
+    }
+    clearPendingDropIndex();
+    completeTerminalSchemaChange(committed);
     return status;
   }
 
   public StatusCode abort(TransactionOutcome result) {
     StatusCode status = session.abort(result);
+    clearPendingDropIndex();
     completeTerminalSchemaChange(false);
     releaseTerminalTransaction();
     return status;
@@ -810,6 +878,13 @@ public final class RelationalSession {
       }
     }
     return true;
+  }
+
+  private void clearPendingDropIndex() {
+    pendingDropIndexName.reset();
+    pendingDropTableName.reset();
+    pendingDropMutationStart = 0;
+    pendingDropIndex = false;
   }
 
   private StatusCode resolveWriteKey(TableDefinition table, long key) {
@@ -1183,4 +1258,5 @@ public final class RelationalSession {
       schemaChangeMutationStart = 0;
     }
   }
+
 }
