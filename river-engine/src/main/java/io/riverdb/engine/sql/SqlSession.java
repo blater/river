@@ -511,6 +511,7 @@ public final class SqlSession {
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk()
         && (command.type() == SqlCommandType.COUNT
+            || command.type() == SqlCommandType.COUNT_VALUE
             || isValueAggregate(command.type()))) {
       status = execute(sql, aggregateExecution);
       if (status.isOk()) {
@@ -945,6 +946,10 @@ public final class SqlSession {
             : command.type() == SqlCommandType.MIN
                 ? MIN_COLUMN_NAME : MAX_COLUMN_NAME;
       }
+      if (command.type() == SqlCommandType.COUNT_VALUE) {
+        SqlIdentifier alias = command.columnAlias(0);
+        return alias != null && alias.length() > 0 ? alias : COUNT_COLUMN_NAME;
+      }
       return COUNT_COLUMN_NAME;
     }
     if (cursor.groupCount()) {
@@ -1095,10 +1100,12 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.COUNT
+        || command.type() == SqlCommandType.COUNT_VALUE
         || isValueAggregate(command.type())) {
       boolean sum = command.type() == SqlCommandType.SUM;
       boolean minimum = command.type() == SqlCommandType.MIN;
       boolean valueAggregate = isValueAggregate(command.type());
+      boolean countValue = command.type() == SqlCommandType.COUNT_VALUE;
       long aggregate = 0;
       long aggregateHigh = 0;
       boolean aggregatePresent = false;
@@ -1142,7 +1149,7 @@ public final class SqlSession {
           status = StatusCode.OK;
           break;
         }
-        if (status.isOk() && (filtered || valueAggregate)) {
+        if (status.isOk() && (filtered || valueAggregate || countValue)) {
           status = validateRow(source);
         }
         if (status.isOk() && filtered && !matchesPredicates(primaryKey, source)) {
@@ -1165,11 +1172,16 @@ public final class SqlSession {
               }
               aggregatePresent = true;
             }
-          } else if (aggregate == Long.MAX_VALUE) {
-            status = StatusCode.RESOURCE_EXHAUSTED;
           } else {
-            aggregate++;
-            aggregatePresent = true;
+            int column = countValue ? projectedColumns[0] : -1;
+            if (!countValue || !isNull(source, table, column)) {
+              if (aggregate == Long.MAX_VALUE) {
+                status = StatusCode.RESOURCE_EXHAUSTED;
+              } else {
+                aggregate++;
+                aggregatePresent = true;
+              }
+            }
           }
         }
       }
@@ -1240,6 +1252,7 @@ public final class SqlSession {
   private boolean isSelect() {
     return command.type() == SqlCommandType.SELECT
         || command.type() == SqlCommandType.COUNT
+        || command.type() == SqlCommandType.COUNT_VALUE
         || isValueAggregate(command.type());
   }
 
@@ -1252,7 +1265,8 @@ public final class SqlSession {
     if (command.type() == SqlCommandType.COUNT) {
       return bindPredicates(false);
     }
-    if (isValueAggregate(command.type())) {
+    if (command.type() == SqlCommandType.COUNT_VALUE
+        || isValueAggregate(command.type())) {
       StatusCode status = bindProjections();
       return status.isOk() ? bindPredicates(false) : status;
     }

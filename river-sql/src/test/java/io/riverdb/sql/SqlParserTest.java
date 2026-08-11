@@ -120,6 +120,15 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
+            "SELECT COUNT(a.balance) AS present FROM accounts a WHERE a.region=7",
+            command));
+    assertEquals(SqlCommandType.COUNT_VALUE, command.type());
+    assertName("a", command.columnTableName(0));
+    assertName("balance", command.columnName(0));
+    assertName("present", command.columnAlias(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
             "SELECT SUM(a.balance) AS total FROM accounts a "
                 + "WHERE a.region>=7 AND a.region<9",
             command));
@@ -158,6 +167,12 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT MAX(balance, region) FROM accounts", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT COUNT(*) AS total FROM accounts", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT COUNT(balance AS total) FROM accounts", command));
     assertEquals(
         StatusCode.OK,
         parser.parse(

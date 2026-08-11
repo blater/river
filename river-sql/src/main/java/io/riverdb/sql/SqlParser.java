@@ -545,23 +545,14 @@ public final class SqlParser {
       if (consumeKeyword(sql, "COUNT")) {
         type = SqlCommandType.COUNT;
         status = requireCharacter(sql, '(');
-        if (status.isOk()) {
-          status = requireCharacter(sql, '*');
-        }
-        if (status.isOk()) {
+        if (status.isOk() && consumeCharacter(sql, '*')) {
           status = requireCharacter(sql, ')');
+        } else if (status.isOk()) {
+          type = SqlCommandType.COUNT_VALUE;
+          status = aggregateColumn(sql, result);
         }
         if (status.isOk()) {
-          status = requireKeyword(sql, "FROM");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-        if (status.isOk()) {
-          status = optionalTableAlias(sql, result);
-        }
-        if (status.isOk() && consumeKeyword(sql, "WHERE")) {
-          status = predicates(sql, result, false);
+          status = aggregateSource(sql, result);
         }
       } else if (consumeKeyword(sql, "SUM")) {
         type = SqlCommandType.SUM;
@@ -989,8 +980,13 @@ public final class SqlParser {
   private StatusCode valueAggregate(CharSequence sql, SqlCommand result) {
     StatusCode status = requireCharacter(sql, '(');
     if (status.isOk()) {
-      status = selectColumnIdentifier(sql, result);
+      status = aggregateColumn(sql, result);
     }
+    return status.isOk() ? aggregateSource(sql, result) : status;
+  }
+
+  private StatusCode aggregateColumn(CharSequence sql, SqlCommand result) {
+    StatusCode status = selectColumnIdentifier(sql, result);
     if (status.isOk()
         && (result.isNullProjection(0)
             || result.columnAlias(0).length() > 0)) {
@@ -999,12 +995,11 @@ public final class SqlParser {
     if (status.isOk()) {
       status = requireCharacter(sql, ')');
     }
-    if (status.isOk()) {
-      status = optionalColumnAlias(sql, result, 0);
-    }
-    if (status.isOk()) {
-      status = requireKeyword(sql, "FROM");
-    }
+    return status.isOk() ? optionalColumnAlias(sql, result, 0) : status;
+  }
+
+  private StatusCode aggregateSource(CharSequence sql, SqlCommand result) {
+    StatusCode status = requireKeyword(sql, "FROM");
     if (status.isOk()) {
       status = identifier(sql, result.writableTableName());
     }

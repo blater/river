@@ -1138,6 +1138,29 @@ final class RiverDriverTest {
         assertEquals(4, count.getLong(1));
         assertFalse(count.next());
       }
+      try (ResultSet count = statement.executeQuery(
+          "SELECT COUNT(value) AS present FROM comparison_values")) {
+        assertEquals("present", count.getMetaData().getColumnLabel(1));
+        assertTrue(count.next());
+        assertEquals(5, count.getLong(1));
+        assertFalse(count.wasNull());
+        assertFalse(count.next());
+      }
+      try (ResultSet count = statement.executeQuery(
+          "SELECT COUNT(value) FROM comparison_values WHERE id>=5")) {
+        assertEquals("count", count.getMetaData().getColumnLabel(1));
+        assertTrue(count.next());
+        assertEquals(1, count.getLong(1));
+        assertFalse(count.wasNull());
+        assertFalse(count.next());
+      }
+      try (ResultSet count = statement.executeQuery(
+          "SELECT COUNT(value) FROM comparison_values WHERE id=99")) {
+        assertTrue(count.next());
+        assertEquals(0, count.getLong(1));
+        assertFalse(count.wasNull());
+        assertFalse(count.next());
+      }
       assertEquals(0, statement.executeUpdate(
           "CREATE INDEX comparison_kind_idx ON comparison_values(kind)"));
       try (ResultSet groups = statement.executeQuery(
