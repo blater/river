@@ -457,6 +457,30 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
+            "SELECT region, SUM(balance) AS total FROM accounts "
+                + "GROUP BY region HAVING SUM(balance) >= 100 "
+                + "ORDER BY region LIMIT 5",
+            command));
+    assertEquals(true, command.hasGroupHaving());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.groupHavingComparison());
+    assertEquals(100, command.groupHavingValue());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, COUNT(*) FROM accounts "
+                + "GROUP BY region HAVING COUNT(*) <> 1",
+            command));
+    assertEquals(SqlComparison.NOT_EQUAL, command.groupHavingComparison());
+    assertEquals(1, command.groupHavingValue());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "SELECT region, SUM(balance) FROM accounts "
+                + "GROUP BY region HAVING COUNT(*) > 1",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
             "SELECT region, COUNT(balance) FROM accounts GROUP BY region",
             command));
     assertEquals(SqlCommandType.GROUP_COUNT_VALUE, command.type());

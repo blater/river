@@ -879,6 +879,11 @@ public final class SqlSession {
           } else if (command.type() == SqlCommandType.GROUP_SUM
               && table.isVarchar(aggregateColumn)) {
             status = StatusCode.INVALID_EXTERNAL_INPUT;
+          } else if (command.hasGroupHaving()
+              && (command.type() == SqlCommandType.GROUP_MIN
+                  || command.type() == SqlCommandType.GROUP_MAX)
+              && table.isVarchar(aggregateColumn)) {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
           }
         }
       }
@@ -2278,6 +2283,27 @@ public final class SqlSession {
   private StatusCode nextGroupAggregate(
       SqlScanCursor cursor,
       SqlScanRowResult result) {
+    while (true) {
+      StatusCode status = nextGroupAggregateCandidate(cursor, result);
+      if (!status.isOk()) {
+        result.reset();
+        return status;
+      }
+      if (!command.hasGroupHaving()
+          || !result.isNull(1)
+              && matchesComparison(
+                  result.valueAt(1),
+                  command.groupHavingComparison(),
+                  command.groupHavingValue())) {
+        cursor.rowReturned();
+        return StatusCode.OK;
+      }
+    }
+  }
+
+  private StatusCode nextGroupAggregateCandidate(
+      SqlScanCursor cursor,
+      SqlScanRowResult result) {
     if (cursor.groupInputExhausted() && !cursor.hasGroupLookahead()) {
       return StatusCode.CONFLICT;
     }
@@ -2368,7 +2394,6 @@ public final class SqlSession {
         nullMask,
         groupProjectionVarcharMask(cursor),
         2);
-    cursor.rowReturned();
     return StatusCode.OK;
   }
 
@@ -3794,6 +3819,21 @@ public final class SqlSession {
         actual >= source.predicateLowerInclusive(predicate)
             && actual < source.predicateUpperExclusive(predicate);
       case IN, NOT_IN -> matchesLiteralMembership(actual, source, predicate);
+    };
+  }
+
+  private static boolean matchesComparison(
+      long actual,
+      SqlComparison comparison,
+      long expected) {
+    return switch (comparison) {
+      case EQUAL -> actual == expected;
+      case NOT_EQUAL -> actual != expected;
+      case LESS_THAN -> actual < expected;
+      case LESS_OR_EQUAL -> actual <= expected;
+      case GREATER_THAN -> actual > expected;
+      case GREATER_OR_EQUAL -> actual >= expected;
+      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
     };
   }
 

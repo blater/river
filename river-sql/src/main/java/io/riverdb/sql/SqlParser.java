@@ -872,6 +872,9 @@ public final class SqlParser {
           if (status.isOk()) {
             status = matchingIdentifier(sql, result.firstColumnName());
           }
+          if (status.isOk() && consumeKeyword(sql, "HAVING")) {
+            status = groupHaving(sql, result, type);
+          }
         } else if (status.isOk()
             && type == SqlCommandType.SCAN
             && result.hasPredicate()) {
@@ -1469,6 +1472,42 @@ public final class SqlParser {
         || type == SqlCommandType.GROUP_SUM
         || type == SqlCommandType.GROUP_MIN
         || type == SqlCommandType.GROUP_MAX;
+  }
+
+  private StatusCode groupHaving(
+      CharSequence sql,
+      SqlCommand result,
+      SqlCommandType type) {
+    String function = type == SqlCommandType.GROUP_SUM
+        ? "SUM" : type == SqlCommandType.GROUP_MIN
+            ? "MIN" : type == SqlCommandType.GROUP_MAX ? "MAX" : "COUNT";
+    StatusCode status = requireKeyword(sql, function);
+    if (status.isOk()) {
+      status = requireCharacter(sql, '(');
+    }
+    if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
+      status = requireCharacter(sql, '*');
+    } else if (status.isOk()) {
+      status = matchingIdentifier(sql, result.secondColumnName());
+    }
+    if (status.isOk()) {
+      status = requireCharacter(sql, ')');
+    }
+    SqlComparison comparison = status.isOk() ? comparisonOperator(sql) : null;
+    if (status.isOk()
+        && (comparison == null
+            || comparison == SqlComparison.HALF_OPEN_RANGE
+            || comparison == SqlComparison.IN
+            || comparison == SqlComparison.NOT_IN)) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      status = number(sql, numberResult);
+    }
+    if (status.isOk()) {
+      result.setGroupHaving(comparison, numberResult.value);
+    }
+    return status;
   }
 
   private StatusCode aggregateSource(CharSequence sql, SqlCommand result) {

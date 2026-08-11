@@ -173,6 +173,48 @@ final class SqlGroupedAggregateTest {
         new long[] {10, 20, 30, 40},
         new long[] {200, 500, 0, Long.MAX_VALUE},
         1L << 2);
+    assertGroups(
+        session,
+        "SELECT category, SUM(amount) FROM events "
+            + "WHERE category < 40 GROUP BY category "
+            + "HAVING SUM(amount) >= 300 ORDER BY category",
+        "sum",
+        new long[] {10, 20},
+        new long[] {300, 800},
+        0);
+    assertGroups(
+        session,
+        "SELECT category, SUM(amount) FROM events "
+            + "WHERE category < 40 GROUP BY category "
+            + "HAVING SUM(amount) > 300 ORDER BY category LIMIT 1",
+        "sum",
+        new long[] {20},
+        new long[] {800},
+        0);
+    assertGroups(
+        session,
+        "SELECT category, COUNT(amount) FROM events "
+            + "GROUP BY category HAVING COUNT(amount) = 0 ORDER BY category",
+        "count",
+        new long[] {30},
+        new long[] {0},
+        0);
+    assertGroups(
+        session,
+        "SELECT category, MIN(amount) FROM events "
+            + "GROUP BY category HAVING MIN(amount) < 200 ORDER BY category",
+        "min",
+        new long[] {10, 40},
+        new long[] {100, 1},
+        0);
+    assertGroups(
+        session,
+        "SELECT category, COUNT(*) FROM events "
+            + "GROUP BY category HAVING COUNT(*) > 99 ORDER BY category",
+        "count",
+        new long[0],
+        new long[0],
+        0);
 
     SqlScanCursor overflow = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
@@ -226,6 +268,7 @@ final class SqlGroupedAggregateTest {
       assertEquals((nullGroups & 1L << index) != 0, row.isNull(1));
     }
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(false, row.isAvailable());
     assertEquals(StatusCode.OK, session.closeScan(cursor, closed));
   }
 }

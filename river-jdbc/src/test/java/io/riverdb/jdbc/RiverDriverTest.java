@@ -742,6 +742,14 @@ final class RiverDriverTest {
         assertEquals(1, grouped.getLong(2));
         assertFalse(grouped.next());
       }
+      try (ResultSet grouped = statement.executeQuery(
+          "SELECT region AS area, COUNT(*) FROM accounts "
+              + "GROUP BY region HAVING COUNT(*) > 1 ORDER BY area")) {
+        assertTrue(grouped.next());
+        assertEquals(7, grouped.getLong("area"));
+        assertEquals(2, grouped.getLong("count"));
+        assertFalse(grouped.next());
+      }
       try (ResultSet distinct = statement.executeQuery(
           "SELECT DISTINCT region AS area FROM accounts "
               + "WHERE balance >= 150 AND balance < 350 "

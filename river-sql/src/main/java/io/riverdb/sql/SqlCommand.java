@@ -71,8 +71,10 @@ public final class SqlCommand {
   private final boolean[] varcharPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
   private SqlCommandType type;
+  private SqlComparison groupHavingComparison;
   private long key;
   private long value;
+  private long groupHavingValue;
   private long scanLowerInclusive;
   private long scanUpperExclusive;
   private long columnNotNullMask;
@@ -163,8 +165,10 @@ public final class SqlCommand {
     }
     orderColumnName.reset();
     type = null;
+    groupHavingComparison = null;
     key = 0;
     value = 0;
+    groupHavingValue = 0;
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
     columnNotNullMask = 0;
@@ -338,6 +342,11 @@ public final class SqlCommand {
     rowLimit = maximumRows;
   }
 
+  void setGroupHaving(SqlComparison comparison, long expected) {
+    groupHavingComparison = comparison;
+    groupHavingValue = expected;
+  }
+
   void setPredicateValue(int index, long predicateValue) {
     if (index >= 0
         && index < predicateCount
@@ -396,6 +405,8 @@ public final class SqlCommand {
     }
     orderColumnName.copyFrom(source.orderColumnName);
     descendingOrder = source.descendingOrder;
+    groupHavingComparison = source.groupHavingComparison;
+    groupHavingValue = source.groupHavingValue;
     if (source.selectAll) {
       setSelectAll();
     }
@@ -1004,6 +1015,18 @@ public final class SqlCommand {
 
   public boolean isSelectAll() {
     return selectAll;
+  }
+
+  public boolean hasGroupHaving() {
+    return groupHavingComparison != null;
+  }
+
+  public SqlComparison groupHavingComparison() {
+    return groupHavingComparison;
+  }
+
+  public long groupHavingValue() {
+    return groupHavingValue;
   }
 
   public boolean isSerializableTransaction() {

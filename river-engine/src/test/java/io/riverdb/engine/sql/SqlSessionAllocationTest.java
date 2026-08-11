@@ -168,7 +168,7 @@ final class SqlSessionAllocationTest {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
         "SELECT region, SUM(balance) FROM t WHERE balance=10 AND region=7 "
-            + "GROUP BY region ORDER BY region",
+            + "GROUP BY region HAVING SUM(balance) >= 10 ORDER BY region",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
