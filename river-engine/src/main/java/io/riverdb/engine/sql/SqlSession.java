@@ -1434,6 +1434,9 @@ public final class SqlSession {
         if (command.updateIsNull(index) && !table.isNullable(column)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
+        if (command.updateIsDefault(index) && !table.hasDefault(column)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
         updatedColumns[index] = column;
         if (command.isRelativeUpdate(index)) {
           int sourceColumn = table.findColumn(command.updateSourceColumnName(index));
@@ -1672,6 +1675,8 @@ public final class SqlSession {
     for (int column = 1; column < table.columnCount(); column++) {
       int source = insertSourceByColumn[column];
       boolean omitted = source < 0;
+      boolean explicitDefault = !omitted
+          && command.insertIsDefault(rowIndex, source);
       boolean nullValue = omitted
           ? !table.hasDefault(column) : command.insertIsNull(rowIndex, source);
       if (nullValue) {
@@ -1679,7 +1684,7 @@ public final class SqlSession {
       }
       row.putLong(
           (column - 1) * Long.BYTES,
-          omitted && table.hasDefault(column)
+          omitted && table.hasDefault(column) || explicitDefault
               ? table.defaultValue(column)
               : command.insertValue(rowIndex, source));
     }
@@ -1713,11 +1718,18 @@ public final class SqlSession {
     }
     for (int rowIndex = 0; rowIndex < command.insertRowCount(); rowIndex++) {
       int keySource = insertSourceByColumn[0];
-      if (keySource < 0 || command.insertIsNull(rowIndex, keySource)) {
+      if (keySource < 0
+          || command.insertIsNull(rowIndex, keySource)
+          || command.insertIsDefault(rowIndex, keySource)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int column = 1; column < table.columnCount(); column++) {
         int source = insertSourceByColumn[column];
+        if (source >= 0
+            && command.insertIsDefault(rowIndex, source)
+            && !table.hasDefault(column)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
         boolean nullValue = source < 0
             ? !table.hasDefault(column) : command.insertIsNull(rowIndex, source);
         if (nullValue && !table.isNullable(column)) {
@@ -3796,7 +3808,8 @@ public final class SqlSession {
       for (int index = 0; index < updatedColumnCount; index++) {
         int column = updatedColumns[index];
         boolean nullValue = command.updateIsNull(index);
-        long updatedValue = command.updateValue(index);
+        long updatedValue = command.updateIsDefault(index)
+            ? table.defaultValue(column) : command.updateValue(index);
         if (command.isRelativeUpdate(index)) {
           int sourceColumn = updateSourceColumns[index];
           nullValue = isNull(fetched, table, sourceColumn);

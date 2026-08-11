@@ -561,7 +561,10 @@ public final class SqlParser {
         value = rowResult.values[1];
         if (status.isOk()) {
           result.appendInsert(
-              rowResult.values, rowResult.nullMask, rowResult.count);
+              rowResult.values,
+              rowResult.nullMask,
+              rowResult.defaultMask,
+              rowResult.count);
         }
       }
       while (status.isOk() && consumeCharacter(sql, ',')) {
@@ -574,7 +577,10 @@ public final class SqlParser {
           }
           if (status.isOk()) {
             result.appendInsert(
-                rowResult.values, rowResult.nullMask, rowResult.count);
+                rowResult.values,
+                rowResult.nullMask,
+                rowResult.defaultMask,
+                rowResult.count);
           }
         }
       }
@@ -761,9 +767,12 @@ public final class SqlParser {
           status = requireCharacter(sql, '=');
         }
         boolean nullValue = status.isOk() && consumeKeyword(sql, "NULL");
+        boolean defaultValue = status.isOk()
+            && !nullValue
+            && consumeKeyword(sql, "DEFAULT");
         boolean relative = false;
         boolean subtract = false;
-        if (status.isOk() && !nullValue) {
+        if (status.isOk() && !nullValue && !defaultValue) {
           if (startsNumber(sql)) {
             status = number(sql, numberResult);
           } else {
@@ -790,12 +799,13 @@ public final class SqlParser {
         }
         if (status.isOk()) {
           result.appendUpdate(
-              nullValue ? 0 : numberResult.value,
+              nullValue || defaultValue ? 0 : numberResult.value,
               nullValue,
+              defaultValue,
               relative,
               subtract);
           if (result.updateColumnCount() == 1) {
-            value = nullValue ? 0 : numberResult.value;
+            value = nullValue || defaultValue ? 0 : numberResult.value;
           }
         }
         if (!status.isOk() || !consumeCharacter(sql, ',')) {
@@ -1061,19 +1071,23 @@ public final class SqlParser {
   private StatusCode row(CharSequence sql, LongRow result) {
     result.count = 0;
     result.nullMask = 0;
+    result.defaultMask = 0;
     StatusCode status = requireCharacter(sql, '(');
     while (status.isOk()) {
       if (result.count >= SqlCommand.MAXIMUM_COLUMNS) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
       boolean nullValue = consumeKeyword(sql, "NULL");
-      if (!nullValue) {
+      boolean defaultValue = !nullValue && consumeKeyword(sql, "DEFAULT");
+      if (!nullValue && !defaultValue) {
         status = number(sql, numberResult);
       }
       if (status.isOk()) {
         result.values[result.count] = nullValue ? 0 : numberResult.value;
         if (nullValue) {
           result.nullMask |= 1L << result.count;
+        } else if (defaultValue) {
+          result.defaultMask |= 1L << result.count;
         }
         result.count++;
       }
@@ -1436,6 +1450,7 @@ public final class SqlParser {
     private final SqlIdentifier identifier = new SqlIdentifier();
     private int count;
     private long nullMask;
+    private long defaultMask;
   }
 
   private static final class SqlSourceView implements CharSequence {

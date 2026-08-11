@@ -34,9 +34,11 @@ public final class SqlCommand {
   private final long[] insertValues =
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
   private final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
+  private final long[] insertDefaultMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
   private final long[] columnDefaultValues = new long[MAXIMUM_COLUMNS];
   private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
+  private final boolean[] defaultUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] relativeUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] subtractUpdates = new boolean[MAXIMUM_COLUMNS];
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
@@ -153,9 +155,11 @@ public final class SqlCommand {
     available = false;
     for (int index = 0; index < insertNullMasks.length; index++) {
       insertNullMasks[index] = 0;
+      insertDefaultMasks[index] = 0;
     }
     for (int index = 0; index < nullUpdates.length; index++) {
       nullUpdates[index] = false;
+      defaultUpdates[index] = false;
       relativeUpdates[index] = false;
       subtractUpdates[index] = false;
     }
@@ -369,13 +373,18 @@ public final class SqlCommand {
     available = true;
   }
 
-  void appendInsert(long[] values, long nullMask, int count) {
+  void appendInsert(
+      long[] values,
+      long nullMask,
+      long defaultMask,
+      int count) {
     int destination = insertRowCount * MAXIMUM_COLUMNS;
     for (int index = 0; index < count; index++) {
       insertValues[destination + index] = values[index];
     }
     insertColumnCount = count;
     insertNullMasks[insertRowCount] = nullMask;
+    insertDefaultMasks[insertRowCount] = defaultMask;
     insertRowCount++;
   }
 
@@ -389,10 +398,12 @@ public final class SqlCommand {
   void appendUpdate(
       long updateValue,
       boolean isNull,
+      boolean isDefault,
       boolean relative,
       boolean subtract) {
     updateValues[updateColumnCount] = updateValue;
     nullUpdates[updateColumnCount] = isNull;
+    defaultUpdates[updateColumnCount] = isDefault;
     relativeUpdates[updateColumnCount] = relative;
     subtractUpdates[updateColumnCount++] = subtract;
   }
@@ -686,8 +697,20 @@ public final class SqlCommand {
         && (insertNullMasks[rowIndex] & 1L << columnIndex) != 0;
   }
 
+  public boolean insertIsDefault(int rowIndex, int columnIndex) {
+    return rowIndex >= 0
+        && rowIndex < insertRowCount
+        && columnIndex >= 0
+        && columnIndex < insertColumnCount
+        && (insertDefaultMasks[rowIndex] & 1L << columnIndex) != 0;
+  }
+
   public boolean updateIsNull(int index) {
     return index >= 0 && index < updateColumnCount && nullUpdates[index];
+  }
+
+  public boolean updateIsDefault(int index) {
+    return index >= 0 && index < updateColumnCount && defaultUpdates[index];
   }
 
   public long scanLowerInclusive() {

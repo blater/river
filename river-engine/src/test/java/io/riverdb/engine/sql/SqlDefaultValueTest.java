@@ -98,7 +98,40 @@ final class SqlDefaultValueTest {
     assertEquals(7, result.valueAt(0));
     assertEquals(-1, result.valueAt(1));
     assertEquals(70, result.valueAt(2));
-    assertDefaultIndexRows(session, 4, 13);
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO settings VALUES (8, DEFAULT, DEFAULT, 80)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("UPDATE settings SET required=12, note=4 WHERE id=3", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT COUNT(*) FROM settings WHERE required=12", result));
+    assertEquals(1, result.value());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "UPDATE settings SET required=DEFAULT, note=DEFAULT WHERE id=3",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT required, note FROM settings WHERE id=3", result));
+    assertEquals(7, result.valueAt(0));
+    assertEquals(-1, result.valueAt(1));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "INSERT INTO settings (id, required, optional) VALUES "
+                + "(9, DEFAULT, 90), (10, DEFAULT, DEFAULT)",
+            result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("UPDATE settings SET optional=DEFAULT WHERE id=1", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT required FROM settings WHERE id=9", result));
+    assertDefaultIndexRows(session, 5, 21);
 
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
