@@ -36,3 +36,5 @@ replay_pid*
 # Benchmark and diagnostic artifacts
 benchmark-results/
 *.jfr
+
+docs/

@@ -8,11 +8,21 @@ Development is ordered around proved vertical slices: durable formats and a
 recoverable indexed table come before broad SQL or networking. The complete
 architecture and execution baseline lives in [docs/plans](docs/plans).
 
+Useful database function is the priority. Infrastructure, observability, and
+review work must serve an immediate production-kernel consumer and stop when it
+is unblocked. Planned modules remain outside the active build and dependency
+graph until they receive production code.
+
 ## Current milestone
 
-River is implementing **M0 (architecture ready)** and **M1 (recoverable indexed
-table)**. Interfaces, durable formats, and public behavior are not stable until
-their named gate has passed.
+**P00 is passed and the foundation baseline is sufficient to proceed.** River's
+active delivery priority is **M1 (recoverable indexed table)**, beginning with
+S1, an inspectable empty database. Residual M0/G0 checks are performed only
+when an immediate kernel consumer needs them; they do not justify a continuing
+foundation-only workstream or block unrelated functional implementation.
+
+Interfaces, durable formats, and public behavior are not stable until their
+named gate has passed.
 
 See the [project implementation plan](docs/plans/river-project-implementation-plan.md)
 for deliverables, dependencies, gates, and milestone definitions.
