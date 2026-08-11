@@ -200,6 +200,46 @@ final class SqlParserTest {
     assertEquals(true, command.columnIsUnique(1));
     assertEquals(true, command.columnIsUnique(2));
     assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE orders "
+                + "(id BIGINT PRIMARY KEY, account_id BIGINT REFERENCES accounts(id), "
+                + "external_id BIGINT UNIQUE REFERENCES external_accounts(id))",
+            command));
+    assertEquals(true, command.columnHasReference(1));
+    assertName("accounts", command.columnReferenceTableName(1));
+    assertName("id", command.columnReferenceColumnName(1));
+    assertEquals(true, command.columnHasReference(2));
+    assertEquals(true, command.columnIsUnique(2));
+    assertName("external_accounts", command.columnReferenceTableName(2));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE duplicate_reference "
+                + "(id BIGINT PRIMARY KEY, account_id BIGINT "
+                + "REFERENCES accounts(id) REFERENCES accounts(id))",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE text_reference "
+                + "(id BIGINT PRIMARY KEY, account_id VARCHAR(7) REFERENCES accounts(id))",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE excessive_references "
+                + "(id BIGINT PRIMARY KEY, a BIGINT REFERENCES parents(id), "
+                + "b BIGINT REFERENCES parents(id), c BIGINT REFERENCES parents(id), "
+                + "d BIGINT REFERENCES parents(id), e BIGINT REFERENCES parents(id))",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE reserved_reference "
+                + "(id BIGINT PRIMARY KEY, parent_id BIGINT REFERENCES _river_parent(id))",
+            command));
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse(
             "CREATE TABLE duplicate_unique "

@@ -17,11 +17,13 @@ public final class TableSchema {
   private final long[] defaultValues = new long[MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[MAXIMUM_COLUMNS];
+  private final int[] referenceTableIds = new int[MAXIMUM_COLUMNS];
   private int columnCount;
   private long notNullMask;
   private long defaultMask;
   private long varcharMask;
   private long checkMask;
+  private long referenceMask;
   private boolean identity;
 
   public TableSchema() {
@@ -39,6 +41,7 @@ public final class TableSchema {
     defaultMask = 0;
     varcharMask = 0;
     checkMask = 0;
+    referenceMask = 0;
     identity = false;
   }
 
@@ -113,6 +116,23 @@ public final class TableSchema {
     return StatusCode.OK;
   }
 
+  public StatusCode setLastReference(int tableId) {
+    return setReference(columnCount - 1, tableId);
+  }
+
+  public StatusCode setReference(int column, int tableId) {
+    if (column <= 0
+        || column >= columnCount
+        || tableId <= 0
+        || (varcharMask & 1L << column) != 0
+        || (referenceMask & 1L << column) != 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    referenceMask |= 1L << column;
+    referenceTableIds[column] = tableId;
+    return StatusCode.OK;
+  }
+
   public int columnCount() {
     return columnCount;
   }
@@ -175,6 +195,14 @@ public final class TableSchema {
     return column >= 0 && column < columnCount ? checkValues[column] : 0;
   }
 
+  long referenceMask() {
+    return referenceMask;
+  }
+
+  int referenceTableId(int column) {
+    return column >= 0 && column < columnCount ? referenceTableIds[column] : 0;
+  }
+
   static boolean validCheckComparison(int comparison) {
     return comparison >= CHECK_EQUAL && comparison <= CHECK_GREATER_OR_EQUAL;
   }
@@ -191,6 +219,13 @@ public final class TableSchema {
       length = name.length();
       for (int index = 0; index < length; index++) {
         characters[index] = name.charAt(index);
+      }
+    }
+
+    void set(java.nio.ByteBuffer source, int offset, int bytes) {
+      length = bytes;
+      for (int index = 0; index < length; index++) {
+        characters[index] = (char) Byte.toUnsignedInt(source.get(offset + index));
       }
     }
 

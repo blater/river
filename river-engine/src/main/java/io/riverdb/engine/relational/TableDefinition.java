@@ -21,6 +21,7 @@ public final class TableDefinition {
   private final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] referenceTableIds = new int[TableSchema.MAXIMUM_COLUMNS];
   private final ColumnName keyColumnName = new ColumnName();
   private final ColumnName valueColumnName = new ColumnName();
   private final ColumnName[] additionalColumns =
@@ -31,6 +32,7 @@ public final class TableDefinition {
   private long defaultMask;
   private long varcharMask;
   private long checkMask;
+  private long referenceMask;
   private long schemaVersion;
   private boolean available;
   private boolean identity;
@@ -62,6 +64,7 @@ public final class TableDefinition {
     defaultMask = 0;
     varcharMask = 0;
     checkMask = 0;
+    referenceMask = 0;
     schemaVersion = 0;
     available = false;
     identity = false;
@@ -89,6 +92,7 @@ public final class TableDefinition {
     defaultMask = 0;
     varcharMask = 0;
     checkMask = 0;
+    referenceMask = 0;
     uniqueIndexCount = 0;
     identity = false;
     if (valueIndexTableId > 0) {
@@ -133,6 +137,7 @@ public final class TableDefinition {
     varcharMask = schema.varcharMask;
     copyDefaults(schema);
     copyChecks(schema);
+    copyReferences(schema);
     identity = schema.identity;
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
@@ -159,11 +164,13 @@ public final class TableDefinition {
     defaultMask = schema.defaultMask();
     varcharMask = schema.varcharMask();
     checkMask = schema.checkMask();
+    referenceMask = schema.referenceMask();
     identity = schema.hasIdentity();
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = schema.defaultValue(index);
       checkComparisons[index] = schema.checkComparison(index);
       checkValues[index] = schema.checkValue(index);
+      referenceTableIds[index] = schema.referenceTableId(index);
     }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
@@ -193,6 +200,8 @@ public final class TableDefinition {
       long requiredCheckMask,
       int checksOffset,
       int checkValuesOffset,
+      long requiredReferenceMask,
+      int referenceTableIdsOffset,
       int defaultsOffset) {
     owner = database;
     tableId = id;
@@ -202,10 +211,13 @@ public final class TableDefinition {
     varcharMask = requiredVarcharMask;
     identity = requiredIdentity;
     checkMask = requiredCheckMask;
+    referenceMask = requiredReferenceMask;
     for (int index = 0; index < columns; index++) {
       defaultValues[index] = source.getLong(defaultsOffset + index * Long.BYTES);
       checkComparisons[index] = source.getInt(checksOffset + index * Integer.BYTES);
       checkValues[index] = source.getLong(checkValuesOffset + index * Long.BYTES);
+      referenceTableIds[index] = source.getInt(
+          referenceTableIdsOffset + index * Integer.BYTES);
     }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
@@ -460,8 +472,7 @@ public final class TableDefinition {
     if (tableId <= 0
         || (state != INDEX_BUILDING && state != INDEX_READY && state != INDEX_DROPPING)
         || column <= 0
-        || column >= columnCount
-        || constraint && !unique) {
+        || column >= columnCount) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < uniqueIndexCount; index++) {
@@ -572,6 +583,40 @@ public final class TableDefinition {
 
   long checkValue(int column) {
     return column >= 0 && column < columnCount ? checkValues[column] : 0;
+  }
+
+  boolean hasReferences() {
+    return referenceMask != 0;
+  }
+
+  long referenceMask() {
+    return referenceMask;
+  }
+
+  boolean hasReference(int column) {
+    return column > 0
+        && column < columnCount
+        && (referenceMask & 1L << column) != 0;
+  }
+
+  int referenceTableId(int column) {
+    return hasReference(column) ? referenceTableIds[column] : 0;
+  }
+
+  boolean referencesTable(int referencedTableId) {
+    for (int column = 1; column < columnCount; column++) {
+      if (hasReference(column) && referenceTableIds[column] == referencedTableId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private void copyReferences(TableDefinition source) {
+    referenceMask = source.referenceMask;
+    for (int column = 0; column < columnCount; column++) {
+      referenceTableIds[column] = source.referenceTableIds[column];
+    }
   }
 
   private void setIndex(int slot, int tableId, int state, int column, boolean unique) {

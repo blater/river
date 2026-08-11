@@ -56,6 +56,7 @@ final class JdbcExceptions {
       case NUMERIC_VALUE_OUT_OF_RANGE -> "22003";
       case CHECK_VIOLATION -> "23514";
       case UNIQUE_VIOLATION -> "23505";
+      case FOREIGN_KEY_VIOLATION -> "23503";
       case INVALID_EXTERNAL_INPUT -> "22000";
       case OK -> "00000";
     };

@@ -605,6 +605,10 @@ public final class SqlParser {
                 }
               } else if (consumeKeyword(sql, "UNIQUE")) {
                 status = result.markLastColumnUnique();
+              } else if (consumeKeyword(sql, "REFERENCES")) {
+                status = result.columnHasReference(result.columnCount() - 1)
+                    ? StatusCode.INVALID_EXTERNAL_INPUT
+                    : columnReference(sql, result);
               } else {
                 constraints = false;
               }
@@ -1018,8 +1022,9 @@ public final class SqlParser {
       SqlCommandType type,
       SqlCommand command) {
     return switch (type) {
-      case CREATE_TABLE, DROP_TABLE, ALTER_TABLE_RENAME_COLUMN ->
-          reservedObjectName(command.tableName());
+      case CREATE_TABLE -> reservedObjectName(command.tableName())
+          || reservedReferenceName(command);
+      case DROP_TABLE, ALTER_TABLE_RENAME_COLUMN -> reservedObjectName(command.tableName());
       case ALTER_TABLE_RENAME ->
           reservedObjectName(command.tableName())
               || reservedObjectName(command.renamedTableName());
@@ -1045,6 +1050,16 @@ public final class SqlParser {
       }
     }
     return true;
+  }
+
+  private static boolean reservedReferenceName(SqlCommand command) {
+    for (int column = 1; column < command.columnCount(); column++) {
+      if (command.columnHasReference(column)
+          && reservedObjectName(command.columnReferenceTableName(column))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private StatusCode predicates(
@@ -1274,6 +1289,25 @@ public final class SqlParser {
       result.markLastColumnCheck(comparison, numberResult.value);
     }
     return status;
+  }
+
+  private StatusCode columnReference(CharSequence sql, SqlCommand result) {
+    SqlIdentifier table = result.writableLastColumnReferenceTableName();
+    SqlIdentifier column = result.writableLastColumnReferenceColumnName();
+    if (table == null || column == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = identifier(sql, table);
+    if (status.isOk()) {
+      status = requireCharacter(sql, '(');
+    }
+    if (status.isOk()) {
+      status = identifier(sql, column);
+    }
+    if (status.isOk()) {
+      status = requireCharacter(sql, ')');
+    }
+    return status.isOk() ? result.markLastColumnReference() : status;
   }
 
   private boolean consumeHalfOpenUpper(

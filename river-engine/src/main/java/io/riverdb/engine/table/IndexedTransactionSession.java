@@ -415,21 +415,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         return StatusCode.OK;
       }
     }
-    if (transaction.isolationLevel() == IsolationLevel.SERIALIZABLE
-        && findHeldLock(key) < 0) {
-      if (heldLockCount >= MAXIMUM_HELD_LOCKS) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      StatusCode status = manager.tryAcquireSharedKey(
-          transaction, TABLE_LOCK_ID, key, heldLocks[heldLockCount]);
+    if (transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
+      StatusCode status = protectKey(key);
       if (!status.isOk()) {
         return status;
       }
-      lockedKeys[heldLockCount] = key;
-      lockedUpperKeys[heldLockCount] = 0;
-      exclusiveLocks[heldLockCount] = false;
-      rangeLocks[heldLockCount] = false;
-      heldLockCount++;
     }
     if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED
         && !statementActive) {
@@ -441,6 +431,29 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     }
     return table.fetchByKeyAt(
         transaction.snapshot().visibleCommitSequence(), key, result);
+  }
+
+  /** Holds a shared key lock through transaction completion for integrity checks. */
+  public StatusCode protectKey(long key) {
+    if (transaction.state() != TransactionState.ACTIVE || key == Long.MAX_VALUE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (findHeldLock(key) >= 0) {
+      return StatusCode.OK;
+    }
+    if (heldLockCount >= MAXIMUM_HELD_LOCKS) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = manager.tryAcquireSharedKey(
+        transaction, TABLE_LOCK_ID, key, heldLocks[heldLockCount]);
+    if (status.isOk()) {
+      lockedKeys[heldLockCount] = key;
+      lockedUpperKeys[heldLockCount] = 0;
+      exclusiveLocks[heldLockCount] = false;
+      rangeLocks[heldLockCount] = false;
+      heldLockCount++;
+    }
+    return status;
   }
 
   public StatusCode beginScan(

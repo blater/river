@@ -35,8 +35,12 @@ public final class RelationalDatabase {
   private final TableDefinition indexedTable = new TableDefinition();
   private final TableDefinition indexStorageTable = new TableDefinition();
   private final TableDefinition updatedTable = new TableDefinition();
+  private final TableDefinition referencingTable = new TableDefinition();
+  private final TableSchema.ColumnName scannedTableName = new TableSchema.ColumnName();
   private final RelationalScanCursor indexBuildCursor = new RelationalScanCursor();
   private final RelationalScanResult indexBuildRow = new RelationalScanResult();
+  private final RelationalScanCursor referenceLookupCursor = new RelationalScanCursor();
+  private final ValueIndexLookupResult referenceLookup = new ValueIndexLookupResult();
   private final ByteBuffer indexKeyOutput = ByteBuffer.allocateDirect(Long.BYTES);
   private final long[] cleanupIndexKeys = new long[INDEX_BUILD_BATCH_ROWS];
   private final long[] droppingIndexCatalogKeys =
@@ -577,7 +581,7 @@ public final class RelationalDatabase {
         session, name, outcome, maximumCleanupBatches);
   }
 
-  StatusCode markDroppingTable(
+  synchronized StatusCode markDroppingTable(
       RelationalSession session,
       CharSequence name) {
     droppingTableAlreadyMarked = false;
@@ -595,6 +599,9 @@ public final class RelationalDatabase {
               catalogRow, catalogScratch, name, this, indexedTable);
     }
     if (status.isOk() && !droppingTableAlreadyMarked) {
+      status = checkTableReferences(session, indexedTable, 0, false);
+    }
+    if (status.isOk() && !droppingTableAlreadyMarked) {
       CatalogRecord.encodeDroppingTable(
           catalogOutput, indexedTable.tableId(), name, indexedTable);
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
@@ -604,6 +611,107 @@ public final class RelationalDatabase {
       }
     }
     return status;
+  }
+
+  synchronized StatusCode checkDeleteReferences(
+      RelationalSession session,
+      TableDefinition table,
+      long key) {
+    if (session == null
+        || table == null
+        || !table.isOwnedBy(this)
+        || key < 0
+        || key > RelationalKey.MAXIMUM_USER_KEY) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return checkTableReferences(session, table, key, true);
+  }
+
+  private StatusCode checkTableReferences(
+      RelationalSession session,
+      TableDefinition referencedTable,
+      long key,
+      boolean checkRows) {
+    StatusCode status = session.indexedSession().beginScan(
+        Long.MIN_VALUE, 0, catalogScanCursor);
+    boolean scanActive = status.isOk();
+    while (status.isOk()) {
+      status = session.indexedSession().nextScan(catalogScanCursor, catalogScanRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      StatusCode decoded = status.isOk()
+          ? CatalogRecord.decodeTableForScan(
+              catalogScanRow.row(),
+              catalogScratch,
+              this,
+              scannedTableName,
+              referencingTable)
+          : status;
+      if (decoded == StatusCode.CONFLICT) {
+        continue;
+      }
+      if (!decoded.isOk()) {
+        status = decoded;
+        break;
+      }
+      if (!referencingTable.referencesTable(referencedTable.tableId())) {
+        continue;
+      }
+      if (!checkRows) {
+        status = StatusCode.FOREIGN_KEY_VIOLATION;
+        break;
+      }
+      for (int column = 1;
+          status.isOk() && column < referencingTable.columnCount();
+          column++) {
+        if (!referencingTable.hasReference(column)
+            || referencingTable.referenceTableId(column) != referencedTable.tableId()) {
+          continue;
+        }
+        status = referenceExists(session, referencingTable, column, key);
+      }
+    }
+    if (scanActive) {
+      StatusCode close = session.indexedSession().closeScan(catalogScanCursor);
+      catalogScanCursor.reset();
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    return status;
+  }
+
+  private StatusCode referenceExists(
+      RelationalSession session,
+      TableDefinition child,
+      int column,
+      long key) {
+    if (!child.hasIndexOn(column)) {
+      return StatusCode.CORRUPTION;
+    }
+    StatusCode status;
+    if (child.hasUniqueIndexOn(column)) {
+      status = session.fetchByUniqueValue(child, column, key, referenceLookup);
+    } else {
+      status = session.beginNonUniqueValueLookup(
+          child, column, key, referenceLookupCursor);
+      if (status.isOk()) {
+        status = session.nextNonUniqueValueLookup(
+            child, referenceLookupCursor, referenceLookup);
+        StatusCode close = session.closeScan(referenceLookupCursor);
+        referenceLookupCursor.reset();
+        if (status.isOk() && !close.isOk()) {
+          status = close;
+        }
+      }
+    }
+    if (status.isOk()) {
+      return StatusCode.FOREIGN_KEY_VIOLATION;
+    }
+    return status == StatusCode.CONFLICT || status == StatusCode.INVALID_EXTERNAL_INPUT
+        ? StatusCode.OK : status;
   }
 
   StatusCode finishDroppingTable(

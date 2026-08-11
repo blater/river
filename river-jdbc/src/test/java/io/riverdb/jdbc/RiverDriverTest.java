@@ -1703,6 +1703,46 @@ final class RiverDriverTest {
   }
 
   @Test
+  void reportsForeignKeySqlState(@TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE fk_parents (id BIGINT PRIMARY KEY, value BIGINT)"));
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE fk_children "
+                  + "(id BIGINT PRIMARY KEY, parent_id BIGINT REFERENCES fk_parents(id))"));
+      SQLException violation = assertThrows(
+          SQLException.class,
+          () -> statement.executeUpdate(
+              "INSERT INTO fk_children VALUES (1, 99)"));
+      assertEquals("23503", violation.getSQLState());
+      assertEquals(StatusCode.FOREIGN_KEY_VIOLATION.stableCode(), violation.getErrorCode());
+      assertEquals(
+          1,
+          statement.executeUpdate("INSERT INTO fk_parents VALUES (99, 10)"));
+      assertEquals(
+          1,
+          statement.executeUpdate("INSERT INTO fk_children VALUES (1, 99)"));
+      SQLException deleteViolation = assertThrows(
+          SQLException.class,
+          () -> statement.executeUpdate("DELETE FROM fk_parents WHERE id=99"));
+      assertEquals("23503", deleteViolation.getSQLState());
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void returnsIdentityKeysThroughJdbc(@TempDir Path root) throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(

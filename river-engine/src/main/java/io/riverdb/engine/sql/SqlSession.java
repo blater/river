@@ -56,6 +56,7 @@ public final class SqlSession {
   private final TableDefinition table = new TableDefinition();
   private final TableDefinition joinTable = new TableDefinition();
   private final TableDefinition scalarTable = new TableDefinition();
+  private final TableDefinition referencedTable = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final CheckpointResult checkpoint = new CheckpointResult();
@@ -380,7 +381,9 @@ public final class SqlSession {
       if (!status.isOk()) {
         return status;
       }
-      if (!transactionActive && !command.hasUniqueColumns()) {
+      if (!transactionActive
+          && !command.hasUniqueColumns()
+          && !command.hasReferences()) {
         status = database.createTable(
             command.tableName(), createSchema, table);
         if (status.isOk()) {
@@ -395,11 +398,14 @@ public final class SqlSession {
           status = beginStatement();
         }
         if (status.isOk()) {
+          status = resolveCreateReferences();
+        }
+        if (status.isOk()) {
           status = session.createTable(
               command.tableName(), createSchema, table);
         }
         if (status.isOk()) {
-          status = createUniqueColumnIndexes();
+          status = createConstraintIndexes();
         }
         status = completeStatement(status);
         if (implicit) {
@@ -419,11 +425,14 @@ public final class SqlSession {
         status = beginStatement();
       }
       if (status.isOk()) {
+        status = resolveCreateReferences();
+      }
+      if (status.isOk()) {
         status = session.createTable(
             command.tableName(), createSchema, table);
       }
       if (status.isOk()) {
-        status = createUniqueColumnIndexes();
+        status = createConstraintIndexes();
       }
       status = completeStatement(status);
       if (!status.isOk() && statementSavepoint.isActive()) {
@@ -2099,15 +2108,42 @@ public final class SqlSession {
     return status;
   }
 
-  private StatusCode createUniqueColumnIndexes() {
+  private StatusCode createConstraintIndexes() {
     StatusCode status = StatusCode.OK;
     for (int column = 1;
         status.isOk() && column < command.columnCount();
         column++) {
-      if (command.columnIsUnique(column)) {
-        String indexName = "_river_unique_" + table.tableId() + "_" + column;
-        status = session.createUniqueConstraintIndex(
-            indexName, command.tableName(), command.columnName(column));
+      if (command.columnIsUnique(column) || command.columnHasReference(column)) {
+        String kind = command.columnIsUnique(column) ? "unique" : "reference";
+        String indexName = "_river_" + kind + "_" + table.tableId() + "_" + column;
+        status = session.createConstraintIndex(
+            indexName,
+            command.tableName(),
+            command.columnName(column),
+            command.columnIsUnique(column));
+      }
+    }
+    return status;
+  }
+
+  private StatusCode resolveCreateReferences() {
+    StatusCode status = StatusCode.OK;
+    for (int column = 1;
+        status.isOk() && column < command.columnCount();
+        column++) {
+      if (!command.columnHasReference(column)) {
+        continue;
+      }
+      status = session.resolveTable(
+          command.columnReferenceTableName(column), referencedTable);
+      int referencedColumn = status.isOk()
+          ? referencedTable.findColumn(command.columnReferenceColumnName(column)) : -1;
+      if (status.isOk()
+          && (referencedColumn != 0 || referencedTable.isVarchar(referencedColumn))) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (status.isOk()) {
+        status = createSchema.setReference(column, referencedTable.tableId());
       }
     }
     return status;

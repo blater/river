@@ -38,11 +38,13 @@ public final class RelationalSession {
   private final CatalogRecord.UserSequenceResult userSequenceRecord =
       new CatalogRecord.UserSequenceResult();
   private final TableDefinition valueIndexTable = new TableDefinition();
+  private final TableDefinition referenceTable = new TableDefinition();
   private final TableSchema schemaScratch = new TableSchema();
   private final HeapRowResult indexedKeyRow = new HeapRowResult();
   private final HeapRowResult indexHeadRow = new HeapRowResult();
   private final HeapRowResult indexEntryRow = new HeapRowResult();
   private final HeapRowResult indexAllocatorRow = new HeapRowResult();
+  private final HeapRowResult referencedRow = new HeapRowResult();
   private final ByteBuffer valueScratch = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer indexEntryScratch = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
   private final ByteBuffer rowScratch = ByteBuffer.allocateDirect(
@@ -310,6 +312,14 @@ public final class RelationalSession {
     return createValueIndex(indexName, tableName, columnName, true, true);
   }
 
+  public StatusCode createConstraintIndex(
+      CharSequence indexName,
+      CharSequence tableName,
+      CharSequence columnName,
+      boolean unique) {
+    return createValueIndex(indexName, tableName, columnName, unique, true);
+  }
+
   private StatusCode createValueIndex(
       CharSequence indexName,
       CharSequence tableName,
@@ -546,7 +556,10 @@ public final class RelationalSession {
     if (!validRow(table, row)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = insert(table, key, row);
+    StatusCode status = validateReferences(table, row);
+    if (status.isOk()) {
+      status = insert(table, key, row);
+    }
     for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
       if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY
           || table.isNull(row, table.uniqueIndexColumn(slot))) {
@@ -580,8 +593,8 @@ public final class RelationalSession {
     if (!validRow(table, row)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = StatusCode.OK;
-    if (table.hasUniqueValueIndex()) {
+    StatusCode status = validateReferences(table, row);
+    if (status.isOk() && table.hasUniqueValueIndex()) {
       status = fetch(table, key, indexedKeyRow);
       if (status.isOk()) {
         status = copyRow(table, indexedKeyRow, rowScratch);
@@ -628,8 +641,8 @@ public final class RelationalSession {
   }
 
   public StatusCode deleteLong(TableDefinition table, long key) {
-    StatusCode status = StatusCode.OK;
-    if (table.hasUniqueValueIndex()) {
+    StatusCode status = database.checkDeleteReferences(this, table, key);
+    if (status.isOk() && table.hasUniqueValueIndex()) {
       status = fetch(table, key, indexedKeyRow);
       if (status.isOk()) {
         status = copyRow(table, indexedKeyRow, rowScratch);
@@ -657,6 +670,37 @@ public final class RelationalSession {
               valueIndexTable, previousIndexedValues[slot], key);
     }
     return status;
+  }
+
+  private StatusCode validateReferences(TableDefinition table, ByteBuffer row) {
+    if (!table.hasReferences()) {
+      return StatusCode.OK;
+    }
+    for (int column = 1; column < table.columnCount(); column++) {
+      if (!table.hasReference(column) || table.isNull(row, column)) {
+        continue;
+      }
+      long referencedKey = row.getLong(row.position() + (column - 1) * Long.BYTES);
+      referenceTable.set(
+          database,
+          table.referenceTableId(column),
+          0,
+          TableDefinition.INDEX_NONE);
+      StatusCode status = resolveKey(referenceTable, referencedKey);
+      if (status.isOk()) {
+        status = session.protectKey(physicalKey.key());
+      }
+      if (status.isOk()) {
+        status = session.fetchByKey(physicalKey.key(), referencedRow);
+      }
+      if (status == StatusCode.CONFLICT || status == StatusCode.INVALID_EXTERNAL_INPUT) {
+        return StatusCode.FOREIGN_KEY_VIOLATION;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return StatusCode.OK;
   }
 
   public StatusCode fetchByUniqueValue(

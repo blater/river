@@ -7,7 +7,7 @@ import java.nio.ByteBuffer;
 /** Current catalog encoding for bounded relational schemas and index-build state. */
 final class CatalogRecord {
   static final int MAXIMUM_BYTES =
-      168 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
+      208 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
           + TableDefinition.MAXIMUM_INDEXES * 16
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
 
@@ -20,14 +20,16 @@ final class CatalogRecord {
   private static final int SEQUENCE_VERSION = 1;
   private static final int USER_SEQUENCE_VERSION = 1;
   private static final int IDENTITY_SEQUENCE_VERSION = 1;
-  private static final int TABLE_VERSION = 9;
+  private static final int TABLE_VERSION = 10;
   private static final int INDEX_VERSION = 3;
   private static final int TABLE_CHECK_MASK_OFFSET = 60;
   private static final int TABLE_CHECKS_OFFSET = 68;
   private static final int TABLE_CHECK_VALUES_OFFSET = 104;
   private static final int TABLE_DEFAULTS_OFFSET = 168;
+  private static final int TABLE_REFERENCE_MASK_OFFSET = 232;
+  private static final int TABLE_REFERENCE_IDS_OFFSET = 240;
   private static final int TABLE_INDEXES_OFFSET =
-      TABLE_DEFAULTS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Long.BYTES;
+      TABLE_REFERENCE_IDS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
 
   private CatalogRecord() {
   }
@@ -402,6 +404,44 @@ final class CatalogRecord {
         && scratch.getLong(0) == DROPPING_TABLE_MAGIC;
   }
 
+  static StatusCode decodeTableForScan(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      RelationalDatabase database,
+      TableSchema.ColumnName name,
+      TableDefinition result) {
+    if (source == null || scratch == null || database == null || name == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    scratch.clear();
+    StatusCode status = source.copyTo(scratch);
+    long magic = status.isOk() && source.length() >= Long.BYTES
+        ? scratch.getLong(0) : 0;
+    if (!status.isOk()) {
+      return status;
+    }
+    if (magic != TABLE_MAGIC && magic != DROPPING_TABLE_MAGIC) {
+      return StatusCode.CONFLICT;
+    }
+    int indexCount = source.length() >= 28 ? scratch.getInt(24) : -1;
+    int nameBytes = source.length() >= 20 ? scratch.getInt(16) : -1;
+    int nameOffset = indexCount >= 0 && indexCount <= TableDefinition.MAXIMUM_INDEXES
+        ? TABLE_INDEXES_OFFSET + indexCount * 16 : -1;
+    if (source.length() < 28
+        || scratch.getInt(8) != TABLE_VERSION
+        || nameBytes <= 0
+        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
+        || nameOffset < 0
+        || nameOffset > source.length() - nameBytes) {
+      return StatusCode.CORRUPTION;
+    }
+    name.set(scratch, nameOffset, nameBytes);
+    if (!RelationalKey.validName(name)) {
+      return StatusCode.CORRUPTION;
+    }
+    return decodeTable(source, scratch, name, database, result, magic);
+  }
+
   static void encodeDroppingTable(
       ByteBuffer target,
       int tableId,
@@ -441,6 +481,8 @@ final class CatalogRecord {
         ? scratch.getLong(52) : -1;
     long checkMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(TABLE_CHECK_MASK_OFFSET) : -1;
+    long referenceMask = source.length() >= TABLE_INDEXES_OFFSET
+        ? scratch.getLong(TABLE_REFERENCE_MASK_OFFSET) : -1;
     boolean validIndexCount = indexCount >= 0
         && indexCount <= TableDefinition.MAXIMUM_INDEXES;
     int nameOffset = validIndexCount
@@ -492,6 +534,11 @@ final class CatalogRecord {
         || (checkMask & ~((1L << columnCount) - 1)) != 0
         || (checkMask & varcharMask) != 0
         || !validChecks(scratch, columnCount, checkMask)
+        || (referenceMask & 1) != 0
+        || (referenceMask & ~((1L << columnCount) - 1)) != 0
+        || (referenceMask & varcharMask) != 0
+        || !validReferences(
+            scratch, columnCount, referenceMask, scratch.getInt(12))
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
@@ -516,6 +563,8 @@ final class CatalogRecord {
         checkMask,
         TABLE_CHECKS_OFFSET,
         TABLE_CHECK_VALUES_OFFSET,
+        referenceMask,
+        TABLE_REFERENCE_IDS_OFFSET,
         TABLE_DEFAULTS_OFFSET);
     int buildingIndexes = 0;
     for (int index = 0; status.isOk() && index < indexCount; index++) {
@@ -533,7 +582,7 @@ final class CatalogRecord {
           || indexColumn <= 0
           || indexColumn >= columnCount
           || (flags & ~3) != 0
-          || (flags & 2) != 0 && (flags & 1) == 0
+          || ((flags & 3) == 2 && (referenceMask & 1L << indexColumn) == 0)
           || duplicateIndex(scratch, index, indexTableId, indexColumn)
           || (indexState == TableDefinition.INDEX_BUILDING && ++buildingIndexes > 1)) {
         status = StatusCode.CORRUPTION;
@@ -583,7 +632,6 @@ final class CatalogRecord {
             && state != TableDefinition.INDEX_READY
             && state != TableDefinition.INDEX_DROPPING)
         || (flags & ~3) != 0
-        || (flags & 2) != 0 && (flags & 1) == 0
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
@@ -627,7 +675,6 @@ final class CatalogRecord {
             && state != TableDefinition.INDEX_READY
             && state != TableDefinition.INDEX_DROPPING)
         || (flags & ~3) != 0
-        || (flags & 2) != 0 && (flags & 1) == 0
         || nameBytes <= 0
         || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH) {
       return StatusCode.CORRUPTION;
@@ -712,6 +759,19 @@ final class CatalogRecord {
           : existing != null ? existing.defaultValue(index) : 0;
       target.putLong(TABLE_DEFAULTS_OFFSET + index * Long.BYTES, value);
     }
+    long referenceMask = definition != null
+        ? definition.referenceMask()
+        : existing != null ? existing.referenceMask() : 0;
+    target.putLong(TABLE_REFERENCE_MASK_OFFSET, referenceMask);
+    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
+      boolean referenced = (referenceMask & 1L << index) != 0;
+      int referencedTableId = definition != null
+          ? definition.referenceTableId(index)
+          : existing != null ? existing.referenceTableId(index) : 0;
+      target.putInt(
+          TABLE_REFERENCE_IDS_OFFSET + index * Integer.BYTES,
+          referenced ? referencedTableId : 0);
+    }
     for (int index = 0; index < indexCount; index++) {
       int output = TABLE_INDEXES_OFFSET + index * 16;
       boolean override = index == overrideSlot
@@ -770,6 +830,26 @@ final class CatalogRecord {
       if (checked
           ? !TableSchema.validCheckComparison(comparison)
           : comparison != 0 || value != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean validReferences(
+      ByteBuffer source,
+      int columns,
+      long referenceMask,
+      int tableId) {
+    for (int column = 0; column < TableSchema.MAXIMUM_COLUMNS; column++) {
+      int referencedTableId = source.getInt(
+          TABLE_REFERENCE_IDS_OFFSET + column * Integer.BYTES);
+      boolean referenced = column < columns && (referenceMask & 1L << column) != 0;
+      if (referenced
+          ? referencedTableId <= 0
+              || referencedTableId > RelationalKey.MAXIMUM_TABLE_ID
+              || referencedTableId == tableId
+          : referencedTableId != 0) {
         return false;
       }
     }

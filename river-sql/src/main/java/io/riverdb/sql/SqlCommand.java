@@ -6,7 +6,7 @@ import io.riverdb.base.error.StatusCode;
 public final class SqlCommand {
   public static final int MAXIMUM_INSERT_ROWS = 64;
   public static final int MAXIMUM_COLUMNS = 8;
-  public static final int MAXIMUM_UNIQUE_COLUMNS = 4;
+  public static final int MAXIMUM_CONSTRAINT_INDEXES = 4;
   public static final int MAXIMUM_PREDICATES = MAXIMUM_COLUMNS;
   public static final int MAXIMUM_LITERAL_MEMBERSHIP_VALUES = 256;
 
@@ -24,6 +24,10 @@ public final class SqlCommand {
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnAliases = new SqlIdentifier[MAXIMUM_COLUMNS];
+  private final SqlIdentifier[] columnReferenceTableNames =
+      new SqlIdentifier[MAXIMUM_COLUMNS];
+  private final SqlIdentifier[] columnReferenceColumnNames =
+      new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] updateSourceColumnNames =
       new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] predicateTableNames =
@@ -75,6 +79,7 @@ public final class SqlCommand {
   private long columnDefaultMask;
   private long columnVarcharMask;
   private long columnUniqueMask;
+  private long columnReferenceMask;
   private long rowLimit = Long.MAX_VALUE;
   private long sequenceStart = 1;
   private long sequenceIncrement = 1;
@@ -98,6 +103,8 @@ public final class SqlCommand {
       columnNames[index] = new SqlIdentifier();
       columnTableNames[index] = new SqlIdentifier();
       columnAliases[index] = new SqlIdentifier();
+      columnReferenceTableNames[index] = new SqlIdentifier();
+      columnReferenceColumnNames[index] = new SqlIdentifier();
       updateSourceColumnNames[index] = new SqlIdentifier();
       predicateTableNames[index] = new SqlIdentifier();
       predicateColumnNames[index] = new SqlIdentifier();
@@ -125,6 +132,8 @@ public final class SqlCommand {
       nullProjections[index] = false;
       columnCheckValues[index] = 0;
       columnCheckComparisons[index] = null;
+      columnReferenceTableNames[index].reset();
+      columnReferenceColumnNames[index].reset();
     }
     for (SqlIdentifier columnTableName : columnTableNames) {
       columnTableName.reset();
@@ -162,6 +171,7 @@ public final class SqlCommand {
     columnDefaultMask = 0;
     columnVarcharMask = 0;
     columnUniqueMask = 0;
+    columnReferenceMask = 0;
     rowLimit = Long.MAX_VALUE;
     sequenceStart = 1;
     sequenceIncrement = 1;
@@ -526,12 +536,37 @@ public final class SqlCommand {
   }
 
   StatusCode markLastColumnUnique() {
+    long bit = columnCount <= 0 ? 0 : 1L << columnCount - 1;
     if (columnCount <= 1
-        || Long.bitCount(columnUniqueMask) >= MAXIMUM_UNIQUE_COLUMNS
-        || (columnUniqueMask & 1L << columnCount - 1) != 0) {
+        || Long.bitCount(columnUniqueMask | columnReferenceMask | bit)
+            > MAXIMUM_CONSTRAINT_INDEXES
+        || (columnUniqueMask & bit) != 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    columnUniqueMask |= 1L << columnCount - 1;
+    columnUniqueMask |= bit;
+    return StatusCode.OK;
+  }
+
+  SqlIdentifier writableLastColumnReferenceTableName() {
+    return columnCount > 1 ? columnReferenceTableNames[columnCount - 1] : null;
+  }
+
+  SqlIdentifier writableLastColumnReferenceColumnName() {
+    return columnCount > 1 ? columnReferenceColumnNames[columnCount - 1] : null;
+  }
+
+  StatusCode markLastColumnReference() {
+    long bit = columnCount <= 0 ? 0 : 1L << columnCount - 1;
+    if (columnCount <= 1
+        || columnIsVarchar(columnCount - 1)
+        || Long.bitCount(columnUniqueMask | columnReferenceMask | bit)
+            > MAXIMUM_CONSTRAINT_INDEXES
+        || (columnReferenceMask & bit) != 0
+        || columnReferenceTableNames[columnCount - 1].length() == 0
+        || columnReferenceColumnNames[columnCount - 1].length() == 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    columnReferenceMask |= bit;
     return StatusCode.OK;
   }
 
@@ -689,6 +724,24 @@ public final class SqlCommand {
 
   public boolean hasUniqueColumns() {
     return columnUniqueMask != 0;
+  }
+
+  public boolean columnHasReference(int index) {
+    return index > 0
+        && index < columnCount
+        && (columnReferenceMask & 1L << index) != 0;
+  }
+
+  public SqlIdentifier columnReferenceTableName(int index) {
+    return columnHasReference(index) ? columnReferenceTableNames[index] : null;
+  }
+
+  public SqlIdentifier columnReferenceColumnName(int index) {
+    return columnHasReference(index) ? columnReferenceColumnNames[index] : null;
+  }
+
+  public boolean hasReferences() {
+    return columnReferenceMask != 0;
   }
 
   public boolean hasPrimaryKeyIdentity() {
