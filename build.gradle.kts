@@ -120,9 +120,10 @@ val declaredDependencies = mapOf(
   "river-storage" to setOf("river-base"),
   "river-tx" to setOf("river-base", "river-tx-api"),
   "river-sql" to setOf("river-base"),
+  "river-engine-api" to setOf("river-base"),
   "river-engine" to setOf(
     "river-base", "river-format", "river-platform", "river-storage",
-    "river-tx", "river-tx-api", "river-wal", "river-sql"
+    "river-tx", "river-tx-api", "river-wal", "river-sql", "river-engine-api"
   ),
   "river-inspect" to setOf("river-base", "river-format", "river-platform"),
   "river-testkit" to setOf(
@@ -133,8 +134,11 @@ val declaredDependencies = mapOf(
 
 // Project dependencies are compile-private unless a current River consumer
 // must compile against a type exposed by a dependency. Keep this allowset exact:
-// adding an entry changes downstream compile visibility and requires P03 review.
-val approvedApiDependencies = emptyMap<String, Set<String>>()
+// adding an entry changes downstream compile visibility and requires a
+// compile-visibility test.
+val approvedApiDependencies = mapOf(
+  "river-engine-api" to setOf("river-base")
+)
 
 subprojects {
   apply(plugin = "java-library")
@@ -253,6 +257,9 @@ val sqlCommandDescriptor = "Lio/riverdb/sql/SqlCommand;"
 val sqlExecutionResultDescriptor = "Lio/riverdb/engine/sql/SqlExecutionResult;"
 val sqlScanCursorDescriptor = "Lio/riverdb/engine/sql/SqlScanCursor;"
 val sqlScanRowResultDescriptor = "Lio/riverdb/engine/sql/SqlScanRowResult;"
+val engineCommandResultDescriptor = "Lio/riverdb/engine/api/CommandResult;"
+val engineQueryOpenResultDescriptor = "Lio/riverdb/engine/api/QueryOpenResult;"
+val engineRowResultDescriptor = "Lio/riverdb/engine/api/RowResult;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val longArrayDescriptor = "[J"
@@ -918,6 +925,26 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.sql.SqlSession",
     "nextScan",
     "($sqlScanCursorDescriptor$sqlScanRowResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.EmbeddedRiver\$EngineSession",
+    "execute",
+    "(Ljava/lang/String;$engineCommandResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.EmbeddedRiver\$EngineSession",
+    "beginQuery",
+    "(Ljava/lang/String;$engineQueryOpenResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.EmbeddedRiver\$EngineSession",
+    "copyExecution",
+    "($engineCommandResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.EmbeddedRiver\$EngineSession\$EngineQuery",
+    "next",
+    "($engineRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

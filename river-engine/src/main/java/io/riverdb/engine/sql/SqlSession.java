@@ -47,6 +47,7 @@ public final class SqlSession {
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
+  private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
   private int updatedColumnCount;
@@ -78,6 +79,9 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
+    if (closed) {
+      return StatusCode.CLOSED;
+    }
     if (transactionActive) {
       result.setTransaction(true, session.visibleCommitSequence());
     }
@@ -306,8 +310,14 @@ public final class SqlSession {
   }
 
   public StatusCode beginScan(String sql, SqlScanCursor cursor) {
-    if (cursor == null || scanActive) {
+    if (cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (closed) {
+      return StatusCode.CLOSED;
+    }
+    if (scanActive) {
+      return StatusCode.CONFLICT;
     }
     StatusCode status = parser.parse(sql, command);
     boolean equality = status.isOk() && command.type() == SqlCommandType.SELECT;
@@ -398,8 +408,14 @@ public final class SqlSession {
   }
 
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
-    if (cursor == null || !cursor.isOwnedBy(this) || result == null) {
+    if (cursor == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (closed) {
+      return StatusCode.CLOSED;
+    }
+    if (!cursor.isOwnedBy(this)) {
+      return StatusCode.CONFLICT;
     }
     result.reset();
     StatusCode status = StatusCode.OK;
@@ -438,8 +454,14 @@ public final class SqlSession {
   }
 
   public StatusCode closeScan(SqlScanCursor cursor, SqlExecutionResult result) {
-    if (cursor == null || !cursor.isOwnedBy(this) || result == null) {
+    if (cursor == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (closed) {
+      return StatusCode.CLOSED;
+    }
+    if (!cursor.isOwnedBy(this)) {
+      return StatusCode.CONFLICT;
     }
     result.reset();
     StatusCode status = session.closeScan(cursor.relational());
@@ -456,6 +478,28 @@ public final class SqlSession {
       }
     } else {
       result.setTransaction(true, session.visibleCommitSequence());
+    }
+    return status;
+  }
+
+  /** Closes this session, aborting any explicit transaction still owned by it. */
+  public StatusCode close() {
+    if (closed) {
+      return StatusCode.CLOSED;
+    }
+    if (scanActive) {
+      return StatusCode.CONFLICT;
+    }
+    StatusCode status = StatusCode.OK;
+    if (transactionActive) {
+      status = session.abort(outcome);
+      if (status.isOk()) {
+        transactionActive = false;
+        clearUserSavepoint();
+      }
+    }
+    if (status.isOk()) {
+      closed = true;
     }
     return status;
   }
