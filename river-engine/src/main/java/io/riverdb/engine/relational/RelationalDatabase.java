@@ -43,6 +43,7 @@ public final class RelationalDatabase {
   private boolean buildBatchFull;
   private boolean cleanupBatchComplete;
   private boolean droppingIndexAlreadyMarked;
+  private boolean droppingTableAlreadyMarked;
   private volatile long schemaVersion = 1;
   private RelationalSession schemaChangeOwner;
   private int activeTransactions;
@@ -242,33 +243,16 @@ public final class RelationalDatabase {
       status = session.beginPersistentSchemaChange();
     }
     if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(name, catalogKey);
-    }
-    if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
-    }
-    boolean alreadyDropping = status.isOk()
-        && CatalogRecord.isDroppingTable(catalogRow, catalogScratch);
-    if (status.isOk()) {
-      status = alreadyDropping
-          ? CatalogRecord.decodeDroppingTable(
-              catalogRow, catalogScratch, name, this, indexedTable)
-          : CatalogRecord.decodeTable(
-              catalogRow, catalogScratch, name, this, indexedTable);
-    }
-    if (status.isOk() && !alreadyDropping) {
-      CatalogRecord.encodeDroppingTable(
-          catalogOutput, indexedTable.tableId(), name, indexedTable);
-      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      status = markDroppingTable(session, name);
     }
     if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode terminal = status.isOk() && !alreadyDropping
+      StatusCode terminal = status.isOk() && !droppingTableAlreadyMarked
           ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
       if (status.isOk()) {
         status = terminal;
       }
     }
-    if (status.isOk() && !alreadyDropping) {
+    if (status.isOk() && !droppingTableAlreadyMarked) {
       status = publishDroppingTableSchema(session);
     }
     if (!status.isOk()) {
@@ -277,6 +261,42 @@ public final class RelationalDatabase {
     }
     return cleanupDroppingTable(
         session, name, outcome, maximumCleanupBatches);
+  }
+
+  StatusCode markDroppingTable(
+      RelationalSession session,
+      CharSequence name) {
+    droppingTableAlreadyMarked = false;
+    StatusCode status = RelationalKey.catalogTableKey(name, catalogKey);
+    if (status.isOk()) {
+      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    }
+    if (status.isOk()) {
+      droppingTableAlreadyMarked =
+          CatalogRecord.isDroppingTable(catalogRow, catalogScratch);
+      status = droppingTableAlreadyMarked
+          ? CatalogRecord.decodeDroppingTable(
+              catalogRow, catalogScratch, name, this, indexedTable)
+          : CatalogRecord.decodeTable(
+              catalogRow, catalogScratch, name, this, indexedTable);
+    }
+    if (status.isOk() && !droppingTableAlreadyMarked) {
+      CatalogRecord.encodeDroppingTable(
+          catalogOutput, indexedTable.tableId(), name, indexedTable);
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    return status;
+  }
+
+  StatusCode finishDroppingTable(
+      RelationalSession session,
+      CharSequence tableName,
+      TransactionOutcome outcome) {
+    StatusCode status = publishDroppingTableSchema(session);
+    return status.isOk()
+        ? cleanupDroppingTable(
+            session, tableName, outcome, Integer.MAX_VALUE)
+        : status;
   }
 
   public synchronized StatusCode createUniqueValueIndex(

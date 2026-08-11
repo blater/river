@@ -54,9 +54,27 @@ final class EmbeddedRiverDropTableTest {
     assertEquals(StatusCode.OK, second.close());
 
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
-    assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE items", result));
-    assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
     assertEquals(StatusCode.OK, session.execute("DROP TABLE items", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO items VALUES (3, 'gamma', 8)", result));
+    assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT before_drop", result));
+    assertEquals(StatusCode.OK, session.execute("DROP TABLE items", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("ROLLBACK TO SAVEPOINT before_drop", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, session.execute("DROP TABLE items", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
     assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE items", result));
     assertEquals(
         StatusCode.CONFLICT,
