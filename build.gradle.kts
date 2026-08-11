@@ -845,6 +845,11 @@ val liveHotPathMethods = setOf(
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
+    "tryAcquireSharedRange",
+    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.tx.TransactionManager",
     "upgradeKey",
     "($transactionDescriptor$lockTokenDescriptor)$statusCodeDescriptor"
   ),
@@ -882,6 +887,11 @@ val liveHotPathMethods = setOf(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "beginScan",
     "(JJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "acquireSharedRange",
+    "(JJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

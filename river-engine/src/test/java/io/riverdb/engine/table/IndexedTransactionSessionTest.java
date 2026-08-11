@@ -173,7 +173,7 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
-  void serializableScanValidatesPhantomsAtPublication(@TempDir Path root) {
+  void serializableScanLocksPhantomsThroughPublication(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
@@ -190,11 +190,15 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, scanned));
     assertEquals(StatusCode.OK, reader.closeScan(cursor));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.RETRY, writer.insert(50, row(500)));
+    assertEquals(StatusCode.OK, writer.abort(outcome));
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(TransactionState.COMMITTED, outcome.state());
+    assertEquals(0, manager.activeTransactionCount());
+
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert(50, row(500)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.CONFLICT, reader.commit(outcome));
-    assertEquals(TransactionState.ABORTED, outcome.state());
-    assertEquals(0, manager.activeTransactionCount());
 
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));

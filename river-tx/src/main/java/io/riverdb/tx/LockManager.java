@@ -113,6 +113,9 @@ public final class LockManager implements LockService {
     if (transactionId <= 0 || scope == null || mode == null || token == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (scope == LockScope.RANGE && resourceHigh >= resourceLow) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (isDeadlockVictim(transactionId)) {
       removeWait(transactionId);
       return StatusCode.CONFLICT;
@@ -129,13 +132,26 @@ public final class LockManager implements LockService {
         }
         continue;
       }
-      if (scopes[slot] != (byte) scope.ordinal()
-          || resourceHighs[slot] != resourceHigh
-          || resourceLows[slot] != resourceLow) {
+      if (!resourcesOverlap(
+          (byte) scope.ordinal(),
+          resourceHigh,
+          resourceLow,
+          scopes[slot],
+          resourceHighs[slot],
+          resourceLows[slot])) {
         continue;
       }
       if (transactionIds[slot] == transactionId) {
-        return StatusCode.CONFLICT;
+        if (sameResource(
+            (byte) scope.ordinal(),
+            resourceHigh,
+            resourceLow,
+            scopes[slot],
+            resourceHighs[slot],
+            resourceLows[slot])) {
+          return StatusCode.CONFLICT;
+        }
+        continue;
       }
       int requestedMode = mode.ordinal();
       int heldMode = modes[slot];
@@ -251,9 +267,14 @@ public final class LockManager implements LockService {
     for (int other = 0; other < occupied.length; other++) {
       if (other == slot
           || !occupied[other]
-          || scopes[other] != scopes[slot]
-          || resourceHighs[other] != resourceHighs[slot]
-          || resourceLows[other] != resourceLows[slot]) {
+          || transactionIds[other] == token.transactionId()
+          || !resourcesOverlap(
+              scopes[slot],
+              resourceHighs[slot],
+              resourceLows[slot],
+              scopes[other],
+              resourceHighs[other],
+              resourceLows[other])) {
         continue;
       }
       if (conflicts(requested, modes[other]) || conflicts(modes[other], requested)) {
@@ -374,9 +395,13 @@ public final class LockManager implements LockService {
     for (int slot = 0; slot < waiting.length; slot++) {
       if (waiting[slot]
           && waitingTransactionIds[slot] != transactionId
-          && waitingScopes[slot] == (byte) scope.ordinal()
-          && waitingResourceHighs[slot] == resourceHigh
-          && waitingResourceLows[slot] == resourceLow
+          && resourcesOverlap(
+              (byte) scope.ordinal(),
+              resourceHigh,
+              resourceLow,
+              waitingScopes[slot],
+              waitingResourceHighs[slot],
+              waitingResourceLows[slot])
           && waitingOrders[slot] < ownOrder) {
         return true;
       }
@@ -431,7 +456,8 @@ public final class LockManager implements LockService {
     for (int slot = 0; slot < occupied.length; slot++) {
       if (!occupied[slot]
           || transactionIds[slot] == transactionId
-          || !sameResource(waitSlot, scopes[slot], resourceHighs[slot], resourceLows[slot])
+          || !overlapsWait(
+              waitSlot, scopes[slot], resourceHighs[slot], resourceLows[slot])
           || !conflictingModes(waitingModes[waitSlot], modes[slot])) {
         continue;
       }
@@ -444,7 +470,7 @@ public final class LockManager implements LockService {
       if (!waiting[slot]
           || waitingTransactionIds[slot] == transactionId
           || waitingOrders[slot] >= waitingOrders[waitSlot]
-          || !sameResource(
+          || !overlapsWait(
               waitSlot,
               waitingScopes[slot],
               waitingResourceHighs[slot],
@@ -474,14 +500,50 @@ public final class LockManager implements LockService {
     return findCycleVictim(dependency, cycleStart, depth + 1);
   }
 
-  private boolean sameResource(
+  private boolean overlapsWait(
       int waitSlot,
       byte scope,
       long resourceHigh,
       long resourceLow) {
-    return waitingScopes[waitSlot] == scope
-        && waitingResourceHighs[waitSlot] == resourceHigh
-        && waitingResourceLows[waitSlot] == resourceLow;
+    return resourcesOverlap(
+        waitingScopes[waitSlot],
+        waitingResourceHighs[waitSlot],
+        waitingResourceLows[waitSlot],
+        scope,
+        resourceHigh,
+        resourceLow);
+  }
+
+  private static boolean sameResource(
+      byte leftScope,
+      long leftHigh,
+      long leftLow,
+      byte rightScope,
+      long rightHigh,
+      long rightLow) {
+    return leftScope == rightScope && leftHigh == rightHigh && leftLow == rightLow;
+  }
+
+  private static boolean resourcesOverlap(
+      byte leftScope,
+      long leftHigh,
+      long leftLow,
+      byte rightScope,
+      long rightHigh,
+      long rightLow) {
+    int range = LockScope.RANGE.ordinal();
+    int key = LockScope.KEY.ordinal();
+    if (leftScope == range && rightScope == range) {
+      return leftHigh < rightLow && rightHigh < leftLow;
+    }
+    if (leftScope == range && rightScope == key) {
+      return rightLow >= leftHigh && rightLow < leftLow;
+    }
+    if (leftScope == key && rightScope == range) {
+      return leftLow >= rightHigh && leftLow < rightLow;
+    }
+    return sameResource(
+        leftScope, leftHigh, leftLow, rightScope, rightHigh, rightLow);
   }
 
   private static boolean conflictingModes(byte left, byte right) {

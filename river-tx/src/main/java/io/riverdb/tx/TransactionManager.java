@@ -88,6 +88,25 @@ public final class TransactionManager {
         token);
   }
 
+  public synchronized StatusCode tryAcquireSharedRange(
+      Transaction transaction,
+      long lowerInclusive,
+      long upperExclusive,
+      LockToken token) {
+    if (!validActive(transaction) || lowerInclusive >= upperExclusive) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return locks.tryAcquire(
+        transaction.transactionId(),
+        LockScope.RANGE,
+        lowerInclusive,
+        upperExclusive,
+        LockMode.SHARED,
+        0,
+        0,
+        token);
+  }
+
   public synchronized StatusCode upgradeKey(
       Transaction transaction,
       LockToken token) {
@@ -386,36 +405,6 @@ public final class TransactionManager {
         TransactionState.COMMITTED,
         commitSequence);
     return StatusCode.OK;
-  }
-
-  /**
-   * Commits a read-only optimistic transaction only if its validated source is unchanged.
-   * The manager monitor makes validation atomic with every participant publication.
-   */
-  public synchronized StatusCode commitReadOnlyValidated(
-      Transaction transaction,
-      CommitSequenceSource source,
-      long expectedCommitSequence,
-      TransactionOutcome result) {
-    if (!validActive(transaction)
-        || source == null
-        || expectedCommitSequence < 0
-        || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (source.currentCommitSequence() != expectedCommitSequence) {
-      result.reset();
-      removeActive(transaction.transactionId());
-      transaction.transition(TransactionState.ABORTED, 0, true);
-      result.set(
-          databaseHigh,
-          databaseLow,
-          transaction.transactionId(),
-          TransactionState.ABORTED,
-          0);
-      return StatusCode.CONFLICT;
-    }
-    return commitReadOnly(transaction, result);
   }
 
   /**

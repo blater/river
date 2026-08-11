@@ -620,7 +620,7 @@ final class SqlSessionTest {
   }
 
   @Test
-  void serializableSqlRangeAbortsOnConcurrentPhantom(@TempDir Path root) {
+  void serializableSqlRangeBlocksPhantomButAllowsOutsideCommit(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -633,6 +633,9 @@ final class SqlSessionTest {
     SqlSession writer = sessions.session();
     SqlExecutionResult execution = new SqlExecutionResult();
     assertEquals(StatusCode.OK, writer.execute("CREATE TABLE items", execution));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO items VALUES (12, 120)", execution));
     assertEquals(StatusCode.OK, reader.execute("BEGIN SERIALIZABLE", execution));
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
@@ -641,16 +644,41 @@ final class SqlSessionTest {
         reader.beginScan(
             "SELECT key, value FROM items WHERE key >= 10 AND key < 20",
             cursor));
+    assertEquals(StatusCode.OK, reader.nextScan(cursor, row));
+    assertEquals(12, row.key());
     assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, row));
     assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
     assertEquals(
         StatusCode.OK,
+        reader.execute("UPDATE items SET value=121 WHERE key=12", execution));
+    assertEquals(
+        StatusCode.RETRY,
+        writer.execute("UPDATE items SET value=122 WHERE key=12", execution));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO items VALUES (25, 250)", execution));
+    assertEquals(
+        StatusCode.RETRY,
         writer.execute("INSERT INTO items VALUES (15, 150)", execution));
-    assertEquals(StatusCode.CONFLICT, reader.execute("COMMIT", execution));
+    assertEquals(StatusCode.OK, reader.execute("COMMIT", execution));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO items VALUES (15, 150)", execution));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("UPDATE items SET value=122 WHERE key=12", execution));
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("SELECT value FROM items WHERE key=12", execution));
+    assertEquals(122, execution.value());
     assertEquals(
         StatusCode.OK,
         reader.execute("SELECT value FROM items WHERE key=15", execution));
     assertEquals(150, execution.value());
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("SELECT value FROM items WHERE key=25", execution));
+    assertEquals(250, execution.value());
     assertEquals(StatusCode.OK, database.close());
   }
 

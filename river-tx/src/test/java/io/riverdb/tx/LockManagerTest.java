@@ -197,4 +197,92 @@ final class LockManagerTest {
     assertEquals(StatusCode.OK, locks.upgrade(first, LockMode.EXCLUSIVE, 0, 0));
     assertEquals(StatusCode.OK, locks.release(first));
   }
+
+  @Test
+  void sharedRangesBlockOnlyKeysInsideTheirHalfOpenBounds() {
+    LockManager locks = new LockManager(8);
+    LockToken firstRange = new LockToken();
+    LockToken secondRange = new LockToken();
+    LockToken below = new LockToken();
+    LockToken above = new LockToken();
+    LockToken inside = new LockToken();
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        locks.tryAcquire(80, LockScope.RANGE, 20, 20, LockMode.SHARED, 0, 0, firstRange));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(81, LockScope.RANGE, 10, 20, LockMode.SHARED, 0, 0, firstRange));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(82, LockScope.KEY, 1, 9, LockMode.EXCLUSIVE, 0, 0, below));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(83, LockScope.KEY, 1, 20, LockMode.EXCLUSIVE, 0, 0, above));
+    assertEquals(StatusCode.OK, locks.release(above));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(84, LockScope.RANGE, 15, 25, LockMode.SHARED, 0, 0, secondRange));
+    assertEquals(
+        StatusCode.RETRY,
+        locks.tryAcquire(85, LockScope.KEY, 1, 15, LockMode.EXCLUSIVE, 0, 0, inside));
+    assertEquals(StatusCode.OK, locks.release(firstRange));
+    assertEquals(
+        StatusCode.RETRY,
+        locks.tryAcquire(85, LockScope.KEY, 1, 15, LockMode.EXCLUSIVE, 0, 0, inside));
+    assertEquals(StatusCode.OK, locks.release(secondRange));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(85, LockScope.KEY, 1, 15, LockMode.EXCLUSIVE, 0, 0, inside));
+    assertEquals(StatusCode.OK, locks.release(inside));
+    assertEquals(StatusCode.OK, locks.release(below));
+  }
+
+  @Test
+  void detectsDeadlockAcrossRangeAndKeyResources() {
+    LockManager locks = new LockManager(6);
+    LockToken range = new LockToken();
+    LockToken youngerKey = new LockToken();
+    LockToken rangeOwnerWait = new LockToken();
+    LockToken youngerWait = new LockToken();
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(91, LockScope.RANGE, 10, 20, LockMode.SHARED, 0, 0, range));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(92, LockScope.KEY, 1, 25, LockMode.EXCLUSIVE, 0, 0, youngerKey));
+    assertEquals(
+        StatusCode.RETRY,
+        locks.tryAcquire(
+            91, LockScope.KEY, 1, 25, LockMode.EXCLUSIVE, 0, 0, rangeOwnerWait));
+    assertEquals(
+        StatusCode.CONFLICT,
+        locks.tryAcquire(
+            92, LockScope.KEY, 1, 15, LockMode.EXCLUSIVE, 0, 0, youngerWait));
+    assertTrue(locks.isDeadlockVictim(92));
+    assertEquals(1, locks.deadlockVictimSelections());
+    assertEquals(StatusCode.OK, locks.release(youngerKey));
+    locks.transactionCompleted(92);
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(
+            91, LockScope.KEY, 1, 25, LockMode.EXCLUSIVE, 0, 0, rangeOwnerWait));
+    assertEquals(StatusCode.OK, locks.release(rangeOwnerWait));
+    assertEquals(StatusCode.OK, locks.release(range));
+  }
+
+  @Test
+  void transactionCanUpgradeItsKeyInsideItsOwnRange() {
+    LockManager locks = new LockManager(4);
+    LockToken key = new LockToken();
+    LockToken range = new LockToken();
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(101, LockScope.KEY, 1, 15, LockMode.SHARED, 0, 0, key));
+    assertEquals(
+        StatusCode.OK,
+        locks.tryAcquire(101, LockScope.RANGE, 10, 20, LockMode.SHARED, 0, 0, range));
+    assertEquals(StatusCode.OK, locks.upgrade(key, LockMode.EXCLUSIVE, 0, 0));
+    assertEquals(StatusCode.OK, locks.release(key));
+    assertEquals(StatusCode.OK, locks.release(range));
+  }
 }

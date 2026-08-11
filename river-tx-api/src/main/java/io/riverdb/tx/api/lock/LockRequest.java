@@ -1,6 +1,9 @@
 package io.riverdb.tx.api.lock;
 
-/** Caller-owned lock request; the two resource words are opaque to the lock provider. */
+/**
+ * Caller-owned lock request. Resource words are opaque except for RANGE, whose half-open bounds
+ * are defined by {@link LockScope}.
+ */
 public final class LockRequest {
   private LockScope scope = LockScope.ROW;
   private LockMode mode = LockMode.SHARED;

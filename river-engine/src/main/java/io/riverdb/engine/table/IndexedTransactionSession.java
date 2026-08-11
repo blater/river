@@ -34,9 +34,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final long[] pendingKeys = new long[MAXIMUM_PENDING_INSERTS];
   private final int[] pendingPreviousRowIds = new int[MAXIMUM_PENDING_INSERTS];
   private final int[] pendingRowLengths = new int[MAXIMUM_PENDING_INSERTS];
-  private final LockToken[] keyLocks = new LockToken[MAXIMUM_HELD_LOCKS];
+  private final LockToken[] heldLocks = new LockToken[MAXIMUM_HELD_LOCKS];
   private final long[] lockedKeys = new long[MAXIMUM_HELD_LOCKS];
+  private final long[] lockedUpperKeys = new long[MAXIMUM_HELD_LOCKS];
   private final boolean[] exclusiveLocks = new boolean[MAXIMUM_HELD_LOCKS];
+  private final boolean[] rangeLocks = new boolean[MAXIMUM_HELD_LOCKS];
   private final boolean[] retainedMutations = new boolean[MAXIMUM_PENDING_INSERTS];
   private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
   private final IndexedCommitResult commitResult = new IndexedCommitResult();
@@ -45,7 +47,6 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final IndexedMutationTarget mutationTarget = new IndexedMutationTarget();
   private final int rowStride;
   private long committedSequence;
-  private long serializableScanSequence;
   private long copiedWriteSetBytes;
   private int pendingInsertCount;
   private int heldLockCount;
@@ -118,8 +119,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     transaction = new Transaction(transactionManager.maximumActiveTransactions());
     rowStride = maximumRowBytes;
     pendingRows = ByteBuffer.allocateDirect(maximumRowBytes * MAXIMUM_PENDING_INSERTS);
-    for (int index = 0; index < keyLocks.length; index++) {
-      keyLocks[index] = new LockToken();
+    for (int index = 0; index < heldLocks.length; index++) {
+      heldLocks[index] = new LockToken();
     }
   }
 
@@ -143,10 +144,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     pendingInsertCount = 0;
     heldLockCount = 0;
     committedSequence = 0;
-    serializableScanSequence = 0;
     serializableScan = false;
-    for (LockToken keyLock : keyLocks) {
-      StatusCode status = keyLock.reset();
+    for (LockToken heldLock : heldLocks) {
+      StatusCode status = heldLock.reset();
       if (!status.isOk()) {
         return status;
       }
@@ -388,12 +388,14 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         return StatusCode.RESOURCE_EXHAUSTED;
       }
       StatusCode status = manager.tryAcquireSharedKey(
-          transaction, TABLE_LOCK_ID, key, keyLocks[heldLockCount]);
+          transaction, TABLE_LOCK_ID, key, heldLocks[heldLockCount]);
       if (!status.isOk()) {
         return status;
       }
       lockedKeys[heldLockCount] = key;
+      lockedUpperKeys[heldLockCount] = 0;
       exclusiveLocks[heldLockCount] = false;
+      rangeLocks[heldLockCount] = false;
       heldLockCount++;
     }
     if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED) {
@@ -428,11 +430,19 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (status.isOk()) {
       status = cursor.attach(this);
     }
+    if (status.isOk() && transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
+      status = acquireSharedRange(lowerKey, upperKey);
+    }
+    if (!status.isOk() && cursor.isSessionOwnedBy(this)) {
+      StatusCode close = table.closeScan(cursor);
+      if (!close.isOk()) {
+        return close;
+      }
+    }
     if (status.isOk()) {
       activeScan = cursor;
       if (transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
         serializableScan = true;
-        serializableScanSequence = transaction.snapshot().visibleCommitSequence();
       }
     }
     return status;
@@ -580,10 +590,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     }
     compactWriteSet();
     if (pendingInsertCount == 0) {
-      StatusCode status = serializableScan
-          ? manager.commitReadOnlyValidated(
-              transaction, table, serializableScanSequence, result)
-          : manager.commitReadOnly(transaction, result);
+      StatusCode status = manager.commitReadOnly(transaction, result);
       if (!transaction.isActiveHandle()) {
         StatusCode release = releaseLocks();
         clearWriteSet();
@@ -693,11 +700,6 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   @Override
   public StatusCode commit(long transactionId) {
-    if (serializableScan
-        && table.currentCommitSequence() != serializableScanSequence) {
-      committedSequence = 0;
-      return StatusCode.CONFLICT;
-    }
     pendingRows.position(0);
     pendingRows.limit(pendingRows.capacity());
     StatusCode status;
@@ -734,16 +736,18 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private StatusCode releaseLocks() {
     StatusCode result = StatusCode.OK;
     for (int index = 0; index < heldLockCount; index++) {
-      LockToken keyLock = keyLocks[index];
-      if (!keyLock.isActive()) {
+      LockToken heldLock = heldLocks[index];
+      if (!heldLock.isActive()) {
         continue;
       }
-      StatusCode status = manager.release(keyLock);
+      StatusCode status = manager.release(heldLock);
       if (result.isOk() && !status.isOk()) {
         result = status;
       }
       lockedKeys[index] = 0;
+      lockedUpperKeys[index] = 0;
       exclusiveLocks[index] = false;
+      rangeLocks[index] = false;
     }
     heldLockCount = 0;
     return result;
@@ -751,7 +755,6 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   private void clearWriteSet() {
     clearPendingFrom(0);
-    serializableScanSequence = 0;
     serializableScan = false;
     completeSavepointsAfter(0);
   }
@@ -785,7 +788,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   private int findHeldLock(long key) {
     for (int index = 0; index < heldLockCount; index++) {
-      if (lockedKeys[index] == key) {
+      if (!rangeLocks[index] && lockedKeys[index] == key) {
         return index;
       }
     }
@@ -798,7 +801,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       if (exclusiveLocks[lockIndex]) {
         return StatusCode.OK;
       }
-      StatusCode status = manager.upgradeKey(transaction, keyLocks[lockIndex]);
+      StatusCode status = manager.upgradeKey(transaction, heldLocks[lockIndex]);
       if (status.isOk()) {
         exclusiveLocks[lockIndex] = true;
       }
@@ -808,10 +811,35 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = manager.tryAcquireKey(
-        transaction, TABLE_LOCK_ID, key, keyLocks[heldLockCount]);
+        transaction, TABLE_LOCK_ID, key, heldLocks[heldLockCount]);
     if (status.isOk()) {
       lockedKeys[heldLockCount] = key;
+      lockedUpperKeys[heldLockCount] = 0;
       exclusiveLocks[heldLockCount] = true;
+      rangeLocks[heldLockCount] = false;
+      heldLockCount++;
+    }
+    return status;
+  }
+
+  private StatusCode acquireSharedRange(long lowerKey, long upperKey) {
+    for (int index = 0; index < heldLockCount; index++) {
+      if (rangeLocks[index]
+          && lockedKeys[index] <= lowerKey
+          && lockedUpperKeys[index] >= upperKey) {
+        return StatusCode.OK;
+      }
+    }
+    if (heldLockCount >= MAXIMUM_HELD_LOCKS) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = manager.tryAcquireSharedRange(
+        transaction, lowerKey, upperKey, heldLocks[heldLockCount]);
+    if (status.isOk()) {
+      lockedKeys[heldLockCount] = lowerKey;
+      lockedUpperKeys[heldLockCount] = upperKey;
+      exclusiveLocks[heldLockCount] = false;
+      rangeLocks[heldLockCount] = true;
       heldLockCount++;
     }
     return status;
