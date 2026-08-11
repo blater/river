@@ -417,6 +417,48 @@ final class RiverDriverTest {
                   + "(SELECT id FROM accounts WHERE region IN "
                   + "(SELECT id FROM regions))"));
       assertEquals("21000", mixedCardinalityFailure.getSQLState());
+      try (ResultSet nonImmediateExistence = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE EXISTS "
+              + "(SELECT b.id FROM accounts b WHERE b.id IN "
+              + "(SELECT c.id FROM accounts c WHERE c.id=a.id)) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(nonImmediateExistence.next());
+          assertEquals(expected, nonImmediateExistence.getLong(1));
+        }
+        assertFalse(nonImmediateExistence.next());
+      }
+      try (ResultSet nonImmediateScalar = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id="
+              + "(SELECT b.id FROM accounts b WHERE EXISTS "
+              + "(SELECT c.id FROM accounts c WHERE c.id=a.id) LIMIT 1) "
+              + "ORDER BY id")) {
+        assertTrue(nonImmediateScalar.next());
+        assertEquals(1, nonImmediateScalar.getLong(1));
+        assertFalse(nonImmediateScalar.next());
+      }
+      try (ResultSet nonImmediateMembership = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id IN "
+              + "(SELECT b.id FROM accounts b WHERE b.id="
+              + "(SELECT c.id FROM accounts c WHERE c.id=a.id)) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(nonImmediateMembership.next());
+          assertEquals(expected, nonImmediateMembership.getLong(1));
+        }
+        assertFalse(nonImmediateMembership.next());
+      }
+      try (ResultSet nonImmediateShadow = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE EXISTS "
+              + "(SELECT b.id FROM accounts b WHERE b.id IN "
+              + "(SELECT a.id FROM accounts a WHERE a.id=3)) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(nonImmediateShadow.next());
+          assertEquals(expected, nonImmediateShadow.getLong(1));
+        }
+        assertFalse(nonImmediateShadow.next());
+      }
       try (ResultSet exists = statement.executeQuery(
           "SELECT id FROM accounts WHERE EXISTS "
               + "(SELECT id FROM regions WHERE code=7000) ORDER BY id")) {

@@ -624,6 +624,21 @@ final class SqlParserTest {
     assertFalse(query.hasScalarPredicate(0));
     assertFalse(query.hasExistencePredicate(1));
     assertFalse(query.hasMembershipPredicate(2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT a.id FROM accounts a WHERE EXISTS "
+                + "(SELECT b.id FROM accounts b WHERE b.id IN "
+                + "(SELECT c.id FROM accounts c WHERE c.id=a.id))",
+            query,
+            command));
+    assertEquals(3, query.blockCount());
+    assertName("a", command.tableAlias());
+    assertName("b", query.block(1).tableAlias());
+    assertName("c", query.block(2).tableAlias());
+    assertTrue(query.block(2).isColumnPredicate(0));
+    assertName("a", query.block(2).predicateValueTableName(0));
+    assertName("id", query.block(2).predicateValueColumnName(0));
   }
 
   @Test

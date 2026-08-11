@@ -120,6 +120,7 @@ public final class SqlSession {
   private boolean correlatedScalar;
   private boolean correlatedExistence;
   private boolean correlatedMembership;
+  private boolean correlatedNestedChain;
   private boolean existenceResult;
   private boolean scalarResultNull;
   private long scalarResultValue;
@@ -410,6 +411,7 @@ public final class SqlSession {
     correlatedScalar = false;
     correlatedExistence = false;
     correlatedMembership = false;
+    correlatedNestedChain = false;
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk() && command.type() == SqlCommandType.COUNT) {
       status = execute(sql, aggregateExecution);
@@ -576,7 +578,7 @@ public final class SqlSession {
         && (query.hasScalarPredicate()
             || query.hasExistencePredicate()
             || query.hasMembershipPredicate())) {
-      status = evaluateNestedChain();
+      status = prepareNestedChain();
     } else if (status.isOk() && query.hasScalarPredicate()) {
       status = evaluateScalarPredicate();
     } else if (status.isOk() && query.hasExistencePredicate()) {
@@ -747,6 +749,19 @@ public final class SqlSession {
       status = validateRow(source);
       if (correlatedScalar || correlatedExistence) {
         subqueryPredicateFalse = false;
+      }
+      if (status.isOk() && correlatedNestedChain) {
+        subqueryPredicateFalse = false;
+        membershipValueCount = 0;
+        membershipHasNull = false;
+        status = copyCorrelatedOuterRow(source);
+        if (status.isOk()) {
+          status = evaluateNestedChain(primaryKey, correlatedOuterRow);
+          source = correlatedOuterRow;
+        }
+        if (status.isOk() && subqueryPredicateFalse) {
+          continue;
+        }
       }
       if (status.isOk() && correlatedScalar) {
         status = copyCorrelatedOuterRow(source);
@@ -1257,7 +1272,7 @@ public final class SqlSession {
           && query.membershipPredicate() == index) {
         continue;
       }
-      if (correlatedScalar
+      if ((correlatedScalar || correlatedNestedChain)
           && query.hasScalarPredicate()
           && query.scalarPredicate() == index) {
         continue;
@@ -1718,7 +1733,29 @@ public final class SqlSession {
     return true;
   }
 
-  private StatusCode evaluateNestedChain() {
+  private StatusCode prepareNestedChain() {
+    StatusCode status = StatusCode.OK;
+    boolean correlated = false;
+    for (int block = query.blockCount() - 1;
+        status.isOk() && block > 0;
+        block--) {
+      SqlCommand nested = query.block(block);
+      if (nested == null || nested.isOrdered()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      status = bindNestedCommand(nested);
+      correlated |= nestedCorrelated;
+    }
+    if (status.isOk() && correlated) {
+      correlatedNestedChain = true;
+      return StatusCode.OK;
+    }
+    return status.isOk() ? evaluateNestedChain(0, null) : status;
+  }
+
+  private StatusCode evaluateNestedChain(
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
     StatusCode status = StatusCode.OK;
     boolean commandEnabled = true;
     long[] candidates = membershipValues;
@@ -1732,7 +1769,7 @@ public final class SqlSession {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       status = bindNestedCommand(nested);
-      if (status.isOk() && nestedCorrelated) {
+      if (status.isOk() && nestedCorrelated && outerSource == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       int parent = block - 1;
@@ -1755,6 +1792,8 @@ public final class SqlSession {
             commandEnabled,
             resultKind,
             output,
+            outerPrimaryKey,
+            outerSource,
             query.membershipPredicate(block),
             query.membershipNegated(block),
             candidates,
@@ -1797,6 +1836,8 @@ public final class SqlSession {
       boolean commandEnabled,
       int resultKind,
       long[] output,
+      long outerPrimaryKey,
+      HeapRowResult outerSource,
       int nestedMembershipPredicate,
       boolean nestedMembershipNegated,
       long[] input,
@@ -1825,8 +1866,8 @@ public final class SqlSession {
               nested,
               scalarRow.key(),
               scalarRow.row(),
-              0,
-              null,
+              outerPrimaryKey,
+              outerSource,
               nestedMembershipPredicate,
               nestedMembershipNegated,
               input,
@@ -2504,6 +2545,19 @@ public final class SqlSession {
       }
       if (correlatedScalar || correlatedExistence) {
         subqueryPredicateFalse = false;
+      }
+      if (status.isOk() && correlatedNestedChain) {
+        subqueryPredicateFalse = false;
+        membershipValueCount = 0;
+        membershipHasNull = false;
+        status = copyCorrelatedOuterRow(source);
+        if (status.isOk()) {
+          status = evaluateNestedChain(primaryKey, correlatedOuterRow);
+          source = correlatedOuterRow;
+        }
+        if (status.isOk() && subqueryPredicateFalse) {
+          continue;
+        }
       }
       if (status.isOk() && correlatedScalar) {
         status = copyCorrelatedOuterRow(source);
