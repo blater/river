@@ -6,9 +6,13 @@ public final class SqlCommand {
   public static final int MAXIMUM_COLUMNS = 8;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
+  private final SqlIdentifier joinTableName = new SqlIdentifier();
+  private final SqlIdentifier joinOuterColumnName = new SqlIdentifier();
+  private final SqlIdentifier joinInnerColumnName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
   private final SqlIdentifier savepointName = new SqlIdentifier();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
+  private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier predicateColumnName = new SqlIdentifier();
   private final SqlIdentifier orderColumnName = new SqlIdentifier();
   private final long[] insertValues =
@@ -32,15 +36,22 @@ public final class SqlCommand {
   public SqlCommand() {
     for (int index = 0; index < columnNames.length; index++) {
       columnNames[index] = new SqlIdentifier();
+      columnTableNames[index] = new SqlIdentifier();
     }
   }
 
   public void reset() {
     tableName.reset();
+    joinTableName.reset();
+    joinOuterColumnName.reset();
+    joinInnerColumnName.reset();
     indexName.reset();
     savepointName.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
+    }
+    for (SqlIdentifier columnTableName : columnTableNames) {
+      columnTableName.reset();
     }
     predicateColumnName.reset();
     orderColumnName.reset();
@@ -122,6 +133,18 @@ public final class SqlCommand {
     return tableName;
   }
 
+  SqlIdentifier writableJoinTableName() {
+    return joinTableName;
+  }
+
+  SqlIdentifier writableJoinOuterColumnName() {
+    return joinOuterColumnName;
+  }
+
+  SqlIdentifier writableJoinInnerColumnName() {
+    return joinInnerColumnName;
+  }
+
   SqlIdentifier writableIndexName() {
     return indexName;
   }
@@ -132,6 +155,10 @@ public final class SqlCommand {
 
   SqlIdentifier writableNextColumnName() {
     return columnCount < columnNames.length ? columnNames[columnCount++] : null;
+  }
+
+  SqlIdentifier writableColumnTableName(int index) {
+    return index >= 0 && index < columnCount ? columnTableNames[index] : null;
   }
 
   SqlIdentifier writablePredicateColumnName() {
@@ -148,6 +175,18 @@ public final class SqlCommand {
 
   public SqlIdentifier tableName() {
     return tableName;
+  }
+
+  public SqlIdentifier joinTableName() {
+    return joinTableName;
+  }
+
+  public SqlIdentifier joinOuterColumnName() {
+    return joinOuterColumnName;
+  }
+
+  public SqlIdentifier joinInnerColumnName() {
+    return joinInnerColumnName;
   }
 
   public SqlIdentifier indexName() {
@@ -172,6 +211,10 @@ public final class SqlCommand {
 
   public SqlIdentifier columnName(int index) {
     return index >= 0 && index < columnCount ? columnNames[index] : null;
+  }
+
+  public SqlIdentifier columnTableName(int index) {
+    return index >= 0 && index < columnCount ? columnTableNames[index] : null;
   }
 
   public SqlIdentifier predicateColumnName() {

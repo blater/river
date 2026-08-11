@@ -1466,6 +1466,60 @@ final class SqlSessionTest {
         new long[] {1, 2, 3, 4, 5},
         new long[] {100, 200, 300, 400, 500});
     assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE categories (id BIGINT PRIMARY KEY, code BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO categories VALUES "
+                + "(10, 1000), (20, 2000), (100, 100), (200, 200), "
+                + "(300, 300), (400, 400), (500, 500)",
+            result));
+    SqlScanCursor joined = new SqlScanCursor();
+    SqlScanRowResult joinedRow = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT events.id, categories.code FROM events "
+                + "JOIN categories ON events.category=categories.id",
+            joined));
+    long[] joinedKeys = {1, 2, 3, 4};
+    long[] joinedCodes = {1000, 1000, 2000, 1000};
+    for (int index = 0; index < joinedKeys.length; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
+      assertEquals(joinedKeys[index], joinedRow.valueAt(0));
+      assertEquals(joinedCodes[index], joinedRow.valueAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(joined, joinedRow));
+    assertEquals(StatusCode.OK, session.closeScan(joined, result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE UNIQUE INDEX categories_code ON categories(code)",
+            result));
+    assertEquals(StatusCode.OK, joined.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT events.id, categories.id FROM events "
+                + "JOIN categories ON events.amount=categories.code",
+            joined));
+    for (int index = 1; index <= 5; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
+      assertEquals(index, joinedRow.valueAt(0));
+      assertEquals(index * 100, joinedRow.valueAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(joined, joinedRow));
+    assertEquals(StatusCode.OK, session.closeScan(joined, result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT id, code FROM events "
+                + "JOIN categories ON events.category=categories.id",
+            new SqlScanCursor()));
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.execute("SELECT id, amount FROM events WHERE category=10", result));
     assertEquals(

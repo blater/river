@@ -30,6 +30,7 @@ public final class SqlSession {
   private final SqlCommand command = new SqlCommand();
   private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
   private final TableDefinition table = new TableDefinition();
+  private final TableDefinition joinTable = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final CheckpointResult checkpoint = new CheckpointResult();
@@ -345,6 +346,11 @@ public final class SqlSession {
       if (status.isOk()) {
         status = session.resolveTable(command.tableName(), table);
       }
+      if (status.isOk()
+          && command.columnTableName(0).length() > 0
+          && !sameName(command.columnTableName(0), command.tableName())) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       int groupColumn = status.isOk()
           ? table.findColumn(command.firstColumnName()) : -1;
       boolean valueIndex = groupColumn > 0 && table.hasIndexOn(groupColumn);
@@ -359,6 +365,39 @@ public final class SqlSession {
       }
       if (status.isOk()) {
         status = cursor.claimGroupCount(this, implicit, groupColumn, valueIndex);
+      }
+      if (status.isOk()) {
+        scanActive = true;
+      } else if (implicit) {
+        session.abort(outcome);
+      }
+      return status;
+    }
+    if (status.isOk() && command.type() == SqlCommandType.JOIN_SCAN) {
+      boolean implicit = !transactionActive;
+      if (implicit) {
+        status = session.begin(IsolationLevel.READ_COMMITTED);
+      }
+      if (status.isOk()) {
+        status = session.resolveTable(command.tableName(), table);
+      }
+      if (status.isOk()) {
+        status = session.resolveTable(command.joinTableName(), joinTable);
+      }
+      if (status.isOk()) {
+        status = bindJoin();
+      }
+      if (status.isOk()) {
+        status = session.beginScan(table, cursor.relational());
+      }
+      if (status.isOk()) {
+        status = cursor.claimJoin(
+            this,
+            implicit,
+            table.findColumn(command.joinOuterColumnName()),
+            joinTable.findColumn(command.joinInnerColumnName()),
+            projectedColumns,
+            projectedColumnCount);
       }
       if (status.isOk()) {
         scanActive = true;
@@ -490,6 +529,9 @@ public final class SqlSession {
     if (cursor.groupCount()) {
       return nextGroupCount(cursor, result);
     }
+    if (cursor.join()) {
+      return nextJoin(cursor, result);
+    }
     StatusCode status = StatusCode.OK;
     while (status.isOk()) {
       long primaryKey;
@@ -536,6 +578,12 @@ public final class SqlSession {
       return index == 0
           ? table.columnName(cursor.groupColumn())
           : index == 1 ? COUNT_COLUMN_NAME : null;
+    }
+    if (cursor.join()) {
+      int projection = cursor.projectedColumn(index);
+      return projection >= 0
+          ? table.columnName(projection)
+          : joinTable.columnName(-projection - 1);
     }
     int column = cursor.projectedColumn(index);
     return column < 0 ? null : table.columnName(column);
@@ -834,6 +882,11 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < count; index++) {
+      if (!command.isSelectAll()
+          && command.columnTableName(index).length() > 0
+          && !sameName(command.columnTableName(index), command.tableName())) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       int column = command.isSelectAll()
           ? index : table.findColumn(command.columnName(index));
       if (column < 0) {
@@ -847,6 +900,41 @@ public final class SqlSession {
       projectedColumns[index] = column;
     }
     projectedColumnCount = count;
+    return StatusCode.OK;
+  }
+
+  private StatusCode bindJoin() {
+    if (sameName(command.tableName(), command.joinTableName())) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int outerJoinColumn = table.findColumn(command.joinOuterColumnName());
+    int innerJoinColumn = joinTable.findColumn(command.joinInnerColumnName());
+    if (outerJoinColumn < 0
+        || innerJoinColumn < 0
+        || innerJoinColumn > 0 && !joinTable.hasUniqueIndexOn(innerJoinColumn)
+        || command.columnCount() <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < command.columnCount(); index++) {
+      int descriptor;
+      if (sameName(command.columnTableName(index), command.tableName())) {
+        int column = table.findColumn(command.columnName(index));
+        if (column < 0) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        descriptor = column;
+      } else if (sameName(command.columnTableName(index), command.joinTableName())) {
+        int column = joinTable.findColumn(command.columnName(index));
+        if (column < 0) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        descriptor = -column - 1;
+      } else {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      projectedColumns[index] = descriptor;
+    }
+    projectedColumnCount = command.columnCount();
     return StatusCode.OK;
   }
 
@@ -954,6 +1042,44 @@ public final class SqlSession {
     return StatusCode.OK;
   }
 
+  private StatusCode nextJoin(SqlScanCursor cursor, SqlScanRowResult result) {
+    while (true) {
+      StatusCode status = session.nextScan(cursor.relational(), aggregateRow);
+      if (!status.isOk()) {
+        return status;
+      }
+      long outerKey = aggregateRow.key();
+      HeapRowResult outerRow = aggregateRow.row();
+      long joinValue = readColumn(outerKey, outerRow, cursor.joinOuterColumn());
+      long innerKey = joinValue;
+      HeapRowResult innerRow = fetched;
+      if (cursor.joinInnerColumn() == 0) {
+        status = session.fetch(joinTable, joinValue, fetched);
+      } else {
+        status = session.fetchByUniqueValue(
+            joinTable, cursor.joinInnerColumn(), joinValue, indexed);
+        innerKey = indexed.key();
+        innerRow = indexed.row();
+      }
+      if (status == StatusCode.CONFLICT
+          || status == StatusCode.INVALID_EXTERNAL_INPUT) {
+        continue;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      for (int index = 0; index < cursor.projectedColumnCount(); index++) {
+        int projection = cursor.projectedColumn(index);
+        projectedValues[index] = projection >= 0
+            ? readColumn(outerKey, outerRow, projection)
+            : readColumn(innerKey, innerRow, -projection - 1);
+      }
+      result.set(outerKey, projectedValues, cursor.projectedColumnCount());
+      cursor.rowReturned();
+      return StatusCode.OK;
+    }
+  }
+
   private StatusCode nextGroupValue(SqlScanCursor cursor) {
     StatusCode status;
     long primaryKey;
@@ -974,6 +1100,23 @@ public final class SqlSession {
           ? primaryKey : source.getLong((column - 1) * Long.BYTES);
     }
     return status;
+  }
+
+  private static long readColumn(long primaryKey, HeapRowResult source, int column) {
+    return column == 0
+        ? primaryKey : source.getLong((column - 1) * Long.BYTES);
+  }
+
+  private static boolean sameName(CharSequence left, CharSequence right) {
+    if (left.length() != right.length()) {
+      return false;
+    }
+    for (int index = 0; index < left.length(); index++) {
+      if (left.charAt(index) != right.charAt(index)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private StatusCode projectRow(

@@ -132,6 +132,21 @@ final class SqlParserTest {
         parser.parse("SELECT key FROM accounts ORDER BY key DESC", command));
     assertEquals(
         StatusCode.OK,
+        parser.parse(
+            "SELECT accounts.key, regions.code FROM accounts "
+                + "JOIN regions ON accounts.region=regions.id",
+            command));
+    assertEquals(SqlCommandType.JOIN_SCAN, command.type());
+    assertName("accounts", command.tableName());
+    assertName("regions", command.joinTableName());
+    assertName("region", command.joinOuterColumnName());
+    assertName("id", command.joinInnerColumnName());
+    assertName("accounts", command.columnTableName(0));
+    assertName("key", command.columnName(0));
+    assertName("regions", command.columnTableName(1));
+    assertName("code", command.columnName(1));
+    assertEquals(
+        StatusCode.OK,
         parser.parse("SELECT region, key, value FROM accounts WHERE key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertEquals(3, command.columnCount());

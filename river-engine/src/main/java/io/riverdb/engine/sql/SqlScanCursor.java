@@ -10,6 +10,7 @@ public final class SqlScanCursor {
   private SqlSession owner;
   private boolean aggregate;
   private boolean groupCount;
+  private boolean join;
   private boolean groupLookahead;
   private boolean groupInputExhausted;
   private boolean aggregateTransactionActive;
@@ -17,6 +18,8 @@ public final class SqlScanCursor {
   private long aggregateCommitSequence;
   private long groupLookaheadValue;
   private int groupColumn = -1;
+  private int joinOuterColumn = -1;
+  private int joinInnerColumn = -1;
   private boolean implicitTransaction;
   private boolean valueIndex;
   private int filterColumn = -1;
@@ -35,6 +38,7 @@ public final class SqlScanCursor {
     owner = null;
     aggregate = false;
     groupCount = false;
+    join = false;
     groupLookahead = false;
     groupInputExhausted = false;
     aggregateTransactionActive = false;
@@ -42,6 +46,8 @@ public final class SqlScanCursor {
     aggregateCommitSequence = 0;
     groupLookaheadValue = 0;
     groupColumn = -1;
+    joinOuterColumn = -1;
+    joinInnerColumn = -1;
     implicitTransaction = false;
     valueIndex = false;
     filterColumn = -1;
@@ -128,6 +134,36 @@ public final class SqlScanCursor {
     return StatusCode.OK;
   }
 
+  StatusCode claimJoin(
+      SqlSession session,
+      boolean implicit,
+      int outerColumn,
+      int innerColumn,
+      int[] projections,
+      int projectionCount) {
+    if (active
+        || session == null
+        || outerColumn < 0
+        || innerColumn < 0
+        || projections == null
+        || projectionCount <= 0
+        || projectionCount > projectedColumns.length) {
+      return StatusCode.CONFLICT;
+    }
+    owner = session;
+    implicitTransaction = implicit;
+    join = true;
+    joinOuterColumn = outerColumn;
+    joinInnerColumn = innerColumn;
+    projectedColumnCount = projectionCount;
+    for (int index = 0; index < projectionCount; index++) {
+      projectedColumns[index] = projections[index];
+    }
+    active = true;
+    rowsReturned = 0;
+    return StatusCode.OK;
+  }
+
   boolean isOwnedBy(SqlSession session) {
     return active && owner == session;
   }
@@ -146,6 +182,18 @@ public final class SqlScanCursor {
 
   boolean groupCount() {
     return groupCount;
+  }
+
+  boolean join() {
+    return join;
+  }
+
+  int joinOuterColumn() {
+    return joinOuterColumn;
+  }
+
+  int joinInnerColumn() {
+    return joinInnerColumn;
   }
 
   int groupColumn() {

@@ -60,6 +60,14 @@ final class RiverDriverTest {
           statement.executeUpdate(
               "INSERT INTO accounts VALUES "
                   + "(1, 100, 7), (2, 200, 7), (3, 300, 8)"));
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE regions (id BIGINT PRIMARY KEY, code BIGINT)"));
+      assertEquals(
+          2,
+          statement.executeUpdate(
+              "INSERT INTO regions VALUES (7, 7000), (8, 8000)"));
       SQLException missingOrderIndex = assertThrows(
           SQLException.class,
           () -> statement.executeQuery(
@@ -95,6 +103,18 @@ final class RiverDriverTest {
         assertEquals(8, grouped.getLong(1));
         assertEquals(1, grouped.getLong(2));
         assertFalse(grouped.next());
+      }
+      try (ResultSet joined = statement.executeQuery(
+          "SELECT accounts.id, regions.code FROM accounts "
+              + "JOIN regions ON accounts.region=regions.id")) {
+        assertEquals("id", joined.getMetaData().getColumnLabel(1));
+        assertEquals("code", joined.getMetaData().getColumnLabel(2));
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(joined.next());
+          assertEquals(expected, joined.getLong("id"));
+          assertEquals(expected < 3 ? 7000 : 8000, joined.getLong("code"));
+        }
+        assertFalse(joined.next());
       }
 
       try (ResultSet rows = statement.executeQuery(

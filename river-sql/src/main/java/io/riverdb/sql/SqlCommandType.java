@@ -8,6 +8,7 @@ public enum SqlCommandType {
   SELECT,
   COUNT,
   GROUP_COUNT,
+  JOIN_SCAN,
   SCAN,
   UPDATE,
   DELETE,

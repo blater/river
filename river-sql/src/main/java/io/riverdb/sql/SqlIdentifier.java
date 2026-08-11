@@ -15,6 +15,13 @@ public final class SqlIdentifier implements CharSequence {
     characters[length++] = character;
   }
 
+  void copyFrom(CharSequence source) {
+    reset();
+    for (int index = 0; index < source.length(); index++) {
+      characters[length++] = source.charAt(index);
+    }
+  }
+
   @Override
   public int length() {
     return length;

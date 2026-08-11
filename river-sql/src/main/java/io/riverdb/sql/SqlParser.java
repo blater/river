@@ -6,6 +6,7 @@ import io.riverdb.base.error.StatusCode;
 public final class SqlParser {
   private final LongResult numberResult = new LongResult();
   private final LongRow rowResult = new LongRow();
+  private final SqlIdentifier identifierScratch = new SqlIdentifier();
   private int offset;
 
   public StatusCode parse(String sql, SqlCommand result) {
@@ -200,7 +201,7 @@ public final class SqlParser {
           result.setSelectAll();
           status = StatusCode.OK;
         } else {
-          status = columnIdentifier(sql, result);
+          status = selectColumnIdentifier(sql, result);
           if (status.isOk() && consumeCharacter(sql, ',')) {
             if (consumeKeyword(sql, "COUNT")) {
               type = SqlCommandType.GROUP_COUNT;
@@ -212,9 +213,9 @@ public final class SqlParser {
                 status = requireCharacter(sql, ')');
               }
             } else {
-              status = columnIdentifier(sql, result);
+              status = selectColumnIdentifier(sql, result);
               while (status.isOk() && consumeCharacter(sql, ',')) {
-                status = columnIdentifier(sql, result);
+                status = selectColumnIdentifier(sql, result);
               }
             }
           }
@@ -225,6 +226,36 @@ public final class SqlParser {
         if (status.isOk()) {
           status = identifier(sql, result.writableTableName());
         }
+        if (status.isOk()
+            && type != SqlCommandType.GROUP_COUNT
+            && consumeKeyword(sql, "JOIN")) {
+          type = SqlCommandType.JOIN_SCAN;
+          status = identifier(sql, result.writableJoinTableName());
+          if (status.isOk()) {
+            status = requireKeyword(sql, "ON");
+          }
+          if (status.isOk()) {
+            status = matchingIdentifier(sql, result.tableName());
+          }
+          if (status.isOk()) {
+            status = requireCharacter(sql, '.');
+          }
+          if (status.isOk()) {
+            status = identifier(sql, result.writableJoinOuterColumnName());
+          }
+          if (status.isOk()) {
+            status = requireCharacter(sql, '=');
+          }
+          if (status.isOk()) {
+            status = matchingIdentifier(sql, result.joinTableName());
+          }
+          if (status.isOk()) {
+            status = requireCharacter(sql, '.');
+          }
+          if (status.isOk()) {
+            status = identifier(sql, result.writableJoinInnerColumnName());
+          }
+        }
         if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
           status = requireKeyword(sql, "GROUP");
           if (status.isOk()) {
@@ -233,7 +264,9 @@ public final class SqlParser {
           if (status.isOk()) {
             status = matchingIdentifier(sql, result.firstColumnName());
           }
-        } else if (status.isOk() && consumeKeyword(sql, "WHERE")) {
+        } else if (status.isOk()
+            && type != SqlCommandType.JOIN_SCAN
+            && consumeKeyword(sql, "WHERE")) {
           status = identifier(sql, result.writablePredicateColumnName());
           if (status.isOk() && consumeCharacter(sql, '=')) {
             type = SqlCommandType.SELECT;
@@ -265,7 +298,9 @@ public final class SqlParser {
             }
           }
         }
-        if (status.isOk() && consumeKeyword(sql, "ORDER")) {
+        if (status.isOk()
+            && type != SqlCommandType.JOIN_SCAN
+            && consumeKeyword(sql, "ORDER")) {
           status = requireKeyword(sql, "BY");
           if (status.isOk()) {
             status = type == SqlCommandType.GROUP_COUNT
@@ -422,6 +457,24 @@ public final class SqlParser {
   private StatusCode columnIdentifier(String sql, SqlCommand result) {
     SqlIdentifier column = result.writableNextColumnName();
     return column == null ? StatusCode.RESOURCE_EXHAUSTED : identifier(sql, column);
+  }
+
+  private StatusCode selectColumnIdentifier(String sql, SqlCommand result) {
+    identifierScratch.reset();
+    StatusCode status = identifier(sql, identifierScratch);
+    SqlIdentifier column = status.isOk() ? result.writableNextColumnName() : null;
+    if (!status.isOk()) {
+      return status;
+    }
+    if (column == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (consumeCharacter(sql, '.')) {
+      result.writableColumnTableName(result.columnCount() - 1).copyFrom(identifierScratch);
+      return identifier(sql, column);
+    }
+    column.copyFrom(identifierScratch);
+    return StatusCode.OK;
   }
 
   private StatusCode identifier(String sql, SqlIdentifier result) {

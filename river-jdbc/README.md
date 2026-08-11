@@ -12,6 +12,9 @@ primary-key or existing secondary-index order; River rejects an unindexed order
 instead of silently materializing an unbounded heap sort.
 `SELECT column, COUNT(*) ... GROUP BY column` likewise streams consecutive
 groups from primary-key or secondary-index order without a hash table.
+Qualified inner equijoins stream the outer table and probe an inner primary or
+unique index for each row. Missing inner rows are skipped; joins that would
+require an unbounded hash build are rejected.
 
 `PreparedStatement` currently accepts bounded positional BIGINT parameters.
 Values are rendered directly into a statement-owned character buffer as
