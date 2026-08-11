@@ -7,16 +7,22 @@ import io.riverdb.sql.SqlCommandType;
 
 /** Caller-owned capability for one ordered SQL table scan. */
 public final class SqlScanCursor {
+  static final int MAXIMUM_PLAN_STEPS = 8;
+
   private final RelationalScanCursor relational = new RelationalScanCursor();
   private final RelationalScanCursor joinInnerRelational = new RelationalScanCursor();
   private final long[] joinOuterProjectedValues =
       new long[TableSchema.MAXIMUM_COLUMNS];
+  private final long[] planOperators = new long[MAXIMUM_PLAN_STEPS];
+  private final long[] planDetails = new long[MAXIMUM_PLAN_STEPS];
   private SqlSession owner;
   private boolean aggregate;
   private boolean groupAggregate;
   private boolean distinct;
   private boolean join;
   private boolean sorted;
+  private boolean explain;
+  private boolean explainAnalyzed;
   private boolean joinInnerScanActive;
   private boolean joinInnerUnique;
   private boolean groupLookahead;
@@ -29,6 +35,8 @@ public final class SqlScanCursor {
   private boolean aggregateVarchar;
   private long aggregateValue;
   private long aggregateCommitSequence;
+  private long explainCommitSequence;
+  private long explainActualRows;
   private long groupLookaheadValue;
   private long groupLookaheadAggregateValue;
   private boolean groupLookaheadAggregateNull;
@@ -42,6 +50,8 @@ public final class SqlScanCursor {
   private long joinOuterNullMask;
   private int sortedRowCount;
   private int sortedRowIndex;
+  private int planStepCount;
+  private int planStepIndex;
   private boolean implicitTransaction;
   private boolean valueIndex;
   private long maximumRows = Long.MAX_VALUE;
@@ -60,6 +70,8 @@ public final class SqlScanCursor {
     distinct = false;
     join = false;
     sorted = false;
+    explain = false;
+    explainAnalyzed = false;
     joinInnerScanActive = false;
     joinInnerUnique = false;
     groupLookahead = false;
@@ -72,6 +84,8 @@ public final class SqlScanCursor {
     aggregateVarchar = false;
     aggregateValue = 0;
     aggregateCommitSequence = 0;
+    explainCommitSequence = 0;
+    explainActualRows = 0;
     groupLookaheadValue = 0;
     groupLookaheadAggregateValue = 0;
     groupLookaheadAggregateNull = false;
@@ -85,6 +99,8 @@ public final class SqlScanCursor {
     joinOuterNullMask = 0;
     sortedRowCount = 0;
     sortedRowIndex = 0;
+    planStepCount = 0;
+    planStepIndex = 0;
     implicitTransaction = false;
     valueIndex = false;
     maximumRows = Long.MAX_VALUE;
@@ -288,6 +304,43 @@ public final class SqlScanCursor {
     return StatusCode.OK;
   }
 
+  StatusCode claimExplain(
+      SqlSession session,
+      boolean analyzed,
+      boolean transactionActive,
+      long commitSequence,
+      long actualRows,
+      long[] operators,
+      long[] details,
+      int stepCount) {
+    if (active
+        || session == null
+        || commitSequence < 0
+        || actualRows < 0
+        || operators == null
+        || details == null
+        || stepCount <= 0
+        || stepCount > planOperators.length) {
+      return StatusCode.CONFLICT;
+    }
+    owner = session;
+    explain = true;
+    explainAnalyzed = analyzed;
+    aggregateTransactionActive = transactionActive;
+    explainCommitSequence = commitSequence;
+    explainActualRows = actualRows;
+    planStepCount = stepCount;
+    planStepIndex = 0;
+    projectedColumnCount = 3;
+    for (int index = 0; index < stepCount; index++) {
+      planOperators[index] = operators[index];
+      planDetails[index] = details[index];
+    }
+    active = true;
+    rowsReturned = 0;
+    return StatusCode.OK;
+  }
+
   boolean isOwnedBy(SqlSession session) {
     return active && owner == session;
   }
@@ -318,6 +371,38 @@ public final class SqlScanCursor {
 
   boolean sorted() {
     return sorted;
+  }
+
+  boolean explain() {
+    return explain;
+  }
+
+  boolean explainAnalyzed() {
+    return explainAnalyzed;
+  }
+
+  int currentPlanStep() {
+    return planStepIndex < planStepCount ? planStepIndex : -1;
+  }
+
+  long planOperator(int index) {
+    return planOperators[index];
+  }
+
+  long planDetail(int index) {
+    return planDetails[index];
+  }
+
+  void advancePlanStep() {
+    planStepIndex++;
+  }
+
+  long explainActualRows() {
+    return explainActualRows;
+  }
+
+  long explainCommitSequence() {
+    return explainCommitSequence;
   }
 
   int currentSortedRow() {

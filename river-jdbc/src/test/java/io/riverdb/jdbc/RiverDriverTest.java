@@ -1883,6 +1883,50 @@ final class RiverDriverTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void streamsExplainAndAnalyzePlansThroughJdbc(@TempDir Path root)
+      throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      statement.executeUpdate(
+          "CREATE TABLE planned "
+              + "(id BIGINT PRIMARY KEY, category BIGINT, amount BIGINT)");
+      statement.executeUpdate(
+          "CREATE INDEX planned_category ON planned(category)");
+      statement.executeUpdate(
+          "INSERT INTO planned VALUES (1,7,10),(2,7,20),(3,8,30)");
+      try (ResultSet plan = statement.executeQuery(
+          "EXPLAIN SELECT id FROM planned WHERE category=7")) {
+        ResultSetMetaData metadata = plan.getMetaData();
+        assertEquals(3, metadata.getColumnCount());
+        assertEquals("operator", metadata.getColumnName(1));
+        assertEquals("detail", metadata.getColumnName(2));
+        assertEquals("rows", metadata.getColumnName(3));
+        assertTrue(plan.next());
+        assertEquals("filter", plan.getString("operator"));
+        assertEquals(1, plan.getLong("detail"));
+        assertNull(plan.getObject("rows"));
+        assertTrue(plan.next());
+        assertEquals("index", plan.getString("operator"));
+        assertFalse(plan.next());
+      }
+      try (ResultSet plan = statement.executeQuery(
+          "EXPLAIN ANALYZE SELECT id FROM planned WHERE category=7")) {
+        assertTrue(plan.next());
+        assertEquals("filter", plan.getString(1));
+        assertEquals(2, plan.getLong(3));
+      }
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static LoopbackRiverServer start(RiverDatabase database) {
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, result));

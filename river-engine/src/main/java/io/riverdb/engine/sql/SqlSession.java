@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.PackedText;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
@@ -36,6 +37,21 @@ public final class SqlSession {
   private static final String MIN_COLUMN_NAME = "min";
   private static final String MAX_COLUMN_NAME = "max";
   private static final String NULL_COLUMN_NAME = "null";
+  private static final String PLAN_OPERATOR_COLUMN_NAME = "operator";
+  private static final String PLAN_DETAIL_COLUMN_NAME = "detail";
+  private static final String PLAN_ROWS_COLUMN_NAME = "rows";
+  private static final long PLAN_AGGREGATE = PackedText.pack("agg");
+  private static final long PLAN_DISTINCT = PackedText.pack("dedupe");
+  private static final long PLAN_FILTER = PackedText.pack("filter");
+  private static final long PLAN_GROUP = PackedText.pack("group");
+  private static final long PLAN_INDEX = PackedText.pack("index");
+  private static final long PLAN_JOIN = PackedText.pack("join");
+  private static final long PLAN_LIMIT = PackedText.pack("limit");
+  private static final long PLAN_LOOKUP = PackedText.pack("lookup");
+  private static final long PLAN_NESTED = PackedText.pack("nested");
+  private static final long PLAN_PRIMARY = PackedText.pack("primary");
+  private static final long PLAN_SORT = PackedText.pack("sort");
+  private static final long PLAN_TABLE = PackedText.pack("table");
   private static final int NULL_PROJECTION = Integer.MIN_VALUE;
   private static final int NESTED_SCALAR = 1;
   private static final int NESTED_EXISTENCE = 2;
@@ -112,6 +128,8 @@ public final class SqlSession {
       new long[MAXIMUM_MEMBERSHIP_VALUES];
   private long[] membershipCandidates = membershipValues;
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final long[] planOperators = new long[SqlScanCursor.MAXIMUM_PLAN_STEPS];
+  private final long[] planDetails = new long[SqlScanCursor.MAXIMUM_PLAN_STEPS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final long[] sortRunOffsets = new long[MAXIMUM_SORT_RUNS];
   private final long[] sortRunReadOffsets = new long[MAXIMUM_SORT_RUNS];
@@ -129,6 +147,7 @@ public final class SqlSession {
   private final ValueIndexLookupResult joinOuterIndexed = new ValueIndexLookupResult();
   private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
+  private final SqlScanRowResult explainRow = new SqlScanRowResult();
   private final RelationalScanCursor scalarCursor = new RelationalScanCursor();
   private final RelationalScanResult scalarRow = new RelationalScanResult();
   private final HeapRowResult correlatedOuterRow = new HeapRowResult();
@@ -182,6 +201,10 @@ public final class SqlSession {
   private int sortedRowCount;
   private int nestedProjection;
   private int membershipValueCount;
+  private int planStepCount;
+  private int planAccessColumn;
+  private boolean explainOnly;
+  private boolean planSort;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -259,6 +282,15 @@ public final class SqlSession {
     if (!status.isOk()) {
       return status;
     }
+    return executeParsed(result);
+  }
+
+  private StatusCode executeParsed(SqlExecutionResult result) {
+    result.reset();
+    if (transactionActive) {
+      result.setTransaction(true, session.visibleCommitSequence());
+    }
+    StatusCode status = StatusCode.OK;
     if (scanActive || command.type() == SqlCommandType.SCAN) {
       return StatusCode.CONFLICT;
     }
@@ -825,12 +857,72 @@ public final class SqlSession {
     recursiveNestedChain = false;
     recursiveRootCorrelated = false;
     StatusCode status = parser.parseQuery(sql, query, command);
+    if (!status.isOk()) {
+      return status;
+    }
+    explainOnly = query.isExplain() && !query.isAnalyze();
+    planSort = false;
+    planAccessColumn = -1;
+    if (query.isExplain()
+        && command.type() == SqlCommandType.NEXT_SEQUENCE_VALUE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (explainOnly && isScalarAggregate(command.type())) {
+      return beginScalarAggregateExplain(cursor);
+    }
+    status = beginParsedScan(cursor);
+    if (explainOnly && status.isOk()) {
+      return finishOpenedExplain(cursor, false, 0);
+    }
+    if (!query.isAnalyze() || !status.isOk()) {
+      return status;
+    }
+    describePlan(cursor);
+    long actualRows = 0;
+    while ((status = nextScan(cursor, explainRow)) == StatusCode.OK) {
+      actualRows++;
+    }
+    if (status == StatusCode.CONFLICT) {
+      status = StatusCode.OK;
+    }
+    StatusCode close = closeScan(cursor, aggregateExecution);
+    if (status.isOk()) {
+      status = close;
+    }
+    if (status.isOk()) {
+      status = cursor.reset();
+    }
+    if (status.isOk()) {
+      status = cursor.claimExplain(
+          this,
+          true,
+          aggregateExecution.transactionActive(),
+          aggregateExecution.commitSequence(),
+          actualRows,
+          planOperators,
+          planDetails,
+          planStepCount);
+    }
+    if (status.isOk()) {
+      scanActive = true;
+    }
+    return status;
+  }
+
+  private StatusCode beginParsedScan(SqlScanCursor cursor) {
+    StatusCode status = StatusCode.OK;
     if (status.isOk()
         && (command.type() == SqlCommandType.COUNT
             || command.type() == SqlCommandType.COUNT_VALUE
             || command.type() == SqlCommandType.NEXT_SEQUENCE_VALUE
             || isValueAggregate(command.type()))) {
-      status = execute(sql, aggregateExecution);
+      status = executeParsed(aggregateExecution);
+      if (status.isOk()) {
+        planAccessColumn = accessPredicate >= 0
+            ? predicateColumn == 0 || table.hasIndexOn(predicateColumn)
+                ? predicateColumn : -1
+            : -1;
+      }
       if (status.isOk()) {
         status = cursor.claimAggregate(
             this,
@@ -895,6 +987,8 @@ public final class SqlSession {
               && table.hasIndexOn(groupColumn)
               && !table.isNullable(groupColumn);
       boolean inputValueIndex = orderedInput && groupColumn > 0;
+      planSort = !orderedInput;
+      planAccessColumn = orderedInput ? groupColumn : -1;
       int sortedInputRows = -1;
       if (status.isOk() && orderedInput) {
         status = beginOrderedAggregateScan(
@@ -907,6 +1001,8 @@ public final class SqlSession {
                 && table.hasIndexOn(predicateColumn)
             ? predicateColumn : -1;
         inputValueIndex = scanIndexColumn > 0;
+        planAccessColumn = inputValueIndex
+            ? scanIndexColumn : bounded && predicateColumn == 0 ? 0 : -1;
         if (equality
             && (predicateColumn == 0 || inputValueIndex)
             && accessValue() == Long.MAX_VALUE) {
@@ -927,7 +1023,7 @@ public final class SqlSession {
         } else {
           status = session.beginScan(table, cursor.relational());
         }
-        if (status.isOk()) {
+        if (status.isOk() && !explainOnly) {
           projectedColumns[0] = groupColumn;
           projectedColumns[1] = aggregateColumn < 0
               ? NULL_PROJECTION : aggregateColumn;
@@ -984,6 +1080,8 @@ public final class SqlSession {
               && table.hasIndexOn(distinctColumn)
               && !table.isNullable(distinctColumn);
       boolean inputValueIndex = orderedInput && distinctColumn > 0;
+      planSort = !orderedInput;
+      planAccessColumn = orderedInput ? distinctColumn : -1;
       int sortedInputRows = -1;
       if (status.isOk() && orderedInput) {
         status = beginOrderedAggregateScan(
@@ -996,6 +1094,8 @@ public final class SqlSession {
                 && table.hasIndexOn(predicateColumn)
             ? predicateColumn : -1;
         inputValueIndex = scanIndexColumn > 0;
+        planAccessColumn = inputValueIndex
+            ? scanIndexColumn : bounded && predicateColumn == 0 ? 0 : -1;
         if (equality
             && (predicateColumn == 0 || inputValueIndex)
             && accessValue() == Long.MAX_VALUE) {
@@ -1016,7 +1116,7 @@ public final class SqlSession {
         } else {
           status = session.beginScan(table, cursor.relational());
         }
-        if (status.isOk()) {
+        if (status.isOk() && !explainOnly) {
           projectedColumns[0] = distinctColumn;
           projectedColumnCount = 1;
           status = materializeSortedScan(
@@ -1063,6 +1163,7 @@ public final class SqlSession {
           && predicateColumn > 0
           && table.hasIndexOn(predicateColumn);
       boolean primaryRange = predicate && predicateColumn == 0;
+      planAccessColumn = indexedOuter ? predicateColumn : primaryRange ? 0 : -1;
       int outerJoinColumn = status.isOk()
           ? table.findColumn(command.joinOuterColumnName()) : -1;
       int innerJoinColumn = status.isOk()
@@ -1123,16 +1224,20 @@ public final class SqlSession {
         && (query.hasScalarPredicate()
             || query.hasExistencePredicate()
             || query.hasMembershipPredicate())) {
-      status = prepareNestedChain();
+      status = explainOnly ? StatusCode.OK : prepareNestedChain();
     } else if (status.isOk() && query.hasScalarPredicate()) {
-      status = evaluateScalarPredicate();
+      status = explainOnly ? StatusCode.OK : evaluateScalarPredicate();
     } else if (status.isOk() && query.hasExistencePredicate()) {
-      status = evaluateExistencePredicate();
+      status = explainOnly ? StatusCode.OK : evaluateExistencePredicate();
     } else if (status.isOk() && query.hasMembershipPredicate()) {
-      status = evaluateMembershipPredicate();
+      status = explainOnly ? StatusCode.OK : evaluateMembershipPredicate();
     }
     if (status.isOk()) {
       status = bindDataCommand();
+    }
+    if (status.isOk() && explainOnly && query.blockCount() > 1) {
+      accessPredicate = -1;
+      predicateColumn = -1;
     }
     int orderColumn = status.isOk() && command.isOrdered()
         ? resolveOrderColumn() : -1;
@@ -1147,6 +1252,7 @@ public final class SqlSession {
             || orderColumn > 0
                 && (!table.hasIndexOn(orderColumn)
                     || table.isNullable(orderColumn)));
+    planSort = materializedSort;
     boolean bounded = status.isOk() && accessPredicate >= 0;
     boolean equality = bounded && accessEquality();
     int scanIndexColumn = status.isOk() && command.isOrdered() && !materializedSort
@@ -1154,6 +1260,8 @@ public final class SqlSession {
         : status.isOk() && predicateColumn > 0 && table.hasIndexOn(predicateColumn)
             ? predicateColumn : -1;
     boolean valueIndex = scanIndexColumn > 0;
+    planAccessColumn = valueIndex
+        ? scanIndexColumn : bounded && predicateColumn == 0 ? 0 : -1;
     if (status.isOk()
         && equality
         && predicateColumn == 0
@@ -1185,7 +1293,7 @@ public final class SqlSession {
       }
     }
     if (status.isOk()) {
-      if (materializedSort) {
+      if (materializedSort && !explainOnly) {
         status = materializeSortedScan(cursor, valueIndex, orderColumn);
         if (status.isOk()) {
           status = cursor.claimSorted(
@@ -1213,6 +1321,127 @@ public final class SqlSession {
     return failScanStart(status, cursor, implicit);
   }
 
+  private StatusCode beginScalarAggregateExplain(SqlScanCursor cursor) {
+    boolean implicit = !transactionActive;
+    StatusCode status = implicit
+        ? session.begin(IsolationLevel.READ_COMMITTED) : StatusCode.OK;
+    boolean active = status.isOk() && implicit;
+    if (status.isOk()) {
+      status = beginStatement();
+    }
+    if (status.isOk()) {
+      status = session.resolveTable(command.tableName(), table);
+    }
+    if (status.isOk()) {
+      status = bindDataCommand();
+    }
+    if (status.isOk()) {
+      planAccessColumn = accessPredicate >= 0
+          ? predicateColumn == 0 || table.hasIndexOn(predicateColumn)
+              ? predicateColumn : -1
+          : -1;
+      describePlan(null);
+    }
+    status = completeStatement(status);
+    long commitSequence = transactionActive
+        ? session.visibleCommitSequence() : 0;
+    if (status.isOk() && implicit) {
+      status = session.commit(outcome);
+      active = false;
+      commitSequence = status.isOk() ? outcome.commitSequence() : 0;
+    } else if (!status.isOk() && active) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        status = abort;
+      }
+    }
+    if (status.isOk()) {
+      status = cursor.claimExplain(
+          this,
+          false,
+          transactionActive,
+          commitSequence,
+          0,
+          planOperators,
+          planDetails,
+          planStepCount);
+    }
+    if (status.isOk()) {
+      scanActive = true;
+    }
+    return status;
+  }
+
+  private StatusCode finishOpenedExplain(
+      SqlScanCursor cursor,
+      boolean analyzed,
+      long actualRows) {
+    describePlan(cursor);
+    StatusCode status = closeScan(cursor, aggregateExecution);
+    if (status.isOk()) {
+      status = cursor.reset();
+    }
+    if (status.isOk()) {
+      status = cursor.claimExplain(
+          this,
+          analyzed,
+          aggregateExecution.transactionActive(),
+          aggregateExecution.commitSequence(),
+          actualRows,
+          planOperators,
+          planDetails,
+          planStepCount);
+    }
+    if (status.isOk()) {
+      scanActive = true;
+    }
+    return status;
+  }
+
+  private void describePlan(SqlScanCursor cursor) {
+    planStepCount = 0;
+    if (command.rowLimit() != Long.MAX_VALUE) {
+      addPlanStep(PLAN_LIMIT, command.rowLimit());
+    }
+    if (isScalarAggregate(command.type())) {
+      addPlanStep(
+          PLAN_AGGREGATE,
+          command.type() == SqlCommandType.COUNT ? -1 : projectedColumns[0]);
+    } else if (isGroupAggregate(command.type())) {
+      addPlanStep(
+          PLAN_GROUP, cursor == null ? -1 : cursor.groupAggregateColumn());
+    } else if (command.type() == SqlCommandType.DISTINCT_SCAN) {
+      addPlanStep(PLAN_DISTINCT, cursor == null ? -1 : cursor.groupColumn());
+    } else if (command.type() == SqlCommandType.JOIN_SCAN) {
+      addPlanStep(PLAN_JOIN, cursor == null ? -1 : cursor.joinOuterColumn());
+    }
+    if (query.blockCount() > 1) {
+      addPlanStep(PLAN_NESTED, query.blockCount());
+    }
+    if (planSort) {
+      addPlanStep(PLAN_SORT, command.isDescendingOrder() ? -1 : 1);
+    }
+    if (predicateCount > 0) {
+      addPlanStep(PLAN_FILTER, predicateCount);
+    }
+    addPlanStep(
+        planAccessColumn > 0
+            ? PLAN_INDEX : planAccessColumn == 0 ? PLAN_PRIMARY : PLAN_TABLE,
+        planAccessColumn);
+    if (command.type() == SqlCommandType.JOIN_SCAN) {
+      addPlanStep(
+          PLAN_LOOKUP, cursor == null ? -1 : cursor.joinInnerColumn());
+    }
+  }
+
+  private void addPlanStep(long operator, long detail) {
+    if (planStepCount < planOperators.length) {
+      planOperators[planStepCount] = operator;
+      planDetails[planStepCount] = detail;
+      planStepCount++;
+    }
+  }
+
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
     if (cursor == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1224,6 +1453,20 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     result.reset();
+    if (cursor.explain()) {
+      int step = cursor.currentPlanStep();
+      if (step < 0) {
+        return StatusCode.CONFLICT;
+      }
+      projectedValues[0] = cursor.planOperator(step);
+      projectedValues[1] = cursor.planDetail(step);
+      projectedValues[2] = cursor.explainActualRows();
+      long nullMask = cursor.explainAnalyzed() && step == 0 ? 0 : 1L << 2;
+      result.set(step, projectedValues, nullMask, 1, 3);
+      cursor.advancePlanStep();
+      cursor.rowReturned();
+      return StatusCode.OK;
+    }
     if (!cursor.aggregate() && cursor.limitReached()) {
       return StatusCode.CONFLICT;
     }
@@ -1380,6 +1623,12 @@ public final class SqlSession {
     if (cursor == null || !cursor.isOwnedBy(this)) {
       return null;
     }
+    if (cursor.explain()) {
+      return index == 0
+          ? PLAN_OPERATOR_COLUMN_NAME
+          : index == 1
+              ? PLAN_DETAIL_COLUMN_NAME : index == 2 ? PLAN_ROWS_COLUMN_NAME : null;
+    }
     if (cursor.aggregate()) {
       if (index != 0) {
         return null;
@@ -1423,6 +1672,9 @@ public final class SqlSession {
         || index >= cursor.projectedColumnCount()) {
       return false;
     }
+    if (cursor.explain()) {
+      return index == 0;
+    }
     if (cursor.aggregate()) {
       return index == 0 && cursor.aggregateVarchar();
     }
@@ -1464,6 +1716,14 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     result.reset();
+    if (cursor.explain()) {
+      result.setTransaction(
+          cursor.aggregateTransactionActive(),
+          cursor.explainCommitSequence());
+      cursor.complete();
+      scanActive = false;
+      return StatusCode.OK;
+    }
     if (cursor.aggregate()) {
       result.setTransaction(
           cursor.aggregateTransactionActive(),
@@ -1843,6 +2103,12 @@ public final class SqlSession {
     return type == SqlCommandType.SUM
         || type == SqlCommandType.MIN
         || type == SqlCommandType.MAX;
+  }
+
+  private static boolean isScalarAggregate(SqlCommandType type) {
+    return type == SqlCommandType.COUNT
+        || type == SqlCommandType.COUNT_VALUE
+        || isValueAggregate(type);
   }
 
   private static boolean isGroupAggregate(SqlCommandType type) {

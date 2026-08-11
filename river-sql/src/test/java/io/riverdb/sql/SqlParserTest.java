@@ -998,6 +998,37 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesExplainWithoutCopyingTheNestedQueryText() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "EXPLAIN SELECT id FROM events WHERE category=7",
+            query,
+            command));
+    assertTrue(query.isExplain());
+    assertFalse(query.isAnalyze());
+    assertName("events", command.tableName());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            " EXPLAIN ANALYZE SELECT e.id FROM "
+                + "(SELECT id, category FROM events) e WHERE e.category=7 ",
+            query,
+            command));
+    assertTrue(query.isExplain());
+    assertTrue(query.isAnalyze());
+    assertEquals(2, query.blockCount());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery("EXPLAIN", query, command));
+  }
+
+  @Test
   void parsesScalarPredicatesAsBoundedQueryBlocks() {
     SqlParser parser = new SqlParser();
     SqlQuery query = new SqlQuery();

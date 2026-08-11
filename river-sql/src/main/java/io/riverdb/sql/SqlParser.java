@@ -32,33 +32,64 @@ public final class SqlParser {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     query.reset();
-    int derived = findDerivedSource(sql, 0, sql.length());
+    int start = skipExplainPrefix(sql, query);
+    if (start < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int derived = findDerivedSource(sql, start, sql.length());
     if (derived >= 0) {
-      StatusCode status = parseDerivedBlocks(sql, 0, sql.length(), query);
+      StatusCode status = parseDerivedBlocks(sql, start, sql.length(), query);
       return status.isOk() ? query.compileDerived(result) : status;
     }
-    int exists = findExistenceSource(sql, 0, sql.length());
+    int exists = findExistenceSource(sql, start, sql.length());
     if (exists >= 0) {
-      return parseExistencePredicate(sql, exists, query, result);
+      return parseExistencePredicate(sql, start, exists, query, result);
     }
-    int membership = findMembershipSource(sql, 0, sql.length());
+    int membership = findMembershipSource(sql, start, sql.length());
     if (membership >= 0) {
-      return parseMembershipPredicate(sql, membership, query, result);
+      return parseMembershipPredicate(sql, start, membership, query, result);
     }
-    int scalar = findScalarSource(sql, 0, sql.length());
+    int scalar = findScalarSource(sql, start, sql.length());
+    sourceView.set(sql, start, sql.length(), sql.length(), sql.length());
     return scalar < 0
-        ? parseText(sql, result)
-        : parseScalarPredicate(sql, scalar, query, result);
+        ? parseText(sourceView, result)
+        : parseScalarPredicate(sql, start, scalar, query, result);
+  }
+
+  private static int skipExplainPrefix(String sql, SqlQuery query) {
+    int start = skipSpaces(sql, 0);
+    if (!matchesKeyword(sql, start, sql.length(), "EXPLAIN")) {
+      return start;
+    }
+    start = skipSpaces(sql, start + 7);
+    boolean analyze = matchesKeyword(sql, start, sql.length(), "ANALYZE");
+    if (analyze) {
+      start = skipSpaces(sql, start + 7);
+    }
+    if (start >= sql.length()) {
+      return -1;
+    }
+    query.setExplain(analyze);
+    return start;
+  }
+
+  private static int skipSpaces(String sql, int start) {
+    int index = start;
+    while (index < sql.length() && Character.isWhitespace(sql.charAt(index))) {
+      index++;
+    }
+    return index;
   }
 
   private StatusCode parseExistencePredicate(
       String sql,
+      int start,
       int open,
       SqlQuery query,
       SqlCommand result) {
     StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : parseExistenceBlocks(sql, 0, sql.length(), query);
+        : parseExistenceBlocks(sql, start, sql.length(), query);
     return status.isOk()
         ? query.compileExistencePredicate(result, query.existenceNegated()) : status;
   }
@@ -91,12 +122,13 @@ public final class SqlParser {
 
   private StatusCode parseScalarPredicate(
       String sql,
+      int start,
       int open,
       SqlQuery query,
       SqlCommand result) {
     StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : parseScalarBlocks(sql, 0, sql.length(), query);
+        : parseScalarBlocks(sql, start, sql.length(), query);
     return status.isOk()
         ? query.compileScalarPredicate(result, query.scalarPredicate()) : status;
   }
@@ -131,12 +163,13 @@ public final class SqlParser {
 
   private StatusCode parseMembershipPredicate(
       String sql,
+      int start,
       int open,
       SqlQuery query,
       SqlCommand result) {
     StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : parseMembershipBlocks(sql, 0, sql.length(), query);
+        : parseMembershipBlocks(sql, start, sql.length(), query);
     return status.isOk()
         ? query.compileMembershipPredicate(
             result, query.membershipPredicate(), query.membershipNegated())

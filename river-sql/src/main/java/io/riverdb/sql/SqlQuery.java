@@ -11,6 +11,8 @@ public final class SqlQuery {
   private final int[] existencePredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private final int[] membershipPredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private int blockCount;
+  private boolean explain;
+  private boolean analyze;
 
   public SqlQuery() {
     for (int index = 0; index < blocks.length; index++) {
@@ -27,6 +29,21 @@ public final class SqlQuery {
       membershipPredicates[index] = 0;
     }
     blockCount = 0;
+    explain = false;
+    analyze = false;
+  }
+
+  void setExplain(boolean analyzeQuery) {
+    explain = true;
+    analyze = analyzeQuery;
+  }
+
+  public boolean isExplain() {
+    return explain;
+  }
+
+  public boolean isAnalyze() {
+    return analyze;
   }
 
   SqlCommand nextBlock() {
