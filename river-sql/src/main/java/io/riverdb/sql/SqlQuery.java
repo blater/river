@@ -78,6 +78,7 @@ public final class SqlQuery {
       SqlCommand block = blocks[index];
       if (block.type() != SqlCommandType.SCAN
           && block.type() != SqlCommandType.SELECT
+          || block.hasDisjunction()
           || block.isSelectAll()
           || block.columnCount() <= 0
           || index > 0 && block.rowLimit() != Long.MAX_VALUE) {
@@ -208,6 +209,7 @@ public final class SqlQuery {
           + (membership >= 0 ? 1 : 0);
       if (block.type() != SqlCommandType.SCAN
           && block.type() != SqlCommandType.SELECT
+          || block.hasDisjunction()
           || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
           || index + 1 < blockCount
               && (edgeCount != 1

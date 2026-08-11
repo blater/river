@@ -69,6 +69,8 @@ public final class SqlCommand {
   private final boolean[] negatedNullPredicates =
       new boolean[MAXIMUM_PREDICATES];
   private final boolean[] varcharPredicates = new boolean[MAXIMUM_PREDICATES];
+  private final boolean[] disjunctionPredicates =
+      new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
   private SqlCommandType type;
   private SqlComparison groupHavingComparison;
@@ -163,6 +165,7 @@ public final class SqlCommand {
       nullPredicates[index] = false;
       negatedNullPredicates[index] = false;
       varcharPredicates[index] = false;
+      disjunctionPredicates[index] = false;
     }
     orderColumnName.reset();
     type = null;
@@ -408,6 +411,9 @@ public final class SqlCommand {
       if (source.varcharPredicates[index]) {
         markLastPredicateVarchar();
       }
+      if (source.disjunctionPredicates[index]) {
+        markLastPredicateDisjunction();
+      }
     }
     orderColumnName.copyFrom(source.orderColumnName);
     descendingOrder = source.descendingOrder;
@@ -598,6 +604,14 @@ public final class SqlCommand {
   void markLastPredicateVarchar() {
     if (predicateCount > 0) {
       varcharPredicates[predicateCount - 1] = true;
+    }
+  }
+
+  void markLastPredicateDisjunction() {
+    if (predicateCount > 1) {
+      disjunctionPredicates[predicateCount - 1] = true;
+      equalityPredicate = false;
+      boundedScan = false;
     }
   }
 
@@ -998,6 +1012,21 @@ public final class SqlCommand {
 
   public boolean predicateIsVarchar(int index) {
     return index >= 0 && index < predicateCount && varcharPredicates[index];
+  }
+
+  public boolean predicateStartsDisjunction(int index) {
+    return index > 0
+        && index < predicateCount
+        && disjunctionPredicates[index];
+  }
+
+  public boolean hasDisjunction() {
+    for (int index = 1; index < predicateCount; index++) {
+      if (disjunctionPredicates[index]) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public boolean isColumnPredicate(int index) {

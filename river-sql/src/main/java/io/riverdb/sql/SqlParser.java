@@ -1113,6 +1113,7 @@ public final class SqlParser {
       SqlCommand result,
       boolean qualified) {
     StatusCode status = StatusCode.OK;
+    boolean disjunction = false;
     while (status.isOk()) {
       SqlIdentifier table = result.writableNextPredicateTableName();
       SqlIdentifier column = result.writableNextPredicateColumnName();
@@ -1271,8 +1272,18 @@ public final class SqlParser {
         if (varchar && !columnEquality && !nullPredicate) {
           result.markLastPredicateVarchar();
         }
+        if (disjunction) {
+          result.markLastPredicateDisjunction();
+        }
       }
-      if (!status.isOk() || !consumeKeyword(sql, "AND")) {
+      if (!status.isOk()) {
+        return status;
+      }
+      if (consumeKeyword(sql, "AND")) {
+        disjunction = false;
+      } else if (consumeKeyword(sql, "OR")) {
+        disjunction = true;
+      } else {
         return status;
       }
     }

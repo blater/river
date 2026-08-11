@@ -107,6 +107,7 @@ final class SqlSessionAllocationTest {
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
+      exerciseDisjunction(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
@@ -119,6 +120,7 @@ final class SqlSessionAllocationTest {
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
+      exerciseDisjunction(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
@@ -290,6 +292,20 @@ final class SqlSessionAllocationTest {
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.nullMask();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseDisjunction(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id FROM t WHERE region=7 OR balance=999", cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

@@ -1955,6 +1955,25 @@ final class RiverDriverTest {
         assertEquals("filter", plan.getString(1));
         assertEquals(2, plan.getLong(3));
       }
+      try (ResultSet selected = statement.executeQuery(
+          "SELECT id FROM planned "
+              + "WHERE category=7 OR amount>=40 ORDER BY id")) {
+        for (long id : new long[] {1, 2, 4}) {
+          assertTrue(selected.next());
+          assertEquals(id, selected.getLong(1));
+        }
+        assertFalse(selected.next());
+      }
+      assertEquals(
+          2,
+          statement.executeUpdate(
+              "UPDATE planned SET amount=99 WHERE id=1 OR id=3"));
+      try (ResultSet selected = statement.executeQuery(
+          "SELECT COUNT(*) FROM planned WHERE amount=99")) {
+        assertTrue(selected.next());
+        assertEquals(2, selected.getLong(1));
+        assertFalse(selected.next());
+      }
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());

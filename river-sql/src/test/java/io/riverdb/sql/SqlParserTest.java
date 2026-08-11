@@ -844,6 +844,36 @@ final class SqlParserTest {
   }
 
   @Test
+  void groupsBoundedDisjunctionsWithoutFlatteningNestedBlocks() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM metrics "
+                + "WHERE region=7 OR region=8 AND value>100",
+            command));
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertEquals(3, command.predicateCount());
+    assertTrue(command.hasDisjunction());
+    assertFalse(command.predicateStartsDisjunction(0));
+    assertTrue(command.predicateStartsDisjunction(1));
+    assertFalse(command.predicateStartsDisjunction(2));
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM metrics WHERE region=7 OR", command));
+    SqlQuery query = new SqlQuery();
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT d.id FROM "
+                + "(SELECT id FROM metrics WHERE region=7 OR region=8) d",
+            query,
+            command));
+  }
+
+  @Test
   void parsesBigintComparisonsWithoutLosingHalfOpenRanges() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();

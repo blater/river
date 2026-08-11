@@ -2261,6 +2261,9 @@ public final class SqlSession {
   }
 
   private StatusCode bindJoinPredicates() {
+    if (command.hasDisjunction()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     predicateCount = command.predicateCount();
     accessPredicate = -1;
     predicateColumn = -1;
@@ -2329,6 +2332,9 @@ public final class SqlSession {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       predicateColumns[index] = column;
+      if (command.hasDisjunction()) {
+        continue;
+      }
       if (query.hasMembershipPredicate()
           && query.membershipPredicate() == index) {
         continue;
@@ -2991,7 +2997,9 @@ public final class SqlSession {
       int orderedColumn,
       boolean valueIndex) {
     int boundedPredicate = -1;
-    for (int index = 0; index < predicateCount; index++) {
+    for (int index = 0;
+        !command.hasDisjunction() && index < predicateCount;
+        index++) {
       if (predicateColumns[index] == orderedColumn
           && (command.isEqualityPredicate(index)
               || command.isRangePredicate(index))
@@ -3051,17 +3059,28 @@ public final class SqlSession {
     if (subqueryPredicateFalse) {
       return false;
     }
+    boolean conjunction = true;
     for (int index = 0; index < predicateCount; index++) {
+      if (command.predicateStartsDisjunction(index)) {
+        if (conjunction) {
+          return true;
+        }
+        conjunction = true;
+      }
+      if (!conjunction) {
+        continue;
+      }
       long value = readColumn(primaryKey, source, predicateColumns[index]);
       boolean nullValue = isNull(source, table, predicateColumns[index]);
       if (command.isNullPredicate(index)) {
         if (nullValue == command.isNullPredicateNegated(index)) {
-          return false;
+          conjunction = false;
         }
         continue;
       }
       if (nullValue) {
-        return false;
+        conjunction = false;
+        continue;
       }
       if (query.hasMembershipPredicate()
           && query.membershipPredicate() == index) {
@@ -3074,15 +3093,15 @@ public final class SqlSession {
         }
         if (equal == query.membershipNegated()
             || !equal && membershipHasNull) {
-          return false;
+          conjunction = false;
         }
         continue;
       }
       if (!matchesComparison(value, command, index)) {
-        return false;
+        conjunction = false;
       }
     }
-    return true;
+    return conjunction;
   }
 
   private StatusCode prepareNestedChain() {
