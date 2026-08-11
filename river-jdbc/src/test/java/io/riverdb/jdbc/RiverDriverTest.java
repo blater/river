@@ -128,6 +128,104 @@ final class RiverDriverTest {
       assertEquals(
           0,
           statement.executeUpdate(
+              "CREATE TABLE nullable_values "
+                  + "(id BIGINT PRIMARY KEY, value BIGINT, rank BIGINT)"));
+      assertEquals(
+          3,
+          statement.executeUpdate(
+              "INSERT INTO nullable_values VALUES "
+                  + "(1, NULL, 3), (2, 20, NULL), (3, 30, 1)"));
+      try (ResultSet nullableRows = statement.executeQuery(
+          "SELECT id, value, rank FROM nullable_values ORDER BY value")) {
+        assertTrue(nullableRows.next());
+        assertEquals(1, nullableRows.getLong(1));
+        assertEquals(0, nullableRows.getLong(2));
+        assertTrue(nullableRows.wasNull());
+        assertEquals(3, nullableRows.getLong(3));
+        assertFalse(nullableRows.wasNull());
+        assertTrue(nullableRows.next());
+        assertEquals(2, nullableRows.getLong(1));
+        assertEquals(20, nullableRows.getLong(2));
+        assertEquals(0, nullableRows.getLong(3));
+        assertTrue(nullableRows.wasNull());
+        assertTrue(nullableRows.next());
+        assertEquals(3, nullableRows.getLong(1));
+        assertEquals(30, nullableRows.getLong(2));
+        assertFalse(nullableRows.next());
+      }
+      try (ResultSet membership = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value IN "
+              + "(SELECT value FROM nullable_values) ORDER BY id")) {
+        assertTrue(membership.next());
+        assertEquals(2, membership.getLong(1));
+        assertTrue(membership.next());
+        assertEquals(3, membership.getLong(1));
+        assertFalse(membership.next());
+      }
+      try (ResultSet membership = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value NOT IN "
+              + "(SELECT value FROM nullable_values)")) {
+        assertFalse(membership.next());
+      }
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "UPDATE nullable_values SET value=NULL, rank=9 WHERE id=3"));
+      try (ResultSet updated = statement.executeQuery(
+          "SELECT value, rank FROM nullable_values WHERE id=3")) {
+        assertTrue(updated.next());
+        assertNull(updated.getObject(1));
+        assertTrue(updated.wasNull());
+        assertEquals(9, updated.getLong(2));
+        assertFalse(updated.wasNull());
+      }
+      assertEquals(
+          "22000",
+          assertThrows(
+              SQLException.class,
+              () -> statement.executeUpdate(
+                  "CREATE INDEX nullable_value_idx "
+                      + "ON nullable_values(value)"))
+              .getSQLState());
+      try (ResultSet nullComparison = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value=0")) {
+        assertFalse(nullComparison.next());
+      }
+      assertEquals(
+          "22000",
+          assertThrows(
+              SQLException.class,
+              () -> statement.executeUpdate(
+                  "INSERT INTO nullable_values VALUES (NULL, 4, 5)"))
+              .getSQLState());
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "UPDATE nullable_values SET value=10 WHERE id=1"));
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "UPDATE nullable_values SET value=40 WHERE id=3"));
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE INDEX nullable_value_idx ON nullable_values(value)"));
+      try (ResultSet indexed = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value=40")) {
+        assertTrue(indexed.next());
+        assertEquals(3, indexed.getLong(1));
+        assertFalse(indexed.next());
+      }
+      assertEquals(
+          "22000",
+          assertThrows(
+              SQLException.class,
+              () -> statement.executeUpdate(
+                  "UPDATE nullable_values SET value=NULL WHERE id=2"))
+              .getSQLState());
+      assertEquals(
+          0,
+          statement.executeUpdate(
               "CREATE TABLE regions (id BIGINT PRIMARY KEY, code BIGINT)"));
       assertEquals(
           2,
@@ -350,6 +448,15 @@ final class RiverDriverTest {
             "SELECT balance FROM accounts WHERE id=4")) {
       assertTrue(row.next());
       assertEquals(450, row.getLong(1));
+      assertFalse(row.next());
+    }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement();
+        ResultSet row = statement.executeQuery(
+            "SELECT rank FROM nullable_values WHERE id=2")) {
+      assertTrue(row.next());
+      assertNull(row.getObject(1));
+      assertTrue(row.wasNull());
       assertFalse(row.next());
     }
     assertEquals(StatusCode.OK, server.close());

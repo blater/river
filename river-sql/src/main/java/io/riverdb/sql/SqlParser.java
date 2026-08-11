@@ -456,7 +456,8 @@ public final class SqlParser {
         key = rowResult.values[0];
         value = rowResult.values[1];
         if (status.isOk()) {
-          result.appendInsert(rowResult.values, rowResult.count);
+          result.appendInsert(
+              rowResult.values, rowResult.nullMask, rowResult.count);
         }
       }
       while (status.isOk() && consumeCharacter(sql, ',')) {
@@ -468,7 +469,8 @@ public final class SqlParser {
             status = StatusCode.INVALID_EXTERNAL_INPUT;
           }
           if (status.isOk()) {
-            result.appendInsert(rowResult.values, rowResult.count);
+            result.appendInsert(
+                rowResult.values, rowResult.nullMask, rowResult.count);
           }
         }
       }
@@ -613,13 +615,14 @@ public final class SqlParser {
         if (status.isOk()) {
           status = requireCharacter(sql, '=');
         }
-        if (status.isOk()) {
+        boolean nullValue = status.isOk() && consumeKeyword(sql, "NULL");
+        if (status.isOk() && !nullValue) {
           status = number(sql, numberResult);
         }
         if (status.isOk()) {
-          result.appendUpdate(numberResult.value);
+          result.appendUpdate(nullValue ? 0 : numberResult.value, nullValue);
           if (result.updateColumnCount() == 1) {
-            value = numberResult.value;
+            value = nullValue ? 0 : numberResult.value;
           }
         }
         if (!status.isOk() || !consumeCharacter(sql, ',')) {
@@ -739,14 +742,22 @@ public final class SqlParser {
 
   private StatusCode row(CharSequence sql, LongRow result) {
     result.count = 0;
+    result.nullMask = 0;
     StatusCode status = requireCharacter(sql, '(');
     while (status.isOk()) {
       if (result.count >= SqlCommand.MAXIMUM_COLUMNS) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      status = number(sql, numberResult);
+      boolean nullValue = consumeKeyword(sql, "NULL");
+      if (!nullValue) {
+        status = number(sql, numberResult);
+      }
       if (status.isOk()) {
-        result.values[result.count++] = numberResult.value;
+        result.values[result.count] = nullValue ? 0 : numberResult.value;
+        if (nullValue) {
+          result.nullMask |= 1L << result.count;
+        }
+        result.count++;
       }
       if (!status.isOk() || consumeCharacter(sql, ')')) {
         break;
@@ -939,6 +950,7 @@ public final class SqlParser {
     private final long[] values = new long[SqlCommand.MAXIMUM_COLUMNS];
     private final SqlIdentifier identifier = new SqlIdentifier();
     private int count;
+    private long nullMask;
   }
 
   private static final class SqlSourceView implements CharSequence {

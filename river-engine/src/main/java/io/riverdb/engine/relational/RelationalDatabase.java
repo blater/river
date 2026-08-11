@@ -257,7 +257,7 @@ public final class RelationalDatabase {
       return publishUniqueValueIndex(
           session, indexName, tableName, outcome);
     }
-    if (status == StatusCode.CONFLICT && buildReserved) {
+    if (!status.isOk() && buildReserved) {
       StatusCode cleanup = cleanupUniqueValueIndex(
           session, indexName, tableName, outcome);
       return cleanup.isOk() ? status : cleanup;
@@ -400,12 +400,21 @@ public final class RelationalDatabase {
         exhausted = true;
         break;
       }
-      if (status.isOk() && indexBuildRow.row().length() != indexedTable.rowBytes()) {
+      if (status.isOk()
+          && (indexBuildRow.row().length() != indexedTable.rowBytes()
+              || !indexedTable.isValidNullMask(
+                  indexBuildRow.row().getLong(indexedTable.nullMaskOffset())))) {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
         catalogScratch.clear();
         status = indexBuildRow.row().copyTo(catalogScratch);
+      }
+      if (status.isOk()) {
+        if ((catalogScratch.getLong(indexedTable.nullMaskOffset())
+            & 1L << indexedTable.uniqueValueIndexColumn()) != 0) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+        }
       }
       if (status.isOk()) {
         long value = catalogScratch.getLong(
@@ -658,12 +667,21 @@ public final class RelationalDatabase {
         status = StatusCode.OK;
         break;
       }
-      if (status.isOk() && indexBuildRow.row().length() != indexedTable.rowBytes()) {
+      if (status.isOk()
+          && (indexBuildRow.row().length() != indexedTable.rowBytes()
+              || !indexedTable.isValidNullMask(
+                  indexBuildRow.row().getLong(indexedTable.nullMaskOffset())))) {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
         catalogScratch.clear();
         status = indexBuildRow.row().copyTo(catalogScratch);
+      }
+      if (status.isOk()) {
+        if ((catalogScratch.getLong(indexedTable.nullMaskOffset())
+            & 1L << indexColumn) != 0) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+        }
       }
       if (status.isOk()) {
         long value = catalogScratch.getLong(

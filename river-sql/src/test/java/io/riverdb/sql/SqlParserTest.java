@@ -77,6 +77,14 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
+            "INSERT INTO ledger VALUES (1, NULL, 7), (2, 20, NULL)",
+            command));
+    assertFalse(command.insertIsNull(0, 0));
+    assertTrue(command.insertIsNull(0, 1));
+    assertTrue(command.insertIsNull(1, 2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
             "INSERT INTO ledger (region, id, balance) VALUES (7, 1, 100)",
             command));
     assertEquals(3, command.columnCount());
@@ -258,6 +266,13 @@ final class SqlParserTest {
     assertName("region", command.columnName(1));
     assertEquals(12, command.updateValue(0));
     assertEquals(-3, command.updateValue(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE accounts SET balance=NULL, region=4 WHERE key=7",
+            command));
+    assertTrue(command.updateIsNull(0));
+    assertFalse(command.updateIsNull(1));
     assertEquals(
         StatusCode.OK,
         parser.parse(

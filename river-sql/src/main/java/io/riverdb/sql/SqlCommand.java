@@ -21,7 +21,9 @@ public final class SqlCommand {
   private final SqlIdentifier orderColumnName = new SqlIdentifier();
   private final long[] insertValues =
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
+  private final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
+  private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
@@ -94,6 +96,12 @@ public final class SqlCommand {
     predicateCount = 0;
     columnCount = 0;
     available = false;
+    for (int index = 0; index < insertNullMasks.length; index++) {
+      insertNullMasks[index] = 0;
+    }
+    for (int index = 0; index < nullUpdates.length; index++) {
+      nullUpdates[index] = false;
+    }
   }
 
   void set(SqlCommandType commandType, long primaryKey, long rowValue) {
@@ -186,12 +194,13 @@ public final class SqlCommand {
     available = true;
   }
 
-  void appendInsert(long[] values, int count) {
+  void appendInsert(long[] values, long nullMask, int count) {
     int destination = insertRowCount * MAXIMUM_COLUMNS;
     for (int index = 0; index < count; index++) {
       insertValues[destination + index] = values[index];
     }
     insertColumnCount = count;
+    insertNullMasks[insertRowCount] = nullMask;
     insertRowCount++;
   }
 
@@ -202,8 +211,9 @@ public final class SqlCommand {
     available = true;
   }
 
-  void appendUpdate(long updateValue) {
-    updateValues[updateColumnCount++] = updateValue;
+  void appendUpdate(long updateValue, boolean isNull) {
+    updateValues[updateColumnCount] = updateValue;
+    nullUpdates[updateColumnCount++] = isNull;
   }
 
   SqlIdentifier writableTableName() {
@@ -377,6 +387,18 @@ public final class SqlCommand {
             && columnIndex >= 0
             && columnIndex < insertColumnCount
         ? insertValues[rowIndex * MAXIMUM_COLUMNS + columnIndex] : 0;
+  }
+
+  public boolean insertIsNull(int rowIndex, int columnIndex) {
+    return rowIndex >= 0
+        && rowIndex < insertRowCount
+        && columnIndex >= 0
+        && columnIndex < insertColumnCount
+        && (insertNullMasks[rowIndex] & 1L << columnIndex) != 0;
+  }
+
+  public boolean updateIsNull(int index) {
+    return index >= 0 && index < updateColumnCount && nullUpdates[index];
   }
 
   public long scanLowerInclusive() {

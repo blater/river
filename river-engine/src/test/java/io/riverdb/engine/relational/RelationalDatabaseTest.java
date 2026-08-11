@@ -284,15 +284,15 @@ final class RelationalDatabaseTest {
   }
 
   private static ByteBuffer row(long value) {
-    ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
+    ByteBuffer row = ByteBuffer.allocateDirect(2 * Long.BYTES);
     row.putLong(0, value);
     row.position(0);
-    row.limit(Long.BYTES);
+    row.limit(2 * Long.BYTES);
     return row;
   }
 
   private static long value(HeapRowResult result) {
-    ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
+    ByteBuffer row = ByteBuffer.allocate(2 * Long.BYTES);
     assertEquals(StatusCode.OK, result.copyTo(row));
     return row.getLong(0);
   }

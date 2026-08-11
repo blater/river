@@ -36,7 +36,7 @@ public final class SqlSession {
   private static final int MAXIMUM_SORT_ROWS = 1_024;
   private static final int MAXIMUM_SORT_RUNS = 64;
   private static final int MAXIMUM_SORT_RECORD_BYTES =
-      (TableSchema.MAXIMUM_COLUMNS + 2) * Long.BYTES + Integer.BYTES;
+      (TableSchema.MAXIMUM_COLUMNS + 3) * Long.BYTES + Integer.BYTES;
 
   private final RelationalDatabase database;
   private final RelationalSession session;
@@ -68,6 +68,8 @@ public final class SqlSession {
   private final int[] sortRunRowsRemaining = new int[MAXIMUM_SORT_RUNS];
   private final long[] sortMergeKeys = new long[MAXIMUM_SORT_RUNS];
   private final long[] sortMergePrimaryKeys = new long[MAXIMUM_SORT_RUNS];
+  private final long[] sortMergeNullMasks = new long[MAXIMUM_SORT_RUNS];
+  private final boolean[] sortMergeKeyNulls = new boolean[MAXIMUM_SORT_RUNS];
   private final long[] sortMergeValues =
       new long[MAXIMUM_SORT_RUNS * TableSchema.MAXIMUM_COLUMNS];
   private final boolean[] sortRunActive = new boolean[MAXIMUM_SORT_RUNS];
@@ -79,13 +81,15 @@ public final class SqlSession {
   private final RelationalScanCursor scalarCursor = new RelationalScanCursor();
   private final RelationalScanResult scalarRow = new RelationalScanResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(
-      (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
+      TableSchema.MAXIMUM_COLUMNS * Long.BYTES);
   private final ByteBuffer sortRecord = ByteBuffer.allocateDirect(
       MAXIMUM_SORT_RECORD_BYTES);
   private final CRC32C sortChecksum = new CRC32C();
   private long[] sortedKeys;
   private long[] sortedPrimaryKeys;
   private long[] sortedValues;
+  private long[] sortedNullMasks;
+  private boolean[] sortedKeyNulls;
   private FileChannel sortSpillChannel;
   private Path sortSpillPath;
   private boolean sortSpilled;
@@ -93,6 +97,7 @@ public final class SqlSession {
   private int sortedTotalRows;
   private long sortSpillWriteOffset;
   private long sortedOutputPrimaryKey;
+  private long sortedOutputNullMask;
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
@@ -673,7 +678,10 @@ public final class SqlSession {
         primaryKey = sortedPrimaryKeys[sortedRow];
       }
       if (status.isOk()) {
-        result.set(primaryKey, projectedValues, 0, cursor.projectedColumnCount());
+        long nullMask = sortSpilled
+            ? sortedOutputNullMask : sortedNullMasks[sortedRow];
+        result.set(
+            primaryKey, projectedValues, nullMask, cursor.projectedColumnCount());
         cursor.advanceSortedRow();
         cursor.rowReturned();
       }
@@ -979,7 +987,8 @@ public final class SqlSession {
       result.setProjection(
           primaryKey,
           projectedValues,
-          projectionNullMask(projectedColumns, projectedColumnCount),
+          projectionNullMask(
+              source, table, projectedColumns, projectedColumnCount),
           projectedColumnCount,
           0);
     }
@@ -1033,6 +1042,9 @@ public final class SqlSession {
           if (updatedColumns[prior] == column) {
             return StatusCode.INVALID_EXTERNAL_INPUT;
           }
+        }
+        if (command.updateIsNull(index) && table.hasIndexOn(column)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
         }
         updatedColumns[index] = column;
       }
@@ -1202,11 +1214,17 @@ public final class SqlSession {
   private void encodeInsertRow(int rowIndex) {
     row.clear();
     row.limit(table.rowBytes());
+    long nullMask = 0;
     for (int column = 1; column < table.columnCount(); column++) {
+      int source = insertSourceByColumn[column];
+      if (command.insertIsNull(rowIndex, source)) {
+        nullMask |= 1L << column;
+      }
       row.putLong(
           (column - 1) * Long.BYTES,
-          command.insertValue(rowIndex, insertSourceByColumn[column]));
+          command.insertValue(rowIndex, source));
     }
+    row.putLong(table.nullMaskOffset(), nullMask);
     row.position(0);
   }
 
@@ -1221,17 +1239,28 @@ public final class SqlSession {
       for (int index = 0; index < table.columnCount(); index++) {
         insertSourceByColumn[index] = index;
       }
-      return StatusCode.OK;
-    }
-    if (command.columnCount() != table.columnCount()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int source = 0; source < command.columnCount(); source++) {
-      int column = table.findColumn(command.columnName(source));
-      if (column < 0 || insertSourceByColumn[column] >= 0) {
+    } else {
+      if (command.columnCount() != table.columnCount()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      insertSourceByColumn[column] = source;
+      for (int source = 0; source < command.columnCount(); source++) {
+        int column = table.findColumn(command.columnName(source));
+        if (column < 0 || insertSourceByColumn[column] >= 0) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        insertSourceByColumn[column] = source;
+      }
+    }
+    for (int rowIndex = 0; rowIndex < command.insertRowCount(); rowIndex++) {
+      if (command.insertIsNull(rowIndex, insertSourceByColumn[0])) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int column = 1; column < table.columnCount(); column++) {
+        if (table.hasIndexOn(column)
+            && command.insertIsNull(rowIndex, insertSourceByColumn[column])) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      }
     }
     return StatusCode.OK;
   }
@@ -1257,7 +1286,10 @@ public final class SqlSession {
   private static StatusCode validateRow(
       HeapRowResult source,
       TableDefinition definition) {
-    if (source.length() != definition.rowBytes()) {
+    if (source.length() != definition.rowBytes()
+        || !definition.isValidNullMask(
+            source.length() == definition.rowBytes()
+                ? source.getLong(definition.nullMaskOffset()) : 0)) {
       return StatusCode.CORRUPTION;
     }
     return StatusCode.OK;
@@ -1352,14 +1384,27 @@ public final class SqlSession {
         if (!matchesJoinPredicates(indexed.key(), innerRow, false)) {
           continue;
         }
+        long nullMask = 0;
         for (int index = 0; index < cursor.projectedColumnCount(); index++) {
           int projection = cursor.projectedColumn(index);
-          projectedValues[index] = projection >= 0
-              ? cursor.joinOuterProjectedValue(index)
-              : readColumn(indexed.key(), innerRow, -projection - 1);
+          if (projection >= 0) {
+            projectedValues[index] = cursor.joinOuterProjectedValue(index);
+            if (cursor.joinOuterProjectedNull(index)) {
+              nullMask |= 1L << index;
+            }
+          } else {
+            int column = -projection - 1;
+            projectedValues[index] = readColumn(indexed.key(), innerRow, column);
+            if (isNull(innerRow, joinTable, column)) {
+              nullMask |= 1L << index;
+            }
+          }
         }
         result.set(
-            cursor.joinOuterKey(), projectedValues, 0, cursor.projectedColumnCount());
+            cursor.joinOuterKey(),
+            projectedValues,
+            nullMask,
+            cursor.projectedColumnCount());
         cursor.rowReturned();
         return StatusCode.OK;
       }
@@ -1386,13 +1431,18 @@ public final class SqlSession {
       if (!matchesJoinPredicates(outerKey, outerRow, true)) {
         continue;
       }
+      if (isNull(outerRow, table, cursor.joinOuterColumn())) {
+        continue;
+      }
       long joinValue = readColumn(outerKey, outerRow, cursor.joinOuterColumn());
       if (cursor.joinInnerColumn() > 0 && !cursor.joinInnerUnique()) {
         for (int index = 0; index < cursor.projectedColumnCount(); index++) {
           int projection = cursor.projectedColumn(index);
           if (projection >= 0) {
             cursor.setJoinOuterProjectedValue(
-                index, readColumn(outerKey, outerRow, projection));
+                index,
+                readColumn(outerKey, outerRow, projection),
+                isNull(outerRow, table, projection));
           }
         }
         status = joinValue == Long.MAX_VALUE
@@ -1436,13 +1486,24 @@ public final class SqlSession {
       if (!matchesJoinPredicates(innerKey, innerRow, false)) {
         continue;
       }
+      long nullMask = 0;
       for (int index = 0; index < cursor.projectedColumnCount(); index++) {
         int projection = cursor.projectedColumn(index);
-        projectedValues[index] = projection >= 0
-            ? readColumn(outerKey, outerRow, projection)
-            : readColumn(innerKey, innerRow, -projection - 1);
+        if (projection >= 0) {
+          projectedValues[index] = readColumn(outerKey, outerRow, projection);
+          if (isNull(outerRow, table, projection)) {
+            nullMask |= 1L << index;
+          }
+        } else {
+          int column = -projection - 1;
+          projectedValues[index] = readColumn(innerKey, innerRow, column);
+          if (isNull(innerRow, joinTable, column)) {
+            nullMask |= 1L << index;
+          }
+        }
       }
-      result.set(outerKey, projectedValues, 0, cursor.projectedColumnCount());
+      result.set(
+          outerKey, projectedValues, nullMask, cursor.projectedColumnCount());
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -1519,12 +1580,23 @@ public final class SqlSession {
         ? primaryKey : source.getLong((column - 1) * Long.BYTES);
   }
 
+  private static boolean isNull(
+      HeapRowResult source,
+      TableDefinition definition,
+      int column) {
+    return column > 0
+        && (source.getLong(definition.nullMaskOffset()) & 1L << column) != 0;
+  }
+
   private boolean matchesPredicates(long primaryKey, HeapRowResult source) {
     if (subqueryPredicateFalse) {
       return false;
     }
     for (int index = 0; index < predicateCount; index++) {
       long value = readColumn(primaryKey, source, predicateColumns[index]);
+      if (isNull(source, table, predicateColumns[index])) {
+        return false;
+      }
       if (query.hasMembershipPredicate()
           && query.membershipPredicate() == index) {
         boolean equal = false;
@@ -1585,7 +1657,8 @@ public final class SqlSession {
         if (rows > 1) {
           status = StatusCode.CARDINALITY_VIOLATION;
         } else {
-          if (nestedProjection == NULL_PROJECTION) {
+          if (nestedProjection == NULL_PROJECTION
+              || isNull(scalarRow.row(), scalarTable, nestedProjection)) {
             subqueryPredicateFalse = true;
           } else {
             value = readColumn(scalarRow.key(), scalarRow.row(), nestedProjection);
@@ -1685,7 +1758,8 @@ public final class SqlSession {
       }
       if (status.isOk()) {
         matchedRows++;
-        if (nestedProjection == NULL_PROJECTION) {
+        if (nestedProjection == NULL_PROJECTION
+            || isNull(scalarRow.row(), scalarTable, nestedProjection)) {
           membershipHasNull = true;
         } else if (membershipValueCount >= membershipValues.length) {
           status = StatusCode.RESOURCE_EXHAUSTED;
@@ -1754,6 +1828,9 @@ public final class SqlSession {
       HeapRowResult source) {
     for (int index = 0; index < scalar.predicateCount(); index++) {
       long value = readColumn(primaryKey, source, scalarPredicateColumns[index]);
+      if (isNull(source, scalarTable, scalarPredicateColumns[index])) {
+        return false;
+      }
       boolean matches = scalar.isEqualityPredicate(index)
           ? value == scalar.predicateValue(index)
           : value >= scalar.predicateLowerInclusive(index)
@@ -1775,6 +1852,10 @@ public final class SqlSession {
         continue;
       }
       int column = outer ? descriptor : -descriptor - 1;
+      TableDefinition definition = outer ? table : joinTable;
+      if (isNull(source, definition, column)) {
+        return false;
+      }
       long value = readColumn(primaryKey, source, column);
       boolean matches = command.isEqualityPredicate(index)
           ? value == command.predicateValue(index)
@@ -1845,15 +1926,23 @@ public final class SqlSession {
         nullMask |= 1L << index;
       } else {
         destination[index] = readColumn(primaryKey, source, column);
+        if (isNull(source, table, column)) {
+          nullMask |= 1L << index;
+        }
       }
     }
     return nullMask;
   }
 
-  private static long projectionNullMask(int[] columns, int columnCount) {
+  private long projectionNullMask(
+      HeapRowResult source,
+      TableDefinition definition,
+      int[] columns,
+      int columnCount) {
     long nullMask = 0;
     for (int index = 0; index < columnCount; index++) {
-      if (columns[index] == NULL_PROJECTION) {
+      if (columns[index] == NULL_PROJECTION
+          || isNull(source, definition, columns[index])) {
         nullMask |= 1L << index;
       }
     }
@@ -1901,12 +1990,19 @@ public final class SqlSession {
         int rowIndex = sortedRowCount++;
         sortedTotalRows++;
         sortedKeys[rowIndex] = readColumn(primaryKey, source, orderColumn);
+        sortedKeyNulls[rowIndex] = isNull(source, table, orderColumn);
         sortedPrimaryKeys[rowIndex] = primaryKey;
         int valueStart = rowIndex * TableSchema.MAXIMUM_COLUMNS;
+        long nullMask = 0;
         for (int index = 0; index < projectedColumnCount; index++) {
-          sortedValues[valueStart + index] = readColumn(
-              primaryKey, source, projectedColumns[index]);
+          int projection = projectedColumns[index];
+          sortedValues[valueStart + index] = projection == NULL_PROJECTION
+              ? 0 : readColumn(primaryKey, source, projection);
+          if (projection == NULL_PROJECTION || isNull(source, table, projection)) {
+            nullMask |= 1L << index;
+          }
         }
+        sortedNullMasks[rowIndex] = nullMask;
       }
     }
     StatusCode close = session.closeScan(cursor.relational());
@@ -1947,13 +2043,16 @@ public final class SqlSession {
     int run = sortRunCount;
     sortRunOffsets[run] = sortSpillWriteOffset;
     sortRunRowCounts[run] = sortedRowCount;
-    int dataBytes = (projectedColumnCount + 2) * Long.BYTES;
+    int dataBytes = (projectedColumnCount + 3) * Long.BYTES;
     int recordBytes = dataBytes + Integer.BYTES;
     for (int rowIndex = 0; rowIndex < sortedRowCount; rowIndex++) {
       sortRecord.clear();
       sortRecord.limit(recordBytes);
       sortRecord.putLong(sortedKeys[rowIndex]);
       sortRecord.putLong(sortedPrimaryKeys[rowIndex]);
+      sortRecord.putLong(
+          sortedNullMasks[rowIndex]
+              | (sortedKeyNulls[rowIndex] ? Long.MIN_VALUE : 0));
       int valueStart = rowIndex * TableSchema.MAXIMUM_COLUMNS;
       for (int index = 0; index < projectedColumnCount; index++) {
         sortRecord.putLong(sortedValues[valueStart + index]);
@@ -2028,6 +2127,7 @@ public final class SqlSession {
       return StatusCode.CORRUPTION;
     }
     sortedOutputPrimaryKey = sortMergePrimaryKeys[selected];
+    sortedOutputNullMask = sortMergeNullMasks[selected];
     int valueStart = selected * TableSchema.MAXIMUM_COLUMNS;
     for (int index = 0; index < columnCount; index++) {
       projectedValues[index] = sortMergeValues[valueStart + index];
@@ -2036,6 +2136,9 @@ public final class SqlSession {
   }
 
   private int compareSortMergeRows(int left, int right) {
+    if (sortMergeKeyNulls[left] != sortMergeKeyNulls[right]) {
+      return sortMergeKeyNulls[left] ? -1 : 1;
+    }
     long leftKey = sortMergeKeys[left];
     long rightKey = sortMergeKeys[right];
     if (leftKey < rightKey) {
@@ -2054,7 +2157,7 @@ public final class SqlSession {
       sortRunActive[run] = false;
       return StatusCode.OK;
     }
-    int dataBytes = (projectedColumnCount + 2) * Long.BYTES;
+    int dataBytes = (projectedColumnCount + 3) * Long.BYTES;
     int recordBytes = dataBytes + Integer.BYTES;
     sortRecord.clear();
     sortRecord.limit(recordBytes);
@@ -2077,6 +2180,9 @@ public final class SqlSession {
     }
     sortMergeKeys[run] = sortRecord.getLong();
     sortMergePrimaryKeys[run] = sortRecord.getLong();
+    long nullInfo = sortRecord.getLong();
+    sortMergeNullMasks[run] = nullInfo & ~Long.MIN_VALUE;
+    sortMergeKeyNulls[run] = (nullInfo & Long.MIN_VALUE) != 0;
     int valueStart = run * TableSchema.MAXIMUM_COLUMNS;
     for (int index = 0; index < projectedColumnCount; index++) {
       sortMergeValues[valueStart + index] = sortRecord.getLong();
@@ -2124,6 +2230,8 @@ public final class SqlSession {
     sortedKeys = new long[MAXIMUM_SORT_ROWS];
     sortedPrimaryKeys = new long[MAXIMUM_SORT_ROWS];
     sortedValues = new long[MAXIMUM_SORT_ROWS * TableSchema.MAXIMUM_COLUMNS];
+    sortedNullMasks = new long[MAXIMUM_SORT_ROWS];
+    sortedKeyNulls = new boolean[MAXIMUM_SORT_ROWS];
   }
 
   private void sortMaterializedRows() {
@@ -2152,6 +2260,9 @@ public final class SqlSession {
   }
 
   private int compareSortedRows(int left, int right) {
+    if (sortedKeyNulls[left] != sortedKeyNulls[right]) {
+      return sortedKeyNulls[left] ? -1 : 1;
+    }
     long leftKey = sortedKeys[left];
     long rightKey = sortedKeys[right];
     if (leftKey < rightKey) {
@@ -2172,6 +2283,12 @@ public final class SqlSession {
     long primaryKey = sortedPrimaryKeys[left];
     sortedPrimaryKeys[left] = sortedPrimaryKeys[right];
     sortedPrimaryKeys[right] = primaryKey;
+    long nullMask = sortedNullMasks[left];
+    sortedNullMasks[left] = sortedNullMasks[right];
+    sortedNullMasks[right] = nullMask;
+    boolean keyNull = sortedKeyNulls[left];
+    sortedKeyNulls[left] = sortedKeyNulls[right];
+    sortedKeyNulls[right] = keyNull;
     int leftStart = left * TableSchema.MAXIMUM_COLUMNS;
     int rightStart = right * TableSchema.MAXIMUM_COLUMNS;
     for (int index = 0; index < projectedColumnCount; index++) {
@@ -2193,9 +2310,15 @@ public final class SqlSession {
     }
     if (status.isOk()) {
       for (int index = 0; index < updatedColumnCount; index++) {
+        int column = updatedColumns[index];
         row.putLong(
-            (updatedColumns[index] - 1) * Long.BYTES,
+            (column - 1) * Long.BYTES,
             command.updateValue(index));
+        long nullMask = row.getLong(table.nullMaskOffset());
+        row.putLong(
+            table.nullMaskOffset(),
+            command.updateIsNull(index)
+                ? nullMask | 1L << column : nullMask & ~(1L << column));
       }
       status = session.updateRow(table, primaryKey, row);
     }

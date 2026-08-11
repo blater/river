@@ -228,7 +228,24 @@ public final class TableDefinition {
   }
 
   public int rowBytes() {
+    return columnCount * Long.BYTES;
+  }
+
+  public int nullMaskOffset() {
     return (columnCount - 1) * Long.BYTES;
+  }
+
+  public boolean isNull(ByteBuffer row, int column) {
+    return row != null
+        && column > 0
+        && column < columnCount
+        && row.remaining() == rowBytes()
+        && (row.getLong(row.position() + nullMaskOffset()) & 1L << column) != 0;
+  }
+
+  public boolean isValidNullMask(long nullMask) {
+    long allowed = ((1L << columnCount) - 1) & ~1L;
+    return available && (nullMask & ~allowed) == 0;
   }
 
   int uniqueValueIndexTableId() {

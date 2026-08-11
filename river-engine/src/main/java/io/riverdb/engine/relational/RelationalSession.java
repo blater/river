@@ -41,7 +41,7 @@ public final class RelationalSession {
   private final ByteBuffer valueScratch = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer indexEntryScratch = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
   private final ByteBuffer rowScratch = ByteBuffer.allocateDirect(
-      (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
+      TableSchema.MAXIMUM_COLUMNS * Long.BYTES);
   private final ByteBuffer indexRow = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer nonUniqueIndexRow = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
   private final long[] previousIndexedValues = new long[TableDefinition.MAXIMUM_INDEXES];
@@ -242,6 +242,12 @@ public final class RelationalSession {
     if (!validRow(table, row)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    for (int slot = 0; slot < table.uniqueIndexCount(); slot++) {
+      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_NONE
+          && table.isNull(row, table.uniqueIndexColumn(slot))) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+    }
     StatusCode status = insert(table, key, row);
     for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
       if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY) {
@@ -271,6 +277,12 @@ public final class RelationalSession {
   public StatusCode updateRow(TableDefinition table, long key, ByteBuffer row) {
     if (!validRow(table, row)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int slot = 0; slot < table.uniqueIndexCount(); slot++) {
+      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_NONE
+          && table.isNull(row, table.uniqueIndexColumn(slot))) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
     }
     StatusCode status = StatusCode.OK;
     if (table.hasUniqueValueIndex()) {
@@ -1065,7 +1077,9 @@ public final class RelationalSession {
   private static boolean validRow(TableDefinition table, ByteBuffer row) {
     return table != null
         && row != null
-        && row.remaining() == table.rowBytes();
+        && row.remaining() == table.rowBytes()
+        && table.isValidNullMask(
+            row.getLong(row.position() + table.nullMaskOffset()));
   }
 
   private static long indexedValue(TableDefinition table, ByteBuffer row, int slot) {

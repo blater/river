@@ -30,6 +30,7 @@ public final class SqlScanCursor {
   private int joinOuterColumn = -1;
   private int joinInnerColumn = -1;
   private long joinOuterKey;
+  private long joinOuterNullMask;
   private int sortedRowCount;
   private int sortedRowIndex;
   private boolean implicitTransaction;
@@ -64,6 +65,7 @@ public final class SqlScanCursor {
     joinOuterColumn = -1;
     joinInnerColumn = -1;
     joinOuterKey = 0;
+    joinOuterNullMask = 0;
     sortedRowCount = 0;
     sortedRowIndex = 0;
     implicitTransaction = false;
@@ -311,12 +313,21 @@ public final class SqlScanCursor {
     return joinOuterKey;
   }
 
-  void setJoinOuterProjectedValue(int index, long value) {
+  void setJoinOuterProjectedValue(int index, long value, boolean isNull) {
     joinOuterProjectedValues[index] = value;
+    if (isNull) {
+      joinOuterNullMask |= 1L << index;
+    } else {
+      joinOuterNullMask &= ~(1L << index);
+    }
   }
 
   long joinOuterProjectedValue(int index) {
     return joinOuterProjectedValues[index];
+  }
+
+  boolean joinOuterProjectedNull(int index) {
+    return (joinOuterNullMask & 1L << index) != 0;
   }
 
   int groupColumn() {
