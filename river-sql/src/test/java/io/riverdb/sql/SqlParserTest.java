@@ -385,6 +385,22 @@ final class SqlParserTest {
     assertName("region", command.columnName(1));
     assertEquals(12, command.updateValue(0));
     assertEquals(-3, command.updateValue(1));
+    assertEquals(false, command.isRelativeUpdate(0));
+    assertEquals(false, command.isRelativeUpdate(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE accounts SET balance=balance+25, region=id-2 WHERE key=7",
+            command));
+    assertEquals(2, command.updateColumnCount());
+    assertName("balance", command.updateSourceColumnName(0));
+    assertName("id", command.updateSourceColumnName(1));
+    assertEquals(25, command.updateValue(0));
+    assertEquals(2, command.updateValue(1));
+    assertEquals(true, command.isRelativeUpdate(0));
+    assertEquals(false, command.isSubtractUpdate(0));
+    assertEquals(true, command.isRelativeUpdate(1));
+    assertEquals(true, command.isSubtractUpdate(1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -400,6 +416,12 @@ final class SqlParserTest {
     assertEquals(false, command.isEqualityPredicate());
     assertEquals(100, command.scanLowerInclusive());
     assertEquals(500, command.scanUpperExclusive());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("UPDATE accounts SET balance=balance WHERE key=7", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("UPDATE accounts SET balance=balance*2 WHERE key=7", command));
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
     assertEquals(true, command.isEqualityPredicate());

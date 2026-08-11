@@ -708,11 +708,39 @@ public final class SqlParser {
           status = requireCharacter(sql, '=');
         }
         boolean nullValue = status.isOk() && consumeKeyword(sql, "NULL");
+        boolean relative = false;
+        boolean subtract = false;
         if (status.isOk() && !nullValue) {
-          status = number(sql, numberResult);
+          if (startsNumber(sql)) {
+            status = number(sql, numberResult);
+          } else {
+            SqlIdentifier source = result.writableNextUpdateSourceColumnName();
+            if (source == null) {
+              status = StatusCode.RESOURCE_EXHAUSTED;
+            } else {
+              status = identifier(sql, source);
+            }
+            if (status.isOk()) {
+              if (consumeCharacter(sql, '+')) {
+                relative = true;
+              } else if (consumeCharacter(sql, '-')) {
+                relative = true;
+                subtract = true;
+              } else {
+                status = StatusCode.INVALID_EXTERNAL_INPUT;
+              }
+            }
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+            }
+          }
         }
         if (status.isOk()) {
-          result.appendUpdate(nullValue ? 0 : numberResult.value, nullValue);
+          result.appendUpdate(
+              nullValue ? 0 : numberResult.value,
+              nullValue,
+              relative,
+              subtract);
           if (result.updateColumnCount() == 1) {
             value = nullValue ? 0 : numberResult.value;
           }

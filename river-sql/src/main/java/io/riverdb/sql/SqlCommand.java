@@ -20,6 +20,8 @@ public final class SqlCommand {
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnAliases = new SqlIdentifier[MAXIMUM_COLUMNS];
+  private final SqlIdentifier[] updateSourceColumnNames =
+      new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] predicateTableNames =
       new SqlIdentifier[MAXIMUM_PREDICATES];
   private final SqlIdentifier[] predicateColumnNames =
@@ -34,6 +36,8 @@ public final class SqlCommand {
   private final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
   private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
+  private final boolean[] relativeUpdates = new boolean[MAXIMUM_COLUMNS];
+  private final boolean[] subtractUpdates = new boolean[MAXIMUM_COLUMNS];
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
@@ -74,6 +78,7 @@ public final class SqlCommand {
       columnNames[index] = new SqlIdentifier();
       columnTableNames[index] = new SqlIdentifier();
       columnAliases[index] = new SqlIdentifier();
+      updateSourceColumnNames[index] = new SqlIdentifier();
       predicateTableNames[index] = new SqlIdentifier();
       predicateColumnNames[index] = new SqlIdentifier();
       predicateValueTableNames[index] = new SqlIdentifier();
@@ -101,6 +106,9 @@ public final class SqlCommand {
     }
     for (SqlIdentifier columnAlias : columnAliases) {
       columnAlias.reset();
+    }
+    for (SqlIdentifier updateSourceColumnName : updateSourceColumnNames) {
+      updateSourceColumnName.reset();
     }
     for (int index = 0; index < predicateColumnNames.length; index++) {
       predicateTableNames[index].reset();
@@ -143,6 +151,8 @@ public final class SqlCommand {
     }
     for (int index = 0; index < nullUpdates.length; index++) {
       nullUpdates[index] = false;
+      relativeUpdates[index] = false;
+      subtractUpdates[index] = false;
     }
   }
 
@@ -371,9 +381,20 @@ public final class SqlCommand {
     available = true;
   }
 
-  void appendUpdate(long updateValue, boolean isNull) {
+  void appendUpdate(
+      long updateValue,
+      boolean isNull,
+      boolean relative,
+      boolean subtract) {
     updateValues[updateColumnCount] = updateValue;
-    nullUpdates[updateColumnCount++] = isNull;
+    nullUpdates[updateColumnCount] = isNull;
+    relativeUpdates[updateColumnCount] = relative;
+    subtractUpdates[updateColumnCount++] = subtract;
+  }
+
+  SqlIdentifier writableNextUpdateSourceColumnName() {
+    return updateColumnCount < updateSourceColumnNames.length
+        ? updateSourceColumnNames[updateColumnCount] : null;
   }
 
   SqlIdentifier writableTableName() {
@@ -583,6 +604,19 @@ public final class SqlCommand {
 
   public long updateValue(int index) {
     return index >= 0 && index < updateColumnCount ? updateValues[index] : 0;
+  }
+
+  public SqlIdentifier updateSourceColumnName(int index) {
+    return index >= 0 && index < updateColumnCount
+        ? updateSourceColumnNames[index] : null;
+  }
+
+  public boolean isRelativeUpdate(int index) {
+    return index >= 0 && index < updateColumnCount && relativeUpdates[index];
+  }
+
+  public boolean isSubtractUpdate(int index) {
+    return index >= 0 && index < updateColumnCount && subtractUpdates[index];
   }
 
   public int insertRowCount() {

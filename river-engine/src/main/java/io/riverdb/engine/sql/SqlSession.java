@@ -62,6 +62,7 @@ public final class SqlSession {
   private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
   private final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] updateSourceColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] predicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
   private final int[] scalarPredicateColumns =
       new int[SqlCommand.MAXIMUM_PREDICATES];
@@ -1308,6 +1309,15 @@ public final class SqlSession {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
         updatedColumns[index] = column;
+        if (command.isRelativeUpdate(index)) {
+          int sourceColumn = table.findColumn(command.updateSourceColumnName(index));
+          if (sourceColumn < 0) {
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          updateSourceColumns[index] = sourceColumn;
+        } else {
+          updateSourceColumns[index] = -1;
+        }
       }
       updatedColumnCount = command.updateColumnCount();
       return StatusCode.OK;
@@ -3558,18 +3568,48 @@ public final class SqlSession {
     if (status.isOk()) {
       for (int index = 0; index < updatedColumnCount; index++) {
         int column = updatedColumns[index];
-        row.putLong(
-            (column - 1) * Long.BYTES,
-            command.updateValue(index));
+        boolean nullValue = command.updateIsNull(index);
+        long updatedValue = command.updateValue(index);
+        if (command.isRelativeUpdate(index)) {
+          int sourceColumn = updateSourceColumns[index];
+          nullValue = isNull(fetched, table, sourceColumn);
+          if (nullValue && table.hasIndexOn(column)) {
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          if (!nullValue) {
+            long sourceValue = readColumn(primaryKey, fetched, sourceColumn);
+            boolean subtract = command.isSubtractUpdate(index);
+            updatedValue = subtract
+                ? sourceValue - updatedValue : sourceValue + updatedValue;
+            if (arithmeticOverflow(
+                sourceValue,
+                command.updateValue(index),
+                updatedValue,
+                subtract)) {
+              return StatusCode.RESOURCE_EXHAUSTED;
+            }
+          }
+        }
+        row.putLong((column - 1) * Long.BYTES, updatedValue);
         long nullMask = row.getLong(table.nullMaskOffset());
         row.putLong(
             table.nullMaskOffset(),
-            command.updateIsNull(index)
+            nullValue
                 ? nullMask | 1L << column : nullMask & ~(1L << column));
       }
       status = session.updateRow(table, primaryKey, row);
     }
     return status;
+  }
+
+  private static boolean arithmeticOverflow(
+      long left,
+      long right,
+      long result,
+      boolean subtract) {
+    return subtract
+        ? ((left ^ right) & (left ^ result)) < 0
+        : ((left ^ result) & (right ^ result)) < 0;
   }
 
   private StatusCode collectMatchedKeys() {
