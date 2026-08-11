@@ -14,12 +14,16 @@ decimal numerals, so user values cannot inject SQL text; the existing String
 engine boundary still requires one rendered SQL String per execution. Parameter
 count and rendered length are fixed at statement creation.
 
+Statement and prepared-statement batches hold at most 64 SQL snapshots. They
+execute in order through the same transaction state and report the exact
+successful prefix in `BatchUpdateException` if an entry fails.
+
 Column count and BIGINT type metadata are available when the query opens.
 Column names are not yet carried by the engine API or wire contract, so the
 temporary pre-V1 labels are `column1` through `column8`. Server-side prepared
-plans, other parameter types, batching, generated keys, LOBs, callable
-statements, non-loopback URLs, and authenticated JDBC properties remain
-unsupported until their production consumers are implemented.
+plans, other parameter types, generated keys, LOBs, callable statements,
+non-loopback URLs, and authenticated JDBC properties remain unsupported until
+their production consumers are implemented.
 
 River uses status returns internally. JDBC-mandated `SQLException` objects are
 created only at this external adapter boundary.

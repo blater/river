@@ -14,6 +14,7 @@ import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerOpenResult;
 import java.nio.file.Path;
+import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -22,6 +23,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -197,6 +199,72 @@ final class RiverDriverTest {
       assertThrows(
           SQLException.class,
           () -> select.executeQuery("SELECT value FROM prepared_values WHERE id=2"));
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void batchesAreBoundedAndReportTheSuccessfulPrefix(@TempDir Path root)
+      throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+
+    try (Connection connection = DriverManager.getConnection(url(server))) {
+      try (Statement statement = connection.createStatement()) {
+        assertEquals(0, statement.executeUpdate(
+            "CREATE TABLE batch_values (id BIGINT PRIMARY KEY, value BIGINT)"));
+        statement.addBatch("INSERT INTO batch_values VALUES (1, 10)");
+        statement.addBatch("INSERT INTO batch_values VALUES (2, 20)");
+        assertTrue(Arrays.equals(new int[] {1, 1}, statement.executeBatch()));
+        assertEquals(0, statement.executeBatch().length);
+
+        statement.addBatch("INSERT INTO batch_values VALUES (3, 30)");
+        statement.addBatch("INSERT INTO batch_values VALUES (1, 999)");
+        statement.addBatch("INSERT INTO batch_values VALUES (4, 40)");
+        BatchUpdateException partial = assertThrows(
+            BatchUpdateException.class,
+            statement::executeBatch);
+        assertTrue(Arrays.equals(new int[] {1}, partial.getUpdateCounts()));
+        assertEquals("40001", partial.getSQLState());
+
+        for (int index = 0;
+            index < RiverJdbcStatement.MAXIMUM_BATCH_STATEMENTS;
+            index++) {
+          statement.addBatch("INSERT INTO batch_values VALUES (99, 99)");
+        }
+        SQLException full = assertThrows(
+            SQLException.class,
+            () -> statement.addBatch("INSERT INTO batch_values VALUES (100, 100)"));
+        assertEquals("53000", full.getSQLState());
+        statement.clearBatch();
+      }
+
+      try (PreparedStatement insert = connection.prepareStatement(
+          "INSERT INTO batch_values VALUES (?, ?)")) {
+        insert.setLong(1, 4);
+        insert.setLong(2, 40);
+        insert.addBatch();
+        insert.setLong(1, 5);
+        insert.setLong(2, 50);
+        insert.addBatch();
+        assertTrue(Arrays.equals(new int[] {1, 1}, insert.executeBatch()));
+      }
+
+      try (Statement statement = connection.createStatement();
+          ResultSet rows = statement.executeQuery(
+              "SELECT id, value FROM batch_values WHERE id >= 1 AND id < 6")) {
+        long[] expectedKeys = {1, 2, 3, 4, 5};
+        int index = 0;
+        while (rows.next()) {
+          assertEquals(expectedKeys[index++], rows.getLong(1));
+        }
+        assertEquals(expectedKeys.length, index);
+      }
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());

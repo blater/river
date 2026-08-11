@@ -5,20 +5,26 @@ import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
+import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Arrays;
 
 /** One forward-only statement on the connection's ordered River session. */
 class RiverJdbcStatement extends AbstractStatement {
+  static final int MAXIMUM_BATCH_STATEMENTS = 64;
+
   private final RiverJdbcConnection connection;
   private final RiverSession session;
   private final CommandResult command = new CommandResult();
   private final QueryOpenResult openedQuery = new QueryOpenResult();
+  private final String[] batch = new String[MAXIMUM_BATCH_STATEMENTS];
   private RiverJdbcResultSet resultSet;
   private int updateCount = -1;
   private boolean closeOnCompletion;
   private boolean closed;
+  private int batchCount;
 
   RiverJdbcStatement(RiverJdbcConnection owner, RiverSession remoteSession) {
     connection = owner;
@@ -40,6 +46,10 @@ class RiverJdbcStatement extends AbstractStatement {
 
   @Override
   public int executeUpdate(String sql) throws SQLException {
+    return executeUpdateSql(sql);
+  }
+
+  private int executeUpdateSql(String sql) throws SQLException {
     requireOpen();
     closeCurrentResult();
     connection.beforeExecution();
@@ -69,6 +79,7 @@ class RiverJdbcStatement extends AbstractStatement {
       return;
     }
     closeCurrentResult();
+    clearBatchEntries();
     closed = true;
     connection.statementClosed(this);
   }
@@ -203,6 +214,58 @@ class RiverJdbcStatement extends AbstractStatement {
   }
 
   @Override
+  public void addBatch(String sql) throws SQLException {
+    requireOpen();
+    if (sql == null) {
+      throw JdbcExceptions.invalid("batch SQL must not be null");
+    }
+    addSqlBatch(sql);
+  }
+
+  @Override
+  public void clearBatch() throws SQLException {
+    requireOpen();
+    clearBatchEntries();
+  }
+
+  @Override
+  public int[] executeBatch() throws SQLException {
+    requireOpen();
+    closeCurrentResult();
+    int entries = batchCount;
+    int[] updates = new int[entries];
+    batchCount = 0;
+    for (int index = 0; index < entries; index++) {
+      String sql = batch[index];
+      batch[index] = null;
+      try {
+        updates[index] = executeUpdateSql(sql);
+      } catch (SQLException failure) {
+        for (int remaining = index + 1; remaining < entries; remaining++) {
+          batch[remaining] = null;
+        }
+        throw new BatchUpdateException(
+            "River batch failed at entry " + index,
+            failure.getSQLState(),
+            failure.getErrorCode(),
+            Arrays.copyOf(updates, index),
+            failure);
+      }
+    }
+    return updates;
+  }
+
+  @Override
+  public long[] executeLargeBatch() throws SQLException {
+    int[] updates = executeBatch();
+    long[] large = new long[updates.length];
+    for (int index = 0; index < updates.length; index++) {
+      large[index] = updates[index];
+    }
+    return large;
+  }
+
+  @Override
   public Connection getConnection() throws SQLException {
     requireOpen();
     return connection;
@@ -299,11 +362,27 @@ class RiverJdbcStatement extends AbstractStatement {
     closeCurrentResult();
   }
 
+  void addSqlBatch(String sql) throws SQLException {
+    if (batchCount >= batch.length) {
+      throw JdbcExceptions.failure(
+          StatusCode.RESOURCE_EXHAUSTED,
+          "add batch entry");
+    }
+    batch[batchCount++] = sql;
+  }
+
   private void closeCurrentResult() throws SQLException {
     RiverJdbcResultSet current = resultSet;
     if (current != null) {
       current.close();
     }
+  }
+
+  private void clearBatchEntries() {
+    for (int index = 0; index < batchCount; index++) {
+      batch[index] = null;
+    }
+    batchCount = 0;
   }
 
   private void requireOpen() throws SQLException {

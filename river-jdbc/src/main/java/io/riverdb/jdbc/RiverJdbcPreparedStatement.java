@@ -58,6 +58,11 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   }
 
   @Override
+  public void addBatch() throws SQLException {
+    addSqlBatch(render());
+  }
+
+  @Override
   public long executeLargeUpdate() throws SQLException {
     return executeUpdate();
   }
