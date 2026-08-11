@@ -618,6 +618,10 @@ public final class IndexedTable
     return store.obsoleteVersionCount();
   }
 
+  public synchronized int remainingVersionCapacity() {
+    return store.remainingVersionCapacity();
+  }
+
   public int rootPageId() {
     return BTreeRootPage.rootPageId(store.currentPayload(ROOT_META_PAGE_ID));
   }

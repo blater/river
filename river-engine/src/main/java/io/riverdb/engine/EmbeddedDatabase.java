@@ -148,6 +148,10 @@ public final class EmbeddedDatabase {
     return vacuum.automaticDeferrals();
   }
 
+  public long automaticVacuumPressureRejections() {
+    return vacuum.automaticPressureRejections();
+  }
+
   public long automaticVacuumRowsReclaimed() {
     return vacuum.automaticRowsReclaimed();
   }

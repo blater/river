@@ -13,6 +13,7 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
   private long committedSequence;
   private long automaticRuns;
   private long automaticDeferrals;
+  private long automaticPressureRejections;
   private long automaticRowsReclaimed;
 
   public IndexedVacuum(TransactionManager transactionManager, IndexedTable indexedTable) {
@@ -25,6 +26,12 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
   }
 
   public synchronized StatusCode runAutomatic(TransactionOutcome outcome) {
+    return runAutomatic(outcome, false);
+  }
+
+  public synchronized StatusCode runAutomatic(
+      TransactionOutcome outcome,
+      boolean rejectAdmissionWhenDeferred) {
     StatusCode status = table.vacuumPreflight();
     if (status.isOk()) {
       status = runMaintenance(outcome);
@@ -34,6 +41,9 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
       automaticRowsReclaimed += result.rowsReclaimed();
     } else if (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED) {
       automaticDeferrals++;
+      if (status == StatusCode.RETRY && rejectAdmissionWhenDeferred) {
+        automaticPressureRejections++;
+      }
     }
     return status;
   }
@@ -44,6 +54,10 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
 
   public synchronized long automaticDeferrals() {
     return automaticDeferrals;
+  }
+
+  public synchronized long automaticPressureRejections() {
+    return automaticPressureRejections;
   }
 
   public synchronized long automaticRowsReclaimed() {

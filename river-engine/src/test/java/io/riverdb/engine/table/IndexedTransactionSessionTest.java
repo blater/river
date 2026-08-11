@@ -831,6 +831,51 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void versionPressureRejectsNewAdmissionUntilSnapshotDrains(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    TransactionOutcome outcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(manager, table);
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(401, row(4010)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+
+    IndexedTransactionSession snapshot = session(manager, table);
+    assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedTransactionSession writer = new IndexedTransactionSession(
+        manager,
+        table,
+        128,
+        null,
+        vacuum,
+        100,
+        IndexedPageStore.MAX_ROWS);
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.update(401, row(4011)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.RETRY, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(1, vacuum.automaticDeferrals());
+    assertEquals(1, vacuum.automaticPressureRejections());
+    assertEquals(2, table.rowCount());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, snapshot.fetchByKey(401, fetched));
+    assertEquals(4010, value(fetched));
+
+    assertEquals(StatusCode.OK, snapshot.abort(outcome));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(1, table.rowCount());
+    assertEquals(StatusCode.OK, writer.update(401, row(4012)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, table.fetchByKey(401, fetched));
+    assertEquals(4012, value(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void commitsDistinctTransactionsFromConcurrentSessions(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

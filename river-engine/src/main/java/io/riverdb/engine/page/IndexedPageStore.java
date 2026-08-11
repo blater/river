@@ -433,6 +433,10 @@ public final class IndexedPageStore {
     return obsoleteVersionCount;
   }
 
+  public int remainingVersionCapacity() {
+    return MAX_ROWS - rowCount;
+  }
+
   public StatusCode commit(long transactionId, long commitSequence) {
     if (!operationActive
         || transactionId <= 0

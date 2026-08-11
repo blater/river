@@ -27,6 +27,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final IndexedGroupCommitCoordinator groupCommit;
   private final IndexedVacuum automaticVacuum;
   private final int automaticVacuumThreshold;
+  private final int automaticVacuumCapacityReserve;
   private final Transaction transaction;
   private final ByteBuffer pendingRows;
   private final int[] pendingOperations = new int[MAXIMUM_PENDING_INSERTS];
@@ -79,7 +80,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         maximumRowBytes,
         groupCommitCoordinator,
         versionVacuum,
-        AUTOMATIC_VACUUM_OBSOLETE_VERSIONS);
+        AUTOMATIC_VACUUM_OBSOLETE_VERSIONS,
+        MAXIMUM_PENDING_INSERTS);
   }
 
   IndexedTransactionSession(
@@ -89,11 +91,30 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       IndexedGroupCommitCoordinator groupCommitCoordinator,
       IndexedVacuum versionVacuum,
       int vacuumThreshold) {
+    this(
+        transactionManager,
+        indexedTable,
+        maximumRowBytes,
+        groupCommitCoordinator,
+        versionVacuum,
+        vacuumThreshold,
+        MAXIMUM_PENDING_INSERTS);
+  }
+
+  IndexedTransactionSession(
+      TransactionManager transactionManager,
+      IndexedTable indexedTable,
+      int maximumRowBytes,
+      IndexedGroupCommitCoordinator groupCommitCoordinator,
+      IndexedVacuum versionVacuum,
+      int vacuumThreshold,
+      int vacuumCapacityReserve) {
     manager = transactionManager;
     table = indexedTable;
     groupCommit = groupCommitCoordinator;
     automaticVacuum = versionVacuum;
     automaticVacuumThreshold = vacuumThreshold;
+    automaticVacuumCapacityReserve = vacuumCapacityReserve;
     transaction = new Transaction(transactionManager.maximumActiveTransactions());
     rowStride = maximumRowBytes;
     pendingRows = ByteBuffer.allocateDirect(maximumRowBytes * MAXIMUM_PENDING_INSERTS);
@@ -145,10 +166,19 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (obsoleteVersions < 0) {
       return StatusCode.CORRUPTION;
     }
-    if (obsoleteVersions < automaticVacuumThreshold) {
+    if (obsoleteVersions == 0) {
       return StatusCode.OK;
     }
-    StatusCode status = automaticVacuum.runAutomatic(maintenanceOutcome);
+    long reservedRows = (long) (manager.activeTransactionCount() + 1)
+        * automaticVacuumCapacityReserve;
+    boolean pressure = table.remainingVersionCapacity() < reservedRows;
+    if (obsoleteVersions < automaticVacuumThreshold && !pressure) {
+      return StatusCode.OK;
+    }
+    StatusCode status = automaticVacuum.runAutomatic(maintenanceOutcome, pressure);
+    if (status == StatusCode.RETRY && pressure) {
+      return status;
+    }
     if (status.isOk()
         || status == StatusCode.CONFLICT
         || status == StatusCode.RETRY
