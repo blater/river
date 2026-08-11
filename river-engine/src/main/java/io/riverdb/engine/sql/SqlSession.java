@@ -65,6 +65,37 @@ public final class SqlSession {
       new int[SqlCommand.MAXIMUM_PREDICATES];
   private final boolean[] scalarPredicateValueOuter =
       new boolean[SqlCommand.MAXIMUM_PREDICATES];
+  private final TableDefinition[] recursiveTables =
+      new TableDefinition[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final RelationalScanCursor[] recursiveCursors =
+      new RelationalScanCursor[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final RelationalScanResult[] recursiveRows =
+      new RelationalScanResult[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final ByteBuffer[] recursiveRowBuffers =
+      new ByteBuffer[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final HeapRowResult[] recursiveRowCopies =
+      new HeapRowResult[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final long[] recursiveKeys =
+      new long[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final int[] recursiveProjections =
+      new int[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final int[] recursivePredicateColumns = new int[
+      SqlQuery.MAXIMUM_QUERY_BLOCKS * SqlCommand.MAXIMUM_PREDICATES];
+  private final int[] recursivePredicateValueColumns = new int[
+      SqlQuery.MAXIMUM_QUERY_BLOCKS * SqlCommand.MAXIMUM_PREDICATES];
+  private final int[] recursivePredicateValueScopes = new int[
+      SqlQuery.MAXIMUM_QUERY_BLOCKS * SqlCommand.MAXIMUM_PREDICATES];
+  private final boolean[] recursiveScalarNulls =
+      new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final long[] recursiveScalarValues =
+      new long[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final boolean[] recursiveExistenceResults =
+      new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private long[] recursiveMembershipValues;
+  private final int[] recursiveMembershipCounts =
+      new int[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final boolean[] recursiveMembershipNulls =
+      new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
   private final long[] membershipValues = new long[MAXIMUM_MEMBERSHIP_VALUES];
   private final long[] membershipScratchValues =
@@ -121,9 +152,12 @@ public final class SqlSession {
   private boolean correlatedExistence;
   private boolean correlatedMembership;
   private boolean correlatedNestedChain;
+  private boolean recursiveNestedChain;
+  private boolean recursiveRootCorrelated;
   private boolean existenceResult;
   private boolean scalarResultNull;
   private long scalarResultValue;
+  private int membershipCandidateOffset;
   private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
@@ -407,11 +441,14 @@ public final class SqlSession {
     membershipValueCount = 0;
     membershipHasNull = false;
     membershipCandidates = membershipValues;
+    membershipCandidateOffset = 0;
     nestedCorrelated = false;
     correlatedScalar = false;
     correlatedExistence = false;
     correlatedMembership = false;
     correlatedNestedChain = false;
+    recursiveNestedChain = false;
+    recursiveRootCorrelated = false;
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk() && command.type() == SqlCommandType.COUNT) {
       status = execute(sql, aggregateExecution);
@@ -749,6 +786,17 @@ public final class SqlSession {
       status = validateRow(source);
       if (correlatedScalar || correlatedExistence) {
         subqueryPredicateFalse = false;
+      }
+      if (status.isOk() && recursiveNestedChain && recursiveRootCorrelated) {
+        subqueryPredicateFalse = false;
+        status = copyCorrelatedOuterRow(source);
+        if (status.isOk()) {
+          status = evaluateRecursiveChain(primaryKey, correlatedOuterRow);
+          source = correlatedOuterRow;
+        }
+        if (status.isOk() && subqueryPredicateFalse) {
+          continue;
+        }
       }
       if (status.isOk() && correlatedNestedChain) {
         subqueryPredicateFalse = false;
@@ -1272,7 +1320,9 @@ public final class SqlSession {
           && query.membershipPredicate() == index) {
         continue;
       }
-      if ((correlatedScalar || correlatedNestedChain)
+      if ((correlatedScalar
+              || correlatedNestedChain
+              || recursiveNestedChain && recursiveRootCorrelated)
           && query.hasScalarPredicate()
           && query.scalarPredicate() == index) {
         continue;
@@ -1711,7 +1761,7 @@ public final class SqlSession {
           && query.membershipPredicate() == index) {
         boolean equal = false;
         for (int candidate = 0; candidate < membershipValueCount; candidate++) {
-          if (value == membershipCandidates[candidate]) {
+          if (value == membershipCandidates[membershipCandidateOffset + candidate]) {
             equal = true;
             break;
           }
@@ -1735,6 +1785,17 @@ public final class SqlSession {
 
   private StatusCode prepareNestedChain() {
     StatusCode status = StatusCode.OK;
+    if (hasIntermediateReference()) {
+      ensureRecursiveState();
+      status = bindRecursiveChain();
+    }
+    if (!status.isOk()) {
+      return status;
+    }
+    if (recursiveNestedChain) {
+      return recursiveRootCorrelated
+          ? StatusCode.OK : evaluateRecursiveChain(0, null);
+    }
     boolean correlated = false;
     for (int block = query.blockCount() - 1;
         status.isOk() && block > 0;
@@ -1751,6 +1812,378 @@ public final class SqlSession {
       return StatusCode.OK;
     }
     return status.isOk() ? evaluateNestedChain(0, null) : status;
+  }
+
+  private boolean hasIntermediateReference() {
+    for (int depth = 2; depth < query.blockCount(); depth++) {
+      SqlCommand nested = query.block(depth);
+      for (int index = 0; index < nested.predicateCount(); index++) {
+        if (!nested.isColumnPredicate(index)) {
+          continue;
+        }
+        CharSequence qualifier = nested.predicateValueTableName(index);
+        if (matchesTableQualifier(nested, qualifier)) {
+          continue;
+        }
+        for (int scope = depth - 1; scope > 0; scope--) {
+          if (matchesTableQualifier(query.block(scope), qualifier)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private void ensureRecursiveState() {
+    if (recursiveMembershipValues != null) {
+      return;
+    }
+    recursiveMembershipValues = new long[
+        SqlQuery.MAXIMUM_QUERY_BLOCKS * MAXIMUM_MEMBERSHIP_VALUES];
+    for (int depth = 0; depth < recursiveTables.length; depth++) {
+      recursiveTables[depth] = new TableDefinition();
+      recursiveCursors[depth] = new RelationalScanCursor();
+      recursiveRows[depth] = new RelationalScanResult();
+      recursiveRowBuffers[depth] = ByteBuffer.allocateDirect(
+          TableSchema.MAXIMUM_COLUMNS * Long.BYTES);
+      recursiveRowCopies[depth] = new HeapRowResult();
+    }
+  }
+
+  private StatusCode bindRecursiveChain() {
+    recursiveNestedChain = false;
+    recursiveRootCorrelated = false;
+    for (int depth = 1; depth < query.blockCount(); depth++) {
+      SqlCommand nested = query.block(depth);
+      if (nested == null || nested.isOrdered()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      TableDefinition definition = recursiveTables[depth];
+      StatusCode status = session.resolveTable(nested.tableName(), definition);
+      if (!status.isOk()) {
+        return status;
+      }
+      if (nested.columnCount() != 1
+          || nested.isSelectAll()
+          || nested.columnTableName(0).length() > 0
+              && !matchesTableQualifier(nested, nested.columnTableName(0))) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      int projection = nested.isNullProjection(0)
+          ? NULL_PROJECTION : definition.findColumn(nested.firstColumnName());
+      if (projection < 0 && projection != NULL_PROJECTION) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      recursiveProjections[depth] = projection;
+      int base = depth * SqlCommand.MAXIMUM_PREDICATES;
+      for (int index = 0; index < nested.predicateCount(); index++) {
+        if (nested.predicateTableName(index).length() > 0
+            && !matchesTableQualifier(
+                nested, nested.predicateTableName(index))) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        int column = definition.findColumn(nested.predicateColumnName(index));
+        if (column < 0
+            || !nested.isNullPredicate(index)
+                && !nested.isEqualityPredicate(index)
+                && nested.predicateUpperExclusive(index)
+                    <= nested.predicateLowerInclusive(index)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        int slot = base + index;
+        recursivePredicateColumns[slot] = column;
+        recursivePredicateValueColumns[slot] = -1;
+        recursivePredicateValueScopes[slot] = -1;
+        if (nested.isColumnPredicate(index)) {
+          int scope = recursiveScope(
+              depth, nested.predicateValueTableName(index));
+          if (scope < 0) {
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          TableDefinition valueDefinition = scope == 0
+              ? table : recursiveTables[scope];
+          int valueColumn = valueDefinition.findColumn(
+              nested.predicateValueColumnName(index));
+          if (valueColumn < 0) {
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          recursivePredicateValueScopes[slot] = scope;
+          recursivePredicateValueColumns[slot] = valueColumn;
+          recursiveRootCorrelated |= scope == 0;
+          recursiveNestedChain |= scope > 0 && scope < depth;
+        }
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private int recursiveScope(int depth, CharSequence qualifier) {
+    if (qualifier.length() == 0) {
+      return -1;
+    }
+    SqlCommand local = query.block(depth);
+    if (matchesTableQualifier(local, qualifier)) {
+      return depth;
+    }
+    for (int scope = depth - 1; scope > 0; scope--) {
+      if (matchesTableQualifier(query.block(scope), qualifier)) {
+        return scope;
+      }
+    }
+    return matchesTableQualifier(command, qualifier) ? 0 : -1;
+  }
+
+  private StatusCode evaluateRecursiveChain(
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    int resultKind = query.hasScalarPredicate()
+        ? NESTED_SCALAR
+        : query.hasExistencePredicate()
+            ? NESTED_EXISTENCE
+            : query.hasMembershipPredicate() ? NESTED_MEMBERSHIP : 0;
+    if (resultKind == 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = evaluateRecursiveBlock(
+        1, resultKind, outerPrimaryKey, outerSource);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (resultKind == NESTED_SCALAR) {
+      subqueryPredicateFalse = recursiveScalarNulls[1];
+      if (!subqueryPredicateFalse) {
+        status = query.bindScalarValue(command, recursiveScalarValues[1]);
+      }
+    } else if (resultKind == NESTED_EXISTENCE) {
+      subqueryPredicateFalse = query.existenceNegated()
+          ? recursiveExistenceResults[1] : !recursiveExistenceResults[1];
+    } else {
+      subqueryPredicateFalse = false;
+      membershipCandidates = recursiveMembershipValues;
+      membershipCandidateOffset = MAXIMUM_MEMBERSHIP_VALUES;
+      membershipValueCount = recursiveMembershipCounts[1];
+      membershipHasNull = recursiveMembershipNulls[1];
+    }
+    return status;
+  }
+
+  private StatusCode evaluateRecursiveBlock(
+      int depth,
+      int resultKind,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    recursiveScalarNulls[depth] = true;
+    recursiveScalarValues[depth] = 0;
+    recursiveExistenceResults[depth] = false;
+    recursiveMembershipCounts[depth] = 0;
+    recursiveMembershipNulls[depth] = false;
+    SqlCommand nested = query.block(depth);
+    if (nested.rowLimit() == 0) {
+      return StatusCode.OK;
+    }
+    TableDefinition definition = recursiveTables[depth];
+    RelationalScanCursor cursor = recursiveCursors[depth];
+    RelationalScanResult rowResult = recursiveRows[depth];
+    StatusCode status = session.beginScan(definition, cursor);
+    boolean cursorActive = status.isOk();
+    long matchedRows = 0;
+    while (status.isOk()) {
+      status = session.nextScan(cursor, rowResult);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      HeapRowResult source = rowResult.row();
+      long primaryKey = rowResult.key();
+      if (status.isOk()) {
+        status = validateRow(source, definition);
+      }
+      if (status.isOk()
+          && !matchesRecursivePredicates(
+              depth, primaryKey, source, outerPrimaryKey, outerSource)) {
+        continue;
+      }
+      if (status.isOk() && depth + 1 < query.blockCount()) {
+        status = copyRecursiveRow(depth, primaryKey, source);
+        if (status.isOk()) {
+          source = recursiveRowCopies[depth];
+          int childKind = recursiveResultKind(depth);
+          status = childKind == 0
+              ? StatusCode.INVALID_EXTERNAL_INPUT
+              : evaluateRecursiveBlock(
+                  depth + 1, childKind, outerPrimaryKey, outerSource);
+        }
+        if (status.isOk()
+            && !matchesRecursiveChild(depth, primaryKey, source)) {
+          continue;
+        }
+      }
+      if (!status.isOk()) {
+        break;
+      }
+      matchedRows++;
+      int projection = recursiveProjections[depth];
+      if (resultKind == NESTED_EXISTENCE) {
+        recursiveExistenceResults[depth] = true;
+        break;
+      }
+      if (resultKind == NESTED_SCALAR) {
+        if (matchedRows > 1) {
+          status = StatusCode.CARDINALITY_VIOLATION;
+        } else if (projection != NULL_PROJECTION
+            && !isNull(source, definition, projection)) {
+          recursiveScalarNulls[depth] = false;
+          recursiveScalarValues[depth] = readColumn(
+              primaryKey, source, projection);
+        }
+      } else if (projection == NULL_PROJECTION
+          || isNull(source, definition, projection)) {
+        recursiveMembershipNulls[depth] = true;
+      } else {
+        int count = recursiveMembershipCounts[depth];
+        if (count >= MAXIMUM_MEMBERSHIP_VALUES) {
+          status = StatusCode.RESOURCE_EXHAUSTED;
+        } else {
+          recursiveMembershipValues[
+              depth * MAXIMUM_MEMBERSHIP_VALUES + count] = readColumn(
+                  primaryKey, source, projection);
+          recursiveMembershipCounts[depth] = count + 1;
+        }
+      }
+      if (status.isOk() && matchedRows >= nested.rowLimit()) {
+        break;
+      }
+    }
+    if (cursorActive) {
+      StatusCode close = session.closeScan(cursor);
+      if (close.isOk()) {
+        cursor.reset();
+        rowResult.reset();
+      }
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    return status;
+  }
+
+  private int recursiveResultKind(int block) {
+    return query.hasScalarPredicate(block)
+        ? NESTED_SCALAR
+        : query.hasExistencePredicate(block)
+            ? NESTED_EXISTENCE
+            : query.hasMembershipPredicate(block) ? NESTED_MEMBERSHIP : 0;
+  }
+
+  private StatusCode copyRecursiveRow(
+      int depth,
+      long primaryKey,
+      HeapRowResult source) {
+    ByteBuffer target = recursiveRowBuffers[depth];
+    target.clear();
+    target.limit(source.length());
+    StatusCode status = source.copyTo(target);
+    if (status.isOk()) {
+      target.position(0);
+      recursiveRowCopies[depth].set(target, 0, 0, source.length());
+      recursiveKeys[depth] = primaryKey;
+    }
+    return status;
+  }
+
+  private boolean matchesRecursivePredicates(
+      int depth,
+      long primaryKey,
+      HeapRowResult source,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    SqlCommand nested = query.block(depth);
+    TableDefinition definition = recursiveTables[depth];
+    int skipped = query.hasScalarPredicate(depth)
+        ? query.scalarPredicate(depth)
+        : query.hasMembershipPredicate(depth)
+            ? query.membershipPredicate(depth) : -1;
+    int base = depth * SqlCommand.MAXIMUM_PREDICATES;
+    for (int index = 0; index < nested.predicateCount(); index++) {
+      if (index == skipped) {
+        continue;
+      }
+      int slot = base + index;
+      int column = recursivePredicateColumns[slot];
+      long value = readColumn(primaryKey, source, column);
+      boolean nullValue = isNull(source, definition, column);
+      if (nested.isNullPredicate(index)) {
+        if (nullValue == nested.isNullPredicateNegated(index)) {
+          return false;
+        }
+        continue;
+      }
+      if (nullValue) {
+        return false;
+      }
+      if (nested.isColumnPredicate(index)) {
+        int scope = recursivePredicateValueScopes[slot];
+        int valueColumn = recursivePredicateValueColumns[slot];
+        HeapRowResult valueSource = scope == 0
+            ? outerSource : scope == depth
+                ? source : recursiveRowCopies[scope];
+        TableDefinition valueDefinition = scope == 0
+            ? table : recursiveTables[scope];
+        long valueKey = scope == 0
+            ? outerPrimaryKey : scope == depth
+                ? primaryKey : recursiveKeys[scope];
+        if (valueSource == null
+            || isNull(valueSource, valueDefinition, valueColumn)
+            || value != readColumn(valueKey, valueSource, valueColumn)) {
+          return false;
+        }
+        continue;
+      }
+      boolean matches = nested.isEqualityPredicate(index)
+          ? value == nested.predicateValue(index)
+          : value >= nested.predicateLowerInclusive(index)
+              && value < nested.predicateUpperExclusive(index);
+      if (!matches) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private boolean matchesRecursiveChild(
+      int depth,
+      long primaryKey,
+      HeapRowResult source) {
+    int child = depth + 1;
+    if (query.hasExistencePredicate(depth)) {
+      boolean exists = recursiveExistenceResults[child];
+      return query.existenceNegated(depth) ? !exists : exists;
+    }
+    int predicate = query.hasScalarPredicate(depth)
+        ? query.scalarPredicate(depth) : query.membershipPredicate(depth);
+    int column = recursivePredicateColumns[
+        depth * SqlCommand.MAXIMUM_PREDICATES + predicate];
+    TableDefinition definition = recursiveTables[depth];
+    if (isNull(source, definition, column)) {
+      return false;
+    }
+    long value = readColumn(primaryKey, source, column);
+    if (query.hasScalarPredicate(depth)) {
+      return !recursiveScalarNulls[child]
+          && value == recursiveScalarValues[child];
+    }
+    int count = recursiveMembershipCounts[child];
+    int offset = child * MAXIMUM_MEMBERSHIP_VALUES;
+    boolean equal = false;
+    for (int index = 0; index < count; index++) {
+      if (value == recursiveMembershipValues[offset + index]) {
+        equal = true;
+        break;
+      }
+    }
+    return equal != query.membershipNegated(depth)
+        && (equal || !recursiveMembershipNulls[child]);
   }
 
   private StatusCode evaluateNestedChain(
@@ -2545,6 +2978,17 @@ public final class SqlSession {
       }
       if (correlatedScalar || correlatedExistence) {
         subqueryPredicateFalse = false;
+      }
+      if (status.isOk() && recursiveNestedChain && recursiveRootCorrelated) {
+        subqueryPredicateFalse = false;
+        status = copyCorrelatedOuterRow(source);
+        if (status.isOk()) {
+          status = evaluateRecursiveChain(primaryKey, correlatedOuterRow);
+          source = correlatedOuterRow;
+        }
+        if (status.isOk() && subqueryPredicateFalse) {
+          continue;
+        }
       }
       if (status.isOk() && correlatedNestedChain) {
         subqueryPredicateFalse = false;

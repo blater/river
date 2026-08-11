@@ -459,6 +459,65 @@ final class RiverDriverTest {
         }
         assertFalse(nonImmediateShadow.next());
       }
+      try (ResultSet intermediateExistence = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id IN "
+              + "(SELECT b.id FROM accounts b WHERE EXISTS "
+              + "(SELECT c.id FROM accounts c "
+              + "WHERE c.id=b.id AND c.region=8))")) {
+        assertTrue(intermediateExistence.next());
+        assertEquals(3, intermediateExistence.getLong(1));
+        assertFalse(intermediateExistence.next());
+      }
+      try (ResultSet intermediateScalar = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id IN "
+              + "(SELECT b.id FROM accounts b WHERE b.id="
+              + "(SELECT c.id FROM accounts c WHERE c.id=b.id)) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(intermediateScalar.next());
+          assertEquals(expected, intermediateScalar.getLong(1));
+        }
+        assertFalse(intermediateScalar.next());
+      }
+      try (ResultSet intermediateMembership = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id IN "
+              + "(SELECT b.id FROM accounts b WHERE b.region IN "
+              + "(SELECT c.region FROM accounts c WHERE c.id=b.id)) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(intermediateMembership.next());
+          assertEquals(expected, intermediateMembership.getLong(1));
+        }
+        assertFalse(intermediateMembership.next());
+      }
+      try (ResultSet mixedIntermediate = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id IN "
+              + "(SELECT b.id FROM accounts b WHERE EXISTS "
+              + "(SELECT c.id FROM accounts c "
+              + "WHERE c.id=b.id AND c.region=a.region)) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(mixedIntermediate.next());
+          assertEquals(expected, mixedIntermediate.getLong(1));
+        }
+        assertFalse(mixedIntermediate.next());
+      }
+      try (ResultSet intermediateShadow = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id IN "
+              + "(SELECT a.id FROM accounts a WHERE EXISTS "
+              + "(SELECT c.id FROM accounts c "
+              + "WHERE c.id=a.id AND c.region=8)) ORDER BY id")) {
+        assertTrue(intermediateShadow.next());
+        assertEquals(3, intermediateShadow.getLong(1));
+        assertFalse(intermediateShadow.next());
+      }
+      SQLException intermediateCardinalityFailure = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
+              "SELECT a.id FROM accounts a WHERE a.id IN "
+                  + "(SELECT b.id FROM accounts b WHERE b.region="
+                  + "(SELECT c.region FROM accounts c "
+                  + "WHERE c.region=b.region))"));
+      assertEquals("21000", intermediateCardinalityFailure.getSQLState());
       try (ResultSet exists = statement.executeQuery(
           "SELECT id FROM accounts WHERE EXISTS "
               + "(SELECT id FROM regions WHERE code=7000) ORDER BY id")) {
