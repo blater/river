@@ -1640,6 +1640,35 @@ final class RiverDriverTest {
   }
 
   @Test
+  void reportsCheckConstraintSqlState(@TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE checked_values "
+                  + "(id BIGINT PRIMARY KEY, value BIGINT CHECK (value >= 0))"));
+      SQLException violation = assertThrows(
+          SQLException.class,
+          () -> statement.executeUpdate(
+              "INSERT INTO checked_values VALUES (1, -1)"));
+      assertEquals("23514", violation.getSQLState());
+      assertEquals(StatusCode.CHECK_VIOLATION.stableCode(), violation.getErrorCode());
+      assertEquals(
+          1,
+          statement.executeUpdate("INSERT INTO checked_values VALUES (1, 1)"));
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void returnsIdentityKeysThroughJdbc(@TempDir Path root) throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(

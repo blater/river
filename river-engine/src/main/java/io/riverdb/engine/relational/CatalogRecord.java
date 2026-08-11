@@ -7,7 +7,7 @@ import java.nio.ByteBuffer;
 /** Current catalog encoding for bounded relational schemas and index-build state. */
 final class CatalogRecord {
   static final int MAXIMUM_BYTES =
-      60 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
+      168 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
           + TableDefinition.MAXIMUM_INDEXES * 16
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
 
@@ -20,9 +20,12 @@ final class CatalogRecord {
   private static final int SEQUENCE_VERSION = 1;
   private static final int USER_SEQUENCE_VERSION = 1;
   private static final int IDENTITY_SEQUENCE_VERSION = 1;
-  private static final int TABLE_VERSION = 7;
+  private static final int TABLE_VERSION = 8;
   private static final int INDEX_VERSION = 2;
-  private static final int TABLE_DEFAULTS_OFFSET = 60;
+  private static final int TABLE_CHECK_MASK_OFFSET = 60;
+  private static final int TABLE_CHECKS_OFFSET = 68;
+  private static final int TABLE_CHECK_VALUES_OFFSET = 104;
+  private static final int TABLE_DEFAULTS_OFFSET = 168;
   private static final int TABLE_INDEXES_OFFSET =
       TABLE_DEFAULTS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Long.BYTES;
 
@@ -400,6 +403,8 @@ final class CatalogRecord {
         ? scratch.getLong(44) : -1;
     long identityMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(52) : -1;
+    long checkMask = source.length() >= TABLE_INDEXES_OFFSET
+        ? scratch.getLong(TABLE_CHECK_MASK_OFFSET) : -1;
     boolean validIndexCount = indexCount >= 0
         && indexCount <= TableDefinition.MAXIMUM_INDEXES;
     int nameOffset = validIndexCount
@@ -448,6 +453,9 @@ final class CatalogRecord {
         || (varcharMask & 1) != 0
         || (varcharMask & ~((1L << columnCount) - 1)) != 0
         || (identityMask != 0 && identityMask != 1)
+        || (checkMask & ~((1L << columnCount) - 1)) != 0
+        || (checkMask & varcharMask) != 0
+        || !validChecks(scratch, columnCount, checkMask)
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
@@ -469,6 +477,9 @@ final class CatalogRecord {
         defaultMask,
         varcharMask,
         identityMask == 1,
+        checkMask,
+        TABLE_CHECKS_OFFSET,
+        TABLE_CHECK_VALUES_OFFSET,
         TABLE_DEFAULTS_OFFSET);
     int buildingIndexes = 0;
     for (int index = 0; status.isOk() && index < indexCount; index++) {
@@ -623,6 +634,24 @@ final class CatalogRecord {
     boolean identity = definition != null
         ? definition.hasIdentity() : existing != null && existing.hasIdentity();
     target.putLong(52, identity ? 1 : 0);
+    long checkMask = definition != null
+        ? definition.checkMask() : existing != null ? existing.checkMask() : 0;
+    target.putLong(TABLE_CHECK_MASK_OFFSET, checkMask);
+    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
+      boolean checked = (checkMask & 1L << index) != 0;
+      int comparison = definition != null
+          ? definition.checkComparison(index)
+          : existing != null ? existing.checkComparison(index) : 0;
+      long value = definition != null
+          ? definition.checkValue(index)
+          : existing != null ? existing.checkValue(index) : 0;
+      target.putInt(
+          TABLE_CHECKS_OFFSET + index * Integer.BYTES,
+          checked ? comparison : 0);
+      target.putLong(
+          TABLE_CHECK_VALUES_OFFSET + index * Long.BYTES,
+          checked ? value : 0);
+    }
     for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
       long value = definition != null
           ? definition.defaultValue(index)
@@ -673,6 +702,20 @@ final class CatalogRecord {
         if (sameName(name, table.columnName(prior))) {
           return false;
         }
+      }
+    }
+    return true;
+  }
+
+  private static boolean validChecks(ByteBuffer source, int columns, long checkMask) {
+    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
+      int comparison = source.getInt(TABLE_CHECKS_OFFSET + index * Integer.BYTES);
+      long value = source.getLong(TABLE_CHECK_VALUES_OFFSET + index * Long.BYTES);
+      boolean checked = index < columns && (checkMask & 1L << index) != 0;
+      if (checked
+          ? !TableSchema.validCheckComparison(comparison)
+          : comparison != 0 || value != 0) {
+        return false;
       }
     }
     return true;

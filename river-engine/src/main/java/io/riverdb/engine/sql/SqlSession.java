@@ -1488,12 +1488,12 @@ public final class SqlSession {
       StatusCode status = StatusCode.OK;
       for (int index = 0; status.isOk() && index < command.insertRowCount(); index++) {
         encodeInsertRow(index);
-        status = session.insertRow(
-            table,
-            table.hasIdentity()
-                ? generatedInsertKeys[index]
-                : command.insertValue(index, insertSourceByColumn[0]),
-            row);
+        long key = table.hasIdentity()
+            ? generatedInsertKeys[index]
+            : command.insertValue(index, insertSourceByColumn[0]);
+        status = table.checksSatisfied(key, row)
+            ? session.insertRow(table, key, row)
+            : StatusCode.CHECK_VIOLATION;
       }
       if (status.isOk() && table.hasIdentity()) {
         result.setGeneratedKey(generatedInsertKeys[0]);
@@ -2057,6 +2057,11 @@ public final class SqlSession {
               command.columnName(index), !command.columnIsNotNull(index));
       if (status.isOk() && command.columnHasDefault(index)) {
         status = createSchema.setLastDefault(command.columnDefaultValue(index));
+      }
+      if (status.isOk() && command.columnHasCheck(index)) {
+        status = createSchema.setLastCheck(
+            checkComparisonCode(command.columnCheckComparison(index)),
+            command.columnCheckValue(index));
       }
     }
     if (status.isOk() && command.hasPrimaryKeyIdentity()) {
@@ -4273,7 +4278,9 @@ public final class SqlSession {
             nullValue
                 ? nullMask | 1L << column : nullMask & ~(1L << column));
       }
-      status = session.updateRow(table, primaryKey, row);
+      status = table.checksSatisfied(primaryKey, row)
+          ? session.updateRow(table, primaryKey, row)
+          : StatusCode.CHECK_VIOLATION;
     }
     return status;
   }
@@ -4286,6 +4293,18 @@ public final class SqlSession {
     return subtract
         ? ((left ^ right) & (left ^ result)) < 0
         : ((left ^ result) & (right ^ result)) < 0;
+  }
+
+  private static int checkComparisonCode(SqlComparison comparison) {
+    return switch (comparison) {
+      case EQUAL -> TableSchema.CHECK_EQUAL;
+      case NOT_EQUAL -> TableSchema.CHECK_NOT_EQUAL;
+      case LESS_THAN -> TableSchema.CHECK_LESS_THAN;
+      case LESS_OR_EQUAL -> TableSchema.CHECK_LESS_OR_EQUAL;
+      case GREATER_THAN -> TableSchema.CHECK_GREATER_THAN;
+      case GREATER_OR_EQUAL -> TableSchema.CHECK_GREATER_OR_EQUAL;
+      case HALF_OPEN_RANGE, IN, NOT_IN -> 0;
+    };
   }
 
   private StatusCode collectMatchedKeys() {

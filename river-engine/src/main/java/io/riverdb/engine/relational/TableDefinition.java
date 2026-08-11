@@ -18,6 +18,8 @@ public final class TableDefinition {
   private final int[] uniqueIndexColumns = new int[MAXIMUM_INDEXES];
   private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
   private final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final long[] checkValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] checkComparisons = new int[TableSchema.MAXIMUM_COLUMNS];
   private final ColumnName keyColumnName = new ColumnName();
   private final ColumnName valueColumnName = new ColumnName();
   private final ColumnName[] additionalColumns =
@@ -27,6 +29,7 @@ public final class TableDefinition {
   private long notNullMask;
   private long defaultMask;
   private long varcharMask;
+  private long checkMask;
   private long schemaVersion;
   private boolean available;
   private boolean identity;
@@ -56,6 +59,7 @@ public final class TableDefinition {
     notNullMask = 0;
     defaultMask = 0;
     varcharMask = 0;
+    checkMask = 0;
     schemaVersion = 0;
     available = false;
     identity = false;
@@ -82,6 +86,7 @@ public final class TableDefinition {
     notNullMask = 1;
     defaultMask = 0;
     varcharMask = 0;
+    checkMask = 0;
     uniqueIndexCount = 0;
     identity = false;
     if (valueIndexTableId > 0) {
@@ -125,6 +130,7 @@ public final class TableDefinition {
     notNullMask = schema.notNullMask;
     varcharMask = schema.varcharMask;
     copyDefaults(schema);
+    copyChecks(schema);
     identity = schema.identity;
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
@@ -150,9 +156,12 @@ public final class TableDefinition {
     notNullMask = schema.notNullMask();
     defaultMask = schema.defaultMask();
     varcharMask = schema.varcharMask();
+    checkMask = schema.checkMask();
     identity = schema.hasIdentity();
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = schema.defaultValue(index);
+      checkComparisons[index] = schema.checkComparison(index);
+      checkValues[index] = schema.checkValue(index);
     }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
@@ -179,6 +188,9 @@ public final class TableDefinition {
       long requiredDefaultMask,
       long requiredVarcharMask,
       boolean requiredIdentity,
+      long requiredCheckMask,
+      int checksOffset,
+      int checkValuesOffset,
       int defaultsOffset) {
     owner = database;
     tableId = id;
@@ -187,8 +199,11 @@ public final class TableDefinition {
     defaultMask = requiredDefaultMask;
     varcharMask = requiredVarcharMask;
     identity = requiredIdentity;
+    checkMask = requiredCheckMask;
     for (int index = 0; index < columns; index++) {
       defaultValues[index] = source.getLong(defaultsOffset + index * Long.BYTES);
+      checkComparisons[index] = source.getInt(checksOffset + index * Integer.BYTES);
+      checkValues[index] = source.getLong(checkValuesOffset + index * Long.BYTES);
     }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
@@ -275,6 +290,31 @@ public final class TableDefinition {
 
   public boolean hasIdentity() {
     return identity;
+  }
+
+  public boolean checksSatisfied(long primaryKey, ByteBuffer row) {
+    for (int column = 0; column < columnCount; column++) {
+      if ((checkMask & 1L << column) == 0
+          || column > 0 && isNull(row, column)) {
+        continue;
+      }
+      long actual = column == 0
+          ? primaryKey : row.getLong(row.position() + (column - 1) * Long.BYTES);
+      long required = checkValues[column];
+      boolean satisfied = switch (checkComparisons[column]) {
+        case TableSchema.CHECK_EQUAL -> actual == required;
+        case TableSchema.CHECK_NOT_EQUAL -> actual != required;
+        case TableSchema.CHECK_LESS_THAN -> actual < required;
+        case TableSchema.CHECK_LESS_OR_EQUAL -> actual <= required;
+        case TableSchema.CHECK_GREATER_THAN -> actual > required;
+        case TableSchema.CHECK_GREATER_OR_EQUAL -> actual >= required;
+        default -> false;
+      };
+      if (!satisfied) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public long defaultValue(int column) {
@@ -494,6 +534,26 @@ public final class TableDefinition {
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = source.defaultValues[index];
     }
+  }
+
+  private void copyChecks(TableDefinition source) {
+    checkMask = source.checkMask;
+    for (int index = 0; index < columnCount; index++) {
+      checkComparisons[index] = source.checkComparisons[index];
+      checkValues[index] = source.checkValues[index];
+    }
+  }
+
+  long checkMask() {
+    return checkMask;
+  }
+
+  int checkComparison(int column) {
+    return column >= 0 && column < columnCount ? checkComparisons[column] : 0;
+  }
+
+  long checkValue(int column) {
+    return column >= 0 && column < columnCount ? checkValues[column] : 0;
   }
 
   private void setIndex(int slot, int tableId, int state, int column, boolean unique) {

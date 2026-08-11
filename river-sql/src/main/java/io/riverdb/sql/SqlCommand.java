@@ -41,6 +41,9 @@ public final class SqlCommand {
   private final long[] insertVarcharMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
   private final long[] columnDefaultValues = new long[MAXIMUM_COLUMNS];
+  private final long[] columnCheckValues = new long[MAXIMUM_COLUMNS];
+  private final SqlComparison[] columnCheckComparisons =
+      new SqlComparison[MAXIMUM_COLUMNS];
   private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] defaultUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] varcharUpdates = new boolean[MAXIMUM_COLUMNS];
@@ -118,6 +121,8 @@ public final class SqlCommand {
     }
     for (int index = 0; index < nullProjections.length; index++) {
       nullProjections[index] = false;
+      columnCheckValues[index] = 0;
+      columnCheckComparisons[index] = null;
     }
     for (SqlIdentifier columnTableName : columnTableNames) {
       columnTableName.reset();
@@ -517,6 +522,14 @@ public final class SqlCommand {
     }
   }
 
+  void markLastColumnCheck(SqlComparison comparison, long value) {
+    if (columnCount > 0) {
+      int column = columnCount - 1;
+      columnCheckComparisons[column] = comparison;
+      columnCheckValues[column] = value;
+    }
+  }
+
   void markLastPredicateVarchar() {
     if (predicateCount > 0) {
       varcharPredicates[predicateCount - 1] = true;
@@ -657,6 +670,20 @@ public final class SqlCommand {
 
   public boolean hasPrimaryKeyIdentity() {
     return primaryKeyIdentity;
+  }
+
+  public boolean columnHasCheck(int index) {
+    return index >= 0
+        && index < columnCount
+        && columnCheckComparisons[index] != null;
+  }
+
+  public SqlComparison columnCheckComparison(int index) {
+    return columnHasCheck(index) ? columnCheckComparisons[index] : null;
+  }
+
+  public long columnCheckValue(int index) {
+    return columnHasCheck(index) ? columnCheckValues[index] : 0;
   }
 
   public SqlIdentifier columnTableName(int index) {

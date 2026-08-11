@@ -532,6 +532,9 @@ public final class SqlParser {
               result.markPrimaryKeyIdentity();
             }
           }
+          if (status.isOk() && consumeKeyword(sql, "CHECK")) {
+            status = columnCheck(sql, result);
+          }
           if (status.isOk()) {
             status = requireKeyword(sql, "PRIMARY");
           }
@@ -593,6 +596,12 @@ public final class SqlParser {
                   if (status.isOk()) {
                     result.markLastColumnDefault(numberResult.value);
                   }
+                }
+              } else if (consumeKeyword(sql, "CHECK")) {
+                if (result.columnHasCheck(result.columnCount() - 1)) {
+                  status = StatusCode.INVALID_EXTERNAL_INPUT;
+                } else {
+                  status = columnCheck(sql, result);
                 }
               } else {
                 constraints = false;
@@ -1196,6 +1205,37 @@ public final class SqlParser {
           ? SqlComparison.GREATER_OR_EQUAL : SqlComparison.GREATER_THAN;
     }
     return null;
+  }
+
+  private StatusCode columnCheck(CharSequence sql, SqlCommand result) {
+    StatusCode status = requireCharacter(sql, '(');
+    identifierScratch.reset();
+    if (status.isOk()) {
+      status = identifier(sql, identifierScratch);
+    }
+    int column = result.columnCount() - 1;
+    if (status.isOk()
+        && !sameIdentifier(identifierScratch, result.columnName(column))) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SqlComparison comparison = status.isOk() ? comparisonOperator(sql) : null;
+    if (status.isOk()
+        && (comparison == null
+            || comparison == SqlComparison.HALF_OPEN_RANGE
+            || comparison == SqlComparison.IN
+            || comparison == SqlComparison.NOT_IN)) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      status = number(sql, numberResult);
+    }
+    if (status.isOk()) {
+      status = requireCharacter(sql, ')');
+    }
+    if (status.isOk()) {
+      result.markLastColumnCheck(comparison, numberResult.value);
+    }
+    return status;
   }
 
   private boolean consumeHalfOpenUpper(

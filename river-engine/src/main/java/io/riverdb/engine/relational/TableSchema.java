@@ -5,14 +5,23 @@ import io.riverdb.base.error.StatusCode;
 /** Caller-owned bounded schema for the current BIGINT and VARCHAR(7) relational slice. */
 public final class TableSchema {
   public static final int MAXIMUM_COLUMNS = 8;
+  public static final int CHECK_EQUAL = 1;
+  public static final int CHECK_NOT_EQUAL = 2;
+  public static final int CHECK_LESS_THAN = 3;
+  public static final int CHECK_LESS_OR_EQUAL = 4;
+  public static final int CHECK_GREATER_THAN = 5;
+  public static final int CHECK_GREATER_OR_EQUAL = 6;
   static final int MAXIMUM_NAME_LENGTH = 64;
 
   private final ColumnName[] columns = new ColumnName[MAXIMUM_COLUMNS];
   private final long[] defaultValues = new long[MAXIMUM_COLUMNS];
+  private final long[] checkValues = new long[MAXIMUM_COLUMNS];
+  private final int[] checkComparisons = new int[MAXIMUM_COLUMNS];
   private int columnCount;
   private long notNullMask;
   private long defaultMask;
   private long varcharMask;
+  private long checkMask;
   private boolean identity;
 
   public TableSchema() {
@@ -29,6 +38,7 @@ public final class TableSchema {
     notNullMask = 0;
     defaultMask = 0;
     varcharMask = 0;
+    checkMask = 0;
     identity = false;
   }
 
@@ -89,6 +99,20 @@ public final class TableSchema {
     return StatusCode.OK;
   }
 
+  public StatusCode setLastCheck(int comparison, long value) {
+    int column = columnCount - 1;
+    if (column < 0
+        || (varcharMask & 1L << column) != 0
+        || (checkMask & 1L << column) != 0
+        || !validCheckComparison(comparison)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    checkMask |= 1L << column;
+    checkComparisons[column] = comparison;
+    checkValues[column] = value;
+    return StatusCode.OK;
+  }
+
   public int columnCount() {
     return columnCount;
   }
@@ -137,6 +161,22 @@ public final class TableSchema {
 
   long varcharMask() {
     return varcharMask;
+  }
+
+  long checkMask() {
+    return checkMask;
+  }
+
+  int checkComparison(int column) {
+    return column >= 0 && column < columnCount ? checkComparisons[column] : 0;
+  }
+
+  long checkValue(int column) {
+    return column >= 0 && column < columnCount ? checkValues[column] : 0;
+  }
+
+  static boolean validCheckComparison(int comparison) {
+    return comparison >= CHECK_EQUAL && comparison <= CHECK_GREATER_OR_EQUAL;
   }
 
   static final class ColumnName implements CharSequence {
