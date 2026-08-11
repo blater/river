@@ -143,6 +143,7 @@ public final class SqlSession {
   private long sortedOutputPrimaryKey;
   private long sortedOutputNullMask;
   private boolean transactionActive;
+  private boolean statementActive;
   private boolean userSavepointActive;
   private boolean scanActive;
   private boolean subqueryPredicateFalse;
@@ -173,6 +174,45 @@ public final class SqlSession {
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
     session = relationalSession;
+  }
+
+  private StatusCode beginStatement() {
+    StatusCode status = session.beginStatement();
+    if (status.isOk()) {
+      statementActive = true;
+    }
+    return status;
+  }
+
+  private StatusCode completeStatement(StatusCode status) {
+    if (!statementActive) {
+      return status;
+    }
+    StatusCode completed = session.completeStatement();
+    if (completed.isOk()) {
+      statementActive = false;
+    }
+    return completed.isOk() ? status : completed;
+  }
+
+  private StatusCode failScanStart(
+      StatusCode status,
+      SqlScanCursor cursor,
+      boolean implicit) {
+    if (cursor.relational().isActive()) {
+      StatusCode close = session.closeScan(cursor.relational());
+      if (!close.isOk()) {
+        status = close;
+      }
+    }
+    status = completeStatement(status);
+    if (implicit) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        status = abort;
+      }
+    }
+    return status;
   }
 
   public static StatusCode create(
@@ -214,8 +254,11 @@ public final class SqlSession {
       if (transactionActive) {
         return StatusCode.CONFLICT;
       }
-      status = session.begin(command.isSerializableTransaction()
-          ? IsolationLevel.SERIALIZABLE : IsolationLevel.REPEATABLE_READ);
+      IsolationLevel isolation = command.isReadCommittedTransaction()
+          ? IsolationLevel.READ_COMMITTED
+          : command.isSerializableTransaction()
+              ? IsolationLevel.SERIALIZABLE : IsolationLevel.REPEATABLE_READ;
+      status = session.begin(isolation);
       if (status.isOk()) {
         transactionActive = true;
         result.setTransaction(true, 0);
@@ -296,9 +339,13 @@ public final class SqlSession {
       }
       status = session.createSavepoint(statementSavepoint);
       if (status.isOk()) {
+        status = beginStatement();
+      }
+      if (status.isOk()) {
         status = session.createTable(
             command.tableName(), createSchema, table);
       }
+      status = completeStatement(status);
       if (!status.isOk() && statementSavepoint.isActive()) {
         StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
         if (!rollback.isOk()) {
@@ -333,9 +380,13 @@ public final class SqlSession {
       }
       status = session.createSavepoint(statementSavepoint);
       if (status.isOk()) {
+        status = beginStatement();
+      }
+      if (status.isOk()) {
         status = session.createValueIndex(
             command.indexName(), command.tableName(), command.firstColumnName(), unique);
       }
+      status = completeStatement(status);
       if (!status.isOk() && statementSavepoint.isActive()) {
         StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
         if (!rollback.isOk()) {
@@ -375,6 +426,9 @@ public final class SqlSession {
       savepointActive = status.isOk();
     }
     if (status.isOk()) {
+      status = beginStatement();
+    }
+    if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
     }
     if (status.isOk()) {
@@ -383,6 +437,7 @@ public final class SqlSession {
     if (status.isOk()) {
       status = executeDataCommand(result);
     }
+    status = completeStatement(status);
     if (savepointActive) {
       if (!status.isOk()) {
         StatusCode cancel = session.cancelLockWait();
@@ -470,6 +525,9 @@ public final class SqlSession {
         status = session.begin(IsolationLevel.READ_COMMITTED);
       }
       if (status.isOk()) {
+        status = beginStatement();
+      }
+      if (status.isOk()) {
         status = session.resolveTable(command.tableName(), table);
       }
       if (status.isOk()) {
@@ -496,8 +554,8 @@ public final class SqlSession {
       }
       if (status.isOk()) {
         scanActive = true;
-      } else if (implicit) {
-        session.abort(outcome);
+      } else {
+        status = failScanStart(status, cursor, implicit);
       }
       return status;
     }
@@ -505,6 +563,9 @@ public final class SqlSession {
       boolean implicit = !transactionActive;
       if (implicit) {
         status = session.begin(IsolationLevel.READ_COMMITTED);
+      }
+      if (status.isOk()) {
+        status = beginStatement();
       }
       if (status.isOk()) {
         status = session.resolveTable(command.tableName(), table);
@@ -533,8 +594,8 @@ public final class SqlSession {
       }
       if (status.isOk()) {
         scanActive = true;
-      } else if (implicit) {
-        session.abort(outcome);
+      } else {
+        status = failScanStart(status, cursor, implicit);
       }
       return status;
     }
@@ -542,6 +603,9 @@ public final class SqlSession {
       boolean implicit = !transactionActive;
       if (implicit) {
         status = session.begin(IsolationLevel.READ_COMMITTED);
+      }
+      if (status.isOk()) {
+        status = beginStatement();
       }
       if (status.isOk()) {
         status = session.resolveTable(command.tableName(), table);
@@ -593,8 +657,8 @@ public final class SqlSession {
       }
       if (status.isOk()) {
         scanActive = true;
-      } else if (implicit) {
-        session.abort(outcome);
+      } else {
+        status = failScanStart(status, cursor, implicit);
       }
       return status;
     }
@@ -606,6 +670,9 @@ public final class SqlSession {
     boolean implicit = !transactionActive;
     if (implicit) {
       status = session.begin(IsolationLevel.READ_COMMITTED);
+    }
+    if (status.isOk()) {
+      status = beginStatement();
     }
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
@@ -701,10 +768,7 @@ public final class SqlSession {
       scanActive = true;
       return StatusCode.OK;
     }
-    if (implicit) {
-      session.abort(outcome);
-    }
-    return status;
+    return failScanStart(status, cursor, implicit);
   }
 
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
@@ -915,6 +979,7 @@ public final class SqlSession {
     if (status.isOk() && cursor.sorted()) {
       status = closeSortSpill();
     }
+    status = completeStatement(status);
     if (!status.isOk()) {
       return status;
     }

@@ -68,6 +68,36 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void readCommittedPinsOneSnapshotAcrossAStatement(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedTransactionSession reader = session(manager, table);
+    IndexedTransactionSession writer = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    HeapRowResult fetched = new HeapRowResult();
+
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.READ_COMMITTED));
+    assertEquals(StatusCode.OK, reader.beginStatement());
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(72, fetched));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(72, row(7201)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(72, fetched));
+    assertEquals(StatusCode.CONFLICT, reader.commit(outcome));
+    assertEquals(StatusCode.OK, reader.completeStatement());
+
+    assertEquals(StatusCode.OK, reader.beginStatement());
+    assertEquals(StatusCode.OK, reader.fetchByKey(72, fetched));
+    assertEquals(7201, value(fetched));
+    assertEquals(StatusCode.OK, reader.completeStatement());
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    close(table, wal, directory);
+  }
+
+  @Test
   void concurrentUniqueConflictAbortsOnlyLosingTransaction(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

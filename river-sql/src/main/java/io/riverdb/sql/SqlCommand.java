@@ -47,6 +47,7 @@ public final class SqlCommand {
   private boolean boundedScan;
   private boolean equalityPredicate;
   private boolean selectAll;
+  private boolean readCommittedTransaction;
   private boolean serializableTransaction;
   private int insertRowCount;
   private int insertColumnCount;
@@ -106,6 +107,7 @@ public final class SqlCommand {
     boundedScan = false;
     equalityPredicate = false;
     selectAll = false;
+    readCommittedTransaction = false;
     serializableTransaction = false;
     insertRowCount = 0;
     insertColumnCount = 0;
@@ -236,8 +238,9 @@ public final class SqlCommand {
     }
   }
 
-  void setBegin(boolean serializable) {
+  void setBegin(boolean readCommitted, boolean serializable) {
     type = SqlCommandType.BEGIN;
+    readCommittedTransaction = readCommitted;
     serializableTransaction = serializable;
     available = true;
   }
@@ -534,6 +537,10 @@ public final class SqlCommand {
 
   public boolean isSerializableTransaction() {
     return serializableTransaction;
+  }
+
+  public boolean isReadCommittedTransaction() {
+    return readCommittedTransaction;
   }
 
   public long rowLimit() {

@@ -56,6 +56,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private int activeScanCount;
   private int savepointCount;
   private boolean serializableScan;
+  private boolean statementActive;
 
   public IndexedTransactionSession(
       TransactionManager transactionManager,
@@ -141,13 +142,17 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode begin(IsolationLevel isolationLevel) {
-    if (transaction.isActiveHandle() || activeScanCount != 0 || savepointCount != 0) {
+    if (transaction.isActiveHandle()
+        || activeScanCount != 0
+        || savepointCount != 0
+        || statementActive) {
       return StatusCode.CONFLICT;
     }
     pendingInsertCount = 0;
     heldLockCount = 0;
     committedSequence = 0;
     serializableScan = false;
+    statementActive = false;
     for (LockToken heldLock : heldLocks) {
       StatusCode status = heldLock.reset();
       if (!status.isOk()) {
@@ -159,6 +164,31 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return maintenance;
     }
     return manager.begin(isolationLevel, table, transaction);
+  }
+
+  /** Pins one statement snapshot while higher layers perform related storage calls. */
+  public StatusCode beginStatement() {
+    if (transaction.state() != TransactionState.ACTIVE
+        || statementActive
+        || activeScanCount != 0) {
+      return StatusCode.CONFLICT;
+    }
+    StatusCode status = transaction.isolationLevel() == IsolationLevel.READ_COMMITTED
+        ? manager.refreshReadCommitted(transaction, table) : StatusCode.OK;
+    if (status.isOk()) {
+      statementActive = true;
+    }
+    return status;
+  }
+
+  public StatusCode completeStatement() {
+    if (transaction.state() != TransactionState.ACTIVE
+        || !statementActive
+        || activeScanCount != 0) {
+      return StatusCode.CONFLICT;
+    }
+    statementActive = false;
+    return StatusCode.OK;
   }
 
   private StatusCode maintainVersions() {
@@ -401,7 +431,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       rangeLocks[heldLockCount] = false;
       heldLockCount++;
     }
-    if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED) {
+    if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED
+        && !statementActive) {
       StatusCode status = manager.refreshReadCommitted(
           transaction, table);
       if (!status.isOk()) {
@@ -426,6 +457,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED
+        && !statementActive
         && activeScanCount == 0) {
       StatusCode status = manager.refreshReadCommitted(transaction, table);
       if (!status.isOk()) {
@@ -604,7 +636,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode commit(TransactionOutcome result) {
-    if (activeScanCount != 0) {
+    if (activeScanCount != 0 || statementActive) {
       return StatusCode.CONFLICT;
     }
     compactWriteSet();
@@ -703,7 +735,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode abort(TransactionOutcome result) {
-    if (activeScanCount != 0) {
+    if (activeScanCount != 0 || statementActive) {
       return StatusCode.CONFLICT;
     }
     StatusCode status = manager.abort(transaction, result);
@@ -865,7 +897,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   private StatusCode refreshForWrite() {
-    if (transaction.isolationLevel() != IsolationLevel.READ_COMMITTED) {
+    if (transaction.isolationLevel() != IsolationLevel.READ_COMMITTED
+        || statementActive) {
       return StatusCode.OK;
     }
     return manager.refreshReadCommitted(transaction, table);

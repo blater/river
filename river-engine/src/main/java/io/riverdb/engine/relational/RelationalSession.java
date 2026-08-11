@@ -70,6 +70,14 @@ public final class RelationalSession {
     return status;
   }
 
+  public StatusCode beginStatement() {
+    return session.beginStatement();
+  }
+
+  public StatusCode completeStatement() {
+    return session.completeStatement();
+  }
+
   public StatusCode resolveTable(CharSequence name, TableDefinition result) {
     if (result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

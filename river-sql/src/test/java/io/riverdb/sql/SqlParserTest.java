@@ -292,10 +292,26 @@ final class SqlParserTest {
     assertEquals(20, command.scanUpperExclusive());
     assertEquals(StatusCode.OK, parser.parse("BEGIN;", command));
     assertEquals(SqlCommandType.BEGIN, command.type());
+    assertEquals(false, command.isReadCommittedTransaction());
+    assertEquals(false, command.isSerializableTransaction());
+    assertEquals(StatusCode.OK, parser.parse("BEGIN READ COMMITTED", command));
+    assertEquals(SqlCommandType.BEGIN, command.type());
+    assertEquals(true, command.isReadCommittedTransaction());
+    assertEquals(false, command.isSerializableTransaction());
+    assertEquals(StatusCode.OK, parser.parse("BEGIN REPEATABLE READ", command));
+    assertEquals(SqlCommandType.BEGIN, command.type());
+    assertEquals(false, command.isReadCommittedTransaction());
     assertEquals(false, command.isSerializableTransaction());
     assertEquals(StatusCode.OK, parser.parse("BEGIN SERIALIZABLE", command));
     assertEquals(SqlCommandType.BEGIN, command.type());
+    assertEquals(false, command.isReadCommittedTransaction());
     assertEquals(true, command.isSerializableTransaction());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("BEGIN READ", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("BEGIN REPEATABLE", command));
     assertEquals(StatusCode.OK, parser.parse("SAVEPOINT before_update", command));
     assertEquals(SqlCommandType.SAVEPOINT, command.type());
     assertName("before_update", command.savepointName());

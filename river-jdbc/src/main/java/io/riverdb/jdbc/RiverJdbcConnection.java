@@ -186,7 +186,8 @@ final class RiverJdbcConnection extends AbstractConnection {
     if (transactionActive) {
       throw JdbcExceptions.failure(StatusCode.CONFLICT, "change transaction isolation");
     }
-    if (level != Connection.TRANSACTION_REPEATABLE_READ
+    if (level != Connection.TRANSACTION_READ_COMMITTED
+        && level != Connection.TRANSACTION_REPEATABLE_READ
         && level != Connection.TRANSACTION_SERIALIZABLE) {
       throw JdbcExceptions.unsupported();
     }
@@ -274,8 +275,10 @@ final class RiverJdbcConnection extends AbstractConnection {
   void beforeExecution() throws SQLException {
     requireOpen();
     if (!autoCommit && !transactionActive) {
-      String begin = isolation == Connection.TRANSACTION_SERIALIZABLE
-          ? "BEGIN SERIALIZABLE" : "BEGIN";
+      String begin = isolation == Connection.TRANSACTION_READ_COMMITTED
+          ? "BEGIN READ COMMITTED"
+          : isolation == Connection.TRANSACTION_SERIALIZABLE
+              ? "BEGIN SERIALIZABLE" : "BEGIN";
       transactionResult.reset();
       JdbcExceptions.require(session.execute(begin, transactionResult), "begin transaction");
       transactionActive = true;

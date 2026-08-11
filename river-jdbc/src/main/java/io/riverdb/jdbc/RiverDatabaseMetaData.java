@@ -213,7 +213,8 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   @Override
   public boolean supportsTransactionIsolationLevel(int level) throws SQLException {
     connection.requireOpen();
-    return level == Connection.TRANSACTION_REPEATABLE_READ
+    return level == Connection.TRANSACTION_READ_COMMITTED
+        || level == Connection.TRANSACTION_REPEATABLE_READ
         || level == Connection.TRANSACTION_SERIALIZABLE;
   }
 

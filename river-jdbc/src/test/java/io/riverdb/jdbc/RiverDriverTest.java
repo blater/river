@@ -839,6 +839,67 @@ final class RiverDriverTest {
   }
 
   @Test
+  void readCommittedRefreshesEachNestedQueryStatement(@TempDir Path root)
+      throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    String query = "SELECT id FROM isolation_values WHERE value="
+        + "(SELECT value FROM isolation_values WHERE id=1) ORDER BY id";
+
+    try (Connection setup = DriverManager.getConnection(url(server));
+        Statement statement = setup.createStatement()) {
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE isolation_values "
+              + "(id BIGINT PRIMARY KEY, value BIGINT)"));
+      assertEquals(2, statement.executeUpdate(
+          "INSERT INTO isolation_values VALUES (1, 10), (2, 20)"));
+    }
+    try (Connection reader = DriverManager.getConnection(url(server));
+        Connection writer = DriverManager.getConnection(url(server));
+        Statement reads = reader.createStatement();
+        Statement writes = writer.createStatement()) {
+      reader.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+      reader.setAutoCommit(false);
+      assertEquals(Connection.TRANSACTION_READ_COMMITTED,
+          reader.getTransactionIsolation());
+      assertQueryKeys(reads, query, 1);
+      assertEquals(1, writes.executeUpdate(
+          "UPDATE isolation_values SET value=20 WHERE id=1"));
+      assertQueryKeys(reads, query, 1, 2);
+      reader.rollback();
+
+      reader.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+      assertQueryKeys(reads, query, 1, 2);
+      assertEquals(1, writes.executeUpdate(
+          "UPDATE isolation_values SET value=30 WHERE id=1"));
+      assertQueryKeys(reads, query, 1, 2);
+      reader.rollback();
+      reader.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+      assertQueryKeys(reads, query, 1);
+      reader.rollback();
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertQueryKeys(
+      Statement statement,
+      String query,
+      long... expectedKeys) throws SQLException {
+    try (ResultSet rows = statement.executeQuery(query)) {
+      for (long expected : expectedKeys) {
+        assertTrue(rows.next());
+        assertEquals(expected, rows.getLong(1));
+      }
+      assertFalse(rows.next());
+    }
+  }
+
+  @Test
   void reportsBoundedSubsetAndStableSqlStates(@TempDir Path root) throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
@@ -862,11 +923,11 @@ final class RiverDriverTest {
       assertEquals(3, metadata.getJDBCMinorVersion());
       assertTrue(metadata.supportsTransactions());
       assertTrue(metadata.supportsTransactionIsolationLevel(
+          Connection.TRANSACTION_READ_COMMITTED));
+      assertTrue(metadata.supportsTransactionIsolationLevel(
           Connection.TRANSACTION_REPEATABLE_READ));
       assertTrue(metadata.supportsTransactionIsolationLevel(
           Connection.TRANSACTION_SERIALIZABLE));
-      assertFalse(metadata.supportsTransactionIsolationLevel(
-          Connection.TRANSACTION_READ_COMMITTED));
       assertTrue(metadata.supportsBatchUpdates());
       assertTrue(metadata.supportsResultSetConcurrency(
           ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));

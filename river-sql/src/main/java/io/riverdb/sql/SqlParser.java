@@ -409,12 +409,18 @@ public final class SqlParser {
     long scanLower = 0;
     long scanUpper = 0;
     boolean boundedScan = false;
+    boolean readCommittedTransaction = false;
     boolean serializableTransaction = false;
     if (consumeKeyword(sql, "BEGIN")) {
       type = SqlCommandType.BEGIN;
       status = StatusCode.OK;
       if (consumeKeyword(sql, "SERIALIZABLE")) {
         serializableTransaction = true;
+      } else if (consumeKeyword(sql, "READ")) {
+        status = requireKeyword(sql, "COMMITTED");
+        readCommittedTransaction = status.isOk();
+      } else if (consumeKeyword(sql, "REPEATABLE")) {
+        status = requireKeyword(sql, "READ");
       }
     } else if (consumeKeyword(sql, "SAVEPOINT")) {
       type = SqlCommandType.SAVEPOINT;
@@ -725,7 +731,7 @@ public final class SqlParser {
     } else if (type == SqlCommandType.SCAN) {
       result.setScan(scanLower, scanUpper, boundedScan);
     } else if (type == SqlCommandType.BEGIN) {
-      result.setBegin(serializableTransaction);
+      result.setBegin(readCommittedTransaction, serializableTransaction);
     } else {
       result.set(type, key, value);
     }
