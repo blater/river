@@ -228,6 +228,36 @@ public final class RelationalSession {
     return status;
   }
 
+  public StatusCode renameTable(
+      CharSequence currentName,
+      CharSequence renamedName) {
+    if (!registeredTransaction
+        || !RelationalKey.validName(currentName)
+        || !RelationalKey.validName(renamedName)
+        || sameName(currentName, renamedName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    if (status.isOk()) {
+      status = database.renameTable(this, currentName, renamedName);
+    }
+    if (!status.isOk() && acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
+  }
+
   public StatusCode update(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = resolveWriteKey(table, key);
     return status.isOk() ? session.update(physicalKey.key(), row) : status;
@@ -766,6 +796,20 @@ public final class RelationalSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return RelationalKey.tableRowKey(table.tableId(), key, physicalKey);
+  }
+
+  private static boolean sameName(
+      CharSequence first,
+      CharSequence second) {
+    if (first.length() != second.length()) {
+      return false;
+    }
+    for (int index = 0; index < first.length(); index++) {
+      if (first.charAt(index) != second.charAt(index)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private StatusCode resolveWriteKey(TableDefinition table, long key) {

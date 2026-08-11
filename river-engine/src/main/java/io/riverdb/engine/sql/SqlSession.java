@@ -433,13 +433,38 @@ public final class SqlSession {
       return status;
     }
     if (command.type() == SqlCommandType.ALTER_TABLE_RENAME) {
-      if (transactionActive) {
-        return StatusCode.CONFLICT;
+      if (!transactionActive) {
+        status = database.renameTable(
+            command.tableName(), command.renamedTableName());
+        if (status.isOk()) {
+          result.setUpdate(0, 0);
+        }
+        return status;
       }
-      status = database.renameTable(
-          command.tableName(), command.renamedTableName());
+      status = session.createSavepoint(statementSavepoint);
+      if (status.isOk()) {
+        status = beginStatement();
+      }
+      if (status.isOk()) {
+        status = session.renameTable(
+            command.tableName(), command.renamedTableName());
+      }
+      status = completeStatement(status);
+      if (!status.isOk() && statementSavepoint.isActive()) {
+        StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
+        if (!rollback.isOk()) {
+          status = rollback;
+        }
+      }
+      if (statementSavepoint.isActive()) {
+        StatusCode release = session.releaseSavepoint(statementSavepoint);
+        if (!release.isOk()) {
+          status = release;
+        }
+      }
       if (status.isOk()) {
         result.setUpdate(0, 0);
+        result.setTransaction(true, session.visibleCommitSequence());
       }
       return status;
     }

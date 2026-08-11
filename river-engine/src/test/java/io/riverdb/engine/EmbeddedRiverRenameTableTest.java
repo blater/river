@@ -59,15 +59,27 @@ final class EmbeddedRiverRenameTableTest {
 
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.OK,
         session.execute("ALTER TABLE accounts RENAME TO ledger", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO ledger VALUES (3, 'gamma')", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO accounts VALUES (4, 'delta')", result));
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
+    assertEquals(2, countRows(session, "SELECT id FROM accounts"));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("INSERT INTO ledger VALUES (3, 'gamma')", result));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("ALTER TABLE accounts RENAME TO customers", result));
+    assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(
         StatusCode.OK,
         session.execute("ALTER TABLE accounts RENAME TO ledger", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("INSERT INTO accounts VALUES (3, 'gamma')", result));
