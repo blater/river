@@ -221,6 +221,36 @@ final class SqlParserTest {
     assertName("accounts", command.tableName());
     assertEquals(2, command.predicateCount());
     assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, SUM(balance) AS total FROM accounts "
+                + "GROUP BY region ORDER BY region LIMIT 5",
+            command));
+    assertEquals(SqlCommandType.GROUP_SUM, command.type());
+    assertName("region", command.columnName(0));
+    assertName("balance", command.columnName(1));
+    assertName("total", command.columnAlias(1));
+    assertEquals(5, command.rowLimit());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, COUNT(balance) FROM accounts GROUP BY region",
+            command));
+    assertEquals(SqlCommandType.GROUP_COUNT_VALUE, command.type());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, MIN(accounts.balance) FROM accounts GROUP BY region",
+            command));
+    assertEquals(SqlCommandType.GROUP_MIN, command.type());
+    assertName("accounts", command.columnTableName(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, MAX(balance) FROM accounts GROUP BY region",
+            command));
+    assertEquals(SqlCommandType.GROUP_MAX, command.type());
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse(
             "SELECT region, COUNT(*) FROM accounts GROUP BY value",

@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.TableSchema;
+import io.riverdb.sql.SqlCommandType;
 
 /** Caller-owned capability for one ordered SQL table scan. */
 public final class SqlScanCursor {
@@ -12,7 +13,7 @@ public final class SqlScanCursor {
       new long[TableSchema.MAXIMUM_COLUMNS];
   private SqlSession owner;
   private boolean aggregate;
-  private boolean groupCount;
+  private boolean groupAggregate;
   private boolean distinct;
   private boolean join;
   private boolean sorted;
@@ -26,8 +27,12 @@ public final class SqlScanCursor {
   private long aggregateValue;
   private long aggregateCommitSequence;
   private long groupLookaheadValue;
+  private long groupLookaheadAggregateValue;
+  private boolean groupLookaheadAggregateNull;
   private long distinctValue;
   private int groupColumn = -1;
+  private int groupAggregateColumn = -1;
+  private SqlCommandType groupAggregateType;
   private int joinOuterColumn = -1;
   private int joinInnerColumn = -1;
   private long joinOuterKey;
@@ -48,7 +53,7 @@ public final class SqlScanCursor {
     }
     owner = null;
     aggregate = false;
-    groupCount = false;
+    groupAggregate = false;
     distinct = false;
     join = false;
     sorted = false;
@@ -62,8 +67,12 @@ public final class SqlScanCursor {
     aggregateValue = 0;
     aggregateCommitSequence = 0;
     groupLookaheadValue = 0;
+    groupLookaheadAggregateValue = 0;
+    groupLookaheadAggregateNull = false;
     distinctValue = 0;
     groupColumn = -1;
+    groupAggregateColumn = -1;
+    groupAggregateType = null;
     joinOuterColumn = -1;
     joinInnerColumn = -1;
     joinOuterKey = 0;
@@ -167,20 +176,30 @@ public final class SqlScanCursor {
     return StatusCode.OK;
   }
 
-  StatusCode claimGroupCount(
+  StatusCode claimGroupAggregate(
       SqlSession session,
       boolean implicit,
+      SqlCommandType aggregateType,
       int column,
+      int aggregateColumn,
       boolean indexedValue,
       long rowLimit) {
-    if (active || session == null || column < 0 || rowLimit < 0) {
+    if (active
+        || session == null
+        || !isGroupAggregate(aggregateType)
+        || column < 0
+        || aggregateColumn < -1
+        || aggregateType != SqlCommandType.GROUP_COUNT && aggregateColumn < 0
+        || rowLimit < 0) {
       return StatusCode.CONFLICT;
     }
     owner = session;
     implicitTransaction = implicit;
     valueIndex = indexedValue;
-    groupCount = true;
+    groupAggregate = true;
+    groupAggregateType = aggregateType;
     groupColumn = column;
+    groupAggregateColumn = aggregateColumn;
     maximumRows = rowLimit;
     projectedColumns[0] = column;
     projectedColumnCount = 2;
@@ -264,8 +283,8 @@ public final class SqlScanCursor {
     return aggregate;
   }
 
-  boolean groupCount() {
-    return groupCount;
+  boolean groupAggregate() {
+    return groupAggregate;
   }
 
   boolean distinct() {
@@ -338,6 +357,14 @@ public final class SqlScanCursor {
     return groupColumn;
   }
 
+  int groupAggregateColumn() {
+    return groupAggregateColumn;
+  }
+
+  SqlCommandType groupAggregateType() {
+    return groupAggregateType;
+  }
+
   boolean groupInputExhausted() {
     return groupInputExhausted;
   }
@@ -355,8 +382,18 @@ public final class SqlScanCursor {
     return groupLookaheadValue;
   }
 
-  void setGroupLookahead(long value) {
+  long groupLookaheadAggregateValue() {
+    return groupLookaheadAggregateValue;
+  }
+
+  boolean groupLookaheadAggregateNull() {
+    return groupLookaheadAggregateNull;
+  }
+
+  void setGroupLookahead(long value, long aggregateValue, boolean aggregateNull) {
     groupLookaheadValue = value;
+    groupLookaheadAggregateValue = aggregateValue;
+    groupLookaheadAggregateNull = aggregateNull;
     groupLookahead = true;
   }
 
@@ -415,5 +452,13 @@ public final class SqlScanCursor {
 
   public boolean isActive() {
     return active;
+  }
+
+  private static boolean isGroupAggregate(SqlCommandType type) {
+    return type == SqlCommandType.GROUP_COUNT
+        || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_SUM
+        || type == SqlCommandType.GROUP_MIN
+        || type == SqlCommandType.GROUP_MAX;
   }
 }

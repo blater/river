@@ -577,11 +577,29 @@ public final class SqlParser {
             if (consumeKeyword(sql, "COUNT")) {
               type = SqlCommandType.GROUP_COUNT;
               status = requireCharacter(sql, '(');
-              if (status.isOk()) {
-                status = requireCharacter(sql, '*');
-              }
-              if (status.isOk()) {
+              if (status.isOk() && consumeCharacter(sql, '*')) {
                 status = requireCharacter(sql, ')');
+              } else if (status.isOk()) {
+                type = SqlCommandType.GROUP_COUNT_VALUE;
+                status = groupAggregateColumn(sql, result);
+              }
+            } else if (consumeKeyword(sql, "SUM")) {
+              type = SqlCommandType.GROUP_SUM;
+              status = requireCharacter(sql, '(');
+              if (status.isOk()) {
+                status = groupAggregateColumn(sql, result);
+              }
+            } else if (consumeKeyword(sql, "MIN")) {
+              type = SqlCommandType.GROUP_MIN;
+              status = requireCharacter(sql, '(');
+              if (status.isOk()) {
+                status = groupAggregateColumn(sql, result);
+              }
+            } else if (consumeKeyword(sql, "MAX")) {
+              type = SqlCommandType.GROUP_MAX;
+              status = requireCharacter(sql, '(');
+              if (status.isOk()) {
+                status = groupAggregateColumn(sql, result);
               }
             } else {
               status = selectColumnIdentifier(sql, result);
@@ -601,7 +619,7 @@ public final class SqlParser {
           status = optionalTableAlias(sql, result);
         }
         if (status.isOk()
-            && type != SqlCommandType.GROUP_COUNT
+            && !isGroupAggregate(type)
             && consumeKeyword(sql, "JOIN")) {
           type = SqlCommandType.JOIN_SCAN;
           status = identifier(sql, result.writableJoinTableName());
@@ -645,7 +663,7 @@ public final class SqlParser {
             && consumeKeyword(sql, "WHERE")) {
           status = predicates(sql, result, false);
         }
-        if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
+        if (status.isOk() && isGroupAggregate(type)) {
           status = requireKeyword(sql, "GROUP");
           if (status.isOk()) {
             status = requireKeyword(sql, "BY");
@@ -665,7 +683,7 @@ public final class SqlParser {
             && consumeKeyword(sql, "ORDER")) {
           status = requireKeyword(sql, "BY");
           if (status.isOk()) {
-            status = type == SqlCommandType.GROUP_COUNT
+            status = isGroupAggregate(type)
                     || type == SqlCommandType.DISTINCT_SCAN
                 ? matchingEitherIdentifier(
                     sql,
@@ -677,7 +695,7 @@ public final class SqlParser {
             if (consumeKeyword(sql, "ASC")) {
               result.setDescendingOrder(false);
             } else if (consumeKeyword(sql, "DESC")) {
-              if (type == SqlCommandType.GROUP_COUNT
+              if (isGroupAggregate(type)
                   || type == SqlCommandType.DISTINCT_SCAN) {
                 status = StatusCode.INVALID_EXTERNAL_INPUT;
               } else {
@@ -1087,6 +1105,29 @@ public final class SqlParser {
       status = requireCharacter(sql, ')');
     }
     return status.isOk() ? optionalColumnAlias(sql, result, 0) : status;
+  }
+
+  private StatusCode groupAggregateColumn(CharSequence sql, SqlCommand result) {
+    int columnIndex = result.columnCount();
+    StatusCode status = selectColumnIdentifier(sql, result);
+    if (status.isOk()
+        && (result.isNullProjection(columnIndex)
+            || result.columnAlias(columnIndex).length() > 0)) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      status = requireCharacter(sql, ')');
+    }
+    return status.isOk()
+        ? optionalColumnAlias(sql, result, columnIndex) : status;
+  }
+
+  private static boolean isGroupAggregate(SqlCommandType type) {
+    return type == SqlCommandType.GROUP_COUNT
+        || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_SUM
+        || type == SqlCommandType.GROUP_MIN
+        || type == SqlCommandType.GROUP_MAX;
   }
 
   private StatusCode aggregateSource(CharSequence sql, SqlCommand result) {

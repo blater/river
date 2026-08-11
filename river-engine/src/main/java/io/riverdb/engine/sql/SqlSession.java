@@ -153,6 +153,7 @@ public final class SqlSession {
   private boolean scanActive;
   private boolean subqueryPredicateFalse;
   private boolean membershipHasNull;
+  private boolean groupAggregateInputNull;
   private boolean nestedCorrelated;
   private boolean correlatedScalar;
   private boolean correlatedExistence;
@@ -528,7 +529,7 @@ public final class SqlSession {
       }
       return status;
     }
-    if (status.isOk() && command.type() == SqlCommandType.GROUP_COUNT) {
+    if (status.isOk() && isGroupAggregate(command.type())) {
       boolean implicit = !transactionActive;
       if (implicit) {
         status = session.begin(IsolationLevel.READ_COMMITTED);
@@ -549,6 +550,19 @@ public final class SqlSession {
       }
       int groupColumn = status.isOk()
           ? table.findColumn(command.firstColumnName()) : -1;
+      int aggregateColumn = -1;
+      if (status.isOk() && command.type() != SqlCommandType.GROUP_COUNT) {
+        if (command.columnCount() != 2
+            || command.columnTableName(1).length() > 0
+                && !matchesTableQualifier(command, command.columnTableName(1))) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+        } else {
+          aggregateColumn = table.findColumn(command.columnName(1));
+          if (aggregateColumn < 0) {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+        }
+      }
       boolean valueIndex = groupColumn > 0 && table.hasIndexOn(groupColumn);
       if (status.isOk()
           && (groupColumn < 0 || groupColumn > 0 && !valueIndex)) {
@@ -558,8 +572,14 @@ public final class SqlSession {
         status = beginOrderedAggregateScan(cursor, groupColumn, valueIndex);
       }
       if (status.isOk()) {
-        status = cursor.claimGroupCount(
-            this, implicit, groupColumn, valueIndex, command.rowLimit());
+        status = cursor.claimGroupAggregate(
+            this,
+            implicit,
+            command.type(),
+            groupColumn,
+            aggregateColumn,
+            valueIndex,
+            command.rowLimit());
       }
       if (status.isOk()) {
         scanActive = true;
@@ -829,8 +849,8 @@ public final class SqlSession {
       }
       return status;
     }
-    if (cursor.groupCount()) {
-      return nextGroupCount(cursor, result);
+    if (cursor.groupAggregate()) {
+      return nextGroupAggregate(cursor, result);
     }
     if (cursor.distinct()) {
       return nextDistinct(cursor, result);
@@ -953,10 +973,10 @@ public final class SqlSession {
       }
       return COUNT_COLUMN_NAME;
     }
-    if (cursor.groupCount()) {
+    if (cursor.groupAggregate()) {
       return index == 0
           ? command.columnOutputName(0)
-          : index == 1 ? COUNT_COLUMN_NAME : null;
+          : index == 1 ? groupAggregateColumnName(cursor) : null;
     }
     if (cursor.distinct()) {
       return index == 0 ? command.columnOutputName(0) : null;
@@ -967,6 +987,21 @@ public final class SqlSession {
     int column = cursor.projectedColumn(index);
     return column == NULL_PROJECTION
         ? NULL_COLUMN_NAME : column < 0 ? null : table.columnName(column);
+  }
+
+  private CharSequence groupAggregateColumnName(SqlScanCursor cursor) {
+    if (cursor.groupAggregateType() != SqlCommandType.GROUP_COUNT) {
+      SqlIdentifier alias = command.columnAlias(1);
+      if (alias != null && alias.length() > 0) {
+        return alias;
+      }
+    }
+    return cursor.groupAggregateType() == SqlCommandType.GROUP_SUM
+        ? SUM_COLUMN_NAME
+        : cursor.groupAggregateType() == SqlCommandType.GROUP_MIN
+            ? MIN_COLUMN_NAME
+            : cursor.groupAggregateType() == SqlCommandType.GROUP_MAX
+                ? MAX_COLUMN_NAME : COUNT_COLUMN_NAME;
   }
 
   public StatusCode closeScan(SqlScanCursor cursor, SqlExecutionResult result) {
@@ -1334,6 +1369,14 @@ public final class SqlSession {
         || type == SqlCommandType.MAX;
   }
 
+  private static boolean isGroupAggregate(SqlCommandType type) {
+    return type == SqlCommandType.GROUP_COUNT
+        || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_SUM
+        || type == SqlCommandType.GROUP_MIN
+        || type == SqlCommandType.GROUP_MAX;
+  }
+
   private StatusCode bindProjections() {
     int count = command.isSelectAll() ? table.columnCount() : command.columnCount();
     if (count <= 0 || count > projectedColumns.length) {
@@ -1611,14 +1654,19 @@ public final class SqlSession {
     return StatusCode.OK;
   }
 
-  private StatusCode nextGroupCount(SqlScanCursor cursor, SqlScanRowResult result) {
+  private StatusCode nextGroupAggregate(
+      SqlScanCursor cursor,
+      SqlScanRowResult result) {
     if (cursor.groupInputExhausted() && !cursor.hasGroupLookahead()) {
       return StatusCode.CONFLICT;
     }
     long groupValue;
-    long count = 1;
+    long inputValue;
+    boolean inputNull;
     if (cursor.hasGroupLookahead()) {
       groupValue = cursor.takeGroupLookahead();
+      inputValue = cursor.groupLookaheadAggregateValue();
+      inputNull = cursor.groupLookaheadAggregateNull();
     } else {
       StatusCode first = nextGroupValue(cursor);
       if (first == StatusCode.CONFLICT) {
@@ -1629,7 +1677,16 @@ public final class SqlSession {
         return first;
       }
       groupValue = projectedValues[0];
+      inputValue = projectedValues[1];
+      inputNull = groupAggregateInputNull;
     }
+    SqlCommandType aggregateType = cursor.groupAggregateType();
+    long aggregate = aggregateType == SqlCommandType.GROUP_COUNT
+        ? 1 : aggregateType == SqlCommandType.GROUP_COUNT_VALUE
+            ? inputNull ? 0 : 1 : inputValue;
+    boolean aggregateNull = aggregateType != SqlCommandType.GROUP_COUNT
+        && aggregateType != SqlCommandType.GROUP_COUNT_VALUE
+        && inputNull;
     while (true) {
       StatusCode status = nextGroupValue(cursor);
       if (status == StatusCode.CONFLICT) {
@@ -1641,17 +1698,40 @@ public final class SqlSession {
       }
       long value = projectedValues[0];
       if (value != groupValue) {
-        cursor.setGroupLookahead(value);
+        cursor.setGroupLookahead(
+            value, projectedValues[1], groupAggregateInputNull);
         break;
       }
-      if (count == Long.MAX_VALUE) {
-        return StatusCode.RESOURCE_EXHAUSTED;
+      inputValue = projectedValues[1];
+      inputNull = groupAggregateInputNull;
+      if (aggregateType == SqlCommandType.GROUP_COUNT
+          || aggregateType == SqlCommandType.GROUP_COUNT_VALUE && !inputNull) {
+        if (aggregate == Long.MAX_VALUE) {
+          return StatusCode.RESOURCE_EXHAUSTED;
+        }
+        aggregate++;
+      } else if (!inputNull && aggregateNull) {
+        aggregate = inputValue;
+        aggregateNull = false;
+      } else if (!inputNull && aggregateType == SqlCommandType.GROUP_SUM) {
+        long sum = aggregate + inputValue;
+        if (arithmeticOverflow(aggregate, inputValue, sum, false)) {
+          return StatusCode.RESOURCE_EXHAUSTED;
+        }
+        aggregate = sum;
+      } else if (!inputNull
+          && aggregateType == SqlCommandType.GROUP_MIN
+          && inputValue < aggregate) {
+        aggregate = inputValue;
+      } else if (!inputNull
+          && aggregateType == SqlCommandType.GROUP_MAX
+          && inputValue > aggregate) {
+        aggregate = inputValue;
       }
-      count++;
     }
     projectedValues[0] = groupValue;
-    projectedValues[1] = count;
-    result.set(groupValue, projectedValues, 0, 2);
+    projectedValues[1] = aggregate;
+    result.set(groupValue, projectedValues, aggregateNull ? 1L << 1 : 0, 2);
     cursor.rowReturned();
     return StatusCode.OK;
   }
@@ -1852,6 +1932,11 @@ public final class SqlSession {
       int column = cursor.groupColumn();
       projectedValues[0] = column == 0
           ? primaryKey : source.getLong((column - 1) * Long.BYTES);
+      int aggregateColumn = cursor.groupAggregateColumn();
+      groupAggregateInputNull = aggregateColumn >= 0
+          && isNull(source, table, aggregateColumn);
+      projectedValues[1] = aggregateColumn < 0
+          ? 0 : readColumn(primaryKey, source, aggregateColumn);
       return StatusCode.OK;
     }
   }
