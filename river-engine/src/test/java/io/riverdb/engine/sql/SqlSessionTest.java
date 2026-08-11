@@ -1924,6 +1924,18 @@ final class SqlSessionTest {
     }
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, value FROM spilled ORDER BY value DESC LIMIT 3",
+            cursor));
+    for (long value = rowCount; value > rowCount - 3; value--) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(value, row.valueAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, database.close());
   }
 

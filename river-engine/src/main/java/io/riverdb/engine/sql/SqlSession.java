@@ -703,8 +703,8 @@ public final class SqlSession {
     }
     boolean materializedSort = status.isOk()
         && command.isOrdered()
-        && orderColumn > 0
-        && !table.hasIndexOn(orderColumn);
+        && (command.isDescendingOrder()
+            || orderColumn > 0 && !table.hasIndexOn(orderColumn));
     boolean bounded = status.isOk() && accessPredicate >= 0;
     boolean equality = bounded && accessEquality();
     int scanIndexColumn = status.isOk() && command.isOrdered() && !materializedSort
@@ -3281,20 +3281,17 @@ public final class SqlSession {
   }
 
   private int compareSortMergeRows(int left, int right) {
+    int comparison;
     if (sortMergeKeyNulls[left] != sortMergeKeyNulls[right]) {
-      return sortMergeKeyNulls[left] ? -1 : 1;
+      comparison = sortMergeKeyNulls[left] ? -1 : 1;
+    } else {
+      comparison = Long.compare(sortMergeKeys[left], sortMergeKeys[right]);
     }
-    long leftKey = sortMergeKeys[left];
-    long rightKey = sortMergeKeys[right];
-    if (leftKey < rightKey) {
-      return -1;
+    if (comparison == 0) {
+      comparison = Long.compare(
+          sortMergePrimaryKeys[left], sortMergePrimaryKeys[right]);
     }
-    if (leftKey > rightKey) {
-      return 1;
-    }
-    long leftPrimary = sortMergePrimaryKeys[left];
-    long rightPrimary = sortMergePrimaryKeys[right];
-    return leftPrimary < rightPrimary ? -1 : leftPrimary == rightPrimary ? 0 : 1;
+    return command.isDescendingOrder() ? -comparison : comparison;
   }
 
   private StatusCode readSortRunRow(int run) {
@@ -3405,20 +3402,16 @@ public final class SqlSession {
   }
 
   private int compareSortedRows(int left, int right) {
+    int comparison;
     if (sortedKeyNulls[left] != sortedKeyNulls[right]) {
-      return sortedKeyNulls[left] ? -1 : 1;
+      comparison = sortedKeyNulls[left] ? -1 : 1;
+    } else {
+      comparison = Long.compare(sortedKeys[left], sortedKeys[right]);
     }
-    long leftKey = sortedKeys[left];
-    long rightKey = sortedKeys[right];
-    if (leftKey < rightKey) {
-      return -1;
+    if (comparison == 0) {
+      comparison = Long.compare(sortedPrimaryKeys[left], sortedPrimaryKeys[right]);
     }
-    if (leftKey > rightKey) {
-      return 1;
-    }
-    long leftPrimary = sortedPrimaryKeys[left];
-    long rightPrimary = sortedPrimaryKeys[right];
-    return leftPrimary < rightPrimary ? -1 : leftPrimary == rightPrimary ? 0 : 1;
+    return command.isDescendingOrder() ? -comparison : comparison;
   }
 
   private void swapSortedRows(int left, int right) {

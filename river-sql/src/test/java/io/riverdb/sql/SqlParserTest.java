@@ -144,6 +144,7 @@ final class SqlParserTest {
             command));
     assertEquals(SqlCommandType.SCAN, command.type());
     assertEquals(true, command.isOrdered());
+    assertEquals(false, command.isDescendingOrder());
     assertName("value", command.orderColumnName());
     assertEquals(7, command.rowLimit());
     assertEquals(
@@ -175,8 +176,21 @@ final class SqlParserTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT DISTINCT region, key FROM accounts", command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("SELECT key FROM accounts ORDER BY key DESC", command));
+    assertTrue(command.isDescendingOrder());
+    assertName("key", command.orderColumnName());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "SELECT region, COUNT(*) FROM accounts "
+                + "GROUP BY region ORDER BY region DESC",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "SELECT DISTINCT region FROM accounts ORDER BY region DESC",
+            command));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -457,7 +471,7 @@ final class SqlParserTest {
         parser.parseQuery(
             "SELECT d.id FROM "
                 + "(SELECT id, region FROM accounts WHERE accounts.region=7) d "
-                + "WHERE d.id >= 1 AND d.id < 5 ORDER BY region LIMIT 2",
+                + "WHERE d.id >= 1 AND d.id < 5 ORDER BY region DESC LIMIT 2",
             query,
             command));
     assertEquals(2, query.blockCount());
@@ -470,6 +484,7 @@ final class SqlParserTest {
     assertEquals(1, command.predicateLowerInclusive(1));
     assertEquals(5, command.predicateUpperExclusive(1));
     assertName("region", command.orderColumnName());
+    assertTrue(command.isDescendingOrder());
     assertEquals(2, command.rowLimit());
     assertEquals(
         StatusCode.OK,

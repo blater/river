@@ -1114,6 +1114,23 @@ final class RiverDriverTest {
         assertEquals(3, rows.getLong(1));
         assertFalse(rows.next());
       }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_indexed ORDER BY value DESC")) {
+        for (long expected = 3; expected >= 1; expected--) {
+          assertTrue(rows.next());
+          assertEquals(expected, rows.getLong(1));
+        }
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values ORDER BY value DESC")) {
+        long[] expected = {5, 4, 3, 2, 1, 6};
+        for (long id : expected) {
+          assertTrue(rows.next());
+          assertEquals(id, rows.getLong(1));
+        }
+        assertFalse(rows.next());
+      }
 
       try (ResultSet count = statement.executeQuery(
           "SELECT COUNT(*) FROM comparison_values WHERE value<>0")) {
@@ -1158,6 +1175,16 @@ final class RiverDriverTest {
         assertEquals(4, rows.getLong(1));
         assertTrue(rows.next());
         assertEquals(5, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT d.id FROM "
+              + "(SELECT id, value FROM comparison_values) d "
+              + "WHERE d.value>0 ORDER BY id DESC")) {
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(4, rows.getLong(1));
         assertFalse(rows.next());
       }
       try (ResultSet row = statement.executeQuery(

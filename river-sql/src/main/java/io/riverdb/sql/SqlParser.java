@@ -667,7 +667,16 @@ public final class SqlParser {
                 : identifier(sql, result.writableOrderColumnName());
           }
           if (status.isOk()) {
-            consumeKeyword(sql, "ASC");
+            if (consumeKeyword(sql, "ASC")) {
+              result.setDescendingOrder(false);
+            } else if (consumeKeyword(sql, "DESC")) {
+              if (type == SqlCommandType.GROUP_COUNT
+                  || type == SqlCommandType.DISTINCT_SCAN) {
+                status = StatusCode.INVALID_EXTERNAL_INPUT;
+              } else {
+                result.setDescendingOrder(true);
+              }
+            }
           }
         }
         if (status.isOk() && consumeKeyword(sql, "LIMIT")) {

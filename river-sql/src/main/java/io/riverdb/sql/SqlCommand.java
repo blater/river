@@ -50,6 +50,7 @@ public final class SqlCommand {
   private boolean selectAll;
   private boolean readCommittedTransaction;
   private boolean serializableTransaction;
+  private boolean descendingOrder;
   private int insertRowCount;
   private int insertColumnCount;
   private int updateColumnCount;
@@ -114,6 +115,7 @@ public final class SqlCommand {
     selectAll = false;
     readCommittedTransaction = false;
     serializableTransaction = false;
+    descendingOrder = false;
     insertRowCount = 0;
     insertColumnCount = 0;
     updateColumnCount = 0;
@@ -251,6 +253,7 @@ public final class SqlCommand {
       }
     }
     orderColumnName.copyFrom(source.orderColumnName);
+    descendingOrder = source.descendingOrder;
     if (source.selectAll) {
       setSelectAll();
     }
@@ -461,6 +464,14 @@ public final class SqlCommand {
 
   public boolean isOrdered() {
     return orderColumnName.length() > 0;
+  }
+
+  void setDescendingOrder(boolean descending) {
+    descendingOrder = descending;
+  }
+
+  public boolean isDescendingOrder() {
+    return descendingOrder;
   }
 
   public long key() {

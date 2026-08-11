@@ -144,6 +144,7 @@ public final class SqlQuery {
       if (resolvedNull != 0) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
+      destination.setDescendingOrder(root.isDescendingOrder());
     }
     destination.setRowLimit(root.rowLimit());
     destination.setScan(0, 0, false);
