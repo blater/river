@@ -1168,6 +1168,24 @@ final class RiverDriverTest {
         assertFalse(rows.next());
       }
       try (ResultSet rows = statement.executeQuery(
+          "SELECT cv.id, ck.label FROM comparison_values cv "
+              + "JOIN comparison_kinds AS ck ON cv.kind=ck.id "
+              + "WHERE cv.value>0")) {
+        assertTrue(rows.next());
+        assertEquals(4, rows.getLong(1));
+        assertEquals(20, rows.getLong(2));
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertEquals(20, rows.getLong(2));
+        assertFalse(rows.next());
+      }
+      SQLException ambiguousAlias = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
+              "SELECT cv.id FROM comparison_values cv "
+                  + "JOIN comparison_kinds cv ON cv.kind=cv.id"));
+      assertEquals("22000", ambiguousAlias.getSQLState());
+      try (ResultSet rows = statement.executeQuery(
           "SELECT d.id FROM "
               + "(SELECT id, value FROM comparison_values) d "
               + "WHERE d.value>0 ORDER BY id")) {

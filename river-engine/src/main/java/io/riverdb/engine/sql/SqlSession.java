@@ -1302,7 +1302,9 @@ public final class SqlSession {
   }
 
   private StatusCode bindJoin() {
-    if (sameName(command.tableName(), command.joinTableName())) {
+    if (matchesTableQualifier(command, command.joinTableName())
+        || command.joinTableAlias().length() > 0
+            && matchesTableQualifier(command, command.joinTableAlias())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int outerJoinColumn = table.findColumn(command.joinOuterColumnName());
@@ -1324,7 +1326,7 @@ public final class SqlSession {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
         descriptor = column;
-      } else if (sameName(command.columnTableName(index), command.joinTableName())) {
+      } else if (matchesJoinTableQualifier(command, command.columnTableName(index))) {
         int column = joinTable.findColumn(command.columnName(index));
         if (column < 0) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1347,8 +1349,8 @@ public final class SqlSession {
     for (int index = 0; index < predicateCount; index++) {
       boolean outer = matchesTableQualifier(
           command, command.predicateTableName(index));
-      boolean inner = sameName(
-          command.predicateTableName(index), command.joinTableName());
+      boolean inner = matchesJoinTableQualifier(
+          command, command.predicateTableName(index));
       TableDefinition definition = outer ? table : inner ? joinTable : null;
       int column = definition == null
           ? -1 : definition.findColumn(command.predicateColumnName(index));
@@ -2969,6 +2971,14 @@ public final class SqlSession {
     return sameName(name, qualified.tableName())
         || qualified.tableAlias().length() > 0
             && sameName(name, qualified.tableAlias());
+  }
+
+  private static boolean matchesJoinTableQualifier(
+      SqlCommand qualified,
+      CharSequence name) {
+    return sameName(name, qualified.joinTableName())
+        || qualified.joinTableAlias().length() > 0
+            && sameName(name, qualified.joinTableAlias());
   }
 
   private static boolean sameName(CharSequence left, CharSequence right) {

@@ -208,6 +208,19 @@ final class SqlParserTest {
     assertName("code", command.columnName(1));
     assertEquals(
         StatusCode.OK,
+        parser.parse(
+            "SELECT a.key, r.code FROM accounts a "
+                + "JOIN regions AS r ON a.region=r.id "
+                + "WHERE a.region=7 AND r.code>=7000",
+            command));
+    assertName("a", command.tableAlias());
+    assertName("r", command.joinTableAlias());
+    assertName("a", command.columnTableName(0));
+    assertName("r", command.columnTableName(1));
+    assertName("a", command.predicateTableName(0));
+    assertName("r", command.predicateTableName(1));
+    assertEquals(
+        StatusCode.OK,
         parser.parse("SELECT region, key, value FROM accounts WHERE key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertEquals(3, command.columnCount());

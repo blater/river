@@ -9,6 +9,7 @@ public final class SqlCommand {
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier tableAlias = new SqlIdentifier();
   private final SqlIdentifier joinTableName = new SqlIdentifier();
+  private final SqlIdentifier joinTableAlias = new SqlIdentifier();
   private final SqlIdentifier joinOuterColumnName = new SqlIdentifier();
   private final SqlIdentifier joinInnerColumnName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
@@ -74,6 +75,7 @@ public final class SqlCommand {
     tableName.reset();
     tableAlias.reset();
     joinTableName.reset();
+    joinTableAlias.reset();
     joinOuterColumnName.reset();
     joinInnerColumnName.reset();
     indexName.reset();
@@ -306,6 +308,10 @@ public final class SqlCommand {
     return joinTableName;
   }
 
+  SqlIdentifier writableJoinTableAlias() {
+    return joinTableAlias;
+  }
+
   SqlIdentifier writableJoinOuterColumnName() {
     return joinOuterColumnName;
   }
@@ -378,6 +384,10 @@ public final class SqlCommand {
 
   public SqlIdentifier joinTableName() {
     return joinTableName;
+  }
+
+  public SqlIdentifier joinTableAlias() {
+    return joinTableAlias;
   }
 
   public SqlIdentifier joinOuterColumnName() {

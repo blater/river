@@ -604,10 +604,14 @@ public final class SqlParser {
           type = SqlCommandType.JOIN_SCAN;
           status = identifier(sql, result.writableJoinTableName());
           if (status.isOk()) {
+            status = optionalJoinTableAlias(sql, result);
+          }
+          if (status.isOk()) {
             status = requireKeyword(sql, "ON");
           }
           if (status.isOk()) {
-            status = matchingIdentifier(sql, result.tableName());
+            status = matchingEitherIdentifier(
+                sql, result.tableName(), result.tableAlias());
           }
           if (status.isOk()) {
             status = requireCharacter(sql, '.');
@@ -619,7 +623,8 @@ public final class SqlParser {
             status = requireCharacter(sql, '=');
           }
           if (status.isOk()) {
-            status = matchingIdentifier(sql, result.joinTableName());
+            status = matchingEitherIdentifier(
+                sql, result.joinTableName(), result.joinTableAlias());
           }
           if (status.isOk()) {
             status = requireCharacter(sql, '.');
@@ -1030,6 +1035,22 @@ public final class SqlParser {
     }
     return identifierStart(sql.charAt(offset))
         ? identifier(sql, result.writableTableAlias())
+        : StatusCode.OK;
+  }
+
+  private StatusCode optionalJoinTableAlias(
+      CharSequence sql,
+      SqlCommand result) {
+    if (consumeKeyword(sql, "AS")) {
+      return identifier(sql, result.writableJoinTableAlias());
+    }
+    skipSpaces(sql);
+    if (offset >= sql.length()
+        || nextKeyword(sql, "ON")) {
+      return StatusCode.OK;
+    }
+    return identifierStart(sql.charAt(offset))
+        ? identifier(sql, result.writableJoinTableAlias())
         : StatusCode.OK;
   }
 
