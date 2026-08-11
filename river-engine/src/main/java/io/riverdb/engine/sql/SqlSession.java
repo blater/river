@@ -153,6 +153,7 @@ public final class SqlSession {
   private boolean scanActive;
   private boolean subqueryPredicateFalse;
   private boolean membershipHasNull;
+  private boolean groupInputNull;
   private boolean groupAggregateInputNull;
   private boolean nestedCorrelated;
   private boolean correlatedScalar;
@@ -563,13 +564,53 @@ public final class SqlSession {
           }
         }
       }
-      boolean valueIndex = groupColumn > 0 && table.hasIndexOn(groupColumn);
-      if (status.isOk()
-          && (groupColumn < 0 || groupColumn > 0 && !valueIndex)) {
+      if (status.isOk() && groupColumn < 0) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      if (status.isOk()) {
-        status = beginOrderedAggregateScan(cursor, groupColumn, valueIndex);
+      boolean orderedInput = groupColumn == 0
+          || groupColumn > 0 && table.hasIndexOn(groupColumn);
+      boolean inputValueIndex = orderedInput && groupColumn > 0;
+      int sortedInputRows = -1;
+      if (status.isOk() && orderedInput) {
+        status = beginOrderedAggregateScan(
+            cursor, groupColumn, inputValueIndex);
+      } else if (status.isOk()) {
+        boolean bounded = accessPredicate >= 0;
+        boolean equality = bounded && accessEquality();
+        int scanIndexColumn = bounded
+                && predicateColumn > 0
+                && table.hasIndexOn(predicateColumn)
+            ? predicateColumn : -1;
+        inputValueIndex = scanIndexColumn > 0;
+        if (equality
+            && (predicateColumn == 0 || inputValueIndex)
+            && accessValue() == Long.MAX_VALUE) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+        } else if (inputValueIndex) {
+          status = session.beginValueScan(
+              table,
+              scanIndexColumn,
+              equality ? accessValue() : accessLowerInclusive(),
+              equality ? accessValue() + 1 : accessUpperExclusive(),
+              cursor.relational());
+        } else if (bounded && predicateColumn == 0) {
+          status = session.beginScan(
+              table,
+              equality ? accessValue() : accessLowerInclusive(),
+              equality ? accessValue() + 1 : accessUpperExclusive(),
+              cursor.relational());
+        } else {
+          status = session.beginScan(table, cursor.relational());
+        }
+        if (status.isOk()) {
+          projectedColumns[0] = groupColumn;
+          projectedColumns[1] = aggregateColumn < 0
+              ? NULL_PROJECTION : aggregateColumn;
+          projectedColumnCount = 2;
+          status = materializeSortedScan(
+              cursor, inputValueIndex, groupColumn);
+          sortedInputRows = status.isOk() ? sortedTotalRows : -1;
+        }
       }
       if (status.isOk()) {
         status = cursor.claimGroupAggregate(
@@ -578,7 +619,8 @@ public final class SqlSession {
             command.type(),
             groupColumn,
             aggregateColumn,
-            valueIndex,
+            inputValueIndex,
+            sortedInputRows,
             command.rowLimit());
       }
       if (status.isOk()) {
@@ -822,6 +864,9 @@ public final class SqlSession {
       cursor.rowReturned();
       return StatusCode.OK;
     }
+    if (cursor.groupAggregate()) {
+      return nextGroupAggregate(cursor, result);
+    }
     if (cursor.sorted()) {
       int sortedRow = cursor.currentSortedRow();
       if (sortedRow < 0) {
@@ -848,9 +893,6 @@ public final class SqlSession {
         cursor.rowReturned();
       }
       return status;
-    }
-    if (cursor.groupAggregate()) {
-      return nextGroupAggregate(cursor, result);
     }
     if (cursor.distinct()) {
       return nextDistinct(cursor, result);
@@ -1661,10 +1703,12 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     long groupValue;
+    boolean groupNull;
     long inputValue;
     boolean inputNull;
     if (cursor.hasGroupLookahead()) {
       groupValue = cursor.takeGroupLookahead();
+      groupNull = cursor.groupLookaheadNull();
       inputValue = cursor.groupLookaheadAggregateValue();
       inputNull = cursor.groupLookaheadAggregateNull();
     } else {
@@ -1677,6 +1721,7 @@ public final class SqlSession {
         return first;
       }
       groupValue = projectedValues[0];
+      groupNull = groupInputNull;
       inputValue = projectedValues[1];
       inputNull = groupAggregateInputNull;
     }
@@ -1697,9 +1742,12 @@ public final class SqlSession {
         return status;
       }
       long value = projectedValues[0];
-      if (value != groupValue) {
+      if (groupInputNull != groupNull || value != groupValue) {
         cursor.setGroupLookahead(
-            value, projectedValues[1], groupAggregateInputNull);
+            value,
+            groupInputNull,
+            projectedValues[1],
+            groupAggregateInputNull);
         break;
       }
       inputValue = projectedValues[1];
@@ -1731,7 +1779,11 @@ public final class SqlSession {
     }
     projectedValues[0] = groupValue;
     projectedValues[1] = aggregate;
-    result.set(groupValue, projectedValues, aggregateNull ? 1L << 1 : 0, 2);
+    long nullMask = groupNull ? 1 : 0;
+    if (aggregateNull) {
+      nullMask |= 1L << 1;
+    }
+    result.set(groupValue, projectedValues, nullMask, 2);
     cursor.rowReturned();
     return StatusCode.OK;
   }
@@ -1906,6 +1958,30 @@ public final class SqlSession {
   }
 
   private StatusCode nextGroupValue(SqlScanCursor cursor) {
+    if (cursor.sorted()) {
+      int sortedRow = cursor.currentSortedRow();
+      if (sortedRow < 0) {
+        return StatusCode.CONFLICT;
+      }
+      StatusCode status = StatusCode.OK;
+      long nullMask;
+      if (sortSpilled) {
+        status = nextSpilledSortRow(2);
+        nullMask = sortedOutputNullMask;
+      } else {
+        int valueStart = sortedRow * TableSchema.MAXIMUM_COLUMNS;
+        projectedValues[0] = sortedValues[valueStart];
+        projectedValues[1] = sortedValues[valueStart + 1];
+        nullMask = sortedNullMasks[sortedRow];
+      }
+      if (status.isOk()) {
+        cursor.advanceSortedRow();
+        groupInputNull = (nullMask & 1) != 0;
+        groupAggregateInputNull = cursor.groupAggregateColumn() >= 0
+            && (nullMask & 1L << 1) != 0;
+      }
+      return status;
+    }
     while (true) {
       StatusCode status;
       long primaryKey;
@@ -1932,6 +2008,7 @@ public final class SqlSession {
       int column = cursor.groupColumn();
       projectedValues[0] = column == 0
           ? primaryKey : source.getLong((column - 1) * Long.BYTES);
+      groupInputNull = isNull(source, table, column);
       int aggregateColumn = cursor.groupAggregateColumn();
       groupAggregateInputNull = aggregateColumn >= 0
           && isNull(source, table, aggregateColumn);

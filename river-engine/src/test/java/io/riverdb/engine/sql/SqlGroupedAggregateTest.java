@@ -17,6 +17,99 @@ final class SqlGroupedAggregateTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void spillsAndMergesUnindexedGroupsWithoutCollapsingNullIntoZero(
+      @TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE samples "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, amount BIGINT)",
+            result));
+
+    long[] sums = new long[8];
+    boolean[] values = new boolean[8];
+    int rows = 1_100;
+    for (int start = 1; start <= rows; start += 64) {
+      int end = Math.min(rows, start + 63);
+      StringBuilder insert = new StringBuilder("INSERT INTO samples VALUES ");
+      for (int id = start; id <= end; id++) {
+        if (id > start) {
+          insert.append(',');
+        }
+        boolean nullCategory = id % 100 == 0;
+        boolean nullAmount = id % 13 == 0;
+        insert.append('(').append(id).append(',');
+        if (nullCategory) {
+          insert.append("NULL");
+        } else {
+          insert.append(id % 7);
+        }
+        insert.append(',');
+        if (nullAmount) {
+          insert.append("NULL");
+        } else {
+          insert.append(id);
+          int group = nullCategory ? 0 : id % 7 + 1;
+          sums[group] += id;
+          values[group] = true;
+        }
+        insert.append(')');
+      }
+      assertEquals(StatusCode.OK, session.execute(insert.toString(), result));
+    }
+
+    String grouped =
+        "SELECT category, SUM(amount) FROM samples GROUP BY category ORDER BY category";
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(grouped, cursor));
+    for (int index = 0; index < sums.length; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(index == 0, row.isNull(0));
+      assertEquals(index == 0 ? 0 : index - 1, row.valueAt(0));
+      assertEquals(!values[index], row.isNull(1));
+      assertEquals(sums[index], row.valueAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(grouped + " LIMIT 1", cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+
+    assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    session = sessionResult.session();
+    assertGroups(
+        session,
+        "SELECT category, SUM(amount) FROM samples "
+            + "WHERE category=3 GROUP BY category",
+        "sum",
+        new long[] {3},
+        new long[] {sums[4]},
+        0);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void streamsGroupedValueAggregatesWithNullAndOverflowSemantics(
       @TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();

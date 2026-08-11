@@ -20,6 +20,7 @@ public final class SqlScanCursor {
   private boolean joinInnerScanActive;
   private boolean joinInnerUnique;
   private boolean groupLookahead;
+  private boolean groupLookaheadNull;
   private boolean groupInputExhausted;
   private boolean distinctValueAvailable;
   private boolean aggregateTransactionActive;
@@ -60,6 +61,7 @@ public final class SqlScanCursor {
     joinInnerScanActive = false;
     joinInnerUnique = false;
     groupLookahead = false;
+    groupLookaheadNull = false;
     groupInputExhausted = false;
     distinctValueAvailable = false;
     aggregateTransactionActive = false;
@@ -183,6 +185,7 @@ public final class SqlScanCursor {
       int column,
       int aggregateColumn,
       boolean indexedValue,
+      int sortedInputRows,
       long rowLimit) {
     if (active
         || session == null
@@ -190,6 +193,7 @@ public final class SqlScanCursor {
         || column < 0
         || aggregateColumn < -1
         || aggregateType != SqlCommandType.GROUP_COUNT && aggregateColumn < 0
+        || sortedInputRows < -1
         || rowLimit < 0) {
       return StatusCode.CONFLICT;
     }
@@ -200,6 +204,9 @@ public final class SqlScanCursor {
     groupAggregateType = aggregateType;
     groupColumn = column;
     groupAggregateColumn = aggregateColumn;
+    sorted = sortedInputRows >= 0;
+    sortedRowCount = sorted ? sortedInputRows : 0;
+    sortedRowIndex = 0;
     maximumRows = rowLimit;
     projectedColumns[0] = column;
     projectedColumnCount = 2;
@@ -382,6 +389,10 @@ public final class SqlScanCursor {
     return groupLookaheadValue;
   }
 
+  boolean groupLookaheadNull() {
+    return groupLookaheadNull;
+  }
+
   long groupLookaheadAggregateValue() {
     return groupLookaheadAggregateValue;
   }
@@ -390,8 +401,13 @@ public final class SqlScanCursor {
     return groupLookaheadAggregateNull;
   }
 
-  void setGroupLookahead(long value, long aggregateValue, boolean aggregateNull) {
+  void setGroupLookahead(
+      long value,
+      boolean nullValue,
+      long aggregateValue,
+      boolean aggregateNull) {
     groupLookaheadValue = value;
+    groupLookaheadNull = nullValue;
     groupLookaheadAggregateValue = aggregateValue;
     groupLookaheadAggregateNull = aggregateNull;
     groupLookahead = true;
