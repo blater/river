@@ -520,6 +520,18 @@ public final class SqlParser {
           if (status.isOk() && consumeKeyword(sql, "NOT")) {
             status = requireKeyword(sql, "NULL");
           }
+          if (status.isOk() && consumeKeyword(sql, "GENERATED")) {
+            status = requireKeyword(sql, "ALWAYS");
+            if (status.isOk()) {
+              status = requireKeyword(sql, "AS");
+            }
+            if (status.isOk()) {
+              status = requireKeyword(sql, "IDENTITY");
+            }
+            if (status.isOk()) {
+              result.markPrimaryKeyIdentity();
+            }
+          }
           if (status.isOk()) {
             status = requireKeyword(sql, "PRIMARY");
           }

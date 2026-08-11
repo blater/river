@@ -208,7 +208,39 @@ public final class RelationalDatabase {
     if (!status.isOk()) {
       return status;
     }
-    long sequenceKey = catalogKey.key();
+    return allocateSequence(
+        catalogKey.key(), name, 0, Long.MIN_VALUE, Long.MAX_VALUE, result);
+  }
+
+  public synchronized StatusCode nextIdentityValue(
+      TableDefinition table,
+      SequenceValueResult result) {
+    if (table == null
+        || result == null
+        || !table.isOwnedBy(this)
+        || !table.hasIdentity()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    return allocateSequence(
+        RelationalKey.identitySequenceKey(table.tableId()),
+        null,
+        table.tableId(),
+        1,
+        RelationalKey.MAXIMUM_USER_KEY,
+        result);
+  }
+
+  private StatusCode allocateSequence(
+      long sequenceKey,
+      CharSequence name,
+      int identityTableId,
+      long minimum,
+      long maximum,
+      SequenceValueResult result) {
+    if (schemaChangeOwner != null) {
+      return StatusCode.RETRY;
+    }
     int cachedSlot = sequenceCacheSlot(sequenceKey);
     if (cachedSlot >= 0) {
       long value = sequenceCacheNextValues[cachedSlot];
@@ -225,13 +257,16 @@ public final class RelationalDatabase {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     TransactionOutcome outcome = new TransactionOutcome();
-    status = session.begin(IsolationLevel.SERIALIZABLE);
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
     if (status.isOk()) {
       status = session.indexedSession().fetchByKey(sequenceKey, catalogRow);
     }
     if (status.isOk()) {
-      status = CatalogRecord.decodeUserSequence(
-          catalogRow, catalogScratch, name, userSequenceRecord);
+      status = identityTableId > 0
+          ? CatalogRecord.decodeIdentitySequence(
+              catalogRow, catalogScratch, identityTableId, userSequenceRecord)
+          : CatalogRecord.decodeUserSequence(
+              catalogRow, catalogScratch, name, userSequenceRecord);
     }
     if (status.isOk() && userSequenceRecord.isExhausted()) {
       status = StatusCode.RESOURCE_EXHAUSTED;
@@ -248,16 +283,22 @@ public final class RelationalDatabase {
       if (additionOverflows(next, increment)) {
         exhausted = true;
       } else {
-        next += increment;
+        long candidate = next + increment;
+        if (candidate < minimum || candidate > maximum) {
+          exhausted = true;
+        } else {
+          next = candidate;
+        }
       }
     }
     if (status.isOk()) {
-      CatalogRecord.encodeUserSequence(
-          catalogOutput,
-          name,
-          next,
-          increment,
-          exhausted);
+      if (identityTableId > 0) {
+        CatalogRecord.encodeIdentitySequence(
+            catalogOutput, identityTableId, next, exhausted);
+      } else {
+        CatalogRecord.encodeUserSequence(
+            catalogOutput, name, next, increment, exhausted);
+      }
       status = session.indexedSession().update(sequenceKey, catalogOutput);
     }
     if (status.isOk()) {
@@ -554,6 +595,10 @@ public final class RelationalDatabase {
       CatalogRecord.encodeDroppingTable(
           catalogOutput, indexedTable.tableId(), name, indexedTable);
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      if (status.isOk() && indexedTable.hasIdentity()) {
+        status = session.indexedSession().delete(
+            RelationalKey.identitySequenceKey(indexedTable.tableId()));
+      }
     }
     return status;
   }

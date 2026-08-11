@@ -13,6 +13,7 @@ public final class TableSchema {
   private long notNullMask;
   private long defaultMask;
   private long varcharMask;
+  private boolean identity;
 
   public TableSchema() {
     for (int index = 0; index < columns.length; index++) {
@@ -28,6 +29,7 @@ public final class TableSchema {
     notNullMask = 0;
     defaultMask = 0;
     varcharMask = 0;
+    identity = false;
   }
 
   public StatusCode addBigint(CharSequence name) {
@@ -79,6 +81,14 @@ public final class TableSchema {
     return StatusCode.OK;
   }
 
+  public StatusCode setPrimaryKeyIdentity() {
+    if (columnCount < 1 || (defaultMask & 1L) != 0 || (varcharMask & 1L) != 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    identity = true;
+    return StatusCode.OK;
+  }
+
   public int columnCount() {
     return columnCount;
   }
@@ -119,6 +129,10 @@ public final class TableSchema {
     return column > 0
         && column < columnCount
         && (varcharMask & 1L << column) != 0;
+  }
+
+  public boolean hasIdentity() {
+    return identity;
   }
 
   long varcharMask() {

@@ -104,6 +104,8 @@ public final class SqlSession {
   private final boolean[] recursiveMembershipNulls =
       new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
+  private final long[] generatedInsertKeys =
+      new long[SqlCommand.MAXIMUM_INSERT_ROWS];
   private final long[] membershipValues = new long[MAXIMUM_MEMBERSHIP_VALUES];
   private final long[] membershipScratchValues =
       new long[MAXIMUM_MEMBERSHIP_VALUES];
@@ -708,6 +710,11 @@ public final class SqlSession {
     }
     if (status.isOk()) {
       status = bindDataCommand();
+    }
+    if (status.isOk()
+        && command.type() == SqlCommandType.INSERT
+        && table.hasIdentity()) {
+      status = allocateIdentityKeys();
     }
     if (status.isOk()) {
       status = executeDataCommand(result);
@@ -1483,8 +1490,13 @@ public final class SqlSession {
         encodeInsertRow(index);
         status = session.insertRow(
             table,
-            command.insertValue(index, insertSourceByColumn[0]),
+            table.hasIdentity()
+                ? generatedInsertKeys[index]
+                : command.insertValue(index, insertSourceByColumn[0]),
             row);
+      }
+      if (status.isOk() && table.hasIdentity()) {
+        result.setGeneratedKey(generatedInsertKeys[0]);
       }
       return status;
     }
@@ -2047,6 +2059,9 @@ public final class SqlSession {
         status = createSchema.setLastDefault(command.columnDefaultValue(index));
       }
     }
+    if (status.isOk() && command.hasPrimaryKeyIdentity()) {
+      status = createSchema.setPrimaryKeyIdentity();
+    }
     return status;
   }
 
@@ -2100,11 +2115,17 @@ public final class SqlSession {
     }
     for (int rowIndex = 0; rowIndex < command.insertRowCount(); rowIndex++) {
       int keySource = insertSourceByColumn[0];
-      if (keySource < 0
-          || command.insertIsNull(rowIndex, keySource)
-          || command.insertIsDefault(rowIndex, keySource)
-          || command.insertIsVarchar(rowIndex, keySource)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
+      if (table.hasIdentity()) {
+        if (keySource >= 0 && !command.insertIsDefault(rowIndex, keySource)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      } else {
+        if (keySource < 0
+            || command.insertIsNull(rowIndex, keySource)
+            || command.insertIsDefault(rowIndex, keySource)
+            || command.insertIsVarchar(rowIndex, keySource)) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
       }
       for (int column = 1; column < table.columnCount(); column++) {
         int source = insertSourceByColumn[column];
@@ -2127,6 +2148,17 @@ public final class SqlSession {
       }
     }
     return StatusCode.OK;
+  }
+
+  private StatusCode allocateIdentityKeys() {
+    StatusCode status = StatusCode.OK;
+    for (int index = 0; status.isOk() && index < command.insertRowCount(); index++) {
+      status = database.nextIdentityValue(table, sequenceValue);
+      if (status.isOk()) {
+        generatedInsertKeys[index] = sequenceValue.value();
+      }
+    }
+    return status;
   }
 
   private StatusCode copyRow(HeapRowResult source) {

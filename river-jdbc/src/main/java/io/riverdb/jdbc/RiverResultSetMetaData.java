@@ -9,12 +9,14 @@ import java.sql.Types;
 final class RiverResultSetMetaData implements ResultSetMetaData {
   private final String[] columnNames;
   private final boolean[] varcharColumns;
+  private final boolean autoIncrement;
   private final int columnCount;
 
   RiverResultSetMetaData(RiverQuery query) throws SQLException {
     columnCount = query.columnCount();
     columnNames = new String[columnCount];
     varcharColumns = new boolean[columnCount];
+    autoIncrement = false;
     for (int index = 0; index < columnCount; index++) {
       varcharColumns[index] = query.columnIsVarchar(index);
       CharSequence name = query.columnName(index);
@@ -33,6 +35,13 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     }
   }
 
+  RiverResultSetMetaData(String columnName, boolean generated) {
+    columnCount = 1;
+    columnNames = new String[] {columnName};
+    varcharColumns = new boolean[1];
+    autoIncrement = generated;
+  }
+
   @Override
   public int getColumnCount() {
     return columnCount;
@@ -41,7 +50,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public boolean isAutoIncrement(int column) throws SQLException {
     requireColumn(column);
-    return false;
+    return autoIncrement;
   }
 
   @Override

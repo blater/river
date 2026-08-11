@@ -176,6 +176,10 @@ public final class RelationalSession {
           schema);
       status = session.insert(physicalKey.key(), catalogOutput);
     }
+    if (status.isOk() && schema.hasIdentity()) {
+      CatalogRecord.encodeIdentitySequence(catalogOutput, tableId, 1, false);
+      status = session.insert(RelationalKey.identitySequenceKey(tableId), catalogOutput);
+    }
     if (status.isOk()) {
       result.set(
           database,

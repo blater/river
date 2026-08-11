@@ -22,11 +22,16 @@ final class RelationalKey {
       hash *= 0x100000001b3L;
     }
     long key = hash | Long.MIN_VALUE;
-    if (key == CATALOG_SEQUENCE_KEY || key == Long.MAX_VALUE) {
-      key++;
+    if (key >= CATALOG_SEQUENCE_KEY
+        && key <= CATALOG_SEQUENCE_KEY + MAXIMUM_TABLE_ID) {
+      key ^= 1L << 48;
     }
     result.set(key);
     return StatusCode.OK;
+  }
+
+  static long identitySequenceKey(int tableId) {
+    return CATALOG_SEQUENCE_KEY + tableId;
   }
 
   static StatusCode tableRowKey(int tableId, long userKey, LongKeyResult result) {

@@ -7,20 +7,22 @@ import java.nio.ByteBuffer;
 /** Current catalog encoding for bounded relational schemas and index-build state. */
 final class CatalogRecord {
   static final int MAXIMUM_BYTES =
-      52 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
+      60 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
           + TableDefinition.MAXIMUM_INDEXES * 16
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
 
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
   private static final long USER_SEQUENCE_MAGIC = 0x5249564552555345L; // RIVERUSE
+  private static final long IDENTITY_SEQUENCE_MAGIC = 0x5249564552494453L; // RIVERIDS
   private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
   private static final long DROPPING_TABLE_MAGIC = 0x524956455244524fL; // RIVERDRO
   private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
   private static final int SEQUENCE_VERSION = 1;
   private static final int USER_SEQUENCE_VERSION = 1;
-  private static final int TABLE_VERSION = 6;
+  private static final int IDENTITY_SEQUENCE_VERSION = 1;
+  private static final int TABLE_VERSION = 7;
   private static final int INDEX_VERSION = 2;
-  private static final int TABLE_DEFAULTS_OFFSET = 52;
+  private static final int TABLE_DEFAULTS_OFFSET = 60;
   private static final int TABLE_INDEXES_OFFSET =
       TABLE_DEFAULTS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Long.BYTES;
 
@@ -108,6 +110,45 @@ final class CatalogRecord {
       }
     }
     result.set(scratch.getLong(16), increment, exhausted == 1);
+    return StatusCode.OK;
+  }
+
+  static void encodeIdentitySequence(
+      ByteBuffer target,
+      int tableId,
+      long nextValue,
+      boolean exhausted) {
+    clear(target);
+    target.putLong(0, IDENTITY_SEQUENCE_MAGIC);
+    target.putInt(8, IDENTITY_SEQUENCE_VERSION);
+    target.putInt(12, tableId);
+    target.putLong(16, nextValue);
+    target.putInt(24, exhausted ? 1 : 0);
+    target.position(0);
+    target.limit(28);
+  }
+
+  static StatusCode decodeIdentitySequence(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      int expectedTableId,
+      UserSequenceResult result) {
+    scratch.clear();
+    StatusCode status = source.copyTo(scratch);
+    if (!status.isOk()) {
+      return status;
+    }
+    int exhausted = source.length() >= 28 ? scratch.getInt(24) : -1;
+    if (source.length() != 28
+        || scratch.getLong(0) != IDENTITY_SEQUENCE_MAGIC
+        || scratch.getInt(8) != IDENTITY_SEQUENCE_VERSION
+        || scratch.getInt(12) != expectedTableId
+        || scratch.getLong(16) < 1
+        || scratch.getLong(16) > RelationalKey.MAXIMUM_USER_KEY
+        || (exhausted != 0 && exhausted != 1)) {
+      return StatusCode.CORRUPTION;
+    }
+    result.set(scratch.getLong(16), 1, exhausted == 1);
     return StatusCode.OK;
   }
 
@@ -357,6 +398,8 @@ final class CatalogRecord {
         ? scratch.getLong(36) : -1;
     long varcharMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(44) : -1;
+    long identityMask = source.length() >= TABLE_INDEXES_OFFSET
+        ? scratch.getLong(52) : -1;
     boolean validIndexCount = indexCount >= 0
         && indexCount <= TableDefinition.MAXIMUM_INDEXES;
     int nameOffset = validIndexCount
@@ -404,6 +447,7 @@ final class CatalogRecord {
         || (defaultMask & ~((1L << columnCount) - 1)) != 0
         || (varcharMask & 1) != 0
         || (varcharMask & ~((1L << columnCount) - 1)) != 0
+        || (identityMask != 0 && identityMask != 1)
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
@@ -424,6 +468,7 @@ final class CatalogRecord {
         notNullMask,
         defaultMask,
         varcharMask,
+        identityMask == 1,
         TABLE_DEFAULTS_OFFSET);
     int buildingIndexes = 0;
     for (int index = 0; status.isOk() && index < indexCount; index++) {
@@ -575,6 +620,9 @@ final class CatalogRecord {
     target.putLong(28, notNullMask);
     target.putLong(36, defaultMask);
     target.putLong(44, varcharMask);
+    boolean identity = definition != null
+        ? definition.hasIdentity() : existing != null && existing.hasIdentity();
+    target.putLong(52, identity ? 1 : 0);
     for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
       long value = definition != null
           ? definition.defaultValue(index)

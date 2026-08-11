@@ -1640,6 +1640,69 @@ final class RiverDriverTest {
   }
 
   @Test
+  void returnsIdentityKeysThroughJdbc(@TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE generated_events "
+                  + "(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+                  + "payload BIGINT)"));
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "INSERT INTO generated_events(payload) VALUES (10)",
+              Statement.RETURN_GENERATED_KEYS));
+      try (ResultSet keys = statement.getGeneratedKeys()) {
+        assertTrue(keys.next());
+        assertEquals(1, keys.getLong(1));
+        assertEquals(1L, keys.getObject("GENERATED_KEY", Long.class));
+        assertTrue(keys.getMetaData().isAutoIncrement(1));
+        assertFalse(keys.next());
+      }
+
+      connection.setAutoCommit(false);
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "INSERT INTO generated_events(payload) VALUES (20)",
+              Statement.RETURN_GENERATED_KEYS));
+      try (ResultSet keys = statement.getGeneratedKeys()) {
+        assertTrue(keys.next());
+        assertEquals(2, keys.getLong(1));
+      }
+      connection.rollback();
+      connection.setAutoCommit(true);
+      assertFalse(statement.execute(
+          "INSERT INTO generated_events(payload) VALUES (30)",
+          Statement.RETURN_GENERATED_KEYS));
+      try (ResultSet keys = statement.getGeneratedKeys()) {
+        assertTrue(keys.next());
+        assertEquals(3, keys.getLong(1));
+        assertFalse(keys.next());
+      }
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "UPDATE generated_events SET payload=31 WHERE id=3",
+              Statement.RETURN_GENERATED_KEYS));
+      try (ResultSet keys = statement.getGeneratedKeys()) {
+        assertFalse(keys.next());
+      }
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void dataSourceExecutesJdbcInsideTlsBoundTokenAuthentication(@TempDir Path root)
       throws Exception {
     byte[] token = "river-jdbc-auth-token-0001".getBytes(StandardCharsets.UTF_8);

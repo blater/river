@@ -29,6 +29,7 @@ public final class TableDefinition {
   private long varcharMask;
   private long schemaVersion;
   private boolean available;
+  private boolean identity;
 
   public TableDefinition() {
     for (int index = 0; index < additionalColumns.length; index++) {
@@ -57,6 +58,7 @@ public final class TableDefinition {
     varcharMask = 0;
     schemaVersion = 0;
     available = false;
+    identity = false;
   }
 
   void set(
@@ -81,6 +83,7 @@ public final class TableDefinition {
     defaultMask = 0;
     varcharMask = 0;
     uniqueIndexCount = 0;
+    identity = false;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, 1, true);
       uniqueIndexCount = 1;
@@ -122,6 +125,7 @@ public final class TableDefinition {
     notNullMask = schema.notNullMask;
     varcharMask = schema.varcharMask;
     copyDefaults(schema);
+    identity = schema.identity;
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
     }
@@ -146,6 +150,7 @@ public final class TableDefinition {
     notNullMask = schema.notNullMask();
     defaultMask = schema.defaultMask();
     varcharMask = schema.varcharMask();
+    identity = schema.hasIdentity();
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = schema.defaultValue(index);
     }
@@ -173,6 +178,7 @@ public final class TableDefinition {
       long requiredNotNullMask,
       long requiredDefaultMask,
       long requiredVarcharMask,
+      boolean requiredIdentity,
       int defaultsOffset) {
     owner = database;
     tableId = id;
@@ -180,6 +186,7 @@ public final class TableDefinition {
     notNullMask = requiredNotNullMask;
     defaultMask = requiredDefaultMask;
     varcharMask = requiredVarcharMask;
+    identity = requiredIdentity;
     for (int index = 0; index < columns; index++) {
       defaultValues[index] = source.getLong(defaultsOffset + index * Long.BYTES);
     }
@@ -264,6 +271,10 @@ public final class TableDefinition {
     return column > 0
         && column < columnCount
         && (varcharMask & 1L << column) != 0;
+  }
+
+  public boolean hasIdentity() {
+    return identity;
   }
 
   public long defaultValue(int column) {

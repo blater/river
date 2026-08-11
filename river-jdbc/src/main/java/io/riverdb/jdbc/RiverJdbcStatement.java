@@ -21,6 +21,9 @@ class RiverJdbcStatement extends AbstractStatement {
   private final QueryOpenResult openedQuery = new QueryOpenResult();
   private final String[] batch = new String[MAXIMUM_BATCH_STATEMENTS];
   private RiverJdbcResultSet resultSet;
+  private RiverGeneratedKeysResultSet generatedKeysResultSet;
+  private long generatedKey;
+  private boolean generatedKeyAvailable;
   private int updateCount = -1;
   private boolean closeOnCompletion;
   private boolean closed;
@@ -46,10 +49,10 @@ class RiverJdbcStatement extends AbstractStatement {
 
   @Override
   public int executeUpdate(String sql) throws SQLException {
-    return executeUpdateSql(sql);
+    return executeUpdateSql(sql, false);
   }
 
-  private int executeUpdateSql(String sql) throws SQLException {
+  private int executeUpdateSql(String sql, boolean returnGeneratedKeys) throws SQLException {
     requireOpen();
     closeCurrentResult();
     connection.beforeExecution();
@@ -60,6 +63,8 @@ class RiverJdbcStatement extends AbstractStatement {
     }
     connection.commandCompleted(command);
     updateCount = command.affectedRows();
+    generatedKeyAvailable = returnGeneratedKeys && command.key() > 0;
+    generatedKey = generatedKeyAvailable ? command.key() : 0;
     return updateCount;
   }
 
@@ -239,7 +244,7 @@ class RiverJdbcStatement extends AbstractStatement {
       String sql = batch[index];
       batch[index] = null;
       try {
-        updates[index] = executeUpdateSql(sql);
+        updates[index] = executeUpdateSql(sql, false);
       } catch (SQLException failure) {
         for (int remaining = index + 1; remaining < entries; remaining++) {
           batch[remaining] = null;
@@ -320,18 +325,35 @@ class RiverJdbcStatement extends AbstractStatement {
 
   @Override
   public int executeUpdate(String sql, int generatedKeys) throws SQLException {
-    if (generatedKeys != NO_GENERATED_KEYS) {
+    if (generatedKeys != NO_GENERATED_KEYS && generatedKeys != RETURN_GENERATED_KEYS) {
       throw JdbcExceptions.unsupported();
     }
-    return executeUpdate(sql);
+    return executeUpdateSql(sql, generatedKeys == RETURN_GENERATED_KEYS);
   }
 
   @Override
   public boolean execute(String sql, int generatedKeys) throws SQLException {
-    if (generatedKeys != NO_GENERATED_KEYS) {
+    if (generatedKeys != NO_GENERATED_KEYS && generatedKeys != RETURN_GENERATED_KEYS) {
       throw JdbcExceptions.unsupported();
     }
-    return execute(sql);
+    if (generatedKeys == NO_GENERATED_KEYS) {
+      return execute(sql);
+    }
+    if (isQuery(sql)) {
+      throw JdbcExceptions.invalid("generated keys require update SQL");
+    }
+    executeUpdateSql(sql, true);
+    return false;
+  }
+
+  @Override
+  public ResultSet getGeneratedKeys() throws SQLException {
+    requireOpen();
+    if (generatedKeysResultSet == null) {
+      generatedKeysResultSet = new RiverGeneratedKeysResultSet(
+          this, generatedKey, generatedKeyAvailable);
+    }
+    return generatedKeysResultSet;
   }
 
   @Override
@@ -375,6 +397,13 @@ class RiverJdbcStatement extends AbstractStatement {
     RiverJdbcResultSet current = resultSet;
     if (current != null) {
       current.close();
+    }
+    RiverGeneratedKeysResultSet currentKeys = generatedKeysResultSet;
+    generatedKeysResultSet = null;
+    generatedKey = 0;
+    generatedKeyAvailable = false;
+    if (currentKeys != null) {
+      currentKeys.close();
     }
   }
 

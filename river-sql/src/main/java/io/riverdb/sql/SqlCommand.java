@@ -79,6 +79,7 @@ public final class SqlCommand {
   private boolean readCommittedTransaction;
   private boolean serializableTransaction;
   private boolean descendingOrder;
+  private boolean primaryKeyIdentity;
   private int insertRowCount;
   private int insertColumnCount;
   private int updateColumnCount;
@@ -162,6 +163,7 @@ public final class SqlCommand {
     readCommittedTransaction = false;
     serializableTransaction = false;
     descendingOrder = false;
+    primaryKeyIdentity = false;
     insertRowCount = 0;
     insertColumnCount = 0;
     updateColumnCount = 0;
@@ -497,6 +499,10 @@ public final class SqlCommand {
     }
   }
 
+  void markPrimaryKeyIdentity() {
+    primaryKeyIdentity = true;
+  }
+
   void markLastColumnDefault(long value) {
     if (columnCount > 1) {
       int column = columnCount - 1;
@@ -647,6 +653,10 @@ public final class SqlCommand {
     return index > 0
         && index < columnCount
         && (columnVarcharMask & 1L << index) != 0;
+  }
+
+  public boolean hasPrimaryKeyIdentity() {
+    return primaryKeyIdentity;
   }
 
   public SqlIdentifier columnTableName(int index) {

@@ -32,6 +32,10 @@ public final class SqlExecutionResult {
     commitSequence = committedAt;
   }
 
+  void setGeneratedKey(long generatedKey) {
+    key = generatedKey;
+  }
+
   void setProjection(
       long selectedKey,
       long[] projectedValues,
