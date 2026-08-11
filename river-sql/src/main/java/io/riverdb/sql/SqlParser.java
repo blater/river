@@ -459,11 +459,20 @@ public final class SqlParser {
       if (status.isOk()) {
         status = requireKeyword(sql, "RENAME");
       }
-      if (status.isOk()) {
+      if (status.isOk() && consumeKeyword(sql, "COLUMN")) {
+        type = SqlCommandType.ALTER_TABLE_RENAME_COLUMN;
+        status = identifier(sql, result.writableNextColumnName());
+        if (status.isOk()) {
+          status = requireKeyword(sql, "TO");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableNextColumnName());
+        }
+      } else if (status.isOk()) {
         status = requireKeyword(sql, "TO");
-      }
-      if (status.isOk()) {
-        status = identifier(sql, result.writableRenamedTableName());
+        if (status.isOk()) {
+          status = identifier(sql, result.writableRenamedTableName());
+        }
       }
     } else if (consumeKeyword(sql, "DROP")) {
       if (consumeKeyword(sql, "INDEX")) {

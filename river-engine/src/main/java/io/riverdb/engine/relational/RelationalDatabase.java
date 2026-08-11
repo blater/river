@@ -193,6 +193,31 @@ public final class RelationalDatabase {
     return status;
   }
 
+  public synchronized StatusCode renameColumn(
+      CharSequence tableName,
+      CharSequence currentName,
+      CharSequence renamedName) {
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.renameColumn(tableName, currentName, renamedName);
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    return status;
+  }
+
   synchronized StatusCode renameTable(
       RelationalSession session,
       CharSequence currentName,
@@ -225,6 +250,39 @@ public final class RelationalDatabase {
     }
     return status.isOk()
         ? session.indexedSession().delete(catalogKey.key()) : status;
+  }
+
+  synchronized StatusCode renameColumn(
+      RelationalSession session,
+      CharSequence tableName,
+      CharSequence currentName,
+      CharSequence renamedName) {
+    StatusCode status = session.resolveTable(tableName, indexedTable);
+    if (status.isOk()) {
+      updatedTable.set(
+          this,
+          indexedTable.tableId(),
+          0,
+          TableDefinition.INDEX_NONE,
+          -1,
+          indexedTable);
+      status = updatedTable.renameColumn(currentName, renamedName);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(tableName, catalogKey);
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeTable(
+          catalogOutput,
+          updatedTable.tableId(),
+          0,
+          TableDefinition.INDEX_NONE,
+          -1,
+          tableName,
+          updatedTable);
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    return status;
   }
 
   synchronized StatusCode dropTable(

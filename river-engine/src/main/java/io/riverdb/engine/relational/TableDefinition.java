@@ -430,6 +430,21 @@ public final class TableDefinition {
     return StatusCode.CONFLICT;
   }
 
+  StatusCode renameColumn(
+      CharSequence currentName,
+      CharSequence renamedName) {
+    if (!RelationalKey.validName(currentName)
+        || !RelationalKey.validName(renamedName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int column = findColumn(currentName);
+    if (column < 0 || findColumn(renamedName) >= 0) {
+      return StatusCode.CONFLICT;
+    }
+    writableColumn(column).set(renamedName);
+    return StatusCode.OK;
+  }
+
   boolean isOwnedBy(RelationalDatabase database) {
     return available
         && owner == database

@@ -345,6 +345,41 @@ public final class RelationalSession {
     return status;
   }
 
+  public StatusCode renameColumn(
+      CharSequence tableName,
+      CharSequence currentName,
+      CharSequence renamedName) {
+    if (!registeredTransaction
+        || !RelationalKey.validName(tableName)
+        || !RelationalKey.validName(currentName)
+        || !RelationalKey.validName(renamedName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropType != PENDING_DROP_NONE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    if (status.isOk()) {
+      status = database.renameColumn(
+          this, tableName, currentName, renamedName);
+    }
+    if (!status.isOk() && acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
+  }
+
   public StatusCode update(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = resolveWriteKey(table, key);
     return status.isOk() ? session.update(physicalKey.key(), row) : status;
