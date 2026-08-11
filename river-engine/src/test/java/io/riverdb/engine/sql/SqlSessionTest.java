@@ -1583,6 +1583,56 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
+            "CREATE TABLE category_labels "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, code BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO category_labels VALUES "
+                + "(1, 10, 10001), (2, 10, 10002), (3, 20, 20001)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE INDEX category_labels_category ON category_labels(category)",
+            result));
+    assertEquals(StatusCode.OK, joined.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT events.id, category_labels.code FROM events "
+                + "JOIN category_labels "
+                + "ON events.category=category_labels.category "
+                + "WHERE events.id=1 LIMIT 1",
+            joined));
+    assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(joined, joinedRow));
+    assertEquals(StatusCode.OK, session.closeScan(joined, result));
+    assertEquals(StatusCode.OK, joined.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT events.id, category_labels.code FROM events "
+                + "JOIN category_labels "
+                + "ON events.category=category_labels.category "
+                + "WHERE events.id=1",
+            joined));
+    long joinedCodeSum = 0;
+    long joinedCodeProduct = 1;
+    for (int index = 0; index < 2; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
+      assertEquals(1, joinedRow.valueAt(0));
+      joinedCodeSum += joinedRow.valueAt(1);
+      joinedCodeProduct *= joinedRow.valueAt(1);
+    }
+    assertEquals(20003, joinedCodeSum);
+    assertEquals(100030002, joinedCodeProduct);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(joined, joinedRow));
+    assertEquals(StatusCode.OK, session.closeScan(joined, result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
             "CREATE UNIQUE INDEX categories_code ON categories(code)",
             result));
     assertEquals(StatusCode.OK, joined.reset());

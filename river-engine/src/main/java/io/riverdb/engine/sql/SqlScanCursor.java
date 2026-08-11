@@ -7,11 +7,16 @@ import io.riverdb.engine.relational.TableSchema;
 /** Caller-owned capability for one ordered SQL table scan. */
 public final class SqlScanCursor {
   private final RelationalScanCursor relational = new RelationalScanCursor();
+  private final RelationalScanCursor joinInnerRelational = new RelationalScanCursor();
+  private final long[] joinOuterProjectedValues =
+      new long[TableSchema.MAXIMUM_COLUMNS];
   private SqlSession owner;
   private boolean aggregate;
   private boolean groupCount;
   private boolean distinct;
   private boolean join;
+  private boolean joinInnerScanActive;
+  private boolean joinInnerUnique;
   private boolean groupLookahead;
   private boolean groupInputExhausted;
   private boolean distinctValueAvailable;
@@ -23,6 +28,7 @@ public final class SqlScanCursor {
   private int groupColumn = -1;
   private int joinOuterColumn = -1;
   private int joinInnerColumn = -1;
+  private long joinOuterKey;
   private boolean implicitTransaction;
   private boolean valueIndex;
   private long maximumRows = Long.MAX_VALUE;
@@ -40,6 +46,8 @@ public final class SqlScanCursor {
     groupCount = false;
     distinct = false;
     join = false;
+    joinInnerScanActive = false;
+    joinInnerUnique = false;
     groupLookahead = false;
     groupInputExhausted = false;
     distinctValueAvailable = false;
@@ -51,16 +59,23 @@ public final class SqlScanCursor {
     groupColumn = -1;
     joinOuterColumn = -1;
     joinInnerColumn = -1;
+    joinOuterKey = 0;
     implicitTransaction = false;
     valueIndex = false;
     maximumRows = Long.MAX_VALUE;
     projectedColumnCount = 0;
     rowsReturned = 0;
-    return relational.reset();
+    StatusCode status = relational.reset();
+    StatusCode inner = joinInnerRelational.reset();
+    return status.isOk() ? inner : status;
   }
 
   RelationalScanCursor relational() {
     return relational;
+  }
+
+  RelationalScanCursor joinInnerRelational() {
+    return joinInnerRelational;
   }
 
   StatusCode claim(
@@ -159,6 +174,7 @@ public final class SqlScanCursor {
       int outerColumn,
       int innerColumn,
       boolean indexedOuter,
+      boolean uniqueInner,
       int[] projections,
       int projectionCount,
       long rowLimit) {
@@ -178,6 +194,7 @@ public final class SqlScanCursor {
     valueIndex = indexedOuter;
     joinOuterColumn = outerColumn;
     joinInnerColumn = innerColumn;
+    joinInnerUnique = uniqueInner;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
@@ -222,6 +239,35 @@ public final class SqlScanCursor {
 
   int joinInnerColumn() {
     return joinInnerColumn;
+  }
+
+  boolean joinInnerUnique() {
+    return joinInnerUnique;
+  }
+
+  boolean joinInnerScanActive() {
+    return joinInnerScanActive;
+  }
+
+  void beginJoinInnerScan(long outerKey) {
+    joinOuterKey = outerKey;
+    joinInnerScanActive = true;
+  }
+
+  void completeJoinInnerScan() {
+    joinInnerScanActive = false;
+  }
+
+  long joinOuterKey() {
+    return joinOuterKey;
+  }
+
+  void setJoinOuterProjectedValue(int index, long value) {
+    joinOuterProjectedValues[index] = value;
+  }
+
+  long joinOuterProjectedValue(int index) {
+    return joinOuterProjectedValues[index];
   }
 
   int groupColumn() {

@@ -12,6 +12,7 @@ public final class RelationalScanCursor {
   private long duplicateValue;
   private int duplicateEntriesVisited;
   private boolean uniqueIndex;
+  private boolean exactValueLookup;
   private boolean active;
 
   public StatusCode reset() {
@@ -24,6 +25,7 @@ public final class RelationalScanCursor {
     duplicateValue = 0;
     duplicateEntriesVisited = 0;
     uniqueIndex = false;
+    exactValueLookup = false;
     return indexed.reset();
   }
 
@@ -36,6 +38,23 @@ public final class RelationalScanCursor {
       return StatusCode.CONFLICT;
     }
     owner = session;
+    active = true;
+    return StatusCode.OK;
+  }
+
+  StatusCode claimExactValueLookup(
+      RelationalSession session,
+      int column,
+      long value,
+      long entryId) {
+    if (active || session == null || column <= 0 || entryId <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    owner = session;
+    indexedColumn = column;
+    uniqueIndex = false;
+    exactValueLookup = true;
+    startDuplicateChain(value, entryId);
     active = true;
     return StatusCode.OK;
   }
@@ -62,6 +81,10 @@ public final class RelationalScanCursor {
 
   boolean uniqueIndex() {
     return uniqueIndex;
+  }
+
+  boolean exactValueLookup() {
+    return exactValueLookup;
   }
 
   long duplicateEntryId() {

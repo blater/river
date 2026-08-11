@@ -446,6 +446,7 @@ public final class RelationalSession {
         || !table.isOwnedBy(database)
         || table.readyIndexSlotOn(cursor == null ? -1 : cursor.indexedColumn()) < 0
         || cursor == null
+        || cursor.exactValueLookup()
         || indexResult == null
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -479,6 +480,56 @@ public final class RelationalSession {
     return status;
   }
 
+  public StatusCode beginNonUniqueValueLookup(
+      TableDefinition table,
+      int column,
+      long value,
+      RelationalScanCursor cursor) {
+    int slot = table == null ? -1 : table.readyIndexSlotOn(column);
+    if (table == null
+        || !table.isOwnedBy(database)
+        || slot < 0
+        || table.indexIsUnique(slot)
+        || !validNonUniqueIndexedValue(value)
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    prepareValueIndex(table, slot);
+    StatusCode status = fetch(
+        valueIndexTable, normalizeNonUniqueIndexedValue(value), indexedKeyRow);
+    if (status.isOk()) {
+      status = decodeLong(indexedKeyRow, valueScratch);
+    }
+    long headEntryId = status.isOk() ? valueScratch.getLong(0) : 0;
+    if (status.isOk() && !validNonUniqueEntryId(headEntryId)) {
+      status = StatusCode.CORRUPTION;
+    }
+    return status.isOk()
+        ? cursor.claimExactValueLookup(this, column, value, headEntryId)
+        : status;
+  }
+
+  public StatusCode nextNonUniqueValueLookup(
+      TableDefinition table,
+      RelationalScanCursor cursor,
+      ValueIndexLookupResult result) {
+    int slot = table == null || cursor == null
+        ? -1 : table.readyIndexSlotOn(cursor.indexedColumn());
+    if (table == null
+        || !table.isOwnedBy(database)
+        || slot < 0
+        || table.indexIsUnique(slot)
+        || cursor == null
+        || !cursor.isOwnedBy(this)
+        || !cursor.exactValueLookup()
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    prepareValueIndex(table, slot);
+    return nextNonUniqueEntry(table, cursor, result, slot);
+  }
+
   private StatusCode nextNonUniqueValueScan(
       TableDefinition table,
       RelationalScanCursor cursor,
@@ -487,62 +538,69 @@ public final class RelationalSession {
       int slot) {
     prepareValueIndex(table, slot);
     StatusCode status = StatusCode.OK;
-    while (status.isOk()) {
-      if (cursor.duplicateEntryId() == 0) {
-        status = nextScan(cursor, indexResult);
-        if (!status.isOk()) {
-          return status;
-        }
-        status = decodeLong(indexResult.row(), valueScratch);
-        long headEntryId = status.isOk() ? valueScratch.getLong(0) : 0;
-        if (status.isOk() && !validNonUniqueEntryId(headEntryId)) {
-          status = StatusCode.CORRUPTION;
-        }
-        if (status.isOk()) {
-          cursor.startDuplicateChain(
-              denormalizeNonUniqueIndexedValue(indexResult.key()), headEntryId);
-        }
+    if (cursor.duplicateEntryId() == 0) {
+      status = nextScan(cursor, indexResult);
+      if (!status.isOk()) {
+        return status;
       }
-      if (status.isOk()
-          && cursor.duplicateEntriesVisited() >= MAXIMUM_DUPLICATE_CHAIN) {
-        status = StatusCode.CORRUPTION;
-      }
-      long entryId = cursor.duplicateEntryId();
-      if (status.isOk()) {
-        status = fetch(valueIndexTable, nonUniqueEntryKey(entryId), indexEntryRow);
-        if (status == StatusCode.CONFLICT) {
-          status = StatusCode.CORRUPTION;
-        }
-      }
-      if (status.isOk()) {
-        status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
-      }
-      long value = status.isOk() ? indexEntryScratch.getLong(0) : 0;
-      long primaryKey = status.isOk() ? indexEntryScratch.getLong(8) : 0;
-      long nextEntryId = status.isOk() ? indexEntryScratch.getLong(16) : 0;
-      if (status.isOk()
-          && (value != cursor.duplicateValue()
-              || nextEntryId < 0
-              || nextEntryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
+      status = decodeLong(indexResult.row(), valueScratch);
+      long headEntryId = status.isOk() ? valueScratch.getLong(0) : 0;
+      if (status.isOk() && !validNonUniqueEntryId(headEntryId)) {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
-        cursor.advanceDuplicateChain(nextEntryId);
-        status = fetch(table, primaryKey, result.row());
-        if (status == StatusCode.CONFLICT) {
-          status = StatusCode.CORRUPTION;
-        }
+        cursor.startDuplicateChain(
+            denormalizeNonUniqueIndexedValue(indexResult.key()), headEntryId);
       }
-      if (status.isOk()) {
-        status = copyRow(table, result.row(), rowScratch);
-      }
-      if (status.isOk() && indexedValue(table, rowScratch, slot) != value) {
+    }
+    return status.isOk()
+        ? nextNonUniqueEntry(table, cursor, result, slot) : status;
+  }
+
+  private StatusCode nextNonUniqueEntry(
+      TableDefinition table,
+      RelationalScanCursor cursor,
+      ValueIndexLookupResult result,
+      int slot) {
+    if (cursor.duplicateEntryId() == 0) {
+      return StatusCode.CONFLICT;
+    }
+    StatusCode status = cursor.duplicateEntriesVisited() >= MAXIMUM_DUPLICATE_CHAIN
+        ? StatusCode.CORRUPTION : StatusCode.OK;
+    long entryId = cursor.duplicateEntryId();
+    if (status.isOk()) {
+      status = fetch(valueIndexTable, nonUniqueEntryKey(entryId), indexEntryRow);
+      if (status == StatusCode.CONFLICT) {
         status = StatusCode.CORRUPTION;
       }
-      if (status.isOk()) {
-        result.setKey(primaryKey);
-        return StatusCode.OK;
+    }
+    if (status.isOk()) {
+      status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
+    }
+    long value = status.isOk() ? indexEntryScratch.getLong(0) : 0;
+    long primaryKey = status.isOk() ? indexEntryScratch.getLong(8) : 0;
+    long nextEntryId = status.isOk() ? indexEntryScratch.getLong(16) : 0;
+    if (status.isOk()
+        && (value != cursor.duplicateValue()
+            || nextEntryId < 0
+            || nextEntryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) {
+      cursor.advanceDuplicateChain(nextEntryId);
+      status = fetch(table, primaryKey, result.row());
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.CORRUPTION;
       }
+    }
+    if (status.isOk()) {
+      status = copyRow(table, result.row(), rowScratch);
+    }
+    if (status.isOk() && indexedValue(table, rowScratch, slot) != value) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) {
+      result.setKey(primaryKey);
     }
     return status;
   }
@@ -590,7 +648,8 @@ public final class RelationalSession {
     if (cursor == null || !cursor.isOwnedBy(this)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = session.closeScan(cursor.indexed());
+    StatusCode status = cursor.exactValueLookup()
+        ? StatusCode.OK : session.closeScan(cursor.indexed());
     if (status.isOk()) {
       cursor.complete();
     }

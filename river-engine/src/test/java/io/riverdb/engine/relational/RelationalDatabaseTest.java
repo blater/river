@@ -260,6 +260,25 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.CONFLICT, status);
     assertEquals(150, count);
     assertEquals(StatusCode.OK, session.closeScan(cursor));
+    RelationalScanCursor outer = new RelationalScanCursor();
+    RelationalScanCursor exact = new RelationalScanCursor();
+    assertEquals(StatusCode.OK, session.beginScan(events, outer));
+    assertEquals(
+        StatusCode.OK,
+        session.beginNonUniqueValueLookup(events, 1, 10, exact));
+    count = 0;
+    while ((status = session.nextNonUniqueValueLookup(events, exact, indexed)).isOk()) {
+      assertEquals(10, value(indexed.row()));
+      count++;
+    }
+    assertEquals(StatusCode.CONFLICT, status);
+    assertEquals(150, count);
+    assertEquals(StatusCode.OK, session.closeScan(exact));
+    assertEquals(StatusCode.OK, session.closeScan(outer));
+    assertEquals(StatusCode.OK, exact.reset());
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.beginNonUniqueValueLookup(events, 1, 11, exact));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
   }
