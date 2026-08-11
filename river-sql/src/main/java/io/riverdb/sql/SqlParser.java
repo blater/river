@@ -457,11 +457,17 @@ public final class SqlParser {
           if (status.isOk()) {
             status = requireKeyword(sql, "BIGINT");
           }
+          if (status.isOk() && consumeKeyword(sql, "NOT")) {
+            status = requireKeyword(sql, "NULL");
+          }
           if (status.isOk()) {
             status = requireKeyword(sql, "PRIMARY");
           }
           if (status.isOk()) {
             status = requireKeyword(sql, "KEY");
+          }
+          if (status.isOk()) {
+            result.markLastColumnNotNull();
           }
           while (status.isOk() && !consumeCharacter(sql, ')')) {
             status = requireCharacter(sql, ',');
@@ -471,12 +477,19 @@ public final class SqlParser {
             if (status.isOk()) {
               status = requireKeyword(sql, "BIGINT");
             }
+            if (status.isOk() && consumeKeyword(sql, "NOT")) {
+              status = requireKeyword(sql, "NULL");
+              if (status.isOk()) {
+                result.markLastColumnNotNull();
+              }
+            }
           }
           if (status.isOk() && result.columnCount() < 2) {
             status = StatusCode.INVALID_EXTERNAL_INPUT;
           }
         } else if (status.isOk()) {
           setIdentifier(result.writableNextColumnName(), "key");
+          result.markLastColumnNotNull();
           setIdentifier(result.writableNextColumnName(), "value");
         }
       } else {

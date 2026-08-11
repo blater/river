@@ -22,6 +22,7 @@ public final class TableDefinition {
       new ColumnName[TableSchema.MAXIMUM_COLUMNS - 2];
   private int uniqueIndexCount;
   private int columnCount;
+  private long notNullMask;
   private long schemaVersion;
   private boolean available;
 
@@ -47,6 +48,7 @@ public final class TableDefinition {
       additionalColumns[index].reset();
     }
     columnCount = 0;
+    notNullMask = 0;
     schemaVersion = 0;
     available = false;
   }
@@ -69,6 +71,7 @@ public final class TableDefinition {
     owner = database;
     tableId = id;
     columnCount = 2;
+    notNullMask = 1;
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, 1, true);
@@ -108,6 +111,7 @@ public final class TableDefinition {
     owner = database;
     tableId = id;
     columnCount = schema.columnCount();
+    notNullMask = schema.notNullMask;
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
     }
@@ -129,6 +133,7 @@ public final class TableDefinition {
     owner = database;
     tableId = id;
     columnCount = schema.columnCount();
+    notNullMask = schema.notNullMask();
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, indexColumn, true);
@@ -149,10 +154,12 @@ public final class TableDefinition {
       int indexColumn,
       ByteBuffer source,
       int columnsOffset,
-      int columns) {
+      int columns,
+      long requiredNotNullMask) {
     owner = database;
     tableId = id;
     columnCount = columns;
+    notNullMask = requiredNotNullMask;
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, indexColumn, true);
@@ -245,7 +252,13 @@ public final class TableDefinition {
 
   public boolean isValidNullMask(long nullMask) {
     long allowed = ((1L << columnCount) - 1) & ~1L;
-    return available && (nullMask & ~allowed) == 0;
+    return available
+        && (nullMask & ~allowed) == 0
+        && (nullMask & notNullMask) == 0;
+  }
+
+  long notNullMask() {
+    return notNullMask;
   }
 
   int uniqueValueIndexTableId() {

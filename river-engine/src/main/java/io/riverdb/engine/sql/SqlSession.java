@@ -1607,7 +1607,8 @@ public final class SqlSession {
     createSchema.reset();
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < command.columnCount(); index++) {
-      status = createSchema.addBigint(command.columnName(index));
+      status = createSchema.addBigint(
+          command.columnName(index), !command.columnIsNotNull(index));
     }
     return status;
   }

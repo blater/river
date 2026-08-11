@@ -36,6 +36,19 @@ final class SqlParserTest {
             command));
     assertEquals(3, command.columnCount());
     assertName("region", command.columnName(2));
+    assertTrue(command.columnIsNotNull(0));
+    assertFalse(command.columnIsNotNull(1));
+    assertFalse(command.columnIsNotNull(2));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE required_values "
+                + "(id BIGINT NOT NULL PRIMARY KEY, value BIGINT NOT NULL, "
+                + "note BIGINT)",
+            command));
+    assertTrue(command.columnIsNotNull(0));
+    assertTrue(command.columnIsNotNull(1));
+    assertFalse(command.columnIsNotNull(2));
     assertEquals(
         StatusCode.OK,
         parser.parse("CREATE UNIQUE INDEX accounts_value ON accounts(value)", command));

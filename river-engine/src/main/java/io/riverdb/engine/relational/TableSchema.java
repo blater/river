@@ -9,6 +9,7 @@ public final class TableSchema {
 
   private final ColumnName[] columns = new ColumnName[MAXIMUM_COLUMNS];
   private int columnCount;
+  private long notNullMask;
 
   public TableSchema() {
     for (int index = 0; index < columns.length; index++) {
@@ -21,9 +22,14 @@ public final class TableSchema {
       columns[index].reset();
     }
     columnCount = 0;
+    notNullMask = 0;
   }
 
   public StatusCode addBigint(CharSequence name) {
+    return addBigint(name, columnCount > 0);
+  }
+
+  public StatusCode addBigint(CharSequence name, boolean nullable) {
     if (!RelationalKey.validName(name)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -33,7 +39,14 @@ public final class TableSchema {
     if (find(name) >= 0) {
       return StatusCode.CONFLICT;
     }
-    columns[columnCount++].set(name);
+    if (columnCount == 0 && nullable) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    columns[columnCount].set(name);
+    if (!nullable) {
+      notNullMask |= 1L << columnCount;
+    }
+    columnCount++;
     return StatusCode.OK;
   }
 
@@ -55,7 +68,11 @@ public final class TableSchema {
   }
 
   boolean isValid() {
-    return columnCount >= 2;
+    return columnCount >= 2 && (notNullMask & 1L) != 0;
+  }
+
+  long notNullMask() {
+    return notNullMask;
   }
 
   static final class ColumnName implements CharSequence {

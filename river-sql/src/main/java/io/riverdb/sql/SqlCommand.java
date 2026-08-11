@@ -58,6 +58,7 @@ public final class SqlCommand {
   private long value;
   private long scanLowerInclusive;
   private long scanUpperExclusive;
+  private long columnNotNullMask;
   private long rowLimit = Long.MAX_VALUE;
   private boolean boundedScan;
   private boolean equalityPredicate;
@@ -132,6 +133,7 @@ public final class SqlCommand {
     value = 0;
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
+    columnNotNullMask = 0;
     rowLimit = Long.MAX_VALUE;
     boundedScan = false;
     equalityPredicate = false;
@@ -433,6 +435,12 @@ public final class SqlCommand {
     return columnCount < columnNames.length ? columnNames[columnCount++] : null;
   }
 
+  void markLastColumnNotNull() {
+    if (columnCount > 0) {
+      columnNotNullMask |= 1L << columnCount - 1;
+    }
+  }
+
   void markLastProjectionNull() {
     if (columnCount > 0) {
       nullProjections[columnCount - 1] = true;
@@ -521,6 +529,12 @@ public final class SqlCommand {
 
   public SqlIdentifier columnName(int index) {
     return index >= 0 && index < columnCount ? columnNames[index] : null;
+  }
+
+  public boolean columnIsNotNull(int index) {
+    return index >= 0
+        && index < columnCount
+        && (columnNotNullMask & 1L << index) != 0;
   }
 
   public SqlIdentifier columnTableName(int index) {
