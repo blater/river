@@ -10,6 +10,7 @@ public final class SqlCommand {
   public static final int MAXIMUM_LITERAL_MEMBERSHIP_VALUES = 256;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
+  private final SqlIdentifier renamedTableName = new SqlIdentifier();
   private final SqlIdentifier tableAlias = new SqlIdentifier();
   private final SqlIdentifier joinTableName = new SqlIdentifier();
   private final SqlIdentifier joinTableAlias = new SqlIdentifier();
@@ -97,6 +98,7 @@ public final class SqlCommand {
 
   public void reset() {
     tableName.reset();
+    renamedTableName.reset();
     tableAlias.reset();
     joinTableName.reset();
     joinTableAlias.reset();
@@ -432,6 +434,10 @@ public final class SqlCommand {
     return tableName;
   }
 
+  SqlIdentifier writableRenamedTableName() {
+    return renamedTableName;
+  }
+
   SqlIdentifier writableTableAlias() {
     return tableAlias;
   }
@@ -534,6 +540,10 @@ public final class SqlCommand {
 
   public SqlIdentifier tableName() {
     return tableName;
+  }
+
+  public SqlIdentifier renamedTableName() {
+    return renamedTableName;
   }
 
   public SqlIdentifier tableAlias() {

@@ -432,6 +432,17 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.ALTER_TABLE_RENAME) {
+      if (transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = database.renameTable(
+          command.tableName(), command.renamedTableName());
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CHECKPOINT) {
       if (transactionActive) {
         return StatusCode.CONFLICT;

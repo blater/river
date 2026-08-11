@@ -167,6 +167,66 @@ public final class RelationalDatabase {
     return dropTable(name, Integer.MAX_VALUE);
   }
 
+  public synchronized StatusCode renameTable(
+      CharSequence currentName,
+      CharSequence renamedName) {
+    if (!RelationalKey.validName(currentName)
+        || !RelationalKey.validName(renamedName)
+        || sameName(currentName, renamedName)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.beginPersistentSchemaChange();
+    }
+    if (status.isOk()) {
+      status = session.resolveTable(currentName, indexedTable);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(renamedName, catalogKey);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+      if (status.isOk()) {
+        status = StatusCode.CONFLICT;
+      } else if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+      }
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeTable(
+          catalogOutput,
+          indexedTable.tableId(),
+          0,
+          TableDefinition.INDEX_NONE,
+          -1,
+          renamedName,
+          indexedTable);
+      status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(currentName, catalogKey);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().delete(catalogKey.key());
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    return status;
+  }
+
   synchronized StatusCode dropTable(
       CharSequence name,
       int maximumCleanupBatches) {
@@ -218,6 +278,20 @@ public final class RelationalDatabase {
     }
     return cleanupDroppingTable(
         session, name, outcome, maximumCleanupBatches);
+  }
+
+  private static boolean sameName(
+      CharSequence first,
+      CharSequence second) {
+    if (first.length() != second.length()) {
+      return false;
+    }
+    for (int index = 0; index < first.length(); index++) {
+      if (first.charAt(index) != second.charAt(index)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   public synchronized StatusCode createUniqueValueIndex(

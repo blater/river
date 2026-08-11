@@ -123,6 +123,12 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse("DROP TABLE accounts", command));
     assertEquals(SqlCommandType.DROP_TABLE, command.type());
     assertName("accounts", command.tableName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("ALTER TABLE accounts RENAME TO customers", command));
+    assertEquals(SqlCommandType.ALTER_TABLE_RENAME, command.type());
+    assertName("accounts", command.tableName());
+    assertName("customers", command.renamedTableName());
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());

@@ -6,6 +6,7 @@ public enum SqlCommandType {
   CREATE_UNIQUE_INDEX,
   DROP_INDEX,
   DROP_TABLE,
+  ALTER_TABLE_RENAME,
   INSERT,
   SELECT,
   COUNT,
