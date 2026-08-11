@@ -93,19 +93,22 @@ final class RiverDriverTest {
       }
       try (ResultSet grouped = statement.executeQuery(
           "SELECT region, COUNT(*) FROM accounts "
+              + "WHERE balance >= 150 AND balance < 350 "
               + "GROUP BY region ORDER BY region")) {
         assertEquals("region", grouped.getMetaData().getColumnLabel(1));
         assertEquals("count", grouped.getMetaData().getColumnLabel(2));
         assertTrue(grouped.next());
         assertEquals(7, grouped.getLong("region"));
-        assertEquals(2, grouped.getLong("count"));
+        assertEquals(1, grouped.getLong("count"));
         assertTrue(grouped.next());
         assertEquals(8, grouped.getLong(1));
         assertEquals(1, grouped.getLong(2));
         assertFalse(grouped.next());
       }
       try (ResultSet distinct = statement.executeQuery(
-          "SELECT DISTINCT region FROM accounts ORDER BY region")) {
+          "SELECT DISTINCT region FROM accounts "
+              + "WHERE balance >= 150 AND balance < 350 "
+              + "ORDER BY region")) {
         assertTrue(distinct.next());
         assertEquals(7, distinct.getLong("region"));
         assertTrue(distinct.next());

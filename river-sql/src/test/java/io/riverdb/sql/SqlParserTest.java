@@ -105,11 +105,13 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse(
             "SELECT region, COUNT(*) FROM accounts "
+                + "WHERE value >= 100 AND value < 300 AND region=7 "
                 + "GROUP BY region ORDER BY region ASC",
             command));
     assertEquals(SqlCommandType.GROUP_COUNT, command.type());
     assertName("region", command.firstColumnName());
     assertName("accounts", command.tableName());
+    assertEquals(2, command.predicateCount());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse(
@@ -145,9 +147,13 @@ final class SqlParserTest {
         parser.parse("SELECT key FROM accounts LIMIT -1", command));
     assertEquals(
         StatusCode.OK,
-        parser.parse("SELECT DISTINCT region FROM accounts ORDER BY region LIMIT 2", command));
+        parser.parse(
+            "SELECT DISTINCT region FROM accounts WHERE value=100 AND region=7 "
+                + "ORDER BY region LIMIT 2",
+            command));
     assertEquals(SqlCommandType.DISTINCT_SCAN, command.type());
     assertName("region", command.firstColumnName());
+    assertEquals(2, command.predicateCount());
     assertEquals(2, command.rowLimit());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,

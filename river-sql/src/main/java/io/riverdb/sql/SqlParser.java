@@ -233,6 +233,11 @@ public final class SqlParser {
             && consumeKeyword(sql, "WHERE")) {
           status = predicates(sql, result, true);
         }
+        if (status.isOk()
+            && type != SqlCommandType.JOIN_SCAN
+            && consumeKeyword(sql, "WHERE")) {
+          status = predicates(sql, result, false);
+        }
         if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
           status = requireKeyword(sql, "GROUP");
           if (status.isOk()) {
@@ -242,10 +247,8 @@ public final class SqlParser {
             status = matchingIdentifier(sql, result.firstColumnName());
           }
         } else if (status.isOk()
-            && type != SqlCommandType.JOIN_SCAN
-            && type != SqlCommandType.DISTINCT_SCAN
-            && consumeKeyword(sql, "WHERE")) {
-          status = predicates(sql, result, false);
+            && type == SqlCommandType.SCAN
+            && result.hasPredicate()) {
           if (status.isOk() && result.isEqualityPredicate()) {
             type = SqlCommandType.SELECT;
           }

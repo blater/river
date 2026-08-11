@@ -350,6 +350,9 @@ public final class SqlSession {
       if (status.isOk()) {
         status = session.resolveTable(command.tableName(), table);
       }
+      if (status.isOk()) {
+        status = bindPredicates(false);
+      }
       if (status.isOk()
           && command.columnTableName(0).length() > 0
           && !sameName(command.columnTableName(0), command.tableName())) {
@@ -363,9 +366,7 @@ public final class SqlSession {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
       if (status.isOk()) {
-        status = valueIndex
-            ? session.beginValueScan(table, groupColumn, cursor.relational())
-            : session.beginScan(table, cursor.relational());
+        status = beginOrderedAggregateScan(cursor, groupColumn, valueIndex);
       }
       if (status.isOk()) {
         status = cursor.claimGroupCount(
@@ -386,6 +387,9 @@ public final class SqlSession {
       if (status.isOk()) {
         status = session.resolveTable(command.tableName(), table);
       }
+      if (status.isOk()) {
+        status = bindPredicates(false);
+      }
       if (status.isOk()
           && command.columnTableName(0).length() > 0
           && !sameName(command.columnTableName(0), command.tableName())) {
@@ -399,9 +403,7 @@ public final class SqlSession {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
       if (status.isOk()) {
-        status = valueIndex
-            ? session.beginValueScan(table, distinctColumn, cursor.relational())
-            : session.beginScan(table, cursor.relational());
+        status = beginOrderedAggregateScan(cursor, distinctColumn, valueIndex);
       }
       if (status.isOk()) {
         status = cursor.claimDistinct(
@@ -1206,28 +1208,69 @@ public final class SqlSession {
   }
 
   private StatusCode nextGroupValue(SqlScanCursor cursor) {
-    StatusCode status;
-    long primaryKey;
-    HeapRowResult source;
-    if (cursor.valueIndex()) {
-      status = session.nextValueScan(
-          table, cursor.relational(), aggregateRow, indexed);
-      primaryKey = indexed.key();
-      source = indexed.row();
-    } else {
-      status = session.nextScan(cursor.relational(), aggregateRow);
-      primaryKey = aggregateRow.key();
-      source = aggregateRow.row();
-    }
-    if (status.isOk()) {
-      status = validateRow(source, table);
-    }
-    if (status.isOk()) {
+    while (true) {
+      StatusCode status;
+      long primaryKey;
+      HeapRowResult source;
+      if (cursor.valueIndex()) {
+        status = session.nextValueScan(
+            table, cursor.relational(), aggregateRow, indexed);
+        primaryKey = indexed.key();
+        source = indexed.row();
+      } else {
+        status = session.nextScan(cursor.relational(), aggregateRow);
+        primaryKey = aggregateRow.key();
+        source = aggregateRow.row();
+      }
+      if (status.isOk()) {
+        status = validateRow(source, table);
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      if (!matchesPredicates(primaryKey, source)) {
+        continue;
+      }
       int column = cursor.groupColumn();
       projectedValues[0] = column == 0
           ? primaryKey : source.getLong((column - 1) * Long.BYTES);
+      return StatusCode.OK;
     }
-    return status;
+  }
+
+  private StatusCode beginOrderedAggregateScan(
+      SqlScanCursor cursor,
+      int orderedColumn,
+      boolean valueIndex) {
+    int boundedPredicate = -1;
+    for (int index = 0; index < predicateCount; index++) {
+      if (predicateColumns[index] == orderedColumn
+          && (boundedPredicate < 0 || command.isEqualityPredicate(index))) {
+        boundedPredicate = index;
+        if (command.isEqualityPredicate(index)) {
+          break;
+        }
+      }
+    }
+    if (boundedPredicate < 0) {
+      return valueIndex
+          ? session.beginValueScan(table, orderedColumn, cursor.relational())
+          : session.beginScan(table, cursor.relational());
+    }
+    boolean equality = command.isEqualityPredicate(boundedPredicate);
+    long lower = equality
+        ? command.predicateValue(boundedPredicate)
+        : command.predicateLowerInclusive(boundedPredicate);
+    if (equality && lower == Long.MAX_VALUE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long upper = equality
+        ? lower + 1
+        : command.predicateUpperExclusive(boundedPredicate);
+    return valueIndex
+        ? session.beginValueScan(
+            table, orderedColumn, lower, upper, cursor.relational())
+        : session.beginScan(table, lower, upper, cursor.relational());
   }
 
   private static long readColumn(long primaryKey, HeapRowResult source, int column) {

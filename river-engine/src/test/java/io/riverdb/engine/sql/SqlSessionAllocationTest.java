@@ -45,6 +45,9 @@ final class SqlSessionAllocationTest {
             "CREATE TABLE t (id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT)",
             result));
     assertEquals(StatusCode.OK, session.execute("INSERT INTO t VALUES (1, 10, 7)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE INDEX t_region ON t(region)", result));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
       exerciseCount(session, result);
@@ -62,10 +65,12 @@ final class SqlSessionAllocationTest {
     SqlScanRowResult scanRow = new SqlScanRowResult();
     for (int index = 0; index < 100; index++) {
       exerciseScan(session, cursor, scanRow, result);
+      exerciseAggregate(session, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exerciseScan(session, cursor, scanRow, result);
+      exerciseAggregate(session, cursor, scanRow, result);
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL scan allocated bytes: " + allocated);
@@ -95,6 +100,23 @@ final class SqlSessionAllocationTest {
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.key();
     allocationGuard += row.value();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseAggregate(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT region, COUNT(*) FROM t WHERE balance=10 AND region=7 "
+            + "GROUP BY region ORDER BY region",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

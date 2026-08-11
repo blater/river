@@ -1475,18 +1475,17 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.beginScan(
             "SELECT category, COUNT(*) FROM events "
+                + "WHERE category >= 10 AND category < 30 "
+                + "AND amount >= 150 AND amount < 450 "
                 + "GROUP BY category ORDER BY category",
             groups));
     assertEquals(true, "category".contentEquals(session.scanColumnName(groups, 0)));
     assertEquals(true, "count".contentEquals(session.scanColumnName(groups, 1)));
     assertEquals(StatusCode.OK, session.nextScan(groups, group));
     assertEquals(10, group.valueAt(0));
-    assertEquals(3, group.valueAt(1));
+    assertEquals(2, group.valueAt(1));
     assertEquals(StatusCode.OK, session.nextScan(groups, group));
     assertEquals(20, group.valueAt(0));
-    assertEquals(1, group.valueAt(1));
-    assertEquals(StatusCode.OK, session.nextScan(groups, group));
-    assertEquals(30, group.valueAt(0));
     assertEquals(1, group.valueAt(1));
     assertEquals(StatusCode.CONFLICT, session.nextScan(groups, group));
     assertEquals(StatusCode.OK, session.closeScan(groups, result));
@@ -1495,7 +1494,9 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         session.beginScan(
-            "SELECT DISTINCT category FROM events ORDER BY category LIMIT 2",
+            "SELECT DISTINCT category FROM events "
+                + "WHERE amount >= 150 AND amount < 450 "
+                + "ORDER BY category LIMIT 2",
             distinct));
     assertEquals(true, "category".contentEquals(session.scanColumnName(distinct, 0)));
     assertEquals(StatusCode.OK, session.nextScan(distinct, distinctRow));

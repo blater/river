@@ -44,7 +44,9 @@ final class RiverSqlMainTest {
           JOIN regions ON accounts.region=regions.id
           WHERE accounts.id >= 1 AND accounts.id < 4
             AND accounts.region=7 LIMIT 2;
-        SELECT region, COUNT(*) FROM accounts GROUP BY region ORDER BY region;
+        SELECT region, COUNT(*) FROM accounts
+          WHERE balance >= 150 AND balance < 350
+          GROUP BY region ORDER BY region;
         """;
     ByteArrayOutputStream standardOutput = new ByteArrayOutputStream();
     ByteArrayOutputStream standardError = new ByteArrayOutputStream();
@@ -60,7 +62,7 @@ final class RiverSqlMainTest {
     assertTrue(
         output.contains("id\tcode\n1\t7000\n2\t7000\nROWS\t2\n")
             || output.contains("id\tcode\n2\t7000\n1\t7000\nROWS\t2\n"));
-    assertTrue(output.contains("region\tcount\n7\t2\n8\t1\nROWS\t2\n"));
+    assertTrue(output.contains("region\tcount\n7\t1\n8\t1\nROWS\t2\n"));
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
   }
