@@ -140,7 +140,7 @@ public final class RiverSqlMain {
     opened.reset();
     StatusCode status = session.beginQuery(sql, opened);
     if (status.isOk()) {
-      return stream(opened.query(), row, closed, output, errors);
+      return stream(opened.query(), row, closed, characters, output, errors);
     }
     if (status != StatusCode.INVALID_EXTERNAL_INPUT) {
       error(errors, status);
@@ -163,6 +163,7 @@ public final class RiverSqlMain {
       RiverQuery query,
       RowResult row,
       CommandResult closed,
+      char[] textCharacters,
       PrintStream output,
       PrintStream errors) {
     for (int index = 0; index < query.columnCount(); index++) {
@@ -179,7 +180,23 @@ public final class RiverSqlMain {
         if (index > 0) {
           output.print('\t');
         }
-        output.print(row.valueAt(index));
+        if (row.isNull(index)) {
+          output.print("NULL");
+        } else if (row.isVarchar(index)) {
+          int length = row.copyTextAt(index, textCharacters, 0);
+          if (length < 0) {
+            status = StatusCode.CORRUPTION;
+            break;
+          }
+          for (int character = 0; character < length; character++) {
+            output.print(textCharacters[character]);
+          }
+        } else {
+          output.print(row.valueAt(index));
+        }
+      }
+      if (!status.isOk()) {
+        break;
       }
       output.println();
       rows++;
