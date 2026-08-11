@@ -202,13 +202,9 @@ final class RiverDriverTest {
         assertFalse(nestedNullFilter.next());
       }
       assertEquals(
-          "22000",
-          assertThrows(
-              SQLException.class,
-              () -> statement.executeUpdate(
-                  "CREATE INDEX nullable_value_idx "
-                      + "ON nullable_values(value)"))
-              .getSQLState());
+          0,
+          statement.executeUpdate(
+              "CREATE INDEX nullable_value_idx ON nullable_values(value)"));
       try (ResultSet nullComparison = statement.executeQuery(
           "SELECT id FROM nullable_values WHERE value=0")) {
         assertFalse(nullComparison.next());
@@ -228,10 +224,6 @@ final class RiverDriverTest {
           1,
           statement.executeUpdate(
               "UPDATE nullable_values SET value=40 WHERE id=3"));
-      assertEquals(
-          0,
-          statement.executeUpdate(
-              "CREATE INDEX nullable_value_idx ON nullable_values(value)"));
       try (ResultSet indexed = statement.executeQuery(
           "SELECT id FROM nullable_values WHERE value=40")) {
         assertTrue(indexed.next());
@@ -239,12 +231,15 @@ final class RiverDriverTest {
         assertFalse(indexed.next());
       }
       assertEquals(
-          "22000",
-          assertThrows(
-              SQLException.class,
-              () -> statement.executeUpdate(
-                  "UPDATE nullable_values SET value=NULL WHERE id=2"))
-              .getSQLState());
+          1,
+          statement.executeUpdate(
+              "UPDATE nullable_values SET value=NULL WHERE id=2"));
+      try (ResultSet indexedNull = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value IS NULL ORDER BY id")) {
+        assertTrue(indexedNull.next());
+        assertEquals(2, indexedNull.getLong(1));
+        assertFalse(indexedNull.next());
+      }
       assertEquals(
           0,
           statement.executeUpdate(

@@ -1615,10 +1615,17 @@ final class SqlSessionTest {
     assertEquals(20, distinctRow.valueAt(0));
     assertEquals(StatusCode.CONFLICT, session.nextScan(distinct, distinctRow));
     assertEquals(StatusCode.OK, session.closeScan(distinct, result));
+    assertEquals(StatusCode.OK, distinct.reset());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session.beginScan(
-            "SELECT DISTINCT amount FROM events", new SqlScanCursor()));
+        StatusCode.OK,
+        session.beginScan("SELECT DISTINCT amount FROM events", distinct));
+    long[] distinctAmounts = {100, 200, 300, 400, 500};
+    for (long amount : distinctAmounts) {
+      assertEquals(StatusCode.OK, session.nextScan(distinct, distinctRow));
+      assertEquals(amount, distinctRow.valueAt(0));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(distinct, distinctRow));
+    assertEquals(StatusCode.OK, session.closeScan(distinct, result));
     assertEquals(StatusCode.OK, groups.reset());
     assertEquals(
         StatusCode.OK,

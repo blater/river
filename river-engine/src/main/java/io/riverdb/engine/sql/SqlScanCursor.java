@@ -23,6 +23,7 @@ public final class SqlScanCursor {
   private boolean groupLookaheadNull;
   private boolean groupInputExhausted;
   private boolean distinctValueAvailable;
+  private boolean distinctValueNull;
   private boolean aggregateTransactionActive;
   private boolean aggregateNull;
   private long aggregateValue;
@@ -64,6 +65,7 @@ public final class SqlScanCursor {
     groupLookaheadNull = false;
     groupInputExhausted = false;
     distinctValueAvailable = false;
+    distinctValueNull = false;
     aggregateTransactionActive = false;
     aggregateNull = false;
     aggregateValue = 0;
@@ -220,8 +222,13 @@ public final class SqlScanCursor {
       boolean implicit,
       int column,
       boolean indexedValue,
+      int sortedInputRows,
       long rowLimit) {
-    if (active || session == null || column < 0 || rowLimit < 0) {
+    if (active
+        || session == null
+        || column < 0
+        || sortedInputRows < -1
+        || rowLimit < 0) {
       return StatusCode.CONFLICT;
     }
     owner = session;
@@ -229,6 +236,9 @@ public final class SqlScanCursor {
     valueIndex = indexedValue;
     distinct = true;
     groupColumn = column;
+    sorted = sortedInputRows >= 0;
+    sortedRowCount = sorted ? sortedInputRows : 0;
+    sortedRowIndex = 0;
     maximumRows = rowLimit;
     projectedColumns[0] = column;
     projectedColumnCount = 1;
@@ -421,8 +431,13 @@ public final class SqlScanCursor {
     return distinctValue;
   }
 
-  void setDistinctValue(long value) {
+  boolean distinctValueNull() {
+    return distinctValueNull;
+  }
+
+  void setDistinctValue(long value, boolean nullValue) {
     distinctValue = value;
+    distinctValueNull = nullValue;
     distinctValueAvailable = true;
   }
 

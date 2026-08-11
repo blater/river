@@ -45,6 +45,8 @@ public final class RelationalSession {
   private final ByteBuffer indexRow = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer nonUniqueIndexRow = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
   private final long[] previousIndexedValues = new long[TableDefinition.MAXIMUM_INDEXES];
+  private final boolean[] previousIndexedNulls =
+      new boolean[TableDefinition.MAXIMUM_INDEXES];
   private boolean registeredTransaction;
   private boolean schemaChangeActive;
   private int schemaChangeMutationStart;
@@ -250,15 +252,10 @@ public final class RelationalSession {
     if (!validRow(table, row)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int slot = 0; slot < table.uniqueIndexCount(); slot++) {
-      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_NONE
-          && table.isNull(row, table.uniqueIndexColumn(slot))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
     StatusCode status = insert(table, key, row);
     for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
-      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY) {
+      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY
+          || table.isNull(row, table.uniqueIndexColumn(slot))) {
         continue;
       }
       prepareValueIndex(table, slot);
@@ -286,12 +283,6 @@ public final class RelationalSession {
     if (!validRow(table, row)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int slot = 0; slot < table.uniqueIndexCount(); slot++) {
-      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_NONE
-          && table.isNull(row, table.uniqueIndexColumn(slot))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
     StatusCode status = StatusCode.OK;
     if (table.hasUniqueValueIndex()) {
       status = fetch(table, key, indexedKeyRow);
@@ -299,6 +290,8 @@ public final class RelationalSession {
         status = copyRow(table, indexedKeyRow, rowScratch);
         for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
           previousIndexedValues[slot] = indexedValue(table, rowScratch, slot);
+          previousIndexedNulls[slot] = table.isNull(
+              rowScratch, table.uniqueIndexColumn(slot));
         }
       }
     }
@@ -309,16 +302,20 @@ public final class RelationalSession {
       if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY) {
         continue;
       }
+      boolean nextNull = table.isNull(row, table.uniqueIndexColumn(slot));
       long nextValue = indexedValue(table, row, slot);
-      if (previousIndexedValues[slot] == nextValue) {
+      if (previousIndexedNulls[slot] == nextNull
+          && (nextNull || previousIndexedValues[slot] == nextValue)) {
         continue;
       }
       prepareValueIndex(table, slot);
-      status = table.indexIsUnique(slot)
-          ? deleteIndexedValue(valueIndexTable, previousIndexedValues[slot])
-          : deleteNonUniqueIndexedValue(
-              valueIndexTable, previousIndexedValues[slot], key);
-      if (status.isOk()) {
+      if (!previousIndexedNulls[slot]) {
+        status = table.indexIsUnique(slot)
+            ? deleteIndexedValue(valueIndexTable, previousIndexedValues[slot])
+            : deleteNonUniqueIndexedValue(
+                valueIndexTable, previousIndexedValues[slot], key);
+      }
+      if (status.isOk() && !nextNull) {
         if (table.indexIsUnique(slot)) {
           encodeLong(indexRow, key);
           status = insertIndexedValue(valueIndexTable, nextValue, indexRow);
@@ -338,6 +335,8 @@ public final class RelationalSession {
         status = copyRow(table, indexedKeyRow, rowScratch);
         for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
           previousIndexedValues[slot] = indexedValue(table, rowScratch, slot);
+          previousIndexedNulls[slot] = table.isNull(
+              rowScratch, table.uniqueIndexColumn(slot));
         }
       }
     }
@@ -346,6 +345,9 @@ public final class RelationalSession {
     }
     for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
       if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY) {
+        continue;
+      }
+      if (previousIndexedNulls[slot]) {
         continue;
       }
       prepareValueIndex(table, slot);

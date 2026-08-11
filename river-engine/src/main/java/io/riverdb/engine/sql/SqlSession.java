@@ -568,7 +568,9 @@ public final class SqlSession {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
       boolean orderedInput = groupColumn == 0
-          || groupColumn > 0 && table.hasIndexOn(groupColumn);
+          || groupColumn > 0
+              && table.hasIndexOn(groupColumn)
+              && !table.isNullable(groupColumn);
       boolean inputValueIndex = orderedInput && groupColumn > 0;
       int sortedInputRows = -1;
       if (status.isOk() && orderedInput) {
@@ -651,17 +653,62 @@ public final class SqlSession {
       }
       int distinctColumn = status.isOk()
           ? table.findColumn(command.firstColumnName()) : -1;
-      boolean valueIndex = distinctColumn > 0 && table.hasIndexOn(distinctColumn);
-      if (status.isOk()
-          && (distinctColumn < 0 || distinctColumn > 0 && !valueIndex)) {
+      if (status.isOk() && distinctColumn < 0) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      if (status.isOk()) {
-        status = beginOrderedAggregateScan(cursor, distinctColumn, valueIndex);
+      boolean orderedInput = distinctColumn == 0
+          || distinctColumn > 0
+              && table.hasIndexOn(distinctColumn)
+              && !table.isNullable(distinctColumn);
+      boolean inputValueIndex = orderedInput && distinctColumn > 0;
+      int sortedInputRows = -1;
+      if (status.isOk() && orderedInput) {
+        status = beginOrderedAggregateScan(
+            cursor, distinctColumn, inputValueIndex);
+      } else if (status.isOk()) {
+        boolean bounded = accessPredicate >= 0;
+        boolean equality = bounded && accessEquality();
+        int scanIndexColumn = bounded
+                && predicateColumn > 0
+                && table.hasIndexOn(predicateColumn)
+            ? predicateColumn : -1;
+        inputValueIndex = scanIndexColumn > 0;
+        if (equality
+            && (predicateColumn == 0 || inputValueIndex)
+            && accessValue() == Long.MAX_VALUE) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+        } else if (inputValueIndex) {
+          status = session.beginValueScan(
+              table,
+              scanIndexColumn,
+              equality ? accessValue() : accessLowerInclusive(),
+              equality ? accessValue() + 1 : accessUpperExclusive(),
+              cursor.relational());
+        } else if (bounded && predicateColumn == 0) {
+          status = session.beginScan(
+              table,
+              equality ? accessValue() : accessLowerInclusive(),
+              equality ? accessValue() + 1 : accessUpperExclusive(),
+              cursor.relational());
+        } else {
+          status = session.beginScan(table, cursor.relational());
+        }
+        if (status.isOk()) {
+          projectedColumns[0] = distinctColumn;
+          projectedColumnCount = 1;
+          status = materializeSortedScan(
+              cursor, inputValueIndex, distinctColumn);
+          sortedInputRows = status.isOk() ? sortedTotalRows : -1;
+        }
       }
       if (status.isOk()) {
         status = cursor.claimDistinct(
-            this, implicit, distinctColumn, valueIndex, command.rowLimit());
+            this,
+            implicit,
+            distinctColumn,
+            inputValueIndex,
+            sortedInputRows,
+            command.rowLimit());
       }
       if (status.isOk()) {
         scanActive = true;
@@ -774,7 +821,9 @@ public final class SqlSession {
     boolean materializedSort = status.isOk()
         && command.isOrdered()
         && (command.isDescendingOrder()
-            || orderColumn > 0 && !table.hasIndexOn(orderColumn));
+            || orderColumn > 0
+                && (!table.hasIndexOn(orderColumn)
+                    || table.isNullable(orderColumn)));
     boolean bounded = status.isOk() && accessPredicate >= 0;
     boolean equality = bounded && accessEquality();
     int scanIndexColumn = status.isOk() && command.isOrdered() && !materializedSort
@@ -867,6 +916,9 @@ public final class SqlSession {
     if (cursor.groupAggregate()) {
       return nextGroupAggregate(cursor, result);
     }
+    if (cursor.distinct()) {
+      return nextDistinct(cursor, result);
+    }
     if (cursor.sorted()) {
       int sortedRow = cursor.currentSortedRow();
       if (sortedRow < 0) {
@@ -893,9 +945,6 @@ public final class SqlSession {
         cursor.rowReturned();
       }
       return status;
-    }
-    if (cursor.distinct()) {
-      return nextDistinct(cursor, result);
     }
     if (cursor.join()) {
       return nextJoin(cursor, result);
@@ -1382,7 +1431,7 @@ public final class SqlSession {
             return StatusCode.INVALID_EXTERNAL_INPUT;
           }
         }
-        if (command.updateIsNull(index) && table.hasIndexOn(column)) {
+        if (command.updateIsNull(index) && !table.isNullable(column)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
         updatedColumns[index] = column;
@@ -1662,8 +1711,7 @@ public final class SqlSession {
       for (int column = 1; column < table.columnCount(); column++) {
         int source = insertSourceByColumn[column];
         boolean nullValue = source < 0 || command.insertIsNull(rowIndex, source);
-        if (nullValue
-            && (!table.isNullable(column) || table.hasIndexOn(column))) {
+        if (nullValue && !table.isNullable(column)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
       }
@@ -1747,7 +1795,7 @@ public final class SqlSession {
         return status;
       }
       long value = projectedValues[0];
-      if (groupInputNull != groupNull || value != groupValue) {
+      if (groupInputNull != groupNull || !groupNull && value != groupValue) {
         cursor.setGroupLookahead(
             value,
             groupInputNull,
@@ -1800,11 +1848,14 @@ public final class SqlSession {
         return status;
       }
       long value = projectedValues[0];
-      if (cursor.hasDistinctValue() && cursor.distinctValue() == value) {
+      boolean nullValue = groupInputNull;
+      if (cursor.hasDistinctValue()
+          && cursor.distinctValueNull() == nullValue
+          && (nullValue || cursor.distinctValue() == value)) {
         continue;
       }
-      cursor.setDistinctValue(value);
-      result.set(value, projectedValues, 0, 1);
+      cursor.setDistinctValue(value, nullValue);
+      result.set(value, projectedValues, nullValue ? 1 : 0, 1);
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -3740,7 +3791,7 @@ public final class SqlSession {
         if (command.isRelativeUpdate(index)) {
           int sourceColumn = updateSourceColumns[index];
           nullValue = isNull(fetched, table, sourceColumn);
-          if (nullValue && table.hasIndexOn(column)) {
+          if (nullValue && !table.isNullable(column)) {
             return StatusCode.INVALID_EXTERNAL_INPUT;
           }
           if (!nullValue) {

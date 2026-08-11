@@ -410,13 +410,10 @@ public final class RelationalDatabase {
         catalogScratch.clear();
         status = indexBuildRow.row().copyTo(catalogScratch);
       }
-      if (status.isOk()) {
-        if ((catalogScratch.getLong(indexedTable.nullMaskOffset())
-            & 1L << indexedTable.uniqueValueIndexColumn()) != 0) {
-          status = StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-      if (status.isOk()) {
+      boolean nullValue = status.isOk()
+          && (catalogScratch.getLong(indexedTable.nullMaskOffset())
+              & 1L << indexedTable.uniqueValueIndexColumn()) != 0;
+      if (status.isOk() && !nullValue) {
         long value = catalogScratch.getLong(
             (indexedTable.uniqueValueIndexColumn() - 1) * Long.BYTES);
         int buildingSlot = indexedTable.buildingIndexSlot();
@@ -677,13 +674,10 @@ public final class RelationalDatabase {
         catalogScratch.clear();
         status = indexBuildRow.row().copyTo(catalogScratch);
       }
-      if (status.isOk()) {
-        if ((catalogScratch.getLong(indexedTable.nullMaskOffset())
-            & 1L << indexColumn) != 0) {
-          status = StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-      }
-      if (status.isOk()) {
+      boolean nullValue = status.isOk()
+          && (catalogScratch.getLong(indexedTable.nullMaskOffset())
+              & 1L << indexColumn) != 0;
+      if (status.isOk() && !nullValue) {
         long value = catalogScratch.getLong(
             (indexColumn - 1) * Long.BYTES);
         if (unique) {
