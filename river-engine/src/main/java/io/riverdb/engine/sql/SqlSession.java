@@ -18,12 +18,21 @@ import io.riverdb.sql.SqlParser;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.zip.CRC32C;
 
 /** Executes the first SQL point-statement subset through real catalog and transactions. */
 public final class SqlSession {
   private static final String COUNT_COLUMN_NAME = "count";
   private static final int MAXIMUM_SORT_ROWS = 1_024;
+  private static final int MAXIMUM_SORT_RUNS = 64;
+  private static final int MAXIMUM_SORT_RECORD_BYTES =
+      (TableSchema.MAXIMUM_COLUMNS + 2) * Long.BYTES + Integer.BYTES;
 
   private final RelationalDatabase database;
   private final RelationalSession session;
@@ -44,6 +53,15 @@ public final class SqlSession {
   private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final long[] sortRunOffsets = new long[MAXIMUM_SORT_RUNS];
+  private final long[] sortRunReadOffsets = new long[MAXIMUM_SORT_RUNS];
+  private final int[] sortRunRowCounts = new int[MAXIMUM_SORT_RUNS];
+  private final int[] sortRunRowsRemaining = new int[MAXIMUM_SORT_RUNS];
+  private final long[] sortMergeKeys = new long[MAXIMUM_SORT_RUNS];
+  private final long[] sortMergePrimaryKeys = new long[MAXIMUM_SORT_RUNS];
+  private final long[] sortMergeValues =
+      new long[MAXIMUM_SORT_RUNS * TableSchema.MAXIMUM_COLUMNS];
+  private final boolean[] sortRunActive = new boolean[MAXIMUM_SORT_RUNS];
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final ValueIndexLookupResult joinOuterIndexed = new ValueIndexLookupResult();
@@ -51,9 +69,19 @@ public final class SqlSession {
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(
       (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
+  private final ByteBuffer sortRecord = ByteBuffer.allocateDirect(
+      MAXIMUM_SORT_RECORD_BYTES);
+  private final CRC32C sortChecksum = new CRC32C();
   private long[] sortedKeys;
   private long[] sortedPrimaryKeys;
   private long[] sortedValues;
+  private FileChannel sortSpillChannel;
+  private Path sortSpillPath;
+  private boolean sortSpilled;
+  private int sortRunCount;
+  private int sortedTotalRows;
+  private long sortSpillWriteOffset;
+  private long sortedOutputPrimaryKey;
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
@@ -554,7 +582,7 @@ public final class SqlSession {
               implicit,
               projectedColumns,
               projectedColumnCount,
-              sortedRowCount,
+              sortedTotalRows,
               command.rowLimit());
         }
       } else {
@@ -601,20 +629,28 @@ public final class SqlSession {
       return StatusCode.OK;
     }
     if (cursor.sorted()) {
-      int sortedRow = cursor.nextSortedRow();
+      int sortedRow = cursor.currentSortedRow();
       if (sortedRow < 0) {
         return StatusCode.CONFLICT;
       }
-      int valueStart = sortedRow * TableSchema.MAXIMUM_COLUMNS;
-      for (int index = 0; index < cursor.projectedColumnCount(); index++) {
-        projectedValues[index] = sortedValues[valueStart + index];
+      StatusCode status = StatusCode.OK;
+      long primaryKey;
+      if (sortSpilled) {
+        status = nextSpilledSortRow(cursor.projectedColumnCount());
+        primaryKey = sortedOutputPrimaryKey;
+      } else {
+        int valueStart = sortedRow * TableSchema.MAXIMUM_COLUMNS;
+        for (int index = 0; index < cursor.projectedColumnCount(); index++) {
+          projectedValues[index] = sortedValues[valueStart + index];
+        }
+        primaryKey = sortedPrimaryKeys[sortedRow];
       }
-      result.set(
-          sortedPrimaryKeys[sortedRow],
-          projectedValues,
-          cursor.projectedColumnCount());
-      cursor.rowReturned();
-      return StatusCode.OK;
+      if (status.isOk()) {
+        result.set(primaryKey, projectedValues, cursor.projectedColumnCount());
+        cursor.advanceSortedRow();
+        cursor.rowReturned();
+      }
+      return status;
     }
     if (cursor.groupCount()) {
       return nextGroupCount(cursor, result);
@@ -709,6 +745,9 @@ public final class SqlSession {
     }
     if (status.isOk() && !cursor.sorted()) {
       status = session.closeScan(cursor.relational());
+    }
+    if (status.isOk() && cursor.sorted()) {
+      status = closeSortSpill();
     }
     if (!status.isOk()) {
       return status;
@@ -1528,7 +1567,11 @@ public final class SqlSession {
       int orderColumn) {
     ensureSortWorkspace();
     sortedRowCount = 0;
-    StatusCode status = StatusCode.OK;
+    sortedTotalRows = 0;
+    sortRunCount = 0;
+    sortSpillWriteOffset = 0;
+    sortSpilled = false;
+    StatusCode status = closeSortSpill();
     while (status.isOk()) {
       long primaryKey;
       HeapRowResult source;
@@ -1553,10 +1596,11 @@ public final class SqlSession {
         continue;
       }
       if (status.isOk() && sortedRowCount >= MAXIMUM_SORT_ROWS) {
-        status = StatusCode.RESOURCE_EXHAUSTED;
+        status = spillSortedRun();
       }
       if (status.isOk()) {
         int rowIndex = sortedRowCount++;
+        sortedTotalRows++;
         sortedKeys[rowIndex] = readColumn(primaryKey, source, orderColumn);
         sortedPrimaryKeys[rowIndex] = primaryKey;
         int valueStart = rowIndex * TableSchema.MAXIMUM_COLUMNS;
@@ -1568,12 +1612,210 @@ public final class SqlSession {
     }
     StatusCode close = session.closeScan(cursor.relational());
     if (!close.isOk()) {
-      return close;
+      status = close;
     }
     if (status.isOk()) {
-      sortMaterializedRows();
+      if (sortSpilled) {
+        status = spillSortedRun();
+        if (status.isOk()) {
+          status = initializeSortMerge();
+        }
+      } else {
+        sortMaterializedRows();
+      }
+    }
+    if (!status.isOk()) {
+      StatusCode cleanup = closeSortSpill();
+      if (!cleanup.isOk()) {
+        return cleanup;
+      }
     }
     return status;
+  }
+
+  private StatusCode spillSortedRun() {
+    if (sortedRowCount <= 0) {
+      return StatusCode.OK;
+    }
+    if (sortRunCount >= MAXIMUM_SORT_RUNS) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = openSortSpill();
+    if (!status.isOk()) {
+      return status;
+    }
+    sortMaterializedRows();
+    int run = sortRunCount;
+    sortRunOffsets[run] = sortSpillWriteOffset;
+    sortRunRowCounts[run] = sortedRowCount;
+    int dataBytes = (projectedColumnCount + 2) * Long.BYTES;
+    int recordBytes = dataBytes + Integer.BYTES;
+    for (int rowIndex = 0; rowIndex < sortedRowCount; rowIndex++) {
+      sortRecord.clear();
+      sortRecord.limit(recordBytes);
+      sortRecord.putLong(sortedKeys[rowIndex]);
+      sortRecord.putLong(sortedPrimaryKeys[rowIndex]);
+      int valueStart = rowIndex * TableSchema.MAXIMUM_COLUMNS;
+      for (int index = 0; index < projectedColumnCount; index++) {
+        sortRecord.putLong(sortedValues[valueStart + index]);
+      }
+      sortRecord.putInt(sortRecordChecksum(dataBytes));
+      sortRecord.flip();
+      status = writeSortRecord();
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    sortRunCount++;
+    sortSpilled = true;
+    sortedRowCount = 0;
+    return StatusCode.OK;
+  }
+
+  private StatusCode openSortSpill() {
+    if (sortSpillChannel != null) {
+      return StatusCode.OK;
+    }
+    try {
+      sortSpillPath = Files.createTempFile("river-sort-", ".run");
+      sortSpillChannel = FileChannel.open(
+          sortSpillPath,
+          StandardOpenOption.READ,
+          StandardOpenOption.WRITE);
+      return StatusCode.OK;
+    } catch (IOException failure) {
+      sortSpillChannel = null;
+      return StatusCode.IO_FAILURE;
+    }
+  }
+
+  private StatusCode writeSortRecord() {
+    try {
+      while (sortRecord.hasRemaining()) {
+        int written = sortSpillChannel.write(sortRecord, sortSpillWriteOffset);
+        if (written <= 0) {
+          return StatusCode.IO_FAILURE;
+        }
+        sortSpillWriteOffset += written;
+      }
+      return StatusCode.OK;
+    } catch (IOException failure) {
+      return StatusCode.IO_FAILURE;
+    }
+  }
+
+  private StatusCode initializeSortMerge() {
+    for (int run = 0; run < sortRunCount; run++) {
+      sortRunReadOffsets[run] = sortRunOffsets[run];
+      sortRunRowsRemaining[run] = sortRunRowCounts[run];
+      sortRunActive[run] = false;
+      StatusCode status = readSortRunRow(run);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode nextSpilledSortRow(int columnCount) {
+    int selected = -1;
+    for (int run = 0; run < sortRunCount; run++) {
+      if (sortRunActive[run]
+          && (selected < 0 || compareSortMergeRows(run, selected) < 0)) {
+        selected = run;
+      }
+    }
+    if (selected < 0) {
+      return StatusCode.CORRUPTION;
+    }
+    sortedOutputPrimaryKey = sortMergePrimaryKeys[selected];
+    int valueStart = selected * TableSchema.MAXIMUM_COLUMNS;
+    for (int index = 0; index < columnCount; index++) {
+      projectedValues[index] = sortMergeValues[valueStart + index];
+    }
+    return readSortRunRow(selected);
+  }
+
+  private int compareSortMergeRows(int left, int right) {
+    long leftKey = sortMergeKeys[left];
+    long rightKey = sortMergeKeys[right];
+    if (leftKey < rightKey) {
+      return -1;
+    }
+    if (leftKey > rightKey) {
+      return 1;
+    }
+    long leftPrimary = sortMergePrimaryKeys[left];
+    long rightPrimary = sortMergePrimaryKeys[right];
+    return leftPrimary < rightPrimary ? -1 : leftPrimary == rightPrimary ? 0 : 1;
+  }
+
+  private StatusCode readSortRunRow(int run) {
+    if (sortRunRowsRemaining[run] <= 0) {
+      sortRunActive[run] = false;
+      return StatusCode.OK;
+    }
+    int dataBytes = (projectedColumnCount + 2) * Long.BYTES;
+    int recordBytes = dataBytes + Integer.BYTES;
+    sortRecord.clear();
+    sortRecord.limit(recordBytes);
+    long offset = sortRunReadOffsets[run];
+    try {
+      while (sortRecord.hasRemaining()) {
+        int read = sortSpillChannel.read(sortRecord, offset);
+        if (read <= 0) {
+          return read < 0 ? StatusCode.CORRUPTION : StatusCode.IO_FAILURE;
+        }
+        offset += read;
+      }
+    } catch (IOException failure) {
+      return StatusCode.IO_FAILURE;
+    }
+    sortRecord.flip();
+    int storedChecksum = sortRecord.getInt(dataBytes);
+    if (storedChecksum != sortRecordChecksum(dataBytes)) {
+      return StatusCode.CORRUPTION;
+    }
+    sortMergeKeys[run] = sortRecord.getLong();
+    sortMergePrimaryKeys[run] = sortRecord.getLong();
+    int valueStart = run * TableSchema.MAXIMUM_COLUMNS;
+    for (int index = 0; index < projectedColumnCount; index++) {
+      sortMergeValues[valueStart + index] = sortRecord.getLong();
+    }
+    sortRunReadOffsets[run] = offset;
+    sortRunRowsRemaining[run]--;
+    sortRunActive[run] = true;
+    return StatusCode.OK;
+  }
+
+  private int sortRecordChecksum(int length) {
+    sortChecksum.reset();
+    for (int index = 0; index < length; index++) {
+      sortChecksum.update(sortRecord.get(index));
+    }
+    return (int) sortChecksum.getValue();
+  }
+
+  private StatusCode closeSortSpill() {
+    if (sortSpillChannel != null) {
+      try {
+        sortSpillChannel.close();
+        sortSpillChannel = null;
+      } catch (IOException failure) {
+        return StatusCode.IO_FAILURE;
+      }
+    }
+    if (sortSpillPath != null) {
+      try {
+        Files.deleteIfExists(sortSpillPath);
+        sortSpillPath = null;
+      } catch (IOException failure) {
+        return StatusCode.IO_FAILURE;
+      }
+    }
+    sortSpilled = false;
+    sortRunCount = 0;
+    return StatusCode.OK;
   }
 
   private void ensureSortWorkspace() {

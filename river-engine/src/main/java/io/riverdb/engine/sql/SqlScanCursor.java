@@ -274,8 +274,12 @@ public final class SqlScanCursor {
     return sorted;
   }
 
-  int nextSortedRow() {
-    return sortedRowIndex < sortedRowCount ? sortedRowIndex++ : -1;
+  int currentSortedRow() {
+    return sortedRowIndex < sortedRowCount ? sortedRowIndex : -1;
+  }
+
+  void advanceSortedRow() {
+    sortedRowIndex++;
   }
 
   int joinOuterColumn() {

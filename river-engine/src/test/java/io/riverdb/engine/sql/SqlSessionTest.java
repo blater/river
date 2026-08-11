@@ -8,6 +8,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
+import io.riverdb.sql.SqlCommand;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -1771,6 +1772,63 @@ final class SqlSessionTest {
             "DELETE FROM events WHERE id >= 7 AND id < 7", result));
     assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM events", result));
     assertEquals(2, result.value());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void spillsAndMergesUnindexedSortRuns(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE spilled (id BIGINT PRIMARY KEY, value BIGINT)", result));
+    int rowCount = 1_025;
+    for (int first = 0; first < rowCount; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
+      int end = Math.min(first + SqlCommand.MAXIMUM_INSERT_ROWS, rowCount);
+      StringBuilder insert = new StringBuilder("INSERT INTO spilled VALUES ");
+      for (int key = first; key < end; key++) {
+        if (key > first) {
+          insert.append(',');
+        }
+        insert.append('(')
+            .append(key)
+            .append(',')
+            .append(rowCount - key)
+            .append(')');
+      }
+      assertEquals(StatusCode.OK, session.execute(insert.toString(), result));
+    }
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, value FROM spilled ORDER BY value LIMIT 3", cursor));
+    for (long value = 1; value <= 3; value++) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(value, row.valueAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan("SELECT id, value FROM spilled ORDER BY value", cursor));
+    for (long value = 1; value <= rowCount; value++) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(rowCount - value, row.valueAt(0));
+      assertEquals(value, row.valueAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, database.close());
   }
 
