@@ -451,16 +451,21 @@ public final class SqlParser {
       type = SqlCommandType.CHECKPOINT;
       status = StatusCode.OK;
     } else if (consumeKeyword(sql, "DROP")) {
-      type = SqlCommandType.DROP_INDEX;
-      status = requireKeyword(sql, "INDEX");
-      if (status.isOk()) {
+      if (consumeKeyword(sql, "INDEX")) {
+        type = SqlCommandType.DROP_INDEX;
         status = identifier(sql, result.writableIndexName());
-      }
-      if (status.isOk()) {
-        status = requireKeyword(sql, "ON");
-      }
-      if (status.isOk()) {
-        status = identifier(sql, result.writableTableName());
+        if (status.isOk()) {
+          status = requireKeyword(sql, "ON");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableTableName());
+        }
+      } else {
+        type = SqlCommandType.DROP_TABLE;
+        status = requireKeyword(sql, "TABLE");
+        if (status.isOk()) {
+          status = identifier(sql, result.writableTableName());
+        }
       }
     } else if (consumeKeyword(sql, "CREATE")) {
       if (consumeKeyword(sql, "TABLE")) {

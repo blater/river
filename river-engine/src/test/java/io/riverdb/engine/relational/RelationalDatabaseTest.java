@@ -19,6 +19,53 @@ final class RelationalDatabaseTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void resumesBoundedDroppingTableCleanupAfterReopen(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    TableDefinition accounts = new TableDefinition();
+    assertEquals(StatusCode.OK, database.createTable("accounts", accounts));
+    RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RelationalSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    for (int key = 0; key < 60; key++) {
+      assertEquals(StatusCode.OK, session.insert(accounts, key, row(key)));
+    }
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(
+        StatusCode.OK,
+        database.createUniqueValueIndex("accounts_value", "accounts"));
+
+    assertEquals(StatusCode.RETRY, database.dropTable("accounts", 1));
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    session = sessionResult.session();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.resolveTable("accounts", new TableDefinition()));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, database.dropTable("accounts"));
+    assertEquals(StatusCode.CONFLICT, database.dropTable("accounts"));
+    assertEquals(
+        StatusCode.OK,
+        database.createTable("accounts", new TableDefinition()));
+    assertEquals(
+        StatusCode.OK,
+        database.createUniqueValueIndex("accounts_value", "accounts"));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void catalogsTwoTablesAndCommitsAcrossBoth(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(

@@ -422,6 +422,16 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.DROP_TABLE) {
+      if (transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = database.dropTable(command.tableName());
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CHECKPOINT) {
       if (transactionActive) {
         return StatusCode.CONFLICT;

@@ -120,6 +120,9 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.DROP_INDEX, command.type());
     assertName("accounts_region", command.indexName());
     assertName("accounts", command.tableName());
+    assertEquals(StatusCode.OK, parser.parse("DROP TABLE accounts", command));
+    assertEquals(SqlCommandType.DROP_TABLE, command.type());
+    assertName("accounts", command.tableName());
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());
@@ -649,7 +652,7 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse("INSERT INTO x VALUES (0, -9223372036854775808)", command));
     assertEquals(Long.MIN_VALUE, command.value());
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("DROP TABLE x", command));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("DROP TABLE", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key, value FROM x WHERE key ! 1", command));

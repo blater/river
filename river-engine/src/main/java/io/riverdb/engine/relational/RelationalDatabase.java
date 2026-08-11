@@ -7,6 +7,8 @@ import io.riverdb.engine.EmbeddedDatabase;
 import io.riverdb.engine.EmbeddedDatabaseOpenResult;
 import io.riverdb.engine.EmbeddedSessionOpenResult;
 import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.table.IndexedScanCursor;
+import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -33,8 +35,13 @@ public final class RelationalDatabase {
   private final RelationalScanResult indexBuildRow = new RelationalScanResult();
   private final ByteBuffer indexKeyOutput = ByteBuffer.allocateDirect(Long.BYTES);
   private final long[] cleanupIndexKeys = new long[INDEX_BUILD_BATCH_ROWS];
+  private final long[] droppingIndexCatalogKeys =
+      new long[TableDefinition.MAXIMUM_INDEXES];
+  private final IndexedScanCursor catalogScanCursor = new IndexedScanCursor();
+  private final IndexedScanResult catalogScanRow = new IndexedScanResult();
   private long buildLastKey;
   private boolean buildBatchFull;
+  private boolean cleanupBatchComplete;
   private volatile long schemaVersion = 1;
   private RelationalSession schemaChangeOwner;
   private int activeTransactions;
@@ -154,6 +161,63 @@ public final class RelationalDatabase {
       session.abort(outcome);
     }
     return status;
+  }
+
+  public synchronized StatusCode dropTable(CharSequence name) {
+    return dropTable(name, Integer.MAX_VALUE);
+  }
+
+  synchronized StatusCode dropTable(
+      CharSequence name,
+      int maximumCleanupBatches) {
+    if (!RelationalKey.validName(name) || maximumCleanupBatches <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.beginPersistentSchemaChange();
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(name, catalogKey);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    }
+    boolean alreadyDropping = status.isOk()
+        && CatalogRecord.isDroppingTable(catalogRow, catalogScratch);
+    if (status.isOk()) {
+      status = alreadyDropping
+          ? CatalogRecord.decodeDroppingTable(
+              catalogRow, catalogScratch, name, this, indexedTable)
+          : CatalogRecord.decodeTable(
+              catalogRow, catalogScratch, name, this, indexedTable);
+    }
+    if (status.isOk() && !alreadyDropping) {
+      CatalogRecord.encodeDroppingTable(
+          catalogOutput, indexedTable.tableId(), name, indexedTable);
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode terminal = status.isOk() && !alreadyDropping
+          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
+      if (status.isOk()) {
+        status = terminal;
+      }
+    }
+    if (status.isOk() && !alreadyDropping) {
+      status = publishDroppingTableSchema(session);
+    }
+    if (!status.isOk()) {
+      session.releasePersistentSchemaChange();
+      return status;
+    }
+    return cleanupDroppingTable(
+        session, name, outcome, maximumCleanupBatches);
   }
 
   public synchronized StatusCode createUniqueValueIndex(
@@ -712,6 +776,162 @@ public final class RelationalDatabase {
     return status;
   }
 
+  private StatusCode cleanupDroppingTable(
+      RelationalSession session,
+      CharSequence tableName,
+      TransactionOutcome outcome,
+      int maximumCleanupBatches) {
+    StatusCode status = StatusCode.OK;
+    int batches = 0;
+    for (int slot = 0;
+        status.isOk() && slot < indexedTable.uniqueIndexCount();
+        slot++) {
+      boolean complete = false;
+      while (status.isOk() && !complete && batches < maximumCleanupBatches) {
+        status = cleanupPhysicalTableBatch(
+            session, indexedTable.uniqueIndexTableId(slot), outcome);
+        complete = status.isOk() && cleanupBatchComplete;
+        batches++;
+      }
+      if (status.isOk() && !complete) {
+        session.releasePersistentSchemaChange();
+        return StatusCode.RETRY;
+      }
+    }
+    boolean tableComplete = false;
+    while (status.isOk()
+        && !tableComplete
+        && batches < maximumCleanupBatches) {
+      status = cleanupPhysicalTableBatch(
+          session, indexedTable.tableId(), outcome);
+      tableComplete = status.isOk() && cleanupBatchComplete;
+      batches++;
+    }
+    if (status.isOk() && !tableComplete) {
+      session.releasePersistentSchemaChange();
+      return StatusCode.RETRY;
+    }
+    if (status.isOk()) {
+      status = removeDroppingTableCatalog(session, tableName, outcome);
+    }
+    if (!status.isOk()) {
+      session.releasePersistentSchemaChange();
+    }
+    return status;
+  }
+
+  private StatusCode cleanupPhysicalTableBatch(
+      RelationalSession session,
+      int tableId,
+      TransactionOutcome outcome) {
+    indexStorageTable.set(this, tableId, 0, TableDefinition.INDEX_NONE);
+    cleanupBatchComplete = false;
+    StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
+    if (status.isOk()) {
+      status = session.beginScan(indexStorageTable, indexBuildCursor);
+    }
+    int count = 0;
+    boolean exhausted = false;
+    while (status.isOk() && count < cleanupIndexKeys.length) {
+      status = session.nextScan(indexBuildCursor, indexBuildRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        exhausted = true;
+        break;
+      }
+      if (status.isOk()) {
+        cleanupIndexKeys[count++] = indexBuildRow.key();
+      }
+    }
+    if (indexBuildCursor.isActive()) {
+      StatusCode close = session.closeScan(indexBuildCursor);
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    indexBuildCursor.reset();
+    for (int index = 0; status.isOk() && index < count; index++) {
+      status = session.delete(indexStorageTable, cleanupIndexKeys[index]);
+      cleanupIndexKeys[index] = 0;
+    }
+    if (status.isOk()) {
+      status = session.commitBuildPhase(outcome);
+    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abortBuildPhase(outcome);
+      if (!abort.isOk()) {
+        status = abort;
+      }
+    }
+    cleanupBatchComplete = status.isOk() && exhausted;
+    return status;
+  }
+
+  private StatusCode removeDroppingTableCatalog(
+      RelationalSession session,
+      CharSequence tableName,
+      TransactionOutcome outcome) {
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    boolean scanActive = false;
+    if (status.isOk()) {
+      status = session.indexedSession().beginScan(
+          Long.MIN_VALUE, 0, catalogScanCursor);
+      scanActive = status.isOk();
+    }
+    int indexCatalogCount = 0;
+    while (status.isOk()) {
+      status = session.indexedSession().nextScan(
+          catalogScanCursor, catalogScanRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      StatusCode decoded = status.isOk()
+          ? CatalogRecord.decodeIndexForTable(
+              catalogScanRow.row(),
+              catalogScratch,
+              indexedTable.tableId(),
+              indexRecord)
+          : status;
+      if (decoded == StatusCode.CONFLICT) {
+        continue;
+      }
+      if (!decoded.isOk()) {
+        status = decoded;
+      } else if (indexCatalogCount >= droppingIndexCatalogKeys.length) {
+        status = StatusCode.CORRUPTION;
+      } else {
+        droppingIndexCatalogKeys[indexCatalogCount++] = catalogScanRow.key();
+      }
+    }
+    if (scanActive) {
+      StatusCode close = session.indexedSession().closeScan(catalogScanCursor);
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    catalogScanCursor.reset();
+    for (int index = 0; status.isOk() && index < indexCatalogCount; index++) {
+      status = session.indexedSession().delete(droppingIndexCatalogKeys[index]);
+      droppingIndexCatalogKeys[index] = 0;
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(tableName, catalogKey);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().delete(catalogKey.key());
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    return status;
+  }
+
   StatusCode buildUniqueValueIndex(
       RelationalSession session,
       CharSequence indexName,
@@ -968,6 +1188,15 @@ public final class RelationalDatabase {
     schemaVersion++;
     indexStorageTable.set(
         this, indexTableId, 0, TableDefinition.INDEX_NONE);
+    return StatusCode.OK;
+  }
+
+  private synchronized StatusCode publishDroppingTableSchema(
+      RelationalSession owner) {
+    if (schemaChangeOwner != owner) {
+      return StatusCode.NOT_OWNER;
+    }
+    schemaVersion++;
     return StatusCode.OK;
   }
 

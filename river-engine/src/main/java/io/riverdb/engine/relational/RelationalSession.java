@@ -90,6 +90,9 @@ public final class RelationalSession {
       return status;
     }
     status = session.fetchByKey(physicalKey.key(), catalogRow);
+    if (status.isOk() && CatalogRecord.isDroppingTable(catalogRow, catalogScratch)) {
+      return StatusCode.CONFLICT;
+    }
     return status.isOk()
         ? CatalogRecord.decodeTable(
             catalogRow, catalogScratch, name, database, result)

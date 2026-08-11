@@ -13,6 +13,7 @@ final class CatalogRecord {
 
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
   private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
+  private static final long DROPPING_TABLE_MAGIC = 0x524956455244524fL; // RIVERDRO
   private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
   private static final int SEQUENCE_VERSION = 1;
   private static final int TABLE_VERSION = 6;
@@ -240,6 +241,50 @@ final class CatalogRecord {
       CharSequence expectedName,
       RelationalDatabase database,
       TableDefinition result) {
+    return decodeTable(
+        source, scratch, expectedName, database, result, TABLE_MAGIC);
+  }
+
+  static StatusCode decodeDroppingTable(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      CharSequence expectedName,
+      RelationalDatabase database,
+      TableDefinition result) {
+    return decodeTable(
+        source, scratch, expectedName, database, result, DROPPING_TABLE_MAGIC);
+  }
+
+  static boolean isDroppingTable(HeapRowResult source, ByteBuffer scratch) {
+    scratch.clear();
+    return source.copyTo(scratch).isOk()
+        && source.length() >= Long.BYTES
+        && scratch.getLong(0) == DROPPING_TABLE_MAGIC;
+  }
+
+  static void encodeDroppingTable(
+      ByteBuffer target,
+      int tableId,
+      CharSequence name,
+      TableDefinition schema) {
+    encodeTable(
+        target,
+        tableId,
+        0,
+        TableDefinition.INDEX_NONE,
+        -1,
+        name,
+        schema);
+    target.putLong(0, DROPPING_TABLE_MAGIC);
+  }
+
+  private static StatusCode decodeTable(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      CharSequence expectedName,
+      RelationalDatabase database,
+      TableDefinition result,
+      long expectedMagic) {
     scratch.clear();
     StatusCode status = source.copyTo(scratch);
     int version = source.length() >= 12 ? scratch.getInt(8) : -1;
@@ -286,7 +331,7 @@ final class CatalogRecord {
         || nameOffset < 0
         || source.length() < nameOffset + 1
         || source.length() != expectedBytes
-        || scratch.getLong(0) != TABLE_MAGIC
+        || scratch.getLong(0) != expectedMagic
         || scratch.getInt(12) <= 0
         || scratch.getInt(12) > RelationalKey.MAXIMUM_TABLE_ID
         || nameBytes <= 0
@@ -388,6 +433,43 @@ final class CatalogRecord {
       if (Byte.toUnsignedInt(scratch.get(nameOffset + index)) != expectedName.charAt(index)) {
         return StatusCode.CONFLICT;
       }
+    }
+    result.set(scratch.getInt(12), scratch.getInt(16), state, unique == 1);
+    return StatusCode.OK;
+  }
+
+  static StatusCode decodeIndexForTable(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      int expectedTableId,
+      IndexResult result) {
+    scratch.clear();
+    StatusCode status = source.copyTo(scratch);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (source.length() < 32 || scratch.getLong(0) != INDEX_MAGIC) {
+      return StatusCode.CONFLICT;
+    }
+    int nameBytes = scratch.getInt(28);
+    int state = scratch.getInt(20);
+    int unique = scratch.getInt(24);
+    if (scratch.getInt(8) != INDEX_VERSION
+        || source.length() != 32 + nameBytes
+        || scratch.getInt(12) <= 0
+        || scratch.getInt(12) > RelationalKey.MAXIMUM_TABLE_ID
+        || scratch.getInt(16) <= 0
+        || scratch.getInt(16) > RelationalKey.MAXIMUM_TABLE_ID
+        || (state != TableDefinition.INDEX_BUILDING
+            && state != TableDefinition.INDEX_READY
+            && state != TableDefinition.INDEX_DROPPING)
+        || (unique != 0 && unique != 1)
+        || nameBytes <= 0
+        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH) {
+      return StatusCode.CORRUPTION;
+    }
+    if (scratch.getInt(12) != expectedTableId) {
+      return StatusCode.CONFLICT;
     }
     result.set(scratch.getInt(12), scratch.getInt(16), state, unique == 1);
     return StatusCode.OK;
