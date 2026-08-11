@@ -1658,6 +1658,9 @@ public final class SqlSession {
     for (int index = 0; status.isOk() && index < command.columnCount(); index++) {
       status = createSchema.addBigint(
           command.columnName(index), !command.columnIsNotNull(index));
+      if (status.isOk() && command.columnHasDefault(index)) {
+        status = createSchema.setLastDefault(command.columnDefaultValue(index));
+      }
     }
     return status;
   }
@@ -1668,12 +1671,17 @@ public final class SqlSession {
     long nullMask = 0;
     for (int column = 1; column < table.columnCount(); column++) {
       int source = insertSourceByColumn[column];
-      if (source < 0 || command.insertIsNull(rowIndex, source)) {
+      boolean omitted = source < 0;
+      boolean nullValue = omitted
+          ? !table.hasDefault(column) : command.insertIsNull(rowIndex, source);
+      if (nullValue) {
         nullMask |= 1L << column;
       }
       row.putLong(
           (column - 1) * Long.BYTES,
-          command.insertValue(rowIndex, source));
+          omitted && table.hasDefault(column)
+              ? table.defaultValue(column)
+              : command.insertValue(rowIndex, source));
     }
     row.putLong(table.nullMaskOffset(), nullMask);
     row.position(0);
@@ -1710,7 +1718,8 @@ public final class SqlSession {
       }
       for (int column = 1; column < table.columnCount(); column++) {
         int source = insertSourceByColumn[column];
-        boolean nullValue = source < 0 || command.insertIsNull(rowIndex, source);
+        boolean nullValue = source < 0
+            ? !table.hasDefault(column) : command.insertIsNull(rowIndex, source);
         if (nullValue && !table.isNullable(column)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }

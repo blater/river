@@ -477,10 +477,32 @@ public final class SqlParser {
             if (status.isOk()) {
               status = requireKeyword(sql, "BIGINT");
             }
-            if (status.isOk() && consumeKeyword(sql, "NOT")) {
-              status = requireKeyword(sql, "NULL");
-              if (status.isOk()) {
-                result.markLastColumnNotNull();
+            boolean notNull = false;
+            boolean hasDefault = false;
+            boolean constraints = true;
+            while (status.isOk() && constraints) {
+              if (consumeKeyword(sql, "NOT")) {
+                if (notNull) {
+                  status = StatusCode.INVALID_EXTERNAL_INPUT;
+                } else {
+                  status = requireKeyword(sql, "NULL");
+                  notNull = status.isOk();
+                  if (status.isOk()) {
+                    result.markLastColumnNotNull();
+                  }
+                }
+              } else if (consumeKeyword(sql, "DEFAULT")) {
+                if (hasDefault) {
+                  status = StatusCode.INVALID_EXTERNAL_INPUT;
+                } else {
+                  status = number(sql, numberResult);
+                  hasDefault = status.isOk();
+                  if (status.isOk()) {
+                    result.markLastColumnDefault(numberResult.value);
+                  }
+                }
+              } else {
+                constraints = false;
               }
             }
           }
@@ -1060,7 +1082,7 @@ public final class SqlParser {
       }
       status = requireCharacter(sql, ',');
     }
-    return status.isOk() && result.count >= 2
+    return status.isOk() && result.count >= 1
         ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 

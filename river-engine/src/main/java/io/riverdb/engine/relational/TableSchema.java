@@ -8,8 +8,10 @@ public final class TableSchema {
   static final int MAXIMUM_NAME_LENGTH = 64;
 
   private final ColumnName[] columns = new ColumnName[MAXIMUM_COLUMNS];
+  private final long[] defaultValues = new long[MAXIMUM_COLUMNS];
   private int columnCount;
   private long notNullMask;
+  private long defaultMask;
 
   public TableSchema() {
     for (int index = 0; index < columns.length; index++) {
@@ -23,6 +25,7 @@ public final class TableSchema {
     }
     columnCount = 0;
     notNullMask = 0;
+    defaultMask = 0;
   }
 
   public StatusCode addBigint(CharSequence name) {
@@ -50,6 +53,16 @@ public final class TableSchema {
     return StatusCode.OK;
   }
 
+  public StatusCode setLastDefault(long value) {
+    if (columnCount <= 1) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int column = columnCount - 1;
+    defaultMask |= 1L << column;
+    defaultValues[column] = value;
+    return StatusCode.OK;
+  }
+
   public int columnCount() {
     return columnCount;
   }
@@ -73,6 +86,17 @@ public final class TableSchema {
 
   long notNullMask() {
     return notNullMask;
+  }
+
+  long defaultMask() {
+    return defaultMask;
+  }
+
+  long defaultValue(int column) {
+    return column >= 0
+            && column < columnCount
+            && (defaultMask & 1L << column) != 0
+        ? defaultValues[column] : 0;
   }
 
   static final class ColumnName implements CharSequence {

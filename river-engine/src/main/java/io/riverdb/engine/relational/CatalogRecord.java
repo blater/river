@@ -7,16 +7,19 @@ import java.nio.ByteBuffer;
 /** Current catalog encoding for bounded BIGINT schemas and index-build state. */
 final class CatalogRecord {
   static final int MAXIMUM_BYTES =
-      36 + TableDefinition.MAXIMUM_INDEXES * 16
+      44 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
+          + TableDefinition.MAXIMUM_INDEXES * 16
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
 
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
   private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
   private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
   private static final int SEQUENCE_VERSION = 1;
-  private static final int TABLE_VERSION = 4;
+  private static final int TABLE_VERSION = 5;
   private static final int INDEX_VERSION = 2;
-  private static final int TABLE_INDEXES_OFFSET = 36;
+  private static final int TABLE_DEFAULTS_OFFSET = 44;
+  private static final int TABLE_INDEXES_OFFSET =
+      TABLE_DEFAULTS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Long.BYTES;
 
   private CatalogRecord() {
   }
@@ -97,6 +100,8 @@ final class CatalogRecord {
         name,
         2,
         1L,
+        0,
+        null,
         null,
         true);
     offset = encodeColumn(target, offset, keyColumnName);
@@ -122,6 +127,8 @@ final class CatalogRecord {
         name,
         schema.columnCount(),
         schema.notNullMask(),
+        schema.defaultMask(),
+        schema,
         null,
         true);
     for (int index = 0; index < schema.columnCount(); index++) {
@@ -168,6 +175,8 @@ final class CatalogRecord {
         name,
         schema.columnCount(),
         schema.notNullMask(),
+        schema.defaultMask(),
+        null,
         schema,
         unique);
     for (int index = 0; index < schema.columnCount(); index++) {
@@ -236,6 +245,8 @@ final class CatalogRecord {
     int indexCount = source.length() >= 28 ? scratch.getInt(24) : -1;
     long notNullMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(28) : -1;
+    long defaultMask = source.length() >= TABLE_INDEXES_OFFSET
+        ? scratch.getLong(36) : -1;
     boolean validIndexCount = indexCount >= 0
         && indexCount <= TableDefinition.MAXIMUM_INDEXES;
     int nameOffset = validIndexCount
@@ -279,6 +290,8 @@ final class CatalogRecord {
         || columnCount > TableSchema.MAXIMUM_COLUMNS
         || (notNullMask & 1) == 0
         || (notNullMask & ~((1L << columnCount) - 1)) != 0
+        || (defaultMask & 1) != 0
+        || (defaultMask & ~((1L << columnCount) - 1)) != 0
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
@@ -296,7 +309,9 @@ final class CatalogRecord {
         scratch,
         columnsOffset,
         columnCount,
-        notNullMask);
+        notNullMask,
+        defaultMask,
+        TABLE_DEFAULTS_OFFSET);
     int buildingIndexes = 0;
     for (int index = 0; status.isOk() && index < indexCount; index++) {
       int offset = TABLE_INDEXES_OFFSET + index * 16;
@@ -377,6 +392,8 @@ final class CatalogRecord {
       CharSequence name,
       int columnCount,
       long notNullMask,
+      long defaultMask,
+      TableSchema definition,
       TableDefinition existing,
       boolean unique) {
     clear(target);
@@ -403,6 +420,13 @@ final class CatalogRecord {
     target.putInt(20, columnCount);
     target.putInt(24, indexCount);
     target.putLong(28, notNullMask);
+    target.putLong(36, defaultMask);
+    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
+      long value = definition != null
+          ? definition.defaultValue(index)
+          : existing != null ? existing.defaultValue(index) : 0;
+      target.putLong(TABLE_DEFAULTS_OFFSET + index * Long.BYTES, value);
+    }
     for (int index = 0; index < indexCount; index++) {
       int output = TABLE_INDEXES_OFFSET + index * 16;
       boolean override = index == overrideSlot

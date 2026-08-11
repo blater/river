@@ -16,6 +16,7 @@ public final class TableDefinition {
   private final int[] uniqueIndexStates = new int[MAXIMUM_INDEXES];
   private final int[] uniqueIndexColumns = new int[MAXIMUM_INDEXES];
   private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
+  private final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final ColumnName keyColumnName = new ColumnName();
   private final ColumnName valueColumnName = new ColumnName();
   private final ColumnName[] additionalColumns =
@@ -23,6 +24,7 @@ public final class TableDefinition {
   private int uniqueIndexCount;
   private int columnCount;
   private long notNullMask;
+  private long defaultMask;
   private long schemaVersion;
   private boolean available;
 
@@ -49,6 +51,7 @@ public final class TableDefinition {
     }
     columnCount = 0;
     notNullMask = 0;
+    defaultMask = 0;
     schemaVersion = 0;
     available = false;
   }
@@ -72,6 +75,7 @@ public final class TableDefinition {
     tableId = id;
     columnCount = 2;
     notNullMask = 1;
+    defaultMask = 0;
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, 1, true);
@@ -112,6 +116,7 @@ public final class TableDefinition {
     tableId = id;
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask;
+    copyDefaults(schema);
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
     }
@@ -134,6 +139,10 @@ public final class TableDefinition {
     tableId = id;
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask();
+    defaultMask = schema.defaultMask();
+    for (int index = 0; index < columnCount; index++) {
+      defaultValues[index] = schema.defaultValue(index);
+    }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, indexColumn, true);
@@ -155,11 +164,17 @@ public final class TableDefinition {
       ByteBuffer source,
       int columnsOffset,
       int columns,
-      long requiredNotNullMask) {
+      long requiredNotNullMask,
+      long requiredDefaultMask,
+      int defaultsOffset) {
     owner = database;
     tableId = id;
     columnCount = columns;
     notNullMask = requiredNotNullMask;
+    defaultMask = requiredDefaultMask;
+    for (int index = 0; index < columns; index++) {
+      defaultValues[index] = source.getLong(defaultsOffset + index * Long.BYTES);
+    }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, indexColumn, true);
@@ -231,6 +246,16 @@ public final class TableDefinition {
         && (notNullMask & 1L << column) == 0;
   }
 
+  public boolean hasDefault(int column) {
+    return column > 0
+        && column < columnCount
+        && (defaultMask & 1L << column) != 0;
+  }
+
+  public long defaultValue(int column) {
+    return hasDefault(column) ? defaultValues[column] : 0;
+  }
+
   public int findColumn(CharSequence name) {
     for (int index = 0; index < columnCount; index++) {
       if (writableColumn(index).matches(name)) {
@@ -265,6 +290,10 @@ public final class TableDefinition {
 
   long notNullMask() {
     return notNullMask;
+  }
+
+  long defaultMask() {
+    return defaultMask;
   }
 
   int uniqueValueIndexTableId() {
@@ -412,6 +441,13 @@ public final class TableDefinition {
           source.uniqueIndexStates[index],
           source.uniqueIndexColumns[index],
           source.uniqueIndexes[index]);
+    }
+  }
+
+  private void copyDefaults(TableDefinition source) {
+    defaultMask = source.defaultMask;
+    for (int index = 0; index < columnCount; index++) {
+      defaultValues[index] = source.defaultValues[index];
     }
   }
 

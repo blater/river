@@ -51,6 +51,22 @@ final class SqlParserTest {
     assertFalse(command.columnIsNotNull(2));
     assertEquals(
         StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE default_values "
+                + "(id BIGINT PRIMARY KEY, required BIGINT NOT NULL DEFAULT -7, "
+                + "optional BIGINT DEFAULT 9 NOT NULL, note BIGINT DEFAULT 0)",
+            command));
+    assertFalse(command.columnHasDefault(0));
+    assertTrue(command.columnHasDefault(1));
+    assertEquals(-7, command.columnDefaultValue(1));
+    assertTrue(command.columnIsNotNull(1));
+    assertTrue(command.columnHasDefault(2));
+    assertEquals(9, command.columnDefaultValue(2));
+    assertTrue(command.columnIsNotNull(2));
+    assertTrue(command.columnHasDefault(3));
+    assertEquals(0, command.columnDefaultValue(3));
+    assertEquals(
+        StatusCode.OK,
         parser.parse("CREATE UNIQUE INDEX accounts_value ON accounts(value)", command));
     assertEquals(SqlCommandType.CREATE_UNIQUE_INDEX, command.type());
     assertName("accounts_value", command.indexName());
@@ -527,6 +543,18 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("CREATE TABLE only_key (id BIGINT PRIMARY KEY)", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE bad_default "
+                + "(id BIGINT PRIMARY KEY, value BIGINT DEFAULT 1 DEFAULT 2)",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE bad_primary_default "
+                + "(id BIGINT DEFAULT 1 PRIMARY KEY, value BIGINT)",
+            command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("INSERT INTO x VALUES (9223372036854775808, 1)", command));

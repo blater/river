@@ -35,6 +35,7 @@ public final class SqlCommand {
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
   private final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
+  private final long[] columnDefaultValues = new long[MAXIMUM_COLUMNS];
   private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] relativeUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] subtractUpdates = new boolean[MAXIMUM_COLUMNS];
@@ -59,6 +60,7 @@ public final class SqlCommand {
   private long scanLowerInclusive;
   private long scanUpperExclusive;
   private long columnNotNullMask;
+  private long columnDefaultMask;
   private long rowLimit = Long.MAX_VALUE;
   private boolean boundedScan;
   private boolean equalityPredicate;
@@ -134,6 +136,7 @@ public final class SqlCommand {
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
     columnNotNullMask = 0;
+    columnDefaultMask = 0;
     rowLimit = Long.MAX_VALUE;
     boundedScan = false;
     equalityPredicate = false;
@@ -441,6 +444,14 @@ public final class SqlCommand {
     }
   }
 
+  void markLastColumnDefault(long value) {
+    if (columnCount > 1) {
+      int column = columnCount - 1;
+      columnDefaultMask |= 1L << column;
+      columnDefaultValues[column] = value;
+    }
+  }
+
   void markLastProjectionNull() {
     if (columnCount > 0) {
       nullProjections[columnCount - 1] = true;
@@ -535,6 +546,16 @@ public final class SqlCommand {
     return index >= 0
         && index < columnCount
         && (columnNotNullMask & 1L << index) != 0;
+  }
+
+  public boolean columnHasDefault(int index) {
+    return index > 0
+        && index < columnCount
+        && (columnDefaultMask & 1L << index) != 0;
+  }
+
+  public long columnDefaultValue(int index) {
+    return columnHasDefault(index) ? columnDefaultValues[index] : 0;
   }
 
   public SqlIdentifier columnTableName(int index) {
