@@ -9,9 +9,14 @@ public final class SqlScanCursor {
   private final RelationalScanCursor relational = new RelationalScanCursor();
   private SqlSession owner;
   private boolean aggregate;
+  private boolean groupCount;
+  private boolean groupLookahead;
+  private boolean groupInputExhausted;
   private boolean aggregateTransactionActive;
   private long aggregateValue;
   private long aggregateCommitSequence;
+  private long groupLookaheadValue;
+  private int groupColumn = -1;
   private boolean implicitTransaction;
   private boolean valueIndex;
   private int filterColumn = -1;
@@ -29,9 +34,14 @@ public final class SqlScanCursor {
     }
     owner = null;
     aggregate = false;
+    groupCount = false;
+    groupLookahead = false;
+    groupInputExhausted = false;
     aggregateTransactionActive = false;
     aggregateValue = 0;
     aggregateCommitSequence = 0;
+    groupLookaheadValue = 0;
+    groupColumn = -1;
     implicitTransaction = false;
     valueIndex = false;
     filterColumn = -1;
@@ -98,6 +108,26 @@ public final class SqlScanCursor {
     return StatusCode.OK;
   }
 
+  StatusCode claimGroupCount(
+      SqlSession session,
+      boolean implicit,
+      int column,
+      boolean indexedValue) {
+    if (active || session == null || column < 0) {
+      return StatusCode.CONFLICT;
+    }
+    owner = session;
+    implicitTransaction = implicit;
+    valueIndex = indexedValue;
+    groupCount = true;
+    groupColumn = column;
+    projectedColumns[0] = column;
+    projectedColumnCount = 2;
+    active = true;
+    rowsReturned = 0;
+    return StatusCode.OK;
+  }
+
   boolean isOwnedBy(SqlSession session) {
     return active && owner == session;
   }
@@ -112,6 +142,36 @@ public final class SqlScanCursor {
 
   boolean aggregate() {
     return aggregate;
+  }
+
+  boolean groupCount() {
+    return groupCount;
+  }
+
+  int groupColumn() {
+    return groupColumn;
+  }
+
+  boolean groupInputExhausted() {
+    return groupInputExhausted;
+  }
+
+  void exhaustGroupInput() {
+    groupInputExhausted = true;
+  }
+
+  boolean hasGroupLookahead() {
+    return groupLookahead;
+  }
+
+  long takeGroupLookahead() {
+    groupLookahead = false;
+    return groupLookaheadValue;
+  }
+
+  void setGroupLookahead(long value) {
+    groupLookaheadValue = value;
+    groupLookahead = true;
   }
 
   long aggregateValue() {

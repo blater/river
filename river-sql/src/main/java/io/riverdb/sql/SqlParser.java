@@ -201,8 +201,22 @@ public final class SqlParser {
           status = StatusCode.OK;
         } else {
           status = columnIdentifier(sql, result);
-          while (status.isOk() && consumeCharacter(sql, ',')) {
-            status = columnIdentifier(sql, result);
+          if (status.isOk() && consumeCharacter(sql, ',')) {
+            if (consumeKeyword(sql, "COUNT")) {
+              type = SqlCommandType.GROUP_COUNT;
+              status = requireCharacter(sql, '(');
+              if (status.isOk()) {
+                status = requireCharacter(sql, '*');
+              }
+              if (status.isOk()) {
+                status = requireCharacter(sql, ')');
+              }
+            } else {
+              status = columnIdentifier(sql, result);
+              while (status.isOk() && consumeCharacter(sql, ',')) {
+                status = columnIdentifier(sql, result);
+              }
+            }
           }
         }
         if (status.isOk()) {
@@ -211,7 +225,15 @@ public final class SqlParser {
         if (status.isOk()) {
           status = identifier(sql, result.writableTableName());
         }
-        if (status.isOk() && consumeKeyword(sql, "WHERE")) {
+        if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
+          status = requireKeyword(sql, "GROUP");
+          if (status.isOk()) {
+            status = requireKeyword(sql, "BY");
+          }
+          if (status.isOk()) {
+            status = matchingIdentifier(sql, result.firstColumnName());
+          }
+        } else if (status.isOk() && consumeKeyword(sql, "WHERE")) {
           status = identifier(sql, result.writablePredicateColumnName());
           if (status.isOk() && consumeCharacter(sql, '=')) {
             type = SqlCommandType.SELECT;
@@ -246,7 +268,9 @@ public final class SqlParser {
         if (status.isOk() && consumeKeyword(sql, "ORDER")) {
           status = requireKeyword(sql, "BY");
           if (status.isOk()) {
-            status = identifier(sql, result.writableOrderColumnName());
+            status = type == SqlCommandType.GROUP_COUNT
+                ? matchingIdentifier(sql, result.firstColumnName())
+                : identifier(sql, result.writableOrderColumnName());
           }
           if (status.isOk()) {
             consumeKeyword(sql, "ASC");

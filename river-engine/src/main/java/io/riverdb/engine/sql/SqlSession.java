@@ -337,6 +337,36 @@ public final class SqlSession {
       }
       return status;
     }
+    if (status.isOk() && command.type() == SqlCommandType.GROUP_COUNT) {
+      boolean implicit = !transactionActive;
+      if (implicit) {
+        status = session.begin(IsolationLevel.READ_COMMITTED);
+      }
+      if (status.isOk()) {
+        status = session.resolveTable(command.tableName(), table);
+      }
+      int groupColumn = status.isOk()
+          ? table.findColumn(command.firstColumnName()) : -1;
+      boolean valueIndex = groupColumn > 0 && table.hasIndexOn(groupColumn);
+      if (status.isOk()
+          && (groupColumn < 0 || groupColumn > 0 && !valueIndex)) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (status.isOk()) {
+        status = valueIndex
+            ? session.beginValueScan(table, groupColumn, cursor.relational())
+            : session.beginScan(table, cursor.relational());
+      }
+      if (status.isOk()) {
+        status = cursor.claimGroupCount(this, implicit, groupColumn, valueIndex);
+      }
+      if (status.isOk()) {
+        scanActive = true;
+      } else if (implicit) {
+        session.abort(outcome);
+      }
+      return status;
+    }
     boolean equality = status.isOk() && command.type() == SqlCommandType.SELECT;
     if (!status.isOk()
         || command.type() != SqlCommandType.SCAN && !equality) {
@@ -457,6 +487,9 @@ public final class SqlSession {
       cursor.rowReturned();
       return StatusCode.OK;
     }
+    if (cursor.groupCount()) {
+      return nextGroupCount(cursor, result);
+    }
     StatusCode status = StatusCode.OK;
     while (status.isOk()) {
       long primaryKey;
@@ -498,6 +531,11 @@ public final class SqlSession {
     }
     if (cursor.aggregate()) {
       return index == 0 ? COUNT_COLUMN_NAME : null;
+    }
+    if (cursor.groupCount()) {
+      return index == 0
+          ? table.columnName(cursor.groupColumn())
+          : index == 1 ? COUNT_COLUMN_NAME : null;
     }
     int column = cursor.projectedColumn(index);
     return column < 0 ? null : table.columnName(column);
@@ -867,6 +905,73 @@ public final class SqlSession {
     StatusCode status = source.copyTo(row);
     if (status.isOk()) {
       row.position(0);
+    }
+    return status;
+  }
+
+  private StatusCode nextGroupCount(SqlScanCursor cursor, SqlScanRowResult result) {
+    if (cursor.groupInputExhausted() && !cursor.hasGroupLookahead()) {
+      return StatusCode.CONFLICT;
+    }
+    long groupValue;
+    long count = 1;
+    if (cursor.hasGroupLookahead()) {
+      groupValue = cursor.takeGroupLookahead();
+    } else {
+      StatusCode first = nextGroupValue(cursor);
+      if (first == StatusCode.CONFLICT) {
+        cursor.exhaustGroupInput();
+        return StatusCode.CONFLICT;
+      }
+      if (!first.isOk()) {
+        return first;
+      }
+      groupValue = projectedValues[0];
+    }
+    while (true) {
+      StatusCode status = nextGroupValue(cursor);
+      if (status == StatusCode.CONFLICT) {
+        cursor.exhaustGroupInput();
+        break;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      long value = projectedValues[0];
+      if (value != groupValue) {
+        cursor.setGroupLookahead(value);
+        break;
+      }
+      if (count == Long.MAX_VALUE) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      count++;
+    }
+    projectedValues[0] = groupValue;
+    projectedValues[1] = count;
+    result.set(groupValue, projectedValues, 2);
+    cursor.rowReturned();
+    return StatusCode.OK;
+  }
+
+  private StatusCode nextGroupValue(SqlScanCursor cursor) {
+    StatusCode status;
+    long primaryKey;
+    HeapRowResult source;
+    if (cursor.valueIndex()) {
+      status = session.nextValueScan(
+          table, cursor.relational(), aggregateRow, indexed);
+      primaryKey = indexed.key();
+      source = indexed.row();
+    } else {
+      status = session.nextScan(cursor.relational(), aggregateRow);
+      primaryKey = aggregateRow.key();
+      source = aggregateRow.row();
+    }
+    if (status.isOk()) {
+      int column = cursor.groupColumn();
+      projectedValues[0] = column == 0
+          ? primaryKey : source.getLong((column - 1) * Long.BYTES);
     }
     return status;
   }

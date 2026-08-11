@@ -101,6 +101,20 @@ final class SqlParserTest {
     assertEquals(false, command.isEqualityPredicate());
     assertEquals(-2, command.scanLowerInclusive());
     assertEquals(9, command.scanUpperExclusive());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, COUNT(*) FROM accounts "
+                + "GROUP BY region ORDER BY region ASC",
+            command));
+    assertEquals(SqlCommandType.GROUP_COUNT, command.type());
+    assertName("region", command.firstColumnName());
+    assertName("accounts", command.tableName());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "SELECT region, COUNT(*) FROM accounts GROUP BY value",
+            command));
     assertEquals(StatusCode.OK, parser.parse("SELECT key, value FROM accounts", command));
     assertEquals(SqlCommandType.SCAN, command.type());
     assertName("accounts", command.tableName());

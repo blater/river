@@ -1428,6 +1428,27 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE INDEX events_category ON events(category)", result));
+    SqlScanCursor groups = new SqlScanCursor();
+    SqlScanRowResult group = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT category, COUNT(*) FROM events "
+                + "GROUP BY category ORDER BY category",
+            groups));
+    assertEquals(true, "category".contentEquals(session.scanColumnName(groups, 0)));
+    assertEquals(true, "count".contentEquals(session.scanColumnName(groups, 1)));
+    assertEquals(StatusCode.OK, session.nextScan(groups, group));
+    assertEquals(10, group.valueAt(0));
+    assertEquals(3, group.valueAt(1));
+    assertEquals(StatusCode.OK, session.nextScan(groups, group));
+    assertEquals(20, group.valueAt(0));
+    assertEquals(1, group.valueAt(1));
+    assertEquals(StatusCode.OK, session.nextScan(groups, group));
+    assertEquals(30, group.valueAt(0));
+    assertEquals(1, group.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(groups, group));
+    assertEquals(StatusCode.OK, session.closeScan(groups, result));
     assertUnindexedRows(
         session,
         result,

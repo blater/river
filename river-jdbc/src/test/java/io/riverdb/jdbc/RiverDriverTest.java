@@ -69,6 +69,10 @@ final class RiverDriverTest {
           0,
           statement.executeUpdate(
               "CREATE INDEX accounts_balance ON accounts(balance)"));
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE INDEX accounts_region ON accounts(region)"));
 
       try (ResultSet ordered = statement.executeQuery(
           "SELECT id, balance FROM accounts ORDER BY balance")) {
@@ -78,6 +82,19 @@ final class RiverDriverTest {
           assertEquals(expected * 100, ordered.getLong("balance"));
         }
         assertFalse(ordered.next());
+      }
+      try (ResultSet grouped = statement.executeQuery(
+          "SELECT region, COUNT(*) FROM accounts "
+              + "GROUP BY region ORDER BY region")) {
+        assertEquals("region", grouped.getMetaData().getColumnLabel(1));
+        assertEquals("count", grouped.getMetaData().getColumnLabel(2));
+        assertTrue(grouped.next());
+        assertEquals(7, grouped.getLong("region"));
+        assertEquals(2, grouped.getLong("count"));
+        assertTrue(grouped.next());
+        assertEquals(8, grouped.getLong(1));
+        assertEquals(1, grouped.getLong(2));
+        assertFalse(grouped.next());
       }
 
       try (ResultSet rows = statement.executeQuery(

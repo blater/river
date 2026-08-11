@@ -18,6 +18,11 @@ public final class HeapRowResult {
     return length;
   }
 
+  /** Reads a validated internal BIGINT field directly from the borrowed row. */
+  public long getLong(int relativeOffset) {
+    return page.getLong(offset + relativeOffset);
+  }
+
   public StatusCode copyTo(ByteBuffer destination) {
     if (destination == null || destination.remaining() < length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
