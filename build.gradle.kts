@@ -121,6 +121,8 @@ val declaredDependencies = mapOf(
   "river-tx" to setOf("river-base", "river-tx-api"),
   "river-sql" to setOf("river-base"),
   "river-engine-api" to setOf("river-base"),
+  "river-protocol" to setOf("river-base", "river-engine-api"),
+  "river-server" to setOf("river-base", "river-engine-api", "river-protocol"),
   "river-engine" to setOf(
     "river-base", "river-format", "river-platform", "river-storage",
     "river-tx", "river-tx-api", "river-wal", "river-sql", "river-engine-api"
@@ -137,7 +139,8 @@ val declaredDependencies = mapOf(
 // adding an entry changes downstream compile visibility and requires a
 // compile-visibility test.
 val approvedApiDependencies = mapOf(
-  "river-engine-api" to setOf("river-base")
+  "river-engine-api" to setOf("river-base"),
+  "river-protocol" to setOf("river-base", "river-engine-api")
 )
 
 subprojects {

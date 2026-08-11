@@ -1,0 +1,62 @@
+package io.riverdb.protocol;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.sun.management.ThreadMXBean;
+import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.CommandResult;
+import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Test;
+
+final class ProtocolFrameCodecAllocationTest {
+  private static volatile long allocationGuard;
+
+  @Test
+  void warmedFrameAndResponsePathReusesCallerOwnedStorage() {
+    java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
+    Assumptions.assumeTrue(standard instanceof ThreadMXBean);
+    ThreadMXBean bean = (ThreadMXBean) standard;
+    Assumptions.assumeTrue(bean.isThreadAllocatedMemorySupported());
+    bean.setThreadAllocatedMemoryEnabled(true);
+
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    ProtocolFrame frame = new ProtocolFrame();
+    ProtocolResponse response = new ProtocolResponse();
+    CommandResult command = new CommandResult();
+    assertEquals(
+        StatusCode.OK,
+        command.complete(1, 7, false, true, 3, new long[] {9, 10}, 2));
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    for (int index = 0; index < 10_000; index++) {
+      exercise(codec, frame, response, command, bytes);
+    }
+
+    long threadId = Thread.currentThread().threadId();
+    long before = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exercise(codec, frame, response, command, bytes);
+    }
+    long allocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertTrue(allocated <= 512, "warmed protocol allocated bytes: " + allocated);
+  }
+
+  private static void exercise(
+      ProtocolFrameCodec codec,
+      ProtocolFrame frame,
+      ProtocolResponse response,
+      CommandResult command,
+      ByteBuffer bytes) {
+    allocationGuard += codec.encodeCommandResponse(
+        bytes,
+        ProtocolMessageType.EXECUTE,
+        11,
+        StatusCode.OK,
+        command,
+        false).ordinal();
+    allocationGuard += codec.decodeResponse(bytes, frame, response).ordinal();
+    allocationGuard += response.valueAt(1);
+  }
+}
