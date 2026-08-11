@@ -360,6 +360,13 @@ public final class SqlSession {
         status = bindDataCommand();
       }
     }
+    int orderColumn = status.isOk() && command.isOrdered()
+        ? table.findColumn(command.orderColumnName()) : -1;
+    if (status.isOk()
+        && command.isOrdered()
+        && (orderColumn < 0 || orderColumn > 0 && !table.hasIndexOn(orderColumn))) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     boolean bounded = equality || command.isBoundedScan();
     if (status.isOk()
         && !equality
@@ -367,31 +374,37 @@ public final class SqlSession {
         && command.scanUpperExclusive() <= command.scanLowerInclusive()) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    boolean valueIndex = status.isOk()
-        && predicateColumn > 0
-        && table.hasIndexOn(predicateColumn);
+    int scanIndexColumn = status.isOk() && command.isOrdered()
+        ? orderColumn > 0 ? orderColumn : -1
+        : status.isOk() && predicateColumn > 0 && table.hasIndexOn(predicateColumn)
+            ? predicateColumn : -1;
+    boolean valueIndex = scanIndexColumn > 0;
+    boolean primaryRangeAccess = scanIndexColumn < 0 && predicateColumn == 0;
     boolean filterRows = status.isOk()
         && bounded
-        && predicateColumn > 0
-        && !valueIndex;
+        && predicateColumn >= 0
+        && predicateColumn != scanIndexColumn
+        && !primaryRangeAccess;
     if (status.isOk()
         && equality
         && predicateColumn == 0
+        && scanIndexColumn < 0
         && command.key() == Long.MAX_VALUE) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (status.isOk()) {
       if (valueIndex) {
-        long lower = equality ? command.key() : command.scanLowerInclusive();
-        long upper = equality ? command.key() + 1 : command.scanUpperExclusive();
-        status = command.key() == Long.MAX_VALUE && equality
-            ? StatusCode.INVALID_EXTERNAL_INPUT
-            : session.beginValueScan(
-                table,
-                table.findColumn(command.predicateColumnName()),
-                lower,
-                upper,
-                cursor.relational());
+        boolean boundedByScanIndex = bounded && predicateColumn == scanIndexColumn;
+        if (boundedByScanIndex) {
+          long lower = equality ? command.key() : command.scanLowerInclusive();
+          long upper = equality ? command.key() + 1 : command.scanUpperExclusive();
+          status = command.key() == Long.MAX_VALUE && equality
+              ? StatusCode.INVALID_EXTERNAL_INPUT
+              : session.beginValueScan(
+                  table, scanIndexColumn, lower, upper, cursor.relational());
+        } else {
+          status = session.beginValueScan(table, scanIndexColumn, cursor.relational());
+        }
       } else {
         status = bounded && predicateColumn == 0
             ? session.beginScan(

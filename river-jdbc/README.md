@@ -7,6 +7,9 @@ and serializable transactions, update counts, and streaming forward-only,
 read-only BIGINT result sets. Each `next()` consumes one protocol fetch credit;
 the driver does not buffer the result set. Primitive `next()`/`getLong()` use
 reusable row carriers and do not create per-row JDBC adapter objects.
+`COUNT(*)` is exposed as one streamed row. `ORDER BY column` streams in ascending
+primary-key or existing secondary-index order; River rejects an unindexed order
+instead of silently materializing an unbounded heap sort.
 
 `PreparedStatement` currently accepts bounded positional BIGINT parameters.
 Values are rendered directly into a statement-owned character buffer as

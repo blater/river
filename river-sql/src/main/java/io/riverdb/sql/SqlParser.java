@@ -243,6 +243,15 @@ public final class SqlParser {
             }
           }
         }
+        if (status.isOk() && consumeKeyword(sql, "ORDER")) {
+          status = requireKeyword(sql, "BY");
+          if (status.isOk()) {
+            status = identifier(sql, result.writableOrderColumnName());
+          }
+          if (status.isOk()) {
+            consumeKeyword(sql, "ASC");
+          }
+        }
       }
     } else if (consumeKeyword(sql, "UPDATE")) {
       type = SqlCommandType.UPDATE;

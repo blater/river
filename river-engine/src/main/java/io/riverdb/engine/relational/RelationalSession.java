@@ -388,6 +388,23 @@ public final class RelationalSession {
   public StatusCode beginValueScan(
       TableDefinition table,
       int column,
+      RelationalScanCursor cursor) {
+    int slot = table == null ? -1 : table.readyIndexSlotOn(column);
+    boolean unique = slot >= 0 && table.indexIsUnique(slot);
+    return slot < 0
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : beginValueScan(
+            table,
+            column,
+            unique ? MINIMUM_INDEXED_VALUE : MINIMUM_NON_UNIQUE_VALUE,
+            unique ? MAXIMUM_INDEXED_VALUE_EXCLUSIVE
+                : MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE,
+            cursor);
+  }
+
+  public StatusCode beginValueScan(
+      TableDefinition table,
+      int column,
       long lowerInclusive,
       long upperExclusive,
       RelationalScanCursor cursor) {

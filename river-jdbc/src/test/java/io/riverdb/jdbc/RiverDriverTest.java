@@ -60,6 +60,25 @@ final class RiverDriverTest {
           statement.executeUpdate(
               "INSERT INTO accounts VALUES "
                   + "(1, 100, 7), (2, 200, 7), (3, 300, 8)"));
+      SQLException missingOrderIndex = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
+              "SELECT id, balance FROM accounts ORDER BY balance"));
+      assertEquals("22000", missingOrderIndex.getSQLState());
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE INDEX accounts_balance ON accounts(balance)"));
+
+      try (ResultSet ordered = statement.executeQuery(
+          "SELECT id, balance FROM accounts ORDER BY balance")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(ordered.next());
+          assertEquals(expected, ordered.getLong("id"));
+          assertEquals(expected * 100, ordered.getLong("balance"));
+        }
+        assertFalse(ordered.next());
+      }
 
       try (ResultSet rows = statement.executeQuery(
           "SELECT id, balance FROM accounts WHERE id >= 1 AND id < 4")) {

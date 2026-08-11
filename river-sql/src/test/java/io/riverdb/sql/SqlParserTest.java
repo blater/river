@@ -107,6 +107,17 @@ final class SqlParserTest {
     assertEquals(false, command.isBoundedScan());
     assertEquals(
         StatusCode.OK,
+        parser.parse(
+            "SELECT key, value FROM accounts ORDER BY value ASC",
+            command));
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertEquals(true, command.isOrdered());
+    assertName("value", command.orderColumnName());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT key FROM accounts ORDER BY key DESC", command));
+    assertEquals(
+        StatusCode.OK,
         parser.parse("SELECT region, key, value FROM accounts WHERE key=7", command));
     assertEquals(SqlCommandType.SELECT, command.type());
     assertEquals(3, command.columnCount());
