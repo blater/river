@@ -346,6 +346,7 @@ public final class RiverClientConnection implements RiverDatabase {
         response.key(),
         values,
         response.nullMask(),
+        response.varcharMask(),
         columns);
   }
 
@@ -392,6 +393,7 @@ public final class RiverClientConnection implements RiverDatabase {
         query.active = true;
         query.rowsReturned = 0;
         query.columnCount = response.columnCount();
+        query.varcharMask = response.varcharMask();
         for (int index = 0; index < query.columnCount; index++) {
           query.columnNames[index] = response.columnName(index);
         }
@@ -414,6 +416,7 @@ public final class RiverClientConnection implements RiverDatabase {
         query.active = false;
         query.clearColumnNames();
         query.columnCount = 0;
+        query.varcharMask = 0;
         sessionClosed();
       }
       return status;
@@ -425,11 +428,13 @@ public final class RiverClientConnection implements RiverDatabase {
       query.rowsReturned = 0;
       query.clearColumnNames();
       query.columnCount = 0;
+      query.varcharMask = 0;
     }
 
     private final class RemoteQuery implements RiverQuery {
       private final String[] columnNames = new String[CommandResult.MAXIMUM_COLUMNS];
       private long rowsReturned;
+      private long varcharMask;
       private int columnCount;
       private boolean active;
 
@@ -457,7 +462,12 @@ public final class RiverClientConnection implements RiverDatabase {
         for (int index = 0; index < columns; index++) {
           values[index] = response.valueAt(index);
         }
-        return result.complete(response.key(), values, response.nullMask(), columns);
+        return result.complete(
+            response.key(),
+            values,
+            response.nullMask(),
+            response.varcharMask(),
+            columns);
       }
 
       @Override
@@ -477,6 +487,7 @@ public final class RiverClientConnection implements RiverDatabase {
           active = false;
           clearColumnNames();
           columnCount = 0;
+          varcharMask = 0;
           status = copyCommand(result);
         }
         return status;
@@ -495,6 +506,13 @@ public final class RiverClientConnection implements RiverDatabase {
       @Override
       public CharSequence columnName(int index) {
         return index >= 0 && index < columnCount ? columnNames[index] : null;
+      }
+
+      @Override
+      public boolean columnIsVarchar(int index) {
+        return index >= 0
+            && index < columnCount
+            && (varcharMask & 1L << index) != 0;
       }
 
       @Override

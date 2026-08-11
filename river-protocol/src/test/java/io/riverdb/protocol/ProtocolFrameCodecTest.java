@@ -38,7 +38,7 @@ final class ProtocolFrameCodecTest {
     CommandResult command = new CommandResult();
     assertEquals(
         StatusCode.OK,
-        command.complete(3, 19, true, true, 7, new long[] {11, 0}, 2, 2));
+        command.complete(3, 19, true, true, 7, new long[] {11, 0}, 2, 1, 2));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     assertEquals(
         StatusCode.OK,
@@ -58,8 +58,18 @@ final class ProtocolFrameCodecTest {
     assertEquals(0, response.valueAt(1));
     assertFalse(response.isNull(0));
     assertTrue(response.isNull(1));
+    assertTrue(response.isVarchar(0));
+    assertFalse(response.isVarchar(1));
 
     bytes.putLong(ProtocolFrameCodec.HEADER_BYTES + 56, 1L << 2);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeCommandResponse(
+            bytes, ProtocolMessageType.EXECUTE, 8, StatusCode.OK, command, false));
+    bytes.putLong(ProtocolFrameCodec.HEADER_BYTES + 64, 1L << 2);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));
@@ -86,6 +96,8 @@ final class ProtocolFrameCodecTest {
     assertEquals("balance", response.columnName(1));
     assertEquals("region", response.columnName(2));
     assertEquals(0, response.valueAt(0));
+    assertFalse(response.isVarchar(0));
+    assertTrue(response.isVarchar(1));
 
     assertEquals(
         StatusCode.OK,
@@ -120,7 +132,7 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(bytes, 13, StatusCode.OK, query));
-    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 64, (byte) 0);
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 72, (byte) 0);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));
@@ -211,6 +223,11 @@ final class ProtocolFrameCodecTest {
     @Override
     public CharSequence columnName(int index) {
       return index >= 0 && index < names.length ? names[index] : null;
+    }
+
+    @Override
+    public boolean columnIsVarchar(int index) {
+      return index == 1;
     }
 
     @Override

@@ -20,6 +20,7 @@ public final class ProtocolResponse {
   private long challengeHigh;
   private long challengeLow;
   private long nullMask;
+  private long varcharMask;
 
   public void reset() {
     status = null;
@@ -32,6 +33,7 @@ public final class ProtocolResponse {
     challengeHigh = 0;
     challengeLow = 0;
     nullMask = 0;
+    varcharMask = 0;
     for (int index = 0; index < columnNameLengths.length; index++) {
       columnNameLengths[index] = 0;
     }
@@ -47,7 +49,8 @@ public final class ProtocolResponse {
       long returned,
       long nonceHigh,
       long nonceLow,
-      long responseNullMask) {
+      long responseNullMask,
+      long responseVarcharMask) {
     status = responseStatus;
     flags = responseFlags;
     affectedRows = rows;
@@ -58,6 +61,7 @@ public final class ProtocolResponse {
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
     nullMask = responseNullMask;
+    varcharMask = responseVarcharMask;
   }
 
   void valueAt(int index, long value) {
@@ -129,6 +133,16 @@ public final class ProtocolResponse {
 
   public long nullMask() {
     return nullMask;
+  }
+
+  public boolean isVarchar(int index) {
+    return index >= 0
+        && index < columnCount
+        && (varcharMask & 1L << index) != 0;
+  }
+
+  public long varcharMask() {
+    return varcharMask;
   }
 
   public String columnName(int index) {

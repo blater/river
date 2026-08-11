@@ -5,15 +5,18 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 
-/** Metadata for River's current bounded BIGINT projection. */
+/** Metadata for River's current bounded BIGINT and VARCHAR(7) projection. */
 final class RiverResultSetMetaData implements ResultSetMetaData {
   private final String[] columnNames;
+  private final boolean[] varcharColumns;
   private final int columnCount;
 
   RiverResultSetMetaData(RiverQuery query) throws SQLException {
     columnCount = query.columnCount();
     columnNames = new String[columnCount];
+    varcharColumns = new boolean[columnCount];
     for (int index = 0; index < columnCount; index++) {
+      varcharColumns[index] = query.columnIsVarchar(index);
       CharSequence name = query.columnName(index);
       if (name == null || name.length() <= 0) {
         throw JdbcExceptions.invalid("query column name is missing");
@@ -44,7 +47,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public boolean isCaseSensitive(int column) throws SQLException {
     requireColumn(column);
-    return false;
+    return varcharColumns[column - 1];
   }
 
   @Override
@@ -68,13 +71,13 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public boolean isSigned(int column) throws SQLException {
     requireColumn(column);
-    return true;
+    return !varcharColumns[column - 1];
   }
 
   @Override
   public int getColumnDisplaySize(int column) throws SQLException {
     requireColumn(column);
-    return 20;
+    return varcharColumns[column - 1] ? 7 : 20;
   }
 
   @Override
@@ -97,7 +100,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public int getPrecision(int column) throws SQLException {
     requireColumn(column);
-    return 19;
+    return varcharColumns[column - 1] ? 7 : 19;
   }
 
   @Override
@@ -121,13 +124,13 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public int getColumnType(int column) throws SQLException {
     requireColumn(column);
-    return Types.BIGINT;
+    return varcharColumns[column - 1] ? Types.VARCHAR : Types.BIGINT;
   }
 
   @Override
   public String getColumnTypeName(int column) throws SQLException {
     requireColumn(column);
-    return "BIGINT";
+    return varcharColumns[column - 1] ? "VARCHAR" : "BIGINT";
   }
 
   @Override
@@ -151,7 +154,8 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public String getColumnClassName(int column) throws SQLException {
     requireColumn(column);
-    return Long.class.getName();
+    return varcharColumns[column - 1]
+        ? String.class.getName() : Long.class.getName();
   }
 
   @Override
@@ -182,5 +186,10 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
       }
     }
     throw JdbcExceptions.invalid("column label is not in the result projection");
+  }
+
+  boolean isVarchar(int column) throws SQLException {
+    requireColumn(column);
+    return varcharColumns[column - 1];
   }
 }

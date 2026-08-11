@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.base.text.PackedText;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
@@ -15,6 +16,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   private final RiverQuery query;
   private final RowResult row = new RowResult();
   private final CommandResult completion = new CommandResult();
+  private final char[] textCharacters = new char[PackedText.MAXIMUM_LENGTH];
   private final RiverResultSetMetaData metadata;
   private int rowNumber;
   private boolean rowAvailable;
@@ -81,17 +83,27 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   @Override
   public String getString(int column) throws SQLException {
     long value = value(column);
-    return lastWasNull ? null : Long.toString(value);
+    if (lastWasNull) {
+      return null;
+    }
+    if (!metadata.isVarchar(column)) {
+      return Long.toString(value);
+    }
+    int length = row.copyTextAt(column - 1, textCharacters, 0);
+    if (length < 0) {
+      throw JdbcExceptions.invalid("VARCHAR value is invalid");
+    }
+    return new String(textCharacters, 0, length);
   }
 
   @Override
   public boolean getBoolean(int column) throws SQLException {
-    return value(column) != 0;
+    return numericValue(column) != 0;
   }
 
   @Override
   public byte getByte(int column) throws SQLException {
-    long value = value(column);
+    long value = numericValue(column);
     if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
       throw JdbcExceptions.invalid("BIGINT value does not fit in byte");
     }
@@ -100,7 +112,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public short getShort(int column) throws SQLException {
-    long value = value(column);
+    long value = numericValue(column);
     if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
       throw JdbcExceptions.invalid("BIGINT value does not fit in short");
     }
@@ -109,7 +121,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public int getInt(int column) throws SQLException {
-    long value = value(column);
+    long value = numericValue(column);
     if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
       throw JdbcExceptions.invalid("BIGINT value does not fit in int");
     }
@@ -118,29 +130,32 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public long getLong(int column) throws SQLException {
-    return value(column);
+    return numericValue(column);
   }
 
   @Override
   public float getFloat(int column) throws SQLException {
-    return value(column);
+    return numericValue(column);
   }
 
   @Override
   public double getDouble(int column) throws SQLException {
-    return value(column);
+    return numericValue(column);
   }
 
   @Override
   public BigDecimal getBigDecimal(int column) throws SQLException {
-    long value = value(column);
+    long value = numericValue(column);
     return lastWasNull ? null : BigDecimal.valueOf(value);
   }
 
   @Override
   public Object getObject(int column) throws SQLException {
     long value = value(column);
-    return lastWasNull ? null : Long.valueOf(value);
+    if (lastWasNull) {
+      return null;
+    }
+    return metadata.isVarchar(column) ? getString(column) : Long.valueOf(value);
   }
 
   @Override
@@ -153,7 +168,12 @@ final class RiverJdbcResultSet extends AbstractResultSet {
       return null;
     }
     Object converted;
-    if (type == Long.class || type == Long.TYPE) {
+    if (metadata.isVarchar(column)) {
+      if (type != String.class) {
+        throw JdbcExceptions.unsupported();
+      }
+      converted = getString(column);
+    } else if (type == Long.class || type == Long.TYPE) {
       converted = Long.valueOf(value);
     } else if (type == Integer.class || type == Integer.TYPE) {
       if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
@@ -322,6 +342,14 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     lastValueRead = true;
     lastWasNull = row.isNull(column - 1);
     return row.valueAt(column - 1);
+  }
+
+  private long numericValue(int column) throws SQLException {
+    long result = value(column);
+    if (metadata.isVarchar(column) && !lastWasNull) {
+      throw JdbcExceptions.invalid("VARCHAR value is not numeric");
+    }
+    return result;
   }
 
   private void completeQuery() throws SQLException {

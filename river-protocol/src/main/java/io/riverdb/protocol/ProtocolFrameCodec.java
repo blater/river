@@ -14,7 +14,7 @@ public final class ProtocolFrameCodec {
   public static final int MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
   public static final int MAXIMUM_COLUMN_NAME_BYTES = 64;
-  public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 64
+  public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 72
       + CommandResult.MAXIMUM_COLUMNS * (1 + MAXIMUM_COLUMN_NAME_BYTES);
   public static final int FLAG_ROW_AVAILABLE = 1;
   public static final int FLAG_TRANSACTION_ACTIVE = 1 << 1;
@@ -23,7 +23,7 @@ public final class ProtocolFrameCodec {
 
   private static final int MAGIC = 0x52495652;
   private static final int FRAME_RESPONSE = 1;
-  private static final int RESPONSE_FIXED_BYTES = 64;
+  private static final int RESPONSE_FIXED_BYTES = 72;
 
   public StatusCode decode(ByteBuffer source, ProtocolFrame result) {
     if (source == null || result == null) {
@@ -237,12 +237,16 @@ public final class ProtocolFrameCodec {
       return invalidTarget(target);
     }
     int metadataBytes = 0;
+    long varcharMask = 0;
     for (int index = 0; index < columns; index++) {
       CharSequence name = query.columnName(index);
       if (!validColumnName(name)) {
         return invalidTarget(target);
       }
       metadataBytes += 1 + name.length();
+      if (query.columnIsVarchar(index)) {
+        varcharMask |= 1L << index;
+      }
     }
     int payloadBytes = RESPONSE_FIXED_BYTES + metadataBytes;
     StatusCode encoded = beginFrame(
@@ -265,7 +269,8 @@ public final class ProtocolFrameCodec {
         0,
         0,
         0,
-        0);
+        0,
+        varcharMask);
     int offset = HEADER_BYTES + RESPONSE_FIXED_BYTES;
     for (int index = 0; index < columns; index++) {
       CharSequence name = query.columnName(index);
@@ -365,6 +370,7 @@ public final class ProtocolFrameCodec {
     long challengeHigh = bytes.getLong(offset + 40);
     long challengeLow = bytes.getLong(offset + 48);
     long nullMask = bytes.getLong(offset + 56);
+    long varcharMask = bytes.getLong(offset + 64);
     boolean metadata = (flags & FLAG_COLUMN_METADATA) != 0;
     boolean rowAvailable = (flags & FLAG_ROW_AVAILABLE) != 0;
     if (status == null
@@ -378,6 +384,7 @@ public final class ProtocolFrameCodec {
         || commitSequence < 0
         || returned < 0
         || (nullMask & ~((1L << columns) - 1)) != 0
+        || (varcharMask & ~((1L << columns) - 1)) != 0
         || metadata && (frame.type() != ProtocolMessageType.BEGIN_QUERY
             || !status.isOk()
             || flags != (FLAG_QUERY_ACTIVE | FLAG_COLUMN_METADATA)
@@ -398,7 +405,8 @@ public final class ProtocolFrameCodec {
         returned,
         challengeHigh,
         challengeLow,
-        nullMask);
+        nullMask,
+        varcharMask);
     if (metadata) {
       int metadataOffset = offset + RESPONSE_FIXED_BYTES;
       int end = offset + frame.payloadBytes();
@@ -455,7 +463,10 @@ public final class ProtocolFrameCodec {
     }
     long nullMask = command != null
         ? command.nullMask() : row == null ? 0 : row.nullMask();
-    if ((nullMask & ~((1L << columns) - 1)) != 0) {
+    long varcharMask = command != null
+        ? command.varcharMask() : row == null ? 0 : row.varcharMask();
+    if ((nullMask & ~((1L << columns) - 1)) != 0
+        || (varcharMask & ~((1L << columns) - 1)) != 0) {
       return invalidTarget(target);
     }
     int payloadBytes = RESPONSE_FIXED_BYTES + columns * Long.BYTES;
@@ -474,7 +485,8 @@ public final class ProtocolFrameCodec {
         returned,
         challengeHigh,
         challengeLow,
-        nullMask);
+        nullMask,
+        varcharMask);
     for (int index = 0; index < columns; index++) {
       long value = command != null
           ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
@@ -496,7 +508,8 @@ public final class ProtocolFrameCodec {
       long returned,
       long challengeHigh,
       long challengeLow,
-      long nullMask) {
+      long nullMask,
+      long varcharMask) {
     target.putInt(HEADER_BYTES, status.stableCode());
     target.putInt(HEADER_BYTES + 4, flags);
     target.putInt(HEADER_BYTES + 8, rows);
@@ -507,6 +520,7 @@ public final class ProtocolFrameCodec {
     target.putLong(HEADER_BYTES + 40, challengeHigh);
     target.putLong(HEADER_BYTES + 48, challengeLow);
     target.putLong(HEADER_BYTES + 56, nullMask);
+    target.putLong(HEADER_BYTES + 64, varcharMask);
   }
 
   private static boolean validColumnName(CharSequence name) {

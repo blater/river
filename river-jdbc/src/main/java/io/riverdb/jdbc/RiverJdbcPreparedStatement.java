@@ -1,20 +1,25 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.base.text.PackedText;
 import io.riverdb.engine.api.RiverSession;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 
-/** Bounded BIGINT prepared statement with injection-safe numeric rendering. */
+/** Bounded BIGINT/VARCHAR prepared statement with injection-safe rendering. */
 final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   static final int MAXIMUM_PARAMETERS = 512;
   static final int MAXIMUM_RENDERED_CHARACTERS = 16 * 1024;
 
   private static final String MINIMUM_LONG = "-9223372036854775808";
+  private static final byte PARAMETER_UNSET = 0;
+  private static final byte PARAMETER_LONG = 1;
+  private static final byte PARAMETER_VARCHAR = 2;
 
   private final String template;
   private final long[] parameters;
-  private final boolean[] assigned;
+  private final String[] textParameters;
+  private final byte[] parameterTypes;
   private final char[] rendered;
 
   RiverJdbcPreparedStatement(
@@ -38,7 +43,8 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
     }
     template = sql;
     parameters = new long[count];
-    assigned = new boolean[count];
+    textParameters = new String[count];
+    parameterTypes = new byte[count];
     rendered = new char[capacity];
   }
 
@@ -111,7 +117,19 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   public void setLong(int index, long value) throws SQLException {
     requireParameter(index);
     parameters[index - 1] = value;
-    assigned[index - 1] = true;
+    textParameters[index - 1] = null;
+    parameterTypes[index - 1] = PARAMETER_LONG;
+  }
+
+  @Override
+  public void setString(int index, String value) throws SQLException {
+    requireParameter(index);
+    if (!PackedText.isValid(value)) {
+      throw JdbcExceptions.invalid("VARCHAR parameter exceeds the supported domain");
+    }
+    parameters[index - 1] = 0;
+    textParameters[index - 1] = value;
+    parameterTypes[index - 1] = PARAMETER_VARCHAR;
   }
 
   @Override
@@ -124,6 +142,8 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
       setLong(index, number.longValue());
     } else if (value instanceof Long number) {
       setLong(index, number.longValue());
+    } else if (value instanceof String text) {
+      setString(index, text);
     } else {
       throw JdbcExceptions.unsupported();
     }
@@ -131,6 +151,10 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
 
   @Override
   public void setObject(int index, Object value, int targetType) throws SQLException {
+    if (targetType == Types.VARCHAR && value instanceof String text) {
+      setString(index, text);
+      return;
+    }
     if (targetType != Types.BIGINT) {
       throw JdbcExceptions.unsupported();
     }
@@ -152,16 +176,17 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   @Override
   public void clearParameters() throws SQLException {
     requirePreparedOpen();
-    for (int index = 0; index < assigned.length; index++) {
-      assigned[index] = false;
+    for (int index = 0; index < parameterTypes.length; index++) {
+      parameterTypes[index] = PARAMETER_UNSET;
       parameters[index] = 0;
+      textParameters[index] = null;
     }
   }
 
   private String render() throws SQLException {
     requirePreparedOpen();
-    for (int index = 0; index < assigned.length; index++) {
-      if (!assigned[index]) {
+    for (int index = 0; index < parameterTypes.length; index++) {
+      if (parameterTypes[index] == PARAMETER_UNSET) {
         throw JdbcExceptions.invalid("parameter " + (index + 1) + " is not set");
       }
     }
@@ -170,7 +195,9 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
     for (int index = 0; index < template.length(); index++) {
       char value = template.charAt(index);
       if (value == '?') {
-        output = writeLong(rendered, output, parameters[parameter++]);
+        output = parameterTypes[parameter] == PARAMETER_VARCHAR
+            ? writeText(rendered, output, textParameters[parameter++])
+            : writeLong(rendered, output, parameters[parameter++]);
       } else {
         rendered[output++] = value;
       }
@@ -224,5 +251,18 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
       positive /= 10;
     } while (positive > 0);
     return end;
+  }
+
+  private static int writeText(char[] target, int offset, String value) {
+    target[offset++] = '\'';
+    for (int index = 0; index < value.length(); index++) {
+      char character = value.charAt(index);
+      target[offset++] = character;
+      if (character == '\'') {
+        target[offset++] = '\'';
+      }
+    }
+    target[offset++] = '\'';
+    return offset;
   }
 }

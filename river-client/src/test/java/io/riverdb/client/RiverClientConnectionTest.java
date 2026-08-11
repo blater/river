@@ -53,18 +53,46 @@ final class RiverClientConnectionTest {
                 + "(1, 100, 7), (2, 200, 7), (3, 300, 8)",
             command));
     assertEquals(3, command.affectedRows());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE labels "
+                + "(id BIGINT PRIMARY KEY, name VARCHAR(7) NOT NULL)",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO labels VALUES (1, 'beta'), (2, 'alpha')", command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX labels_name ON labels(name)", command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT name FROM labels WHERE name='alpha'", command));
+    assertText(command, 0, "alpha");
 
     QueryOpenResult queryResult = new QueryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery("SELECT name FROM labels ORDER BY name", queryResult));
+    RiverQuery query = queryResult.query();
+    assertTrue(query.columnIsVarchar(0));
+    RowResult row = new RowResult();
+    assertEquals(StatusCode.OK, query.next(row));
+    assertText(row, 0, "alpha");
+    assertEquals(StatusCode.OK, query.next(row));
+    assertText(row, 0, "beta");
+    assertEquals(StatusCode.OK, query.next(row));
+    assertFalse(row.isAvailable());
+    assertEquals(StatusCode.OK, query.close(command));
     assertEquals(
         StatusCode.OK,
         session.beginQuery(
             "SELECT id, balance FROM accounts WHERE id >= 1 AND id < 4",
             queryResult));
-    RiverQuery query = queryResult.query();
+    query = queryResult.query();
     assertEquals(2, query.columnCount());
     assertEquals("id", query.columnName(0));
     assertEquals("balance", query.columnName(1));
-    RowResult row = new RowResult();
     assertRow(query, row, 1, 1, 100);
     assertRow(query, row, 2, 2, 200);
     assertRow(query, row, 3, 3, 300);
@@ -98,6 +126,20 @@ final class RiverClientConnectionTest {
     assertEquals(StatusCode.OK, client.close());
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, engine.close());
+  }
+
+  private static void assertText(CommandResult result, int column, String expected) {
+    char[] characters = new char[7];
+    assertTrue(result.isVarchar(column));
+    assertEquals(expected.length(), result.copyTextAt(column, characters, 0));
+    assertEquals(expected, new String(characters, 0, expected.length()));
+  }
+
+  private static void assertText(RowResult result, int column, String expected) {
+    char[] characters = new char[7];
+    assertTrue(result.isVarchar(column));
+    assertEquals(expected.length(), result.copyTextAt(column, characters, 0));
+    assertEquals(expected, new String(characters, 0, expected.length()));
   }
 
   @Test
