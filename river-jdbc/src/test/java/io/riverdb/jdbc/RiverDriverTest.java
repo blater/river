@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.sql.BatchUpdateException;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -130,6 +131,30 @@ final class RiverDriverTest {
     assertEquals("22000", badUrl.getSQLState());
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement()) {
+      DatabaseMetaData metadata = connection.getMetaData();
+      assertEquals("River", metadata.getDatabaseProductName());
+      assertEquals("River JDBC", metadata.getDriverName());
+      assertEquals(url(server), metadata.getURL());
+      assertEquals(connection, metadata.getConnection());
+      assertEquals(4, metadata.getJDBCMajorVersion());
+      assertEquals(3, metadata.getJDBCMinorVersion());
+      assertTrue(metadata.supportsTransactions());
+      assertTrue(metadata.supportsTransactionIsolationLevel(
+          Connection.TRANSACTION_REPEATABLE_READ));
+      assertTrue(metadata.supportsTransactionIsolationLevel(
+          Connection.TRANSACTION_SERIALIZABLE));
+      assertFalse(metadata.supportsTransactionIsolationLevel(
+          Connection.TRANSACTION_READ_COMMITTED));
+      assertTrue(metadata.supportsBatchUpdates());
+      assertTrue(metadata.supportsResultSetConcurrency(
+          ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
+      assertFalse(metadata.supportsResultSetConcurrency(
+          ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY));
+      assertEquals(8, metadata.getMaxColumnsInTable());
+      assertEquals(64, metadata.getMaxTableNameLength());
+      assertThrows(
+          java.sql.SQLFeatureNotSupportedException.class,
+          () -> metadata.getTables(null, null, null, null));
       SQLException secondStatement = assertThrows(
           SQLException.class,
           connection::createStatement);

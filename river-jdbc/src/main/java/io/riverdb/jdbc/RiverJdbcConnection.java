@@ -5,6 +5,7 @@ import io.riverdb.client.RiverClientConnection;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverSession;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -16,6 +17,7 @@ import java.util.Map;
 final class RiverJdbcConnection extends AbstractConnection {
   private final RiverClientConnection client;
   private final RiverSession session;
+  private final RiverDatabaseMetaData metadata;
   private final CommandResult transactionResult = new CommandResult();
   private RiverJdbcStatement statement;
   private boolean autoCommit = true;
@@ -23,9 +25,19 @@ final class RiverJdbcConnection extends AbstractConnection {
   private boolean closed;
   private int isolation = Connection.TRANSACTION_REPEATABLE_READ;
 
-  RiverJdbcConnection(RiverClientConnection remoteClient, RiverSession remoteSession) {
+  RiverJdbcConnection(
+      RiverClientConnection remoteClient,
+      RiverSession remoteSession,
+      String url) {
     client = remoteClient;
     session = remoteSession;
+    metadata = new RiverDatabaseMetaData(this, url);
+  }
+
+  @Override
+  public DatabaseMetaData getMetaData() throws SQLException {
+    requireOpen();
+    return metadata;
   }
 
   @Override
@@ -299,7 +311,7 @@ final class RiverJdbcConnection extends AbstractConnection {
     }
   }
 
-  private void requireOpen() throws SQLException {
+  void requireOpen() throws SQLException {
     if (closed) {
       throw JdbcExceptions.closed("connection");
     }

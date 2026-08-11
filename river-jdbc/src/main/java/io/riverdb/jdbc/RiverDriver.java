@@ -73,7 +73,7 @@ public final class RiverDriver implements Driver {
       throw JdbcExceptions.failure(status, "open session");
     }
     RiverSession session = opened.session();
-    return new RiverJdbcConnection(client, session);
+    return new RiverJdbcConnection(client, session, URL_PREFIX + port);
   }
 
   @Override

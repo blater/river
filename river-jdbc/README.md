@@ -27,8 +27,11 @@ high-entropy credentials, not human passwords.
 Projection names, column count, and BIGINT type metadata are available when the
 query opens. Server-side prepared plans, other parameter types, generated keys,
 LOBs, callable statements, non-loopback URLs, and authenticated JDBC properties
-remain unsupported until their production consumers are implemented. Secure
-JDBC configuration is currently provided by `RiverDataSource`.
+remain unsupported until their production consumers are implemented.
+`Connection.getMetaData()` truthfully reports the product, driver, JDBC version,
+transaction levels, result-set shape, identifier limits, and batching support.
+Catalog enumeration remains unsupported until River exposes a catalog query
+surface. Secure JDBC configuration is currently provided by `RiverDataSource`.
 
 River uses status returns internally. JDBC-mandated `SQLException` objects are
 created only at this external adapter boundary.
