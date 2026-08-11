@@ -587,16 +587,15 @@ public final class SqlSession {
       if (!status.isOk()) {
         return status;
       }
-      status = copyRow(source);
+      status = validateRow(source);
       if (status.isOk() && cursor.filtersRows()) {
-        long predicateValue = cursor.filterColumn() == 0
-            ? primaryKey : row.getLong((cursor.filterColumn() - 1) * Long.BYTES);
+        long predicateValue = readColumn(primaryKey, source, cursor.filterColumn());
         if (!cursor.matches(predicateValue)) {
           continue;
         }
       }
       if (status.isOk()) {
-        projectCopiedScanRow(primaryKey, cursor, projectedValues);
+        projectScanRow(primaryKey, source, cursor, projectedValues);
         result.set(primaryKey, projectedValues, cursor.projectedColumnCount());
         cursor.rowReturned();
       }
@@ -785,10 +784,10 @@ public final class SqlSession {
           break;
         }
         if (status.isOk() && predicate && predicateColumn > 0 && !indexed) {
-          status = copyRow(source);
+          status = validateRow(source);
         }
         if (status.isOk() && predicate && predicateColumn > 0 && !indexed) {
-          long value = row.getLong((predicateColumn - 1) * Long.BYTES);
+          long value = source.getLong((predicateColumn - 1) * Long.BYTES);
           boolean matches = equality
               ? value == command.key()
               : value >= command.scanLowerInclusive()
@@ -1033,16 +1032,30 @@ public final class SqlSession {
   }
 
   private StatusCode copyRow(HeapRowResult source) {
-    if (source.length() != table.rowBytes()) {
-      return StatusCode.CORRUPTION;
+    StatusCode status = validateRow(source);
+    if (!status.isOk()) {
+      return status;
     }
     row.clear();
     row.limit(table.rowBytes());
-    StatusCode status = source.copyTo(row);
+    status = source.copyTo(row);
     if (status.isOk()) {
       row.position(0);
     }
     return status;
+  }
+
+  private StatusCode validateRow(HeapRowResult source) {
+    return validateRow(source, table);
+  }
+
+  private static StatusCode validateRow(
+      HeapRowResult source,
+      TableDefinition definition) {
+    if (source.length() != definition.rowBytes()) {
+      return StatusCode.CORRUPTION;
+    }
+    return StatusCode.OK;
   }
 
   private StatusCode nextGroupCount(SqlScanCursor cursor, SqlScanRowResult result) {
@@ -1108,6 +1121,10 @@ public final class SqlSession {
       if (!status.isOk()) {
         return status;
       }
+      status = validateRow(outerRow, table);
+      if (!status.isOk()) {
+        return status;
+      }
       if (cursor.filtersRows()
           && !cursor.matches(readColumn(outerKey, outerRow, cursor.filterColumn()))) {
         continue;
@@ -1127,6 +1144,10 @@ public final class SqlSession {
           || status == StatusCode.INVALID_EXTERNAL_INPUT) {
         continue;
       }
+      if (!status.isOk()) {
+        return status;
+      }
+      status = validateRow(innerRow, joinTable);
       if (!status.isOk()) {
         return status;
       }
@@ -1155,6 +1176,9 @@ public final class SqlSession {
       status = session.nextScan(cursor.relational(), aggregateRow);
       primaryKey = aggregateRow.key();
       source = aggregateRow.row();
+    }
+    if (status.isOk()) {
+      status = validateRow(source, table);
     }
     if (status.isOk()) {
       int column = cursor.groupColumn();
@@ -1187,25 +1211,24 @@ public final class SqlSession {
       int[] columns,
       int columnCount,
       long[] destination) {
-    StatusCode status = copyRow(source);
+    StatusCode status = validateRow(source);
     if (status.isOk()) {
       for (int index = 0; index < columnCount; index++) {
         int column = columns[index];
-        destination[index] = column == 0
-            ? primaryKey : row.getLong((column - 1) * Long.BYTES);
+        destination[index] = readColumn(primaryKey, source, column);
       }
     }
     return status;
   }
 
-  private void projectCopiedScanRow(
+  private void projectScanRow(
       long primaryKey,
+      HeapRowResult source,
       SqlScanCursor cursor,
       long[] destination) {
     for (int index = 0; index < cursor.projectedColumnCount(); index++) {
       int column = cursor.projectedColumn(index);
-      destination[index] = column == 0
-          ? primaryKey : row.getLong((column - 1) * Long.BYTES);
+      destination[index] = readColumn(primaryKey, source, column);
     }
   }
 
@@ -1265,12 +1288,12 @@ public final class SqlSession {
         break;
       }
       if (status.isOk() && !indexed && predicateColumn > 0) {
-        status = copyRow(aggregateRow.row());
+        status = validateRow(aggregateRow.row());
       }
       if (status.isOk()
           && !indexed
           && predicateColumn > 0) {
-        long value = row.getLong((predicateColumn - 1) * Long.BYTES);
+        long value = aggregateRow.row().getLong((predicateColumn - 1) * Long.BYTES);
         boolean matches = equality
             ? value == command.key()
             : value >= command.scanLowerInclusive()
