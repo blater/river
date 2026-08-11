@@ -7,6 +7,7 @@ public final class SqlCommand {
   public static final int MAXIMUM_PREDICATES = MAXIMUM_COLUMNS;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
+  private final SqlIdentifier tableAlias = new SqlIdentifier();
   private final SqlIdentifier joinTableName = new SqlIdentifier();
   private final SqlIdentifier joinOuterColumnName = new SqlIdentifier();
   private final SqlIdentifier joinInnerColumnName = new SqlIdentifier();
@@ -67,6 +68,7 @@ public final class SqlCommand {
 
   public void reset() {
     tableName.reset();
+    tableAlias.reset();
     joinTableName.reset();
     joinOuterColumnName.reset();
     joinInnerColumnName.reset();
@@ -197,6 +199,7 @@ public final class SqlCommand {
   void copyQueryFrom(SqlCommand source) {
     reset();
     tableName.copyFrom(source.tableName);
+    tableAlias.copyFrom(source.tableAlias);
     for (int index = 0; index < source.columnCount; index++) {
       writableNextColumnName().copyFrom(source.columnNames[index]);
       writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
@@ -265,6 +268,10 @@ public final class SqlCommand {
     return tableName;
   }
 
+  SqlIdentifier writableTableAlias() {
+    return tableAlias;
+  }
+
   SqlIdentifier writableJoinTableName() {
     return joinTableName;
   }
@@ -329,6 +336,10 @@ public final class SqlCommand {
 
   public SqlIdentifier tableName() {
     return tableName;
+  }
+
+  public SqlIdentifier tableAlias() {
+    return tableAlias;
   }
 
   public SqlIdentifier joinTableName() {

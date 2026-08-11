@@ -428,7 +428,7 @@ public final class SqlSession {
       }
       if (status.isOk()
           && command.columnTableName(0).length() > 0
-          && !sameName(command.columnTableName(0), command.tableName())) {
+          && !matchesTableQualifier(command, command.columnTableName(0))) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
       int groupColumn = status.isOk()
@@ -465,7 +465,7 @@ public final class SqlSession {
       }
       if (status.isOk()
           && command.columnTableName(0).length() > 0
-          && !sameName(command.columnTableName(0), command.tableName())) {
+          && !matchesTableQualifier(command, command.columnTableName(0))) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
       int distinctColumn = status.isOk()
@@ -1114,7 +1114,7 @@ public final class SqlSession {
     for (int index = 0; index < count; index++) {
       if (!command.isSelectAll()
           && command.columnTableName(index).length() > 0
-          && !sameName(command.columnTableName(index), command.tableName())) {
+          && !matchesTableQualifier(command, command.columnTableName(index))) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       if (!command.isSelectAll() && command.isNullProjection(index)) {
@@ -1157,7 +1157,7 @@ public final class SqlSession {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       int descriptor;
-      if (sameName(command.columnTableName(index), command.tableName())) {
+      if (matchesTableQualifier(command, command.columnTableName(index))) {
         int column = table.findColumn(command.columnName(index));
         if (column < 0) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1184,8 +1184,8 @@ public final class SqlSession {
     predicateColumn = -1;
     int accessScore = -1;
     for (int index = 0; index < predicateCount; index++) {
-      boolean outer = sameName(
-          command.predicateTableName(index), command.tableName());
+      boolean outer = matchesTableQualifier(
+          command, command.predicateTableName(index));
       boolean inner = sameName(
           command.predicateTableName(index), command.joinTableName());
       TableDefinition definition = outer ? table : inner ? joinTable : null;
@@ -1224,7 +1224,7 @@ public final class SqlSession {
     int accessScore = -1;
     for (int index = 0; index < predicateCount; index++) {
       if ((qualified || command.predicateTableName(index).length() > 0)
-          && !sameName(command.predicateTableName(index), command.tableName())) {
+          && !matchesTableQualifier(command, command.predicateTableName(index))) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       int column = table.findColumn(command.predicateColumnName(index));
@@ -1954,7 +1954,7 @@ public final class SqlSession {
     StatusCode status = session.resolveTable(nested.tableName(), scalarTable);
     if (status.isOk()
         && nested.columnTableName(0).length() > 0
-        && !sameName(nested.columnTableName(0), nested.tableName())) {
+        && !matchesTableQualifier(nested, nested.columnTableName(0))) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     nestedProjection = status.isOk() && nested.isNullProjection(0)
@@ -1967,7 +1967,7 @@ public final class SqlSession {
     }
     for (int index = 0; status.isOk() && index < nested.predicateCount(); index++) {
       if (nested.predicateTableName(index).length() > 0
-          && !sameName(nested.predicateTableName(index), nested.tableName())) {
+          && !matchesTableQualifier(nested, nested.predicateTableName(index))) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
         break;
       }
@@ -1989,10 +1989,10 @@ public final class SqlSession {
         if (valueTable.length() == 0) {
           status = StatusCode.INVALID_EXTERNAL_INPUT;
           break;
-        } else if (sameName(valueTable, nested.tableName())) {
+        } else if (matchesTableQualifier(nested, valueTable)) {
           valueColumn = scalarTable.findColumn(
               nested.predicateValueColumnName(index));
-        } else if (sameName(valueTable, command.tableName())) {
+        } else if (matchesTableQualifier(command, valueTable)) {
           valueColumn = table.findColumn(nested.predicateValueColumnName(index));
           scalarPredicateValueOuter[index] = true;
           nestedCorrelated = true;
@@ -2102,6 +2102,14 @@ public final class SqlSession {
 
   private long accessUpperExclusive() {
     return command.predicateUpperExclusive(accessPredicate);
+  }
+
+  private static boolean matchesTableQualifier(
+      SqlCommand qualified,
+      CharSequence name) {
+    return sameName(name, qualified.tableName())
+        || qualified.tableAlias().length() > 0
+            && sameName(name, qualified.tableAlias());
   }
 
   private static boolean sameName(CharSequence left, CharSequence right) {

@@ -503,6 +503,21 @@ final class SqlParserTest {
     assertName("id", correlated.predicateColumnName(0));
     assertName("accounts", correlated.predicateValueTableName(0));
     assertName("region", correlated.predicateValueColumnName(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT a.id FROM accounts AS a WHERE EXISTS "
+                + "(SELECT b.id FROM accounts b "
+                + "WHERE b.region=a.region AND b.id=3)",
+            query,
+            command));
+    assertName("accounts", command.tableName());
+    assertName("a", command.tableAlias());
+    correlated = query.existenceCommand();
+    assertName("accounts", correlated.tableName());
+    assertName("b", correlated.tableAlias());
+    assertName("b", correlated.predicateTableName(0));
+    assertName("a", correlated.predicateValueTableName(0));
   }
 
   @Test
@@ -626,6 +641,11 @@ final class SqlParserTest {
               + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT a.id FROM accounts AS a WHERE EXISTS "
+              + "(SELECT b.id FROM accounts b WHERE b.region=a.region)",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -668,6 +688,11 @@ final class SqlParserTest {
       allocationGuard += parser.parseQuery(
           "SELECT id FROM accounts WHERE region NOT IN "
               + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT a.id FROM accounts AS a WHERE EXISTS "
+              + "(SELECT b.id FROM accounts b WHERE b.region=a.region)",
           query,
           command).ordinal();
     }

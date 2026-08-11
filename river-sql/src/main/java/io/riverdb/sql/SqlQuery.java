@@ -180,13 +180,13 @@ public final class SqlQuery {
       SqlCommand outer,
       SqlCommand inner) {
     for (int index = 0; index < outer.columnCount(); index++) {
-      if (!validQualifier(outer.columnTableName(index), outer.tableName())
+      if (!validQualifier(outer.columnTableName(index), outer)
           || !outputContains(inner, outer.columnName(index))) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
     for (int index = 0; index < outer.predicateCount(); index++) {
-      if (!validQualifier(outer.predicateTableName(index), outer.tableName())
+      if (!validQualifier(outer.predicateTableName(index), outer)
           || !outputContains(inner, outer.predicateColumnName(index))) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -199,12 +199,12 @@ public final class SqlQuery {
 
   private static StatusCode validateBaseBlock(SqlCommand base) {
     for (int index = 0; index < base.columnCount(); index++) {
-      if (!validQualifier(base.columnTableName(index), base.tableName())) {
+      if (!validQualifier(base.columnTableName(index), base)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
     for (int index = 0; index < base.predicateCount(); index++) {
-      if (!validQualifier(base.predicateTableName(index), base.tableName())) {
+      if (!validQualifier(base.predicateTableName(index), base)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
@@ -222,8 +222,11 @@ public final class SqlQuery {
 
   private static boolean validQualifier(
       CharSequence qualifier,
-      CharSequence expected) {
-    return qualifier.length() == 0 || sameName(qualifier, expected);
+      SqlCommand command) {
+    return qualifier.length() == 0
+        || sameName(qualifier, command.tableName())
+        || command.tableAlias().length() > 0
+            && sameName(qualifier, command.tableAlias());
   }
 
   private static boolean sameName(CharSequence left, CharSequence right) {

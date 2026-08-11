@@ -421,6 +421,44 @@ final class RiverDriverTest {
               + "WHERE regions.id=accounts.region)")) {
         assertFalse(correlatedUnknown.next());
       }
+      try (ResultSet selfCorrelated = statement.executeQuery(
+          "SELECT a.id FROM accounts AS a WHERE EXISTS "
+              + "(SELECT b.id FROM accounts b "
+              + "WHERE b.region=a.region AND b.id=3)")) {
+        assertTrue(selfCorrelated.next());
+        assertEquals(3, selfCorrelated.getLong(1));
+        assertFalse(selfCorrelated.next());
+      }
+      try (ResultSet selfCorrelated = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.id="
+              + "(SELECT b.id FROM accounts AS b WHERE b.id=a.id) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(selfCorrelated.next());
+          assertEquals(expected, selfCorrelated.getLong(1));
+        }
+        assertFalse(selfCorrelated.next());
+      }
+      try (ResultSet selfCorrelated = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE a.region IN "
+              + "(SELECT b.region FROM accounts b WHERE b.id=a.id) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(selfCorrelated.next());
+          assertEquals(expected, selfCorrelated.getLong(1));
+        }
+        assertFalse(selfCorrelated.next());
+      }
+      try (ResultSet shadowed = statement.executeQuery(
+          "SELECT a.id FROM accounts a WHERE EXISTS "
+              + "(SELECT a.id FROM accounts a WHERE a.id=a.id) "
+              + "ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(shadowed.next());
+          assertEquals(expected, shadowed.getLong(1));
+        }
+        assertFalse(shadowed.next());
+      }
       String nested = "SELECT id FROM accounts";
       for (int depth = 1; depth < 32; depth++) {
         nested = "SELECT d" + depth + ".id FROM (" + nested + ") d" + depth;

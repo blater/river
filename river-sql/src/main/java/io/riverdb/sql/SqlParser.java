@@ -490,6 +490,9 @@ public final class SqlParser {
         if (status.isOk()) {
           status = identifier(sql, result.writableTableName());
         }
+        if (status.isOk()) {
+          status = optionalTableAlias(sql, result);
+        }
         if (status.isOk() && consumeKeyword(sql, "WHERE")) {
           status = predicates(sql, result, false);
         }
@@ -524,6 +527,9 @@ public final class SqlParser {
         }
         if (status.isOk()) {
           status = identifier(sql, result.writableTableName());
+        }
+        if (status.isOk()) {
+          status = optionalTableAlias(sql, result);
         }
         if (status.isOk()
             && type != SqlCommandType.GROUP_COUNT
@@ -844,6 +850,35 @@ public final class SqlParser {
       result.append(lower(sql.charAt(offset++)));
     }
     return StatusCode.OK;
+  }
+
+  private StatusCode optionalTableAlias(
+      CharSequence sql,
+      SqlCommand result) {
+    if (consumeKeyword(sql, "AS")) {
+      return identifier(sql, result.writableTableAlias());
+    }
+    skipSpaces(sql);
+    if (offset >= sql.length()
+        || sql.charAt(offset) == ';'
+        || sql.charAt(offset) == ')'
+        || nextKeyword(sql, "JOIN")
+        || nextKeyword(sql, "WHERE")
+        || nextKeyword(sql, "GROUP")
+        || nextKeyword(sql, "ORDER")
+        || nextKeyword(sql, "LIMIT")) {
+      return StatusCode.OK;
+    }
+    return identifierStart(sql.charAt(offset))
+        ? identifier(sql, result.writableTableAlias())
+        : StatusCode.OK;
+  }
+
+  private boolean nextKeyword(CharSequence sql, String keyword) {
+    int start = offset;
+    boolean matches = consumeKeyword(sql, keyword);
+    offset = start;
+    return matches;
   }
 
   private StatusCode matchingIdentifier(CharSequence sql, CharSequence expected) {
