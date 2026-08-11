@@ -1919,10 +1919,19 @@ final class RiverDriverTest {
       try (ResultSet joined = statement.executeQuery(
           "SELECT planned.id, plan_labels.code FROM planned "
               + "LEFT JOIN plan_labels ON planned.category=plan_labels.category "
-              + "WHERE planned.id=4")) {
+              + "WHERE planned.id=4 AND plan_labels.code IS NULL")) {
         assertTrue(joined.next());
         assertEquals(4, joined.getLong(1));
         assertNull(joined.getObject(2));
+        assertFalse(joined.next());
+      }
+      try (ResultSet joined = statement.executeQuery(
+          "SELECT planned.id, plan_labels.code FROM planned "
+              + "LEFT JOIN plan_labels ON planned.category=plan_labels.category "
+              + "WHERE planned.id=1 AND plan_labels.code=70")) {
+        assertTrue(joined.next());
+        assertEquals(1, joined.getLong(1));
+        assertEquals(70, joined.getLong(2));
         assertFalse(joined.next());
       }
       try (ResultSet plan = statement.executeQuery(

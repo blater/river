@@ -2270,9 +2270,6 @@ public final class SqlSession {
           command, command.predicateTableName(index));
       boolean inner = matchesJoinTableQualifier(
           command, command.predicateTableName(index));
-      if (command.isLeftJoin() && inner) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
       TableDefinition definition = outer ? table : inner ? joinTable : null;
       int column = definition == null
           ? -1 : definition.findColumn(command.predicateColumnName(index));
@@ -2724,7 +2721,7 @@ public final class SqlSession {
           if (!inner.isOk()) {
             return inner;
           }
-          if (unmatched) {
+          if (unmatched && matchesNullExtendedJoinPredicates()) {
             return setUnmatchedJoinRow(cursor, result);
           }
           continue;
@@ -2742,6 +2739,7 @@ public final class SqlSession {
                     != cursor.joinMatchValue())) {
           continue;
         }
+        cursor.matchJoin();
         if (!matchesJoinPredicates(innerKey, innerRow, false)) {
           continue;
         }
@@ -2767,7 +2765,6 @@ public final class SqlSession {
             nullMask,
             scanProjectionVarcharMask(cursor),
             cursor.projectedColumnCount());
-        cursor.matchJoin();
         cursor.rowReturned();
         return StatusCode.OK;
       }
@@ -2807,7 +2804,7 @@ public final class SqlSession {
         }
       }
       if (isNull(outerRow, table, cursor.joinOuterColumn())) {
-        if (cursor.leftJoin()) {
+        if (cursor.leftJoin() && matchesNullExtendedJoinPredicates()) {
           return setUnmatchedJoinRow(cursor, result);
         }
         continue;
@@ -2825,7 +2822,7 @@ public final class SqlSession {
             : session.beginScan(joinTable, cursor.joinInnerRelational());
         if (status == StatusCode.CONFLICT
             || status == StatusCode.INVALID_EXTERNAL_INPUT) {
-          if (cursor.leftJoin()) {
+          if (cursor.leftJoin() && matchesNullExtendedJoinPredicates()) {
             return setUnmatchedJoinRow(cursor, result);
           }
           continue;
@@ -2848,7 +2845,7 @@ public final class SqlSession {
       }
       if (status == StatusCode.CONFLICT
           || status == StatusCode.INVALID_EXTERNAL_INPUT) {
-        if (cursor.leftJoin()) {
+        if (cursor.leftJoin() && matchesNullExtendedJoinPredicates()) {
           return setUnmatchedJoinRow(cursor, result);
         }
         continue;
@@ -2913,6 +2910,19 @@ public final class SqlSession {
         cursor.projectedColumnCount());
     cursor.rowReturned();
     return StatusCode.OK;
+  }
+
+  private boolean matchesNullExtendedJoinPredicates() {
+    for (int index = 0; index < predicateCount; index++) {
+      if (predicateColumns[index] >= 0) {
+        continue;
+      }
+      if (!command.isNullPredicate(index)
+          || command.isNullPredicateNegated(index)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private StatusCode nextGroupValue(SqlScanCursor cursor) {

@@ -285,7 +285,8 @@ final class SqlSessionAllocationTest {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
         "SELECT t.id, raw_labels.code FROM t "
-            + "LEFT JOIN raw_labels ON t.balance=raw_labels.region WHERE t.id=1",
+            + "LEFT JOIN raw_labels ON t.balance=raw_labels.region "
+            + "WHERE t.id=1 AND raw_labels.code IS NULL",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.nullMask();

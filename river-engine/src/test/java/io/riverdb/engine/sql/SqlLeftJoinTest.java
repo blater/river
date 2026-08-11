@@ -50,7 +50,8 @@ final class SqlLeftJoinTest {
         StatusCode.OK,
         session.execute(
             "INSERT INTO labels VALUES "
-                + "(1,10,100),(2,10,101),(3,20,200),(4,NULL,999)",
+                + "(1,10,100),(2,10,101),(3,20,200),(4,NULL,999),"
+                + "(5,30,NULL)",
             execution));
 
     assertLeftRows(session, execution);
@@ -59,14 +60,9 @@ final class SqlLeftJoinTest {
         session.execute("CREATE INDEX labels_category ON labels(category)", execution));
     assertLeftRows(session, execution);
 
+    assertNullableSidePredicates(session, execution);
+
     SqlScanCursor cursor = new SqlScanCursor();
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session.beginScan(
-            "SELECT parents.id, labels.code FROM parents LEFT JOIN labels "
-                + "ON parents.category=labels.category WHERE labels.code=100",
-            cursor));
-    assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
         StatusCode.OK,
         session.beginScan(
@@ -80,6 +76,66 @@ final class SqlLeftJoinTest {
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertNullableSidePredicates(
+      SqlSession session,
+      SqlExecutionResult execution) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT parents.id, labels.code FROM parents LEFT JOIN labels "
+                + "ON parents.category=labels.category WHERE labels.code=100",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(100, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, cursor.reset());
+
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT parents.id, labels.code FROM parents LEFT JOIN labels "
+                + "ON parents.category=labels.category "
+                + "WHERE labels.code IS NOT NULL",
+            cursor));
+    for (long parent : new long[] {1, 1, 2}) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(parent, row.valueAt(0));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, cursor.reset());
+
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT parents.id, labels.code FROM parents LEFT JOIN labels "
+                + "ON parents.category=labels.category WHERE labels.code IS NULL",
+            cursor));
+    for (long parent : new long[] {3, 4}) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(parent, row.valueAt(0));
+      assertTrue(row.isNull(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, cursor.reset());
+
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT parents.id, labels.code FROM parents LEFT JOIN labels "
+                + "ON parents.id=labels.id WHERE labels.code=100",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
   }
 
   private static void assertLeftRows(
