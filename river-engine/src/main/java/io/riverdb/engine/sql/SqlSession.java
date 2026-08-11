@@ -22,10 +22,13 @@ import java.nio.ByteBuffer;
 
 /** Executes the first SQL point-statement subset through real catalog and transactions. */
 public final class SqlSession {
+  private static final String COUNT_COLUMN_NAME = "count";
+
   private final RelationalDatabase database;
   private final RelationalSession session;
   private final SqlParser parser = new SqlParser();
   private final SqlCommand command = new SqlCommand();
+  private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
   private final TableDefinition table = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
   private final TransactionOutcome outcome = new TransactionOutcome();
@@ -320,6 +323,20 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     StatusCode status = parser.parse(sql, command);
+    if (status.isOk() && command.type() == SqlCommandType.COUNT) {
+      status = execute(sql, aggregateExecution);
+      if (status.isOk()) {
+        status = cursor.claimAggregate(
+            this,
+            aggregateExecution.value(),
+            aggregateExecution.transactionActive(),
+            aggregateExecution.commitSequence());
+      }
+      if (status.isOk()) {
+        scanActive = true;
+      }
+      return status;
+    }
     boolean equality = status.isOk() && command.type() == SqlCommandType.SELECT;
     if (!status.isOk()
         || command.type() != SqlCommandType.SCAN && !equality) {
@@ -418,6 +435,15 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     result.reset();
+    if (cursor.aggregate()) {
+      if (cursor.rowsReturned() > 0) {
+        return StatusCode.CONFLICT;
+      }
+      projectedValues[0] = cursor.aggregateValue();
+      result.set(0, projectedValues, 1);
+      cursor.rowReturned();
+      return StatusCode.OK;
+    }
     StatusCode status = StatusCode.OK;
     while (status.isOk()) {
       long primaryKey;
@@ -457,6 +483,9 @@ public final class SqlSession {
     if (cursor == null || !cursor.isOwnedBy(this)) {
       return null;
     }
+    if (cursor.aggregate()) {
+      return index == 0 ? COUNT_COLUMN_NAME : null;
+    }
     int column = cursor.projectedColumn(index);
     return column < 0 ? null : table.columnName(column);
   }
@@ -472,6 +501,14 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     result.reset();
+    if (cursor.aggregate()) {
+      result.setTransaction(
+          cursor.aggregateTransactionActive(),
+          cursor.aggregateCommitSequence());
+      cursor.complete();
+      scanActive = false;
+      return StatusCode.OK;
+    }
     StatusCode status = session.closeScan(cursor.relational());
     if (!status.isOk()) {
       return status;

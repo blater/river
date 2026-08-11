@@ -80,6 +80,13 @@ final class RiverDriverTest {
         assertFalse(rows.next());
         assertTrue(rows.isAfterLast());
       }
+      try (ResultSet aggregate = statement.executeQuery(
+          "SELECT COUNT(*) FROM accounts WHERE region=7")) {
+        assertEquals("count", aggregate.getMetaData().getColumnLabel(1));
+        assertTrue(aggregate.next());
+        assertEquals(2, aggregate.getLong("count"));
+        assertFalse(aggregate.next());
+      }
 
       connection.setAutoCommit(false);
       assertEquals(

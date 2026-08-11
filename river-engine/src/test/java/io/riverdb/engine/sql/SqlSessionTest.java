@@ -1439,6 +1439,17 @@ final class SqlSessionTest {
     assertEquals(3, result.affectedRows());
     assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM events", result));
     assertEquals(2, result.value());
+    SqlScanCursor aggregate = new SqlScanCursor();
+    SqlScanRowResult aggregateRow = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan("SELECT COUNT(*) FROM events", aggregate));
+    assertEquals("count", session.scanColumnName(aggregate, 0).toString());
+    assertEquals(StatusCode.OK, session.nextScan(aggregate, aggregateRow));
+    assertEquals(2, aggregateRow.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(aggregate, aggregateRow));
+    assertEquals(StatusCode.OK, session.closeScan(aggregate, result));
+    assertEquals(false, result.transactionActive());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.beginScan(

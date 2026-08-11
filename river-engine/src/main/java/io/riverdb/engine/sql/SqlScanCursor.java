@@ -8,6 +8,10 @@ import io.riverdb.engine.relational.TableSchema;
 public final class SqlScanCursor {
   private final RelationalScanCursor relational = new RelationalScanCursor();
   private SqlSession owner;
+  private boolean aggregate;
+  private boolean aggregateTransactionActive;
+  private long aggregateValue;
+  private long aggregateCommitSequence;
   private boolean implicitTransaction;
   private boolean valueIndex;
   private int filterColumn = -1;
@@ -24,6 +28,10 @@ public final class SqlScanCursor {
       return StatusCode.CONFLICT;
     }
     owner = null;
+    aggregate = false;
+    aggregateTransactionActive = false;
+    aggregateValue = 0;
+    aggregateCommitSequence = 0;
     implicitTransaction = false;
     valueIndex = false;
     filterColumn = -1;
@@ -71,6 +79,25 @@ public final class SqlScanCursor {
     return StatusCode.OK;
   }
 
+  StatusCode claimAggregate(
+      SqlSession session,
+      long value,
+      boolean transactionActive,
+      long commitSequence) {
+    if (active || session == null || commitSequence < 0) {
+      return StatusCode.CONFLICT;
+    }
+    owner = session;
+    aggregate = true;
+    aggregateValue = value;
+    aggregateTransactionActive = transactionActive;
+    aggregateCommitSequence = commitSequence;
+    projectedColumnCount = 1;
+    active = true;
+    rowsReturned = 0;
+    return StatusCode.OK;
+  }
+
   boolean isOwnedBy(SqlSession session) {
     return active && owner == session;
   }
@@ -81,6 +108,22 @@ public final class SqlScanCursor {
 
   boolean valueIndex() {
     return valueIndex;
+  }
+
+  boolean aggregate() {
+    return aggregate;
+  }
+
+  long aggregateValue() {
+    return aggregateValue;
+  }
+
+  boolean aggregateTransactionActive() {
+    return aggregateTransactionActive;
+  }
+
+  long aggregateCommitSequence() {
+    return aggregateCommitSequence;
   }
 
   boolean filtersRows() {
