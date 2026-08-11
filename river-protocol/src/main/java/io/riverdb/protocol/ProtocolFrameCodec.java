@@ -17,6 +17,7 @@ public final class ProtocolFrameCodec {
   public static final int FLAG_ROW_AVAILABLE = 1;
   public static final int FLAG_TRANSACTION_ACTIVE = 1 << 1;
   public static final int FLAG_QUERY_ACTIVE = 1 << 2;
+  public static final int FLAG_COLUMN_METADATA = 1 << 3;
 
   private static final int MAGIC = 0x52495652;
   private static final int FRAME_RESPONSE = 1;
@@ -202,6 +203,37 @@ public final class ProtocolFrameCodec {
         null);
   }
 
+  public StatusCode encodeQueryOpenResponse(
+      ByteBuffer target,
+      long requestId,
+      StatusCode status,
+      int columnCount,
+      boolean queryActive) {
+    if (status == null
+        || columnCount < 0
+        || columnCount > CommandResult.MAXIMUM_COLUMNS
+        || status.isOk() != queryActive
+        || queryActive != (columnCount > 0)) {
+      return invalidTarget(target);
+    }
+    int flags = queryActive ? FLAG_QUERY_ACTIVE | FLAG_COLUMN_METADATA : 0;
+    return encodeResponse(
+        target,
+        ProtocolMessageType.BEGIN_QUERY,
+        requestId,
+        status,
+        flags,
+        0,
+        columnCount,
+        0,
+        0,
+        0,
+        0,
+        0,
+        null,
+        null);
+  }
+
   public StatusCode encodeCommandResponse(
       ByteBuffer target,
       ProtocolMessageType type,
@@ -288,11 +320,17 @@ public final class ProtocolFrameCodec {
     long challengeHigh = bytes.getLong(offset + 40);
     long challengeLow = bytes.getLong(offset + 48);
     if (status == null
-        || (flags & ~(FLAG_ROW_AVAILABLE | FLAG_TRANSACTION_ACTIVE | FLAG_QUERY_ACTIVE)) != 0
+        || (flags & ~(FLAG_ROW_AVAILABLE
+            | FLAG_TRANSACTION_ACTIVE
+            | FLAG_QUERY_ACTIVE
+            | FLAG_COLUMN_METADATA)) != 0
         || rows < 0
         || columns < 0
         || columns > CommandResult.MAXIMUM_COLUMNS
-        || ((flags & FLAG_ROW_AVAILABLE) != 0) != (columns > 0)
+        || columns > 0
+            != ((flags & (FLAG_ROW_AVAILABLE | FLAG_COLUMN_METADATA)) != 0)
+        || (flags & FLAG_ROW_AVAILABLE) != 0 && (flags & FLAG_COLUMN_METADATA) != 0
+        || (flags & FLAG_COLUMN_METADATA) != 0 && (flags & FLAG_QUERY_ACTIVE) == 0
         || commitSequence < 0
         || returned < 0
         || frame.payloadBytes() != RESPONSE_FIXED_BYTES + columns * Long.BYTES) {
@@ -348,7 +386,8 @@ public final class ProtocolFrameCodec {
     target.putLong(HEADER_BYTES + 40, challengeHigh);
     target.putLong(HEADER_BYTES + 48, challengeLow);
     for (int index = 0; index < columns; index++) {
-      long value = command != null ? command.valueAt(index) : row.valueAt(index);
+      long value = command != null
+          ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
       target.putLong(HEADER_BYTES + RESPONSE_FIXED_BYTES + index * Long.BYTES, value);
     }
     target.position(0);

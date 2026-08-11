@@ -12,5 +12,7 @@ public interface RiverQuery {
 
   boolean isActive();
 
+  int columnCount();
+
   long rowsReturned();
 }

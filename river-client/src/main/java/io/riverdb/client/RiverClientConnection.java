@@ -387,6 +387,7 @@ public final class RiverClientConnection implements RiverDatabase {
       if (status.isOk()) {
         query.active = true;
         query.rowsReturned = 0;
+        query.columnCount = response.columnCount();
         status = result.complete(query);
       }
       return status;
@@ -413,10 +414,12 @@ public final class RiverClientConnection implements RiverDatabase {
       active = true;
       query.active = false;
       query.rowsReturned = 0;
+      query.columnCount = 0;
     }
 
     private final class RemoteQuery implements RiverQuery {
       private long rowsReturned;
+      private int columnCount;
       private boolean active;
 
       @Override
@@ -461,6 +464,7 @@ public final class RiverClientConnection implements RiverDatabase {
         }
         if (status.isOk()) {
           active = false;
+          columnCount = 0;
           status = copyCommand(result);
         }
         return status;
@@ -469,6 +473,11 @@ public final class RiverClientConnection implements RiverDatabase {
       @Override
       public boolean isActive() {
         return active;
+      }
+
+      @Override
+      public int columnCount() {
+        return columnCount;
       }
 
       @Override

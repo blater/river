@@ -101,7 +101,7 @@ public final class SqlScanCursor {
     return projectedColumns[index];
   }
 
-  int projectedColumnCount() {
+  public int projectedColumnCount() {
     return projectedColumnCount;
   }
 

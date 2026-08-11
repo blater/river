@@ -276,6 +276,11 @@ public final class EmbeddedRiver {
       }
 
       @Override
+      public int columnCount() {
+        return scan.projectedColumnCount();
+      }
+
+      @Override
       public long rowsReturned() {
         return scan.rowsReturned();
       }

@@ -19,6 +19,9 @@ uses caller-owned reusable carriers. Statement decoding creates the one
 `String` currently required by the embedded engine API, while fetch and
 response paths are allocation-free after warmup.
 
+A successful query-open response carries the projected column count before the
+first fetch. Projection names are not yet part of the engine or wire contract.
+
 Authenticated connections negotiate protocol version inside TLS 1.3, verify
 the server hostname, and use a fresh server challenge plus TLS exporter keying
 material in an HMAC proof. Raw tokens are never placed in protocol frames. The

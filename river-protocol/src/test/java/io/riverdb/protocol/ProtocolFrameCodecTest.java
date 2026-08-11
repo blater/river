@@ -57,6 +57,31 @@ final class ProtocolFrameCodecTest {
   }
 
   @Test
+  void roundTripsQueryMetadataWithoutClaimingARow() {
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeQueryOpenResponse(bytes, 9, StatusCode.OK, 3, true));
+
+    ProtocolResponse response = new ProtocolResponse();
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(StatusCode.OK, response.status());
+    assertTrue(response.queryActive());
+    assertFalse(response.rowAvailable());
+    assertEquals(3, response.columnCount());
+    assertEquals(0, response.valueAt(0));
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeQueryOpenResponse(
+            bytes, 10, StatusCode.INVALID_EXTERNAL_INPUT, 0, false));
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, response.status());
+    assertFalse(response.queryActive());
+    assertEquals(0, response.columnCount());
+  }
+
+  @Test
   void rejectsMalformedAndUnboundedFramesBeforePayloadUse() {
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES + 1);
     assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));

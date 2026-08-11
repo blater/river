@@ -201,8 +201,12 @@ public final class SessionEndpoint {
       query = openedQuery.query();
       state = QUERY;
     }
-    return codec.encodeStatusResponse(
-        response, frame.type(), frame.requestId(), status, state == QUERY);
+    return codec.encodeQueryOpenResponse(
+        response,
+        frame.requestId(),
+        status,
+        query == null ? 0 : query.columnCount(),
+        state == QUERY);
   }
 
   private StatusCode fetch(ByteBuffer response) {
