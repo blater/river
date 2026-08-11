@@ -132,20 +132,7 @@ public final class SqlQuery {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     scalarPredicates[0] = predicate;
-    for (int index = 0; index < blockCount; index++) {
-      SqlCommand block = blocks[index];
-      if (block.type() != SqlCommandType.SCAN
-          && block.type() != SqlCommandType.SELECT
-          || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
-          || index + 1 < blockCount
-              && (scalarPredicates[index] < 0
-                  || scalarPredicates[index] >= block.predicateCount()
-                  || !block.isEqualityPredicate(scalarPredicates[index]))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
-    destination.copyQueryFrom(blocks[0]);
-    return StatusCode.OK;
+    return compileNestedPredicates(destination);
   }
 
   StatusCode compileExistencePredicate(SqlCommand destination, boolean negated) {
@@ -154,17 +141,7 @@ public final class SqlQuery {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     existencePredicates[0] = negated ? -1 : 1;
-    for (int index = 0; index < blockCount; index++) {
-      SqlCommand block = blocks[index];
-      if (block.type() != SqlCommandType.SCAN
-          && block.type() != SqlCommandType.SELECT
-          || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
-          || index + 1 < blockCount && existencePredicates[index] == 0) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
-    destination.copyQueryFrom(blocks[0]);
-    return StatusCode.OK;
+    return compileNestedPredicates(destination);
   }
 
   StatusCode compileMembershipPredicate(
@@ -176,16 +153,28 @@ public final class SqlQuery {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     setMembershipPredicate(0, predicate, negated);
+    return compileNestedPredicates(destination);
+  }
+
+  private StatusCode compileNestedPredicates(SqlCommand destination) {
     for (int index = 0; index < blockCount; index++) {
       SqlCommand block = blocks[index];
+      int scalar = scalarPredicate(index);
       int membership = membershipPredicate(index);
+      int edgeCount = (scalar >= 0 ? 1 : 0)
+          + (existencePredicates[index] != 0 ? 1 : 0)
+          + (membership >= 0 ? 1 : 0);
       if (block.type() != SqlCommandType.SCAN
           && block.type() != SqlCommandType.SELECT
           || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
           || index + 1 < blockCount
-              && (membership < 0
-                  || membership >= block.predicateCount()
-                  || !block.isEqualityPredicate(membership))) {
+              && (edgeCount != 1
+                  || scalar >= 0
+                      && (scalar >= block.predicateCount()
+                          || !block.isEqualityPredicate(scalar))
+                  || membership >= 0
+                      && (membership >= block.predicateCount()
+                          || !block.isEqualityPredicate(membership)))) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
@@ -267,7 +256,11 @@ public final class SqlQuery {
   }
 
   public boolean hasScalarPredicate() {
-    return blockCount > 1 && scalarPredicates[0] >= 0;
+    return hasScalarPredicate(0);
+  }
+
+  public boolean hasScalarPredicate(int block) {
+    return block >= 0 && block + 1 < blockCount && scalarPredicates[block] >= 0;
   }
 
   public int scalarPredicate() {
@@ -299,7 +292,13 @@ public final class SqlQuery {
   }
 
   public boolean hasExistencePredicate() {
-    return blockCount > 1 && existencePredicates[0] != 0;
+    return hasExistencePredicate(0);
+  }
+
+  public boolean hasExistencePredicate(int block) {
+    return block >= 0
+        && block + 1 < blockCount
+        && existencePredicates[block] != 0;
   }
 
   public boolean existenceNegated() {
@@ -317,7 +316,13 @@ public final class SqlQuery {
   }
 
   public boolean hasMembershipPredicate() {
-    return blockCount > 1 && membershipPredicates[0] != 0;
+    return hasMembershipPredicate(0);
+  }
+
+  public boolean hasMembershipPredicate(int block) {
+    return block >= 0
+        && block + 1 < blockCount
+        && membershipPredicates[block] != 0;
   }
 
   public boolean membershipNegated() {

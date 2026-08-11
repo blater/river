@@ -80,18 +80,7 @@ public final class SqlParser {
     StatusCode status = parseText(sourceView, parent);
     if (status.isOk()) {
       query.setExistencePredicate(parentIndex, negated);
-      int nestedOpen = findExistenceSource(sql, open + 1, close);
-      if (nestedOpen >= 0) {
-        status = parseExistenceBlocks(sql, open + 1, close, query);
-      } else {
-        SqlCommand nested = query.nextBlock();
-        if (nested == null) {
-          status = StatusCode.QUERY_TOO_COMPLEX;
-        } else {
-          sourceView.set(sql, open + 1, close, close, close);
-          status = parseText(sourceView, nested);
-        }
-      }
+      status = parseNestedBlocks(sql, open + 1, close, query);
     }
     return status;
   }
@@ -131,18 +120,7 @@ public final class SqlParser {
     }
     if (status.isOk()) {
       query.setScalarPredicate(parentIndex, scalarPredicateIndex);
-      int nestedOpen = findScalarSource(sql, open + 1, close);
-      if (nestedOpen >= 0) {
-        status = parseScalarBlocks(sql, open + 1, close, query);
-      } else {
-        SqlCommand scalar = query.nextBlock();
-        if (scalar == null) {
-          status = StatusCode.QUERY_TOO_COMPLEX;
-        } else {
-          sourceView.set(sql, open + 1, close, close, close);
-          status = parseText(sourceView, scalar);
-        }
-      }
+      status = parseNestedBlocks(sql, open + 1, close, query);
     }
     return status;
   }
@@ -186,20 +164,31 @@ public final class SqlParser {
     }
     if (status.isOk()) {
       query.setMembershipPredicate(parentIndex, scalarPredicateIndex, negated);
-      int nestedOpen = findMembershipSource(sql, open + 1, close);
-      if (nestedOpen >= 0) {
-        status = parseMembershipBlocks(sql, open + 1, close, query);
-      } else {
-        SqlCommand nested = query.nextBlock();
-        if (nested == null) {
-          status = StatusCode.QUERY_TOO_COMPLEX;
-        } else {
-          sourceView.set(sql, open + 1, close, close, close);
-          status = parseText(sourceView, nested);
-        }
-      }
+      status = parseNestedBlocks(sql, open + 1, close, query);
     }
     return status;
+  }
+
+  private StatusCode parseNestedBlocks(
+      String sql,
+      int start,
+      int end,
+      SqlQuery query) {
+    if (findExistenceSource(sql, start, end) >= 0) {
+      return parseExistenceBlocks(sql, start, end, query);
+    }
+    if (findMembershipSource(sql, start, end) >= 0) {
+      return parseMembershipBlocks(sql, start, end, query);
+    }
+    if (findScalarSource(sql, start, end) >= 0) {
+      return parseScalarBlocks(sql, start, end, query);
+    }
+    SqlCommand nested = query.nextBlock();
+    if (nested == null) {
+      return StatusCode.QUERY_TOO_COMPLEX;
+    }
+    sourceView.set(sql, start, end, end, end);
+    return parseText(sourceView, nested);
   }
 
   private StatusCode parseDerivedBlocks(

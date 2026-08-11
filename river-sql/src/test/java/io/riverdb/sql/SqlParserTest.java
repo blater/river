@@ -604,6 +604,29 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesMixedNestedPredicateForms() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE EXISTS "
+                + "(SELECT id FROM accounts WHERE id IN "
+                + "(SELECT id FROM accounts WHERE id="
+                + "(SELECT id FROM accounts WHERE id=1)))",
+            query,
+            command));
+    assertEquals(4, query.blockCount());
+    assertTrue(query.hasExistencePredicate(0));
+    assertTrue(query.hasMembershipPredicate(1));
+    assertTrue(query.hasScalarPredicate(2));
+    assertFalse(query.hasScalarPredicate(0));
+    assertFalse(query.hasExistencePredicate(1));
+    assertFalse(query.hasMembershipPredicate(2));
+  }
+
+  @Test
   void parsesNullPredicates() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
@@ -700,6 +723,12 @@ final class SqlParserTest {
               + "WHERE id IN (SELECT id FROM accounts WHERE id=1))",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS (SELECT id FROM accounts "
+              + "WHERE id IN (SELECT id FROM accounts WHERE id="
+              + "(SELECT id FROM accounts WHERE id=1)))",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -762,6 +791,12 @@ final class SqlParserTest {
       allocationGuard += parser.parseQuery(
           "SELECT id FROM accounts WHERE id IN (SELECT id FROM accounts "
               + "WHERE id IN (SELECT id FROM accounts WHERE id=1))",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS (SELECT id FROM accounts "
+              + "WHERE id IN (SELECT id FROM accounts WHERE id="
+              + "(SELECT id FROM accounts WHERE id=1)))",
           query,
           command).ordinal();
     }

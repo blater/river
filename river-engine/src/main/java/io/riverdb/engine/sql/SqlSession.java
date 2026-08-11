@@ -32,6 +32,9 @@ public final class SqlSession {
   private static final String COUNT_COLUMN_NAME = "count";
   private static final String NULL_COLUMN_NAME = "null";
   private static final int NULL_PROJECTION = Integer.MIN_VALUE;
+  private static final int NESTED_SCALAR = 1;
+  private static final int NESTED_EXISTENCE = 2;
+  private static final int NESTED_MEMBERSHIP = 3;
   private static final int MAXIMUM_MEMBERSHIP_VALUES = 1_024;
   private static final int MAXIMUM_SORT_ROWS = 1_024;
   private static final int MAXIMUM_SORT_RUNS = 64;
@@ -118,6 +121,8 @@ public final class SqlSession {
   private boolean correlatedExistence;
   private boolean correlatedMembership;
   private boolean existenceResult;
+  private boolean scalarResultNull;
+  private long scalarResultValue;
   private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
@@ -566,7 +571,13 @@ public final class SqlSession {
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
     }
-    if (status.isOk() && query.hasScalarPredicate()) {
+    if (status.isOk()
+        && query.blockCount() > 2
+        && (query.hasScalarPredicate()
+            || query.hasExistencePredicate()
+            || query.hasMembershipPredicate())) {
+      status = evaluateNestedChain();
+    } else if (status.isOk() && query.hasScalarPredicate()) {
       status = evaluateScalarPredicate();
     } else if (status.isOk() && query.hasExistencePredicate()) {
       status = evaluateExistencePredicate();
@@ -1705,6 +1716,165 @@ public final class SqlSession {
       }
     }
     return true;
+  }
+
+  private StatusCode evaluateNestedChain() {
+    StatusCode status = StatusCode.OK;
+    boolean commandEnabled = true;
+    long[] candidates = membershipValues;
+    int candidateCount = 0;
+    boolean candidateHasNull = false;
+    for (int block = query.blockCount() - 1;
+        status.isOk() && block > 0;
+        block--) {
+      SqlCommand nested = query.block(block);
+      if (nested == null || nested.isOrdered()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      status = bindNestedCommand(nested);
+      if (status.isOk() && nestedCorrelated) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      int parent = block - 1;
+      int resultKind = query.hasScalarPredicate(parent)
+          ? NESTED_SCALAR
+          : query.hasExistencePredicate(parent)
+              ? NESTED_EXISTENCE
+              : query.hasMembershipPredicate(parent)
+                  ? NESTED_MEMBERSHIP : 0;
+      if (status.isOk() && resultKind == 0) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      long[] output = candidates == membershipValues
+          ? membershipScratchValues : membershipValues;
+      membershipValueCount = 0;
+      membershipHasNull = false;
+      if (status.isOk()) {
+        status = evaluateNestedRows(
+            nested,
+            commandEnabled,
+            resultKind,
+            output,
+            query.membershipPredicate(block),
+            query.membershipNegated(block),
+            candidates,
+            candidateCount,
+            candidateHasNull);
+      }
+      if (!status.isOk()) {
+        break;
+      }
+      SqlCommand destination = parent == 0 ? command : query.block(parent);
+      if (resultKind == NESTED_SCALAR) {
+        commandEnabled = !scalarResultNull;
+        if (commandEnabled) {
+          status = query.bindScalarValue(
+              destination, parent, scalarResultValue);
+        }
+      } else if (resultKind == NESTED_EXISTENCE) {
+        commandEnabled = query.existenceNegated(parent)
+            ? !existenceResult : existenceResult;
+      } else {
+        commandEnabled = true;
+        candidates = output;
+        candidateCount = membershipValueCount;
+        candidateHasNull = membershipHasNull;
+      }
+    }
+    if (status.isOk()) {
+      subqueryPredicateFalse = !commandEnabled;
+      if (query.hasMembershipPredicate()) {
+        membershipCandidates = candidates;
+        membershipValueCount = candidateCount;
+        membershipHasNull = candidateHasNull;
+      }
+    }
+    return status;
+  }
+
+  private StatusCode evaluateNestedRows(
+      SqlCommand nested,
+      boolean commandEnabled,
+      int resultKind,
+      long[] output,
+      int nestedMembershipPredicate,
+      boolean nestedMembershipNegated,
+      long[] input,
+      int inputCount,
+      boolean inputHasNull) {
+    scalarResultNull = true;
+    scalarResultValue = 0;
+    existenceResult = false;
+    if (!commandEnabled || nested.rowLimit() == 0) {
+      return StatusCode.OK;
+    }
+    StatusCode status = session.beginScan(scalarTable, scalarCursor);
+    boolean cursorActive = status.isOk();
+    long matchedRows = 0;
+    while (status.isOk()) {
+      status = session.nextScan(scalarCursor, scalarRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (status.isOk()) {
+        status = validateRow(scalarRow.row(), scalarTable);
+      }
+      if (status.isOk()
+          && !matchesScalarPredicates(
+              nested,
+              scalarRow.key(),
+              scalarRow.row(),
+              0,
+              null,
+              nestedMembershipPredicate,
+              nestedMembershipNegated,
+              input,
+              inputCount,
+              inputHasNull)) {
+        continue;
+      }
+      if (!status.isOk()) {
+        break;
+      }
+      matchedRows++;
+      if (resultKind == NESTED_EXISTENCE) {
+        existenceResult = true;
+        break;
+      }
+      if (resultKind == NESTED_SCALAR) {
+        if (matchedRows > 1) {
+          status = StatusCode.CARDINALITY_VIOLATION;
+        } else if (nestedProjection != NULL_PROJECTION
+            && !isNull(scalarRow.row(), scalarTable, nestedProjection)) {
+          scalarResultNull = false;
+          scalarResultValue = readColumn(
+              scalarRow.key(), scalarRow.row(), nestedProjection);
+        }
+      } else if (nestedProjection == NULL_PROJECTION
+          || isNull(scalarRow.row(), scalarTable, nestedProjection)) {
+        membershipHasNull = true;
+      } else if (membershipValueCount >= output.length) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      } else {
+        output[membershipValueCount++] = readColumn(
+            scalarRow.key(), scalarRow.row(), nestedProjection);
+      }
+      if (status.isOk() && matchedRows >= nested.rowLimit()) {
+        break;
+      }
+    }
+    if (cursorActive) {
+      StatusCode close = session.closeScan(scalarCursor);
+      if (close.isOk()) {
+        scalarCursor.reset();
+        scalarRow.reset();
+      }
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    return status;
   }
 
   private StatusCode evaluateScalarPredicate() {

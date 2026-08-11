@@ -385,6 +385,38 @@ final class RiverDriverTest {
           SQLException.class,
           () -> statement.executeQuery(nestedMembershipQuery(33)));
       assertEquals("54001", membershipDepthFailure.getSQLState());
+      try (ResultSet mixedScalar = statement.executeQuery(
+          "SELECT id FROM accounts WHERE id="
+              + "(SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM accounts WHERE id=1) LIMIT 1)")) {
+        assertTrue(mixedScalar.next());
+        assertEquals(1, mixedScalar.getLong(1));
+        assertFalse(mixedScalar.next());
+      }
+      try (ResultSet mixedExistence = statement.executeQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM accounts WHERE id IN "
+              + "(SELECT id FROM accounts WHERE id="
+              + "(SELECT id FROM accounts WHERE id=1))) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(mixedExistence.next());
+          assertEquals(expected, mixedExistence.getLong(1));
+        }
+        assertFalse(mixedExistence.next());
+      }
+      try (ResultSet mixedNull = statement.executeQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM accounts WHERE id IN "
+              + "(SELECT NULL FROM accounts WHERE id=1))")) {
+        assertFalse(mixedNull.next());
+      }
+      SQLException mixedCardinalityFailure = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
+              "SELECT id FROM accounts WHERE id="
+                  + "(SELECT id FROM accounts WHERE region IN "
+                  + "(SELECT id FROM regions))"));
+      assertEquals("21000", mixedCardinalityFailure.getSQLState());
       try (ResultSet exists = statement.executeQuery(
           "SELECT id FROM accounts WHERE EXISTS "
               + "(SELECT id FROM regions WHERE code=7000) ORDER BY id")) {
