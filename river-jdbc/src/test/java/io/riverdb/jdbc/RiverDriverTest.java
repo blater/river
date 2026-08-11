@@ -1125,6 +1125,23 @@ final class RiverDriverTest {
         assertFalse(rows.next());
       }
       try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value BETWEEN -1 AND 1 ORDER BY id")) {
+        for (long expected = 2; expected <= 4; expected++) {
+          assertTrue(rows.next());
+          assertEquals(expected, rows.getLong(1));
+        }
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values "
+              + "WHERE value BETWEEN 1 AND 9223372036854775807 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(4, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
           "SELECT id FROM comparison_values "
               + "WHERE value>=-1 AND value<1 ORDER BY id")) {
         assertTrue(rows.next());
@@ -1147,6 +1164,15 @@ final class RiverDriverTest {
         assertEquals(2, rows.getLong(1));
         assertTrue(rows.next());
         assertEquals(3, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_indexed "
+              + "WHERE value BETWEEN 100 AND 200 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(2, rows.getLong(1));
         assertFalse(rows.next());
       }
       try (ResultSet rows = statement.executeQuery(
@@ -1448,6 +1474,19 @@ final class RiverDriverTest {
         assertEquals(1, result.getLong(1));
         assertTrue(result.next());
         assertEquals(3, result.getLong(1));
+        assertFalse(result.next());
+      }
+    }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        PreparedStatement select = connection.prepareStatement(
+            "SELECT id FROM prepared_values WHERE value BETWEEN ? AND ? ORDER BY id")) {
+      select.setLong(1, 100);
+      select.setLong(2, 200);
+      try (ResultSet result = select.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(1, result.getLong(1));
+        assertTrue(result.next());
+        assertEquals(2, result.getLong(1));
         assertFalse(result.next());
       }
     }

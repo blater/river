@@ -195,6 +195,22 @@ final class SqlParserTest {
         parser.parse("SELECT id FROM accounts WHERE region IN (1,)", command));
     assertEquals(
         StatusCode.OK,
+        parser.parse("SELECT id FROM accounts WHERE region BETWEEN -2 AND 9", command));
+    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
+    assertEquals(-2, command.predicateLowerInclusive(0));
+    assertEquals(10, command.predicateUpperExclusive(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM accounts WHERE region BETWEEN 7 AND 9223372036854775807",
+            command));
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(0));
+    assertEquals(7, command.predicateValue(0));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM accounts WHERE region BETWEEN 9 AND -2", command));
+    assertEquals(
+        StatusCode.OK,
         parser.parse(
             "SELECT region, COUNT(*) FROM accounts "
                 + "WHERE value >= 100 AND value < 300 AND region=7 "

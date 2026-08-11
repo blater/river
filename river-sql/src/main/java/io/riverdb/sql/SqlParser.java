@@ -787,8 +787,12 @@ public final class SqlParser {
       if (nullPredicate) {
         status = requireKeyword(sql, "NULL");
       }
-      SqlComparison comparison = !nullPredicate && status.isOk()
-          ? comparisonOperator(sql) : null;
+      boolean betweenPredicate = !nullPredicate
+          && status.isOk()
+          && consumeKeyword(sql, "BETWEEN");
+      SqlComparison comparison = betweenPredicate
+          ? SqlComparison.HALF_OPEN_RANGE
+          : !nullPredicate && status.isOk() ? comparisonOperator(sql) : null;
       if (!nullPredicate && status.isOk() && comparison == null) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -798,7 +802,26 @@ public final class SqlParser {
       boolean columnEquality = false;
       int membershipCount = 0;
       boolean membershipHasNull = false;
-      if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
+      if (betweenPredicate) {
+        status = number(sql, numberResult);
+        lower = numberResult.value;
+        if (status.isOk()) {
+          status = requireKeyword(sql, "AND");
+        }
+        if (status.isOk()) {
+          status = number(sql, numberResult);
+          upper = numberResult.value;
+        }
+        if (status.isOk() && lower > upper) {
+          status = StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        if (status.isOk() && upper == Long.MAX_VALUE) {
+          comparison = SqlComparison.GREATER_OR_EQUAL;
+          value = lower;
+        } else if (status.isOk()) {
+          upper++;
+        }
+      } else if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
         status = requireCharacter(sql, '(');
         boolean complete = false;
         while (status.isOk() && !complete) {
