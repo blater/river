@@ -386,7 +386,7 @@ final class EmbeddedDatabaseTest {
   }
 
   @Test
-  void checkpointPreservesVersionChainsWhenWholeVacuumIsTooLarge(@TempDir Path root) {
+  void checkpointCompactsVersionChainsAcrossBoundedWalRecords(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
     EmbeddedDatabase database = opened.database();
@@ -413,8 +413,8 @@ final class EmbeddedDatabaseTest {
 
     CheckpointResult checkpoint = new CheckpointResult();
     assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
-    assertEquals(200, checkpoint.rowCount());
-    assertEquals(0, checkpoint.rowsReclaimed());
+    assertEquals(192, checkpoint.rowCount());
+    assertEquals(8, checkpoint.rowsReclaimed());
     assertEquals(true, checkpoint.pageCount() > 63);
     assertEquals(StatusCode.OK, database.close());
 

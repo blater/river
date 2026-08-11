@@ -9,6 +9,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.page.IndexedPageStore;
 import io.riverdb.engine.page.IndexedPageStoreOpenResult;
+import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
@@ -22,7 +23,9 @@ import io.riverdb.tx.api.TransactionState;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -766,6 +769,116 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, table.fetchByKey(202, fetched));
     assertEquals(2021, value(fetched));
     assertEquals(StatusCode.CONFLICT, table.fetchByKey(203, fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void vacuumCompactsMoreThanOneWalPayloadAndRecovers(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    IndexedTransactionSession writer = new IndexedTransactionSession(manager, table, 4096);
+    TransactionOutcome outcome = new TransactionOutcome();
+    ByteBuffer largeRow = ByteBuffer.allocateDirect(4096);
+    for (int batch = 0; batch < 6; batch++) {
+      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+      for (int index = 0; index < 50; index++) {
+        long key = 1000L + batch * 50L + index;
+        largeRow.putLong(0, key);
+        largeRow.position(0);
+        largeRow.limit(largeRow.capacity());
+        assertEquals(StatusCode.OK, writer.insert(key, largeRow));
+      }
+      assertEquals(StatusCode.OK, writer.commit(outcome));
+    }
+    for (int batch = 0; batch < 6; batch++) {
+      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+      for (int index = 0; index < 50; index++) {
+        long key = 1000L + batch * 50L + index;
+        largeRow.putLong(0, key + 10_000);
+        largeRow.position(0);
+        largeRow.limit(largeRow.capacity());
+        assertEquals(StatusCode.OK, writer.update(key, largeRow));
+      }
+      assertEquals(StatusCode.OK, writer.commit(outcome));
+    }
+    assertEquals(600, table.rowCount());
+    assertEquals(300, table.obsoleteVersionCount());
+    assertEquals(
+        true,
+        IndexedPageStore.VACUUM_COMMIT_PAYLOAD_BYTES
+            + 300L * (4096 + 24) > WalRecordCodec.MAX_PAYLOAD_BYTES);
+
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    assertEquals(StatusCode.OK, vacuum.run(outcome));
+    assertEquals(600, vacuum.result().rowsBefore());
+    assertEquals(300, vacuum.result().rowsAfter());
+    assertEquals(300, table.rowCount());
+    assertEquals(0, table.obsoleteVersionCount());
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertEquals(300, table.rowCount());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(1000, fetched));
+    assertEquals(11_000, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(1299, fetched));
+    assertEquals(11_299, value(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void recoveryDiscardsVacuumChunksWithoutCommitMarker(@TempDir Path root) throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    IndexedTransactionSession writer = session(manager, table);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(501, row(5010)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.update(501, row(5011)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    assertEquals(StatusCode.OK, vacuum.run(outcome));
+    long incompleteEnd = wal.durableEnd()
+        - WalRecordCodec.encodedBytes(IndexedPageStore.VACUUM_COMMIT_PAYLOAD_BYTES);
+    try (FileChannel channel = FileChannel.open(
+        root.resolve(LocalWal.FILE_NAME), StandardOpenOption.WRITE)) {
+      channel.truncate(incompleteEnd);
+      channel.force(true);
+    }
+
+    assertEquals(StatusCode.OK, directory.advanceGeneration());
+    assertEquals(StatusCode.OK, directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    table = tableResult.table();
+    assertEquals(2, table.rowCount());
+    assertEquals(1, table.obsoleteVersionCount());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(501, fetched));
+    assertEquals(5011, value(fetched));
     close(table, wal, directory);
   }
 
