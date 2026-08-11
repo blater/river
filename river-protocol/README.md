@@ -26,6 +26,11 @@ server stores only the token hash; proof buffers and channel-binding material
 are erased after authentication. Tokens are therefore required to be random,
 high-entropy credentials rather than human passwords.
 
+The production server admits connections into a fixed number of preallocated
+slots. Each admitted connection owns its frame buffers and a virtual thread;
+an idle connection therefore cannot serialize other sessions. Connections
+above the configured cap are closed before a database session is created.
+
 The only production listeners remain deliberately bound to the operating
 system's loopback address. Non-loopback service remains unavailable until
-authorization and connection admission are implemented.
+authorization is implemented.

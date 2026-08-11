@@ -33,7 +33,7 @@ public final class TokenAuthenticator {
     return status.isOk() ? result.complete(authenticator) : status;
   }
 
-  public StatusCode verify(
+  public synchronized StatusCode verify(
       ProtocolFrame frame,
       long challengeHigh,
       long challengeLow,

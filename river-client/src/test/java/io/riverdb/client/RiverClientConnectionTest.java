@@ -117,6 +117,7 @@ final class RiverClientConnectionTest {
         session.execute("INSERT INTO ledger VALUES (9, 900)", command));
 
     assertEquals(StatusCode.OK, server.close());
+    assertEquals(0, server.activeConnections());
     assertEquals(
         StatusCode.IO_FAILURE,
         session.execute("INSERT INTO ledger VALUES (10, 1000)", command));
@@ -137,9 +138,67 @@ final class RiverClientConnectionTest {
     assertEquals(StatusCode.OK, engine.close());
   }
 
+  @Test
+  void twoRemoteSessionsRemainUsableTogether(@TempDir Path root) {
+    DatabaseOpenResult engineResult = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, engineResult));
+    RiverDatabase engine = engineResult.database();
+    LoopbackRiverServer server = start(engine, 2);
+    RiverClientConnection first = connect(server);
+    RiverClientConnection second = connect(server);
+    SessionOpenResult firstResult = new SessionOpenResult();
+    SessionOpenResult secondResult = new SessionOpenResult();
+    assertEquals(StatusCode.OK, first.createSession(firstResult));
+    assertEquals(StatusCode.OK, second.createSession(secondResult));
+    RiverSession firstSession = firstResult.session();
+    RiverSession secondSession = secondResult.session();
+    CommandResult command = new CommandResult();
+
+    assertEquals(
+        StatusCode.OK,
+        firstSession.execute("CREATE TABLE concurrent_sessions", command));
+    assertEquals(
+        StatusCode.OK,
+        firstSession.execute(
+            "INSERT INTO concurrent_sessions VALUES (1, 100)", command));
+    assertEquals(
+        StatusCode.OK,
+        secondSession.execute(
+            "INSERT INTO concurrent_sessions VALUES (2, 200)", command));
+    assertEquals(
+        StatusCode.OK,
+        firstSession.execute(
+            "SELECT value FROM concurrent_sessions WHERE key=2", command));
+    assertEquals(200, command.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        secondSession.execute(
+            "SELECT value FROM concurrent_sessions WHERE key=1", command));
+    assertEquals(100, command.valueAt(0));
+    assertEquals(2, server.activeConnections());
+
+    assertEquals(StatusCode.OK, firstSession.close());
+    assertEquals(StatusCode.OK, secondSession.close());
+    assertEquals(StatusCode.OK, first.close());
+    assertEquals(StatusCode.OK, second.close());
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(0, server.activeConnections());
+    assertEquals(StatusCode.OK, engine.close());
+  }
+
   private static LoopbackRiverServer start(RiverDatabase database) {
+    return start(database, LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS);
+  }
+
+  private static LoopbackRiverServer start(
+      RiverDatabase database,
+      int maximumConnections) {
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, result));
+    assertEquals(
+        StatusCode.OK,
+        LoopbackRiverServer.start(database, 0, maximumConnections, result));
     return result.server();
   }
 

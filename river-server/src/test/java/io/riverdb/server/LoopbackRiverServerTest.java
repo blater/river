@@ -168,11 +168,107 @@ final class LoopbackRiverServerTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void idleConnectionDoesNotBlockUsefulSql(@TempDir Path root) throws IOException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database, 2);
+
+    try (Socket idle = connect(server.port())) {
+      assertTrue(idle.isConnected());
+      awaitConnections(server, 1);
+      try (TestClient client = new TestClient(server.port())) {
+        assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
+        assertStatus(StatusCode.OK, client.send(ProtocolMessageType.OPEN_SESSION));
+        assertStatus(
+            StatusCode.OK,
+            client.send(ProtocolMessageType.EXECUTE, "CREATE TABLE live"));
+        assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_SESSION));
+      }
+      awaitConnections(server, 1);
+      assertEquals(2, server.acceptedConnections());
+      assertEquals(0, server.rejectedConnections());
+    }
+    awaitConnections(server, 0);
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void connectionCapRejectsExcessWithoutDisturbingIncumbent(@TempDir Path root)
+      throws IOException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database, 1);
+
+    try (Socket incumbent = connect(server.port());
+        Socket excess = connect(server.port())) {
+      incumbent.setSoTimeout(2_000);
+      excess.setSoTimeout(2_000);
+      awaitConnections(server, 1);
+      awaitRejectedConnections(server, 1);
+      assertEquals(1, server.maximumConnections());
+      assertEquals(1, server.activeConnections());
+      assertEquals(1, server.acceptedConnections());
+      assertEquals(StatusCode.RESOURCE_EXHAUSTED, server.lastStatus());
+
+      boolean disconnected;
+      try {
+        disconnected = excess.getInputStream().read() < 0;
+      } catch (IOException closed) {
+        disconnected = true;
+      }
+      assertTrue(disconnected);
+
+      TestClient incumbentClient = new TestClient(incumbent);
+      assertStatus(StatusCode.OK, incumbentClient.send(ProtocolMessageType.HELLO));
+      assertStatus(StatusCode.OK, incumbentClient.send(ProtocolMessageType.OPEN_SESSION));
+      assertStatus(StatusCode.OK, incumbentClient.send(ProtocolMessageType.CLOSE_SESSION));
+    }
+    awaitConnections(server, 0);
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static LoopbackRiverServer start(RiverDatabase database) {
+    return start(database, LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS);
+  }
+
+  private static LoopbackRiverServer start(
+      RiverDatabase database,
+      int maximumConnections) {
     LoopbackServerOpenResult started = new LoopbackServerOpenResult();
-    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, started));
+    assertEquals(
+        StatusCode.OK,
+        LoopbackRiverServer.start(database, 0, maximumConnections, started));
     assertTrue(InetAddress.getLoopbackAddress().isLoopbackAddress());
     return started.server();
+  }
+
+  private static void awaitConnections(
+      LoopbackRiverServer server,
+      int expected) {
+    long deadline = System.nanoTime() + 2_000_000_000L;
+    while (server.activeConnections() != expected && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(expected, server.activeConnections());
+  }
+
+  private static void awaitRejectedConnections(
+      LoopbackRiverServer server,
+      long expected) {
+    long deadline = System.nanoTime() + 2_000_000_000L;
+    while (server.rejectedConnections() != expected && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(expected, server.rejectedConnections());
   }
 
   private static void assertStatus(StatusCode expected, ProtocolResponse response) {
@@ -213,7 +309,11 @@ final class LoopbackRiverServerTest {
     private long requestId = 1;
 
     private TestClient(int port) throws IOException {
-      socket = connect(port);
+      this(connect(port));
+    }
+
+    private TestClient(Socket connection) throws IOException {
+      socket = connection;
       input = socket.getInputStream();
       output = socket.getOutputStream();
     }
