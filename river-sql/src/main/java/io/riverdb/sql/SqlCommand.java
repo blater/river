@@ -434,6 +434,10 @@ public final class SqlCommand {
         ? columnAliases[index] : columnNames[index];
   }
 
+  public SqlIdentifier columnAlias(int index) {
+    return index >= 0 && index < columnCount ? columnAliases[index] : null;
+  }
+
   public boolean isNullProjection(int index) {
     return index >= 0 && index < columnCount && nullProjections[index];
   }

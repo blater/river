@@ -20,7 +20,7 @@ final class StatusDetailTest {
       boolean expectedRetryable = switch (code) {
         case RETRY, CONFLICT -> true;
         case OK, FENCED, CLOSED, CANCELLED, INVALID_EXTERNAL_INPUT,
-            CARDINALITY_VIOLATION, NOT_OWNER,
+            CARDINALITY_VIOLATION, NUMERIC_VALUE_OUT_OF_RANGE, NOT_OWNER,
             RESOURCE_EXHAUSTED, QUERY_TOO_COMPLEX, TIMEOUT, IO_FAILURE, CORRUPTION,
             INVARIANT_BROKEN -> false;
       };

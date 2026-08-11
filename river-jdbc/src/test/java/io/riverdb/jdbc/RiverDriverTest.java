@@ -1151,6 +1151,47 @@ final class RiverDriverTest {
         assertEquals(2, groups.getLong(2));
         assertFalse(groups.next());
       }
+      try (ResultSet sum = statement.executeQuery(
+          "SELECT SUM(value) AS total FROM comparison_values")) {
+        assertEquals("total", sum.getMetaData().getColumnLabel(1));
+        assertTrue(sum.next());
+        assertEquals(-1, sum.getLong(1));
+        assertFalse(sum.wasNull());
+        assertFalse(sum.next());
+      }
+      try (ResultSet sum = statement.executeQuery(
+          "SELECT SUM(value) FROM comparison_values WHERE id>=2 AND id<5")) {
+        assertEquals("sum", sum.getMetaData().getColumnLabel(1));
+        assertTrue(sum.next());
+        assertEquals(0, sum.getLong(1));
+        assertFalse(sum.wasNull());
+        assertFalse(sum.next());
+      }
+      try (ResultSet sum = statement.executeQuery(
+          "SELECT SUM(value) FROM comparison_values WHERE id=6")) {
+        assertTrue(sum.next());
+        assertEquals(0, sum.getLong(1));
+        assertTrue(sum.wasNull());
+        assertNull(sum.getObject(1));
+        assertFalse(sum.next());
+      }
+      try (ResultSet sum = statement.executeQuery(
+          "SELECT SUM(value) FROM comparison_values WHERE id=99")) {
+        assertTrue(sum.next());
+        assertNull(sum.getObject(1));
+        assertTrue(sum.wasNull());
+        assertFalse(sum.next());
+      }
+      SQLException positiveOverflow = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
+              "SELECT SUM(value) FROM comparison_values WHERE value>0"));
+      assertEquals("22003", positiveOverflow.getSQLState());
+      SQLException negativeOverflow = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
+              "SELECT SUM(value) FROM comparison_values WHERE value<0"));
+      assertEquals("22003", negativeOverflow.getSQLState());
       assertEquals(0, statement.executeUpdate(
           "CREATE TABLE comparison_kinds "
               + "(id BIGINT PRIMARY KEY, label BIGINT)"));

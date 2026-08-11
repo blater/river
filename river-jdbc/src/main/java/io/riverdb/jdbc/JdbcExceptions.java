@@ -53,6 +53,7 @@ final class JdbcExceptions {
       case TIMEOUT -> "HYT00";
       case CANCELLED -> "57014";
       case CARDINALITY_VIOLATION -> "21000";
+      case NUMERIC_VALUE_OUT_OF_RANGE -> "22003";
       case INVALID_EXTERNAL_INPUT -> "22000";
       case OK -> "00000";
     };

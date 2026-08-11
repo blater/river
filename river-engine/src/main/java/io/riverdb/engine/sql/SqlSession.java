@@ -31,6 +31,7 @@ import java.util.zip.CRC32C;
 /** Executes the first SQL point-statement subset through real catalog and transactions. */
 public final class SqlSession {
   private static final String COUNT_COLUMN_NAME = "count";
+  private static final String SUM_COLUMN_NAME = "sum";
   private static final String NULL_COLUMN_NAME = "null";
   private static final int NULL_PROJECTION = Integer.MIN_VALUE;
   private static final int NESTED_SCALAR = 1;
@@ -506,12 +507,15 @@ public final class SqlSession {
     recursiveNestedChain = false;
     recursiveRootCorrelated = false;
     StatusCode status = parser.parseQuery(sql, query, command);
-    if (status.isOk() && command.type() == SqlCommandType.COUNT) {
+    if (status.isOk()
+        && (command.type() == SqlCommandType.COUNT
+            || command.type() == SqlCommandType.SUM)) {
       status = execute(sql, aggregateExecution);
       if (status.isOk()) {
         status = cursor.claimAggregate(
             this,
             aggregateExecution.value(),
+            aggregateExecution.isNull(0),
             aggregateExecution.transactionActive(),
             aggregateExecution.commitSequence());
       }
@@ -790,7 +794,7 @@ public final class SqlSession {
         return StatusCode.CONFLICT;
       }
       projectedValues[0] = cursor.aggregateValue();
-      result.set(0, projectedValues, 0, 1);
+      result.set(0, projectedValues, cursor.aggregateNull() ? 1 : 0, 1);
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -926,7 +930,14 @@ public final class SqlSession {
       return null;
     }
     if (cursor.aggregate()) {
-      return index == 0 ? COUNT_COLUMN_NAME : null;
+      if (index != 0) {
+        return null;
+      }
+      if (command.type() == SqlCommandType.SUM) {
+        SqlIdentifier alias = command.columnAlias(0);
+        return alias != null && alias.length() > 0 ? alias : SUM_COLUMN_NAME;
+      }
+      return COUNT_COLUMN_NAME;
     }
     if (cursor.groupCount()) {
       return index == 0
@@ -1075,8 +1086,12 @@ public final class SqlSession {
       }
       return status;
     }
-    if (command.type() == SqlCommandType.COUNT) {
-      long count = 0;
+    if (command.type() == SqlCommandType.COUNT
+        || command.type() == SqlCommandType.SUM) {
+      boolean sum = command.type() == SqlCommandType.SUM;
+      long aggregate = 0;
+      long aggregateHigh = 0;
+      boolean aggregatePresent = false;
       boolean filtered = predicateCount > 0;
       boolean bounded = accessPredicate >= 0;
       boolean equality = bounded && accessEquality();
@@ -1117,17 +1132,28 @@ public final class SqlSession {
           status = StatusCode.OK;
           break;
         }
-        if (status.isOk() && filtered) {
+        if (status.isOk() && (filtered || sum)) {
           status = validateRow(source);
         }
         if (status.isOk() && filtered && !matchesPredicates(primaryKey, source)) {
           continue;
         }
         if (status.isOk()) {
-          if (count == Long.MAX_VALUE) {
+          if (sum) {
+            int column = projectedColumns[0];
+            if (!isNull(source, table, column)) {
+              long value = readColumn(primaryKey, source, column);
+              long previous = aggregate;
+              aggregate += value;
+              aggregateHigh += (value < 0 ? -1 : 0)
+                  + (Long.compareUnsigned(aggregate, previous) < 0 ? 1 : 0);
+              aggregatePresent = true;
+            }
+          } else if (aggregate == Long.MAX_VALUE) {
             status = StatusCode.RESOURCE_EXHAUSTED;
           } else {
-            count++;
+            aggregate++;
+            aggregatePresent = true;
           }
         }
       }
@@ -1140,9 +1166,16 @@ public final class SqlSession {
           status = close;
         }
       }
+      if (status.isOk()
+          && sum
+          && aggregatePresent
+          && aggregateHigh != (aggregate < 0 ? -1 : 0)) {
+        status = StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
+      }
       if (status.isOk()) {
-        projectedValues[0] = count;
-        result.setProjection(0, projectedValues, 0, 1, 0);
+        projectedValues[0] = aggregate;
+        result.setProjection(
+            0, projectedValues, sum && !aggregatePresent ? 1 : 0, 1, 0);
       }
       return status;
     }
@@ -1190,7 +1223,8 @@ public final class SqlSession {
 
   private boolean isSelect() {
     return command.type() == SqlCommandType.SELECT
-        || command.type() == SqlCommandType.COUNT;
+        || command.type() == SqlCommandType.COUNT
+        || command.type() == SqlCommandType.SUM;
   }
 
   private StatusCode bindDataCommand() {
@@ -1201,6 +1235,10 @@ public final class SqlSession {
     projectedColumnCount = 0;
     if (command.type() == SqlCommandType.COUNT) {
       return bindPredicates(false);
+    }
+    if (command.type() == SqlCommandType.SUM) {
+      StatusCode status = bindProjections();
+      return status.isOk() ? bindPredicates(false) : status;
     }
     if (command.type() == SqlCommandType.INSERT) {
       return bindInsertColumns();

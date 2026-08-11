@@ -22,6 +22,7 @@ public final class SqlScanCursor {
   private boolean groupInputExhausted;
   private boolean distinctValueAvailable;
   private boolean aggregateTransactionActive;
+  private boolean aggregateNull;
   private long aggregateValue;
   private long aggregateCommitSequence;
   private long groupLookaheadValue;
@@ -57,6 +58,7 @@ public final class SqlScanCursor {
     groupInputExhausted = false;
     distinctValueAvailable = false;
     aggregateTransactionActive = false;
+    aggregateNull = false;
     aggregateValue = 0;
     aggregateCommitSequence = 0;
     groupLookaheadValue = 0;
@@ -147,6 +149,7 @@ public final class SqlScanCursor {
   StatusCode claimAggregate(
       SqlSession session,
       long value,
+      boolean nullValue,
       boolean transactionActive,
       long commitSequence) {
     if (active || session == null || commitSequence < 0) {
@@ -155,6 +158,7 @@ public final class SqlScanCursor {
     owner = session;
     aggregate = true;
     aggregateValue = value;
+    aggregateNull = nullValue;
     aggregateTransactionActive = transactionActive;
     aggregateCommitSequence = commitSequence;
     projectedColumnCount = 1;
@@ -371,6 +375,10 @@ public final class SqlScanCursor {
 
   long aggregateValue() {
     return aggregateValue;
+  }
+
+  boolean aggregateNull() {
+    return aggregateNull;
   }
 
   boolean aggregateTransactionActive() {

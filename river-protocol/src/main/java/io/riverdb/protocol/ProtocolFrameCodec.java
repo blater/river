@@ -625,6 +625,7 @@ public final class ProtocolFrameCodec {
       case 2000 -> StatusCode.CANCELLED;
       case 3000 -> StatusCode.INVALID_EXTERNAL_INPUT;
       case 3001 -> StatusCode.CARDINALITY_VIOLATION;
+      case 3002 -> StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
       case 4000 -> StatusCode.CONFLICT;
       case 4001 -> StatusCode.NOT_OWNER;
       case 5000 -> StatusCode.RESOURCE_EXHAUSTED;

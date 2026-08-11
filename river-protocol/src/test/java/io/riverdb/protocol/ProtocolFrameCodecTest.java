@@ -112,6 +112,13 @@ final class ProtocolFrameCodecTest {
 
     assertEquals(
         StatusCode.OK,
+        codec.encodeQueryOpenResponse(
+            bytes, 12, StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, null));
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, response.status());
+
+    assertEquals(
+        StatusCode.OK,
         codec.encodeQueryOpenResponse(bytes, 13, StatusCode.OK, query));
     bytes.put(ProtocolFrameCodec.HEADER_BYTES + 64, (byte) 0);
     assertEquals(

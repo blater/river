@@ -120,6 +120,28 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
+            "SELECT SUM(a.balance) AS total FROM accounts a "
+                + "WHERE a.region>=7 AND a.region<9",
+            command));
+    assertEquals(SqlCommandType.SUM, command.type());
+    assertName("accounts", command.tableName());
+    assertName("a", command.tableAlias());
+    assertName("a", command.columnTableName(0));
+    assertName("balance", command.columnName(0));
+    assertName("total", command.columnAlias(0));
+    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT SUM(*) FROM accounts", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT SUM(balance, region) FROM accounts", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT SUM(balance AS total) FROM accounts", command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
             "SELECT region, COUNT(*) FROM accounts "
                 + "WHERE value >= 100 AND value < 300 AND region=7 "
                 + "GROUP BY region ORDER BY region ASC",

@@ -7,6 +7,7 @@ public enum SqlCommandType {
   INSERT,
   SELECT,
   COUNT,
+  SUM,
   GROUP_COUNT,
   DISTINCT_SCAN,
   JOIN_SCAN,
