@@ -178,6 +178,110 @@ public final class RelationalDatabase {
         indexName, tableName, columnName, Integer.MAX_VALUE, false);
   }
 
+  public synchronized StatusCode dropValueIndex(
+      CharSequence indexName,
+      CharSequence tableName) {
+    return dropValueIndex(indexName, tableName, Integer.MAX_VALUE);
+  }
+
+  synchronized StatusCode dropValueIndex(
+      CharSequence indexName,
+      CharSequence tableName,
+      int maximumCleanupBatches) {
+    if (!RelationalKey.validName(indexName)
+        || !RelationalKey.validName(tableName)
+        || maximumCleanupBatches <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.beginPersistentSchemaChange();
+    }
+    if (status.isOk()) {
+      status = session.resolveTable(tableName, indexedTable);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    }
+    if (status.isOk()) {
+      status = CatalogRecord.decodeIndex(
+          catalogRow, catalogScratch, indexName, indexRecord);
+    }
+    int indexTableId = status.isOk() ? indexRecord.indexTableId() : 0;
+    int indexSlot = -1;
+    for (int slot = 0; status.isOk() && slot < indexedTable.uniqueIndexCount(); slot++) {
+      if (indexedTable.uniqueIndexTableId(slot) == indexTableId) {
+        indexSlot = slot;
+        break;
+      }
+    }
+    if (status.isOk()
+        && (indexRecord.tableId() != indexedTable.tableId() || indexSlot < 0)) {
+      status = StatusCode.CONFLICT;
+    }
+    if (status.isOk()
+        && indexRecord.state() != indexedTable.uniqueIndexState(indexSlot)) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()) {
+      indexStorageTable.set(this, indexTableId, 0, TableDefinition.INDEX_NONE);
+    }
+    boolean alreadyDropping = status.isOk()
+        && indexRecord.state() == TableDefinition.INDEX_DROPPING;
+    if (status.isOk() && !alreadyDropping) {
+      status = RelationalKey.catalogTableKey(tableName, catalogKey);
+    }
+    if (status.isOk() && !alreadyDropping) {
+      CatalogRecord.encodeTable(
+          catalogOutput,
+          indexedTable.tableId(),
+          indexTableId,
+          TableDefinition.INDEX_DROPPING,
+          indexedTable.uniqueIndexColumn(indexSlot),
+          tableName,
+          indexedTable,
+          indexedTable.indexIsUnique(indexSlot));
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    if (status.isOk() && !alreadyDropping) {
+      status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    }
+    if (status.isOk() && !alreadyDropping) {
+      CatalogRecord.encodeIndex(
+          catalogOutput,
+          indexedTable.tableId(),
+          indexTableId,
+          TableDefinition.INDEX_DROPPING,
+          indexName,
+          indexedTable.indexIsUnique(indexSlot));
+      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode terminal = status.isOk() && !alreadyDropping
+          ? session.commitBuildPhase(outcome) : session.abortBuildPhase(outcome);
+      if (status.isOk()) {
+        status = terminal;
+      }
+    }
+    if (status.isOk() && !alreadyDropping) {
+      status = publishDroppingSchema(session);
+    }
+    if (!status.isOk()) {
+      session.releasePersistentSchemaChange();
+      return status;
+    }
+    return cleanupUniqueValueIndex(
+        session, indexName, tableName, outcome, maximumCleanupBatches);
+  }
+
   synchronized StatusCode createUniqueValueIndex(
       CharSequence indexName,
       CharSequence tableName,
@@ -259,7 +363,7 @@ public final class RelationalDatabase {
     }
     if (!status.isOk() && buildReserved) {
       StatusCode cleanup = cleanupUniqueValueIndex(
-          session, indexName, tableName, outcome);
+          session, indexName, tableName, outcome, Integer.MAX_VALUE);
       return cleanup.isOk() ? status : cleanup;
     }
     session.releasePersistentSchemaChange();
@@ -509,10 +613,12 @@ public final class RelationalDatabase {
       RelationalSession session,
       CharSequence indexName,
       CharSequence tableName,
-      TransactionOutcome outcome) {
+      TransactionOutcome outcome,
+      int maximumCleanupBatches) {
     StatusCode status = StatusCode.OK;
     boolean complete = false;
-    while (status.isOk() && !complete) {
+    int batches = 0;
+    while (status.isOk() && !complete && batches < maximumCleanupBatches) {
       status = session.begin(IsolationLevel.REPEATABLE_READ);
       if (status.isOk()) {
         status = session.beginScan(indexStorageTable, indexBuildCursor);
@@ -550,6 +656,11 @@ public final class RelationalDatabase {
         }
       }
       complete = status.isOk() && exhausted;
+      batches++;
+    }
+    if (status.isOk() && !complete) {
+      session.releasePersistentSchemaChange();
+      return StatusCode.RETRY;
     }
     if (status.isOk()) {
       status = session.begin(IsolationLevel.SERIALIZABLE);
@@ -846,6 +957,17 @@ public final class RelationalDatabase {
         indexedTable.uniqueValueIndexTableId(),
         0,
         TableDefinition.INDEX_NONE);
+    return StatusCode.OK;
+  }
+
+  private synchronized StatusCode publishDroppingSchema(RelationalSession owner) {
+    if (schemaChangeOwner != owner) {
+      return StatusCode.NOT_OWNER;
+    }
+    int indexTableId = indexStorageTable.tableId();
+    schemaVersion++;
+    indexStorageTable.set(
+        this, indexTableId, 0, TableDefinition.INDEX_NONE);
     return StatusCode.OK;
   }
 

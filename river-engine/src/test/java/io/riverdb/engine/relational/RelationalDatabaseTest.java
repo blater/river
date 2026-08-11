@@ -208,6 +208,56 @@ final class RelationalDatabaseTest {
   }
 
   @Test
+  void resumesBoundedDroppingIndexCleanupAfterReopen(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    TableDefinition events = new TableDefinition();
+    assertEquals(StatusCode.OK, database.createTable("drop_events", events));
+    RelationalSessionOpenResult sessions = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    RelationalSession session = sessions.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    for (int first = 0; first < 300; first += 40) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      for (int key = first; key < Math.min(first + 40, 300); key++) {
+        assertEquals(
+            StatusCode.OK,
+            session.insertLong(events, key, key * 10L, row(key * 10L)));
+      }
+      assertEquals(StatusCode.OK, session.commit(outcome));
+    }
+    assertEquals(
+        StatusCode.OK,
+        database.createUniqueValueIndex("drop_events_value", "drop_events"));
+    assertEquals(
+        StatusCode.RETRY,
+        database.dropValueIndex("drop_events_value", "drop_events", 1));
+    assertEquals(StatusCode.OK, database.createSession(sessions));
+    session = sessions.session();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    TableDefinition dropping = new TableDefinition();
+    assertEquals(StatusCode.OK, session.resolveTable("drop_events", dropping));
+    assertEquals(false, dropping.hasUniqueValueIndex());
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    assertEquals(
+        StatusCode.OK,
+        database.dropValueIndex("drop_events_value", "drop_events"));
+    assertEquals(
+        StatusCode.CONFLICT,
+        database.dropValueIndex("drop_events_value", "drop_events"));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void resumesDuplicateIndexBuildWithoutRepeatingEntries(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(

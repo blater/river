@@ -9,6 +9,7 @@ public final class TableDefinition {
   static final int INDEX_NONE = 0;
   static final int INDEX_BUILDING = 1;
   static final int INDEX_READY = 2;
+  static final int INDEX_DROPPING = 3;
 
   private RelationalDatabase owner;
   private int tableId;
@@ -391,7 +392,7 @@ public final class TableDefinition {
 
   StatusCode upsertIndex(int tableId, int state, int column, boolean unique) {
     if (tableId <= 0
-        || (state != INDEX_BUILDING && state != INDEX_READY)
+        || (state != INDEX_BUILDING && state != INDEX_READY && state != INDEX_DROPPING)
         || column <= 0
         || column >= columnCount) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

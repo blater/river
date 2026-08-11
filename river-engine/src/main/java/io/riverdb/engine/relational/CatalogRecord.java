@@ -331,7 +331,8 @@ final class CatalogRecord {
           || indexTableId > RelationalKey.MAXIMUM_TABLE_ID
           || indexTableId == scratch.getInt(12)
           || (indexState != TableDefinition.INDEX_BUILDING
-              && indexState != TableDefinition.INDEX_READY)
+              && indexState != TableDefinition.INDEX_READY
+              && indexState != TableDefinition.INDEX_DROPPING)
           || indexColumn <= 0
           || indexColumn >= columnCount
           || (unique != 0 && unique != 1)
@@ -377,7 +378,8 @@ final class CatalogRecord {
         || scratch.getInt(16) <= 0
         || scratch.getInt(16) > RelationalKey.MAXIMUM_TABLE_ID
         || (state != TableDefinition.INDEX_BUILDING
-            && state != TableDefinition.INDEX_READY)
+            && state != TableDefinition.INDEX_READY
+            && state != TableDefinition.INDEX_DROPPING)
         || (unique != 0 && unique != 1)
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;

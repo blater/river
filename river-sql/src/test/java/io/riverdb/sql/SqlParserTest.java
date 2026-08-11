@@ -114,6 +114,12 @@ final class SqlParserTest {
     assertName("accounts_region", command.indexName());
     assertName("accounts", command.tableName());
     assertName("region", command.firstColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("DROP INDEX accounts_region ON accounts", command));
+    assertEquals(SqlCommandType.DROP_INDEX, command.type());
+    assertName("accounts_region", command.indexName());
+    assertName("accounts", command.tableName());
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());

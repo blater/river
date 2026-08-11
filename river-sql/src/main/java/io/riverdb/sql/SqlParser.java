@@ -450,6 +450,18 @@ public final class SqlParser {
     } else if (consumeKeyword(sql, "CHECKPOINT")) {
       type = SqlCommandType.CHECKPOINT;
       status = StatusCode.OK;
+    } else if (consumeKeyword(sql, "DROP")) {
+      type = SqlCommandType.DROP_INDEX;
+      status = requireKeyword(sql, "INDEX");
+      if (status.isOk()) {
+        status = identifier(sql, result.writableIndexName());
+      }
+      if (status.isOk()) {
+        status = requireKeyword(sql, "ON");
+      }
+      if (status.isOk()) {
+        status = identifier(sql, result.writableTableName());
+      }
     } else if (consumeKeyword(sql, "CREATE")) {
       if (consumeKeyword(sql, "TABLE")) {
         type = SqlCommandType.CREATE_TABLE;

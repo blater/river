@@ -412,6 +412,16 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.DROP_INDEX) {
+      if (transactionActive) {
+        return StatusCode.CONFLICT;
+      }
+      status = database.dropValueIndex(command.indexName(), command.tableName());
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CHECKPOINT) {
       if (transactionActive) {
         return StatusCode.CONFLICT;
