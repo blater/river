@@ -1494,7 +1494,8 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.beginScan(
             "SELECT events.id, categories.code FROM events "
-                + "JOIN categories ON events.category=categories.id LIMIT 2",
+                + "JOIN categories ON events.category=categories.id "
+                + "WHERE events.id >= 1 AND events.id < 5 LIMIT 2",
             joined));
     long[] joinedKeys = {1, 2};
     long[] joinedCodes = {1000, 1000};
@@ -1503,6 +1504,19 @@ final class SqlSessionTest {
       assertEquals(joinedKeys[index], joinedRow.valueAt(0));
       assertEquals(joinedCodes[index], joinedRow.valueAt(1));
     }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(joined, joinedRow));
+    assertEquals(StatusCode.OK, session.closeScan(joined, result));
+    assertEquals(StatusCode.OK, joined.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT events.id, categories.code FROM events "
+                + "JOIN categories ON events.category=categories.id "
+                + "WHERE events.category=20",
+            joined));
+    assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
+    assertEquals(3, joinedRow.valueAt(0));
+    assertEquals(2000, joinedRow.valueAt(1));
     assertEquals(StatusCode.CONFLICT, session.nextScan(joined, joinedRow));
     assertEquals(StatusCode.OK, session.closeScan(joined, result));
     assertEquals(

@@ -13,6 +13,7 @@ public final class SqlCommand {
   private final SqlIdentifier savepointName = new SqlIdentifier();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
+  private final SqlIdentifier predicateTableName = new SqlIdentifier();
   private final SqlIdentifier predicateColumnName = new SqlIdentifier();
   private final SqlIdentifier orderColumnName = new SqlIdentifier();
   private final long[] insertValues =
@@ -54,6 +55,7 @@ public final class SqlCommand {
     for (SqlIdentifier columnTableName : columnTableNames) {
       columnTableName.reset();
     }
+    predicateTableName.reset();
     predicateColumnName.reset();
     orderColumnName.reset();
     type = null;
@@ -171,6 +173,10 @@ public final class SqlCommand {
     return predicateColumnName;
   }
 
+  SqlIdentifier writablePredicateTableName() {
+    return predicateTableName;
+  }
+
   SqlIdentifier writableOrderColumnName() {
     return orderColumnName;
   }
@@ -225,6 +231,10 @@ public final class SqlCommand {
 
   public SqlIdentifier predicateColumnName() {
     return predicateColumnName;
+  }
+
+  public SqlIdentifier predicateTableName() {
+    return predicateTableName;
   }
 
   public SqlIdentifier orderColumnName() {

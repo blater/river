@@ -146,6 +146,11 @@ public final class SqlScanCursor {
       boolean implicit,
       int outerColumn,
       int innerColumn,
+      boolean indexedOuter,
+      int scanFilterColumn,
+      long lowerInclusive,
+      long upperExclusive,
+      boolean equality,
       int[] projections,
       int projectionCount,
       long rowLimit) {
@@ -162,8 +167,13 @@ public final class SqlScanCursor {
     owner = session;
     implicitTransaction = implicit;
     join = true;
+    valueIndex = indexedOuter;
     joinOuterColumn = outerColumn;
     joinInnerColumn = innerColumn;
+    filterColumn = scanFilterColumn;
+    filterLowerInclusive = lowerInclusive;
+    filterUpperExclusive = upperExclusive;
+    equalityFilter = equality;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {

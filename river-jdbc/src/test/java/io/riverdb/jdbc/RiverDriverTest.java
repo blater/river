@@ -106,7 +106,8 @@ final class RiverDriverTest {
       }
       try (ResultSet joined = statement.executeQuery(
           "SELECT accounts.id, regions.code FROM accounts "
-              + "JOIN regions ON accounts.region=regions.id LIMIT 2")) {
+              + "JOIN regions ON accounts.region=regions.id "
+              + "WHERE accounts.id >= 1 AND accounts.id < 4 LIMIT 2")) {
         assertEquals("id", joined.getMetaData().getColumnLabel(1));
         assertEquals("code", joined.getMetaData().getColumnLabel(2));
         for (long expected = 1; expected <= 2; expected++) {

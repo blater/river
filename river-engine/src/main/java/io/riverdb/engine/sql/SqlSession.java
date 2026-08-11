@@ -44,6 +44,7 @@ public final class SqlSession {
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
+  private final ValueIndexLookupResult joinOuterIndexed = new ValueIndexLookupResult();
   private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(
@@ -388,8 +389,34 @@ public final class SqlSession {
       if (status.isOk()) {
         status = bindJoin();
       }
+      boolean predicate = status.isOk() && command.hasPredicate();
+      boolean equality = predicate && command.isEqualityPredicate();
+      boolean indexedOuter = predicate
+          && predicateColumn > 0
+          && table.hasIndexOn(predicateColumn);
+      boolean primaryRange = predicate && predicateColumn == 0;
+      if (status.isOk()
+          && predicate
+          && !equality
+          && command.scanUpperExclusive() <= command.scanLowerInclusive()) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (status.isOk()
+          && predicate
+          && equality
+          && (indexedOuter || primaryRange)
+          && command.key() == Long.MAX_VALUE) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      long lower = equality ? command.key() : command.scanLowerInclusive();
+      long upper = equality ? command.key() + 1 : command.scanUpperExclusive();
       if (status.isOk()) {
-        status = session.beginScan(table, cursor.relational());
+        status = indexedOuter
+            ? session.beginValueScan(
+                table, predicateColumn, lower, upper, cursor.relational())
+            : primaryRange
+                ? session.beginScan(table, lower, upper, cursor.relational())
+                : session.beginScan(table, cursor.relational());
       }
       if (status.isOk()) {
         status = cursor.claimJoin(
@@ -397,6 +424,11 @@ public final class SqlSession {
             implicit,
             table.findColumn(command.joinOuterColumnName()),
             joinTable.findColumn(command.joinInnerColumnName()),
+            indexedOuter,
+            predicate && !indexedOuter && !primaryRange ? predicateColumn : -1,
+            lower,
+            equality ? 0 : upper,
+            equality,
             projectedColumns,
             projectedColumnCount,
             command.rowLimit());
@@ -941,6 +973,16 @@ public final class SqlSession {
       projectedColumns[index] = descriptor;
     }
     projectedColumnCount = command.columnCount();
+    predicateColumn = -1;
+    if (command.hasPredicate()) {
+      if (!sameName(command.predicateTableName(), command.tableName())) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      predicateColumn = table.findColumn(command.predicateColumnName());
+      if (predicateColumn < 0) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+    }
     return StatusCode.OK;
   }
 
@@ -1050,12 +1092,26 @@ public final class SqlSession {
 
   private StatusCode nextJoin(SqlScanCursor cursor, SqlScanRowResult result) {
     while (true) {
-      StatusCode status = session.nextScan(cursor.relational(), aggregateRow);
+      StatusCode status;
+      long outerKey;
+      HeapRowResult outerRow;
+      if (cursor.valueIndex()) {
+        status = session.nextValueScan(
+            table, cursor.relational(), aggregateRow, joinOuterIndexed);
+        outerKey = joinOuterIndexed.key();
+        outerRow = joinOuterIndexed.row();
+      } else {
+        status = session.nextScan(cursor.relational(), aggregateRow);
+        outerKey = aggregateRow.key();
+        outerRow = aggregateRow.row();
+      }
       if (!status.isOk()) {
         return status;
       }
-      long outerKey = aggregateRow.key();
-      HeapRowResult outerRow = aggregateRow.row();
+      if (cursor.filtersRows()
+          && !cursor.matches(readColumn(outerKey, outerRow, cursor.filterColumn()))) {
+        continue;
+      }
       long joinValue = readColumn(outerKey, outerRow, cursor.joinOuterColumn());
       long innerKey = joinValue;
       HeapRowResult innerRow = fetched;

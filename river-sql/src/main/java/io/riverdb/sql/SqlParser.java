@@ -256,6 +256,51 @@ public final class SqlParser {
             status = identifier(sql, result.writableJoinInnerColumnName());
           }
         }
+        if (status.isOk()
+            && type == SqlCommandType.JOIN_SCAN
+            && consumeKeyword(sql, "WHERE")) {
+          status = identifier(sql, result.writablePredicateTableName());
+          if (status.isOk()) {
+            status = requireCharacter(sql, '.');
+          }
+          if (status.isOk()) {
+            status = identifier(sql, result.writablePredicateColumnName());
+          }
+          if (status.isOk() && consumeCharacter(sql, '=')) {
+            equalityPredicate = true;
+            status = number(sql, numberResult);
+            key = numberResult.value;
+          } else if (status.isOk()) {
+            boundedScan = true;
+            status = requireCharacter(sql, '>');
+            if (status.isOk()) {
+              status = requireCharacter(sql, '=');
+            }
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+              scanLower = numberResult.value;
+            }
+            if (status.isOk()) {
+              status = requireKeyword(sql, "AND");
+            }
+            if (status.isOk()) {
+              status = matchingIdentifier(sql, result.predicateTableName());
+            }
+            if (status.isOk()) {
+              status = requireCharacter(sql, '.');
+            }
+            if (status.isOk()) {
+              status = matchingIdentifier(sql, result.predicateColumnName());
+            }
+            if (status.isOk()) {
+              status = requireCharacter(sql, '<');
+            }
+            if (status.isOk()) {
+              status = number(sql, numberResult);
+              scanUpper = numberResult.value;
+            }
+          }
+        }
         if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
           status = requireKeyword(sql, "GROUP");
           if (status.isOk()) {
@@ -435,6 +480,7 @@ public final class SqlParser {
       result.set(type, key, value);
     }
     if (type == SqlCommandType.COUNT
+        || type == SqlCommandType.JOIN_SCAN
         || type == SqlCommandType.UPDATE
         || type == SqlCommandType.DELETE) {
       result.setPredicate(

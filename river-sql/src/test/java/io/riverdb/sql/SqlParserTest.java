@@ -132,9 +132,14 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse(
             "SELECT accounts.key, regions.code FROM accounts "
-                + "JOIN regions ON accounts.region=regions.id LIMIT 0",
+                + "JOIN regions ON accounts.region=regions.id "
+                + "WHERE accounts.region >= 7 AND accounts.region < 9 LIMIT 0",
             command));
     assertEquals(0, command.rowLimit());
+    assertName("accounts", command.predicateTableName());
+    assertName("region", command.predicateColumnName());
+    assertEquals(7, command.scanLowerInclusive());
+    assertEquals(9, command.scanUpperExclusive());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key FROM accounts LIMIT -1", command));
