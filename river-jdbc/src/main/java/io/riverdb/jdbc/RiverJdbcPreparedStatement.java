@@ -21,11 +21,20 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   private final String[] textParameters;
   private final byte[] parameterTypes;
   private final char[] rendered;
+  private final boolean returnGeneratedKeys;
 
   RiverJdbcPreparedStatement(
       RiverJdbcConnection owner,
       RiverSession session,
       String sql) throws SQLException {
+    this(owner, session, sql, false);
+  }
+
+  RiverJdbcPreparedStatement(
+      RiverJdbcConnection owner,
+      RiverSession session,
+      String sql,
+      boolean generatedKeys) throws SQLException {
     super(owner, session);
     if (sql == null || sql.isEmpty()) {
       throw JdbcExceptions.invalid("prepared SQL must not be empty");
@@ -46,6 +55,7 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
     textParameters = new String[count];
     parameterTypes = new byte[count];
     rendered = new char[capacity];
+    returnGeneratedKeys = generatedKeys;
   }
 
   @Override
@@ -55,12 +65,16 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
 
   @Override
   public int executeUpdate() throws SQLException {
-    return super.executeUpdate(render());
+    return returnGeneratedKeys
+        ? super.executeUpdate(render(), RETURN_GENERATED_KEYS)
+        : super.executeUpdate(render());
   }
 
   @Override
   public boolean execute() throws SQLException {
-    return super.execute(render());
+    return returnGeneratedKeys
+        ? super.execute(render(), RETURN_GENERATED_KEYS)
+        : super.execute(render());
   }
 
   @Override

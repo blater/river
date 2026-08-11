@@ -68,11 +68,22 @@ final class RiverJdbcConnection extends AbstractConnection {
 
   @Override
   public PreparedStatement prepareStatement(String sql) throws SQLException {
+    return prepareStatement(sql, Statement.NO_GENERATED_KEYS);
+  }
+
+  @Override
+  public PreparedStatement prepareStatement(String sql, int generatedKeys)
+      throws SQLException {
     requireOpen();
+    if (generatedKeys != Statement.NO_GENERATED_KEYS
+        && generatedKeys != Statement.RETURN_GENERATED_KEYS) {
+      throw JdbcExceptions.unsupported();
+    }
     if (statement != null) {
       throw JdbcExceptions.failure(StatusCode.CONFLICT, "prepare statement");
     }
-    statement = new RiverJdbcPreparedStatement(this, session, sql);
+    statement = new RiverJdbcPreparedStatement(
+        this, session, sql, generatedKeys == Statement.RETURN_GENERATED_KEYS);
     return (PreparedStatement) statement;
   }
 

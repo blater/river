@@ -1698,6 +1698,18 @@ final class RiverDriverTest {
         assertFalse(keys.next());
       }
     }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        PreparedStatement insert = connection.prepareStatement(
+            "INSERT INTO generated_events(payload) VALUES (?)",
+            Statement.RETURN_GENERATED_KEYS)) {
+      insert.setLong(1, 40);
+      assertEquals(1, insert.executeUpdate());
+      try (ResultSet keys = insert.getGeneratedKeys()) {
+        assertTrue(keys.next());
+        assertEquals(4, keys.getLong(1));
+        assertFalse(keys.next());
+      }
+    }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
   }
