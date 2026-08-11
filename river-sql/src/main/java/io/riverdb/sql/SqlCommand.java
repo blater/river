@@ -17,6 +17,7 @@ public final class SqlCommand {
   private final SqlIdentifier joinOuterColumnName = new SqlIdentifier();
   private final SqlIdentifier joinInnerColumnName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
+  private final SqlIdentifier renamedIndexName = new SqlIdentifier();
   private final SqlIdentifier savepointName = new SqlIdentifier();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
@@ -105,6 +106,7 @@ public final class SqlCommand {
     joinOuterColumnName.reset();
     joinInnerColumnName.reset();
     indexName.reset();
+    renamedIndexName.reset();
     savepointName.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
@@ -462,6 +464,10 @@ public final class SqlCommand {
     return indexName;
   }
 
+  SqlIdentifier writableRenamedIndexName() {
+    return renamedIndexName;
+  }
+
   SqlIdentifier writableSavepointName() {
     return savepointName;
   }
@@ -568,6 +574,10 @@ public final class SqlCommand {
 
   public SqlIdentifier indexName() {
     return indexName;
+  }
+
+  public SqlIdentifier renamedIndexName() {
+    return renamedIndexName;
   }
 
   public SqlIdentifier savepointName() {

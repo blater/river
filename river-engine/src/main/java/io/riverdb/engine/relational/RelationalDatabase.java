@@ -218,6 +218,30 @@ public final class RelationalDatabase {
     return status;
   }
 
+  public synchronized StatusCode renameIndex(
+      CharSequence currentName,
+      CharSequence renamedName) {
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.renameIndex(currentName, renamedName);
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    return status;
+  }
+
   synchronized StatusCode renameTable(
       RelationalSession session,
       CharSequence currentName,
@@ -283,6 +307,49 @@ public final class RelationalDatabase {
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
     return status;
+  }
+
+  synchronized StatusCode renameIndex(
+      RelationalSession session,
+      CharSequence currentName,
+      CharSequence renamedName) {
+    StatusCode status = RelationalKey.catalogTableKey(currentName, catalogKey);
+    if (status.isOk()) {
+      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    }
+    if (status.isOk()) {
+      status = CatalogRecord.decodeIndex(
+          catalogRow, catalogScratch, currentName, indexRecord);
+    }
+    if (status.isOk() && indexRecord.state() != TableDefinition.INDEX_READY) {
+      status = StatusCode.RETRY;
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(renamedName, catalogKey);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+      if (status.isOk()) {
+        status = StatusCode.CONFLICT;
+      } else if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+      }
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeIndex(
+          catalogOutput,
+          indexRecord.tableId(),
+          indexRecord.indexTableId(),
+          indexRecord.state(),
+          renamedName,
+          indexRecord.isUnique());
+      status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(currentName, catalogKey);
+    }
+    return status.isOk()
+        ? session.indexedSession().delete(catalogKey.key()) : status;
   }
 
   synchronized StatusCode dropTable(

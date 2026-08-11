@@ -136,6 +136,12 @@ final class SqlParserTest {
     assertName("customers", command.tableName());
     assertName("region", command.firstColumnName());
     assertName("area", command.secondColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("ALTER INDEX customers_region RENAME TO customers_area", command));
+    assertEquals(SqlCommandType.ALTER_INDEX_RENAME, command.type());
+    assertName("customers_region", command.indexName());
+    assertName("customers_area", command.renamedIndexName());
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());

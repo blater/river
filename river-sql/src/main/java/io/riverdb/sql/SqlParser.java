@@ -451,27 +451,41 @@ public final class SqlParser {
       type = SqlCommandType.CHECKPOINT;
       status = StatusCode.OK;
     } else if (consumeKeyword(sql, "ALTER")) {
-      type = SqlCommandType.ALTER_TABLE_RENAME;
-      status = requireKeyword(sql, "TABLE");
-      if (status.isOk()) {
-        status = identifier(sql, result.writableTableName());
-      }
-      if (status.isOk()) {
-        status = requireKeyword(sql, "RENAME");
-      }
-      if (status.isOk() && consumeKeyword(sql, "COLUMN")) {
-        type = SqlCommandType.ALTER_TABLE_RENAME_COLUMN;
-        status = identifier(sql, result.writableNextColumnName());
+      if (consumeKeyword(sql, "INDEX")) {
+        type = SqlCommandType.ALTER_INDEX_RENAME;
+        status = identifier(sql, result.writableIndexName());
+        if (status.isOk()) {
+          status = requireKeyword(sql, "RENAME");
+        }
         if (status.isOk()) {
           status = requireKeyword(sql, "TO");
         }
         if (status.isOk()) {
-          status = identifier(sql, result.writableNextColumnName());
+          status = identifier(sql, result.writableRenamedIndexName());
         }
-      } else if (status.isOk()) {
-        status = requireKeyword(sql, "TO");
+      } else {
+        type = SqlCommandType.ALTER_TABLE_RENAME;
+        status = requireKeyword(sql, "TABLE");
         if (status.isOk()) {
-          status = identifier(sql, result.writableRenamedTableName());
+          status = identifier(sql, result.writableTableName());
+        }
+        if (status.isOk()) {
+          status = requireKeyword(sql, "RENAME");
+        }
+        if (status.isOk() && consumeKeyword(sql, "COLUMN")) {
+          type = SqlCommandType.ALTER_TABLE_RENAME_COLUMN;
+          status = identifier(sql, result.writableNextColumnName());
+          if (status.isOk()) {
+            status = requireKeyword(sql, "TO");
+          }
+          if (status.isOk()) {
+            status = identifier(sql, result.writableNextColumnName());
+          }
+        } else if (status.isOk()) {
+          status = requireKeyword(sql, "TO");
+          if (status.isOk()) {
+            status = identifier(sql, result.writableRenamedTableName());
+          }
         }
       }
     } else if (consumeKeyword(sql, "DROP")) {

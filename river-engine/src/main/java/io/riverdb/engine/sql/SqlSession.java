@@ -557,6 +557,42 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.ALTER_INDEX_RENAME) {
+      if (!transactionActive) {
+        status = database.renameIndex(
+            command.indexName(), command.renamedIndexName());
+        if (status.isOk()) {
+          result.setUpdate(0, 0);
+        }
+        return status;
+      }
+      status = session.createSavepoint(statementSavepoint);
+      if (status.isOk()) {
+        status = beginStatement();
+      }
+      if (status.isOk()) {
+        status = session.renameIndex(
+            command.indexName(), command.renamedIndexName());
+      }
+      status = completeStatement(status);
+      if (!status.isOk() && statementSavepoint.isActive()) {
+        StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
+        if (!rollback.isOk()) {
+          status = rollback;
+        }
+      }
+      if (statementSavepoint.isActive()) {
+        StatusCode release = session.releaseSavepoint(statementSavepoint);
+        if (!release.isOk()) {
+          status = release;
+        }
+      }
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+        result.setTransaction(true, session.visibleCommitSequence());
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CHECKPOINT) {
       if (transactionActive) {
         return StatusCode.CONFLICT;
