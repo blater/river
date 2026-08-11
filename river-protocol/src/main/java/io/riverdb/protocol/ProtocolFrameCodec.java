@@ -614,6 +614,7 @@ public final class ProtocolFrameCodec {
       case 4000 -> StatusCode.CONFLICT;
       case 4001 -> StatusCode.NOT_OWNER;
       case 5000 -> StatusCode.RESOURCE_EXHAUSTED;
+      case 5001 -> StatusCode.QUERY_TOO_COMPLEX;
       case 6000 -> StatusCode.TIMEOUT;
       case 7000 -> StatusCode.IO_FAILURE;
       case 8000 -> StatusCode.CORRUPTION;

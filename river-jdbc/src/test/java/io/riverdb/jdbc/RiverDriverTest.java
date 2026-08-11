@@ -91,6 +91,28 @@ final class RiverDriverTest {
         }
         assertFalse(ordered.next());
       }
+      try (ResultSet derived = statement.executeQuery(
+          "SELECT d.id, d.balance FROM "
+              + "(SELECT id, balance, region FROM accounts WHERE accounts.region=7) d "
+              + "WHERE d.balance >= 50 AND d.balance < 350 ORDER BY balance")) {
+        assertTrue(derived.next());
+        assertEquals(1, derived.getLong("id"));
+        assertEquals(100, derived.getLong("balance"));
+        assertTrue(derived.next());
+        assertEquals(2, derived.getLong("id"));
+        assertEquals(200, derived.getLong("balance"));
+        assertFalse(derived.next());
+      }
+      String nested = "SELECT id FROM accounts";
+      for (int depth = 1; depth < 32; depth++) {
+        nested = "SELECT d" + depth + ".id FROM (" + nested + ") d" + depth;
+      }
+      nested = "SELECT overflow.id FROM (" + nested + ") overflow";
+      String tooDeep = nested;
+      SQLException depthFailure = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(tooDeep));
+      assertEquals("54001", depthFailure.getSQLState());
       assertEquals(
           0,
           statement.executeUpdate(

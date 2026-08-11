@@ -261,6 +261,7 @@ val indexedScanResultDescriptor = "Lio/riverdb/engine/table/IndexedScanResult;"
 val relationalScanCursorDescriptor = "Lio/riverdb/engine/relational/RelationalScanCursor;"
 val relationalScanResultDescriptor = "Lio/riverdb/engine/relational/RelationalScanResult;"
 val sqlCommandDescriptor = "Lio/riverdb/sql/SqlCommand;"
+val sqlQueryDescriptor = "Lio/riverdb/sql/SqlQuery;"
 val sqlExecutionResultDescriptor = "Lio/riverdb/engine/sql/SqlExecutionResult;"
 val sqlScanCursorDescriptor = "Lio/riverdb/engine/sql/SqlScanCursor;"
 val sqlScanRowResultDescriptor = "Lio/riverdb/engine/sql/SqlScanRowResult;"
@@ -881,6 +882,11 @@ val liveHotPathMethods = setOf(
     "io.riverdb.sql.SqlParser",
     "parse",
     "(Ljava/lang/String;$sqlCommandDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.sql.SqlParser",
+    "parseQuery",
+    "(Ljava/lang/String;$sqlQueryDescriptor$sqlCommandDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.sql.SqlSession",

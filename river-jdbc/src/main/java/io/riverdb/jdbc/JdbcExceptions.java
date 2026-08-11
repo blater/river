@@ -49,6 +49,7 @@ final class JdbcExceptions {
       case CLOSED, FENCED, IO_FAILURE, CORRUPTION, INVARIANT_BROKEN -> "08006";
       case CONFLICT, NOT_OWNER, RETRY -> "40001";
       case RESOURCE_EXHAUSTED -> "53000";
+      case QUERY_TOO_COMPLEX -> "54001";
       case TIMEOUT -> "HYT00";
       case CANCELLED -> "57014";
       case INVALID_EXTERNAL_INPUT -> "22000";

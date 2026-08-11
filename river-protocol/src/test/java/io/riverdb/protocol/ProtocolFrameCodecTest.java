@@ -88,7 +88,14 @@ final class ProtocolFrameCodecTest {
 
     assertEquals(
         StatusCode.OK,
-        codec.encodeQueryOpenResponse(bytes, 11, StatusCode.OK, query));
+        codec.encodeQueryOpenResponse(
+            bytes, 11, StatusCode.QUERY_TOO_COMPLEX, null));
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(StatusCode.QUERY_TOO_COMPLEX, response.status());
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeQueryOpenResponse(bytes, 12, StatusCode.OK, query));
     bytes.put(ProtocolFrameCodec.HEADER_BYTES + 56, (byte) 0);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,

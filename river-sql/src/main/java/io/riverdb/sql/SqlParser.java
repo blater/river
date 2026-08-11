@@ -7,9 +7,108 @@ public final class SqlParser {
   private final LongResult numberResult = new LongResult();
   private final LongRow rowResult = new LongRow();
   private final SqlIdentifier identifierScratch = new SqlIdentifier();
+  private final SqlSourceView sourceView = new SqlSourceView();
   private int offset;
 
   public StatusCode parse(String sql, SqlCommand result) {
+    return parseText(sql, result);
+  }
+
+  public StatusCode parseQuery(
+      String sql,
+      SqlQuery query,
+      SqlCommand result) {
+    if (sql == null || query == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    query.reset();
+    int derived = findDerivedSource(sql, 0, sql.length());
+    if (derived < 0) {
+      return parseText(sql, result);
+    }
+    StatusCode status = parseDerivedBlocks(sql, 0, sql.length(), query);
+    return status.isOk() ? query.compileDerived(result) : status;
+  }
+
+  private StatusCode parseDerivedBlocks(
+      String sql,
+      int start,
+      int end,
+      SqlQuery query) {
+    SqlCommand block = query.nextBlock();
+    if (block == null) {
+      return StatusCode.QUERY_TOO_COMPLEX;
+    }
+    int open = findDerivedSource(sql, start, end);
+    if (open < 0) {
+      sourceView.set(sql, start, end, end, end);
+      return parseText(sourceView, block);
+    }
+    int close = matchingCloseParenthesis(sql, open, end);
+    if (close < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    sourceView.set(sql, start, open, close + 1, end);
+    StatusCode status = parseText(sourceView, block);
+    return status.isOk()
+        ? parseDerivedBlocks(sql, open + 1, close, query) : status;
+  }
+
+  private static int findDerivedSource(String sql, int start, int end) {
+    int depth = 0;
+    for (int index = start; index < end; index++) {
+      char character = sql.charAt(index);
+      if (character == '(') {
+        depth++;
+      } else if (character == ')') {
+        if (depth <= 0) {
+          return -1;
+        }
+        depth--;
+      } else if (depth == 0
+          && matchesKeyword(sql, index, end, "FROM")) {
+        int source = index + 4;
+        while (source < end && Character.isWhitespace(sql.charAt(source))) {
+          source++;
+        }
+        return source < end && sql.charAt(source) == '(' ? source : -1;
+      }
+    }
+    return -1;
+  }
+
+  private static int matchingCloseParenthesis(String sql, int open, int end) {
+    int depth = 0;
+    for (int index = open; index < end; index++) {
+      char character = sql.charAt(index);
+      if (character == '(') {
+        depth++;
+      } else if (character == ')' && --depth == 0) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
+  private static boolean matchesKeyword(
+      String sql,
+      int start,
+      int end,
+      String keyword) {
+    if (start > 0 && identifierPart(sql.charAt(start - 1))
+        || end - start < keyword.length()) {
+      return false;
+    }
+    for (int index = 0; index < keyword.length(); index++) {
+      if (upper(sql.charAt(start + index)) != keyword.charAt(index)) {
+        return false;
+      }
+    }
+    int keywordEnd = start + keyword.length();
+    return keywordEnd >= end || !identifierPart(sql.charAt(keywordEnd));
+  }
+
+  private StatusCode parseText(CharSequence sql, SqlCommand result) {
     if (sql == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -338,7 +437,7 @@ public final class SqlParser {
   }
 
   private StatusCode predicates(
-      String sql,
+      CharSequence sql,
       SqlCommand result,
       boolean qualified) {
     StatusCode status = StatusCode.OK;
@@ -348,14 +447,19 @@ public final class SqlParser {
       if (table == null || column == null) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      if (qualified) {
-        status = identifier(sql, table);
-        if (status.isOk()) {
-          status = requireCharacter(sql, '.');
-        }
-      }
+      identifierScratch.reset();
       if (status.isOk()) {
+        status = identifier(sql, identifierScratch);
+      }
+      boolean predicateQualified = status.isOk() && consumeCharacter(sql, '.');
+      if (status.isOk() && qualified && !predicateQualified) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (status.isOk() && predicateQualified) {
+        table.copyFrom(identifierScratch);
         status = identifier(sql, column);
+      } else if (status.isOk()) {
+        column.copyFrom(identifierScratch);
       }
       boolean equality = status.isOk() && consumeCharacter(sql, '=');
       long value = 0;
@@ -376,7 +480,7 @@ public final class SqlParser {
         if (status.isOk()) {
           status = requireKeyword(sql, "AND");
         }
-        if (status.isOk() && qualified) {
+        if (status.isOk() && predicateQualified) {
           status = matchingIdentifier(sql, table);
           if (status.isOk()) {
             status = requireCharacter(sql, '.');
@@ -403,7 +507,7 @@ public final class SqlParser {
     return status;
   }
 
-  private StatusCode row(String sql, LongRow result) {
+  private StatusCode row(CharSequence sql, LongRow result) {
     result.count = 0;
     StatusCode status = requireCharacter(sql, '(');
     while (status.isOk()) {
@@ -423,12 +527,12 @@ public final class SqlParser {
         ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
-  private StatusCode columnIdentifier(String sql, SqlCommand result) {
+  private StatusCode columnIdentifier(CharSequence sql, SqlCommand result) {
     SqlIdentifier column = result.writableNextColumnName();
     return column == null ? StatusCode.RESOURCE_EXHAUSTED : identifier(sql, column);
   }
 
-  private StatusCode selectColumnIdentifier(String sql, SqlCommand result) {
+  private StatusCode selectColumnIdentifier(CharSequence sql, SqlCommand result) {
     identifierScratch.reset();
     StatusCode status = identifier(sql, identifierScratch);
     SqlIdentifier column = status.isOk() ? result.writableNextColumnName() : null;
@@ -446,7 +550,7 @@ public final class SqlParser {
     return StatusCode.OK;
   }
 
-  private StatusCode identifier(String sql, SqlIdentifier result) {
+  private StatusCode identifier(CharSequence sql, SqlIdentifier result) {
     skipSpaces(sql);
     if (offset >= sql.length() || !identifierStart(sql.charAt(offset))) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -460,7 +564,7 @@ public final class SqlParser {
     return StatusCode.OK;
   }
 
-  private StatusCode matchingIdentifier(String sql, CharSequence expected) {
+  private StatusCode matchingIdentifier(CharSequence sql, CharSequence expected) {
     SqlIdentifier actual = rowResult.identifier;
     actual.reset();
     StatusCode status = identifier(sql, actual);
@@ -481,7 +585,7 @@ public final class SqlParser {
     }
   }
 
-  private StatusCode number(String sql, LongResult result) {
+  private StatusCode number(CharSequence sql, LongResult result) {
     skipSpaces(sql);
     if (offset >= sql.length()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -511,11 +615,11 @@ public final class SqlParser {
     return StatusCode.OK;
   }
 
-  private StatusCode requireKeyword(String sql, String keyword) {
+  private StatusCode requireKeyword(CharSequence sql, String keyword) {
     return consumeKeyword(sql, keyword) ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
-  private boolean consumeKeyword(String sql, String keyword) {
+  private boolean consumeKeyword(CharSequence sql, String keyword) {
     skipSpaces(sql);
     if (sql.length() - offset < keyword.length()) {
       return false;
@@ -533,7 +637,7 @@ public final class SqlParser {
     return true;
   }
 
-  private StatusCode requireCharacter(String sql, char expected) {
+  private StatusCode requireCharacter(CharSequence sql, char expected) {
     skipSpaces(sql);
     if (offset >= sql.length() || sql.charAt(offset) != expected) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -542,7 +646,7 @@ public final class SqlParser {
     return StatusCode.OK;
   }
 
-  private boolean consumeCharacter(String sql, char expected) {
+  private boolean consumeCharacter(CharSequence sql, char expected) {
     skipSpaces(sql);
     if (offset >= sql.length() || sql.charAt(offset) != expected) {
       return false;
@@ -551,7 +655,7 @@ public final class SqlParser {
     return true;
   }
 
-  private boolean finish(String sql) {
+  private boolean finish(CharSequence sql) {
     skipSpaces(sql);
     if (offset < sql.length() && sql.charAt(offset) == ';') {
       offset++;
@@ -560,7 +664,7 @@ public final class SqlParser {
     return offset == sql.length();
   }
 
-  private void skipSpaces(String sql) {
+  private void skipSpaces(CharSequence sql) {
     while (offset < sql.length() && Character.isWhitespace(sql.charAt(offset))) {
       offset++;
     }
@@ -596,5 +700,46 @@ public final class SqlParser {
     private final long[] values = new long[SqlCommand.MAXIMUM_COLUMNS];
     private final SqlIdentifier identifier = new SqlIdentifier();
     private int count;
+  }
+
+  private static final class SqlSourceView implements CharSequence {
+    private String source;
+    private int firstStart;
+    private int firstLength;
+    private int secondStart;
+    private int secondLength;
+
+    void set(
+        String text,
+        int firstFrom,
+        int firstTo,
+        int secondFrom,
+        int secondTo) {
+      source = text;
+      firstStart = firstFrom;
+      firstLength = firstTo - firstFrom;
+      secondStart = secondFrom;
+      secondLength = secondTo - secondFrom;
+    }
+
+    @Override
+    public int length() {
+      return firstLength + secondLength;
+    }
+
+    @Override
+    public char charAt(int index) {
+      if (index < 0 || index >= length()) {
+        throw new IndexOutOfBoundsException(index);
+      }
+      return index < firstLength
+          ? source.charAt(firstStart + index)
+          : source.charAt(secondStart + index - firstLength);
+    }
+
+    @Override
+    public CharSequence subSequence(int start, int end) {
+      throw new UnsupportedOperationException();
+    }
   }
 }

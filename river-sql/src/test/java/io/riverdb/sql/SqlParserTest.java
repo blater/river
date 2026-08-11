@@ -335,6 +335,64 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesAndCompilesBoundedDerivedQueryBlocks() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d.id FROM "
+                + "(SELECT id, region FROM accounts WHERE accounts.region=7) d "
+                + "WHERE d.id >= 1 AND d.id < 5 ORDER BY region LIMIT 2",
+            query,
+            command));
+    assertEquals(2, query.blockCount());
+    assertName("accounts", command.tableName());
+    assertName("id", command.firstColumnName());
+    assertEquals(2, command.predicateCount());
+    assertName("region", command.predicateColumnName(0));
+    assertEquals(7, command.predicateValue(0));
+    assertName("id", command.predicateColumnName(1));
+    assertEquals(1, command.predicateLowerInclusive(1));
+    assertEquals(5, command.predicateUpperExclusive(1));
+    assertName("region", command.orderColumnName());
+    assertEquals(2, command.rowLimit());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(nestedQuery(32), query, command));
+    assertEquals(32, query.blockCount());
+    assertName("accounts", command.tableName());
+    assertEquals(
+        StatusCode.QUERY_TOO_COMPLEX,
+        parser.parseQuery(nestedQuery(33), query, command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT d.id FROM (SELECT id FROM accounts LIMIT 1) d",
+            query,
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT wrong.id FROM (SELECT id FROM accounts) d",
+            query,
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT d.region FROM (SELECT id FROM accounts) d",
+            query,
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT d.id FROM (SELECT other.id FROM accounts) d",
+            query,
+            command));
+  }
+
+  @Test
   void warmedParseReusesCommandAndParserState() {
     java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
     Assumptions.assumeTrue(standard instanceof ThreadMXBean);
@@ -343,20 +401,37 @@ final class SqlParserTest {
     bean.setThreadAllocatedMemoryEnabled(true);
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
+    SqlQuery query = new SqlQuery();
     for (int index = 0; index < 1_000; index++) {
-      parser.parse(
-          "UPDATE accounts SET value=11 WHERE key=7 AND region=3", command);
+      parser.parseQuery(
+          "SELECT d.key FROM "
+              + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
+              + "WHERE d.key=7",
+          query,
+          command);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 1_000; index++) {
       assertEquals(
           StatusCode.OK,
-          parser.parse(
-              "UPDATE accounts SET value=11 WHERE key=7 AND region=3", command));
+          parser.parseQuery(
+              "SELECT d.key FROM "
+                  + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
+                  + "WHERE d.key=7",
+              query,
+              command));
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 256, "warmed SQL parse allocated bytes: " + allocated);
+  }
+
+  private static String nestedQuery(int blocks) {
+    String query = "SELECT id FROM accounts";
+    for (int depth = 1; depth < blocks; depth++) {
+      query = "SELECT d" + depth + ".id FROM (" + query + ") d" + depth;
+    }
+    return query;
   }
 
   private static void assertName(String expected, SqlIdentifier actual) {

@@ -9,6 +9,7 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlQuery;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -1481,6 +1482,41 @@ final class SqlSessionTest {
     }
     assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
     assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT d.id, d.amount FROM "
+                + "(SELECT id, amount, category FROM events "
+                + "WHERE events.category=10) d "
+                + "WHERE d.amount >= 150 AND d.amount < 450 "
+                + "ORDER BY amount LIMIT 2",
+            unindexedOrder));
+    assertEquals(StatusCode.OK, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(2, orderedRow.valueAt(0));
+    assertEquals(200, orderedRow.valueAt(1));
+    assertEquals(StatusCode.OK, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(4, orderedRow.valueAt(0));
+    assertEquals(400, orderedRow.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    String nested = "SELECT id FROM events";
+    for (int depth = 1; depth < SqlQuery.MAXIMUM_QUERY_BLOCKS; depth++) {
+      nested = "SELECT d" + depth + ".id FROM (" + nested + ") d" + depth;
+    }
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(StatusCode.OK, session.beginScan(nested, unindexedOrder));
+    int nestedRows = 0;
+    while (session.nextScan(unindexedOrder, orderedRow).isOk()) {
+      nestedRows++;
+    }
+    assertEquals(5, nestedRows);
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    nested = "SELECT overflow.id FROM (" + nested + ") overflow";
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.QUERY_TOO_COMPLEX,
+        session.beginScan(nested, unindexedOrder));
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE INDEX events_category ON events(category)", result));

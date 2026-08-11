@@ -14,6 +14,7 @@ public enum StatusCode {
   CONFLICT(4000, StatusFamily.CONFLICT, true, false),
   NOT_OWNER(4001, StatusFamily.CONFLICT, false, false),
   RESOURCE_EXHAUSTED(5000, StatusFamily.RESOURCE_EXHAUSTED, false, false),
+  QUERY_TOO_COMPLEX(5001, StatusFamily.RESOURCE_EXHAUSTED, false, false),
   TIMEOUT(6000, StatusFamily.TIMEOUT, false, false),
   IO_FAILURE(7000, StatusFamily.IO_FAILURE, false, false),
   CORRUPTION(8000, StatusFamily.CORRUPTION, false, true),

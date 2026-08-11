@@ -15,6 +15,7 @@ import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlIdentifier;
 import io.riverdb.sql.SqlParser;
+import io.riverdb.sql.SqlQuery;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -38,6 +39,7 @@ public final class SqlSession {
   private final RelationalSession session;
   private final SqlParser parser = new SqlParser();
   private final SqlCommand command = new SqlCommand();
+  private final SqlQuery query = new SqlQuery();
   private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
   private final TableDefinition table = new TableDefinition();
   private final TableDefinition joinTable = new TableDefinition();
@@ -360,7 +362,7 @@ public final class SqlSession {
     if (scanActive) {
       return StatusCode.CONFLICT;
     }
-    StatusCode status = parser.parse(sql, command);
+    StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk() && command.type() == SqlCommandType.COUNT) {
       status = execute(sql, aggregateExecution);
       if (status.isOk()) {
@@ -1115,7 +1117,7 @@ public final class SqlSession {
     predicateColumn = -1;
     int accessScore = -1;
     for (int index = 0; index < predicateCount; index++) {
-      if (qualified
+      if ((qualified || command.predicateTableName(index).length() > 0)
           && !sameName(command.predicateTableName(index), command.tableName())) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }

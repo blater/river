@@ -20,7 +20,8 @@ final class StatusDetailTest {
       boolean expectedRetryable = switch (code) {
         case RETRY, CONFLICT -> true;
         case OK, FENCED, CLOSED, CANCELLED, INVALID_EXTERNAL_INPUT, NOT_OWNER,
-            RESOURCE_EXHAUSTED, TIMEOUT, IO_FAILURE, CORRUPTION, INVARIANT_BROKEN -> false;
+            RESOURCE_EXHAUSTED, QUERY_TOO_COMPLEX, TIMEOUT, IO_FAILURE, CORRUPTION,
+            INVARIANT_BROKEN -> false;
       };
       assertEquals(expectedRetryable, code.isRetryable(), code.name());
     }

@@ -127,7 +127,10 @@ final class SqlSessionAllocationTest {
       SqlExecutionResult result) {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
-        "SELECT id, balance FROM t WHERE region=7 ORDER BY balance", cursor).ordinal();
+        "SELECT d.id, d.balance FROM "
+            + "(SELECT id, balance, region FROM t WHERE t.region=7) d "
+            + "ORDER BY balance",
+        cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
