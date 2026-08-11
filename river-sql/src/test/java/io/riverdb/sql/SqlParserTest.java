@@ -192,6 +192,26 @@ final class SqlParserTest {
     assertEquals(SqlComparison.GREATER_OR_EQUAL, command.columnCheckComparison(1));
     assertEquals(-100, command.columnCheckValue(1));
     assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE contacts "
+                + "(id BIGINT PRIMARY KEY, email BIGINT UNIQUE, alias VARCHAR(7) UNIQUE)",
+            command));
+    assertEquals(true, command.columnIsUnique(1));
+    assertEquals(true, command.columnIsUnique(2));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE duplicate_unique "
+                + "(id BIGINT PRIMARY KEY, value BIGINT UNIQUE UNIQUE)",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("DROP INDEX _river_unique_1_1 ON contacts", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE TABLE _river_reserved (id BIGINT PRIMARY KEY, value BIGINT)", command));
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse(
             "CREATE TABLE wrong_check "

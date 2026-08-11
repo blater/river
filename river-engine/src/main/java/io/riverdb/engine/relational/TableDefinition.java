@@ -17,6 +17,7 @@ public final class TableDefinition {
   private final int[] uniqueIndexStates = new int[MAXIMUM_INDEXES];
   private final int[] uniqueIndexColumns = new int[MAXIMUM_INDEXES];
   private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
+  private final boolean[] constraintIndexes = new boolean[MAXIMUM_INDEXES];
   private final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -48,6 +49,7 @@ public final class TableDefinition {
       uniqueIndexStates[index] = INDEX_NONE;
       uniqueIndexColumns[index] = 0;
       uniqueIndexes[index] = false;
+      constraintIndexes[index] = false;
     }
     uniqueIndexCount = 0;
     keyColumnName.reset();
@@ -409,6 +411,10 @@ public final class TableDefinition {
     return slot >= 0 && slot < uniqueIndexCount && uniqueIndexes[slot];
   }
 
+  boolean indexIsConstraint(int slot) {
+    return slot >= 0 && slot < uniqueIndexCount && constraintIndexes[slot];
+  }
+
   int readyIndexSlotOn(int column) {
     for (int index = 0; index < uniqueIndexCount; index++) {
       if (uniqueIndexStates[index] == INDEX_READY && uniqueIndexColumns[index] == column) {
@@ -442,22 +448,32 @@ public final class TableDefinition {
   }
 
   StatusCode upsertIndex(int tableId, int state, int column, boolean unique) {
+    return upsertIndex(tableId, state, column, unique, false);
+  }
+
+  StatusCode upsertIndex(
+      int tableId,
+      int state,
+      int column,
+      boolean unique,
+      boolean constraint) {
     if (tableId <= 0
         || (state != INDEX_BUILDING && state != INDEX_READY && state != INDEX_DROPPING)
         || column <= 0
-        || column >= columnCount) {
+        || column >= columnCount
+        || constraint && !unique) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < uniqueIndexCount; index++) {
       if (uniqueIndexTableIds[index] == tableId || uniqueIndexColumns[index] == column) {
-        setIndex(index, tableId, state, column, unique);
+        setIndex(index, tableId, state, column, unique, constraint);
         return StatusCode.OK;
       }
     }
     if (uniqueIndexCount >= MAXIMUM_INDEXES) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    setIndex(uniqueIndexCount++, tableId, state, column, unique);
+    setIndex(uniqueIndexCount++, tableId, state, column, unique, constraint);
     return StatusCode.OK;
   }
 
@@ -472,10 +488,11 @@ public final class TableDefinition {
             uniqueIndexTableIds[move + 1],
             uniqueIndexStates[move + 1],
             uniqueIndexColumns[move + 1],
-            uniqueIndexes[move + 1]);
+            uniqueIndexes[move + 1],
+            constraintIndexes[move + 1]);
       }
       uniqueIndexCount--;
-      setIndex(uniqueIndexCount, 0, INDEX_NONE, 0, false);
+      setIndex(uniqueIndexCount, 0, INDEX_NONE, 0, false, false);
       return StatusCode.OK;
     }
     return StatusCode.CONFLICT;
@@ -524,7 +541,8 @@ public final class TableDefinition {
           source.uniqueIndexTableIds[index],
           source.uniqueIndexStates[index],
           source.uniqueIndexColumns[index],
-          source.uniqueIndexes[index]);
+          source.uniqueIndexes[index],
+          source.constraintIndexes[index]);
     }
   }
 
@@ -557,10 +575,21 @@ public final class TableDefinition {
   }
 
   private void setIndex(int slot, int tableId, int state, int column, boolean unique) {
+    setIndex(slot, tableId, state, column, unique, false);
+  }
+
+  private void setIndex(
+      int slot,
+      int tableId,
+      int state,
+      int column,
+      boolean unique,
+      boolean constraint) {
     uniqueIndexTableIds[slot] = tableId;
     uniqueIndexStates[slot] = state;
     uniqueIndexColumns[slot] = column;
     uniqueIndexes[slot] = unique;
+    constraintIndexes[slot] = constraint;
   }
 
   private static final class ColumnName implements CharSequence {

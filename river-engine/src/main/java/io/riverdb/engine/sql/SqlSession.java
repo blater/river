@@ -380,11 +380,37 @@ public final class SqlSession {
       if (!status.isOk()) {
         return status;
       }
-      if (!transactionActive) {
+      if (!transactionActive && !command.hasUniqueColumns()) {
         status = database.createTable(
             command.tableName(), createSchema, table);
         if (status.isOk()) {
           result.setUpdate(0, 0);
+        }
+        return status;
+      }
+      if (!transactionActive) {
+        status = session.begin(IsolationLevel.SERIALIZABLE);
+        boolean implicit = status.isOk();
+        if (status.isOk()) {
+          status = beginStatement();
+        }
+        if (status.isOk()) {
+          status = session.createTable(
+              command.tableName(), createSchema, table);
+        }
+        if (status.isOk()) {
+          status = createUniqueColumnIndexes();
+        }
+        status = completeStatement(status);
+        if (implicit) {
+          StatusCode terminal = status.isOk()
+              ? session.commit(outcome) : session.abort(outcome);
+          if (!terminal.isOk()) {
+            status = terminal;
+          }
+        }
+        if (status.isOk()) {
+          result.setUpdate(0, outcome.commitSequence());
         }
         return status;
       }
@@ -395,6 +421,9 @@ public final class SqlSession {
       if (status.isOk()) {
         status = session.createTable(
             command.tableName(), createSchema, table);
+      }
+      if (status.isOk()) {
+        status = createUniqueColumnIndexes();
       }
       status = completeStatement(status);
       if (!status.isOk() && statementSavepoint.isActive()) {
@@ -2066,6 +2095,20 @@ public final class SqlSession {
     }
     if (status.isOk() && command.hasPrimaryKeyIdentity()) {
       status = createSchema.setPrimaryKeyIdentity();
+    }
+    return status;
+  }
+
+  private StatusCode createUniqueColumnIndexes() {
+    StatusCode status = StatusCode.OK;
+    for (int column = 1;
+        status.isOk() && column < command.columnCount();
+        column++) {
+      if (command.columnIsUnique(column)) {
+        String indexName = "_river_unique_" + table.tableId() + "_" + column;
+        status = session.createUniqueConstraintIndex(
+            indexName, command.tableName(), command.columnName(column));
+      }
     }
     return status;
   }

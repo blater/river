@@ -1669,6 +1669,40 @@ final class RiverDriverTest {
   }
 
   @Test
+  void enforcesUniqueColumnsThroughJdbc(@TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE unique_values "
+                  + "(id BIGINT PRIMARY KEY, value BIGINT UNIQUE)"));
+      assertEquals(
+          1,
+          statement.executeUpdate("INSERT INTO unique_values VALUES (1, 10)"));
+      SQLException violation = assertThrows(
+          SQLException.class,
+          () -> statement.executeUpdate("INSERT INTO unique_values VALUES (2, 10)"));
+      assertEquals("23505", violation.getSQLState());
+      assertEquals(StatusCode.UNIQUE_VIOLATION.stableCode(), violation.getErrorCode());
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM unique_values WHERE value=10")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void returnsIdentityKeysThroughJdbc(@TempDir Path root) throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(

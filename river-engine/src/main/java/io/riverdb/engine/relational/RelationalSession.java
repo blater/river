@@ -300,6 +300,22 @@ public final class RelationalSession {
       CharSequence tableName,
       CharSequence columnName,
       boolean unique) {
+    return createValueIndex(indexName, tableName, columnName, unique, false);
+  }
+
+  public StatusCode createUniqueConstraintIndex(
+      CharSequence indexName,
+      CharSequence tableName,
+      CharSequence columnName) {
+    return createValueIndex(indexName, tableName, columnName, true, true);
+  }
+
+  private StatusCode createValueIndex(
+      CharSequence indexName,
+      CharSequence tableName,
+      CharSequence columnName,
+      boolean unique,
+      boolean constraint) {
     if (!registeredTransaction
         || !RelationalKey.validName(indexName)
         || !RelationalKey.validName(tableName)
@@ -321,7 +337,7 @@ public final class RelationalSession {
     }
     if (status.isOk()) {
       status = database.buildValueIndex(
-          this, indexName, tableName, columnName, unique);
+          this, indexName, tableName, columnName, unique, constraint);
     }
     if (!status.isOk() && acquired) {
       database.completeSchemaChange(this, false);
@@ -541,6 +557,9 @@ public final class RelationalSession {
         encodeLong(indexRow, key);
         status = insertIndexedValue(
             valueIndexTable, indexedValue(table, row, slot), indexRow);
+        if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
+          status = StatusCode.UNIQUE_VIOLATION;
+        }
       } else {
         status = insertNonUniqueIndexedValue(
             valueIndexTable, indexedValue(table, row, slot), key);
@@ -597,6 +616,9 @@ public final class RelationalSession {
         if (table.indexIsUnique(slot)) {
           encodeLong(indexRow, key);
           status = insertIndexedValue(valueIndexTable, nextValue, indexRow);
+          if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
+            status = StatusCode.UNIQUE_VIOLATION;
+          }
         } else {
           status = insertNonUniqueIndexedValue(valueIndexTable, nextValue, key);
         }

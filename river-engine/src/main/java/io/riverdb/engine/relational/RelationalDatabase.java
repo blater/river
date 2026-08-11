@@ -510,6 +510,9 @@ public final class RelationalDatabase {
     if (status.isOk() && indexRecord.state() != TableDefinition.INDEX_READY) {
       status = StatusCode.RETRY;
     }
+    if (status.isOk() && indexRecord.isConstraint()) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(renamedName, catalogKey);
     }
@@ -712,6 +715,15 @@ public final class RelationalDatabase {
     if (status.isOk()
         && indexRecord.state() != indexedTable.uniqueIndexState(indexSlot)) {
       status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk()
+        && (indexRecord.isUnique() != indexedTable.indexIsUnique(indexSlot)
+            || indexRecord.isConstraint()
+                != indexedTable.indexIsConstraint(indexSlot))) {
+      status = StatusCode.CORRUPTION;
+    }
+    if (status.isOk() && indexRecord.isConstraint()) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (status.isOk()) {
       indexStorageTable.set(this, indexTableId, 0, TableDefinition.INDEX_NONE);
@@ -1005,6 +1017,10 @@ public final class RelationalDatabase {
                 indexStorageTable, value, indexBuildRow.key())
             : session.ensureNonUniqueIndexedValue(
                 indexStorageTable, value, indexBuildRow.key());
+        if (status == StatusCode.CONFLICT
+            && indexedTable.indexIsConstraint(buildingSlot)) {
+          status = StatusCode.UNIQUE_VIOLATION;
+        }
       }
       if (status.isOk()) {
         buildLastKey = indexBuildRow.key();
@@ -1352,7 +1368,7 @@ public final class RelationalDatabase {
       CharSequence indexName,
       CharSequence tableName,
       CharSequence columnName) {
-    return buildValueIndex(session, indexName, tableName, columnName, true);
+    return buildValueIndex(session, indexName, tableName, columnName, true, false);
   }
 
   StatusCode buildValueIndex(
@@ -1360,7 +1376,8 @@ public final class RelationalDatabase {
       CharSequence indexName,
       CharSequence tableName,
       CharSequence columnName,
-      boolean unique) {
+      boolean unique,
+      boolean constraint) {
     StatusCode status = session.resolveTable(tableName, indexedTable);
     int indexColumn = status.isOk() ? indexedTable.findColumn(columnName) : -1;
     if (status.isOk() && indexColumn <= 0) {
@@ -1432,6 +1449,9 @@ public final class RelationalDatabase {
           indexKeyOutput.position(0);
           indexKeyOutput.limit(Long.BYTES);
           status = session.insertIndexedValue(indexStorageTable, value, indexKeyOutput);
+          if (status == StatusCode.CONFLICT && constraint) {
+            status = StatusCode.UNIQUE_VIOLATION;
+          }
         } else {
           status = session.insertNonUniqueIndexedValue(
               indexStorageTable, value, indexBuildRow.key());
@@ -1461,7 +1481,8 @@ public final class RelationalDatabase {
           indexColumn,
           tableName,
           indexedTable,
-          unique);
+          unique,
+          constraint);
       status = session.indexedSession().update(catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
@@ -1474,7 +1495,8 @@ public final class RelationalDatabase {
           indexTableId,
           TableDefinition.INDEX_READY,
           indexName,
-          unique);
+          unique,
+          constraint);
       status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
     }
     indexBuildCursor.reset();

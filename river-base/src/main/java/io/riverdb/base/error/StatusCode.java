@@ -14,6 +14,7 @@ public enum StatusCode {
   CARDINALITY_VIOLATION(3001, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   NUMERIC_VALUE_OUT_OF_RANGE(3002, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   CHECK_VIOLATION(3003, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
+  UNIQUE_VIOLATION(3004, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   CONFLICT(4000, StatusFamily.CONFLICT, true, false),
   NOT_OWNER(4001, StatusFamily.CONFLICT, false, false),
   RESOURCE_EXHAUSTED(5000, StatusFamily.RESOURCE_EXHAUSTED, false, false),

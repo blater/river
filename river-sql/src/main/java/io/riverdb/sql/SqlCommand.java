@@ -6,6 +6,7 @@ import io.riverdb.base.error.StatusCode;
 public final class SqlCommand {
   public static final int MAXIMUM_INSERT_ROWS = 64;
   public static final int MAXIMUM_COLUMNS = 8;
+  public static final int MAXIMUM_UNIQUE_COLUMNS = 4;
   public static final int MAXIMUM_PREDICATES = MAXIMUM_COLUMNS;
   public static final int MAXIMUM_LITERAL_MEMBERSHIP_VALUES = 256;
 
@@ -73,6 +74,7 @@ public final class SqlCommand {
   private long columnNotNullMask;
   private long columnDefaultMask;
   private long columnVarcharMask;
+  private long columnUniqueMask;
   private long rowLimit = Long.MAX_VALUE;
   private long sequenceStart = 1;
   private long sequenceIncrement = 1;
@@ -159,6 +161,7 @@ public final class SqlCommand {
     columnNotNullMask = 0;
     columnDefaultMask = 0;
     columnVarcharMask = 0;
+    columnUniqueMask = 0;
     rowLimit = Long.MAX_VALUE;
     sequenceStart = 1;
     sequenceIncrement = 1;
@@ -522,6 +525,16 @@ public final class SqlCommand {
     }
   }
 
+  StatusCode markLastColumnUnique() {
+    if (columnCount <= 1
+        || Long.bitCount(columnUniqueMask) >= MAXIMUM_UNIQUE_COLUMNS
+        || (columnUniqueMask & 1L << columnCount - 1) != 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    columnUniqueMask |= 1L << columnCount - 1;
+    return StatusCode.OK;
+  }
+
   void markLastColumnCheck(SqlComparison comparison, long value) {
     if (columnCount > 0) {
       int column = columnCount - 1;
@@ -666,6 +679,16 @@ public final class SqlCommand {
     return index > 0
         && index < columnCount
         && (columnVarcharMask & 1L << index) != 0;
+  }
+
+  public boolean columnIsUnique(int index) {
+    return index > 0
+        && index < columnCount
+        && (columnUniqueMask & 1L << index) != 0;
+  }
+
+  public boolean hasUniqueColumns() {
+    return columnUniqueMask != 0;
   }
 
   public boolean hasPrimaryKeyIdentity() {

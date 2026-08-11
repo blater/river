@@ -20,8 +20,8 @@ final class CatalogRecord {
   private static final int SEQUENCE_VERSION = 1;
   private static final int USER_SEQUENCE_VERSION = 1;
   private static final int IDENTITY_SEQUENCE_VERSION = 1;
-  private static final int TABLE_VERSION = 8;
-  private static final int INDEX_VERSION = 2;
+  private static final int TABLE_VERSION = 9;
+  private static final int INDEX_VERSION = 3;
   private static final int TABLE_CHECK_MASK_OFFSET = 60;
   private static final int TABLE_CHECKS_OFFSET = 68;
   private static final int TABLE_CHECK_VALUES_OFFSET = 104;
@@ -209,7 +209,8 @@ final class CatalogRecord {
         0,
         null,
         null,
-        true);
+        true,
+        false);
     offset = encodeColumn(target, offset, keyColumnName);
     offset = encodeColumn(target, offset, valueColumnName);
     target.position(0);
@@ -237,7 +238,8 @@ final class CatalogRecord {
         schema.varcharMask(),
         schema,
         null,
-        true);
+        true,
+        false);
     for (int index = 0; index < schema.columnCount(); index++) {
       offset = encodeColumn(target, offset, schema.columnName(index));
     }
@@ -273,6 +275,28 @@ final class CatalogRecord {
       CharSequence name,
       TableDefinition schema,
       boolean unique) {
+    encodeTable(
+        target,
+        tableId,
+        valueIndexTableId,
+        valueIndexState,
+        indexColumn,
+        name,
+        schema,
+        unique,
+        false);
+  }
+
+  static void encodeTable(
+      ByteBuffer target,
+      int tableId,
+      int valueIndexTableId,
+      int valueIndexState,
+      int indexColumn,
+      CharSequence name,
+      TableDefinition schema,
+      boolean unique,
+      boolean constraint) {
     int offset = encodeTableHeader(
         target,
         tableId,
@@ -286,7 +310,8 @@ final class CatalogRecord {
         schema.varcharMask(),
         null,
         schema,
-        unique);
+        unique,
+        constraint);
     for (int index = 0; index < schema.columnCount(); index++) {
       offset = encodeColumn(target, offset, schema.columnName(index));
     }
@@ -324,13 +349,24 @@ final class CatalogRecord {
       int indexState,
       CharSequence name,
       boolean unique) {
+    encodeIndex(target, tableId, indexTableId, indexState, name, unique, false);
+  }
+
+  static void encodeIndex(
+      ByteBuffer target,
+      int tableId,
+      int indexTableId,
+      int indexState,
+      CharSequence name,
+      boolean unique,
+      boolean constraint) {
     clear(target);
     target.putLong(0, INDEX_MAGIC);
     target.putInt(8, INDEX_VERSION);
     target.putInt(12, tableId);
     target.putInt(16, indexTableId);
     target.putInt(20, indexState);
-    target.putInt(24, unique ? 1 : 0);
+    target.putInt(24, (unique ? 1 : 0) | (constraint ? 2 : 0));
     target.putInt(28, name.length());
     for (int index = 0; index < name.length(); index++) {
       target.put(32 + index, (byte) name.charAt(index));
@@ -487,7 +523,7 @@ final class CatalogRecord {
       int indexTableId = scratch.getInt(offset);
       int indexState = scratch.getInt(offset + 4);
       int indexColumn = scratch.getInt(offset + 8);
-      int unique = scratch.getInt(offset + 12);
+      int flags = scratch.getInt(offset + 12);
       if (indexTableId <= 0
           || indexTableId > RelationalKey.MAXIMUM_TABLE_ID
           || indexTableId == scratch.getInt(12)
@@ -496,13 +532,18 @@ final class CatalogRecord {
               && indexState != TableDefinition.INDEX_DROPPING)
           || indexColumn <= 0
           || indexColumn >= columnCount
-          || (unique != 0 && unique != 1)
+          || (flags & ~3) != 0
+          || (flags & 2) != 0 && (flags & 1) == 0
           || duplicateIndex(scratch, index, indexTableId, indexColumn)
           || (indexState == TableDefinition.INDEX_BUILDING && ++buildingIndexes > 1)) {
         status = StatusCode.CORRUPTION;
       } else {
         status = result.upsertIndex(
-            indexTableId, indexState, indexColumn, unique == 1);
+            indexTableId,
+            indexState,
+            indexColumn,
+            (flags & 1) != 0,
+            (flags & 2) != 0);
         if (status == StatusCode.CONFLICT
             || status == StatusCode.RESOURCE_EXHAUSTED
             || status == StatusCode.INVALID_EXTERNAL_INPUT) {
@@ -526,7 +567,7 @@ final class CatalogRecord {
     StatusCode status = source.copyTo(scratch);
     int version = source.length() >= 12 ? scratch.getInt(8) : -1;
     int state = source.length() >= 24 ? scratch.getInt(20) : -1;
-    int unique = source.length() >= 28 ? scratch.getInt(24) : -1;
+    int flags = source.length() >= 28 ? scratch.getInt(24) : -1;
     int nameOffset = 32;
     int nameBytes = source.length() >= 32 ? scratch.getInt(28) : -1;
     if (!status.isOk()
@@ -541,7 +582,8 @@ final class CatalogRecord {
         || (state != TableDefinition.INDEX_BUILDING
             && state != TableDefinition.INDEX_READY
             && state != TableDefinition.INDEX_DROPPING)
-        || (unique != 0 && unique != 1)
+        || (flags & ~3) != 0
+        || (flags & 2) != 0 && (flags & 1) == 0
         || nameBytes != expectedName.length()) {
       return StatusCode.CORRUPTION;
     }
@@ -550,7 +592,12 @@ final class CatalogRecord {
         return StatusCode.CONFLICT;
       }
     }
-    result.set(scratch.getInt(12), scratch.getInt(16), state, unique == 1);
+    result.set(
+        scratch.getInt(12),
+        scratch.getInt(16),
+        state,
+        (flags & 1) != 0,
+        (flags & 2) != 0);
     return StatusCode.OK;
   }
 
@@ -569,7 +616,7 @@ final class CatalogRecord {
     }
     int nameBytes = scratch.getInt(28);
     int state = scratch.getInt(20);
-    int unique = scratch.getInt(24);
+    int flags = scratch.getInt(24);
     if (scratch.getInt(8) != INDEX_VERSION
         || source.length() != 32 + nameBytes
         || scratch.getInt(12) <= 0
@@ -579,7 +626,8 @@ final class CatalogRecord {
         || (state != TableDefinition.INDEX_BUILDING
             && state != TableDefinition.INDEX_READY
             && state != TableDefinition.INDEX_DROPPING)
-        || (unique != 0 && unique != 1)
+        || (flags & ~3) != 0
+        || (flags & 2) != 0 && (flags & 1) == 0
         || nameBytes <= 0
         || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH) {
       return StatusCode.CORRUPTION;
@@ -587,7 +635,12 @@ final class CatalogRecord {
     if (scratch.getInt(12) != expectedTableId) {
       return StatusCode.CONFLICT;
     }
-    result.set(scratch.getInt(12), scratch.getInt(16), state, unique == 1);
+    result.set(
+        scratch.getInt(12),
+        scratch.getInt(16),
+        state,
+        (flags & 1) != 0,
+        (flags & 2) != 0);
     return StatusCode.OK;
   }
 
@@ -604,7 +657,8 @@ final class CatalogRecord {
       long varcharMask,
       TableSchema definition,
       TableDefinition existing,
-      boolean unique) {
+      boolean unique,
+      boolean constraint) {
     clear(target);
     int existingCount = existing == null ? 0 : existing.uniqueIndexCount();
     int overrideSlot = -1;
@@ -674,7 +728,8 @@ final class CatalogRecord {
           override ? indexColumn : existing.uniqueIndexColumn(index));
       target.putInt(
           output + 12,
-          (override ? unique : existing.indexIsUnique(index)) ? 1 : 0);
+          ((override ? unique : existing.indexIsUnique(index)) ? 1 : 0)
+              | ((override ? constraint : existing.indexIsConstraint(index)) ? 2 : 0));
     }
     int nameOffset = TABLE_INDEXES_OFFSET + indexCount * 16;
     for (int index = 0; index < name.length(); index++) {
@@ -771,12 +826,19 @@ final class CatalogRecord {
     private int indexTableId;
     private int state;
     private boolean unique;
+    private boolean constraint;
 
-    void set(int ownerTableId, int storageTableId, int indexState, boolean isUnique) {
+    void set(
+        int ownerTableId,
+        int storageTableId,
+        int indexState,
+        boolean isUnique,
+        boolean isConstraint) {
       tableId = ownerTableId;
       indexTableId = storageTableId;
       state = indexState;
       unique = isUnique;
+      constraint = isConstraint;
     }
 
     int tableId() {
@@ -793,6 +855,10 @@ final class CatalogRecord {
 
     boolean isUnique() {
       return unique;
+    }
+
+    boolean isConstraint() {
+      return constraint;
     }
   }
 

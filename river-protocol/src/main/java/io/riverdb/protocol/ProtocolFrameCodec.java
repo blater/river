@@ -641,6 +641,7 @@ public final class ProtocolFrameCodec {
       case 3001 -> StatusCode.CARDINALITY_VIOLATION;
       case 3002 -> StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
       case 3003 -> StatusCode.CHECK_VIOLATION;
+      case 3004 -> StatusCode.UNIQUE_VIOLATION;
       case 4000 -> StatusCode.CONFLICT;
       case 4001 -> StatusCode.NOT_OWNER;
       case 5000 -> StatusCode.RESOURCE_EXHAUSTED;

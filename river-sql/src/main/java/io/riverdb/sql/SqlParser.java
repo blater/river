@@ -603,6 +603,8 @@ public final class SqlParser {
                 } else {
                   status = columnCheck(sql, result);
                 }
+              } else if (consumeKeyword(sql, "UNIQUE")) {
+                status = result.markLastColumnUnique();
               } else {
                 constraints = false;
               }
@@ -997,6 +999,9 @@ public final class SqlParser {
     if (!status.isOk() || !finish(sql)) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
+    if (usesReservedObjectName(type, result)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (type == SqlCommandType.INSERT) {
       result.setInsert();
     } else if (type == SqlCommandType.SCAN) {
@@ -1007,6 +1012,39 @@ public final class SqlParser {
       result.set(type, key, value);
     }
     return StatusCode.OK;
+  }
+
+  private static boolean usesReservedObjectName(
+      SqlCommandType type,
+      SqlCommand command) {
+    return switch (type) {
+      case CREATE_TABLE, DROP_TABLE, ALTER_TABLE_RENAME_COLUMN ->
+          reservedObjectName(command.tableName());
+      case ALTER_TABLE_RENAME ->
+          reservedObjectName(command.tableName())
+              || reservedObjectName(command.renamedTableName());
+      case CREATE_SEQUENCE, DROP_SEQUENCE -> reservedObjectName(command.sequenceName());
+      case CREATE_INDEX, CREATE_UNIQUE_INDEX, DROP_INDEX ->
+          reservedObjectName(command.indexName())
+              || reservedObjectName(command.tableName());
+      case ALTER_INDEX_RENAME ->
+          reservedObjectName(command.indexName())
+              || reservedObjectName(command.renamedIndexName());
+      default -> false;
+    };
+  }
+
+  private static boolean reservedObjectName(CharSequence name) {
+    String prefix = "_river_";
+    if (name == null || name.length() < prefix.length()) {
+      return false;
+    }
+    for (int index = 0; index < prefix.length(); index++) {
+      if (upper(name.charAt(index)) != upper(prefix.charAt(index))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private StatusCode predicates(
