@@ -122,6 +122,7 @@ val declaredDependencies = mapOf(
   "river-sql" to setOf("river-base"),
   "river-engine-api" to setOf("river-base"),
   "river-protocol" to setOf("river-base", "river-engine-api"),
+  "river-client" to setOf("river-base", "river-engine-api", "river-protocol"),
   "river-server" to setOf("river-base", "river-engine-api", "river-protocol"),
   "river-engine" to setOf(
     "river-base", "river-format", "river-platform", "river-storage",
@@ -140,7 +141,8 @@ val declaredDependencies = mapOf(
 // compile-visibility test.
 val approvedApiDependencies = mapOf(
   "river-engine-api" to setOf("river-base"),
-  "river-protocol" to setOf("river-base", "river-engine-api")
+  "river-protocol" to setOf("river-base", "river-engine-api"),
+  "river-client" to setOf("river-base", "river-engine-api")
 )
 
 subprojects {
