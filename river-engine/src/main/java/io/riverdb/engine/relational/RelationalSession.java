@@ -600,6 +600,10 @@ public final class RelationalSession {
     return session.releaseSavepoint(savepoint);
   }
 
+  public StatusCode cancelLockWait() {
+    return session.cancelLockWait();
+  }
+
   public StatusCode commit(TransactionOutcome result) {
     StatusCode status = session.commit(result);
     completeTerminalSchemaChange(status.isOk()

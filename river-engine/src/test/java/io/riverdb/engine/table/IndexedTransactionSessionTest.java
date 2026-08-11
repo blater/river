@@ -93,6 +93,40 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void deadlockAbortsDeterministicVictimAndSurvivorCommits(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession first = session(manager, table);
+    IndexedTransactionSession second = session(manager, table);
+    assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, first.insert(1, row(101)));
+    assertEquals(StatusCode.OK, second.insert(2, row(202)));
+    assertEquals(StatusCode.RETRY, first.insert(2, row(102)));
+    assertEquals(StatusCode.CONFLICT, second.insert(1, row(201)));
+    assertEquals(1, manager.deadlockVictimSelections());
+
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.CONFLICT, second.commit(outcome));
+    assertEquals(TransactionState.ABORTED, outcome.state());
+    assertEquals(StatusCode.OK, first.insert(2, row(102)));
+    assertEquals(StatusCode.OK, first.commit(outcome));
+    assertEquals(TransactionState.COMMITTED, outcome.state());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(1, fetched));
+    assertEquals(101, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(2, fetched));
+    assertEquals(102, value(fetched));
+    assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(0, manager.waitingLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void serializableMissingKeyReadBlocksInsertUntilReadOnlyCommit(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

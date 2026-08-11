@@ -262,6 +262,12 @@ public final class SqlSession {
       status = executeDataCommand(result);
     }
     if (savepointActive) {
+      if (!status.isOk()) {
+        StatusCode cancel = session.cancelLockWait();
+        if (!cancel.isOk()) {
+          status = cancel;
+        }
+      }
       StatusCode savepointStatus = status.isOk()
           ? StatusCode.OK : session.rollbackToSavepoint(statementSavepoint);
       StatusCode release = session.releaseSavepoint(statementSavepoint);

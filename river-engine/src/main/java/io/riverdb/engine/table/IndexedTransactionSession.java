@@ -467,6 +467,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return StatusCode.OK;
   }
 
+  public StatusCode cancelLockWait() {
+    return manager.cancelLockWait(transaction);
+  }
+
   private int nextPendingIndex(IndexedScanCursor cursor) {
     int selected = -1;
     long selectedKey = Long.MAX_VALUE;
@@ -503,6 +507,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
       return status;
     }
+    if (manager.hasLockConflict(transaction)) {
+      return completeCoordinatedCommit(manager.commit(transaction, this, result));
+    }
     if (groupCommit != null && eligibleForCommitGroup()) {
       return groupCommit.commit(this, result);
     }
@@ -513,6 +520,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return transaction.state() == TransactionState.ACTIVE
         && activeScan == null
         && pendingInsertCount > 0
+        && !manager.hasLockConflict(transaction)
         && !serializableScan;
   }
 

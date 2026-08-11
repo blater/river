@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class LockManager implements LockService {
   private static final AtomicLong PROVIDER_IDENTITIES = new AtomicLong(1);
   private static final long OWNER_HIGH = 0x52495645524c4f43L; // RIVERLOC
+  private static final LockScope[] LOCK_SCOPES = LockScope.values();
 
   private final long ownerLow = PROVIDER_IDENTITIES.getAndIncrement();
   private final long[] transactionIds;
@@ -23,8 +24,21 @@ public final class LockManager implements LockService {
   private final byte[] scopes;
   private final byte[] modes;
   private final boolean[] occupied;
+  private final long[] waitingTransactionIds;
+  private final long[] waitingResourceHighs;
+  private final long[] waitingResourceLows;
+  private final long[] waitingOrders;
+  private final long[] waitingDeadlines;
+  private final byte[] waitingScopes;
+  private final byte[] waitingModes;
+  private final boolean[] waiting;
+  private final long[] deadlockVictims;
+  private final long[] cyclePath;
   private long nextCapabilityToken = 1;
+  private long nextWaitOrder = 1;
   private int activeLockCount;
+  private int waitingCount;
+  private long deadlockVictimSelections;
 
   public LockManager(int maximumLocks) {
     transactionIds = new long[maximumLocks];
@@ -34,10 +48,28 @@ public final class LockManager implements LockService {
     scopes = new byte[maximumLocks];
     modes = new byte[maximumLocks];
     occupied = new boolean[maximumLocks];
+    waitingTransactionIds = new long[maximumLocks];
+    waitingResourceHighs = new long[maximumLocks];
+    waitingResourceLows = new long[maximumLocks];
+    waitingOrders = new long[maximumLocks];
+    waitingDeadlines = new long[maximumLocks];
+    waitingScopes = new byte[maximumLocks];
+    waitingModes = new byte[maximumLocks];
+    waiting = new boolean[maximumLocks];
+    deadlockVictims = new long[maximumLocks];
+    cyclePath = new long[maximumLocks];
   }
 
   public synchronized int activeLockCount() {
     return activeLockCount;
+  }
+
+  public synchronized int waitingCount() {
+    return waitingCount;
+  }
+
+  public synchronized long deadlockVictimSelections() {
+    return deadlockVictimSelections;
   }
 
   @Override
@@ -52,6 +84,7 @@ public final class LockManager implements LockService {
     }
     detail.reset();
     if (context.cancellation().isCancellationRequested()) {
+      removeWait(context.transactionId());
       detail.set(StatusCode.CANCELLED);
       return StatusCode.CANCELLED;
     }
@@ -80,10 +113,15 @@ public final class LockManager implements LockService {
     if (transactionId <= 0 || scope == null || mode == null || token == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (isDeadlockVictim(transactionId)) {
+      removeWait(transactionId);
+      return StatusCode.CONFLICT;
+    }
     if (token.isActive()) {
       return StatusCode.CONFLICT;
     }
     int freeSlot = -1;
+    boolean blocked = false;
     for (int slot = 0; slot < occupied.length; slot++) {
       if (!occupied[slot]) {
         if (freeSlot < 0) {
@@ -102,13 +140,42 @@ public final class LockManager implements LockService {
       int requestedMode = mode.ordinal();
       int heldMode = modes[slot];
       if (conflicts(requestedMode, heldMode) || conflicts(heldMode, requestedMode)) {
-        return deadlineNanos > 0 && nowNanos >= deadlineNanos
-            ? StatusCode.TIMEOUT : StatusCode.RETRY;
+        blocked = true;
       }
+    }
+    if (!blocked) {
+      blocked = hasEarlierWaiter(
+          transactionId, scope, resourceHigh, resourceLow);
+    }
+    if (blocked) {
+      if (deadlineNanos > 0 && nowNanos >= deadlineNanos) {
+        removeWait(transactionId);
+        return StatusCode.TIMEOUT;
+      }
+      StatusCode status = registerWait(
+          transactionId,
+          scope,
+          resourceHigh,
+          resourceLow,
+          mode,
+          deadlineNanos);
+      if (!status.isOk()) {
+        return status;
+      }
+      long victim = cycleVictim(transactionId);
+      if (victim > 0) {
+        markDeadlockVictim(victim);
+        removeWait(victim);
+        if (victim == transactionId) {
+          return StatusCode.CONFLICT;
+        }
+      }
+      return StatusCode.RETRY;
     }
     if (freeSlot < 0 || nextCapabilityToken <= 0) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    removeWait(transactionId);
     long capabilityToken = nextCapabilityToken++;
     StatusCode status = token.claim(
         OWNER_HIGH, ownerLow, 1, capabilityToken, transactionId, freeSlot);
@@ -166,6 +233,10 @@ public final class LockManager implements LockService {
     if (token == null || requestedMode == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (isDeadlockVictim(token.transactionId())) {
+      removeWait(token.transactionId());
+      return StatusCode.CONFLICT;
+    }
     int slot = token.slot();
     if (!validToken(token, slot)) {
       return StatusCode.NOT_OWNER;
@@ -173,8 +244,10 @@ public final class LockManager implements LockService {
     int requested = requestedMode.ordinal();
     int held = modes[slot];
     if (held >= requested) {
+      removeWait(token.transactionId());
       return StatusCode.OK;
     }
+    boolean blocked = false;
     for (int other = 0; other < occupied.length; other++) {
       if (other == slot
           || !occupied[other]
@@ -184,12 +257,248 @@ public final class LockManager implements LockService {
         continue;
       }
       if (conflicts(requested, modes[other]) || conflicts(modes[other], requested)) {
-        return deadlineNanos > 0 && nowNanos >= deadlineNanos
-            ? StatusCode.TIMEOUT : StatusCode.RETRY;
+        blocked = true;
       }
     }
+    LockScope scope = LOCK_SCOPES[scopes[slot]];
+    if (!blocked) {
+      blocked = hasEarlierWaiter(
+          token.transactionId(), scope, resourceHighs[slot], resourceLows[slot]);
+    }
+    if (blocked) {
+      if (deadlineNanos > 0 && nowNanos >= deadlineNanos) {
+        removeWait(token.transactionId());
+        return StatusCode.TIMEOUT;
+      }
+      StatusCode status = registerWait(
+          token.transactionId(),
+          scope,
+          resourceHighs[slot],
+          resourceLows[slot],
+          requestedMode,
+          deadlineNanos);
+      if (!status.isOk()) {
+        return status;
+      }
+      long victim = cycleVictim(token.transactionId());
+      if (victim > 0) {
+        markDeadlockVictim(victim);
+        removeWait(victim);
+        if (victim == token.transactionId()) {
+          return StatusCode.CONFLICT;
+        }
+      }
+      return StatusCode.RETRY;
+    }
+    removeWait(token.transactionId());
     modes[slot] = (byte) requested;
     return StatusCode.OK;
+  }
+
+  synchronized boolean isDeadlockVictim(long transactionId) {
+    for (long victim : deadlockVictims) {
+      if (victim == transactionId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  synchronized boolean isWaiting(long transactionId) {
+    return findWait(transactionId) >= 0;
+  }
+
+  synchronized void cancelWait(long transactionId) {
+    removeWait(transactionId);
+  }
+
+  synchronized void transactionCompleted(long transactionId) {
+    removeWait(transactionId);
+    for (int slot = 0; slot < deadlockVictims.length; slot++) {
+      if (deadlockVictims[slot] == transactionId) {
+        deadlockVictims[slot] = 0;
+        return;
+      }
+    }
+  }
+
+  private StatusCode registerWait(
+      long transactionId,
+      LockScope scope,
+      long resourceHigh,
+      long resourceLow,
+      LockMode mode,
+      long deadlineNanos) {
+    int freeSlot = -1;
+    for (int slot = 0; slot < waiting.length; slot++) {
+      if (!waiting[slot]) {
+        if (freeSlot < 0) {
+          freeSlot = slot;
+        }
+        continue;
+      }
+      if (waitingTransactionIds[slot] != transactionId) {
+        continue;
+      }
+      if (waitingScopes[slot] != (byte) scope.ordinal()
+          || waitingResourceHighs[slot] != resourceHigh
+          || waitingResourceLows[slot] != resourceLow) {
+        return StatusCode.CONFLICT;
+      }
+      waitingModes[slot] = (byte) mode.ordinal();
+      waitingDeadlines[slot] = deadlineNanos;
+      return StatusCode.OK;
+    }
+    if (freeSlot < 0 || nextWaitOrder <= 0) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    waiting[freeSlot] = true;
+    waitingTransactionIds[freeSlot] = transactionId;
+    waitingResourceHighs[freeSlot] = resourceHigh;
+    waitingResourceLows[freeSlot] = resourceLow;
+    waitingOrders[freeSlot] = nextWaitOrder++;
+    waitingDeadlines[freeSlot] = deadlineNanos;
+    waitingScopes[freeSlot] = (byte) scope.ordinal();
+    waitingModes[freeSlot] = (byte) mode.ordinal();
+    waitingCount++;
+    return StatusCode.OK;
+  }
+
+  private boolean hasEarlierWaiter(
+      long transactionId,
+      LockScope scope,
+      long resourceHigh,
+      long resourceLow) {
+    int ownSlot = findWait(transactionId);
+    long ownOrder = ownSlot < 0 ? Long.MAX_VALUE : waitingOrders[ownSlot];
+    for (int slot = 0; slot < waiting.length; slot++) {
+      if (waiting[slot]
+          && waitingTransactionIds[slot] != transactionId
+          && waitingScopes[slot] == (byte) scope.ordinal()
+          && waitingResourceHighs[slot] == resourceHigh
+          && waitingResourceLows[slot] == resourceLow
+          && waitingOrders[slot] < ownOrder) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private int findWait(long transactionId) {
+    for (int slot = 0; slot < waiting.length; slot++) {
+      if (waiting[slot] && waitingTransactionIds[slot] == transactionId) {
+        return slot;
+      }
+    }
+    return -1;
+  }
+
+  private void removeWait(long transactionId) {
+    int slot = findWait(transactionId);
+    if (slot < 0) {
+      return;
+    }
+    waiting[slot] = false;
+    waitingTransactionIds[slot] = 0;
+    waitingResourceHighs[slot] = 0;
+    waitingResourceLows[slot] = 0;
+    waitingOrders[slot] = 0;
+    waitingDeadlines[slot] = 0;
+    waitingScopes[slot] = 0;
+    waitingModes[slot] = 0;
+    waitingCount--;
+  }
+
+  private long cycleVictim(long transactionId) {
+    return findCycleVictim(transactionId, transactionId, 0);
+  }
+
+  private long findCycleVictim(
+      long transactionId,
+      long cycleStart,
+      int depth) {
+    if (depth >= cyclePath.length || findWait(transactionId) < 0) {
+      return 0;
+    }
+    for (int index = 0; index < depth; index++) {
+      if (cyclePath[index] == transactionId) {
+        return 0;
+      }
+    }
+    cyclePath[depth] = transactionId;
+    int waitSlot = findWait(transactionId);
+    long victim = 0;
+    for (int slot = 0; slot < occupied.length; slot++) {
+      if (!occupied[slot]
+          || transactionIds[slot] == transactionId
+          || !sameResource(waitSlot, scopes[slot], resourceHighs[slot], resourceLows[slot])
+          || !conflictingModes(waitingModes[waitSlot], modes[slot])) {
+        continue;
+      }
+      victim = Math.max(
+          victim,
+          dependencyCycleVictim(
+              transactionIds[slot], cycleStart, depth));
+    }
+    for (int slot = 0; slot < waiting.length; slot++) {
+      if (!waiting[slot]
+          || waitingTransactionIds[slot] == transactionId
+          || waitingOrders[slot] >= waitingOrders[waitSlot]
+          || !sameResource(
+              waitSlot,
+              waitingScopes[slot],
+              waitingResourceHighs[slot],
+              waitingResourceLows[slot])) {
+        continue;
+      }
+      victim = Math.max(
+          victim,
+          dependencyCycleVictim(
+              waitingTransactionIds[slot], cycleStart, depth));
+    }
+    cyclePath[depth] = 0;
+    return victim;
+  }
+
+  private long dependencyCycleVictim(
+      long dependency,
+      long cycleStart,
+      int depth) {
+    if (dependency == cycleStart) {
+      long victim = cycleStart;
+      for (int index = 0; index <= depth; index++) {
+        victim = Math.max(victim, cyclePath[index]);
+      }
+      return victim;
+    }
+    return findCycleVictim(dependency, cycleStart, depth + 1);
+  }
+
+  private boolean sameResource(
+      int waitSlot,
+      byte scope,
+      long resourceHigh,
+      long resourceLow) {
+    return waitingScopes[waitSlot] == scope
+        && waitingResourceHighs[waitSlot] == resourceHigh
+        && waitingResourceLows[waitSlot] == resourceLow;
+  }
+
+  private static boolean conflictingModes(byte left, byte right) {
+    return conflicts(left, right) || conflicts(right, left);
+  }
+
+  private void markDeadlockVictim(long transactionId) {
+    if (isDeadlockVictim(transactionId)) {
+      return;
+    }
+    for (int slot = 0; slot < deadlockVictims.length; slot++) {
+      if (deadlockVictims[slot] == 0) {
+        deadlockVictims[slot] = transactionId;
+        deadlockVictimSelections++;
+        return;
+      }
+    }
   }
 
   private boolean validToken(LockToken token, int slot) {

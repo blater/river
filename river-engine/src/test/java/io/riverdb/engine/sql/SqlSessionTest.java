@@ -343,6 +343,45 @@ final class SqlSessionTest {
   }
 
   @Test
+  void cancelledStatementWaitLeavesExplicitTransactionUsable(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession first = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession second = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, first.execute("CREATE TABLE accounts", result));
+    assertEquals(StatusCode.OK, first.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, second.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        first.execute("INSERT INTO accounts VALUES (1, 100)", result));
+    assertEquals(
+        StatusCode.RETRY,
+        second.execute("INSERT INTO accounts VALUES (1, 101)", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        second.execute("INSERT INTO accounts VALUES (2, 200)", result));
+    assertEquals(StatusCode.OK, first.execute("COMMIT", result));
+    assertEquals(StatusCode.OK, second.execute("COMMIT", result));
+    assertEquals(
+        StatusCode.OK,
+        first.execute("SELECT value FROM accounts WHERE key=1", result));
+    assertEquals(100, result.value());
+    assertEquals(
+        StatusCode.OK,
+        first.execute("SELECT value FROM accounts WHERE key=2", result));
+    assertEquals(200, result.value());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void tableCreationCommitsAndRollsBackWithItsTransaction(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(

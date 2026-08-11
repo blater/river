@@ -42,6 +42,14 @@ public final class TransactionManager {
     return locks.activeLockCount();
   }
 
+  public int waitingLockCount() {
+    return locks.waitingCount();
+  }
+
+  public long deadlockVictimSelections() {
+    return locks.deadlockVictimSelections();
+  }
+
   public synchronized StatusCode tryAcquireKey(
       Transaction transaction,
       long tableId,
@@ -95,6 +103,20 @@ public final class TransactionManager {
     return locks.release(token);
   }
 
+  public synchronized StatusCode cancelLockWait(Transaction transaction) {
+    if (!validActive(transaction)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    locks.cancelWait(transaction.transactionId());
+    return StatusCode.OK;
+  }
+
+  public synchronized boolean hasLockConflict(Transaction transaction) {
+    return validActive(transaction)
+        && (locks.isDeadlockVictim(transaction.transactionId())
+            || locks.isWaiting(transaction.transactionId()));
+  }
+
   public synchronized StatusCode begin(
       IsolationLevel isolationLevel,
       long visibleCommitSequence,
@@ -142,6 +164,9 @@ public final class TransactionManager {
         || visibleCommitSequence < transaction.snapshot().visibleCommitSequence()) {
       return StatusCode.CONFLICT;
     }
+    if (locks.isDeadlockVictim(transaction.transactionId())) {
+      return StatusCode.CONFLICT;
+    }
     capture(transaction, visibleCommitSequence);
     return StatusCode.OK;
   }
@@ -165,6 +190,10 @@ public final class TransactionManager {
       TransactionOutcome result) {
     if (!validActive(transaction) || participant == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (locks.isDeadlockVictim(transaction.transactionId())
+        || locks.isWaiting(transaction.transactionId())) {
+      return abortForConflict(transaction, result);
     }
     result.reset();
     transaction.transition(TransactionState.COMMITTING, 0, false);
@@ -234,6 +263,10 @@ public final class TransactionManager {
     for (int index = 0; index < count; index++) {
       if (!validActive(transactions[index])) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (locks.isDeadlockVictim(transactions[index].transactionId())
+          || locks.isWaiting(transactions[index].transactionId())) {
+        return StatusCode.CONFLICT;
       }
       for (int previous = 0; previous < index; previous++) {
         if (transactions[previous] == transactions[index]) {
@@ -337,6 +370,10 @@ public final class TransactionManager {
       TransactionOutcome result) {
     if (!validActive(transaction) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (locks.isDeadlockVictim(transaction.transactionId())
+        || locks.isWaiting(transaction.transactionId())) {
+      return abortForConflict(transaction, result);
     }
     result.reset();
     long commitSequence = transaction.snapshot().visibleCommitSequence();
@@ -481,8 +518,25 @@ public final class TransactionManager {
       }
       activeTransactionCount--;
       activeTransactionIds[activeTransactionCount] = 0;
+      locks.transactionCompleted(transactionId);
       return;
     }
+  }
+
+  private StatusCode abortForConflict(
+      Transaction transaction,
+      TransactionOutcome result) {
+    result.reset();
+    transaction.transition(TransactionState.ABORTING, 0, false);
+    removeActive(transaction.transactionId());
+    transaction.transition(TransactionState.ABORTED, 0, true);
+    result.set(
+        databaseHigh,
+        databaseLow,
+        transaction.transactionId(),
+        TransactionState.ABORTED,
+        0);
+    return StatusCode.CONFLICT;
   }
 
   private static boolean indeterminate(StatusCode status) {

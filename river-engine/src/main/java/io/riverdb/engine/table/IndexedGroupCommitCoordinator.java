@@ -129,7 +129,7 @@ public final class IndexedGroupCommitCoordinator {
     status = manager.beginCommitGroup(transactions, count);
     if (!status.isOk()) {
       table.cancelPreparedInsertGroup();
-      completeAll(count, status);
+      commitDirectly(count);
       return;
     }
     for (int index = 0; status.isOk() && index < count; index++) {
