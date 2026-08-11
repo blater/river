@@ -61,6 +61,7 @@ public final class SqlSession {
   private static final int MAXIMUM_MEMBERSHIP_VALUES = 1_024;
   private static final int MAXIMUM_SORT_ROWS = 1_024;
   private static final int MAXIMUM_SORT_RUNS = 64;
+  private static final int MAXIMUM_USER_SAVEPOINTS = 3;
   private static final int MAXIMUM_SORT_RECORD_BYTES =
       (TableSchema.MAXIMUM_COLUMNS + 3) * Long.BYTES + Integer.BYTES;
 
@@ -83,8 +84,12 @@ public final class SqlSession {
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final CheckpointResult checkpoint = new CheckpointResult();
   private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
-  private final IndexedSavepoint userSavepoint = new IndexedSavepoint();
-  private final char[] userSavepointName = new char[SqlIdentifier.MAXIMUM_LENGTH];
+  private final IndexedSavepoint[] userSavepoints =
+      new IndexedSavepoint[MAXIMUM_USER_SAVEPOINTS];
+  private final char[][] userSavepointNames =
+      new char[MAXIMUM_USER_SAVEPOINTS][SqlIdentifier.MAXIMUM_LENGTH];
+  private final int[] userSavepointNameLengths =
+      new int[MAXIMUM_USER_SAVEPOINTS];
   private final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] updateSourceColumns = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -179,7 +184,6 @@ public final class SqlSession {
   private long sortedOutputNullMask;
   private boolean transactionActive;
   private boolean statementActive;
-  private boolean userSavepointActive;
   private boolean scanActive;
   private boolean subqueryPredicateFalse;
   private boolean membershipHasNull;
@@ -197,7 +201,7 @@ public final class SqlSession {
   private long scalarResultValue;
   private int membershipCandidateOffset;
   private boolean closed;
-  private int userSavepointNameLength;
+  private int userSavepointCount;
   private int predicateColumn;
   private int predicateCount;
   private int accessPredicate;
@@ -216,6 +220,9 @@ public final class SqlSession {
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
     session = relationalSession;
+    for (int index = 0; index < userSavepoints.length; index++) {
+      userSavepoints[index] = new IndexedSavepoint();
+    }
   }
 
   private StatusCode beginStatement() {
@@ -321,33 +328,39 @@ public final class SqlSession {
       if (!transactionActive) {
         return StatusCode.CONFLICT;
       }
-      if (userSavepointActive) {
+      if (userSavepointCount >= userSavepoints.length) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      status = session.createSavepoint(userSavepoint);
+      if (findUserSavepoint(command.savepointName()) >= 0) {
+        return StatusCode.CONFLICT;
+      }
+      status = session.createSavepoint(userSavepoints[userSavepointCount]);
       if (status.isOk()) {
-        rememberUserSavepoint(command.savepointName());
+        rememberUserSavepoint(command.savepointName(), userSavepointCount++);
         result.setTransaction(true, session.visibleCommitSequence());
       }
       return status;
     }
     if (command.type() == SqlCommandType.ROLLBACK_TO_SAVEPOINT) {
-      if (!transactionActive || !matchesUserSavepoint(command.savepointName())) {
+      int savepoint = findUserSavepoint(command.savepointName());
+      if (!transactionActive || savepoint < 0) {
         return StatusCode.CONFLICT;
       }
-      status = session.rollbackToSavepoint(userSavepoint);
+      status = session.rollbackToSavepoint(userSavepoints[savepoint]);
       if (status.isOk()) {
+        clearUserSavepointsFrom(savepoint + 1);
         result.setTransaction(true, session.visibleCommitSequence());
       }
       return status;
     }
     if (command.type() == SqlCommandType.RELEASE_SAVEPOINT) {
-      if (!transactionActive || !matchesUserSavepoint(command.savepointName())) {
+      int savepoint = findUserSavepoint(command.savepointName());
+      if (!transactionActive || savepoint < 0) {
         return StatusCode.CONFLICT;
       }
-      status = session.releaseSavepoint(userSavepoint);
+      status = session.releaseSavepoint(userSavepoints[savepoint]);
       if (status.isOk()) {
-        clearUserSavepoint();
+        clearUserSavepointsFrom(savepoint);
         result.setTransaction(true, session.visibleCommitSequence());
       }
       return status;
@@ -358,7 +371,7 @@ public final class SqlSession {
       }
       status = session.commit(outcome);
       transactionActive = false;
-      clearUserSavepoint();
+      clearUserSavepointsFrom(0);
       if (status.isOk()) {
         result.setTransaction(false, outcome.commitSequence());
       }
@@ -370,7 +383,7 @@ public final class SqlSession {
       }
       status = session.abort(outcome);
       transactionActive = false;
-      clearUserSavepoint();
+      clearUserSavepointsFrom(0);
       if (status.isOk()) {
         result.setTransaction(false, 0);
       }
@@ -1908,7 +1921,7 @@ public final class SqlSession {
       status = session.abort(outcome);
       if (status.isOk()) {
         transactionActive = false;
-        clearUserSavepoint();
+        clearUserSavepointsFrom(0);
       }
     }
     if (status.isOk()) {
@@ -4978,31 +4991,40 @@ public final class SqlSession {
     return status;
   }
 
-  private void rememberUserSavepoint(CharSequence name) {
-    userSavepointNameLength = name.length();
-    for (int index = 0; index < userSavepointNameLength; index++) {
-      userSavepointName[index] = name.charAt(index);
+  private void rememberUserSavepoint(CharSequence name, int savepoint) {
+    userSavepointNameLengths[savepoint] = name.length();
+    for (int index = 0; index < name.length(); index++) {
+      userSavepointNames[savepoint][index] = name.charAt(index);
     }
-    userSavepointActive = true;
   }
 
-  private boolean matchesUserSavepoint(CharSequence name) {
-    if (!userSavepointActive || name.length() != userSavepointNameLength) {
-      return false;
-    }
-    for (int index = 0; index < userSavepointNameLength; index++) {
-      if (name.charAt(index) != userSavepointName[index]) {
-        return false;
+  private int findUserSavepoint(CharSequence name) {
+    for (int savepoint = userSavepointCount - 1; savepoint >= 0; savepoint--) {
+      int length = userSavepointNameLengths[savepoint];
+      if (name.length() != length) {
+        continue;
+      }
+      boolean matches = true;
+      for (int index = 0; index < length; index++) {
+        if (name.charAt(index) != userSavepointNames[savepoint][index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return savepoint;
       }
     }
-    return true;
+    return -1;
   }
 
-  private void clearUserSavepoint() {
-    for (int index = 0; index < userSavepointNameLength; index++) {
-      userSavepointName[index] = 0;
+  private void clearUserSavepointsFrom(int first) {
+    for (int savepoint = userSavepointCount - 1; savepoint >= first; savepoint--) {
+      for (int index = 0; index < userSavepointNameLengths[savepoint]; index++) {
+        userSavepointNames[savepoint][index] = 0;
+      }
+      userSavepointNameLengths[savepoint] = 0;
     }
-    userSavepointNameLength = 0;
-    userSavepointActive = false;
+    userSavepointCount = first;
   }
 }

@@ -17,18 +17,21 @@ import java.util.Map;
 /** One JDBC connection owns one ordered remote River session. */
 final class RiverJdbcConnection extends AbstractConnection {
   private static final int MAXIMUM_SAVEPOINT_NAME_LENGTH = 64;
+  private static final int MAXIMUM_SAVEPOINTS = 3;
 
   private final RiverClientConnection client;
   private final RiverSession session;
   private final RiverDatabaseMetaData metadata;
   private final CommandResult transactionResult = new CommandResult();
+  private final RiverJdbcSavepoint[] savepoints =
+      new RiverJdbcSavepoint[MAXIMUM_SAVEPOINTS];
   private RiverJdbcStatement statement;
-  private RiverJdbcSavepoint savepoint;
   private boolean autoCommit = true;
   private boolean transactionActive;
   private boolean closed;
   private int isolation = Connection.TRANSACTION_REPEATABLE_READ;
   private int nextSavepointId = 1;
+  private int savepointCount;
 
   RiverJdbcConnection(
       RiverClientConnection remoteClient,
@@ -153,20 +156,22 @@ final class RiverJdbcConnection extends AbstractConnection {
 
   @Override
   public void rollback(Savepoint target) throws SQLException {
-    RiverJdbcSavepoint owned = requireSavepoint(target, "rollback to savepoint");
+    int savepoint = requireSavepoint(target, "rollback to savepoint");
+    RiverJdbcSavepoint owned = savepoints[savepoint];
     executeTransactionCommand(
         "ROLLBACK TO SAVEPOINT " + owned.sqlName(),
         "rollback to savepoint");
+    completeSavepointsFrom(savepoint + 1);
   }
 
   @Override
   public void releaseSavepoint(Savepoint target) throws SQLException {
-    RiverJdbcSavepoint owned = requireSavepoint(target, "release savepoint");
+    int savepoint = requireSavepoint(target, "release savepoint");
+    RiverJdbcSavepoint owned = savepoints[savepoint];
     executeTransactionCommand(
         "RELEASE SAVEPOINT " + owned.sqlName(),
         "release savepoint");
-    owned.complete();
-    savepoint = null;
+    completeSavepointsFrom(savepoint);
   }
 
   @Override
@@ -184,7 +189,7 @@ final class RiverJdbcConnection extends AbstractConnection {
     }
     StatusCode sessionStatus = session.close();
     StatusCode connectionStatus = client.close();
-    completeSavepoint();
+    completeSavepointsFrom(0);
     closed = true;
     if (closeFailure != null) {
       throw closeFailure;
@@ -336,7 +341,7 @@ final class RiverJdbcConnection extends AbstractConnection {
   void commandCompleted(CommandResult result) {
     transactionActive = result.transactionActive();
     if (!transactionActive) {
-      completeSavepoint();
+      completeSavepointsFrom(0);
     }
   }
 
@@ -350,12 +355,12 @@ final class RiverJdbcConnection extends AbstractConnection {
     transactionResult.reset();
     JdbcExceptions.require(session.execute(sql, transactionResult), operation);
     transactionActive = transactionResult.transactionActive();
-    completeSavepoint();
+    completeSavepointsFrom(0);
   }
 
   private Savepoint createSavepoint(String name) throws SQLException {
     requireManualTransaction("create savepoint");
-    if (savepoint != null) {
+    if (savepointCount >= savepoints.length) {
       throw JdbcExceptions.failure(
           StatusCode.RESOURCE_EXHAUSTED,
           "create savepoint");
@@ -369,21 +374,27 @@ final class RiverJdbcConnection extends AbstractConnection {
     int id = nextSavepointId++;
     String sqlName = "jdbc_savepoint_" + id;
     executeTransactionCommand("SAVEPOINT " + sqlName, "create savepoint");
-    savepoint = new RiverJdbcSavepoint(this, id, name, sqlName);
-    return savepoint;
+    RiverJdbcSavepoint created = new RiverJdbcSavepoint(
+        this, id, name, sqlName);
+    savepoints[savepointCount++] = created;
+    return created;
   }
 
-  private RiverJdbcSavepoint requireSavepoint(
+  private int requireSavepoint(
       Savepoint target,
       String operation) throws SQLException {
     requireManualTransaction(operation);
     if (!(target instanceof RiverJdbcSavepoint candidate)
-        || candidate != savepoint
         || !candidate.isOwnedBy(this)
         || !transactionActive) {
       throw JdbcExceptions.failure(StatusCode.CONFLICT, operation);
     }
-    return candidate;
+    for (int index = savepointCount - 1; index >= 0; index--) {
+      if (savepoints[index] == candidate) {
+        return index;
+      }
+    }
+    throw JdbcExceptions.failure(StatusCode.CONFLICT, operation);
   }
 
   private void executeTransactionCommand(String sql, String operation)
@@ -394,12 +405,12 @@ final class RiverJdbcConnection extends AbstractConnection {
     transactionActive = transactionResult.transactionActive();
   }
 
-  private void completeSavepoint() {
-    RiverJdbcSavepoint active = savepoint;
-    savepoint = null;
-    if (active != null) {
-      active.complete();
+  private void completeSavepointsFrom(int first) {
+    for (int index = savepointCount - 1; index >= first; index--) {
+      savepoints[index].complete();
+      savepoints[index] = null;
     }
+    savepointCount = first;
   }
 
   private static boolean validSavepointName(String name) {

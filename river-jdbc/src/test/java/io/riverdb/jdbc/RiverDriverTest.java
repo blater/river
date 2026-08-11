@@ -1046,19 +1046,10 @@ final class RiverDriverTest {
       Savepoint named = connection.setSavepoint("before second row");
       assertEquals("before second row", named.getSavepointName());
       assertThrows(SQLException.class, named::getSavepointId);
-      assertThrows(SQLException.class, () -> connection.setSavepoint("another"));
       assertEquals(
           1,
           statement.executeUpdate(
               "INSERT INTO savepoint_rows VALUES (2, 20)"));
-      connection.rollback(named);
-      assertQueryKeys(
-          statement,
-          "SELECT id FROM savepoint_rows ORDER BY id",
-          1);
-      connection.releaseSavepoint(named);
-      assertThrows(SQLException.class, () -> connection.rollback(named));
-
       Savepoint unnamed = connection.setSavepoint();
       assertTrue(unnamed.getSavepointId() > 0);
       assertThrows(SQLException.class, unnamed::getSavepointName);
@@ -1066,8 +1057,26 @@ final class RiverDriverTest {
           1,
           statement.executeUpdate(
               "INSERT INTO savepoint_rows VALUES (3, 30)"));
+      Savepoint third = connection.setSavepoint("before fourth row");
+      assertThrows(SQLException.class, connection::setSavepoint);
+      assertEquals(
+          1,
+          statement.executeUpdate(
+              "INSERT INTO savepoint_rows VALUES (4, 40)"));
       connection.rollback(unnamed);
+      assertQueryKeys(
+          statement,
+          "SELECT id FROM savepoint_rows ORDER BY id",
+          1,
+          2);
+      assertThrows(SQLException.class, () -> connection.rollback(third));
       connection.releaseSavepoint(unnamed);
+      connection.rollback(named);
+      assertQueryKeys(
+          statement,
+          "SELECT id FROM savepoint_rows ORDER BY id",
+          1);
+      connection.releaseSavepoint(named);
       connection.commit();
       assertThrows(SQLException.class, () -> connection.rollback(unnamed));
       assertQueryKeys(

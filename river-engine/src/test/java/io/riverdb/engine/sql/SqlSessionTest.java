@@ -461,9 +461,11 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("INSERT INTO accounts VALUES (1, 100)", result));
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT middle", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT second", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT third", result));
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
-        session.execute("SAVEPOINT second", result));
+        session.execute("SAVEPOINT fourth", result));
     assertEquals(
         StatusCode.OK,
         session.execute("INSERT INTO accounts VALUES (2, 200)", result));
@@ -479,6 +481,9 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         session.execute("ROLLBACK TO SAVEPOINT middle", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("ROLLBACK TO SAVEPOINT second", result));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("SELECT value FROM accounts WHERE key=2", result));
