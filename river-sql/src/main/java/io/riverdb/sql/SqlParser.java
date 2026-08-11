@@ -311,6 +311,15 @@ public final class SqlParser {
             consumeKeyword(sql, "ASC");
           }
         }
+        if (status.isOk() && consumeKeyword(sql, "LIMIT")) {
+          status = number(sql, numberResult);
+          if (status.isOk() && numberResult.value < 0) {
+            status = StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          if (status.isOk()) {
+            result.setRowLimit(numberResult.value);
+          }
+        }
       }
     } else if (consumeKeyword(sql, "UPDATE")) {
       type = SqlCommandType.UPDATE;

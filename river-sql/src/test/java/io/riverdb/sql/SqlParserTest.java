@@ -122,11 +122,22 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
-            "SELECT key, value FROM accounts ORDER BY value ASC",
+            "SELECT key, value FROM accounts ORDER BY value ASC LIMIT 7",
             command));
     assertEquals(SqlCommandType.SCAN, command.type());
     assertEquals(true, command.isOrdered());
     assertName("value", command.orderColumnName());
+    assertEquals(7, command.rowLimit());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT accounts.key, regions.code FROM accounts "
+                + "JOIN regions ON accounts.region=regions.id LIMIT 0",
+            command));
+    assertEquals(0, command.rowLimit());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT key FROM accounts LIMIT -1", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key FROM accounts ORDER BY key DESC", command));

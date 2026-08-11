@@ -23,6 +23,7 @@ public final class SqlCommand {
   private long value;
   private long scanLowerInclusive;
   private long scanUpperExclusive;
+  private long rowLimit = Long.MAX_VALUE;
   private boolean boundedScan;
   private boolean equalityPredicate;
   private boolean selectAll;
@@ -60,6 +61,7 @@ public final class SqlCommand {
     value = 0;
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
+    rowLimit = Long.MAX_VALUE;
     boundedScan = false;
     equalityPredicate = false;
     selectAll = false;
@@ -101,6 +103,10 @@ public final class SqlCommand {
 
   void setSelectAll() {
     selectAll = true;
+  }
+
+  void setRowLimit(long maximumRows) {
+    rowLimit = maximumRows;
   }
 
   void setBegin(boolean serializable) {
@@ -296,6 +302,10 @@ public final class SqlCommand {
 
   public boolean isSerializableTransaction() {
     return serializableTransaction;
+  }
+
+  public long rowLimit() {
+    return rowLimit;
   }
 
   public boolean isAvailable() {

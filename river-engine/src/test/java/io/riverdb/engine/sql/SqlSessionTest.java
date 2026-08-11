@@ -1449,6 +1449,17 @@ final class SqlSessionTest {
     assertEquals(1, group.valueAt(1));
     assertEquals(StatusCode.CONFLICT, session.nextScan(groups, group));
     assertEquals(StatusCode.OK, session.closeScan(groups, result));
+    assertEquals(StatusCode.OK, groups.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT category, COUNT(*) FROM events "
+                + "GROUP BY category ORDER BY category LIMIT 1",
+            groups));
+    assertEquals(StatusCode.OK, session.nextScan(groups, group));
+    assertEquals(10, group.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(groups, group));
+    assertEquals(StatusCode.OK, session.closeScan(groups, result));
     assertUnindexedRows(
         session,
         result,
@@ -1483,10 +1494,10 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.beginScan(
             "SELECT events.id, categories.code FROM events "
-                + "JOIN categories ON events.category=categories.id",
+                + "JOIN categories ON events.category=categories.id LIMIT 2",
             joined));
-    long[] joinedKeys = {1, 2, 3, 4};
-    long[] joinedCodes = {1000, 1000, 2000, 1000};
+    long[] joinedKeys = {1, 2};
+    long[] joinedCodes = {1000, 1000};
     for (int index = 0; index < joinedKeys.length; index++) {
       assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
       assertEquals(joinedKeys[index], joinedRow.valueAt(0));

@@ -364,7 +364,8 @@ public final class SqlSession {
             : session.beginScan(table, cursor.relational());
       }
       if (status.isOk()) {
-        status = cursor.claimGroupCount(this, implicit, groupColumn, valueIndex);
+        status = cursor.claimGroupCount(
+            this, implicit, groupColumn, valueIndex, command.rowLimit());
       }
       if (status.isOk()) {
         scanActive = true;
@@ -397,7 +398,8 @@ public final class SqlSession {
             table.findColumn(command.joinOuterColumnName()),
             joinTable.findColumn(command.joinInnerColumnName()),
             projectedColumns,
-            projectedColumnCount);
+            projectedColumnCount,
+            command.rowLimit());
       }
       if (status.isOk()) {
         scanActive = true;
@@ -494,7 +496,8 @@ public final class SqlSession {
           equality ? 0 : command.scanUpperExclusive(),
           equality,
           projectedColumns,
-          projectedColumnCount);
+          projectedColumnCount,
+          command.rowLimit());
     }
     if (status.isOk()) {
       scanActive = true;
@@ -517,6 +520,9 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     result.reset();
+    if (!cursor.aggregate() && cursor.limitReached()) {
+      return StatusCode.CONFLICT;
+    }
     if (cursor.aggregate()) {
       if (cursor.rowsReturned() > 0) {
         return StatusCode.CONFLICT;

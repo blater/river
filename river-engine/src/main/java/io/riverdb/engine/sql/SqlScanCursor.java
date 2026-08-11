@@ -26,6 +26,7 @@ public final class SqlScanCursor {
   private long filterLowerInclusive;
   private long filterUpperExclusive;
   private boolean equalityFilter;
+  private long maximumRows = Long.MAX_VALUE;
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private int projectedColumnCount;
   private boolean active;
@@ -54,6 +55,7 @@ public final class SqlScanCursor {
     filterLowerInclusive = 0;
     filterUpperExclusive = 0;
     equalityFilter = false;
+    maximumRows = Long.MAX_VALUE;
     projectedColumnCount = 0;
     rowsReturned = 0;
     return relational.reset();
@@ -72,11 +74,13 @@ public final class SqlScanCursor {
       long upperExclusive,
       boolean equality,
       int[] projections,
-      int projectionCount) {
+      int projectionCount,
+      long rowLimit) {
     if (active
         || projections == null
         || projectionCount <= 0
-        || projectionCount > projectedColumns.length) {
+        || projectionCount > projectedColumns.length
+        || rowLimit < 0) {
       return StatusCode.CONFLICT;
     }
     owner = session;
@@ -86,6 +90,7 @@ public final class SqlScanCursor {
     filterLowerInclusive = lowerInclusive;
     filterUpperExclusive = upperExclusive;
     equalityFilter = equality;
+    maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
       projectedColumns[index] = projections[index];
@@ -118,8 +123,9 @@ public final class SqlScanCursor {
       SqlSession session,
       boolean implicit,
       int column,
-      boolean indexedValue) {
-    if (active || session == null || column < 0) {
+      boolean indexedValue,
+      long rowLimit) {
+    if (active || session == null || column < 0 || rowLimit < 0) {
       return StatusCode.CONFLICT;
     }
     owner = session;
@@ -127,6 +133,7 @@ public final class SqlScanCursor {
     valueIndex = indexedValue;
     groupCount = true;
     groupColumn = column;
+    maximumRows = rowLimit;
     projectedColumns[0] = column;
     projectedColumnCount = 2;
     active = true;
@@ -140,14 +147,16 @@ public final class SqlScanCursor {
       int outerColumn,
       int innerColumn,
       int[] projections,
-      int projectionCount) {
+      int projectionCount,
+      long rowLimit) {
     if (active
         || session == null
         || outerColumn < 0
         || innerColumn < 0
         || projections == null
         || projectionCount <= 0
-        || projectionCount > projectedColumns.length) {
+        || projectionCount > projectedColumns.length
+        || rowLimit < 0) {
       return StatusCode.CONFLICT;
     }
     owner = session;
@@ -155,6 +164,7 @@ public final class SqlScanCursor {
     join = true;
     joinOuterColumn = outerColumn;
     joinInnerColumn = innerColumn;
+    maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
       projectedColumns[index] = projections[index];
@@ -246,6 +256,10 @@ public final class SqlScanCursor {
     return equalityFilter
         ? value == filterLowerInclusive
         : value >= filterLowerInclusive && value < filterUpperExclusive;
+  }
+
+  boolean limitReached() {
+    return rowsReturned >= maximumRows;
   }
 
   public int projectedColumn(int index) {
