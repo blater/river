@@ -26,18 +26,21 @@ final class ProtocolFrameCodecAllocationTest {
     ProtocolFrame frame = new ProtocolFrame();
     ProtocolResponse response = new ProtocolResponse();
     CommandResult command = new CommandResult();
+    char[] source = "catalog_table_identifier_longer_than_seven".toCharArray();
+    char[] decoded = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
     assertEquals(
         StatusCode.OK,
-        command.complete(1, 7, false, true, 3, new long[] {9, 10}, 0, 2));
+        command.complete(1, 7, false, true, 3, new long[] {0, 10}, 0, 1, 2));
+    assertEquals(StatusCode.OK, command.setTextAt(0, source, 0, source.length));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     for (int index = 0; index < 10_000; index++) {
-      exercise(codec, frame, response, command, bytes);
+      exercise(codec, frame, response, command, bytes, decoded);
     }
 
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
-      exercise(codec, frame, response, command, bytes);
+      exercise(codec, frame, response, command, bytes, decoded);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed protocol allocated bytes: " + allocated);
@@ -48,7 +51,8 @@ final class ProtocolFrameCodecAllocationTest {
       ProtocolFrame frame,
       ProtocolResponse response,
       CommandResult command,
-      ByteBuffer bytes) {
+      ByteBuffer bytes,
+      char[] decoded) {
     allocationGuard += codec.encodeCommandResponse(
         bytes,
         ProtocolMessageType.EXECUTE,
@@ -58,5 +62,6 @@ final class ProtocolFrameCodecAllocationTest {
         false).ordinal();
     allocationGuard += codec.decodeResponse(bytes, frame, response).ordinal();
     allocationGuard += response.valueAt(1);
+    allocationGuard += response.copyTextAt(0, decoded, 0);
   }
 }

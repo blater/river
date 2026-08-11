@@ -36,9 +36,11 @@ final class ProtocolFrameCodecTest {
   @Test
   void roundTripsBoundedCommandResponse() {
     CommandResult command = new CommandResult();
+    char[] text = "catalog_table_identifier_longer_than_seven".toCharArray();
     assertEquals(
         StatusCode.OK,
         command.complete(3, 19, true, true, 7, new long[] {11, 0}, 2, 1, 2));
+    assertEquals(StatusCode.OK, command.setTextAt(0, text, 0, text.length));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     assertEquals(
         StatusCode.OK,
@@ -54,12 +56,15 @@ final class ProtocolFrameCodecTest {
     assertTrue(response.rowAvailable());
     assertEquals(7, response.key());
     assertEquals(2, response.columnCount());
-    assertEquals(11, response.valueAt(0));
+    assertEquals(0, response.valueAt(0));
     assertEquals(0, response.valueAt(1));
     assertFalse(response.isNull(0));
     assertTrue(response.isNull(1));
     assertTrue(response.isVarchar(0));
     assertFalse(response.isVarchar(1));
+    char[] decoded = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
+    assertEquals(text.length, response.copyTextAt(0, decoded, 0));
+    assertEquals(new String(text), new String(decoded, 0, text.length));
 
     bytes.putLong(ProtocolFrameCodec.HEADER_BYTES + 56, 1L << 2);
     assertEquals(
@@ -70,6 +75,22 @@ final class ProtocolFrameCodecTest {
         codec.encodeCommandResponse(
             bytes, ProtocolMessageType.EXECUTE, 8, StatusCode.OK, command, false));
     bytes.putLong(ProtocolFrameCodec.HEADER_BYTES + 64, 1L << 2);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeCommandResponse(
+            bytes, ProtocolMessageType.EXECUTE, 8, StatusCode.OK, command, false));
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 72, (byte) 65);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeCommandResponse(
+            bytes, ProtocolMessageType.EXECUTE, 8, StatusCode.OK, command, false));
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 73, (byte) 0x1f);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));

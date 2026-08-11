@@ -3,6 +3,7 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedSavepoint;
+import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -32,12 +33,17 @@ public final class RelationalSession {
   private final IndexedTransactionSession session;
   private final RelationalKey.LongKeyResult physicalKey = new RelationalKey.LongKeyResult();
   private final HeapRowResult catalogRow = new HeapRowResult();
+  private final IndexedScanResult catalogScanRow = new IndexedScanResult();
   private final ByteBuffer catalogScratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final ByteBuffer catalogOutput = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
   private final CatalogRecord.UserSequenceResult userSequenceRecord =
       new CatalogRecord.UserSequenceResult();
   private final ViewDefinition viewRecord = new ViewDefinition();
+  private final ViewDefinition scannedViewRecord = new ViewDefinition();
+  private final TableDefinition scannedTableRecord = new TableDefinition();
+  private final TableSchema.ColumnName scannedObjectName =
+      new TableSchema.ColumnName();
   private final TableDefinition valueIndexTable = new TableDefinition();
   private final TableDefinition referenceTable = new TableDefinition();
   private final TableSchema schemaScratch = new TableSchema();
@@ -134,6 +140,80 @@ public final class RelationalSession {
         ? CatalogRecord.decodeView(
             catalogRow, catalogScratch, name, result)
         : status;
+  }
+
+  public StatusCode beginCatalogObjectScan(CatalogObjectCursor cursor) {
+    if (!registeredTransaction || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = cursor.reset();
+    if (status.isOk()) {
+      status = session.beginScan(Long.MIN_VALUE, 0, cursor.indexed());
+    }
+    if (status.isOk()) {
+      status = cursor.claim(this);
+    }
+    return status;
+  }
+
+  public StatusCode nextCatalogObject(
+      CatalogObjectCursor cursor,
+      CatalogObjectResult result) {
+    if (cursor == null
+        || result == null
+        || !cursor.isOwnedBy(this)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    while (true) {
+      StatusCode status = session.nextScan(cursor.indexed(), catalogScanRow);
+      if (status == StatusCode.CONFLICT) {
+        return StatusCode.OK;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      HeapRowResult row = catalogScanRow.row();
+      if (CatalogRecord.isDroppingTable(row, catalogScratch)) {
+        continue;
+      }
+      StatusCode tableStatus = CatalogRecord.decodeTableForScan(
+          row,
+          catalogScratch,
+          database,
+          scannedObjectName,
+          scannedTableRecord);
+      if (tableStatus.isOk()) {
+        result.set(scannedObjectName, CatalogObjectResult.TABLE);
+        return StatusCode.OK;
+      }
+      if (tableStatus != StatusCode.CONFLICT) {
+        return tableStatus;
+      }
+      StatusCode viewStatus = CatalogRecord.decodeViewForScan(
+          row,
+          catalogScratch,
+          scannedObjectName,
+          scannedViewRecord);
+      if (viewStatus.isOk()) {
+        result.set(scannedObjectName, CatalogObjectResult.VIEW);
+        return StatusCode.OK;
+      }
+      if (viewStatus != StatusCode.CONFLICT) {
+        return viewStatus;
+      }
+    }
+  }
+
+  public StatusCode closeCatalogObjectScan(CatalogObjectCursor cursor) {
+    if (cursor == null || !cursor.isOwnedBy(this)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = session.closeScan(cursor.indexed());
+    if (status.isOk()) {
+      cursor.complete();
+    }
+    return status;
   }
 
   /** Adds one catalog table entry within this session's active transaction. */

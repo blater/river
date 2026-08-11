@@ -5,7 +5,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 
-/** Metadata for River's current bounded BIGINT and VARCHAR(7) projection. */
+/** Metadata for River's bounded BIGINT and text result projection. */
 final class RiverResultSetMetaData implements ResultSetMetaData {
   private final String[] columnNames;
   private final boolean[] varcharColumns;

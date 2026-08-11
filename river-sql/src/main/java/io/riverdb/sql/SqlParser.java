@@ -487,6 +487,9 @@ public final class SqlParser {
     } else if (consumeKeyword(sql, "CHECKPOINT")) {
       type = SqlCommandType.CHECKPOINT;
       status = StatusCode.OK;
+    } else if (consumeKeyword(sql, "SHOW")) {
+      type = SqlCommandType.SHOW_TABLES;
+      status = requireKeyword(sql, "TABLES");
     } else if (consumeKeyword(sql, "ALTER")) {
       if (consumeKeyword(sql, "INDEX")) {
         type = SqlCommandType.ALTER_INDEX_RENAME;

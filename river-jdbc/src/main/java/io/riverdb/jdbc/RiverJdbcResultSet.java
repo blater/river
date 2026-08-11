@@ -1,6 +1,5 @@
 package io.riverdb.jdbc;
 
-import io.riverdb.base.text.PackedText;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
@@ -16,7 +15,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   private final RiverQuery query;
   private final RowResult row = new RowResult();
   private final CommandResult completion = new CommandResult();
-  private final char[] textCharacters = new char[PackedText.MAXIMUM_LENGTH];
+  private final char[] textCharacters =
+      new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final RiverResultSetMetaData metadata;
   private int rowNumber;
   private boolean rowAvailable;

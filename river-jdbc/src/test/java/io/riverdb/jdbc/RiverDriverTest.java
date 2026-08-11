@@ -2062,6 +2062,55 @@ final class RiverDriverTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void streamsLongCatalogNamesThroughJdbc(@TempDir Path root) throws SQLException {
+    String tableName = "customer_account_transaction_history";
+    String viewName = "customer_account_transaction_history_view";
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE " + tableName
+                  + " (id BIGINT PRIMARY KEY, value BIGINT)"));
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE VIEW " + viewName
+                  + " AS SELECT id, value FROM " + tableName));
+      boolean table = false;
+      boolean view = false;
+      try (ResultSet catalog = statement.executeQuery("SHOW TABLES")) {
+        ResultSetMetaData metadata = catalog.getMetaData();
+        assertEquals(2, metadata.getColumnCount());
+        assertEquals("table_name", metadata.getColumnLabel(1));
+        assertEquals("table_type", metadata.getColumnLabel(2));
+        assertEquals(Types.VARCHAR, metadata.getColumnType(1));
+        assertEquals(Types.VARCHAR, metadata.getColumnType(2));
+        while (catalog.next()) {
+          String name = catalog.getString("table_name");
+          String type = catalog.getString("table_type");
+          if (tableName.equals(name)) {
+            table = "TABLE".equals(type);
+          } else if (viewName.equals(name)) {
+            view = "VIEW".equals(type);
+          }
+        }
+      }
+      assertTrue(table);
+      assertTrue(view);
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static LoopbackRiverServer start(RiverDatabase database) {
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, result));

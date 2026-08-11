@@ -390,8 +390,7 @@ public final class ProtocolFrameCodec {
             || flags != (FLAG_QUERY_ACTIVE | FLAG_COLUMN_METADATA)
             || columns <= 0
             || nullMask != 0)
-        || !metadata && (rowAvailable != (columns > 0)
-            || frame.payloadBytes() != RESPONSE_FIXED_BYTES + columns * Long.BYTES)) {
+        || !metadata && rowAvailable != (columns > 0)) {
       frame.reset();
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -434,10 +433,40 @@ public final class ProtocolFrameCodec {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     } else {
+      int valueOffset = offset + RESPONSE_FIXED_BYTES;
+      int end = offset + frame.payloadBytes();
       for (int index = 0; index < columns; index++) {
-        result.valueAt(
-            index,
-            bytes.getLong(offset + RESPONSE_FIXED_BYTES + index * Long.BYTES));
+        if ((varcharMask & 1L << index) != 0) {
+          if (valueOffset >= end) {
+            frame.reset();
+            result.reset();
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          int length = bytes.get(valueOffset++) & 0xff;
+          if (length > CommandResult.MAXIMUM_TEXT_CHARACTERS
+              || (nullMask & 1L << index) != 0 && length != 0
+              || valueOffset + length > end
+              || !validTextValue(bytes, valueOffset, length)) {
+            frame.reset();
+            result.reset();
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          result.textAt(index, bytes, valueOffset, length);
+          valueOffset += length;
+        } else {
+          if (valueOffset > end - Long.BYTES) {
+            frame.reset();
+            result.reset();
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
+          result.valueAt(index, bytes.getLong(valueOffset));
+          valueOffset += Long.BYTES;
+        }
+      }
+      if (valueOffset != end) {
+        frame.reset();
+        result.reset();
+        return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
     return StatusCode.OK;
@@ -469,7 +498,22 @@ public final class ProtocolFrameCodec {
         || (varcharMask & ~((1L << columns) - 1)) != 0) {
       return invalidTarget(target);
     }
-    int payloadBytes = RESPONSE_FIXED_BYTES + columns * Long.BYTES;
+    int valueBytes = 0;
+    for (int index = 0; index < columns; index++) {
+      if ((varcharMask & 1L << index) != 0) {
+        int length = (nullMask & 1L << index) != 0
+            ? 0 : command != null
+                ? command.textLengthAt(index) : row == null
+                    ? -1 : row.textLengthAt(index);
+        if (length < 0 || length > CommandResult.MAXIMUM_TEXT_CHARACTERS) {
+          return invalidTarget(target);
+        }
+        valueBytes += 1 + length;
+      } else {
+        valueBytes += Long.BYTES;
+      }
+    }
+    int payloadBytes = RESPONSE_FIXED_BYTES + valueBytes;
     StatusCode encoded = beginFrame(target, type, requestId, payloadBytes, FRAME_RESPONSE);
     if (!encoded.isOk()) {
       return encoded;
@@ -487,10 +531,28 @@ public final class ProtocolFrameCodec {
         challengeLow,
         nullMask,
         varcharMask);
+    int valueOffset = HEADER_BYTES + RESPONSE_FIXED_BYTES;
     for (int index = 0; index < columns; index++) {
-      long value = command != null
-          ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
-      target.putLong(HEADER_BYTES + RESPONSE_FIXED_BYTES + index * Long.BYTES, value);
+      if ((varcharMask & 1L << index) != 0) {
+        int length = (nullMask & 1L << index) != 0
+            ? 0 : command != null
+                ? command.textLengthAt(index) : row.textLengthAt(index);
+        target.put(valueOffset++, (byte) length);
+        for (int character = 0; character < length; character++) {
+          char value = command != null
+              ? command.textCharacterAt(index, character)
+              : row.textCharacterAt(index, character);
+          if (value < 0x20 || value > 0x7e) {
+            return invalidTarget(target);
+          }
+          target.put(valueOffset++, (byte) value);
+        }
+      } else {
+        long value = command != null
+            ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
+        target.putLong(valueOffset, value);
+        valueOffset += Long.BYTES;
+      }
     }
     target.position(0);
     target.limit(HEADER_BYTES + payloadBytes);
@@ -544,6 +606,16 @@ public final class ProtocolFrameCodec {
     }
     for (int index = 1; index < length; index++) {
       if (!identifierPart((char) (source.get(offset + index) & 0xff))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean validTextValue(ByteBuffer source, int offset, int length) {
+    for (int index = 0; index < length; index++) {
+      int value = source.get(offset + index) & 0xff;
+      if (value < 0x20 || value > 0x7e) {
         return false;
       }
     }

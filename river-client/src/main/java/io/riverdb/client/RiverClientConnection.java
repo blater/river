@@ -45,6 +45,8 @@ public final class RiverClientConnection implements RiverDatabase {
   private final byte[] responseBytes = new byte[ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES];
   private final ByteBuffer responseBuffer = ByteBuffer.wrap(responseBytes);
   private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
+  private final char[] textCharacters =
+      new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final RemoteSession session = new RemoteSession();
   private final Socket socket;
   private final InputStream input;
@@ -338,7 +340,7 @@ public final class RiverClientConnection implements RiverDatabase {
     for (int index = 0; index < columns; index++) {
       values[index] = response.valueAt(index);
     }
-    return target.complete(
+    StatusCode status = target.complete(
         response.affectedRows(),
         response.commitSequence(),
         response.transactionActive(),
@@ -348,6 +350,15 @@ public final class RiverClientConnection implements RiverDatabase {
         response.nullMask(),
         response.varcharMask(),
         columns);
+    for (int index = 0; status.isOk() && index < columns; index++) {
+      if (response.isVarchar(index) && !response.isNull(index)) {
+        int length = response.copyTextAt(index, textCharacters, 0);
+        status = length < 0
+            ? StatusCode.INVALID_EXTERNAL_INPUT
+            : target.setTextAt(index, textCharacters, 0, length);
+      }
+    }
+    return status;
   }
 
   private final class RemoteSession implements RiverSession {
@@ -462,12 +473,21 @@ public final class RiverClientConnection implements RiverDatabase {
         for (int index = 0; index < columns; index++) {
           values[index] = response.valueAt(index);
         }
-        return result.complete(
+        StatusCode completed = result.complete(
             response.key(),
             values,
             response.nullMask(),
             response.varcharMask(),
             columns);
+        for (int index = 0; completed.isOk() && index < columns; index++) {
+          if (response.isVarchar(index) && !response.isNull(index)) {
+            int length = response.copyTextAt(index, textCharacters, 0);
+            completed = length < 0
+                ? StatusCode.INVALID_EXTERNAL_INPUT
+                : result.setTextAt(index, textCharacters, 0, length);
+          }
+        }
+        return completed;
       }
 
       @Override

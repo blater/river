@@ -791,6 +791,22 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesShowTablesAsAStreamingCatalogQuery() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    SqlQuery query = new SqlQuery();
+
+    assertEquals(StatusCode.OK, parser.parseQuery("SHOW TABLES;", query, command));
+    assertEquals(SqlCommandType.SHOW_TABLES, command.type());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery("SHOW TABLE", query, command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery("SHOW TABLES EXTRA", query, command));
+  }
+
+  @Test
   void rejectsMalformedUnsupportedAndOverflowInput() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();

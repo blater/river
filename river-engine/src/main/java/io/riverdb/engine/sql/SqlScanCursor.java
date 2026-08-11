@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.CatalogObjectCursor;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlCommandType;
@@ -10,6 +11,7 @@ public final class SqlScanCursor {
   static final int MAXIMUM_PLAN_STEPS = 8;
 
   private final RelationalScanCursor relational = new RelationalScanCursor();
+  private final CatalogObjectCursor catalogObjects = new CatalogObjectCursor();
   private final RelationalScanCursor joinInnerRelational = new RelationalScanCursor();
   private final long[] joinOuterProjectedValues =
       new long[TableSchema.MAXIMUM_COLUMNS];
@@ -17,6 +19,7 @@ public final class SqlScanCursor {
   private final long[] planDetails = new long[MAXIMUM_PLAN_STEPS];
   private SqlSession owner;
   private boolean aggregate;
+  private boolean catalogObjectScan;
   private boolean groupAggregate;
   private boolean distinct;
   private boolean join;
@@ -70,6 +73,7 @@ public final class SqlScanCursor {
     }
     owner = null;
     aggregate = false;
+    catalogObjectScan = false;
     groupAggregate = false;
     distinct = false;
     join = false;
@@ -116,7 +120,12 @@ public final class SqlScanCursor {
     rowsReturned = 0;
     StatusCode status = relational.reset();
     StatusCode inner = joinInnerRelational.reset();
-    return status.isOk() ? inner : status;
+    StatusCode catalog = catalogObjects.reset();
+    return !status.isOk() ? status : !inner.isOk() ? inner : catalog;
+  }
+
+  CatalogObjectCursor catalogObjects() {
+    return catalogObjects;
   }
 
   RelationalScanCursor relational() {
@@ -149,6 +158,19 @@ public final class SqlScanCursor {
     for (int index = 0; index < projectionCount; index++) {
       projectedColumns[index] = projections[index];
     }
+    active = true;
+    rowsReturned = 0;
+    return StatusCode.OK;
+  }
+
+  StatusCode claimCatalogObjects(SqlSession session, boolean implicit) {
+    if (active || session == null) {
+      return StatusCode.CONFLICT;
+    }
+    owner = session;
+    implicitTransaction = implicit;
+    catalogObjectScan = true;
+    projectedColumnCount = 2;
     active = true;
     rowsReturned = 0;
     return StatusCode.OK;
@@ -367,6 +389,10 @@ public final class SqlScanCursor {
 
   boolean aggregate() {
     return aggregate;
+  }
+
+  boolean catalogObjectScan() {
+    return catalogObjectScan;
   }
 
   boolean groupAggregate() {

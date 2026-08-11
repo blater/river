@@ -140,6 +140,8 @@ public final class EmbeddedRiver {
     private final SqlScanCursor scan = new SqlScanCursor();
     private final SqlScanRowResult scanRow = new SqlScanRowResult();
     private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
+    private final char[] textCharacters =
+        new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
     private final EngineQuery query = new EngineQuery();
     private boolean closed;
 
@@ -249,12 +251,21 @@ public final class EmbeddedRiver {
         for (int index = 0; index < columns; index++) {
           values[index] = scanRow.valueAt(index);
         }
-        return result.complete(
+        StatusCode completed = result.complete(
             scanRow.key(),
             values,
             scanRow.nullMask(),
             scanRow.varcharMask(),
             columns);
+        for (int index = 0; completed.isOk() && index < columns; index++) {
+          if (scanRow.isVarchar(index) && !scanRow.isNull(index)) {
+            int length = scanRow.copyTextAt(index, textCharacters, 0);
+            completed = length < 0
+                ? StatusCode.INVARIANT_BROKEN
+                : result.setTextAt(index, textCharacters, 0, length);
+          }
+        }
+        return completed;
       }
 
       @Override

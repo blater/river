@@ -6,6 +6,9 @@ import io.riverdb.base.text.PackedText;
 /** Reusable bounded row result; unavailable with OK denotes end of stream. */
 public final class RowResult {
   private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
+  private final char[][] textValues =
+      new char[CommandResult.MAXIMUM_COLUMNS][CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  private final int[] textLengths = new int[CommandResult.MAXIMUM_COLUMNS];
   private long key;
   private long nullMask;
   private long varcharMask;
@@ -18,6 +21,9 @@ public final class RowResult {
     varcharMask = 0;
     columnCount = 0;
     available = false;
+    for (int index = 0; index < textLengths.length; index++) {
+      textLengths[index] = 0;
+    }
   }
 
   public StatusCode complete(
@@ -49,7 +55,39 @@ public final class RowResult {
     available = true;
     for (int index = 0; index < columns; index++) {
       values[index] = sourceValues[index];
+      if ((sourceVarcharMask & 1L << index) != 0
+          && (sourceNullMask & 1L << index) == 0) {
+        textLengths[index] = PackedText.copyTo(
+            sourceValues[index], textValues[index], 0);
+      }
     }
+    return StatusCode.OK;
+  }
+
+  public StatusCode setTextAt(
+      int index,
+      char[] source,
+      int offset,
+      int length) {
+    if (!available
+        || index < 0
+        || index >= columnCount
+        || source == null
+        || offset < 0
+        || length < 0
+        || length > CommandResult.MAXIMUM_TEXT_CHARACTERS
+        || offset > source.length - length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int character = 0; character < length; character++) {
+      char value = source[offset + character];
+      if (value < 0x20 || value > 0x7e) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      textValues[index][character] = value;
+    }
+    textLengths[index] = length;
+    varcharMask |= 1L << index;
     return StatusCode.OK;
   }
 
@@ -81,12 +119,27 @@ public final class RowResult {
 
   public int textLengthAt(int index) {
     return isVarchar(index) && !isNull(index)
-        ? PackedText.length(valueAt(index)) : -1;
+        ? textLengths[index] : -1;
   }
 
   public int copyTextAt(int index, char[] destination, int offset) {
-    return isVarchar(index) && !isNull(index)
-        ? PackedText.copyTo(valueAt(index), destination, offset) : -1;
+    int length = textLengthAt(index);
+    if (length < 0
+        || destination == null
+        || offset < 0
+        || offset > destination.length - length) {
+      return -1;
+    }
+    System.arraycopy(textValues[index], 0, destination, offset, length);
+    return length;
+  }
+
+  public char textCharacterAt(int index, int character) {
+    return isVarchar(index)
+            && !isNull(index)
+            && character >= 0
+            && character < textLengths[index]
+        ? textValues[index][character] : 0;
   }
 
   public long varcharMask() {
