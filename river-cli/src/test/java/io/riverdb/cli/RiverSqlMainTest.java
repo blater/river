@@ -36,7 +36,7 @@ final class RiverSqlMainTest {
     String script = """
         CREATE TABLE accounts
           (id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT);
-        INSERT INTO accounts VALUES (1, 100, 7), (2, 200, 7), (3, 300, 8);
+        INSERT INTO accounts VALUES (1, 300, 7), (2, 100, 7), (3, 200, 8);
         CREATE INDEX accounts_region ON accounts(region);
         CREATE TABLE regions (id BIGINT PRIMARY KEY, code BIGINT);
         INSERT INTO regions VALUES (7, 7000), (8, 8000);
@@ -47,6 +47,7 @@ final class RiverSqlMainTest {
         SELECT region, COUNT(*) FROM accounts
           WHERE balance >= 150 AND balance < 350
           GROUP BY region ORDER BY region;
+        SELECT id, balance FROM accounts ORDER BY balance;
         """;
     ByteArrayOutputStream standardOutput = new ByteArrayOutputStream();
     ByteArrayOutputStream standardError = new ByteArrayOutputStream();
@@ -63,6 +64,8 @@ final class RiverSqlMainTest {
         output.contains("id\tcode\n1\t7000\n2\t7000\nROWS\t2\n")
             || output.contains("id\tcode\n2\t7000\n1\t7000\nROWS\t2\n"));
     assertTrue(output.contains("region\tcount\n7\t1\n8\t1\nROWS\t2\n"));
+    assertTrue(
+        output.contains("id\tbalance\n2\t100\n3\t200\n1\t300\nROWS\t3\n"));
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
   }

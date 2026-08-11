@@ -15,6 +15,7 @@ public final class SqlScanCursor {
   private boolean groupCount;
   private boolean distinct;
   private boolean join;
+  private boolean sorted;
   private boolean joinInnerScanActive;
   private boolean joinInnerUnique;
   private boolean groupLookahead;
@@ -29,6 +30,8 @@ public final class SqlScanCursor {
   private int joinOuterColumn = -1;
   private int joinInnerColumn = -1;
   private long joinOuterKey;
+  private int sortedRowCount;
+  private int sortedRowIndex;
   private boolean implicitTransaction;
   private boolean valueIndex;
   private long maximumRows = Long.MAX_VALUE;
@@ -46,6 +49,7 @@ public final class SqlScanCursor {
     groupCount = false;
     distinct = false;
     join = false;
+    sorted = false;
     joinInnerScanActive = false;
     joinInnerUnique = false;
     groupLookahead = false;
@@ -60,6 +64,8 @@ public final class SqlScanCursor {
     joinOuterColumn = -1;
     joinInnerColumn = -1;
     joinOuterKey = 0;
+    sortedRowCount = 0;
+    sortedRowIndex = 0;
     implicitTransaction = false;
     valueIndex = false;
     maximumRows = Long.MAX_VALUE;
@@ -95,6 +101,37 @@ public final class SqlScanCursor {
     owner = session;
     implicitTransaction = implicit;
     valueIndex = indexedValue;
+    maximumRows = rowLimit;
+    projectedColumnCount = projectionCount;
+    for (int index = 0; index < projectionCount; index++) {
+      projectedColumns[index] = projections[index];
+    }
+    active = true;
+    rowsReturned = 0;
+    return StatusCode.OK;
+  }
+
+  StatusCode claimSorted(
+      SqlSession session,
+      boolean implicit,
+      int[] projections,
+      int projectionCount,
+      int rowCount,
+      long rowLimit) {
+    if (active
+        || session == null
+        || projections == null
+        || projectionCount <= 0
+        || projectionCount > projectedColumns.length
+        || rowCount < 0
+        || rowLimit < 0) {
+      return StatusCode.CONFLICT;
+    }
+    owner = session;
+    implicitTransaction = implicit;
+    sorted = true;
+    sortedRowCount = rowCount;
+    sortedRowIndex = 0;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
     for (int index = 0; index < projectionCount; index++) {
@@ -231,6 +268,14 @@ public final class SqlScanCursor {
 
   boolean join() {
     return join;
+  }
+
+  boolean sorted() {
+    return sorted;
+  }
+
+  int nextSortedRow() {
+    return sortedRowIndex < sortedRowCount ? sortedRowIndex++ : -1;
   }
 
   int joinOuterColumn() {

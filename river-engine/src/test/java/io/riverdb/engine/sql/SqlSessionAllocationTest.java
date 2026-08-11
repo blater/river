@@ -77,12 +77,14 @@ final class SqlSessionAllocationTest {
     SqlScanRowResult scanRow = new SqlScanRowResult();
     for (int index = 0; index < 100; index++) {
       exerciseScan(session, cursor, scanRow, result);
+      exerciseSort(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exerciseScan(session, cursor, scanRow, result);
+      exerciseSort(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
     }
@@ -114,6 +116,20 @@ final class SqlSessionAllocationTest {
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.key();
     allocationGuard += row.value();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseSort(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id, balance FROM t WHERE region=7 ORDER BY balance", cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

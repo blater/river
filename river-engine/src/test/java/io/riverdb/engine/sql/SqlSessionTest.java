@@ -1463,9 +1463,23 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.execute("SELECT COUNT(*) FROM events WHERE missing=10", result));
+    SqlScanCursor unindexedOrder = new SqlScanCursor();
+    SqlScanRowResult orderedRow = new SqlScanRowResult();
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session.beginScan("SELECT id FROM events ORDER BY amount", new SqlScanCursor()));
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, category FROM events "
+                + "WHERE amount >= 150 AND amount < 450 ORDER BY category",
+            unindexedOrder));
+    long[] orderedIds = {2, 4, 3};
+    long[] orderedCategories = {10, 10, 20};
+    for (int index = 0; index < orderedIds.length; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(unindexedOrder, orderedRow));
+      assertEquals(orderedIds[index], orderedRow.valueAt(0));
+      assertEquals(orderedCategories[index], orderedRow.valueAt(1));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE INDEX events_category ON events(category)", result));

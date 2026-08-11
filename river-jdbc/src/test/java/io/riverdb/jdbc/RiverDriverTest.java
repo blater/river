@@ -82,11 +82,15 @@ final class RiverDriverTest {
           0,
           statement.executeUpdate(
               "CREATE INDEX region_labels_region ON region_labels(region)"));
-      SQLException missingOrderIndex = assertThrows(
-          SQLException.class,
-          () -> statement.executeQuery(
-              "SELECT id, balance FROM accounts ORDER BY balance"));
-      assertEquals("22000", missingOrderIndex.getSQLState());
+      try (ResultSet ordered = statement.executeQuery(
+          "SELECT id, balance FROM accounts ORDER BY balance")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(ordered.next());
+          assertEquals(expected, ordered.getLong("id"));
+          assertEquals(expected * 100, ordered.getLong("balance"));
+        }
+        assertFalse(ordered.next());
+      }
       assertEquals(
           0,
           statement.executeUpdate(

@@ -23,6 +23,7 @@ import java.nio.ByteBuffer;
 /** Executes the first SQL point-statement subset through real catalog and transactions. */
 public final class SqlSession {
   private static final String COUNT_COLUMN_NAME = "count";
+  private static final int MAXIMUM_SORT_ROWS = 1_024;
 
   private final RelationalDatabase database;
   private final RelationalSession session;
@@ -50,6 +51,9 @@ public final class SqlSession {
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(
       (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
+  private long[] sortedKeys;
+  private long[] sortedPrimaryKeys;
+  private long[] sortedValues;
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
@@ -61,6 +65,7 @@ public final class SqlSession {
   private int updatedColumnCount;
   private int matchedRowCount;
   private int projectedColumnCount;
+  private int sortedRowCount;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -495,12 +500,16 @@ public final class SqlSession {
         ? table.findColumn(command.orderColumnName()) : -1;
     if (status.isOk()
         && command.isOrdered()
-        && (orderColumn < 0 || orderColumn > 0 && !table.hasIndexOn(orderColumn))) {
+        && orderColumn < 0) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    boolean materializedSort = status.isOk()
+        && command.isOrdered()
+        && orderColumn > 0
+        && !table.hasIndexOn(orderColumn);
     boolean bounded = status.isOk() && predicateCount > 0;
     boolean equality = bounded && accessEquality();
-    int scanIndexColumn = status.isOk() && command.isOrdered()
+    int scanIndexColumn = status.isOk() && command.isOrdered() && !materializedSort
         ? orderColumn > 0 ? orderColumn : -1
         : status.isOk() && predicateColumn > 0 && table.hasIndexOn(predicateColumn)
             ? predicateColumn : -1;
@@ -537,13 +546,26 @@ public final class SqlSession {
       }
     }
     if (status.isOk()) {
-      status = cursor.claim(
-          this,
-          implicit,
-          valueIndex,
-          projectedColumns,
-          projectedColumnCount,
-          command.rowLimit());
+      if (materializedSort) {
+        status = materializeSortedScan(cursor, valueIndex, orderColumn);
+        if (status.isOk()) {
+          status = cursor.claimSorted(
+              this,
+              implicit,
+              projectedColumns,
+              projectedColumnCount,
+              sortedRowCount,
+              command.rowLimit());
+        }
+      } else {
+        status = cursor.claim(
+            this,
+            implicit,
+            valueIndex,
+            projectedColumns,
+            projectedColumnCount,
+            command.rowLimit());
+      }
     }
     if (status.isOk()) {
       scanActive = true;
@@ -575,6 +597,22 @@ public final class SqlSession {
       }
       projectedValues[0] = cursor.aggregateValue();
       result.set(0, projectedValues, 1);
+      cursor.rowReturned();
+      return StatusCode.OK;
+    }
+    if (cursor.sorted()) {
+      int sortedRow = cursor.nextSortedRow();
+      if (sortedRow < 0) {
+        return StatusCode.CONFLICT;
+      }
+      int valueStart = sortedRow * TableSchema.MAXIMUM_COLUMNS;
+      for (int index = 0; index < cursor.projectedColumnCount(); index++) {
+        projectedValues[index] = sortedValues[valueStart + index];
+      }
+      result.set(
+          sortedPrimaryKeys[sortedRow],
+          projectedValues,
+          cursor.projectedColumnCount());
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -669,7 +707,7 @@ public final class SqlSession {
         cursor.completeJoinInnerScan();
       }
     }
-    if (status.isOk()) {
+    if (status.isOk() && !cursor.sorted()) {
       status = session.closeScan(cursor.relational());
     }
     if (!status.isOk()) {
@@ -1481,6 +1519,124 @@ public final class SqlSession {
     for (int index = 0; index < cursor.projectedColumnCount(); index++) {
       int column = cursor.projectedColumn(index);
       destination[index] = readColumn(primaryKey, source, column);
+    }
+  }
+
+  private StatusCode materializeSortedScan(
+      SqlScanCursor cursor,
+      boolean valueIndex,
+      int orderColumn) {
+    ensureSortWorkspace();
+    sortedRowCount = 0;
+    StatusCode status = StatusCode.OK;
+    while (status.isOk()) {
+      long primaryKey;
+      HeapRowResult source;
+      if (valueIndex) {
+        status = session.nextValueScan(
+            table, cursor.relational(), aggregateRow, indexed);
+        primaryKey = indexed.key();
+        source = indexed.row();
+      } else {
+        status = session.nextScan(cursor.relational(), aggregateRow);
+        primaryKey = aggregateRow.key();
+        source = aggregateRow.row();
+      }
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (status.isOk()) {
+        status = validateRow(source);
+      }
+      if (status.isOk() && !matchesPredicates(primaryKey, source)) {
+        continue;
+      }
+      if (status.isOk() && sortedRowCount >= MAXIMUM_SORT_ROWS) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
+      if (status.isOk()) {
+        int rowIndex = sortedRowCount++;
+        sortedKeys[rowIndex] = readColumn(primaryKey, source, orderColumn);
+        sortedPrimaryKeys[rowIndex] = primaryKey;
+        int valueStart = rowIndex * TableSchema.MAXIMUM_COLUMNS;
+        for (int index = 0; index < projectedColumnCount; index++) {
+          sortedValues[valueStart + index] = readColumn(
+              primaryKey, source, projectedColumns[index]);
+        }
+      }
+    }
+    StatusCode close = session.closeScan(cursor.relational());
+    if (!close.isOk()) {
+      return close;
+    }
+    if (status.isOk()) {
+      sortMaterializedRows();
+    }
+    return status;
+  }
+
+  private void ensureSortWorkspace() {
+    if (sortedKeys != null) {
+      return;
+    }
+    sortedKeys = new long[MAXIMUM_SORT_ROWS];
+    sortedPrimaryKeys = new long[MAXIMUM_SORT_ROWS];
+    sortedValues = new long[MAXIMUM_SORT_ROWS * TableSchema.MAXIMUM_COLUMNS];
+  }
+
+  private void sortMaterializedRows() {
+    for (int root = sortedRowCount / 2 - 1; root >= 0; root--) {
+      siftSortedRow(root, sortedRowCount);
+    }
+    for (int end = sortedRowCount - 1; end > 0; end--) {
+      swapSortedRows(0, end);
+      siftSortedRow(0, end);
+    }
+  }
+
+  private void siftSortedRow(int root, int length) {
+    int current = root;
+    while (current * 2 + 1 < length) {
+      int child = current * 2 + 1;
+      if (child + 1 < length && compareSortedRows(child, child + 1) < 0) {
+        child++;
+      }
+      if (compareSortedRows(current, child) >= 0) {
+        return;
+      }
+      swapSortedRows(current, child);
+      current = child;
+    }
+  }
+
+  private int compareSortedRows(int left, int right) {
+    long leftKey = sortedKeys[left];
+    long rightKey = sortedKeys[right];
+    if (leftKey < rightKey) {
+      return -1;
+    }
+    if (leftKey > rightKey) {
+      return 1;
+    }
+    long leftPrimary = sortedPrimaryKeys[left];
+    long rightPrimary = sortedPrimaryKeys[right];
+    return leftPrimary < rightPrimary ? -1 : leftPrimary == rightPrimary ? 0 : 1;
+  }
+
+  private void swapSortedRows(int left, int right) {
+    long key = sortedKeys[left];
+    sortedKeys[left] = sortedKeys[right];
+    sortedKeys[right] = key;
+    long primaryKey = sortedPrimaryKeys[left];
+    sortedPrimaryKeys[left] = sortedPrimaryKeys[right];
+    sortedPrimaryKeys[right] = primaryKey;
+    int leftStart = left * TableSchema.MAXIMUM_COLUMNS;
+    int rightStart = right * TableSchema.MAXIMUM_COLUMNS;
+    for (int index = 0; index < projectedColumnCount; index++) {
+      long value = sortedValues[leftStart + index];
+      sortedValues[leftStart + index] = sortedValues[rightStart + index];
+      sortedValues[rightStart + index] = value;
     }
   }
 
