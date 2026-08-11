@@ -8,8 +8,8 @@ public final class SqlQuery {
 
   private final SqlCommand[] blocks = new SqlCommand[MAXIMUM_QUERY_BLOCKS];
   private final int[] scalarPredicates = new int[MAXIMUM_QUERY_BLOCKS];
+  private final int[] existencePredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private int blockCount;
-  private int existencePredicate;
   private int membershipPredicate;
 
   public SqlQuery() {
@@ -23,9 +23,9 @@ public final class SqlQuery {
     for (int index = 0; index < blockCount; index++) {
       blocks[index].reset();
       scalarPredicates[index] = -1;
+      existencePredicates[index] = 0;
     }
     blockCount = 0;
-    existencePredicate = 0;
     membershipPredicate = 0;
   }
 
@@ -36,11 +36,16 @@ public final class SqlQuery {
     SqlCommand block = blocks[blockCount++];
     block.reset();
     scalarPredicates[blockCount - 1] = -1;
+    existencePredicates[blockCount - 1] = 0;
     return block;
   }
 
   void setScalarPredicate(int block, int predicate) {
     scalarPredicates[block] = predicate;
+  }
+
+  void setExistencePredicate(int block, boolean negated) {
+    existencePredicates[block] = negated ? -1 : 1;
   }
 
   StatusCode compileDerived(SqlCommand destination) {
@@ -140,20 +145,20 @@ public final class SqlQuery {
 
   StatusCode compileExistencePredicate(SqlCommand destination, boolean negated) {
     if (destination == null
-        || blockCount != 2
-        || blocks[0].type() != SqlCommandType.SCAN
-            && blocks[0].type() != SqlCommandType.SELECT) {
+        || blockCount < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlCommand nested = blocks[1];
-    if (nested.type() != SqlCommandType.SCAN
-        && nested.type() != SqlCommandType.SELECT
-        || nested.isSelectAll()
-        || nested.columnCount() != 1) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    existencePredicates[0] = negated ? -1 : 1;
+    for (int index = 0; index < blockCount; index++) {
+      SqlCommand block = blocks[index];
+      if (block.type() != SqlCommandType.SCAN
+          && block.type() != SqlCommandType.SELECT
+          || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
+          || index + 1 < blockCount && existencePredicates[index] == 0) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
     }
     destination.copyQueryFrom(blocks[0]);
-    existencePredicate = negated ? -1 : 1;
     return StatusCode.OK;
   }
 
@@ -288,11 +293,17 @@ public final class SqlQuery {
   }
 
   public boolean hasExistencePredicate() {
-    return existencePredicate != 0;
+    return blockCount > 1 && existencePredicates[0] != 0;
   }
 
   public boolean existenceNegated() {
-    return existencePredicate < 0;
+    return existenceNegated(0);
+  }
+
+  public boolean existenceNegated(int block) {
+    return block >= 0
+        && block < blockCount
+        && existencePredicates[block] < 0;
   }
 
   public SqlCommand existenceCommand() {

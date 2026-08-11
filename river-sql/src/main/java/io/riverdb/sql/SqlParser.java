@@ -52,23 +52,48 @@ public final class SqlParser {
       int open,
       SqlQuery query,
       SqlCommand result) {
-    int close = matchingCloseParenthesis(sql, open, sql.length());
-    if (close < 0 || existenceWhereStart < 0) {
+    StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : parseExistenceBlocks(sql, 0, sql.length(), query);
+    return status.isOk()
+        ? query.compileExistencePredicate(result, query.existenceNegated()) : status;
+  }
+
+  private StatusCode parseExistenceBlocks(
+      String sql,
+      int start,
+      int end,
+      SqlQuery query) {
+    int open = findExistenceSource(sql, start, end);
+    int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
+    int whereStart = existenceWhereStart;
+    boolean negated = existenceNegated;
+    if (open < 0 || close < 0 || whereStart < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlCommand outer = query.nextBlock();
-    SqlCommand nested = query.nextBlock();
-    if (outer == null || nested == null) {
+    int parentIndex = query.blockCount();
+    SqlCommand parent = query.nextBlock();
+    if (parent == null) {
       return StatusCode.QUERY_TOO_COMPLEX;
     }
-    sourceView.set(sql, 0, existenceWhereStart, close + 1, sql.length());
-    StatusCode status = parseText(sourceView, outer);
+    sourceView.set(sql, start, whereStart, close + 1, end);
+    StatusCode status = parseText(sourceView, parent);
     if (status.isOk()) {
-      sourceView.set(sql, open + 1, close, close, close);
-      status = parseText(sourceView, nested);
+      query.setExistencePredicate(parentIndex, negated);
+      int nestedOpen = findExistenceSource(sql, open + 1, close);
+      if (nestedOpen >= 0) {
+        status = parseExistenceBlocks(sql, open + 1, close, query);
+      } else {
+        SqlCommand nested = query.nextBlock();
+        if (nested == null) {
+          status = StatusCode.QUERY_TOO_COMPLEX;
+        } else {
+          sourceView.set(sql, open + 1, close, close, close);
+          status = parseText(sourceView, nested);
+        }
+      }
     }
-    return status.isOk()
-        ? query.compileExistencePredicate(result, existenceNegated) : status;
+    return status;
   }
 
   private StatusCode parseScalarPredicate(

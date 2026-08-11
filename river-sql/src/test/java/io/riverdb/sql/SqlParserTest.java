@@ -477,7 +477,7 @@ final class SqlParserTest {
   }
 
   @Test
-  void parsesExistencePredicatesAsTwoQueryBlocks() {
+  void parsesExistencePredicatesAsBoundedQueryBlocks() {
     SqlParser parser = new SqlParser();
     SqlQuery query = new SqlQuery();
     SqlCommand command = new SqlCommand();
@@ -531,6 +531,19 @@ final class SqlParserTest {
     assertName("b", correlated.tableAlias());
     assertName("b", correlated.predicateTableName(0));
     assertName("a", correlated.predicateValueTableName(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(nestedExistenceQuery(3), query, command));
+    assertEquals(3, query.blockCount());
+    assertFalse(query.existenceNegated(0));
+    assertFalse(query.existenceNegated(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(nestedExistenceQuery(32), query, command));
+    assertEquals(32, query.blockCount());
+    assertEquals(
+        StatusCode.QUERY_TOO_COMPLEX,
+        parser.parseQuery(nestedExistenceQuery(33), query, command));
   }
 
   @Test
@@ -664,6 +677,11 @@ final class SqlParserTest {
               + "WHERE id=(SELECT id FROM accounts WHERE id=1))",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS (SELECT id FROM accounts "
+              + "WHERE EXISTS (SELECT id FROM accounts WHERE id=1))",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -718,6 +736,11 @@ final class SqlParserTest {
               + "WHERE id=(SELECT id FROM accounts WHERE id=1))",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS (SELECT id FROM accounts "
+              + "WHERE EXISTS (SELECT id FROM accounts WHERE id=1))",
+          query,
+          command).ordinal();
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 256, "warmed SQL parse allocated bytes: " + allocated);
@@ -735,6 +758,14 @@ final class SqlParserTest {
     String query = "SELECT id FROM accounts WHERE id=1";
     for (int depth = 1; depth < blocks; depth++) {
       query = "SELECT id FROM accounts WHERE id=(" + query + ")";
+    }
+    return query;
+  }
+
+  private static String nestedExistenceQuery(int blocks) {
+    String query = "SELECT id FROM accounts WHERE id=1";
+    for (int depth = 1; depth < blocks; depth++) {
+      query = "SELECT id FROM accounts WHERE EXISTS (" + query + ")";
     }
     return query;
   }

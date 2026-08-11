@@ -114,6 +114,7 @@ public final class SqlSession {
   private boolean correlatedScalar;
   private boolean correlatedExistence;
   private boolean correlatedMembership;
+  private boolean existenceResult;
   private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
@@ -1807,28 +1808,55 @@ public final class SqlSession {
   }
 
   private StatusCode evaluateExistencePredicate() {
-    SqlCommand nested = query.existenceCommand();
-    if (nested == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = StatusCode.OK;
+    boolean nestedPredicateTrue = true;
+    for (int block = query.blockCount() - 1;
+        status.isOk() && block > 0;
+        block--) {
+      SqlCommand nested = query.block(block);
+      if (nested == null || nested.isOrdered()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      status = bindNestedCommand(nested);
+      if (status.isOk() && nestedCorrelated) {
+        if (query.blockCount() != 2) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        correlatedExistence = true;
+        return StatusCode.OK;
+      }
+      if (status.isOk()) {
+        if (nestedPredicateTrue) {
+          status = evaluateExistenceRows(nested, 0, null);
+        } else {
+          existenceResult = false;
+        }
+      }
+      if (status.isOk()) {
+        nestedPredicateTrue = query.existenceNegated(block - 1)
+            ? !existenceResult : existenceResult;
+      }
     }
-    StatusCode status = bindNestedCommand(nested);
-    if (!status.isOk()) {
-      return status;
+    if (status.isOk()) {
+      subqueryPredicateFalse = !nestedPredicateTrue;
     }
-    if (nestedCorrelated) {
-      correlatedExistence = true;
-      return StatusCode.OK;
-    }
-    return evaluateExistenceRows(nested, 0, null);
+    return status;
   }
 
   private StatusCode evaluateCorrelatedExistence(
       long outerPrimaryKey,
       HeapRowResult outerSource) {
     SqlCommand nested = query.existenceCommand();
-    return nested == null
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : evaluateExistenceRows(nested, outerPrimaryKey, outerSource);
+    if (nested == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = evaluateExistenceRows(
+        nested, outerPrimaryKey, outerSource);
+    if (status.isOk()) {
+      subqueryPredicateFalse = query.existenceNegated()
+          ? existenceResult : !existenceResult;
+    }
+    return status;
   }
 
   private StatusCode evaluateExistenceRows(
@@ -1836,7 +1864,7 @@ public final class SqlSession {
       long outerPrimaryKey,
       HeapRowResult outerSource) {
     StatusCode status = StatusCode.OK;
-    boolean exists = false;
+    existenceResult = false;
     if (status.isOk() && nested.rowLimit() > 0) {
       status = session.beginScan(scalarTable, scalarCursor);
     }
@@ -1857,7 +1885,7 @@ public final class SqlSession {
               scalarRow.row(),
               outerPrimaryKey,
               outerSource)) {
-        exists = true;
+        existenceResult = true;
         break;
       }
     }
@@ -1870,9 +1898,6 @@ public final class SqlSession {
       if (status.isOk()) {
         status = close;
       }
-    }
-    if (status.isOk()) {
-      subqueryPredicateFalse = query.existenceNegated() ? exists : !exists;
     }
     return status;
   }

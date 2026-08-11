@@ -339,6 +339,30 @@ final class RiverDriverTest {
           SQLException.class,
           () -> statement.executeQuery(nestedScalarQuery(33)));
       assertEquals("54001", scalarDepthFailure.getSQLState());
+      for (int depth : new int[] {3, 8, 32}) {
+        try (ResultSet nestedExistence = statement.executeQuery(
+            nestedExistenceQuery(depth))) {
+          for (long expected = 1; expected <= 3; expected++) {
+            assertTrue(nestedExistence.next());
+            assertEquals(expected, nestedExistence.getLong(1));
+          }
+          assertFalse(nestedExistence.next());
+        }
+      }
+      try (ResultSet nestedNotExistence = statement.executeQuery(
+          "SELECT id FROM accounts WHERE NOT EXISTS "
+              + "(SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM accounts WHERE id=99)) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(nestedNotExistence.next());
+          assertEquals(expected, nestedNotExistence.getLong(1));
+        }
+        assertFalse(nestedNotExistence.next());
+      }
+      SQLException existenceDepthFailure = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(nestedExistenceQuery(33)));
+      assertEquals("54001", existenceDepthFailure.getSQLState());
       try (ResultSet exists = statement.executeQuery(
           "SELECT id FROM accounts WHERE EXISTS "
               + "(SELECT id FROM regions WHERE code=7000) ORDER BY id")) {
@@ -639,6 +663,14 @@ final class RiverDriverTest {
     String query = "SELECT id FROM accounts WHERE id=1";
     for (int depth = 1; depth < blocks; depth++) {
       query = "SELECT id FROM accounts WHERE id=(" + query + ")";
+    }
+    return query;
+  }
+
+  private static String nestedExistenceQuery(int blocks) {
+    String query = "SELECT id FROM accounts WHERE id=1";
+    for (int depth = 1; depth < blocks; depth++) {
+      query = "SELECT id FROM accounts WHERE EXISTS (" + query + ")";
     }
     return query;
   }
