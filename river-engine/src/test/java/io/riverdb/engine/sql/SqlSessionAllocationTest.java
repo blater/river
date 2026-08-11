@@ -78,6 +78,7 @@ final class SqlSessionAllocationTest {
     for (int index = 0; index < 100; index++) {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
+      exerciseScalar(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
     }
@@ -85,6 +86,7 @@ final class SqlSessionAllocationTest {
     for (int index = 0; index < 100; index++) {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
+      exerciseScalar(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
     }
@@ -149,6 +151,22 @@ final class SqlSessionAllocationTest {
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseScalar(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id, balance FROM t WHERE balance="
+            + "(SELECT balance FROM t WHERE t.id=1)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();

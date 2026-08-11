@@ -51,6 +51,8 @@ final class RiverSqlMainTest {
         SELECT d.id, d.balance FROM
           (SELECT id, balance, region FROM accounts WHERE region=7) d
           ORDER BY balance;
+        SELECT id, balance FROM accounts WHERE balance=
+          (SELECT balance FROM accounts WHERE id=3);
         """;
     ByteArrayOutputStream standardOutput = new ByteArrayOutputStream();
     ByteArrayOutputStream standardError = new ByteArrayOutputStream();
@@ -70,6 +72,7 @@ final class RiverSqlMainTest {
     assertTrue(
         output.contains("id\tbalance\n2\t100\n3\t200\n1\t300\nROWS\t3\n"));
     assertTrue(output.contains("id\tbalance\n2\t100\n1\t300\nROWS\t2\n"));
+    assertTrue(output.contains("id\tbalance\n3\t200\nROWS\t1\n"));
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
   }

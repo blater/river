@@ -103,6 +103,25 @@ final class RiverDriverTest {
         assertEquals(200, derived.getLong("balance"));
         assertFalse(derived.next());
       }
+      try (ResultSet scalar = statement.executeQuery(
+          "SELECT id, balance FROM accounts WHERE region=7 AND balance="
+              + "(SELECT balance FROM accounts WHERE accounts.id=2)")) {
+        assertTrue(scalar.next());
+        assertEquals(2, scalar.getLong("id"));
+        assertEquals(200, scalar.getLong("balance"));
+        assertFalse(scalar.next());
+      }
+      try (ResultSet scalar = statement.executeQuery(
+          "SELECT id FROM accounts WHERE balance="
+              + "(SELECT balance FROM accounts WHERE id=99)")) {
+        assertFalse(scalar.next());
+      }
+      SQLException cardinality = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
+              "SELECT id FROM accounts WHERE balance="
+                  + "(SELECT region FROM accounts WHERE region=7)"));
+      assertEquals("21000", cardinality.getSQLState());
       String nested = "SELECT id FROM accounts";
       for (int depth = 1; depth < 32; depth++) {
         nested = "SELECT d" + depth + ".id FROM (" + nested + ") d" + depth;

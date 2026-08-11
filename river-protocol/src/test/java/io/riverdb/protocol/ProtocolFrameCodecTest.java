@@ -95,7 +95,14 @@ final class ProtocolFrameCodecTest {
 
     assertEquals(
         StatusCode.OK,
-        codec.encodeQueryOpenResponse(bytes, 12, StatusCode.OK, query));
+        codec.encodeQueryOpenResponse(
+            bytes, 12, StatusCode.CARDINALITY_VIOLATION, null));
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, response.status());
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeQueryOpenResponse(bytes, 13, StatusCode.OK, query));
     bytes.put(ProtocolFrameCodec.HEADER_BYTES + 56, (byte) 0);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,

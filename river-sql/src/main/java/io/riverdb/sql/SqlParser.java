@@ -8,7 +8,9 @@ public final class SqlParser {
   private final LongRow rowResult = new LongRow();
   private final SqlIdentifier identifierScratch = new SqlIdentifier();
   private final SqlSourceView sourceView = new SqlSourceView();
+  private final SqlScalarSourceView scalarSourceView = new SqlScalarSourceView();
   private int offset;
+  private int scalarPredicateIndex = -1;
 
   public StatusCode parse(String sql, SqlCommand result) {
     return parseText(sql, result);
@@ -23,11 +25,42 @@ public final class SqlParser {
     }
     query.reset();
     int derived = findDerivedSource(sql, 0, sql.length());
-    if (derived < 0) {
-      return parseText(sql, result);
+    if (derived >= 0) {
+      StatusCode status = parseDerivedBlocks(sql, 0, sql.length(), query);
+      return status.isOk() ? query.compileDerived(result) : status;
     }
-    StatusCode status = parseDerivedBlocks(sql, 0, sql.length(), query);
-    return status.isOk() ? query.compileDerived(result) : status;
+    int scalar = findScalarSource(sql, 0, sql.length());
+    return scalar < 0
+        ? parseText(sql, result)
+        : parseScalarPredicate(sql, scalar, query, result);
+  }
+
+  private StatusCode parseScalarPredicate(
+      String sql,
+      int open,
+      SqlQuery query,
+      SqlCommand result) {
+    int close = matchingCloseParenthesis(sql, open, sql.length());
+    if (close < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SqlCommand outer = query.nextBlock();
+    SqlCommand scalar = query.nextBlock();
+    if (outer == null || scalar == null) {
+      return StatusCode.QUERY_TOO_COMPLEX;
+    }
+    scalarSourceView.set(sql, 0, open, close + 1, sql.length());
+    scalarPredicateIndex = -1;
+    StatusCode status = parseText(scalarSourceView, outer);
+    if (status.isOk() && scalarPredicateIndex < 0) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      sourceView.set(sql, open + 1, close, close, close);
+      status = parseText(sourceView, scalar);
+    }
+    return status.isOk()
+        ? query.compileScalarPredicate(result, scalarPredicateIndex) : status;
   }
 
   private StatusCode parseDerivedBlocks(
@@ -85,6 +118,37 @@ public final class SqlParser {
         depth++;
       } else if (character == ')' && --depth == 0) {
         return index;
+      }
+    }
+    return -1;
+  }
+
+  private static int findScalarSource(String sql, int start, int end) {
+    int depth = 0;
+    for (int index = start; index < end; index++) {
+      char character = sql.charAt(index);
+      if (character == '(') {
+        depth++;
+      } else if (character == ')') {
+        if (depth <= 0) {
+          return -1;
+        }
+        depth--;
+      } else if (depth == 0 && character == '=') {
+        int open = index + 1;
+        while (open < end && Character.isWhitespace(sql.charAt(open))) {
+          open++;
+        }
+        if (open >= end || sql.charAt(open) != '(') {
+          continue;
+        }
+        int select = open + 1;
+        while (select < end && Character.isWhitespace(sql.charAt(select))) {
+          select++;
+        }
+        if (matchesKeyword(sql, select, end, "SELECT")) {
+          return open;
+        }
       }
     }
     return -1;
@@ -466,6 +530,10 @@ public final class SqlParser {
       long lower = 0;
       long upper = 0;
       if (equality) {
+        skipSpaces(sql);
+        if (sql == scalarSourceView && scalarSourceView.isReplacement(offset)) {
+          scalarPredicateIndex = result.predicateCount();
+        }
         status = number(sql, numberResult);
         value = numberResult.value;
       } else if (status.isOk()) {
@@ -740,6 +808,53 @@ public final class SqlParser {
     @Override
     public CharSequence subSequence(int start, int end) {
       throw new UnsupportedOperationException();
+    }
+  }
+
+  private static final class SqlScalarSourceView implements CharSequence {
+    private String source;
+    private int firstStart;
+    private int firstLength;
+    private int secondStart;
+    private int secondLength;
+
+    void set(
+        String text,
+        int firstFrom,
+        int firstTo,
+        int secondFrom,
+        int secondTo) {
+      source = text;
+      firstStart = firstFrom;
+      firstLength = firstTo - firstFrom;
+      secondStart = secondFrom;
+      secondLength = secondTo - secondFrom;
+    }
+
+    @Override
+    public int length() {
+      return firstLength + 1 + secondLength;
+    }
+
+    @Override
+    public char charAt(int index) {
+      if (index < 0 || index >= length()) {
+        throw new IndexOutOfBoundsException(index);
+      }
+      if (index < firstLength) {
+        return source.charAt(firstStart + index);
+      }
+      return index == firstLength
+          ? '0' : source.charAt(secondStart + index - firstLength - 1);
+    }
+
+    @Override
+    public CharSequence subSequence(int start, int end) {
+      throw new UnsupportedOperationException();
+    }
+
+    boolean isReplacement(int index) {
+      return index == firstLength;
     }
   }
 }

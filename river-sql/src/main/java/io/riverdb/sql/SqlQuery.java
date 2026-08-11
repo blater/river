@@ -8,6 +8,7 @@ public final class SqlQuery {
 
   private final SqlCommand[] blocks = new SqlCommand[MAXIMUM_QUERY_BLOCKS];
   private int blockCount;
+  private int scalarPredicate = -1;
 
   public SqlQuery() {
     for (int index = 0; index < blocks.length; index++) {
@@ -20,6 +21,7 @@ public final class SqlQuery {
       blocks[index].reset();
     }
     blockCount = 0;
+    scalarPredicate = -1;
   }
 
   SqlCommand nextBlock() {
@@ -87,6 +89,28 @@ public final class SqlQuery {
     }
     destination.setRowLimit(root.rowLimit());
     destination.setScan(0, 0, false);
+    return StatusCode.OK;
+  }
+
+  StatusCode compileScalarPredicate(SqlCommand destination, int predicate) {
+    if (destination == null
+        || blockCount != 2
+        || predicate < 0
+        || predicate >= blocks[0].predicateCount()
+        || !blocks[0].isEqualityPredicate(predicate)
+        || blocks[0].type() != SqlCommandType.SCAN
+            && blocks[0].type() != SqlCommandType.SELECT) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SqlCommand scalar = blocks[1];
+    if (scalar.type() != SqlCommandType.SCAN
+        && scalar.type() != SqlCommandType.SELECT
+        || scalar.isSelectAll()
+        || scalar.columnCount() != 1) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.copyQueryFrom(blocks[0]);
+    scalarPredicate = predicate;
     return StatusCode.OK;
   }
 
@@ -158,5 +182,25 @@ public final class SqlQuery {
 
   public SqlCommand block(int index) {
     return index >= 0 && index < blockCount ? blocks[index] : null;
+  }
+
+  public boolean hasScalarPredicate() {
+    return scalarPredicate >= 0;
+  }
+
+  public int scalarPredicate() {
+    return scalarPredicate;
+  }
+
+  public SqlCommand scalarCommand() {
+    return hasScalarPredicate() ? blocks[1] : null;
+  }
+
+  public StatusCode bindScalarValue(SqlCommand destination, long value) {
+    if (destination == null || !hasScalarPredicate()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.setPredicateValue(scalarPredicate, value);
+    return StatusCode.OK;
   }
 }

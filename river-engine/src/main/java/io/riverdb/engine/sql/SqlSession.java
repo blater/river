@@ -43,6 +43,7 @@ public final class SqlSession {
   private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
   private final TableDefinition table = new TableDefinition();
   private final TableDefinition joinTable = new TableDefinition();
+  private final TableDefinition scalarTable = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final CheckpointResult checkpoint = new CheckpointResult();
@@ -52,6 +53,8 @@ public final class SqlSession {
   private final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] predicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
+  private final int[] scalarPredicateColumns =
+      new int[SqlCommand.MAXIMUM_PREDICATES];
   private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
@@ -69,6 +72,8 @@ public final class SqlSession {
   private final ValueIndexLookupResult joinOuterIndexed = new ValueIndexLookupResult();
   private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
   private final RelationalScanResult aggregateRow = new RelationalScanResult();
+  private final RelationalScanCursor scalarCursor = new RelationalScanCursor();
+  private final RelationalScanResult scalarRow = new RelationalScanResult();
   private final ByteBuffer row = ByteBuffer.allocateDirect(
       (TableSchema.MAXIMUM_COLUMNS - 1) * Long.BYTES);
   private final ByteBuffer sortRecord = ByteBuffer.allocateDirect(
@@ -87,6 +92,7 @@ public final class SqlSession {
   private boolean transactionActive;
   private boolean userSavepointActive;
   private boolean scanActive;
+  private boolean scalarPredicateNull;
   private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
@@ -362,6 +368,7 @@ public final class SqlSession {
     if (scanActive) {
       return StatusCode.CONFLICT;
     }
+    scalarPredicateNull = false;
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk() && command.type() == SqlCommandType.COUNT) {
       status = execute(sql, aggregateExecution);
@@ -519,6 +526,9 @@ public final class SqlSession {
     boolean implicit = !transactionActive;
     if (implicit) {
       status = session.begin(IsolationLevel.READ_COMMITTED);
+    }
+    if (status.isOk() && query.hasScalarPredicate()) {
+      status = evaluateScalarPredicate();
     }
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
@@ -1473,12 +1483,120 @@ public final class SqlSession {
   }
 
   private boolean matchesPredicates(long primaryKey, HeapRowResult source) {
+    if (scalarPredicateNull) {
+      return false;
+    }
     for (int index = 0; index < predicateCount; index++) {
       long value = readColumn(primaryKey, source, predicateColumns[index]);
       boolean matches = command.isEqualityPredicate(index)
           ? value == command.predicateValue(index)
           : value >= command.predicateLowerInclusive(index)
               && value < command.predicateUpperExclusive(index);
+      if (!matches) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private StatusCode evaluateScalarPredicate() {
+    SqlCommand scalar = query.scalarCommand();
+    if (scalar == null
+        || scalar.isOrdered()
+        || scalar.columnCount() != 1
+        || scalar.isSelectAll()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = session.resolveTable(scalar.tableName(), scalarTable);
+    if (status.isOk()
+        && scalar.columnTableName(0).length() > 0
+        && !sameName(scalar.columnTableName(0), scalar.tableName())) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int projection = status.isOk()
+        ? scalarTable.findColumn(scalar.firstColumnName()) : -1;
+    if (status.isOk() && projection < 0) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; status.isOk() && index < scalar.predicateCount(); index++) {
+      if (scalar.predicateTableName(index).length() > 0
+          && !sameName(scalar.predicateTableName(index), scalar.tableName())) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+        break;
+      }
+      int column = scalarTable.findColumn(scalar.predicateColumnName(index));
+      if (column < 0
+          || !scalar.isEqualityPredicate(index)
+              && scalar.predicateUpperExclusive(index)
+                  <= scalar.predicateLowerInclusive(index)) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+        break;
+      }
+      scalarPredicateColumns[index] = column;
+    }
+    if (status.isOk() && scalar.rowLimit() == 0) {
+      scalarPredicateNull = true;
+      return StatusCode.OK;
+    }
+    if (status.isOk()) {
+      status = session.beginScan(scalarTable, scalarCursor);
+    }
+    boolean cursorActive = status.isOk();
+    int rows = 0;
+    long value = 0;
+    while (status.isOk()) {
+      status = session.nextScan(scalarCursor, scalarRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (status.isOk()) {
+        status = validateRow(scalarRow.row(), scalarTable);
+      }
+      if (status.isOk()
+          && !matchesScalarPredicates(scalar, scalarRow.key(), scalarRow.row())) {
+        continue;
+      }
+      if (status.isOk()) {
+        rows++;
+        if (rows > 1) {
+          status = StatusCode.CARDINALITY_VIOLATION;
+        } else {
+          value = readColumn(scalarRow.key(), scalarRow.row(), projection);
+          if (scalar.rowLimit() == 1) {
+            break;
+          }
+        }
+      }
+    }
+    if (cursorActive) {
+      StatusCode close = session.closeScan(scalarCursor);
+      if (close.isOk()) {
+        scalarCursor.reset();
+        scalarRow.reset();
+      }
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    if (status.isOk() && rows == 0) {
+      scalarPredicateNull = true;
+    } else if (status.isOk()) {
+      status = query.bindScalarValue(command, value);
+    }
+    return status;
+  }
+
+  private boolean matchesScalarPredicates(
+      SqlCommand scalar,
+      long primaryKey,
+      HeapRowResult source) {
+    for (int index = 0; index < scalar.predicateCount(); index++) {
+      long value = readColumn(primaryKey, source, scalarPredicateColumns[index]);
+      boolean matches = scalar.isEqualityPredicate(index)
+          ? value == scalar.predicateValue(index)
+          : value >= scalar.predicateLowerInclusive(index)
+              && value < scalar.predicateUpperExclusive(index);
       if (!matches) {
         return false;
       }

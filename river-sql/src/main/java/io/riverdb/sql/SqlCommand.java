@@ -138,6 +138,43 @@ public final class SqlCommand {
     rowLimit = maximumRows;
   }
 
+  void setPredicateValue(int index, long predicateValue) {
+    if (index >= 0 && index < predicateCount && equalityPredicates[index]) {
+      predicateValues[index] = predicateValue;
+      if (index == 0) {
+        key = predicateValue;
+      }
+    }
+  }
+
+  void copyQueryFrom(SqlCommand source) {
+    reset();
+    tableName.copyFrom(source.tableName);
+    for (int index = 0; index < source.columnCount; index++) {
+      writableNextColumnName().copyFrom(source.columnNames[index]);
+      writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
+    }
+    for (int index = 0; index < source.predicateCount; index++) {
+      writableNextPredicateTableName().copyFrom(source.predicateTableNames[index]);
+      writableNextPredicateColumnName().copyFrom(source.predicateColumnNames[index]);
+      appendPredicate(
+          source.predicateValues[index],
+          source.predicateLowerInclusive[index],
+          source.predicateUpperExclusive[index],
+          source.equalityPredicates[index]);
+    }
+    orderColumnName.copyFrom(source.orderColumnName);
+    if (source.selectAll) {
+      setSelectAll();
+    }
+    setRowLimit(source.rowLimit);
+    if (source.type == SqlCommandType.SCAN) {
+      setScan(source.scanLowerInclusive, source.scanUpperExclusive, source.boundedScan);
+    } else {
+      set(source.type, source.key, source.value);
+    }
+  }
+
   void setBegin(boolean serializable) {
     type = SqlCommandType.BEGIN;
     serializableTransaction = serializable;

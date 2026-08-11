@@ -393,6 +393,40 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesScalarPredicateAsTwoQueryBlocks() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id, balance FROM accounts WHERE region=7 AND balance = "
+                + "(SELECT balance FROM lookup WHERE lookup.id=7)",
+            query,
+            command));
+    assertEquals(2, query.blockCount());
+    assertTrue(query.hasScalarPredicate());
+    assertEquals(1, query.scalarPredicate());
+    assertName("accounts", command.tableName());
+    assertName("region", command.predicateColumnName(0));
+    assertEquals(7, command.predicateValue(0));
+    assertName("balance", command.predicateColumnName(1));
+    assertEquals(0, command.predicateValue(1));
+    SqlCommand scalar = query.scalarCommand();
+    assertName("lookup", scalar.tableName());
+    assertName("balance", scalar.firstColumnName());
+    assertName("id", scalar.predicateColumnName());
+    assertEquals(7, scalar.predicateValue(0));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE balance = "
+                + "(SELECT id, balance FROM lookup WHERE id=7)",
+            query,
+            command));
+  }
+
+  @Test
   void warmedParseReusesCommandAndParserState() {
     java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
     Assumptions.assumeTrue(standard instanceof ThreadMXBean);
@@ -409,6 +443,11 @@ final class SqlParserTest {
               + "WHERE d.key=7",
           query,
           command);
+      parser.parseQuery(
+          "SELECT key FROM accounts WHERE value="
+              + "(SELECT value FROM lookup WHERE lookup.key=7)",
+          query,
+          command);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -419,6 +458,13 @@ final class SqlParserTest {
               "SELECT d.key FROM "
                   + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
                   + "WHERE d.key=7",
+              query,
+              command));
+      assertEquals(
+          StatusCode.OK,
+          parser.parseQuery(
+              "SELECT key FROM accounts WHERE value="
+                  + "(SELECT value FROM lookup WHERE lookup.key=7)",
               query,
               command));
     }

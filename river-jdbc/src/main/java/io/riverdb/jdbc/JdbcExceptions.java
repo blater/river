@@ -52,6 +52,7 @@ final class JdbcExceptions {
       case QUERY_TOO_COMPLEX -> "54001";
       case TIMEOUT -> "HYT00";
       case CANCELLED -> "57014";
+      case CARDINALITY_VIOLATION -> "21000";
       case INVALID_EXTERNAL_INPUT -> "22000";
       case OK -> "00000";
     };

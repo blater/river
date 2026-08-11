@@ -19,7 +19,8 @@ final class StatusDetailTest {
       assertTrue(stableCodes.add(code.stableCode()), () -> "duplicate code " + code.stableCode());
       boolean expectedRetryable = switch (code) {
         case RETRY, CONFLICT -> true;
-        case OK, FENCED, CLOSED, CANCELLED, INVALID_EXTERNAL_INPUT, NOT_OWNER,
+        case OK, FENCED, CLOSED, CANCELLED, INVALID_EXTERNAL_INPUT,
+            CARDINALITY_VIOLATION, NOT_OWNER,
             RESOURCE_EXHAUSTED, QUERY_TOO_COMPLEX, TIMEOUT, IO_FAILURE, CORRUPTION,
             INVARIANT_BROKEN -> false;
       };
