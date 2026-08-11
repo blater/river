@@ -399,6 +399,30 @@ final class SqlParserTest {
     assertEquals(2, command.rowLimit());
     assertEquals(
         StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d.account_id AS result_id FROM "
+                + "(SELECT id AS account_id, balance funds FROM accounts "
+                + "WHERE balance >= 100 AND balance < 300) d "
+                + "WHERE d.account_id=2 ORDER BY result_id",
+            query,
+            command));
+    assertName("id", command.firstColumnName());
+    assertName("result_id", command.columnOutputName(0));
+    assertName("balance", command.predicateColumnName(0));
+    assertName("id", command.predicateColumnName(1));
+    assertName("id", command.orderColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT second.final_id FROM "
+                + "(SELECT first.account_id AS final_id FROM "
+                + "(SELECT id AS account_id FROM accounts) first) second",
+            query,
+            command));
+    assertName("id", command.firstColumnName());
+    assertName("final_id", command.columnOutputName(0));
+    assertEquals(
+        StatusCode.OK,
         parser.parseQuery(nestedQuery(32), query, command));
     assertEquals(32, query.blockCount());
     assertName("accounts", command.tableName());
@@ -427,6 +451,13 @@ final class SqlParserTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parseQuery(
             "SELECT d.id FROM (SELECT other.id FROM accounts) d",
+            query,
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT d.duplicate FROM "
+                + "(SELECT id AS duplicate, region AS duplicate FROM accounts) d",
             query,
             command));
   }

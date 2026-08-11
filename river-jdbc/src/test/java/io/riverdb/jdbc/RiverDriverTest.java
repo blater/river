@@ -308,6 +308,41 @@ final class RiverDriverTest {
         assertEquals(200, derived.getLong("balance"));
         assertFalse(derived.next());
       }
+      try (ResultSet aliasedDerived = statement.executeQuery(
+          "SELECT d.account_id AS selected_id, d.funds total FROM "
+              + "(SELECT id AS account_id, balance AS funds FROM accounts) d "
+              + "WHERE d.funds >= 100 AND d.funds < 300 "
+              + "ORDER BY selected_id")) {
+        assertEquals("selected_id",
+            aliasedDerived.getMetaData().getColumnName(1));
+        assertEquals("total", aliasedDerived.getMetaData().getColumnName(2));
+        assertTrue(aliasedDerived.next());
+        assertEquals(1, aliasedDerived.getLong("selected_id"));
+        assertEquals(100, aliasedDerived.getLong("total"));
+        assertTrue(aliasedDerived.next());
+        assertEquals(2, aliasedDerived.getLong("selected_id"));
+        assertEquals(200, aliasedDerived.getLong("total"));
+        assertFalse(aliasedDerived.next());
+      }
+      try (ResultSet nestedAlias = statement.executeQuery(
+          "SELECT second.final_id FROM "
+              + "(SELECT first.account_id AS final_id FROM "
+              + "(SELECT id AS account_id FROM accounts) first) second "
+              + "ORDER BY final_id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(nestedAlias.next());
+          assertEquals(expected, nestedAlias.getLong("final_id"));
+        }
+        assertFalse(nestedAlias.next());
+      }
+      try (ResultSet nullableAlias = statement.executeQuery(
+          "SELECT d.missing AS outer_missing FROM "
+              + "(SELECT id, NULL AS missing FROM accounts WHERE id=1) d")) {
+        assertTrue(nullableAlias.next());
+        assertNull(nullableAlias.getObject("outer_missing"));
+        assertTrue(nullableAlias.wasNull());
+        assertFalse(nullableAlias.next());
+      }
       try (ResultSet scalar = statement.executeQuery(
           "SELECT id, balance FROM accounts WHERE region=7 AND balance="
               + "(SELECT balance FROM accounts WHERE accounts.id=2)")) {

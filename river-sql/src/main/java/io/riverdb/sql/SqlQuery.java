@@ -87,10 +87,17 @@ public final class SqlQuery {
       if (column == null) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      column.copyFrom(root.columnName(index));
-      if (root.isNullProjection(index)) {
+      int resolvedNull = root.isNullProjection(index)
+          ? 1 : copyResolvedColumn(0, root.columnName(index), column);
+      if (resolvedNull < 0) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (resolvedNull > 0) {
+        column.copyFrom(root.columnName(index));
         destination.markLastProjectionNull();
       }
+      destination.writableColumnAlias(index).copyFrom(
+          root.columnOutputName(index));
     }
     for (int blockIndex = blockCount - 1; blockIndex >= 0; blockIndex--) {
       SqlCommand block = blocks[blockIndex];
@@ -99,7 +106,11 @@ public final class SqlQuery {
         if (column == null) {
           return StatusCode.RESOURCE_EXHAUSTED;
         }
-        column.copyFrom(block.predicateColumnName(predicate));
+        int resolvedNull = copyResolvedColumn(
+            blockIndex, block.predicateColumnName(predicate), column);
+        if (resolvedNull != 0) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
         if (block.isNullPredicate(predicate)) {
           destination.appendNullPredicate(
               block.isNullPredicateNegated(predicate));
@@ -119,7 +130,14 @@ public final class SqlQuery {
       }
     }
     if (root.isOrdered()) {
-      destination.writableOrderColumnName().copyFrom(root.orderColumnName());
+      int projection = outputIndex(root, root.orderColumnName());
+      CharSequence ordered = projection >= 0
+          ? root.columnName(projection) : root.orderColumnName();
+      int resolvedNull = copyResolvedColumn(
+          0, ordered, destination.writableOrderColumnName());
+      if (resolvedNull != 0) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
     }
     destination.setRowLimit(root.rowLimit());
     destination.setScan(0, 0, false);
@@ -187,7 +205,8 @@ public final class SqlQuery {
       SqlCommand inner) {
     for (int index = 0; index < outer.columnCount(); index++) {
       if (!validQualifier(outer.columnTableName(index), outer)
-          || !outputContains(inner, outer.columnName(index))) {
+          || !outer.isNullProjection(index)
+              && !outputContains(inner, outer.columnName(index))) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
@@ -197,7 +216,9 @@ public final class SqlQuery {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
-    if (outer.isOrdered() && !outputContains(inner, outer.orderColumnName())) {
+    if (outer.isOrdered()
+        && !outputContains(inner, outer.orderColumnName())
+        && outputIndex(outer, outer.orderColumnName()) < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return StatusCode.OK;
@@ -218,12 +239,42 @@ public final class SqlQuery {
   }
 
   private static boolean outputContains(SqlCommand command, CharSequence name) {
+    return outputIndex(command, name) >= 0;
+  }
+
+  private static int outputIndex(SqlCommand command, CharSequence name) {
+    int found = -1;
     for (int index = 0; index < command.columnCount(); index++) {
-      if (sameName(command.columnName(index), name)) {
-        return true;
+      if (sameName(command.columnOutputName(index), name)) {
+        if (found >= 0) {
+          return -2;
+        }
+        found = index;
       }
     }
-    return false;
+    return found;
+  }
+
+  private int copyResolvedColumn(
+      int blockIndex,
+      CharSequence name,
+      SqlIdentifier destination) {
+    CharSequence resolved = name;
+    for (int sourceIndex = blockIndex + 1;
+        sourceIndex < blockCount;
+        sourceIndex++) {
+      SqlCommand source = blocks[sourceIndex];
+      int projection = outputIndex(source, resolved);
+      if (projection < 0) {
+        return -1;
+      }
+      if (source.isNullProjection(projection)) {
+        return 1;
+      }
+      resolved = source.columnName(projection);
+    }
+    destination.copyFrom(resolved);
+    return 0;
   }
 
   private static boolean validQualifier(

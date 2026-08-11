@@ -42,4 +42,10 @@ public final class SqlIdentifier implements CharSequence {
     }
     return new String(characters, start, end - start);
   }
+
+  /** Allocating boundary representation; parser and binder paths use CharSequence accessors. */
+  @Override
+  public String toString() {
+    return new String(characters, 0, length);
+  }
 }

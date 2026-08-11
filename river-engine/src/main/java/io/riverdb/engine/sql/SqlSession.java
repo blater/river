@@ -930,17 +930,14 @@ public final class SqlSession {
     }
     if (cursor.groupCount()) {
       return index == 0
-          ? table.columnName(cursor.groupColumn())
+          ? command.columnOutputName(0)
           : index == 1 ? COUNT_COLUMN_NAME : null;
     }
     if (cursor.distinct()) {
-      return index == 0 ? table.columnName(cursor.groupColumn()) : null;
+      return index == 0 ? command.columnOutputName(0) : null;
     }
-    if (cursor.join()) {
-      int projection = cursor.projectedColumn(index);
-      return projection >= 0
-          ? table.columnName(projection)
-          : joinTable.columnName(-projection - 1);
+    if (index >= 0 && index < command.columnCount()) {
+      return command.columnOutputName(index);
     }
     int column = cursor.projectedColumn(index);
     return column == NULL_PROJECTION

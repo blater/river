@@ -15,6 +15,7 @@ public final class SqlCommand {
   private final SqlIdentifier savepointName = new SqlIdentifier();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
+  private final SqlIdentifier[] columnAliases = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] predicateTableNames =
       new SqlIdentifier[MAXIMUM_PREDICATES];
   private final SqlIdentifier[] predicateColumnNames =
@@ -60,6 +61,7 @@ public final class SqlCommand {
     for (int index = 0; index < columnNames.length; index++) {
       columnNames[index] = new SqlIdentifier();
       columnTableNames[index] = new SqlIdentifier();
+      columnAliases[index] = new SqlIdentifier();
       predicateTableNames[index] = new SqlIdentifier();
       predicateColumnNames[index] = new SqlIdentifier();
       predicateValueTableNames[index] = new SqlIdentifier();
@@ -83,6 +85,9 @@ public final class SqlCommand {
     }
     for (SqlIdentifier columnTableName : columnTableNames) {
       columnTableName.reset();
+    }
+    for (SqlIdentifier columnAlias : columnAliases) {
+      columnAlias.reset();
     }
     for (int index = 0; index < predicateColumnNames.length; index++) {
       predicateTableNames[index].reset();
@@ -205,6 +210,7 @@ public final class SqlCommand {
     for (int index = 0; index < source.columnCount; index++) {
       writableNextColumnName().copyFrom(source.columnNames[index]);
       writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
+      writableColumnAlias(index).copyFrom(source.columnAliases[index]);
       nullProjections[index] = source.nullProjections[index];
     }
     for (int index = 0; index < source.predicateCount; index++) {
@@ -309,6 +315,10 @@ public final class SqlCommand {
     return index >= 0 && index < columnCount ? columnTableNames[index] : null;
   }
 
+  SqlIdentifier writableColumnAlias(int index) {
+    return index >= 0 && index < columnCount ? columnAliases[index] : null;
+  }
+
   SqlIdentifier writableNextPredicateColumnName() {
     return predicateCount < predicateColumnNames.length
         ? predicateColumnNames[predicateCount] : null;
@@ -383,6 +393,14 @@ public final class SqlCommand {
 
   public SqlIdentifier columnTableName(int index) {
     return index >= 0 && index < columnCount ? columnTableNames[index] : null;
+  }
+
+  public SqlIdentifier columnOutputName(int index) {
+    if (index < 0 || index >= columnCount) {
+      return null;
+    }
+    return columnAliases[index].length() > 0
+        ? columnAliases[index] : columnNames[index];
   }
 
   public boolean isNullProjection(int index) {

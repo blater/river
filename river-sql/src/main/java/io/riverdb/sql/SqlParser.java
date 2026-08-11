@@ -879,6 +879,7 @@ public final class SqlParser {
   }
 
   private StatusCode selectColumnIdentifier(CharSequence sql, SqlCommand result) {
+    int columnIndex = result.columnCount();
     if (consumeKeyword(sql, "NULL")) {
       SqlIdentifier column = result.writableNextColumnName();
       if (column == null) {
@@ -886,7 +887,7 @@ public final class SqlParser {
       }
       setIdentifier(column, "null");
       result.markLastProjectionNull();
-      return StatusCode.OK;
+      return optionalColumnAlias(sql, result, columnIndex);
     }
     identifierScratch.reset();
     StatusCode status = identifier(sql, identifierScratch);
@@ -899,10 +900,37 @@ public final class SqlParser {
     }
     if (consumeCharacter(sql, '.')) {
       result.writableColumnTableName(result.columnCount() - 1).copyFrom(identifierScratch);
-      return identifier(sql, column);
+      status = identifier(sql, column);
+    } else {
+      column.copyFrom(identifierScratch);
     }
-    column.copyFrom(identifierScratch);
-    return StatusCode.OK;
+    return status.isOk()
+        ? optionalColumnAlias(sql, result, columnIndex) : status;
+  }
+
+  private StatusCode optionalColumnAlias(
+      CharSequence sql,
+      SqlCommand result,
+      int columnIndex) {
+    if (consumeKeyword(sql, "AS")) {
+      return identifier(sql, result.writableColumnAlias(columnIndex));
+    }
+    skipSpaces(sql);
+    if (offset >= sql.length()
+        || sql.charAt(offset) == ','
+        || sql.charAt(offset) == ';'
+        || sql.charAt(offset) == ')'
+        || nextKeyword(sql, "FROM")
+        || nextKeyword(sql, "JOIN")
+        || nextKeyword(sql, "WHERE")
+        || nextKeyword(sql, "GROUP")
+        || nextKeyword(sql, "ORDER")
+        || nextKeyword(sql, "LIMIT")) {
+      return StatusCode.OK;
+    }
+    return identifierStart(sql.charAt(offset))
+        ? identifier(sql, result.writableColumnAlias(columnIndex))
+        : StatusCode.OK;
   }
 
   private StatusCode identifier(CharSequence sql, SqlIdentifier result) {
