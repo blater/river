@@ -441,6 +441,20 @@ final class SqlParserTest {
     assertName("id", scalar.predicateColumnName());
     assertEquals(7, scalar.predicateValue(0));
     assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE region="
+                + "(SELECT id FROM regions "
+                + "WHERE regions.id=accounts.region)",
+            query,
+            command));
+    scalar = query.scalarCommand();
+    assertTrue(scalar.isColumnPredicate(0));
+    assertName("regions", scalar.predicateTableName(0));
+    assertName("id", scalar.predicateColumnName(0));
+    assertName("accounts", scalar.predicateValueTableName(0));
+    assertName("region", scalar.predicateValueColumnName(0));
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parseQuery(
             "SELECT id FROM accounts WHERE balance = "
@@ -587,6 +601,11 @@ final class SqlParserTest {
               + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE region="
+              + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -618,6 +637,11 @@ final class SqlParserTest {
           command).ordinal();
       allocationGuard += parser.parseQuery(
           "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE region="
               + "(SELECT id FROM regions WHERE regions.id=accounts.region)",
           query,
           command).ordinal();

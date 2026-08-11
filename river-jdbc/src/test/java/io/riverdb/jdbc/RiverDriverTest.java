@@ -352,6 +352,32 @@ final class RiverDriverTest {
         assertEquals(3, correlated.getLong(1));
         assertFalse(correlated.next());
       }
+      try (ResultSet correlated = statement.executeQuery(
+          "SELECT id FROM accounts WHERE region="
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=accounts.region) ORDER BY balance")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(correlated.next());
+          assertEquals(expected, correlated.getLong(1));
+        }
+        assertFalse(correlated.next());
+      }
+      try (ResultSet correlated = statement.executeQuery(
+          "SELECT id FROM accounts WHERE region="
+              + "(SELECT id FROM regions "
+              + "WHERE regions.id=accounts.region AND regions.code=8000)")) {
+        assertTrue(correlated.next());
+        assertEquals(3, correlated.getLong(1));
+        assertFalse(correlated.next());
+      }
+      try (ResultSet correlatedCardinality = statement.executeQuery(
+          "SELECT id FROM accounts WHERE region="
+              + "(SELECT region FROM region_labels "
+              + "WHERE region_labels.region=accounts.region)")) {
+        SQLException cardinalityFailure = assertThrows(
+            SQLException.class, correlatedCardinality::next);
+        assertEquals("21000", cardinalityFailure.getSQLState());
+      }
       String nested = "SELECT id FROM accounts";
       for (int depth = 1; depth < 32; depth++) {
         nested = "SELECT d" + depth + ".id FROM (" + nested + ") d" + depth;
