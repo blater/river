@@ -84,11 +84,16 @@ public final class SqlQuery {
           return StatusCode.RESOURCE_EXHAUSTED;
         }
         column.copyFrom(block.predicateColumnName(predicate));
-        destination.appendPredicate(
-            block.predicateValue(predicate),
-            block.predicateLowerInclusive(predicate),
-            block.predicateUpperExclusive(predicate),
-            block.isEqualityPredicate(predicate));
+        if (block.isNullPredicate(predicate)) {
+          destination.appendNullPredicate(
+              block.isNullPredicateNegated(predicate));
+        } else {
+          destination.appendPredicate(
+              block.predicateValue(predicate),
+              block.predicateLowerInclusive(predicate),
+              block.predicateUpperExclusive(predicate),
+              block.isEqualityPredicate(predicate));
+        }
       }
     }
     if (root.isOrdered()) {

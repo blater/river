@@ -28,6 +28,9 @@ public final class SqlCommand {
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
   private final boolean[] equalityPredicates = new boolean[MAXIMUM_PREDICATES];
+  private final boolean[] nullPredicates = new boolean[MAXIMUM_PREDICATES];
+  private final boolean[] negatedNullPredicates =
+      new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
   private SqlCommandType type;
   private long key;
@@ -78,6 +81,8 @@ public final class SqlCommand {
       predicateLowerInclusive[index] = 0;
       predicateUpperExclusive[index] = 0;
       equalityPredicates[index] = false;
+      nullPredicates[index] = false;
+      negatedNullPredicates[index] = false;
     }
     orderColumnName.reset();
     type = null;
@@ -142,6 +147,16 @@ public final class SqlCommand {
     }
   }
 
+  void appendNullPredicate(boolean negated) {
+    int index = predicateCount++;
+    nullPredicates[index] = true;
+    negatedNullPredicates[index] = negated;
+    if (index == 0) {
+      equalityPredicate = false;
+      boundedScan = false;
+    }
+  }
+
   void setSelectAll() {
     selectAll = true;
   }
@@ -170,11 +185,15 @@ public final class SqlCommand {
     for (int index = 0; index < source.predicateCount; index++) {
       writableNextPredicateTableName().copyFrom(source.predicateTableNames[index]);
       writableNextPredicateColumnName().copyFrom(source.predicateColumnNames[index]);
-      appendPredicate(
-          source.predicateValues[index],
-          source.predicateLowerInclusive[index],
-          source.predicateUpperExclusive[index],
-          source.equalityPredicates[index]);
+      if (source.nullPredicates[index]) {
+        appendNullPredicate(source.negatedNullPredicates[index]);
+      } else {
+        appendPredicate(
+            source.predicateValues[index],
+            source.predicateLowerInclusive[index],
+            source.predicateUpperExclusive[index],
+            source.equalityPredicates[index]);
+      }
     }
     orderColumnName.copyFrom(source.orderColumnName);
     if (source.selectAll) {
@@ -423,6 +442,17 @@ public final class SqlCommand {
 
   public boolean isEqualityPredicate(int index) {
     return index >= 0 && index < predicateCount && equalityPredicates[index];
+  }
+
+  public boolean isNullPredicate(int index) {
+    return index >= 0 && index < predicateCount && nullPredicates[index];
+  }
+
+  public boolean isNullPredicateNegated(int index) {
+    return index >= 0
+        && index < predicateCount
+        && nullPredicates[index]
+        && negatedNullPredicates[index];
   }
 
   public long predicateValue(int index) {

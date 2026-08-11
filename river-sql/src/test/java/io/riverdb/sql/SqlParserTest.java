@@ -507,6 +507,32 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesNullPredicates() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM nullable_values WHERE value IS NULL",
+            command));
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertEquals(1, command.predicateCount());
+    assertTrue(command.isNullPredicate(0));
+    assertFalse(command.isNullPredicateNegated(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM nullable_values "
+                + "WHERE value IS NOT NULL AND rank IS NULL",
+            command));
+    assertEquals(2, command.predicateCount());
+    assertTrue(command.isNullPredicate(0));
+    assertTrue(command.isNullPredicateNegated(0));
+    assertTrue(command.isNullPredicate(1));
+    assertFalse(command.isNullPredicateNegated(1));
+  }
+
+  @Test
   void warmedParseReusesCommandAndParserState() {
     java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
     Assumptions.assumeTrue(standard instanceof ThreadMXBean);
@@ -538,6 +564,10 @@ final class SqlParserTest {
               + "(SELECT value FROM lookup WHERE lookup.key=7)",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM nullable_values WHERE value IS NOT NULL",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -561,6 +591,10 @@ final class SqlParserTest {
       allocationGuard += parser.parseQuery(
           "SELECT key FROM accounts WHERE value NOT IN "
               + "(SELECT value FROM lookup WHERE lookup.key=7)",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM nullable_values WHERE value IS NOT NULL",
           query,
           command).ordinal();
     }

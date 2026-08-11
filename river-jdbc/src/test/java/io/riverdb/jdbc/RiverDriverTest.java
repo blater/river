@@ -179,6 +179,28 @@ final class RiverDriverTest {
         assertEquals(9, updated.getLong(2));
         assertFalse(updated.wasNull());
       }
+      try (ResultSet nullValues = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value IS NULL ORDER BY id")) {
+        assertTrue(nullValues.next());
+        assertEquals(1, nullValues.getLong(1));
+        assertTrue(nullValues.next());
+        assertEquals(3, nullValues.getLong(1));
+        assertFalse(nullValues.next());
+      }
+      try (ResultSet nonNullValues = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value IS NOT NULL")) {
+        assertTrue(nonNullValues.next());
+        assertEquals(2, nonNullValues.getLong(1));
+        assertFalse(nonNullValues.next());
+      }
+      try (ResultSet nestedNullFilter = statement.executeQuery(
+          "SELECT id FROM nullable_values WHERE value IN "
+              + "(SELECT value FROM nullable_values "
+              + "WHERE value IS NOT NULL)")) {
+        assertTrue(nestedNullFilter.next());
+        assertEquals(2, nestedNullFilter.getLong(1));
+        assertFalse(nestedNullFilter.next());
+      }
       assertEquals(
           "22000",
           assertThrows(

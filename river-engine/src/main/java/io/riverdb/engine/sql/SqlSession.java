@@ -1143,13 +1143,14 @@ public final class SqlSession {
       int column = definition == null
           ? -1 : definition.findColumn(command.predicateColumnName(index));
       if (column < 0
-          || !command.isEqualityPredicate(index)
+          || !command.isNullPredicate(index)
+              && !command.isEqualityPredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       predicateColumns[index] = outer ? column : -column - 1;
-      if (!outer) {
+      if (!outer || command.isNullPredicate(index)) {
         continue;
       }
       boolean indexed = column == 0 || table.hasIndexOn(column);
@@ -1178,7 +1179,8 @@ public final class SqlSession {
       }
       int column = table.findColumn(command.predicateColumnName(index));
       if (column < 0
-          || !command.isEqualityPredicate(index)
+          || !command.isNullPredicate(index)
+              && !command.isEqualityPredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1186,6 +1188,9 @@ public final class SqlSession {
       predicateColumns[index] = column;
       if (query.hasMembershipPredicate()
           && query.membershipPredicate() == index) {
+        continue;
+      }
+      if (command.isNullPredicate(index)) {
         continue;
       }
       boolean indexed = column == 0 || table.hasIndexOn(column);
@@ -1594,7 +1599,14 @@ public final class SqlSession {
     }
     for (int index = 0; index < predicateCount; index++) {
       long value = readColumn(primaryKey, source, predicateColumns[index]);
-      if (isNull(source, table, predicateColumns[index])) {
+      boolean nullValue = isNull(source, table, predicateColumns[index]);
+      if (command.isNullPredicate(index)) {
+        if (nullValue == command.isNullPredicateNegated(index)) {
+          return false;
+        }
+        continue;
+      }
+      if (nullValue) {
         return false;
       }
       if (query.hasMembershipPredicate()
@@ -1811,7 +1823,8 @@ public final class SqlSession {
       }
       int column = scalarTable.findColumn(nested.predicateColumnName(index));
       if (column < 0
-          || !nested.isEqualityPredicate(index)
+          || !nested.isNullPredicate(index)
+              && !nested.isEqualityPredicate(index)
               && nested.predicateUpperExclusive(index)
                   <= nested.predicateLowerInclusive(index)) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1828,7 +1841,15 @@ public final class SqlSession {
       HeapRowResult source) {
     for (int index = 0; index < scalar.predicateCount(); index++) {
       long value = readColumn(primaryKey, source, scalarPredicateColumns[index]);
-      if (isNull(source, scalarTable, scalarPredicateColumns[index])) {
+      boolean nullValue = isNull(
+          source, scalarTable, scalarPredicateColumns[index]);
+      if (scalar.isNullPredicate(index)) {
+        if (nullValue == scalar.isNullPredicateNegated(index)) {
+          return false;
+        }
+        continue;
+      }
+      if (nullValue) {
         return false;
       }
       boolean matches = scalar.isEqualityPredicate(index)
@@ -1853,7 +1874,14 @@ public final class SqlSession {
       }
       int column = outer ? descriptor : -descriptor - 1;
       TableDefinition definition = outer ? table : joinTable;
-      if (isNull(source, definition, column)) {
+      boolean nullValue = isNull(source, definition, column);
+      if (command.isNullPredicate(index)) {
+        if (nullValue == command.isNullPredicateNegated(index)) {
+          return false;
+        }
+        continue;
+      }
+      if (nullValue) {
         return false;
       }
       long value = readColumn(primaryKey, source, column);

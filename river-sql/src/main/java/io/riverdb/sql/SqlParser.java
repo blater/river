@@ -690,7 +690,13 @@ public final class SqlParser {
       } else if (status.isOk()) {
         column.copyFrom(identifierScratch);
       }
-      boolean equality = status.isOk() && consumeCharacter(sql, '=');
+      boolean nullPredicate = status.isOk() && consumeKeyword(sql, "IS");
+      boolean nullPredicateNegated = nullPredicate && consumeKeyword(sql, "NOT");
+      if (nullPredicate) {
+        status = requireKeyword(sql, "NULL");
+      }
+      boolean equality = !nullPredicate
+          && status.isOk() && consumeCharacter(sql, '=');
       long value = 0;
       long lower = 0;
       long upper = 0;
@@ -701,7 +707,7 @@ public final class SqlParser {
         }
         status = number(sql, numberResult);
         value = numberResult.value;
-      } else if (status.isOk()) {
+      } else if (!nullPredicate && status.isOk()) {
         status = requireCharacter(sql, '>');
         if (status.isOk()) {
           status = requireCharacter(sql, '=');
@@ -731,7 +737,11 @@ public final class SqlParser {
         }
       }
       if (status.isOk()) {
-        result.appendPredicate(value, lower, upper, equality);
+        if (nullPredicate) {
+          result.appendNullPredicate(nullPredicateNegated);
+        } else {
+          result.appendPredicate(value, lower, upper, equality);
+        }
       }
       if (!status.isOk() || !consumeKeyword(sql, "AND")) {
         return status;
