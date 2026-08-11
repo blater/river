@@ -63,6 +63,16 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
+            "CREATE TABLE raw_labels "
+                + "(id BIGINT PRIMARY KEY, region BIGINT, code BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO raw_labels VALUES (1, 7, 70), (2, 7, 71)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
             "CREATE TABLE texts (id BIGINT PRIMARY KEY, label VARCHAR(7) NOT NULL)",
             result));
     assertEquals(
@@ -95,6 +105,7 @@ final class SqlSessionAllocationTest {
       exerciseExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
@@ -105,6 +116,7 @@ final class SqlSessionAllocationTest {
       exerciseExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
@@ -241,6 +253,24 @@ final class SqlSessionAllocationTest {
     allocationGuard += row.valueAt(0);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseUnindexedJoin(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT t.id, raw_labels.code FROM t "
+            + "JOIN raw_labels ON t.region=raw_labels.region WHERE t.id=1",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

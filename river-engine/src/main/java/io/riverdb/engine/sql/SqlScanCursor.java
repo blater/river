@@ -24,6 +24,7 @@ public final class SqlScanCursor {
   private boolean explain;
   private boolean explainAnalyzed;
   private boolean joinInnerScanActive;
+  private boolean joinInnerIndexed;
   private boolean joinInnerUnique;
   private boolean groupLookahead;
   private boolean groupLookaheadNull;
@@ -47,6 +48,7 @@ public final class SqlScanCursor {
   private int joinOuterColumn = -1;
   private int joinInnerColumn = -1;
   private long joinOuterKey;
+  private long joinMatchValue;
   private long joinOuterNullMask;
   private int sortedRowCount;
   private int sortedRowIndex;
@@ -73,6 +75,7 @@ public final class SqlScanCursor {
     explain = false;
     explainAnalyzed = false;
     joinInnerScanActive = false;
+    joinInnerIndexed = false;
     joinInnerUnique = false;
     groupLookahead = false;
     groupLookaheadNull = false;
@@ -96,6 +99,7 @@ public final class SqlScanCursor {
     joinOuterColumn = -1;
     joinInnerColumn = -1;
     joinOuterKey = 0;
+    joinMatchValue = 0;
     joinOuterNullMask = 0;
     sortedRowCount = 0;
     sortedRowIndex = 0;
@@ -273,6 +277,7 @@ public final class SqlScanCursor {
       int outerColumn,
       int innerColumn,
       boolean indexedOuter,
+      boolean indexedInner,
       boolean uniqueInner,
       int[] projections,
       int projectionCount,
@@ -293,6 +298,7 @@ public final class SqlScanCursor {
     valueIndex = indexedOuter;
     joinOuterColumn = outerColumn;
     joinInnerColumn = innerColumn;
+    joinInnerIndexed = indexedInner;
     joinInnerUnique = uniqueInner;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
@@ -425,12 +431,17 @@ public final class SqlScanCursor {
     return joinInnerUnique;
   }
 
+  boolean joinInnerIndexed() {
+    return joinInnerIndexed;
+  }
+
   boolean joinInnerScanActive() {
     return joinInnerScanActive;
   }
 
-  void beginJoinInnerScan(long outerKey) {
+  void beginJoinInnerScan(long outerKey, long matchValue) {
     joinOuterKey = outerKey;
+    joinMatchValue = matchValue;
     joinInnerScanActive = true;
   }
 
@@ -440,6 +451,10 @@ public final class SqlScanCursor {
 
   long joinOuterKey() {
     return joinOuterKey;
+  }
+
+  long joinMatchValue() {
+    return joinMatchValue;
   }
 
   void setJoinOuterProjectedValue(int index, long value, boolean isNull) {

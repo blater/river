@@ -68,6 +68,42 @@ final class SqlExplainTest {
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
 
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE labels "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, code BIGINT)",
+            execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO labels VALUES (1,7,70),(2,7,71),(3,8,80)",
+            execution));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "EXPLAIN SELECT events.id, labels.code FROM events "
+                + "JOIN labels ON events.category=labels.category",
+            cursor));
+    assertPlanRow(session, cursor, row, "join", 1);
+    assertPlanRow(session, cursor, row, "table", -1);
+    assertPlanRow(session, cursor, row, "table", 1);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "EXPLAIN ANALYZE SELECT events.id, labels.code FROM events "
+                + "JOIN labels ON events.category=labels.category",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack("join"), row.valueAt(0));
+    assertEquals(5, row.valueAt(2));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
         StatusCode.OK,

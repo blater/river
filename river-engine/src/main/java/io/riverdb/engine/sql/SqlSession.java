@@ -1192,6 +1192,7 @@ public final class SqlSession {
             outerJoinColumn,
             innerJoinColumn,
             indexedOuter,
+            innerJoinColumn == 0 || joinTable.hasIndexOn(innerJoinColumn),
             innerJoinColumn == 0 || joinTable.hasUniqueIndexOn(innerJoinColumn),
             projectedColumns,
             projectedColumnCount,
@@ -1430,7 +1431,9 @@ public final class SqlSession {
         planAccessColumn);
     if (command.type() == SqlCommandType.JOIN_SCAN) {
       addPlanStep(
-          PLAN_LOOKUP, cursor == null ? -1 : cursor.joinInnerColumn());
+          cursor != null && cursor.joinInnerIndexed()
+              ? PLAN_LOOKUP : PLAN_TABLE,
+          cursor == null ? -1 : cursor.joinInnerColumn());
     }
   }
 
@@ -2224,7 +2227,6 @@ public final class SqlSession {
     if (outerJoinColumn < 0
         || innerJoinColumn < 0
         || table.isVarchar(outerJoinColumn) != joinTable.isVarchar(innerJoinColumn)
-        || innerJoinColumn > 0 && !joinTable.hasIndexOn(innerJoinColumn)
         || command.columnCount() <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -2691,8 +2693,20 @@ public final class SqlSession {
   private StatusCode nextJoin(SqlScanCursor cursor, SqlScanRowResult result) {
     while (true) {
       if (cursor.joinInnerScanActive()) {
-        StatusCode inner = session.nextNonUniqueValueLookup(
-            joinTable, cursor.joinInnerRelational(), indexed);
+        StatusCode inner;
+        HeapRowResult innerRow;
+        long innerKey;
+        if (cursor.joinInnerIndexed()) {
+          inner = session.nextNonUniqueValueLookup(
+              joinTable, cursor.joinInnerRelational(), indexed);
+          innerRow = indexed.row();
+          innerKey = indexed.key();
+        } else {
+          inner = session.nextScan(
+              cursor.joinInnerRelational(), aggregateRow);
+          innerRow = aggregateRow.row();
+          innerKey = aggregateRow.key();
+        }
         if (inner == StatusCode.CONFLICT) {
           inner = session.closeScan(cursor.joinInnerRelational());
           if (inner.isOk()) {
@@ -2707,12 +2721,17 @@ public final class SqlSession {
         if (!inner.isOk()) {
           return inner;
         }
-        HeapRowResult innerRow = indexed.row();
         inner = validateRow(innerRow, joinTable);
         if (!inner.isOk()) {
           return inner;
         }
-        if (!matchesJoinPredicates(indexed.key(), innerRow, false)) {
+        if (!cursor.joinInnerIndexed()
+            && (isNull(innerRow, joinTable, cursor.joinInnerColumn())
+                || readColumn(innerKey, innerRow, cursor.joinInnerColumn())
+                    != cursor.joinMatchValue())) {
+          continue;
+        }
+        if (!matchesJoinPredicates(innerKey, innerRow, false)) {
           continue;
         }
         long nullMask = 0;
@@ -2725,7 +2744,7 @@ public final class SqlSession {
             }
           } else {
             int column = -projection - 1;
-            projectedValues[index] = readColumn(indexed.key(), innerRow, column);
+            projectedValues[index] = readColumn(innerKey, innerRow, column);
             if (isNull(innerRow, joinTable, column)) {
               nullMask |= 1L << index;
             }
@@ -2767,7 +2786,7 @@ public final class SqlSession {
         continue;
       }
       long joinValue = readColumn(outerKey, outerRow, cursor.joinOuterColumn());
-      if (cursor.joinInnerColumn() > 0 && !cursor.joinInnerUnique()) {
+      if (!cursor.joinInnerUnique()) {
         for (int index = 0; index < cursor.projectedColumnCount(); index++) {
           int projection = cursor.projectedColumn(index);
           if (projection >= 0) {
@@ -2777,13 +2796,15 @@ public final class SqlSession {
                 isNull(outerRow, table, projection));
           }
         }
-        status = joinValue == Long.MAX_VALUE
-            ? StatusCode.INVALID_EXTERNAL_INPUT
-            : session.beginNonUniqueValueLookup(
-                joinTable,
-                cursor.joinInnerColumn(),
-                joinValue,
-                cursor.joinInnerRelational());
+        status = cursor.joinInnerIndexed()
+            ? joinValue == Long.MAX_VALUE
+                ? StatusCode.INVALID_EXTERNAL_INPUT
+                : session.beginNonUniqueValueLookup(
+                    joinTable,
+                    cursor.joinInnerColumn(),
+                    joinValue,
+                    cursor.joinInnerRelational())
+            : session.beginScan(joinTable, cursor.joinInnerRelational());
         if (status == StatusCode.CONFLICT
             || status == StatusCode.INVALID_EXTERNAL_INPUT) {
           continue;
@@ -2791,7 +2812,7 @@ public final class SqlSession {
         if (!status.isOk()) {
           return status;
         }
-        cursor.beginJoinInnerScan(outerKey);
+        cursor.beginJoinInnerScan(outerKey, joinValue);
         continue;
       }
       long innerKey = joinValue;

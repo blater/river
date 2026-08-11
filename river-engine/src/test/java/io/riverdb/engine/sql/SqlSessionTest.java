@@ -1707,8 +1707,23 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute(
             "INSERT INTO category_labels VALUES "
-                + "(1, 10, 10001), (2, 10, 10002), (3, 20, 20001)",
+                + "(1, 10, 10001), (2, 10, 10002), (3, 20, 20001), "
+                + "(4, NULL, 99999)",
             result));
+    assertEquals(StatusCode.OK, joined.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT events.id, category_labels.code FROM events "
+                + "JOIN category_labels "
+                + "ON events.category=category_labels.category "
+                + "WHERE events.id=1 AND category_labels.code>=10002",
+            joined));
+    assertEquals(StatusCode.OK, session.nextScan(joined, joinedRow));
+    assertEquals(1, joinedRow.valueAt(0));
+    assertEquals(10002, joinedRow.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(joined, joinedRow));
+    assertEquals(StatusCode.OK, session.closeScan(joined, result));
     assertEquals(
         StatusCode.OK,
         session.execute(
