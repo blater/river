@@ -225,6 +225,12 @@ public final class TableDefinition {
     return index >= 0 && index < columnCount ? writableColumn(index) : null;
   }
 
+  public boolean isNullable(int column) {
+    return column >= 0
+        && column < columnCount
+        && (notNullMask & 1L << column) == 0;
+  }
+
   public int findColumn(CharSequence name) {
     for (int index = 0; index < columnCount; index++) {
       if (writableColumn(index).matches(name)) {

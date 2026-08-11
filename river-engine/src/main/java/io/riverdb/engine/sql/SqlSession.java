@@ -1619,7 +1619,7 @@ public final class SqlSession {
     long nullMask = 0;
     for (int column = 1; column < table.columnCount(); column++) {
       int source = insertSourceByColumn[column];
-      if (command.insertIsNull(rowIndex, source)) {
+      if (source < 0 || command.insertIsNull(rowIndex, source)) {
         nullMask |= 1L << column;
       }
       row.putLong(
@@ -1631,18 +1631,19 @@ public final class SqlSession {
   }
 
   private StatusCode bindInsertColumns() {
-    if (command.insertColumnCount() != table.columnCount()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     for (int index = 0; index < insertSourceByColumn.length; index++) {
       insertSourceByColumn[index] = -1;
     }
     if (command.columnCount() == 0) {
+      if (command.insertColumnCount() != table.columnCount()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       for (int index = 0; index < table.columnCount(); index++) {
         insertSourceByColumn[index] = index;
       }
     } else {
-      if (command.columnCount() != table.columnCount()) {
+      if (command.insertColumnCount() != command.columnCount()
+          || command.columnCount() > table.columnCount()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int source = 0; source < command.columnCount(); source++) {
@@ -1654,12 +1655,15 @@ public final class SqlSession {
       }
     }
     for (int rowIndex = 0; rowIndex < command.insertRowCount(); rowIndex++) {
-      if (command.insertIsNull(rowIndex, insertSourceByColumn[0])) {
+      int keySource = insertSourceByColumn[0];
+      if (keySource < 0 || command.insertIsNull(rowIndex, keySource)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int column = 1; column < table.columnCount(); column++) {
-        if (table.hasIndexOn(column)
-            && command.insertIsNull(rowIndex, insertSourceByColumn[column])) {
+        int source = insertSourceByColumn[column];
+        boolean nullValue = source < 0 || command.insertIsNull(rowIndex, source);
+        if (nullValue
+            && (!table.isNullable(column) || table.hasIndexOn(column))) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
       }

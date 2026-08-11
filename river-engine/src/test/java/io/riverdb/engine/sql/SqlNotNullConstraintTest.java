@@ -18,6 +18,81 @@ final class SqlNotNullConstraintTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void fillsOmittedNullableColumnsAndRejectsMissingRequiredValues(
+      @TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE records "
+                + "(id BIGINT PRIMARY KEY, required BIGINT NOT NULL, "
+                + "optional BIGINT, other BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO records (other, id, required) VALUES "
+                + "(7, 1, 10), (8, 2, 20)",
+            result));
+    assertEquals(2, result.affectedRows());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT optional FROM records WHERE id=1", result));
+    assertTrue(result.isNull(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT other FROM records WHERE id=2", result));
+    assertEquals(8, result.value());
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "INSERT INTO records (id, optional) VALUES (3, 300)", result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "INSERT INTO records (required, optional) VALUES (30, 300)",
+            result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT required FROM records WHERE id=3", result));
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE UNIQUE INDEX records_required ON records(required)", result));
+    assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    session = sessionResult.session();
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id, required FROM records WHERE required=20", result));
+    assertEquals(2, result.key());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT optional FROM records WHERE id=2", result));
+    assertTrue(result.isNull(0));
+
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void enforcesPersistedNotNullConstraintsAcrossStatementsAndRestart(
       @TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
