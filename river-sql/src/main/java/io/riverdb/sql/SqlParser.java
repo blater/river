@@ -24,6 +24,10 @@ public final class SqlParser {
     return parseText(sql, result);
   }
 
+  public StatusCode parse(CharSequence sql, SqlCommand result) {
+    return parseText(sql, result);
+  }
+
   public StatusCode parseQuery(
       String sql,
       SqlQuery query,
@@ -522,7 +526,10 @@ public final class SqlParser {
         }
       }
     } else if (consumeKeyword(sql, "DROP")) {
-      if (consumeKeyword(sql, "SEQUENCE")) {
+      if (consumeKeyword(sql, "VIEW")) {
+        type = SqlCommandType.DROP_VIEW;
+        status = identifier(sql, result.writableTableName());
+      } else if (consumeKeyword(sql, "SEQUENCE")) {
         type = SqlCommandType.DROP_SEQUENCE;
         status = identifier(sql, result.writableSequenceName());
       } else if (consumeKeyword(sql, "INDEX")) {
@@ -542,7 +549,32 @@ public final class SqlParser {
         }
       }
     } else if (consumeKeyword(sql, "CREATE")) {
-      if (consumeKeyword(sql, "TABLE")) {
+      if (consumeKeyword(sql, "VIEW")) {
+        type = SqlCommandType.CREATE_VIEW;
+        status = identifier(sql, result.writableTableName());
+        if (status.isOk()) {
+          status = requireKeyword(sql, "AS");
+        }
+        skipSpaces(sql);
+        int definitionStart = offset;
+        int definitionEnd = sql.length();
+        while (definitionEnd > definitionStart
+            && Character.isWhitespace(sql.charAt(definitionEnd - 1))) {
+          definitionEnd--;
+        }
+        if (definitionEnd > definitionStart
+            && sql.charAt(definitionEnd - 1) == ';') {
+          definitionEnd--;
+          while (definitionEnd > definitionStart
+              && Character.isWhitespace(sql.charAt(definitionEnd - 1))) {
+            definitionEnd--;
+          }
+        }
+        if (status.isOk()) {
+          status = result.setViewQuery(sql, definitionStart, definitionEnd);
+        }
+        offset = sql.length();
+      } else if (consumeKeyword(sql, "TABLE")) {
         type = SqlCommandType.CREATE_TABLE;
         status = identifier(sql, result.writableTableName());
         if (status.isOk() && consumeCharacter(sql, '(')) {
@@ -1070,7 +1102,8 @@ public final class SqlParser {
     return switch (type) {
       case CREATE_TABLE -> reservedObjectName(command.tableName())
           || reservedReferenceName(command);
-      case DROP_TABLE, ALTER_TABLE_RENAME_COLUMN -> reservedObjectName(command.tableName());
+      case CREATE_VIEW, DROP_VIEW, DROP_TABLE, ALTER_TABLE_RENAME_COLUMN ->
+          reservedObjectName(command.tableName());
       case ALTER_TABLE_RENAME ->
           reservedObjectName(command.tableName())
               || reservedObjectName(command.renamedTableName());

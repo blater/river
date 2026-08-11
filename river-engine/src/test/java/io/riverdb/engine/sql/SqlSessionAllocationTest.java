@@ -81,6 +81,12 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX texts_label ON texts(label)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE VIEW regional AS "
+                + "SELECT id, balance, region FROM t WHERE balance=10",
+            result));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
       exerciseCount(session, result);
@@ -108,6 +114,7 @@ final class SqlSessionAllocationTest {
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
       exerciseDisjunction(session, cursor, scanRow, result);
+      exerciseView(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
@@ -121,6 +128,7 @@ final class SqlSessionAllocationTest {
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
       exerciseDisjunction(session, cursor, scanRow, result);
+      exerciseView(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
@@ -304,6 +312,20 @@ final class SqlSessionAllocationTest {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
         "SELECT id FROM t WHERE region=7 OR balance=999", cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseView(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id FROM regional WHERE region=7", cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
     allocationGuard += session.nextScan(cursor, row).ordinal();

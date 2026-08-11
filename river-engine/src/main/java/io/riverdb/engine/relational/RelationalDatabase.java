@@ -37,6 +37,7 @@ public final class RelationalDatabase {
   private final TableDefinition updatedTable = new TableDefinition();
   private final TableDefinition referencingTable = new TableDefinition();
   private final TableSchema.ColumnName scannedTableName = new TableSchema.ColumnName();
+  private final ViewDefinition scannedView = new ViewDefinition();
   private final RelationalScanCursor indexBuildCursor = new RelationalScanCursor();
   private final RelationalScanResult indexBuildRow = new RelationalScanResult();
   private final RelationalScanCursor referenceLookupCursor = new RelationalScanCursor();
@@ -438,6 +439,9 @@ public final class RelationalDatabase {
       CharSequence renamedName) {
     StatusCode status = session.resolveTable(currentName, indexedTable);
     if (status.isOk()) {
+      status = checkViewReferences(session, indexedTable.tableId());
+    }
+    if (status.isOk()) {
       status = RelationalKey.catalogTableKey(renamedName, catalogKey);
     }
     if (status.isOk()) {
@@ -472,6 +476,9 @@ public final class RelationalDatabase {
       CharSequence currentName,
       CharSequence renamedName) {
     StatusCode status = session.resolveTable(tableName, indexedTable);
+    if (status.isOk()) {
+      status = checkViewReferences(session, indexedTable.tableId());
+    }
     if (status.isOk()) {
       updatedTable.set(
           this,
@@ -650,6 +657,22 @@ public final class RelationalDatabase {
               referencingTable)
           : status;
       if (decoded == StatusCode.CONFLICT) {
+        if (!checkRows) {
+          StatusCode viewDecoded = CatalogRecord.decodeViewForScan(
+              catalogScanRow.row(),
+              catalogScratch,
+              scannedTableName,
+              scannedView);
+          if (viewDecoded.isOk()
+              && scannedView.baseTableId() == referencedTable.tableId()) {
+            status = StatusCode.CONFLICT;
+            break;
+          }
+          if (viewDecoded != StatusCode.CONFLICT && !viewDecoded.isOk()) {
+            status = viewDecoded;
+            break;
+          }
+        }
         continue;
       }
       if (!decoded.isOk()) {
@@ -671,6 +694,48 @@ public final class RelationalDatabase {
           continue;
         }
         status = referenceExists(session, referencingTable, column, key);
+      }
+    }
+    if (scanActive) {
+      StatusCode close = session.indexedSession().closeScan(catalogScanCursor);
+      catalogScanCursor.reset();
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    return status;
+  }
+
+  private StatusCode checkViewReferences(
+      RelationalSession session,
+      int tableId) {
+    StatusCode status = session.indexedSession().beginScan(
+        Long.MIN_VALUE, 0, catalogScanCursor);
+    boolean scanActive = status.isOk();
+    while (status.isOk()) {
+      status = session.indexedSession().nextScan(
+          catalogScanCursor, catalogScanRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      StatusCode decoded = status.isOk()
+          ? CatalogRecord.decodeViewForScan(
+              catalogScanRow.row(),
+              catalogScratch,
+              scannedTableName,
+              scannedView)
+          : status;
+      if (decoded == StatusCode.CONFLICT) {
+        continue;
+      }
+      if (!decoded.isOk()) {
+        status = decoded;
+        break;
+      }
+      if (scannedView.baseTableId() == tableId) {
+        status = StatusCode.CONFLICT;
+        break;
       }
     }
     if (scanActive) {

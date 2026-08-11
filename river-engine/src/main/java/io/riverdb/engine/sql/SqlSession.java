@@ -12,6 +12,7 @@ import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
+import io.riverdb.engine.relational.ViewDefinition;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
@@ -66,8 +67,12 @@ public final class SqlSession {
   private final RelationalDatabase database;
   private final RelationalSession session;
   private final SqlParser parser = new SqlParser();
-  private final SqlCommand command = new SqlCommand();
+  private final SqlCommand parsedCommand = new SqlCommand();
+  private final SqlCommand viewCommand = new SqlCommand();
+  private final SqlCommand expandedViewCommand = new SqlCommand();
+  private SqlCommand command = parsedCommand;
   private final SqlQuery query = new SqlQuery();
+  private final ViewDefinition viewDefinition = new ViewDefinition();
   private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
   private final SequenceValueResult sequenceValue = new SequenceValueResult();
   private final TableDefinition table = new TableDefinition();
@@ -204,6 +209,7 @@ public final class SqlSession {
   private int membershipValueCount;
   private int planStepCount;
   private int planAccessColumn;
+  private int validatedViewTableId;
   private boolean explainOnly;
   private boolean planSort;
 
@@ -242,7 +248,7 @@ public final class SqlSession {
       }
     }
     status = completeStatement(status);
-    if (implicit) {
+    if (implicit && session.isTransactionActive()) {
       StatusCode abort = session.abort(outcome);
       if (!abort.isOk()) {
         status = abort;
@@ -278,6 +284,7 @@ public final class SqlSession {
       result.setTransaction(true, session.visibleCommitSequence());
     }
     query.reset();
+    command = parsedCommand;
     subqueryPredicateFalse = false;
     StatusCode status = parser.parse(sql, command);
     if (!status.isOk()) {
@@ -368,6 +375,10 @@ public final class SqlSession {
         result.setTransaction(false, 0);
       }
       return status;
+    }
+    if (command.type() == SqlCommandType.CREATE_VIEW
+        || command.type() == SqlCommandType.DROP_VIEW) {
+      return executeViewChange(result);
     }
     if (command.type() == SqlCommandType.CREATE_SEQUENCE) {
       if (!transactionActive) {
@@ -835,6 +846,87 @@ public final class SqlSession {
     return status;
   }
 
+  private StatusCode executeViewChange(SqlExecutionResult result) {
+    boolean create = command.type() == SqlCommandType.CREATE_VIEW;
+    CharSequence viewName = command.tableName();
+    CharSequence viewSql = command.viewQuery();
+    boolean implicit = !transactionActive;
+    StatusCode status = implicit
+        ? session.begin(IsolationLevel.SERIALIZABLE) : StatusCode.OK;
+    boolean active = status.isOk() && implicit;
+    boolean savepointActive = false;
+    if (status.isOk() && !implicit) {
+      status = session.createSavepoint(statementSavepoint);
+      savepointActive = status.isOk();
+    }
+    if (status.isOk()) {
+      status = beginStatement();
+    }
+    if (status.isOk() && create) {
+      status = validateViewDefinition(viewSql);
+    }
+    command = parsedCommand;
+    if (status.isOk()) {
+      status = create
+          ? session.createView(viewName, viewSql, validatedViewTableId)
+          : session.dropView(viewName);
+    }
+    status = completeStatement(status);
+    if (savepointActive) {
+      StatusCode rollback = status.isOk()
+          ? StatusCode.OK : session.rollbackToSavepoint(statementSavepoint);
+      StatusCode release = session.releaseSavepoint(statementSavepoint);
+      if (!rollback.isOk()) {
+        status = rollback;
+      }
+      if (!release.isOk()) {
+        status = release;
+      }
+    }
+    long commitSequence = 0;
+    if (status.isOk() && implicit) {
+      status = session.commit(outcome);
+      active = false;
+      commitSequence = status.isOk() ? outcome.commitSequence() : 0;
+    } else if (!status.isOk() && active) {
+      StatusCode abort = session.abort(outcome);
+      active = false;
+      if (!abort.isOk()) {
+        status = abort;
+      }
+    }
+    if (status.isOk()) {
+      result.setUpdate(0, commitSequence);
+      if (!implicit) {
+        result.setTransaction(true, session.visibleCommitSequence());
+      }
+    }
+    return status;
+  }
+
+  private StatusCode validateViewDefinition(CharSequence viewSql) {
+    validatedViewTableId = 0;
+    StatusCode status = parser.parse(viewSql, viewCommand);
+    if (!status.isOk()
+        || viewCommand.type() != SqlCommandType.SCAN
+            && viewCommand.type() != SqlCommandType.SELECT
+        || viewCommand.isSelectAll()
+        || viewCommand.columnCount() <= 0
+        || viewCommand.isOrdered()
+        || viewCommand.rowLimit() != Long.MAX_VALUE
+        || viewCommand.hasDisjunction()) {
+      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    }
+    status = session.resolveTable(viewCommand.tableName(), table);
+    if (status.isOk()) {
+      validatedViewTableId = table.tableId();
+      command = viewCommand;
+      status = bindDataCommand();
+    }
+    command = parsedCommand;
+    return status;
+  }
+
   public StatusCode beginScan(String sql, SqlScanCursor cursor) {
     if (cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -857,6 +949,7 @@ public final class SqlSession {
     correlatedNestedChain = false;
     recursiveNestedChain = false;
     recursiveRootCorrelated = false;
+    command = parsedCommand;
     StatusCode status = parser.parseQuery(sql, query, command);
     if (!status.isOk()) {
       return status;
@@ -1220,7 +1313,7 @@ public final class SqlSession {
       status = beginStatement();
     }
     if (status.isOk()) {
-      status = session.resolveTable(command.tableName(), table);
+      status = resolveQueryTable();
     }
     if (status.isOk()
         && query.blockCount() > 2
@@ -1322,6 +1415,38 @@ public final class SqlSession {
       return StatusCode.OK;
     }
     return failScanStart(status, cursor, implicit);
+  }
+
+  private StatusCode resolveQueryTable() {
+    StatusCode tableStatus = session.resolveTable(command.tableName(), table);
+    if (tableStatus.isOk()) {
+      return tableStatus;
+    }
+    if (tableStatus != StatusCode.CONFLICT
+        && tableStatus != StatusCode.CORRUPTION) {
+      return tableStatus;
+    }
+    StatusCode status = session.resolveView(
+        command.tableName(), viewDefinition);
+    if (!status.isOk()) {
+      return tableStatus == StatusCode.CORRUPTION
+              && status == StatusCode.CONFLICT
+          ? tableStatus : status;
+    }
+    status = parser.parse(viewDefinition, viewCommand);
+    if (status.isOk()) {
+      status = query.compileView(command, viewCommand, expandedViewCommand);
+    }
+    query.reset();
+    if (status.isOk()) {
+      command = expandedViewCommand;
+      status = session.resolveTable(command.tableName(), table);
+      if (status.isOk()
+          && table.tableId() != viewDefinition.baseTableId()) {
+        status = StatusCode.CORRUPTION;
+      }
+    }
+    return status;
   }
 
   private StatusCode beginScalarAggregateExplain(SqlScanCursor cursor) {

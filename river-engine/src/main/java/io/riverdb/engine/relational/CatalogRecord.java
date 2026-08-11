@@ -14,12 +14,14 @@ final class CatalogRecord {
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
   private static final long USER_SEQUENCE_MAGIC = 0x5249564552555345L; // RIVERUSE
   private static final long IDENTITY_SEQUENCE_MAGIC = 0x5249564552494453L; // RIVERIDS
+  private static final long VIEW_MAGIC = 0x5249564552564945L; // RIVERVIE
   private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
   private static final long DROPPING_TABLE_MAGIC = 0x524956455244524fL; // RIVERDRO
   private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
   private static final int SEQUENCE_VERSION = 1;
   private static final int USER_SEQUENCE_VERSION = 1;
   private static final int IDENTITY_SEQUENCE_VERSION = 1;
+  private static final int VIEW_VERSION = 1;
   private static final int TABLE_VERSION = 10;
   private static final int INDEX_VERSION = 3;
   private static final int TABLE_CHECK_MASK_OFFSET = 60;
@@ -155,6 +157,101 @@ final class CatalogRecord {
     }
     result.set(scratch.getLong(16), 1, exhausted == 1);
     return StatusCode.OK;
+  }
+
+  static void encodeView(
+      ByteBuffer target,
+      CharSequence name,
+      CharSequence query,
+      int baseTableId) {
+    clear(target);
+    target.putLong(0, VIEW_MAGIC);
+    target.putInt(8, VIEW_VERSION);
+    target.putInt(12, name.length());
+    target.putInt(16, query.length());
+    target.putInt(20, baseTableId);
+    int offset = 24;
+    for (int index = 0; index < name.length(); index++) {
+      target.put(offset++, (byte) name.charAt(index));
+    }
+    for (int index = 0; index < query.length(); index++) {
+      target.put(offset++, (byte) query.charAt(index));
+    }
+    target.position(0);
+    target.limit(offset);
+  }
+
+  static StatusCode decodeView(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      CharSequence expectedName,
+      ViewDefinition result) {
+    result.reset();
+    scratch.clear();
+    StatusCode status = source.copyTo(scratch);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (source.length() < Long.BYTES) {
+      return StatusCode.CORRUPTION;
+    }
+    if (scratch.getLong(0) != VIEW_MAGIC) {
+      return StatusCode.CONFLICT;
+    }
+    int nameBytes = source.length() >= 20 ? scratch.getInt(12) : -1;
+    int queryBytes = source.length() >= 20 ? scratch.getInt(16) : -1;
+    if (source.length() < 25
+        || scratch.getInt(8) != VIEW_VERSION
+        || scratch.getInt(20) <= 0
+        || scratch.getInt(20) > RelationalKey.MAXIMUM_TABLE_ID
+        || nameBytes <= 0
+        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
+        || queryBytes <= 0
+        || queryBytes > ViewDefinition.MAXIMUM_QUERY_LENGTH
+        || source.length() != 24 + nameBytes + queryBytes
+        || expectedName.length() != nameBytes) {
+      return StatusCode.CORRUPTION;
+    }
+    for (int index = 0; index < nameBytes; index++) {
+      if (Byte.toUnsignedInt(scratch.get(24 + index))
+          != expectedName.charAt(index)) {
+        return StatusCode.CONFLICT;
+      }
+    }
+    for (int index = 0; index < queryBytes; index++) {
+      result.append((char) Byte.toUnsignedInt(scratch.get(24 + nameBytes + index)));
+    }
+    result.setBaseTableId(scratch.getInt(20));
+    return StatusCode.OK;
+  }
+
+  static StatusCode decodeViewForScan(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      TableSchema.ColumnName name,
+      ViewDefinition result) {
+    scratch.clear();
+    StatusCode status = source.copyTo(scratch);
+    long magic = status.isOk() && source.length() >= Long.BYTES
+        ? scratch.getLong(0) : 0;
+    if (!status.isOk()) {
+      return status;
+    }
+    if (magic != VIEW_MAGIC) {
+      return StatusCode.CONFLICT;
+    }
+    int nameBytes = source.length() >= 20 ? scratch.getInt(12) : -1;
+    if (source.length() < 25
+        || nameBytes <= 0
+        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
+        || nameBytes > source.length() - 24) {
+      return StatusCode.CORRUPTION;
+    }
+    name.set(scratch, 24, nameBytes);
+    if (!RelationalKey.validName(name)) {
+      return StatusCode.CORRUPTION;
+    }
+    return decodeView(source, scratch, name, result);
   }
 
   static void encodeTable(
@@ -467,6 +564,12 @@ final class CatalogRecord {
       long expectedMagic) {
     scratch.clear();
     StatusCode status = source.copyTo(scratch);
+    long actualMagic = status.isOk() && source.length() >= Long.BYTES
+        ? scratch.getLong(0) : 0;
+    if (status.isOk() && actualMagic != expectedMagic) {
+      return knownCatalogMagic(actualMagic)
+          ? StatusCode.CONFLICT : StatusCode.CORRUPTION;
+    }
     int version = source.length() >= 12 ? scratch.getInt(8) : -1;
     int nameBytes = source.length() >= 20 ? scratch.getInt(16) : -1;
     int columnCount = source.length() >= 24 ? scratch.getInt(20) : -1;
@@ -887,6 +990,16 @@ final class CatalogRecord {
     for (int index = 0; index < target.capacity(); index++) {
       target.put(index, (byte) 0);
     }
+  }
+
+  private static boolean knownCatalogMagic(long magic) {
+    return magic == SEQUENCE_MAGIC
+        || magic == USER_SEQUENCE_MAGIC
+        || magic == IDENTITY_SEQUENCE_MAGIC
+        || magic == VIEW_MAGIC
+        || magic == TABLE_MAGIC
+        || magic == DROPPING_TABLE_MAGIC
+        || magic == INDEX_MAGIC;
   }
 
   static final class IntResult {

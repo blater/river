@@ -37,6 +37,7 @@ public final class RelationalSession {
   private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
   private final CatalogRecord.UserSequenceResult userSequenceRecord =
       new CatalogRecord.UserSequenceResult();
+  private final ViewDefinition viewRecord = new ViewDefinition();
   private final TableDefinition valueIndexTable = new TableDefinition();
   private final TableDefinition referenceTable = new TableDefinition();
   private final TableSchema schemaScratch = new TableSchema();
@@ -70,17 +71,22 @@ public final class RelationalSession {
     session = indexedSession;
   }
 
+  public boolean isTransactionActive() {
+    return registeredTransaction;
+  }
+
   public StatusCode begin(IsolationLevel isolationLevel) {
     if (registeredTransaction) {
       return StatusCode.CONFLICT;
     }
     StatusCode status = database.enterTransaction(this);
+    boolean entered = status.isOk();
     if (status.isOk()) {
       status = session.begin(isolationLevel);
     }
     if (status.isOk()) {
       registeredTransaction = true;
-    } else {
+    } else if (entered) {
       database.leaveTransaction();
     }
     return status;
@@ -110,6 +116,23 @@ public final class RelationalSession {
     return status.isOk()
         ? CatalogRecord.decodeTable(
             catalogRow, catalogScratch, name, database, result)
+        : status;
+  }
+
+  public StatusCode resolveView(
+      CharSequence name,
+      ViewDefinition result) {
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = RelationalKey.catalogTableKey(name, physicalKey);
+    if (status.isOk()) {
+      status = session.fetchByKey(physicalKey.key(), catalogRow);
+    }
+    return status.isOk()
+        ? CatalogRecord.decodeView(
+            catalogRow, catalogScratch, name, result)
         : status;
   }
 
@@ -231,6 +254,93 @@ public final class RelationalSession {
       CatalogRecord.encodeUserSequence(
           catalogOutput, name, start, increment, false);
       status = session.insert(physicalKey.key(), catalogOutput);
+    }
+    if (!status.isOk() && acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
+  }
+
+  public StatusCode createView(
+      CharSequence name,
+      CharSequence query,
+      int baseTableId) {
+    if (!registeredTransaction
+        || !RelationalKey.validName(name)
+        || query == null
+        || query.length() <= 0
+        || query.length() > ViewDefinition.MAXIMUM_QUERY_LENGTH
+        || baseTableId <= 0
+        || baseTableId > RelationalKey.MAXIMUM_TABLE_ID) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropType != PENDING_DROP_NONE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(name, physicalKey);
+    }
+    if (status.isOk()) {
+      status = session.fetchByKey(physicalKey.key(), catalogRow);
+      if (status.isOk()) {
+        status = StatusCode.CONFLICT;
+      } else if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+      }
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeView(catalogOutput, name, query, baseTableId);
+      status = session.insert(physicalKey.key(), catalogOutput);
+    }
+    if (!status.isOk() && acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
+  }
+
+  public StatusCode dropView(CharSequence name) {
+    if (!registeredTransaction || !RelationalKey.validName(name)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropType != PENDING_DROP_NONE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(name, physicalKey);
+    }
+    if (status.isOk()) {
+      status = session.fetchByKey(physicalKey.key(), catalogRow);
+    }
+    if (status.isOk()) {
+      status = CatalogRecord.decodeView(
+          catalogRow, catalogScratch, name, viewRecord);
+    }
+    if (status.isOk()) {
+      status = session.delete(physicalKey.key());
     }
     if (!status.isOk() && acquired) {
       database.completeSchemaChange(this, false);

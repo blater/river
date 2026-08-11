@@ -169,6 +169,28 @@ public final class SqlQuery {
     return StatusCode.OK;
   }
 
+  public StatusCode compileView(
+      SqlCommand outer,
+      SqlCommand view,
+      SqlCommand destination) {
+    if (outer == null
+        || view == null
+        || destination == null
+        || destination == outer
+        || destination == view) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    reset();
+    SqlCommand outerBlock = nextBlock();
+    SqlCommand viewBlock = nextBlock();
+    if (outerBlock == null || viewBlock == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    outerBlock.copyQueryFrom(outer);
+    viewBlock.copyQueryFrom(view);
+    return compileDerived(destination);
+  }
+
   StatusCode compileScalarPredicate(SqlCommand destination, int predicate) {
     if (destination == null
         || blockCount < 2) {

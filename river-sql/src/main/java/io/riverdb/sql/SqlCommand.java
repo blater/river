@@ -9,6 +9,7 @@ public final class SqlCommand {
   public static final int MAXIMUM_CONSTRAINT_INDEXES = 4;
   public static final int MAXIMUM_PREDICATES = MAXIMUM_COLUMNS;
   public static final int MAXIMUM_LITERAL_MEMBERSHIP_VALUES = 256;
+  public static final int MAXIMUM_VIEW_QUERY_LENGTH = 768;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier renamedTableName = new SqlIdentifier();
@@ -21,6 +22,7 @@ public final class SqlCommand {
   private final SqlIdentifier renamedIndexName = new SqlIdentifier();
   private final SqlIdentifier sequenceName = new SqlIdentifier();
   private final SqlIdentifier savepointName = new SqlIdentifier();
+  private final ViewQuery viewQuery = new ViewQuery();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnAliases = new SqlIdentifier[MAXIMUM_COLUMNS];
@@ -130,6 +132,7 @@ public final class SqlCommand {
     renamedIndexName.reset();
     sequenceName.reset();
     savepointName.reset();
+    viewQuery.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
     }
@@ -530,6 +533,10 @@ public final class SqlCommand {
     return savepointName;
   }
 
+  StatusCode setViewQuery(CharSequence sql, int start, int end) {
+    return viewQuery.set(sql, start, end);
+  }
+
   SqlIdentifier writableNextColumnName() {
     return columnCount < columnNames.length ? columnNames[columnCount++] : null;
   }
@@ -711,6 +718,10 @@ public final class SqlCommand {
 
   public SqlIdentifier savepointName() {
     return savepointName;
+  }
+
+  public CharSequence viewQuery() {
+    return viewQuery;
   }
 
   public SqlIdentifier firstColumnName() {
@@ -1082,5 +1093,51 @@ public final class SqlCommand {
 
   public boolean isAvailable() {
     return available;
+  }
+
+  private static final class ViewQuery implements CharSequence {
+    private final char[] characters = new char[MAXIMUM_VIEW_QUERY_LENGTH];
+    private int length;
+
+    StatusCode set(CharSequence source, int start, int end) {
+      if (source == null
+          || start < 0
+          || end <= start
+          || end > source.length()
+          || end - start > characters.length) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int index = start; index < end; index++) {
+        char character = source.charAt(index);
+        if (character > 0xff) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        characters[index - start] = character;
+      }
+      length = end - start;
+      return StatusCode.OK;
+    }
+
+    void reset() {
+      length = 0;
+    }
+
+    @Override
+    public int length() {
+      return length;
+    }
+
+    @Override
+    public char charAt(int index) {
+      if (index < 0 || index >= length) {
+        throw new IndexOutOfBoundsException(index);
+      }
+      return characters[index];
+    }
+
+    @Override
+    public CharSequence subSequence(int start, int end) {
+      throw new UnsupportedOperationException();
+    }
   }
 }

@@ -167,6 +167,22 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
+            "CREATE VIEW active_accounts AS "
+                + "SELECT id, region FROM accounts WHERE balance>0;",
+            command));
+    assertEquals(SqlCommandType.CREATE_VIEW, command.type());
+    assertName("active_accounts", command.tableName());
+    assertText(
+        "SELECT id, region FROM accounts WHERE balance>0",
+        command.viewQuery());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("DROP VIEW active_accounts", command));
+    assertEquals(SqlCommandType.DROP_VIEW, command.type());
+    assertName("active_accounts", command.tableName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
             "CREATE TABLE events (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
                 + "payload BIGINT NOT NULL)",
             command));
@@ -874,6 +890,32 @@ final class SqlParserTest {
   }
 
   @Test
+  void composesStoredViewDefinitionsWithOuterQueries() {
+    SqlParser parser = new SqlParser();
+    SqlCommand outer = new SqlCommand();
+    SqlCommand view = new SqlCommand();
+    SqlCommand compiled = new SqlCommand();
+    SqlQuery query = new SqlQuery();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id, amount FROM valuable WHERE kind=7 ORDER BY id",
+            outer));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id, category AS kind, amount FROM events WHERE amount>=100",
+            view));
+    assertEquals(StatusCode.OK, query.compileView(outer, view, compiled));
+    assertName("events", compiled.tableName());
+    assertName("id", compiled.columnName(0));
+    assertName("amount", compiled.columnName(1));
+    assertName("amount", compiled.predicateColumnName(0));
+    assertName("category", compiled.predicateColumnName(1));
+    assertName("id", compiled.orderColumnName());
+  }
+
+  @Test
   void parsesBigintComparisonsWithoutLosingHalfOpenRanges() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
@@ -1505,6 +1547,10 @@ final class SqlParserTest {
   }
 
   private static void assertName(String expected, SqlIdentifier actual) {
+    assertText(expected, actual);
+  }
+
+  private static void assertText(String expected, CharSequence actual) {
     assertEquals(expected.length(), actual.length());
     for (int index = 0; index < expected.length(); index++) {
       assertEquals(expected.charAt(index), actual.charAt(index));

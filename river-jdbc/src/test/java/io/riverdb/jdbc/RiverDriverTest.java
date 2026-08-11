@@ -1974,6 +1974,21 @@ final class RiverDriverTest {
         assertEquals(2, selected.getLong(1));
         assertFalse(selected.next());
       }
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE VIEW expensive_plans AS "
+                  + "SELECT id, category AS kind, amount FROM planned "
+                  + "WHERE amount>=90"));
+      try (ResultSet selected = statement.executeQuery(
+          "SELECT id, amount FROM expensive_plans "
+              + "WHERE kind=7 ORDER BY id")) {
+        assertTrue(selected.next());
+        assertEquals(1, selected.getLong(1));
+        assertEquals(99, selected.getLong(2));
+        assertFalse(selected.next());
+      }
+      assertEquals(0, statement.executeUpdate("DROP VIEW expensive_plans"));
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
