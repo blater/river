@@ -16,6 +16,7 @@ import io.riverdb.server.LoopbackServerOpenResult;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -130,9 +131,72 @@ final class RiverDriverTest {
           SQLException.class,
           () -> statement.executeUpdate("NOT SQL"));
       assertEquals("22000", invalidSql.getSQLState());
+      assertThrows(java.sql.SQLFeatureNotSupportedException.class, () -> {
+        connection.setReadOnly(true);
+      });
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void preparedStatementsRenderOnlyBoundedBigintParameters(@TempDir Path root)
+      throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement schema = connection.createStatement()) {
+      assertEquals(0, schema.executeUpdate(
+          "CREATE TABLE prepared_values (id BIGINT PRIMARY KEY, value BIGINT)"));
+    }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        PreparedStatement insert = connection.prepareStatement(
+            "INSERT INTO prepared_values VALUES (?, ?)")) {
+      insert.setLong(1, 1);
+      SQLException unset = assertThrows(SQLException.class, insert::executeUpdate);
+      assertEquals("22000", unset.getSQLState());
+      insert.setLong(2, 100);
+      assertEquals(1, insert.executeUpdate());
+      insert.setObject(1, Integer.valueOf(2), Types.BIGINT);
+      insert.setLong(2, 200);
+      assertEquals(1, insert.executeUpdate());
+      insert.setLong(1, 3);
+      insert.setLong(2, Long.MIN_VALUE);
+      assertEquals(1, insert.executeUpdate());
       assertThrows(
           java.sql.SQLFeatureNotSupportedException.class,
-          () -> connection.prepareStatement("SELECT value FROM unused"));
+          () -> insert.setString(1, "1 OR 1=1"));
+      insert.clearParameters();
+      assertThrows(SQLException.class, () -> insert.setLong(3, 3));
+    }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        PreparedStatement select = connection.prepareStatement(
+            "SELECT value FROM prepared_values WHERE id=?")) {
+      select.setLong(1, 2);
+      try (ResultSet result = select.executeQuery()) {
+        assertEquals(1, result.getMetaData().getColumnCount());
+        assertTrue(result.next());
+        assertEquals(200, result.getLong(1));
+        assertFalse(result.next());
+      }
+      select.setLong(1, 1);
+      try (ResultSet result = select.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(100, result.getLong(1));
+      }
+      select.setLong(1, 3);
+      try (ResultSet result = select.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(Long.MIN_VALUE, result.getLong(1));
+      }
+      assertThrows(
+          SQLException.class,
+          () -> select.executeQuery("SELECT value FROM prepared_values WHERE id=2"));
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());

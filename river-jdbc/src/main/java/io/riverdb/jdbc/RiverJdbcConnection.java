@@ -5,6 +5,7 @@ import io.riverdb.client.RiverClientConnection;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverSession;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -51,6 +52,16 @@ final class RiverJdbcConnection extends AbstractConnection {
     }
     statement = new RiverJdbcStatement(this, session);
     return statement;
+  }
+
+  @Override
+  public PreparedStatement prepareStatement(String sql) throws SQLException {
+    requireOpen();
+    if (statement != null) {
+      throw JdbcExceptions.failure(StatusCode.CONFLICT, "prepare statement");
+    }
+    statement = new RiverJdbcPreparedStatement(this, session, sql);
+    return (PreparedStatement) statement;
   }
 
   @Override

@@ -10,7 +10,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 
 /** One forward-only statement on the connection's ordered River session. */
-final class RiverJdbcStatement extends AbstractStatement {
+class RiverJdbcStatement extends AbstractStatement {
   private final RiverJdbcConnection connection;
   private final RiverSession session;
   private final CommandResult command = new CommandResult();
