@@ -10,6 +10,7 @@ public final class SqlQuery {
   private int blockCount;
   private int scalarPredicate = -1;
   private int existencePredicate;
+  private int membershipPredicate;
 
   public SqlQuery() {
     for (int index = 0; index < blocks.length; index++) {
@@ -24,6 +25,7 @@ public final class SqlQuery {
     blockCount = 0;
     scalarPredicate = -1;
     existencePredicate = 0;
+    membershipPredicate = 0;
   }
 
   SqlCommand nextBlock() {
@@ -70,6 +72,9 @@ public final class SqlQuery {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
       column.copyFrom(root.columnName(index));
+      if (root.isNullProjection(index)) {
+        destination.markLastProjectionNull();
+      }
     }
     for (int blockIndex = blockCount - 1; blockIndex >= 0; blockIndex--) {
       SqlCommand block = blocks[blockIndex];
@@ -132,6 +137,31 @@ public final class SqlQuery {
     }
     destination.copyQueryFrom(blocks[0]);
     existencePredicate = negated ? -1 : 1;
+    return StatusCode.OK;
+  }
+
+  StatusCode compileMembershipPredicate(
+      SqlCommand destination,
+      int predicate,
+      boolean negated) {
+    if (destination == null
+        || blockCount != 2
+        || predicate < 0
+        || predicate >= blocks[0].predicateCount()
+        || !blocks[0].isEqualityPredicate(predicate)
+        || blocks[0].type() != SqlCommandType.SCAN
+            && blocks[0].type() != SqlCommandType.SELECT) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SqlCommand nested = blocks[1];
+    if (nested.type() != SqlCommandType.SCAN
+        && nested.type() != SqlCommandType.SELECT
+        || nested.isSelectAll()
+        || nested.columnCount() != 1) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.copyQueryFrom(blocks[0]);
+    membershipPredicate = negated ? -predicate - 1 : predicate + 1;
     return StatusCode.OK;
   }
 
@@ -235,5 +265,21 @@ public final class SqlQuery {
 
   public SqlCommand existenceCommand() {
     return hasExistencePredicate() ? blocks[1] : null;
+  }
+
+  public boolean hasMembershipPredicate() {
+    return membershipPredicate != 0;
+  }
+
+  public boolean membershipNegated() {
+    return membershipPredicate < 0;
+  }
+
+  public int membershipPredicate() {
+    return Math.abs(membershipPredicate) - 1;
+  }
+
+  public SqlCommand membershipCommand() {
+    return hasMembershipPredicate() ? blocks[1] : null;
   }
 }

@@ -9,6 +9,7 @@ public final class SqlScanRowResult {
   private final long[] values = new long[TableSchema.MAXIMUM_COLUMNS];
   private long key;
   private long value;
+  private long nullMask;
   private int columnCount;
   private boolean available;
 
@@ -16,6 +17,7 @@ public final class SqlScanRowResult {
     relational.reset();
     key = 0;
     value = 0;
+    nullMask = 0;
     columnCount = 0;
     available = false;
   }
@@ -24,9 +26,14 @@ public final class SqlScanRowResult {
     return relational;
   }
 
-  void set(long rowKey, long[] projectedValues, int projectedColumnCount) {
+  void set(
+      long rowKey,
+      long[] projectedValues,
+      long projectedNullMask,
+      int projectedColumnCount) {
     key = rowKey;
     columnCount = projectedColumnCount;
+    nullMask = projectedNullMask;
     for (int index = 0; index < projectedColumnCount; index++) {
       values[index] = projectedValues[index];
     }
@@ -48,6 +55,14 @@ public final class SqlScanRowResult {
 
   public long valueAt(int index) {
     return index >= 0 && index < columnCount ? values[index] : 0;
+  }
+
+  public boolean isNull(int index) {
+    return index >= 0 && index < columnCount && (nullMask & 1L << index) != 0;
+  }
+
+  public long nullMask() {
+    return nullMask;
   }
 
   public boolean isAvailable() {

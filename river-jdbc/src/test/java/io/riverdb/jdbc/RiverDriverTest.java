@@ -2,6 +2,7 @@ package io.riverdb.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -60,6 +61,70 @@ final class RiverDriverTest {
           statement.executeUpdate(
               "INSERT INTO accounts VALUES "
                   + "(1, 100, 7), (2, 200, 7), (3, 300, 8)"));
+      try (ResultSet nullable = statement.executeQuery(
+          "SELECT id, NULL FROM accounts WHERE id=1")) {
+        assertTrue(nullable.next());
+        assertEquals(1, nullable.getLong(1));
+        assertFalse(nullable.wasNull());
+        assertEquals(0, nullable.getLong(2));
+        assertTrue(nullable.wasNull());
+        assertNull(nullable.getString(2));
+        assertTrue(nullable.wasNull());
+        assertNull(nullable.getObject(2));
+        assertTrue(nullable.wasNull());
+        assertNull(nullable.getObject(2, Long.class));
+        assertTrue(nullable.wasNull());
+        assertFalse(nullable.next());
+      }
+      try (ResultSet membership = statement.executeQuery(
+          "SELECT id FROM accounts WHERE balance IN "
+              + "(SELECT balance FROM accounts WHERE region=7) ORDER BY id")) {
+        assertTrue(membership.next());
+        assertEquals(1, membership.getLong(1));
+        assertTrue(membership.next());
+        assertEquals(2, membership.getLong(1));
+        assertFalse(membership.next());
+      }
+      try (ResultSet membership = statement.executeQuery(
+          "SELECT id FROM accounts WHERE balance NOT IN "
+              + "(SELECT balance FROM accounts WHERE region=7)")) {
+        assertTrue(membership.next());
+        assertEquals(3, membership.getLong(1));
+        assertFalse(membership.next());
+      }
+      try (ResultSet unknown = statement.executeQuery(
+          "SELECT id FROM accounts WHERE id NOT IN "
+              + "(SELECT NULL FROM accounts WHERE id=1)")) {
+        assertFalse(unknown.next());
+      }
+      try (ResultSet unknown = statement.executeQuery(
+          "SELECT id FROM accounts WHERE id IN "
+              + "(SELECT NULL FROM accounts WHERE id=1)")) {
+        assertFalse(unknown.next());
+      }
+      try (ResultSet unknown = statement.executeQuery(
+          "SELECT id FROM accounts WHERE id="
+              + "(SELECT NULL FROM accounts WHERE id=1)")) {
+        assertFalse(unknown.next());
+      }
+      try (ResultSet exists = statement.executeQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT NULL FROM accounts WHERE id=1) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(exists.next());
+          assertEquals(expected, exists.getLong(1));
+        }
+        assertFalse(exists.next());
+      }
+      try (ResultSet empty = statement.executeQuery(
+          "SELECT id FROM accounts WHERE id NOT IN "
+              + "(SELECT id FROM accounts WHERE id=99) ORDER BY id")) {
+        for (long expected = 1; expected <= 3; expected++) {
+          assertTrue(empty.next());
+          assertEquals(expected, empty.getLong(1));
+        }
+        assertFalse(empty.next());
+      }
       assertEquals(
           0,
           statement.executeUpdate(

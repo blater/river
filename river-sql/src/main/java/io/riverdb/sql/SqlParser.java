@@ -13,6 +13,8 @@ public final class SqlParser {
   private int scalarPredicateIndex = -1;
   private int existenceWhereStart = -1;
   private boolean existenceNegated;
+  private int membershipOperatorStart = -1;
+  private boolean membershipNegated;
 
   public StatusCode parse(String sql, SqlCommand result) {
     return parseText(sql, result);
@@ -34,6 +36,10 @@ public final class SqlParser {
     int exists = findExistenceSource(sql, 0, sql.length());
     if (exists >= 0) {
       return parseExistencePredicate(sql, exists, query, result);
+    }
+    int membership = findMembershipSource(sql, 0, sql.length());
+    if (membership >= 0) {
+      return parseMembershipPredicate(sql, membership, query, result);
     }
     int scalar = findScalarSource(sql, 0, sql.length());
     return scalar < 0
@@ -79,7 +85,7 @@ public final class SqlParser {
     if (outer == null || scalar == null) {
       return StatusCode.QUERY_TOO_COMPLEX;
     }
-    scalarSourceView.set(sql, 0, open, close + 1, sql.length());
+    scalarSourceView.set(sql, 0, open, close + 1, sql.length(), false);
     scalarPredicateIndex = -1;
     StatusCode status = parseText(scalarSourceView, outer);
     if (status.isOk() && scalarPredicateIndex < 0) {
@@ -91,6 +97,37 @@ public final class SqlParser {
     }
     return status.isOk()
         ? query.compileScalarPredicate(result, scalarPredicateIndex) : status;
+  }
+
+  private StatusCode parseMembershipPredicate(
+      String sql,
+      int open,
+      SqlQuery query,
+      SqlCommand result) {
+    int close = matchingCloseParenthesis(sql, open, sql.length());
+    if (close < 0 || membershipOperatorStart < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    SqlCommand outer = query.nextBlock();
+    SqlCommand nested = query.nextBlock();
+    if (outer == null || nested == null) {
+      return StatusCode.QUERY_TOO_COMPLEX;
+    }
+    scalarSourceView.set(
+        sql, 0, membershipOperatorStart, close + 1, sql.length(), true);
+    scalarPredicateIndex = -1;
+    StatusCode status = parseText(scalarSourceView, outer);
+    if (status.isOk() && scalarPredicateIndex < 0) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      sourceView.set(sql, open + 1, close, close, close);
+      status = parseText(sourceView, nested);
+    }
+    return status.isOk()
+        ? query.compileMembershipPredicate(
+            result, scalarPredicateIndex, membershipNegated)
+        : status;
   }
 
   private StatusCode parseDerivedBlocks(
@@ -179,6 +216,52 @@ public final class SqlParser {
         if (matchesKeyword(sql, select, end, "SELECT")) {
           return open;
         }
+      }
+    }
+    return -1;
+  }
+
+  private int findMembershipSource(String sql, int start, int end) {
+    membershipOperatorStart = -1;
+    membershipNegated = false;
+    int depth = 0;
+    for (int index = start; index < end; index++) {
+      char character = sql.charAt(index);
+      if (character == '(') {
+        depth++;
+      } else if (character == ')') {
+        if (depth <= 0) {
+          return -1;
+        }
+        depth--;
+      } else if (depth == 0 && matchesKeyword(sql, index, end, "IN")) {
+        int open = index + 2;
+        while (open < end && Character.isWhitespace(sql.charAt(open))) {
+          open++;
+        }
+        if (open >= end || sql.charAt(open) != '(') {
+          continue;
+        }
+        int select = open + 1;
+        while (select < end && Character.isWhitespace(sql.charAt(select))) {
+          select++;
+        }
+        if (!matchesKeyword(sql, select, end, "SELECT")) {
+          continue;
+        }
+        int operator = index;
+        int priorEnd = index;
+        while (priorEnd > start && Character.isWhitespace(sql.charAt(priorEnd - 1))) {
+          priorEnd--;
+        }
+        int priorStart = priorEnd - 3;
+        if (priorStart >= start
+            && matchesKeyword(sql, priorStart, priorEnd, "NOT")) {
+          membershipNegated = true;
+          operator = priorStart;
+        }
+        membershipOperatorStart = operator;
+        return open;
       }
     }
     return -1;
@@ -680,6 +763,15 @@ public final class SqlParser {
   }
 
   private StatusCode selectColumnIdentifier(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "NULL")) {
+      SqlIdentifier column = result.writableNextColumnName();
+      if (column == null) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      setIdentifier(column, "null");
+      result.markLastProjectionNull();
+      return StatusCode.OK;
+    }
     identifierScratch.reset();
     StatusCode status = identifier(sql, identifierScratch);
     SqlIdentifier column = status.isOk() ? result.writableNextColumnName() : null;
@@ -902,17 +994,19 @@ public final class SqlParser {
         int firstFrom,
         int firstTo,
         int secondFrom,
-        int secondTo) {
+        int secondTo,
+        boolean includeEquality) {
       source = text;
       firstStart = firstFrom;
       firstLength = firstTo - firstFrom;
       secondStart = secondFrom;
       secondLength = secondTo - secondFrom;
+      equality = includeEquality;
     }
 
     @Override
     public int length() {
-      return firstLength + 1 + secondLength;
+      return firstLength + (equality ? 2 : 1) + secondLength;
     }
 
     @Override
@@ -923,8 +1017,12 @@ public final class SqlParser {
       if (index < firstLength) {
         return source.charAt(firstStart + index);
       }
-      return index == firstLength
-          ? '0' : source.charAt(secondStart + index - firstLength - 1);
+      if (equality && index == firstLength) {
+        return '=';
+      }
+      int replacement = firstLength + (equality ? 1 : 0);
+      return index == replacement
+          ? '0' : source.charAt(secondStart + index - replacement - 1);
     }
 
     @Override
@@ -933,7 +1031,9 @@ public final class SqlParser {
     }
 
     boolean isReplacement(int index) {
-      return index == firstLength;
+      return index == firstLength + (equality ? 1 : 0);
     }
+
+    private boolean equality;
   }
 }

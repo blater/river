@@ -70,6 +70,27 @@ final class EmbeddedRiverApiTest {
     assertEquals(3, query.rowsReturned());
     assertEquals(StatusCode.OK, query.close(command));
     assertEquals(false, query.isActive());
+
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery(
+            "SELECT id, NULL FROM accounts WHERE id >= 1 AND id < 2",
+            queryResult));
+    query = queryResult.query();
+    assertEquals("null", query.columnName(1).toString());
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(0, row.valueAt(1));
+    assertEquals(false, row.isNull(0));
+    assertEquals(true, row.isNull(1));
+    assertEquals(StatusCode.OK, query.close(command));
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT NULL FROM accounts WHERE id=2", command));
+    assertEquals(true, command.rowAvailable());
+    assertEquals(0, command.valueAt(0));
+    assertEquals(true, command.isNull(0));
     assertEquals(StatusCode.CONFLICT, database.close());
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());

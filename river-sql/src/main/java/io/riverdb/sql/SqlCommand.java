@@ -26,6 +26,7 @@ public final class SqlCommand {
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
   private final boolean[] equalityPredicates = new boolean[MAXIMUM_PREDICATES];
+  private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
   private SqlCommandType type;
   private long key;
   private long value;
@@ -61,6 +62,9 @@ public final class SqlCommand {
     savepointName.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
+    }
+    for (int index = 0; index < nullProjections.length; index++) {
+      nullProjections[index] = false;
     }
     for (SqlIdentifier columnTableName : columnTableNames) {
       columnTableName.reset();
@@ -153,6 +157,7 @@ public final class SqlCommand {
     for (int index = 0; index < source.columnCount; index++) {
       writableNextColumnName().copyFrom(source.columnNames[index]);
       writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
+      nullProjections[index] = source.nullProjections[index];
     }
     for (int index = 0; index < source.predicateCount; index++) {
       writableNextPredicateTableName().copyFrom(source.predicateTableNames[index]);
@@ -229,6 +234,12 @@ public final class SqlCommand {
     return columnCount < columnNames.length ? columnNames[columnCount++] : null;
   }
 
+  void markLastProjectionNull() {
+    if (columnCount > 0) {
+      nullProjections[columnCount - 1] = true;
+    }
+  }
+
   SqlIdentifier writableColumnTableName(int index) {
     return index >= 0 && index < columnCount ? columnTableNames[index] : null;
   }
@@ -293,6 +304,10 @@ public final class SqlCommand {
 
   public SqlIdentifier columnTableName(int index) {
     return index >= 0 && index < columnCount ? columnTableNames[index] : null;
+  }
+
+  public boolean isNullProjection(int index) {
+    return index >= 0 && index < columnCount && nullProjections[index];
   }
 
   public SqlIdentifier predicateColumnName() {

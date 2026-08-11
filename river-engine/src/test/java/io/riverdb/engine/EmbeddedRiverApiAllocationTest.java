@@ -24,6 +24,9 @@ import org.junit.jupiter.api.io.TempDir;
 final class EmbeddedRiverApiAllocationTest {
   private static final String QUERY =
       "SELECT id, balance FROM accounts WHERE region=7";
+  private static final String MEMBERSHIP_QUERY =
+      "SELECT id FROM accounts WHERE balance IN "
+          + "(SELECT balance FROM accounts WHERE region=7)";
   private static volatile long allocationGuard;
 
   @Test
@@ -93,6 +96,11 @@ final class EmbeddedRiverApiAllocationTest {
     allocationGuard += row.key();
     allocationGuard += query.next(row).ordinal();
     allocationGuard += row.isAvailable() ? 1 : 0;
+    allocationGuard += query.close(command).ordinal();
+    allocationGuard += session.beginQuery(MEMBERSHIP_QUERY, queryResult).ordinal();
+    allocationGuard += query.next(row).ordinal();
+    allocationGuard += row.key();
+    allocationGuard += query.next(row).ordinal();
     allocationGuard += query.close(command).ordinal();
   }
 }

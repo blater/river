@@ -30,6 +30,9 @@ import java.util.zip.CRC32C;
 /** Executes the first SQL point-statement subset through real catalog and transactions. */
 public final class SqlSession {
   private static final String COUNT_COLUMN_NAME = "count";
+  private static final String NULL_COLUMN_NAME = "null";
+  private static final int NULL_PROJECTION = Integer.MIN_VALUE;
+  private static final int MAXIMUM_MEMBERSHIP_VALUES = 1_024;
   private static final int MAXIMUM_SORT_ROWS = 1_024;
   private static final int MAXIMUM_SORT_RUNS = 64;
   private static final int MAXIMUM_SORT_RECORD_BYTES =
@@ -56,6 +59,7 @@ public final class SqlSession {
   private final int[] scalarPredicateColumns =
       new int[SqlCommand.MAXIMUM_PREDICATES];
   private final long[] matchedKeys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
+  private final long[] membershipValues = new long[MAXIMUM_MEMBERSHIP_VALUES];
   private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final long[] sortRunOffsets = new long[MAXIMUM_SORT_RUNS];
@@ -93,6 +97,7 @@ public final class SqlSession {
   private boolean userSavepointActive;
   private boolean scanActive;
   private boolean subqueryPredicateFalse;
+  private boolean membershipHasNull;
   private boolean closed;
   private int userSavepointNameLength;
   private int predicateColumn;
@@ -103,6 +108,7 @@ public final class SqlSession {
   private int projectedColumnCount;
   private int sortedRowCount;
   private int nestedProjection;
+  private int membershipValueCount;
 
   private SqlSession(RelationalDatabase relational, RelationalSession relationalSession) {
     database = relational;
@@ -135,6 +141,8 @@ public final class SqlSession {
     if (transactionActive) {
       result.setTransaction(true, session.visibleCommitSequence());
     }
+    query.reset();
+    subqueryPredicateFalse = false;
     StatusCode status = parser.parse(sql, command);
     if (!status.isOk()) {
       return status;
@@ -370,6 +378,8 @@ public final class SqlSession {
       return StatusCode.CONFLICT;
     }
     subqueryPredicateFalse = false;
+    membershipValueCount = 0;
+    membershipHasNull = false;
     StatusCode status = parser.parseQuery(sql, query, command);
     if (status.isOk() && command.type() == SqlCommandType.COUNT) {
       status = execute(sql, aggregateExecution);
@@ -532,6 +542,8 @@ public final class SqlSession {
       status = evaluateScalarPredicate();
     } else if (status.isOk() && query.hasExistencePredicate()) {
       status = evaluateExistencePredicate();
+    } else if (status.isOk() && query.hasMembershipPredicate()) {
+      status = evaluateMembershipPredicate();
     }
     if (status.isOk()) {
       status = session.resolveTable(command.tableName(), table);
@@ -639,7 +651,7 @@ public final class SqlSession {
         return StatusCode.CONFLICT;
       }
       projectedValues[0] = cursor.aggregateValue();
-      result.set(0, projectedValues, 1);
+      result.set(0, projectedValues, 0, 1);
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -661,7 +673,7 @@ public final class SqlSession {
         primaryKey = sortedPrimaryKeys[sortedRow];
       }
       if (status.isOk()) {
-        result.set(primaryKey, projectedValues, cursor.projectedColumnCount());
+        result.set(primaryKey, projectedValues, 0, cursor.projectedColumnCount());
         cursor.advanceSortedRow();
         cursor.rowReturned();
       }
@@ -698,8 +710,10 @@ public final class SqlSession {
         continue;
       }
       if (status.isOk()) {
-        projectScanRow(primaryKey, source, cursor, projectedValues);
-        result.set(primaryKey, projectedValues, cursor.projectedColumnCount());
+        long nullMask = projectScanRow(
+            primaryKey, source, cursor, projectedValues);
+        result.set(
+            primaryKey, projectedValues, nullMask, cursor.projectedColumnCount());
         cursor.rowReturned();
       }
       return status;
@@ -729,7 +743,8 @@ public final class SqlSession {
           : joinTable.columnName(-projection - 1);
     }
     int column = cursor.projectedColumn(index);
-    return column < 0 ? null : table.columnName(column);
+    return column == NULL_PROJECTION
+        ? NULL_COLUMN_NAME : column < 0 ? null : table.columnName(column);
   }
 
   public StatusCode closeScan(SqlScanCursor cursor, SqlExecutionResult result) {
@@ -926,7 +941,7 @@ public final class SqlSession {
       }
       if (status.isOk()) {
         projectedValues[0] = count;
-        result.setProjection(0, projectedValues, 1, 0);
+        result.setProjection(0, projectedValues, 0, 1, 0);
       }
       return status;
     }
@@ -961,7 +976,12 @@ public final class SqlSession {
           primaryKey, source, projectedColumns, projectedColumnCount, projectedValues);
     }
     if (status.isOk()) {
-      result.setProjection(primaryKey, projectedValues, projectedColumnCount, 0);
+      result.setProjection(
+          primaryKey,
+          projectedValues,
+          projectionNullMask(projectedColumns, projectedColumnCount),
+          projectedColumnCount,
+          0);
     }
     return status;
   }
@@ -1036,6 +1056,13 @@ public final class SqlSession {
           && !sameName(command.columnTableName(index), command.tableName())) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
+      if (!command.isSelectAll() && command.isNullProjection(index)) {
+        if (command.isOrdered()) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        projectedColumns[index] = NULL_PROJECTION;
+        continue;
+      }
       int column = command.isSelectAll()
           ? index : table.findColumn(command.columnName(index));
       if (column < 0) {
@@ -1065,6 +1092,9 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < command.columnCount(); index++) {
+      if (command.isNullProjection(index)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       int descriptor;
       if (sameName(command.columnTableName(index), command.tableName())) {
         int column = table.findColumn(command.columnName(index));
@@ -1142,6 +1172,10 @@ public final class SqlSession {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       predicateColumns[index] = column;
+      if (query.hasMembershipPredicate()
+          && query.membershipPredicate() == index) {
+        continue;
+      }
       boolean indexed = column == 0 || table.hasIndexOn(column);
       int score = !indexed ? 0
           : command.isEqualityPredicate(index)
@@ -1269,7 +1303,7 @@ public final class SqlSession {
     }
     projectedValues[0] = groupValue;
     projectedValues[1] = count;
-    result.set(groupValue, projectedValues, 2);
+    result.set(groupValue, projectedValues, 0, 2);
     cursor.rowReturned();
     return StatusCode.OK;
   }
@@ -1285,7 +1319,7 @@ public final class SqlSession {
         continue;
       }
       cursor.setDistinctValue(value);
-      result.set(value, projectedValues, 1);
+      result.set(value, projectedValues, 0, 1);
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -1325,7 +1359,7 @@ public final class SqlSession {
               : readColumn(indexed.key(), innerRow, -projection - 1);
         }
         result.set(
-            cursor.joinOuterKey(), projectedValues, cursor.projectedColumnCount());
+            cursor.joinOuterKey(), projectedValues, 0, cursor.projectedColumnCount());
         cursor.rowReturned();
         return StatusCode.OK;
       }
@@ -1408,7 +1442,7 @@ public final class SqlSession {
             ? readColumn(outerKey, outerRow, projection)
             : readColumn(innerKey, innerRow, -projection - 1);
       }
-      result.set(outerKey, projectedValues, cursor.projectedColumnCount());
+      result.set(outerKey, projectedValues, 0, cursor.projectedColumnCount());
       cursor.rowReturned();
       return StatusCode.OK;
     }
@@ -1491,6 +1525,21 @@ public final class SqlSession {
     }
     for (int index = 0; index < predicateCount; index++) {
       long value = readColumn(primaryKey, source, predicateColumns[index]);
+      if (query.hasMembershipPredicate()
+          && query.membershipPredicate() == index) {
+        boolean equal = false;
+        for (int candidate = 0; candidate < membershipValueCount; candidate++) {
+          if (value == membershipValues[candidate]) {
+            equal = true;
+            break;
+          }
+        }
+        if (equal == query.membershipNegated()
+            || !equal && membershipHasNull) {
+          return false;
+        }
+        continue;
+      }
       boolean matches = command.isEqualityPredicate(index)
           ? value == command.predicateValue(index)
           : value >= command.predicateLowerInclusive(index)
@@ -1536,7 +1585,11 @@ public final class SqlSession {
         if (rows > 1) {
           status = StatusCode.CARDINALITY_VIOLATION;
         } else {
-          value = readColumn(scalarRow.key(), scalarRow.row(), nestedProjection);
+          if (nestedProjection == NULL_PROJECTION) {
+            subqueryPredicateFalse = true;
+          } else {
+            value = readColumn(scalarRow.key(), scalarRow.row(), nestedProjection);
+          }
           if (scalar.rowLimit() == 1) {
             break;
           }
@@ -1555,7 +1608,7 @@ public final class SqlSession {
     }
     if (status.isOk() && rows == 0) {
       subqueryPredicateFalse = true;
-    } else if (status.isOk()) {
+    } else if (status.isOk() && !subqueryPredicateFalse) {
       status = query.bindScalarValue(command, value);
     }
     return status;
@@ -1603,6 +1656,61 @@ public final class SqlSession {
     return status;
   }
 
+  private StatusCode evaluateMembershipPredicate() {
+    SqlCommand nested = query.membershipCommand();
+    if (nested == null || nested.isOrdered()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = bindNestedCommand(nested);
+    if (status.isOk() && nested.rowLimit() == 0) {
+      return StatusCode.OK;
+    }
+    if (status.isOk()) {
+      status = session.beginScan(scalarTable, scalarCursor);
+    }
+    boolean cursorActive = status.isOk();
+    long matchedRows = 0;
+    while (status.isOk()) {
+      status = session.nextScan(scalarCursor, scalarRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (status.isOk()) {
+        status = validateRow(scalarRow.row(), scalarTable);
+      }
+      if (status.isOk()
+          && !matchesScalarPredicates(nested, scalarRow.key(), scalarRow.row())) {
+        continue;
+      }
+      if (status.isOk()) {
+        matchedRows++;
+        if (nestedProjection == NULL_PROJECTION) {
+          membershipHasNull = true;
+        } else if (membershipValueCount >= membershipValues.length) {
+          status = StatusCode.RESOURCE_EXHAUSTED;
+        } else {
+          membershipValues[membershipValueCount++] = readColumn(
+              scalarRow.key(), scalarRow.row(), nestedProjection);
+        }
+        if (status.isOk() && matchedRows >= nested.rowLimit()) {
+          break;
+        }
+      }
+    }
+    if (cursorActive) {
+      StatusCode close = session.closeScan(scalarCursor);
+      if (close.isOk()) {
+        scalarCursor.reset();
+        scalarRow.reset();
+      }
+      if (status.isOk()) {
+        status = close;
+      }
+    }
+    return status;
+  }
+
   private StatusCode bindNestedCommand(SqlCommand nested) {
     if (nested.columnCount() != 1 || nested.isSelectAll()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1613,9 +1721,12 @@ public final class SqlSession {
         && !sameName(nested.columnTableName(0), nested.tableName())) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    nestedProjection = status.isOk()
-        ? scalarTable.findColumn(nested.firstColumnName()) : -1;
-    if (status.isOk() && nestedProjection < 0) {
+    nestedProjection = status.isOk() && nested.isNullProjection(0)
+        ? NULL_PROJECTION
+        : status.isOk() ? scalarTable.findColumn(nested.firstColumnName()) : -1;
+    if (status.isOk()
+        && nestedProjection < 0
+        && nestedProjection != NULL_PROJECTION) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; status.isOk() && index < nested.predicateCount(); index++) {
@@ -1714,21 +1825,39 @@ public final class SqlSession {
     if (status.isOk()) {
       for (int index = 0; index < columnCount; index++) {
         int column = columns[index];
-        destination[index] = readColumn(primaryKey, source, column);
+        destination[index] = column == NULL_PROJECTION
+            ? 0 : readColumn(primaryKey, source, column);
       }
     }
     return status;
   }
 
-  private void projectScanRow(
+  private long projectScanRow(
       long primaryKey,
       HeapRowResult source,
       SqlScanCursor cursor,
       long[] destination) {
+    long nullMask = 0;
     for (int index = 0; index < cursor.projectedColumnCount(); index++) {
       int column = cursor.projectedColumn(index);
-      destination[index] = readColumn(primaryKey, source, column);
+      if (column == NULL_PROJECTION) {
+        destination[index] = 0;
+        nullMask |= 1L << index;
+      } else {
+        destination[index] = readColumn(primaryKey, source, column);
+      }
     }
+    return nullMask;
+  }
+
+  private static long projectionNullMask(int[] columns, int columnCount) {
+    long nullMask = 0;
+    for (int index = 0; index < columnCount; index++) {
+      if (columns[index] == NULL_PROJECTION) {
+        nullMask |= 1L << index;
+      }
+    }
+    return nullMask;
   }
 
   private StatusCode materializeSortedScan(

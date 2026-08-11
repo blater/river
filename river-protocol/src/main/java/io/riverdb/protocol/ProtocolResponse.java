@@ -19,6 +19,7 @@ public final class ProtocolResponse {
   private long rowsReturned;
   private long challengeHigh;
   private long challengeLow;
+  private long nullMask;
 
   public void reset() {
     status = null;
@@ -30,6 +31,7 @@ public final class ProtocolResponse {
     rowsReturned = 0;
     challengeHigh = 0;
     challengeLow = 0;
+    nullMask = 0;
     for (int index = 0; index < columnNameLengths.length; index++) {
       columnNameLengths[index] = 0;
     }
@@ -44,7 +46,8 @@ public final class ProtocolResponse {
       long rowKey,
       long returned,
       long nonceHigh,
-      long nonceLow) {
+      long nonceLow,
+      long responseNullMask) {
     status = responseStatus;
     flags = responseFlags;
     affectedRows = rows;
@@ -54,6 +57,7 @@ public final class ProtocolResponse {
     rowsReturned = returned;
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
+    nullMask = responseNullMask;
   }
 
   void valueAt(int index, long value) {
@@ -117,6 +121,14 @@ public final class ProtocolResponse {
 
   public long valueAt(int index) {
     return index >= 0 && index < columnCount ? values[index] : 0;
+  }
+
+  public boolean isNull(int index) {
+    return index >= 0 && index < columnCount && (nullMask & 1L << index) != 0;
+  }
+
+  public long nullMask() {
+    return nullMask;
   }
 
   public String columnName(int index) {

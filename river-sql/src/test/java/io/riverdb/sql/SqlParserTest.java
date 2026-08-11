@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 final class SqlParserTest {
+  private static volatile long allocationGuard;
   @Test
   void parsesExecutablePointStatementSubset() {
     SqlParser parser = new SqlParser();
@@ -42,6 +43,13 @@ final class SqlParserTest {
     assertName("accounts_value", command.indexName());
     assertName("accounts", command.tableName());
     assertName("value", command.firstColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT id, NULL FROM accounts WHERE id=1", command));
+    assertEquals(2, command.columnCount());
+    assertFalse(command.isNullProjection(0));
+    assertTrue(command.isNullProjection(1));
+    assertName("null", command.columnName(1));
     assertEquals(
         StatusCode.OK,
         parser.parse("CREATE INDEX accounts_region ON accounts(region)", command));
@@ -455,6 +463,35 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesMembershipPredicatesAsTwoQueryBlocks() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE region=7 AND balance IN "
+                + "(SELECT balance FROM lookup WHERE lookup.id=9)",
+            query,
+            command));
+    assertTrue(query.hasMembershipPredicate());
+    assertFalse(query.membershipNegated());
+    assertEquals(1, query.membershipPredicate());
+    assertName("balance", command.predicateColumnName(1));
+    assertName("lookup", query.membershipCommand().tableName());
+    assertName("balance", query.membershipCommand().firstColumnName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE id NOT IN "
+                + "(SELECT NULL FROM lookup WHERE id=9)",
+            query,
+            command));
+    assertTrue(query.membershipNegated());
+    assertTrue(query.membershipCommand().isNullProjection(0));
+  }
+
+  @Test
   void warmedParseReusesCommandAndParserState() {
     java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
     Assumptions.assumeTrue(standard instanceof ThreadMXBean);
@@ -465,48 +502,52 @@ final class SqlParserTest {
     SqlCommand command = new SqlCommand();
     SqlQuery query = new SqlQuery();
     for (int index = 0; index < 1_000; index++) {
-      parser.parseQuery(
+      allocationGuard += parser.parseQuery(
           "SELECT d.key FROM "
               + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
               + "WHERE d.key=7",
           query,
-          command);
-      parser.parseQuery(
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
           "SELECT key FROM accounts WHERE value="
               + "(SELECT value FROM lookup WHERE lookup.key=7)",
           query,
-          command);
-      parser.parseQuery(
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
           "SELECT key FROM accounts WHERE EXISTS "
               + "(SELECT key FROM lookup WHERE lookup.key=7)",
           query,
-          command);
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT key FROM accounts WHERE value NOT IN "
+              + "(SELECT value FROM lookup WHERE lookup.key=7)",
+          query,
+          command).ordinal();
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 1_000; index++) {
-      assertEquals(
-          StatusCode.OK,
-          parser.parseQuery(
-              "SELECT d.key FROM "
-                  + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
-                  + "WHERE d.key=7",
-              query,
-              command));
-      assertEquals(
-          StatusCode.OK,
-          parser.parseQuery(
-              "SELECT key FROM accounts WHERE EXISTS "
-                  + "(SELECT key FROM lookup WHERE lookup.key=7)",
-              query,
-              command));
-      assertEquals(
-          StatusCode.OK,
-          parser.parseQuery(
-              "SELECT key FROM accounts WHERE value="
-                  + "(SELECT value FROM lookup WHERE lookup.key=7)",
-              query,
-              command));
+      allocationGuard += parser.parseQuery(
+          "SELECT d.key FROM "
+              + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
+              + "WHERE d.key=7",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT key FROM accounts WHERE EXISTS "
+              + "(SELECT key FROM lookup WHERE lookup.key=7)",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT key FROM accounts WHERE value="
+              + "(SELECT value FROM lookup WHERE lookup.key=7)",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT key FROM accounts WHERE value NOT IN "
+              + "(SELECT value FROM lookup WHERE lookup.key=7)",
+          query,
+          command).ordinal();
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 256, "warmed SQL parse allocated bytes: " + allocated);

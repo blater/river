@@ -20,6 +20,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   private boolean rowAvailable;
   private boolean completed;
   private boolean closed;
+  private boolean lastValueRead;
+  private boolean lastWasNull;
 
   RiverJdbcResultSet(
       RiverJdbcStatement owner,
@@ -41,6 +43,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
       return false;
     }
     row.reset();
+    lastValueRead = false;
+    lastWasNull = false;
     JdbcExceptions.require(query.next(row), "fetch row");
     rowAvailable = row.isAvailable();
     if (!rowAvailable) {
@@ -61,17 +65,23 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     }
     closed = true;
     rowAvailable = false;
+    lastValueRead = false;
+    lastWasNull = false;
   }
 
   @Override
   public boolean wasNull() throws SQLException {
     requireRow();
-    return false;
+    if (!lastValueRead) {
+      throw JdbcExceptions.invalid("no column value has been read");
+    }
+    return lastWasNull;
   }
 
   @Override
   public String getString(int column) throws SQLException {
-    return Long.toString(value(column));
+    long value = value(column);
+    return lastWasNull ? null : Long.toString(value);
   }
 
   @Override
@@ -123,12 +133,14 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public BigDecimal getBigDecimal(int column) throws SQLException {
-    return BigDecimal.valueOf(value(column));
+    long value = value(column);
+    return lastWasNull ? null : BigDecimal.valueOf(value);
   }
 
   @Override
   public Object getObject(int column) throws SQLException {
-    return Long.valueOf(value(column));
+    long value = value(column);
+    return lastWasNull ? null : Long.valueOf(value);
   }
 
   @Override
@@ -136,15 +148,22 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     if (type == null) {
       throw JdbcExceptions.invalid("target type must not be null");
     }
+    long value = value(column);
+    if (lastWasNull) {
+      return null;
+    }
     Object converted;
     if (type == Long.class || type == Long.TYPE) {
-      converted = Long.valueOf(getLong(column));
+      converted = Long.valueOf(value);
     } else if (type == Integer.class || type == Integer.TYPE) {
-      converted = Integer.valueOf(getInt(column));
+      if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+        throw JdbcExceptions.invalid("BIGINT value does not fit in int");
+      }
+      converted = Integer.valueOf((int) value);
     } else if (type == String.class) {
-      converted = getString(column);
+      converted = Long.toString(value);
     } else if (type == BigDecimal.class) {
-      converted = getBigDecimal(column);
+      converted = BigDecimal.valueOf(value);
     } else {
       throw JdbcExceptions.unsupported();
     }
@@ -300,6 +319,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     if (column <= 0 || column > metadata.getColumnCount()) {
       throw JdbcExceptions.invalid("column index is out of range");
     }
+    lastValueRead = true;
+    lastWasNull = row.isNull(column - 1);
     return row.valueAt(column - 1);
   }
 
@@ -308,6 +329,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     JdbcExceptions.require(query.close(completion), "close query");
     completed = true;
     rowAvailable = false;
+    lastValueRead = false;
+    lastWasNull = false;
     statement.queryCompleted(this, completion);
   }
 

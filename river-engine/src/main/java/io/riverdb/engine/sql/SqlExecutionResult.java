@@ -8,6 +8,7 @@ public final class SqlExecutionResult {
   private long commitSequence;
   private long value;
   private long key;
+  private long nullMask;
   private int affectedRows;
   private int columnCount;
   private boolean hasValue;
@@ -17,6 +18,7 @@ public final class SqlExecutionResult {
     commitSequence = 0;
     value = 0;
     key = 0;
+    nullMask = 0;
     affectedRows = 0;
     columnCount = 0;
     hasValue = false;
@@ -31,9 +33,11 @@ public final class SqlExecutionResult {
   void setProjection(
       long selectedKey,
       long[] projectedValues,
+      long projectedNullMask,
       int projectedColumnCount,
       long committedAt) {
     key = selectedKey;
+    nullMask = projectedNullMask;
     columnCount = projectedColumnCount;
     for (int index = 0; index < projectedColumnCount; index++) {
       values[index] = projectedValues[index];
@@ -75,6 +79,14 @@ public final class SqlExecutionResult {
 
   public long valueAt(int index) {
     return index >= 0 && index < columnCount ? values[index] : 0;
+  }
+
+  public boolean isNull(int index) {
+    return index >= 0 && index < columnCount && (nullMask & 1L << index) != 0;
+  }
+
+  public long nullMask() {
+    return nullMask;
   }
 
   public long commitSequence() {

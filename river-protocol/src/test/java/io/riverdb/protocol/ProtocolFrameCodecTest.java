@@ -38,7 +38,7 @@ final class ProtocolFrameCodecTest {
     CommandResult command = new CommandResult();
     assertEquals(
         StatusCode.OK,
-        command.complete(3, 19, true, true, 7, new long[] {11, 12}, 2));
+        command.complete(3, 19, true, true, 7, new long[] {11, 0}, 2, 2));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     assertEquals(
         StatusCode.OK,
@@ -55,7 +55,17 @@ final class ProtocolFrameCodecTest {
     assertEquals(7, response.key());
     assertEquals(2, response.columnCount());
     assertEquals(11, response.valueAt(0));
-    assertEquals(12, response.valueAt(1));
+    assertEquals(0, response.valueAt(1));
+    assertFalse(response.isNull(0));
+    assertTrue(response.isNull(1));
+
+    bytes.putLong(ProtocolFrameCodec.HEADER_BYTES + 56, 1L << 2);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        command.complete(0, 0, false, true, 0, new long[] {1}, 2, 1));
   }
 
   @Test
@@ -103,7 +113,7 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(bytes, 13, StatusCode.OK, query));
-    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 56, (byte) 0);
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 64, (byte) 0);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));

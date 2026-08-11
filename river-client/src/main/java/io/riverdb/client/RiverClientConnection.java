@@ -345,6 +345,7 @@ public final class RiverClientConnection implements RiverDatabase {
         response.rowAvailable(),
         response.key(),
         values,
+        response.nullMask(),
         columns);
   }
 
@@ -456,7 +457,7 @@ public final class RiverClientConnection implements RiverDatabase {
         for (int index = 0; index < columns; index++) {
           values[index] = response.valueAt(index);
         }
-        return result.complete(response.key(), values, columns);
+        return result.complete(response.key(), values, response.nullMask(), columns);
       }
 
       @Override

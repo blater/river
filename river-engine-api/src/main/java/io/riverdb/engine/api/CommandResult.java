@@ -9,6 +9,7 @@ public final class CommandResult {
   private final long[] values = new long[MAXIMUM_COLUMNS];
   private long commitSequence;
   private long key;
+  private long nullMask;
   private int affectedRows;
   private int columnCount;
   private boolean rowAvailable;
@@ -17,6 +18,7 @@ public final class CommandResult {
   public void reset() {
     commitSequence = 0;
     key = 0;
+    nullMask = 0;
     affectedRows = 0;
     columnCount = 0;
     rowAvailable = false;
@@ -30,13 +32,15 @@ public final class CommandResult {
       boolean hasRow,
       long selectedKey,
       long[] sourceValues,
+      long sourceNullMask,
       int columns) {
     if (rows < 0
         || committedAt < 0
         || columns < 0
         || columns > values.length
         || hasRow != (columns > 0)
-        || columns > 0 && sourceValues == null) {
+        || columns > 0 && sourceValues == null
+        || (sourceNullMask & ~((1L << columns) - 1)) != 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     reset();
@@ -45,6 +49,7 @@ public final class CommandResult {
     transactionActive = activeTransaction;
     rowAvailable = hasRow;
     key = selectedKey;
+    nullMask = sourceNullMask;
     columnCount = columns;
     for (int index = 0; index < columns; index++) {
       values[index] = sourceValues[index];
@@ -78,5 +83,13 @@ public final class CommandResult {
 
   public long valueAt(int index) {
     return index >= 0 && index < columnCount ? values[index] : 0;
+  }
+
+  public boolean isNull(int index) {
+    return index >= 0 && index < columnCount && (nullMask & 1L << index) != 0;
+  }
+
+  public long nullMask() {
+    return nullMask;
   }
 }

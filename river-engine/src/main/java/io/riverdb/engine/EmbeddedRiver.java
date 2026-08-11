@@ -218,6 +218,7 @@ public final class EmbeddedRiver {
           execution.hasValue(),
           execution.key(),
           values,
+          execution.nullMask(),
           columns);
     }
 
@@ -247,7 +248,7 @@ public final class EmbeddedRiver {
         for (int index = 0; index < columns; index++) {
           values[index] = scanRow.valueAt(index);
         }
-        return result.complete(scanRow.key(), values, columns);
+        return result.complete(scanRow.key(), values, scanRow.nullMask(), columns);
       }
 
       @Override

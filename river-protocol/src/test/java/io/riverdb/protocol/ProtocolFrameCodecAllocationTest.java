@@ -28,7 +28,7 @@ final class ProtocolFrameCodecAllocationTest {
     CommandResult command = new CommandResult();
     assertEquals(
         StatusCode.OK,
-        command.complete(1, 7, false, true, 3, new long[] {9, 10}, 2));
+        command.complete(1, 7, false, true, 3, new long[] {9, 10}, 0, 2));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     for (int index = 0; index < 10_000; index++) {
       exercise(codec, frame, response, command, bytes);
