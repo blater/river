@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.SequenceValueResult;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
@@ -51,6 +52,7 @@ public final class SqlSession {
   private final SqlCommand command = new SqlCommand();
   private final SqlQuery query = new SqlQuery();
   private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
+  private final SequenceValueResult sequenceValue = new SequenceValueResult();
   private final TableDefinition table = new TableDefinition();
   private final TableDefinition joinTable = new TableDefinition();
   private final TableDefinition scalarTable = new TableDefinition();
@@ -331,6 +333,46 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.CREATE_SEQUENCE) {
+      if (!transactionActive) {
+        status = database.createSequence(
+            command.sequenceName(),
+            command.sequenceStart(),
+            command.sequenceIncrement());
+        if (status.isOk()) {
+          result.setUpdate(0, 0);
+        }
+        return status;
+      }
+      status = session.createSavepoint(statementSavepoint);
+      if (status.isOk()) {
+        status = beginStatement();
+      }
+      if (status.isOk()) {
+        status = session.createSequence(
+            command.sequenceName(),
+            command.sequenceStart(),
+            command.sequenceIncrement());
+      }
+      status = completeStatement(status);
+      if (!status.isOk() && statementSavepoint.isActive()) {
+        StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
+        if (!rollback.isOk()) {
+          status = rollback;
+        }
+      }
+      if (statementSavepoint.isActive()) {
+        StatusCode release = session.releaseSavepoint(statementSavepoint);
+        if (!release.isOk()) {
+          status = release;
+        }
+      }
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+        result.setTransaction(true, session.visibleCommitSequence());
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CREATE_TABLE) {
       status = prepareCreateSchema();
       if (!status.isOk()) {
@@ -392,6 +434,40 @@ public final class SqlSession {
       if (status.isOk()) {
         status = session.createValueIndex(
             command.indexName(), command.tableName(), command.firstColumnName(), unique);
+      }
+      status = completeStatement(status);
+      if (!status.isOk() && statementSavepoint.isActive()) {
+        StatusCode rollback = session.rollbackToSavepoint(statementSavepoint);
+        if (!rollback.isOk()) {
+          status = rollback;
+        }
+      }
+      if (statementSavepoint.isActive()) {
+        StatusCode release = session.releaseSavepoint(statementSavepoint);
+        if (!release.isOk()) {
+          status = release;
+        }
+      }
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+        result.setTransaction(true, session.visibleCommitSequence());
+      }
+      return status;
+    }
+    if (command.type() == SqlCommandType.DROP_SEQUENCE) {
+      if (!transactionActive) {
+        status = database.dropSequence(command.sequenceName());
+        if (status.isOk()) {
+          result.setUpdate(0, 0);
+        }
+        return status;
+      }
+      status = session.createSavepoint(statementSavepoint);
+      if (status.isOk()) {
+        status = beginStatement();
+      }
+      if (status.isOk()) {
+        status = session.dropSequence(command.sequenceName());
       }
       status = completeStatement(status);
       if (!status.isOk() && statementSavepoint.isActive()) {
@@ -593,6 +669,17 @@ public final class SqlSession {
       }
       return status;
     }
+    if (command.type() == SqlCommandType.NEXT_SEQUENCE_VALUE) {
+      status = database.nextSequenceValue(command.sequenceName(), sequenceValue);
+      if (status.isOk()) {
+        result.setScalar(
+            sequenceValue.value(), sequenceValue.commitSequence());
+        if (transactionActive) {
+          result.setTransaction(true, session.visibleCommitSequence());
+        }
+      }
+      return status;
+    }
     if (command.type() == SqlCommandType.CHECKPOINT) {
       if (transactionActive) {
         return StatusCode.CONFLICT;
@@ -696,6 +783,7 @@ public final class SqlSession {
     if (status.isOk()
         && (command.type() == SqlCommandType.COUNT
             || command.type() == SqlCommandType.COUNT_VALUE
+            || command.type() == SqlCommandType.NEXT_SEQUENCE_VALUE
             || isValueAggregate(command.type()))) {
       status = execute(sql, aggregateExecution);
       if (status.isOk()) {

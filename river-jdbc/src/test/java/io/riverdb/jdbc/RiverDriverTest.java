@@ -56,6 +56,14 @@ final class RiverDriverTest {
           "CREATE TABLE accounts "
               + "(id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT)"));
       assertEquals(0, statement.getUpdateCount());
+      assertFalse(statement.execute(
+          "CREATE SEQUENCE jdbc_ids START WITH 40"));
+      try (ResultSet sequence = statement.executeQuery(
+          "SELECT NEXT VALUE FOR jdbc_ids")) {
+        assertTrue(sequence.next());
+        assertEquals(40, sequence.getLong(1));
+        assertFalse(sequence.next());
+      }
       assertEquals(
           3,
           statement.executeUpdate(
@@ -842,6 +850,14 @@ final class RiverDriverTest {
       assertTrue(row.next());
       assertEquals(450, row.getLong(1));
       assertFalse(row.next());
+    }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement();
+        ResultSet sequence = statement.executeQuery(
+            "SELECT NEXT VALUE FOR jdbc_ids")) {
+      assertTrue(sequence.next());
+      assertEquals(104, sequence.getLong(1));
+      assertFalse(sequence.next());
     }
     try (Connection connection = DriverManager.getConnection(url(server));
         Statement statement = connection.createStatement();

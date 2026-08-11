@@ -35,6 +35,8 @@ public final class RelationalSession {
   private final ByteBuffer catalogScratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final ByteBuffer catalogOutput = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
+  private final CatalogRecord.UserSequenceResult userSequenceRecord =
+      new CatalogRecord.UserSequenceResult();
   private final TableDefinition valueIndexTable = new TableDefinition();
   private final TableSchema schemaScratch = new TableSchema();
   private final HeapRowResult indexedKeyRow = new HeapRowResult();
@@ -182,6 +184,90 @@ public final class RelationalSession {
           TableDefinition.INDEX_NONE,
           -1,
           schema);
+    }
+    return status;
+  }
+
+  public StatusCode createSequence(
+      CharSequence name,
+      long start,
+      long increment) {
+    if (!registeredTransaction
+        || !RelationalKey.validName(name)
+        || increment == 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropType != PENDING_DROP_NONE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(name, physicalKey);
+    }
+    if (status.isOk()) {
+      status = session.fetchByKey(physicalKey.key(), catalogRow);
+      if (status.isOk()) {
+        status = StatusCode.CONFLICT;
+      } else if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+      }
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeUserSequence(
+          catalogOutput, name, start, increment, false);
+      status = session.insert(physicalKey.key(), catalogOutput);
+    }
+    if (!status.isOk() && acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
+    }
+    return status;
+  }
+
+  public StatusCode dropSequence(CharSequence name) {
+    if (!registeredTransaction || !RelationalKey.validName(name)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropType != PENDING_DROP_NONE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = false;
+    StatusCode status = StatusCode.OK;
+    if (!schemaChangeActive) {
+      status = database.beginSchemaChange(this);
+      if (status.isOk()) {
+        schemaChangeMutationStart = session.pendingMutationCount();
+        schemaChangeActive = true;
+        acquired = true;
+      }
+    }
+    if (status.isOk()) {
+      status = RelationalKey.catalogTableKey(name, physicalKey);
+    }
+    if (status.isOk()) {
+      status = session.fetchByKey(physicalKey.key(), catalogRow);
+    }
+    if (status.isOk()) {
+      status = CatalogRecord.decodeUserSequence(
+          catalogRow, catalogScratch, name, userSequenceRecord);
+    }
+    if (status.isOk()) {
+      status = session.delete(physicalKey.key());
+    }
+    if (!status.isOk() && acquired) {
+      database.completeSchemaChange(this, false);
+      schemaChangeActive = false;
+      schemaChangeMutationStart = 0;
     }
     return status;
   }

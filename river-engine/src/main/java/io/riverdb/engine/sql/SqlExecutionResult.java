@@ -56,6 +56,18 @@ public final class SqlExecutionResult {
     commitSequence = committedAt;
   }
 
+  void setScalar(long scalar, long committedAt) {
+    values[0] = scalar;
+    value = scalar;
+    key = 0;
+    nullMask = 0;
+    varcharMask = 0;
+    affectedRows = 1;
+    columnCount = 1;
+    hasValue = true;
+    commitSequence = committedAt;
+  }
+
   void setTransaction(boolean active, long committedAt) {
     transactionActive = active;
     commitSequence = committedAt;

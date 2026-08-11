@@ -142,6 +142,28 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.ALTER_INDEX_RENAME, command.type());
     assertName("customers_region", command.indexName());
     assertName("customers_area", command.renamedIndexName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE SEQUENCE invoice_ids INCREMENT BY -3 START WITH 100",
+            command));
+    assertEquals(SqlCommandType.CREATE_SEQUENCE, command.type());
+    assertName("invoice_ids", command.sequenceName());
+    assertEquals(100, command.sequenceStart());
+    assertEquals(-3, command.sequenceIncrement());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT NEXT VALUE FOR invoice_ids", command));
+    assertEquals(SqlCommandType.NEXT_SEQUENCE_VALUE, command.type());
+    assertName("invoice_ids", command.sequenceName());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("DROP SEQUENCE invoice_ids", command));
+    assertEquals(SqlCommandType.DROP_SEQUENCE, command.type());
+    assertName("invoice_ids", command.sequenceName());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE SEQUENCE invalid INCREMENT BY 0", command));
     assertEquals(StatusCode.OK, parser.parse("INSERT INTO accounts VALUES (7, -9)", command));
     assertEquals(SqlCommandType.INSERT, command.type());
     assertEquals(7, command.key());

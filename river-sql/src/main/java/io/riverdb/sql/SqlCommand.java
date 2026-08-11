@@ -18,6 +18,7 @@ public final class SqlCommand {
   private final SqlIdentifier joinInnerColumnName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
   private final SqlIdentifier renamedIndexName = new SqlIdentifier();
+  private final SqlIdentifier sequenceName = new SqlIdentifier();
   private final SqlIdentifier savepointName = new SqlIdentifier();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
@@ -70,6 +71,8 @@ public final class SqlCommand {
   private long columnDefaultMask;
   private long columnVarcharMask;
   private long rowLimit = Long.MAX_VALUE;
+  private long sequenceStart = 1;
+  private long sequenceIncrement = 1;
   private boolean boundedScan;
   private boolean equalityPredicate;
   private boolean selectAll;
@@ -107,6 +110,7 @@ public final class SqlCommand {
     joinInnerColumnName.reset();
     indexName.reset();
     renamedIndexName.reset();
+    sequenceName.reset();
     savepointName.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
@@ -150,6 +154,8 @@ public final class SqlCommand {
     columnDefaultMask = 0;
     columnVarcharMask = 0;
     rowLimit = Long.MAX_VALUE;
+    sequenceStart = 1;
+    sequenceIncrement = 1;
     boundedScan = false;
     equalityPredicate = false;
     selectAll = false;
@@ -468,6 +474,15 @@ public final class SqlCommand {
     return renamedIndexName;
   }
 
+  SqlIdentifier writableSequenceName() {
+    return sequenceName;
+  }
+
+  void setSequenceOptions(long start, long increment) {
+    sequenceStart = start;
+    sequenceIncrement = increment;
+  }
+
   SqlIdentifier writableSavepointName() {
     return savepointName;
   }
@@ -578,6 +593,18 @@ public final class SqlCommand {
 
   public SqlIdentifier renamedIndexName() {
     return renamedIndexName;
+  }
+
+  public SqlIdentifier sequenceName() {
+    return sequenceName;
+  }
+
+  public long sequenceStart() {
+    return sequenceStart;
+  }
+
+  public long sequenceIncrement() {
+    return sequenceIncrement;
   }
 
   public SqlIdentifier savepointName() {

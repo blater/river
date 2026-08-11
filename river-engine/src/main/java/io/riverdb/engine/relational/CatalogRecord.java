@@ -12,10 +12,12 @@ final class CatalogRecord {
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
 
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
+  private static final long USER_SEQUENCE_MAGIC = 0x5249564552555345L; // RIVERUSE
   private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
   private static final long DROPPING_TABLE_MAGIC = 0x524956455244524fL; // RIVERDRO
   private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
   private static final int SEQUENCE_VERSION = 1;
+  private static final int USER_SEQUENCE_VERSION = 1;
   private static final int TABLE_VERSION = 6;
   private static final int INDEX_VERSION = 2;
   private static final int TABLE_DEFAULTS_OFFSET = 52;
@@ -48,6 +50,64 @@ final class CatalogRecord {
       return StatusCode.CORRUPTION;
     }
     result.set(scratch.getInt(12));
+    return StatusCode.OK;
+  }
+
+  static void encodeUserSequence(
+      ByteBuffer target,
+      CharSequence name,
+      long nextValue,
+      long increment,
+      boolean exhausted) {
+    clear(target);
+    target.putLong(0, USER_SEQUENCE_MAGIC);
+    target.putInt(8, USER_SEQUENCE_VERSION);
+    target.putInt(12, name.length());
+    target.putLong(16, nextValue);
+    target.putLong(24, increment);
+    target.putInt(32, exhausted ? 1 : 0);
+    for (int index = 0; index < name.length(); index++) {
+      target.put(36 + index, (byte) name.charAt(index));
+    }
+    target.position(0);
+    target.limit(36 + name.length());
+  }
+
+  static StatusCode decodeUserSequence(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      CharSequence expectedName,
+      UserSequenceResult result) {
+    scratch.clear();
+    StatusCode status = source.copyTo(scratch);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (source.length() < Long.BYTES) {
+      return StatusCode.CORRUPTION;
+    }
+    if (scratch.getLong(0) != USER_SEQUENCE_MAGIC) {
+      return StatusCode.CONFLICT;
+    }
+    int nameBytes = source.length() >= 16 ? scratch.getInt(12) : -1;
+    long increment = source.length() >= 32 ? scratch.getLong(24) : 0;
+    int exhausted = source.length() >= 36 ? scratch.getInt(32) : -1;
+    if (source.length() < 37
+        || scratch.getInt(8) != USER_SEQUENCE_VERSION
+        || nameBytes <= 0
+        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
+        || source.length() != 36 + nameBytes
+        || increment == 0
+        || (exhausted != 0 && exhausted != 1)
+        || nameBytes != expectedName.length()) {
+      return StatusCode.CORRUPTION;
+    }
+    for (int index = 0; index < nameBytes; index++) {
+      if (Byte.toUnsignedInt(scratch.get(36 + index)) != expectedName.charAt(index)) {
+        return StatusCode.CONFLICT;
+      }
+    }
+    result.set(scratch.getLong(16), increment, exhausted == 1);
     return StatusCode.OK;
   }
 
@@ -642,6 +702,30 @@ final class CatalogRecord {
 
     boolean isUnique() {
       return unique;
+    }
+  }
+
+  static final class UserSequenceResult {
+    private long nextValue;
+    private long increment;
+    private boolean exhausted;
+
+    void set(long value, long step, boolean isExhausted) {
+      nextValue = value;
+      increment = step;
+      exhausted = isExhausted;
+    }
+
+    long nextValue() {
+      return nextValue;
+    }
+
+    long increment() {
+      return increment;
+    }
+
+    boolean isExhausted() {
+      return exhausted;
     }
   }
 }

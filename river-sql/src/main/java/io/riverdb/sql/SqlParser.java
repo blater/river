@@ -489,7 +489,10 @@ public final class SqlParser {
         }
       }
     } else if (consumeKeyword(sql, "DROP")) {
-      if (consumeKeyword(sql, "INDEX")) {
+      if (consumeKeyword(sql, "SEQUENCE")) {
+        type = SqlCommandType.DROP_SEQUENCE;
+        status = identifier(sql, result.writableSequenceName());
+      } else if (consumeKeyword(sql, "INDEX")) {
         type = SqlCommandType.DROP_INDEX;
         status = identifier(sql, result.writableIndexName());
         if (status.isOk()) {
@@ -592,6 +595,47 @@ public final class SqlParser {
           result.markLastColumnNotNull();
           setIdentifier(result.writableNextColumnName(), "value");
         }
+      } else if (consumeKeyword(sql, "SEQUENCE")) {
+        type = SqlCommandType.CREATE_SEQUENCE;
+        status = identifier(sql, result.writableSequenceName());
+        long start = 1;
+        long increment = 1;
+        boolean startSeen = false;
+        boolean incrementSeen = false;
+        boolean options = true;
+        while (status.isOk() && options) {
+          if (consumeKeyword(sql, "START")) {
+            if (startSeen) {
+              status = StatusCode.INVALID_EXTERNAL_INPUT;
+            } else {
+              status = requireKeyword(sql, "WITH");
+              if (status.isOk()) {
+                status = number(sql, numberResult);
+                start = numberResult.value;
+                startSeen = status.isOk();
+              }
+            }
+          } else if (consumeKeyword(sql, "INCREMENT")) {
+            if (incrementSeen) {
+              status = StatusCode.INVALID_EXTERNAL_INPUT;
+            } else {
+              status = requireKeyword(sql, "BY");
+              if (status.isOk()) {
+                status = number(sql, numberResult);
+                increment = numberResult.value;
+                incrementSeen = status.isOk();
+              }
+              if (status.isOk() && increment == 0) {
+                status = StatusCode.INVALID_EXTERNAL_INPUT;
+              }
+            }
+          } else {
+            options = false;
+          }
+        }
+        if (status.isOk()) {
+          result.setSequenceOptions(start, increment);
+        }
       } else {
         boolean unique = consumeKeyword(sql, "UNIQUE");
         type = unique ? SqlCommandType.CREATE_UNIQUE_INDEX : SqlCommandType.CREATE_INDEX;
@@ -665,7 +709,16 @@ public final class SqlParser {
         }
       }
     } else if (consumeKeyword(sql, "SELECT")) {
-      if (consumeKeyword(sql, "COUNT")) {
+      if (consumeKeyword(sql, "NEXT")) {
+        type = SqlCommandType.NEXT_SEQUENCE_VALUE;
+        status = requireKeyword(sql, "VALUE");
+        if (status.isOk()) {
+          status = requireKeyword(sql, "FOR");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableSequenceName());
+        }
+      } else if (consumeKeyword(sql, "COUNT")) {
         type = SqlCommandType.COUNT;
         status = requireCharacter(sql, '(');
         if (status.isOk() && consumeCharacter(sql, '*')) {

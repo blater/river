@@ -20,6 +20,8 @@ import java.nio.file.Path;
 public final class RelationalDatabase {
   private static final int CATALOG_ROW_BYTES = CatalogRecord.MAXIMUM_BYTES;
   private static final int INDEX_BUILD_BATCH_ROWS = 48;
+  private static final int SEQUENCE_CACHE_SLOTS = 64;
+  private static final int SEQUENCE_RESERVATION_VALUES = 64;
 
   private final EmbeddedDatabase embedded;
   private final HeapRowResult catalogRow = new HeapRowResult();
@@ -28,6 +30,8 @@ public final class RelationalDatabase {
   private final RelationalKey.LongKeyResult catalogKey = new RelationalKey.LongKeyResult();
   private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
   private final CatalogRecord.IndexResult indexRecord = new CatalogRecord.IndexResult();
+  private final CatalogRecord.UserSequenceResult userSequenceRecord =
+      new CatalogRecord.UserSequenceResult();
   private final TableDefinition indexedTable = new TableDefinition();
   private final TableDefinition indexStorageTable = new TableDefinition();
   private final TableDefinition updatedTable = new TableDefinition();
@@ -37,6 +41,11 @@ public final class RelationalDatabase {
   private final long[] cleanupIndexKeys = new long[INDEX_BUILD_BATCH_ROWS];
   private final long[] droppingIndexCatalogKeys =
       new long[TableDefinition.MAXIMUM_INDEXES];
+  private final long[] sequenceCacheKeys = new long[SEQUENCE_CACHE_SLOTS];
+  private final long[] sequenceCacheNextValues = new long[SEQUENCE_CACHE_SLOTS];
+  private final long[] sequenceCacheIncrements = new long[SEQUENCE_CACHE_SLOTS];
+  private final long[] sequenceCacheCommitSequences = new long[SEQUENCE_CACHE_SLOTS];
+  private final int[] sequenceCacheRemaining = new int[SEQUENCE_CACHE_SLOTS];
   private final IndexedScanCursor catalogScanCursor = new IndexedScanCursor();
   private final IndexedScanResult catalogScanRow = new IndexedScanResult();
   private long buildLastKey;
@@ -44,6 +53,7 @@ public final class RelationalDatabase {
   private boolean cleanupBatchComplete;
   private boolean droppingIndexAlreadyMarked;
   private boolean droppingTableAlreadyMarked;
+  private int nextSequenceCacheReplacement;
   private volatile long schemaVersion = 1;
   private RelationalSession schemaChangeOwner;
   private int activeTransactions;
@@ -133,6 +143,141 @@ public final class RelationalDatabase {
       status = session.commit(outcome);
     } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
       session.abort(outcome);
+    }
+    return status;
+  }
+
+  public synchronized StatusCode createSequence(
+      CharSequence name,
+      long start,
+      long increment) {
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.createSequence(name, start, increment);
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    return status;
+  }
+
+  public synchronized StatusCode dropSequence(CharSequence name) {
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.dropSequence(name);
+    }
+    if (status.isOk()) {
+      return session.commit(outcome);
+    }
+    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    return status;
+  }
+
+  public synchronized StatusCode nextSequenceValue(
+      CharSequence name,
+      SequenceValueResult result) {
+    if (!RelationalKey.validName(name) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    if (schemaChangeOwner != null) {
+      return StatusCode.RETRY;
+    }
+    StatusCode status = RelationalKey.catalogTableKey(name, catalogKey);
+    if (!status.isOk()) {
+      return status;
+    }
+    long sequenceKey = catalogKey.key();
+    int cachedSlot = sequenceCacheSlot(sequenceKey);
+    if (cachedSlot >= 0) {
+      long value = sequenceCacheNextValues[cachedSlot];
+      sequenceCacheRemaining[cachedSlot]--;
+      if (sequenceCacheRemaining[cachedSlot] > 0) {
+        sequenceCacheNextValues[cachedSlot] =
+            value + sequenceCacheIncrements[cachedSlot];
+      }
+      result.set(value, sequenceCacheCommitSequences[cachedSlot]);
+      return StatusCode.OK;
+    }
+    RelationalSession session = newSession();
+    if (session == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    TransactionOutcome outcome = new TransactionOutcome();
+    status = session.begin(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) {
+      status = session.indexedSession().fetchByKey(sequenceKey, catalogRow);
+    }
+    if (status.isOk()) {
+      status = CatalogRecord.decodeUserSequence(
+          catalogRow, catalogScratch, name, userSequenceRecord);
+    }
+    if (status.isOk() && userSequenceRecord.isExhausted()) {
+      status = StatusCode.RESOURCE_EXHAUSTED;
+    }
+    long value = status.isOk() ? userSequenceRecord.nextValue() : 0;
+    long increment = status.isOk() ? userSequenceRecord.increment() : 0;
+    long next = value;
+    int reserved = 0;
+    boolean exhausted = false;
+    while (status.isOk()
+        && reserved < SEQUENCE_RESERVATION_VALUES
+        && !exhausted) {
+      reserved++;
+      if (additionOverflows(next, increment)) {
+        exhausted = true;
+      } else {
+        next += increment;
+      }
+    }
+    if (status.isOk()) {
+      CatalogRecord.encodeUserSequence(
+          catalogOutput,
+          name,
+          next,
+          increment,
+          exhausted);
+      status = session.indexedSession().update(sequenceKey, catalogOutput);
+    }
+    if (status.isOk()) {
+      status = session.commit(outcome);
+    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
+      StatusCode abort = session.abort(outcome);
+      if (!abort.isOk()) {
+        return abort;
+      }
+    }
+    if (status.isOk()) {
+      result.set(value, outcome.commitSequence());
+      if (reserved > 1) {
+        int slot = writableSequenceCacheSlot(sequenceKey);
+        sequenceCacheKeys[slot] = sequenceKey;
+        sequenceCacheNextValues[slot] = value + increment;
+        sequenceCacheIncrements[slot] = increment;
+        sequenceCacheCommitSequences[slot] = outcome.commitSequence();
+        sequenceCacheRemaining[slot] = reserved - 1;
+      }
     }
     return status;
   }
@@ -1360,6 +1505,37 @@ public final class RelationalDatabase {
     return status.isOk() ? new RelationalSession(this, result.session()) : null;
   }
 
+  private static boolean additionOverflows(long value, long increment) {
+    return increment > 0 && value > Long.MAX_VALUE - increment
+        || increment < 0 && value < Long.MIN_VALUE - increment;
+  }
+
+  private int sequenceCacheSlot(long sequenceKey) {
+    for (int slot = 0; slot < SEQUENCE_CACHE_SLOTS; slot++) {
+      if (sequenceCacheRemaining[slot] > 0 && sequenceCacheKeys[slot] == sequenceKey) {
+        return slot;
+      }
+    }
+    return -1;
+  }
+
+  private int writableSequenceCacheSlot(long sequenceKey) {
+    for (int slot = 0; slot < SEQUENCE_CACHE_SLOTS; slot++) {
+      if (sequenceCacheKeys[slot] == sequenceKey || sequenceCacheRemaining[slot] == 0) {
+        return slot;
+      }
+    }
+    int slot = nextSequenceCacheReplacement;
+    nextSequenceCacheReplacement = (slot + 1) % SEQUENCE_CACHE_SLOTS;
+    return slot;
+  }
+
+  private void clearSequenceCache() {
+    for (int slot = 0; slot < SEQUENCE_CACHE_SLOTS; slot++) {
+      sequenceCacheRemaining[slot] = 0;
+    }
+  }
+
   synchronized StatusCode enterTransaction(RelationalSession requester) {
     if (requester == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1387,6 +1563,7 @@ public final class RelationalDatabase {
     if (schemaChangeOwner == owner) {
       if (committed) {
         schemaVersion++;
+        clearSequenceCache();
       }
       schemaChangeOwner = null;
     }
