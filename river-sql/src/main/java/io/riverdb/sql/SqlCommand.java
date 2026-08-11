@@ -33,7 +33,7 @@ public final class SqlCommand {
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
-  private final boolean[] equalityPredicates = new boolean[MAXIMUM_PREDICATES];
+  private final SqlComparison[] comparisons = new SqlComparison[MAXIMUM_PREDICATES];
   private final boolean[] columnPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] negatedNullPredicates =
@@ -97,7 +97,7 @@ public final class SqlCommand {
       predicateValues[index] = 0;
       predicateLowerInclusive[index] = 0;
       predicateUpperExclusive[index] = 0;
-      equalityPredicates[index] = false;
+      comparisons[index] = null;
       columnPredicates[index] = false;
       nullPredicates[index] = false;
       negatedNullPredicates[index] = false;
@@ -156,13 +156,25 @@ public final class SqlCommand {
     predicateValues[index] = equalityValue;
     predicateLowerInclusive[index] = lowerInclusive;
     predicateUpperExclusive[index] = upperExclusive;
-    equalityPredicates[index] = equality;
+    comparisons[index] = equality
+        ? SqlComparison.EQUAL : SqlComparison.HALF_OPEN_RANGE;
     if (index == 0) {
       key = equalityValue;
       scanLowerInclusive = lowerInclusive;
       scanUpperExclusive = upperExclusive;
       boundedScan = !equality;
       equalityPredicate = equality;
+    }
+  }
+
+  void appendComparison(long predicateValue, SqlComparison comparison) {
+    int index = predicateCount++;
+    predicateValues[index] = predicateValue;
+    comparisons[index] = comparison;
+    if (index == 0) {
+      key = predicateValue;
+      equalityPredicate = comparison == SqlComparison.EQUAL;
+      boundedScan = false;
     }
   }
 
@@ -178,7 +190,7 @@ public final class SqlCommand {
 
   void appendColumnPredicate() {
     int index = predicateCount++;
-    equalityPredicates[index] = true;
+    comparisons[index] = SqlComparison.EQUAL;
     columnPredicates[index] = true;
     if (index == 0) {
       equalityPredicate = true;
@@ -195,7 +207,9 @@ public final class SqlCommand {
   }
 
   void setPredicateValue(int index, long predicateValue) {
-    if (index >= 0 && index < predicateCount && equalityPredicates[index]) {
+    if (index >= 0
+        && index < predicateCount
+        && comparisons[index] == SqlComparison.EQUAL) {
       predicateValues[index] = predicateValue;
       if (index == 0) {
         key = predicateValue;
@@ -225,11 +239,15 @@ public final class SqlCommand {
             source.predicateValueColumnNames[index]);
         appendColumnPredicate();
       } else {
-        appendPredicate(
-            source.predicateValues[index],
-            source.predicateLowerInclusive[index],
-            source.predicateUpperExclusive[index],
-            source.equalityPredicates[index]);
+        if (source.comparisons[index] == SqlComparison.HALF_OPEN_RANGE) {
+          appendPredicate(
+              source.predicateValues[index],
+              source.predicateLowerInclusive[index],
+              source.predicateUpperExclusive[index],
+              false);
+        } else {
+          appendComparison(source.predicateValues[index], source.comparisons[index]);
+        }
       }
     }
     orderColumnName.copyFrom(source.orderColumnName);
@@ -519,7 +537,15 @@ public final class SqlCommand {
   }
 
   public boolean isEqualityPredicate(int index) {
-    return index >= 0 && index < predicateCount && equalityPredicates[index];
+    return comparison(index) == SqlComparison.EQUAL;
+  }
+
+  public boolean isRangePredicate(int index) {
+    return comparison(index) == SqlComparison.HALF_OPEN_RANGE;
+  }
+
+  public SqlComparison comparison(int index) {
+    return index >= 0 && index < predicateCount ? comparisons[index] : null;
   }
 
   public boolean isNullPredicate(int index) {

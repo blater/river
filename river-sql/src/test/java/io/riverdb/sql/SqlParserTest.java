@@ -353,7 +353,7 @@ final class SqlParserTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("DROP TABLE x", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
-        parser.parse("SELECT key, value FROM x WHERE key > 1", command));
+        parser.parse("SELECT key, value FROM x WHERE key ! 1", command));
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         parser.parse(
@@ -371,6 +371,80 @@ final class SqlParserTest {
         StatusCode.RESOURCE_EXHAUSTED,
         parser.parse(tooManyRows.toString(), command));
     assertFalse(command.isAvailable());
+  }
+
+  @Test
+  void parsesBigintComparisonsWithoutLosingHalfOpenRanges() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT id FROM metrics WHERE value=-4", command));
+    assertEquals(SqlComparison.EQUAL, command.comparison(0));
+    assertEquals(-4, command.predicateValue(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT id FROM metrics WHERE value<>0", command));
+    assertEquals(SqlComparison.NOT_EQUAL, command.comparison(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT id FROM metrics WHERE value!=0", command));
+    assertEquals(SqlComparison.NOT_EQUAL, command.comparison(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM metrics WHERE value<-9223372036854775807",
+            command));
+    assertEquals(SqlComparison.LESS_THAN, command.comparison(0));
+    assertEquals(-9223372036854775807L, command.predicateValue(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM metrics WHERE value<=-9223372036854775808",
+            command));
+    assertEquals(SqlComparison.LESS_OR_EQUAL, command.comparison(0));
+    assertEquals(Long.MIN_VALUE, command.predicateValue(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT id FROM metrics WHERE value>9223372036854775806", command));
+    assertEquals(SqlComparison.GREATER_THAN, command.comparison(0));
+    assertEquals(9223372036854775806L, command.predicateValue(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT id FROM metrics WHERE value>=9223372036854775807", command));
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(0));
+    assertEquals(Long.MAX_VALUE, command.predicateValue(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM metrics WHERE value>=-5 AND value<8",
+            command));
+    assertEquals(1, command.predicateCount());
+    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
+    assertEquals(-5, command.predicateLowerInclusive(0));
+    assertEquals(8, command.predicateUpperExclusive(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM metrics WHERE value>=-5 AND value<=8",
+            command));
+    assertEquals(2, command.predicateCount());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(0));
+    assertEquals(SqlComparison.LESS_OR_EQUAL, command.comparison(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM metrics WHERE value>=-5 AND id<8",
+            command));
+    assertEquals(2, command.predicateCount());
+    assertName("value", command.predicateColumnName(0));
+    assertName("id", command.predicateColumnName(1));
   }
 
   @Test

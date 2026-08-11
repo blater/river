@@ -1002,6 +1002,197 @@ final class RiverDriverTest {
   }
 
   @Test
+  void bigintComparisonsReachScansIndexesJoinsAggregatesAndMutations(
+      @TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE comparison_values "
+              + "(id BIGINT PRIMARY KEY, value BIGINT, kind BIGINT)"));
+      assertEquals(
+          6,
+          statement.executeUpdate(
+              "INSERT INTO comparison_values VALUES "
+                  + "(1, -9223372036854775808, 1), (2, -1, 1), "
+                  + "(3, 0, 2), (4, 1, 2), "
+                  + "(5, 9223372036854775807, 2), (6, NULL, 2)"));
+
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value<-1 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value<=-1 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(2, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values "
+              + "WHERE value<=-9223372036854775808")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value>1 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value>=1 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(4, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values "
+              + "WHERE value>9223372036854775807")) {
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value<>0 ORDER BY id")) {
+        for (long expected : new long[] {1, 2, 4, 5}) {
+          assertTrue(rows.next());
+          assertEquals(expected, rows.getLong(1));
+        }
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value!=0 ORDER BY id")) {
+        for (long expected : new long[] {1, 2, 4, 5}) {
+          assertTrue(rows.next());
+          assertEquals(expected, rows.getLong(1));
+        }
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values "
+              + "WHERE value>=-1 AND value<=1 ORDER BY id")) {
+        for (long expected = 2; expected <= 4; expected++) {
+          assertTrue(rows.next());
+          assertEquals(expected, rows.getLong(1));
+        }
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values "
+              + "WHERE value>=-1 AND value<1 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(2, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(3, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE comparison_indexed "
+              + "(id BIGINT PRIMARY KEY, value BIGINT)"));
+      assertEquals(3, statement.executeUpdate(
+          "INSERT INTO comparison_indexed VALUES (1, 100), (2, 200), (3, 300)"));
+      assertEquals(0, statement.executeUpdate(
+          "CREATE INDEX comparison_value_idx ON comparison_indexed(value)"));
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_indexed WHERE value>100 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(2, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(3, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+
+      try (ResultSet count = statement.executeQuery(
+          "SELECT COUNT(*) FROM comparison_values WHERE value<>0")) {
+        assertTrue(count.next());
+        assertEquals(4, count.getLong(1));
+        assertFalse(count.next());
+      }
+      assertEquals(0, statement.executeUpdate(
+          "CREATE INDEX comparison_kind_idx ON comparison_values(kind)"));
+      try (ResultSet groups = statement.executeQuery(
+          "SELECT kind, COUNT(*) FROM comparison_values "
+              + "WHERE value!=0 GROUP BY kind ORDER BY kind")) {
+        assertTrue(groups.next());
+        assertEquals(1, groups.getLong(1));
+        assertEquals(2, groups.getLong(2));
+        assertTrue(groups.next());
+        assertEquals(2, groups.getLong(1));
+        assertEquals(2, groups.getLong(2));
+        assertFalse(groups.next());
+      }
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE comparison_kinds "
+              + "(id BIGINT PRIMARY KEY, label BIGINT)"));
+      assertEquals(2, statement.executeUpdate(
+          "INSERT INTO comparison_kinds VALUES (1, 10), (2, 20)"));
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT comparison_values.id FROM comparison_values "
+              + "JOIN comparison_kinds "
+              + "ON comparison_values.kind=comparison_kinds.id "
+              + "WHERE comparison_values.value>0")) {
+        assertTrue(rows.next());
+        assertEquals(4, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT d.id FROM "
+              + "(SELECT id, value FROM comparison_values) d "
+              + "WHERE d.value>0 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(4, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(5, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+      try (ResultSet row = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE id="
+              + "(SELECT id FROM comparison_values "
+              + "WHERE value>=9223372036854775807)")) {
+        assertTrue(row.next());
+        assertEquals(5, row.getLong(1));
+        assertFalse(row.next());
+      }
+
+      assertEquals(2, statement.executeUpdate(
+          "UPDATE comparison_values SET kind=9 WHERE value<=-1"));
+      try (ResultSet count = statement.executeQuery(
+          "SELECT COUNT(*) FROM comparison_values WHERE kind=9")) {
+        assertTrue(count.next());
+        assertEquals(2, count.getLong(1));
+      }
+      assertEquals(2, statement.executeUpdate(
+          "DELETE FROM comparison_values WHERE value>=1"));
+      try (ResultSet rows = statement.executeQuery(
+          "SELECT id FROM comparison_values WHERE value!=0 ORDER BY id")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertTrue(rows.next());
+        assertEquals(2, rows.getLong(1));
+        assertFalse(rows.next());
+      }
+    }
+
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void preparedStatementsRenderOnlyBoundedBigintParameters(@TempDir Path root)
       throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
@@ -1060,6 +1251,18 @@ final class RiverDriverTest {
       assertThrows(
           SQLException.class,
           () -> select.executeQuery("SELECT value FROM prepared_values WHERE id=2"));
+    }
+    try (Connection connection = DriverManager.getConnection(url(server));
+        PreparedStatement select = connection.prepareStatement(
+            "SELECT id FROM prepared_values WHERE value>=? ORDER BY id")) {
+      select.setLong(1, 100);
+      try (ResultSet result = select.executeQuery()) {
+        assertTrue(result.next());
+        assertEquals(1, result.getLong(1));
+        assertTrue(result.next());
+        assertEquals(2, result.getLong(1));
+        assertFalse(result.next());
+      }
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());

@@ -13,6 +13,7 @@ import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlIdentifier;
 import io.riverdb.sql.SqlParser;
 import io.riverdb.sql.SqlQuery;
@@ -704,14 +705,13 @@ public final class SqlSession {
         && command.isOrdered()
         && orderColumn > 0
         && !table.hasIndexOn(orderColumn);
-    boolean bounded = status.isOk() && predicateCount > 0;
+    boolean bounded = status.isOk() && accessPredicate >= 0;
     boolean equality = bounded && accessEquality();
     int scanIndexColumn = status.isOk() && command.isOrdered() && !materializedSort
         ? orderColumn > 0 ? orderColumn : -1
         : status.isOk() && predicateColumn > 0 && table.hasIndexOn(predicateColumn)
             ? predicateColumn : -1;
     boolean valueIndex = scanIndexColumn > 0;
-    boolean primaryRangeAccess = scanIndexColumn < 0 && predicateColumn == 0;
     if (status.isOk()
         && equality
         && predicateColumn == 0
@@ -1077,19 +1077,22 @@ public final class SqlSession {
     }
     if (command.type() == SqlCommandType.COUNT) {
       long count = 0;
-      boolean predicate = predicateCount > 0;
-      boolean equality = predicate && accessEquality();
-      boolean indexed = predicate
+      boolean filtered = predicateCount > 0;
+      boolean bounded = accessPredicate >= 0;
+      boolean equality = bounded && accessEquality();
+      boolean indexed = bounded
           && predicateColumn > 0
           && table.hasIndexOn(predicateColumn);
-      boolean boundedPrimaryKey = predicate && predicateColumn == 0;
+      boolean boundedPrimaryKey = bounded && predicateColumn == 0;
       if ((indexed || boundedPrimaryKey)
           && equality
           && accessValue() == Long.MAX_VALUE) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      long lower = equality ? accessValue() : accessLowerInclusive();
-      long upper = equality ? accessValue() + 1 : accessUpperExclusive();
+      long lower = bounded
+          ? equality ? accessValue() : accessLowerInclusive() : 0;
+      long upper = bounded
+          ? equality ? accessValue() + 1 : accessUpperExclusive() : 0;
       StatusCode status = indexed
           ? session.beginValueScan(
               table, predicateColumn, lower, upper, aggregateCursor)
@@ -1114,10 +1117,10 @@ public final class SqlSession {
           status = StatusCode.OK;
           break;
         }
-        if (status.isOk() && predicate) {
+        if (status.isOk() && filtered) {
           status = validateRow(source);
         }
-        if (status.isOk() && predicate && !matchesPredicates(primaryKey, source)) {
+        if (status.isOk() && filtered && !matchesPredicates(primaryKey, source)) {
           continue;
         }
         if (status.isOk()) {
@@ -1351,14 +1354,17 @@ public final class SqlSession {
           ? -1 : definition.findColumn(command.predicateColumnName(index));
       if (column < 0
           || command.isColumnPredicate(index)
-          || !command.isNullPredicate(index)
-              && !command.isEqualityPredicate(index)
+          || command.isRangePredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       predicateColumns[index] = outer ? column : -column - 1;
       if (!outer || command.isNullPredicate(index)) {
+        continue;
+      }
+      if (!command.isEqualityPredicate(index)
+          && !command.isRangePredicate(index)) {
         continue;
       }
       boolean indexed = column == 0 || table.hasIndexOn(column);
@@ -1388,8 +1394,7 @@ public final class SqlSession {
       int column = table.findColumn(command.predicateColumnName(index));
       if (column < 0
           || command.isColumnPredicate(index)
-          || !command.isNullPredicate(index)
-              && !command.isEqualityPredicate(index)
+          || command.isRangePredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1407,6 +1412,10 @@ public final class SqlSession {
         continue;
       }
       if (command.isNullPredicate(index)) {
+        continue;
+      }
+      if (!command.isEqualityPredicate(index)
+          && !command.isRangePredicate(index)) {
         continue;
       }
       boolean indexed = column == 0 || table.hasIndexOn(column);
@@ -1768,6 +1777,8 @@ public final class SqlSession {
     int boundedPredicate = -1;
     for (int index = 0; index < predicateCount; index++) {
       if (predicateColumns[index] == orderedColumn
+          && (command.isEqualityPredicate(index)
+              || command.isRangePredicate(index))
           && (boundedPredicate < 0 || command.isEqualityPredicate(index))) {
         boundedPredicate = index;
         if (command.isEqualityPredicate(index)) {
@@ -1851,11 +1862,7 @@ public final class SqlSession {
         }
         continue;
       }
-      boolean matches = command.isEqualityPredicate(index)
-          ? value == command.predicateValue(index)
-          : value >= command.predicateLowerInclusive(index)
-              && value < command.predicateUpperExclusive(index);
-      if (!matches) {
+      if (!matchesComparison(value, command, index)) {
         return false;
       }
     }
@@ -1964,8 +1971,7 @@ public final class SqlSession {
         }
         int column = definition.findColumn(nested.predicateColumnName(index));
         if (column < 0
-            || !nested.isNullPredicate(index)
-                && !nested.isEqualityPredicate(index)
+            || nested.isRangePredicate(index)
                 && nested.predicateUpperExclusive(index)
                     <= nested.predicateLowerInclusive(index)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -2219,11 +2225,7 @@ public final class SqlSession {
         }
         continue;
       }
-      boolean matches = nested.isEqualityPredicate(index)
-          ? value == nested.predicateValue(index)
-          : value >= nested.predicateLowerInclusive(index)
-              && value < nested.predicateUpperExclusive(index);
-      if (!matches) {
+      if (!matchesComparison(value, nested, index)) {
         return false;
       }
     }
@@ -2799,8 +2801,7 @@ public final class SqlSession {
       }
       int column = scalarTable.findColumn(nested.predicateColumnName(index));
       if (column < 0
-          || !nested.isNullPredicate(index)
-              && !nested.isEqualityPredicate(index)
+          || nested.isRangePredicate(index)
               && nested.predicateUpperExclusive(index)
                   <= nested.predicateLowerInclusive(index)) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -2891,11 +2892,7 @@ public final class SqlSession {
         }
         continue;
       }
-      boolean matches = scalar.isEqualityPredicate(index)
-          ? value == scalar.predicateValue(index)
-          : value >= scalar.predicateLowerInclusive(index)
-              && value < scalar.predicateUpperExclusive(index);
-      if (!matches) {
+      if (!matchesComparison(value, scalar, index)) {
         return false;
       }
     }
@@ -2924,11 +2921,7 @@ public final class SqlSession {
         return false;
       }
       long value = readColumn(primaryKey, source, column);
-      boolean matches = command.isEqualityPredicate(index)
-          ? value == command.predicateValue(index)
-          : value >= command.predicateLowerInclusive(index)
-              && value < command.predicateUpperExclusive(index);
-      if (!matches) {
+      if (!matchesComparison(value, command, index)) {
         return false;
       }
     }
@@ -2937,6 +2930,25 @@ public final class SqlSession {
 
   private boolean accessEquality() {
     return accessPredicate >= 0 && command.isEqualityPredicate(accessPredicate);
+  }
+
+  private static boolean matchesComparison(
+      long actual,
+      SqlCommand source,
+      int predicate) {
+    long expected = source.predicateValue(predicate);
+    SqlComparison comparison = source.comparison(predicate);
+    return switch (comparison) {
+      case EQUAL -> actual == expected;
+      case NOT_EQUAL -> actual != expected;
+      case LESS_THAN -> actual < expected;
+      case LESS_OR_EQUAL -> actual <= expected;
+      case GREATER_THAN -> actual > expected;
+      case GREATER_OR_EQUAL -> actual >= expected;
+      case HALF_OPEN_RANGE ->
+        actual >= source.predicateLowerInclusive(predicate)
+            && actual < source.predicateUpperExclusive(predicate);
+    };
   }
 
   private long accessValue() {
@@ -3460,16 +3472,21 @@ public final class SqlSession {
 
   private StatusCode collectMatchedKeys() {
     matchedRowCount = 0;
-    boolean equality = accessEquality();
-    boolean indexed = predicateColumn > 0 && table.hasIndexOn(predicateColumn);
-    boolean primaryRange = predicateColumn == 0;
+    boolean bounded = accessPredicate >= 0;
+    boolean equality = bounded && accessEquality();
+    boolean indexed = bounded
+        && predicateColumn > 0
+        && table.hasIndexOn(predicateColumn);
+    boolean primaryRange = bounded && predicateColumn == 0;
     if ((indexed || primaryRange)
         && equality
         && accessValue() == Long.MAX_VALUE) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    long lower = equality ? accessValue() : accessLowerInclusive();
-    long upper = equality ? accessValue() + 1 : accessUpperExclusive();
+    long lower = bounded
+        ? equality ? accessValue() : accessLowerInclusive() : 0;
+    long upper = bounded
+        ? equality ? accessValue() + 1 : accessUpperExclusive() : 0;
     StatusCode status = indexed
         ? session.beginValueScan(
             table,

@@ -121,11 +121,17 @@ public final class SqlQuery {
               block.predicateValueColumnName(predicate));
           destination.appendColumnPredicate();
         } else {
-          destination.appendPredicate(
-              block.predicateValue(predicate),
-              block.predicateLowerInclusive(predicate),
-              block.predicateUpperExclusive(predicate),
-              block.isEqualityPredicate(predicate));
+          if (block.isRangePredicate(predicate)) {
+            destination.appendPredicate(
+                block.predicateValue(predicate),
+                block.predicateLowerInclusive(predicate),
+                block.predicateUpperExclusive(predicate),
+                false);
+          } else {
+            destination.appendComparison(
+                block.predicateValue(predicate),
+                block.comparison(predicate));
+          }
         }
       }
     }

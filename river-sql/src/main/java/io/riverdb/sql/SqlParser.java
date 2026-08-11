@@ -771,13 +771,16 @@ public final class SqlParser {
       if (nullPredicate) {
         status = requireKeyword(sql, "NULL");
       }
-      boolean equality = !nullPredicate
-          && status.isOk() && consumeCharacter(sql, '=');
+      SqlComparison comparison = !nullPredicate && status.isOk()
+          ? comparisonOperator(sql) : null;
+      if (!nullPredicate && status.isOk() && comparison == null) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       long value = 0;
       long lower = 0;
       long upper = 0;
       boolean columnEquality = false;
-      if (equality) {
+      if (comparison == SqlComparison.EQUAL) {
         skipSpaces(sql);
         if (sql == scalarSourceView && scalarSourceView.isReplacement(offset)) {
           scalarPredicateIndex = result.predicateCount();
@@ -804,32 +807,16 @@ public final class SqlParser {
           columnEquality = status.isOk();
         }
       } else if (!nullPredicate && status.isOk()) {
-        status = requireCharacter(sql, '>');
+        status = number(sql, numberResult);
         if (status.isOk()) {
-          status = requireCharacter(sql, '=');
-        }
-        if (status.isOk()) {
-          status = number(sql, numberResult);
-          lower = numberResult.value;
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "AND");
-        }
-        if (status.isOk() && predicateQualified) {
-          status = matchingIdentifier(sql, table);
-          if (status.isOk()) {
-            status = requireCharacter(sql, '.');
+          value = numberResult.value;
+          if (comparison == SqlComparison.GREATER_OR_EQUAL
+              && consumeHalfOpenUpper(
+                  sql, table, column, predicateQualified)) {
+            lower = value;
+            upper = numberResult.value;
+            comparison = SqlComparison.HALF_OPEN_RANGE;
           }
-        }
-        if (status.isOk()) {
-          status = matchingIdentifier(sql, column);
-        }
-        if (status.isOk()) {
-          status = requireCharacter(sql, '<');
-        }
-        if (status.isOk()) {
-          status = number(sql, numberResult);
-          upper = numberResult.value;
         }
       }
       if (status.isOk()) {
@@ -837,8 +824,10 @@ public final class SqlParser {
           result.appendNullPredicate(nullPredicateNegated);
         } else if (columnEquality) {
           result.appendColumnPredicate();
+        } else if (comparison == SqlComparison.HALF_OPEN_RANGE) {
+          result.appendPredicate(0, lower, upper, false);
         } else {
-          result.appendPredicate(value, lower, upper, equality);
+          result.appendComparison(value, comparison);
         }
       }
       if (!status.isOk() || !consumeKeyword(sql, "AND")) {
@@ -846,6 +835,69 @@ public final class SqlParser {
       }
     }
     return status;
+  }
+
+  private SqlComparison comparisonOperator(CharSequence sql) {
+    if (consumeCharacter(sql, '=')) {
+      return SqlComparison.EQUAL;
+    }
+    if (consumeCharacter(sql, '!')) {
+      return consumeCharacter(sql, '=') ? SqlComparison.NOT_EQUAL : null;
+    }
+    if (consumeCharacter(sql, '<')) {
+      if (consumeCharacter(sql, '>')) {
+        return SqlComparison.NOT_EQUAL;
+      }
+      return consumeCharacter(sql, '=')
+          ? SqlComparison.LESS_OR_EQUAL : SqlComparison.LESS_THAN;
+    }
+    if (consumeCharacter(sql, '>')) {
+      return consumeCharacter(sql, '=')
+          ? SqlComparison.GREATER_OR_EQUAL : SqlComparison.GREATER_THAN;
+    }
+    return null;
+  }
+
+  private boolean consumeHalfOpenUpper(
+      CharSequence sql,
+      CharSequence table,
+      CharSequence column,
+      boolean qualified) {
+    int start = offset;
+    if (!consumeKeyword(sql, "AND")) {
+      return false;
+    }
+    StatusCode status = StatusCode.OK;
+    if (qualified) {
+      status = matchingIdentifier(sql, table);
+      if (status.isOk()) {
+        status = requireCharacter(sql, '.');
+      }
+    }
+    if (status.isOk()) {
+      status = matchingIdentifier(sql, column);
+    }
+    if (status.isOk()) {
+      status = requireCharacter(sql, '<');
+    }
+    if (status.isOk() && nextCharacter(sql, '=')) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      status = number(sql, numberResult);
+    }
+    if (status.isOk()) {
+      return true;
+    }
+    offset = start;
+    return false;
+  }
+
+  private boolean nextCharacter(CharSequence sql, char expected) {
+    int start = offset;
+    boolean matches = consumeCharacter(sql, expected);
+    offset = start;
+    return matches;
   }
 
   private StatusCode row(CharSequence sql, LongRow result) {
