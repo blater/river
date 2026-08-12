@@ -9,7 +9,9 @@ import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -17,6 +19,55 @@ import org.junit.jupiter.api.io.TempDir;
 final class RelationalDatabaseTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(733, 739);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void commitsCatalogAndRowsThroughDurableWalQuorum(@TempDir Path root)
+      throws IOException {
+    Path primary = Files.createDirectory(root.resolve("primary"));
+    Path followerOne = Files.createDirectory(root.resolve("follower-one"));
+    Path followerTwo = Files.createDirectory(root.resolve("follower-two"));
+    Path[] followers = {followerOne, followerTwo};
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.createWithDurableWalQuorum(
+            primary, followers, 2, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    assertEquals(2, database.requiredDurableNodeCount());
+    assertEquals(3, database.availableDurableNodeCount());
+    assertEquals(true, database.quorumDurableCommitSequence() > 0);
+
+    TableDefinition accounts = new TableDefinition();
+    assertEquals(StatusCode.OK, database.createTable("accounts", accounts));
+    RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RelationalSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.insert(accounts, 7, row(700)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(outcome.commitSequence(), database.quorumDurableCommitSequence());
+    assertEquals(true, database.replicatedWalPayloadBytes() > 0);
+    assertEquals(StatusCode.CONFLICT, database.checkpoint(new CheckpointResult()));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openWithDurableWalQuorum(
+            primary, followers, 2, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    session = sessionResult.session();
+    accounts.reset();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.resolveTable("accounts", accounts));
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, session.fetch(accounts, 7, fetched));
+    assertEquals(700, value(fetched));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(3, database.availableDurableNodeCount());
+    assertEquals(StatusCode.OK, database.close());
+  }
 
   @Test
   void resumesBoundedDroppingTableCleanupAfterReopen(@TempDir Path root) {

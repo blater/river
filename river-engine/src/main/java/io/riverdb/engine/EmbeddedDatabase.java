@@ -31,9 +31,14 @@ import java.nio.file.Path;
 public final class EmbeddedDatabase {
   private static final int MAXIMUM_ROW_BYTES = 4096;
   private static final int MAXIMUM_ACTIVE_TRANSACTIONS = 1024;
+  private static final NioDurableDirectory[] NO_FOLLOWER_DIRECTORIES =
+      new NioDurableDirectory[0];
+  private static final LocalWal[] NO_FOLLOWER_WALS = new LocalWal[0];
 
   private final NioDurableDirectory directory;
+  private final NioDurableDirectory[] followerDirectories;
   private final LocalWal wal;
+  private final LocalWal[] followerWals;
   private final IndexedTable table;
   private final TransactionManager transactions;
   private final IndexedGroupCommitCoordinator groupCommit;
@@ -43,14 +48,18 @@ public final class EmbeddedDatabase {
 
   private EmbeddedDatabase(
       NioDurableDirectory openedDirectory,
+      NioDurableDirectory[] openedFollowerDirectories,
       LocalWal openedWal,
+      LocalWal[] openedFollowerWals,
       IndexedPageStore openedStore,
       IndexedTable openedTable,
       int maximumActiveTransactions,
       CheckpointControlStore checkpointControl,
       long checkpointId) {
     directory = openedDirectory;
+    followerDirectories = openedFollowerDirectories;
     wal = openedWal;
+    followerWals = openedFollowerWals;
     table = openedTable;
     transactions = new TransactionManager(
         openedWal.databaseIncarnation().high(),
@@ -81,6 +90,27 @@ public final class EmbeddedDatabase {
         generation,
         maximumActiveTransactions,
         true,
+        null,
+        1,
+        result);
+  }
+
+  public static StatusCode createWithDurableWalQuorum(
+      Path directoryPath,
+      Path[] followerDirectoryPaths,
+      int requiredDurableNodes,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      EmbeddedDatabaseOpenResult result) {
+    return open(
+        directoryPath,
+        database,
+        generation,
+        maximumActiveTransactions,
+        true,
+        followerDirectoryPaths,
+        requiredDurableNodes,
         result);
   }
 
@@ -96,6 +126,27 @@ public final class EmbeddedDatabase {
         generation,
         maximumActiveTransactions,
         false,
+        null,
+        1,
+        result);
+  }
+
+  public static StatusCode openWithDurableWalQuorum(
+      Path directoryPath,
+      Path[] followerDirectoryPaths,
+      int requiredDurableNodes,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      EmbeddedDatabaseOpenResult result) {
+    return open(
+        directoryPath,
+        database,
+        generation,
+        maximumActiveTransactions,
+        false,
+        followerDirectoryPaths,
+        requiredDurableNodes,
         result);
   }
 
@@ -129,7 +180,26 @@ public final class EmbeddedDatabase {
     if (closed) {
       return StatusCode.CLOSED;
     }
+    if (wal.hasDurableQuorum()) {
+      return StatusCode.CONFLICT;
+    }
     return checkpoint.run(result);
+  }
+
+  public int requiredDurableNodeCount() {
+    return wal.requiredDurableNodeCount();
+  }
+
+  public int availableDurableNodeCount() {
+    return wal.availableDurableNodeCount();
+  }
+
+  public long quorumDurableCommitSequence() {
+    return wal.quorumDurableCommitSequence();
+  }
+
+  public long replicatedWalPayloadBytes() {
+    return wal.replicatedPayloadBytes();
   }
 
   public int activeTransactionCount() {
@@ -170,6 +240,18 @@ public final class EmbeddedDatabase {
     if (status.isOk()) {
       status = wal.close();
     }
+    for (LocalWal followerWal : followerWals) {
+      StatusCode followerStatus = followerWal.close();
+      if (status.isOk()) {
+        status = followerStatus;
+      }
+    }
+    for (NioDurableDirectory followerDirectory : followerDirectories) {
+      StatusCode followerStatus = followerDirectory.close();
+      if (status.isOk()) {
+        status = followerStatus;
+      }
+    }
     if (status.isOk()) {
       status = directory.close();
     }
@@ -185,7 +267,10 @@ public final class EmbeddedDatabase {
       WalGeneration generation,
       int maximumActiveTransactions,
       boolean create,
+      Path[] followerDirectoryPaths,
+      int requiredDurableNodes,
       EmbeddedDatabaseOpenResult result) {
+    boolean replicated = followerDirectoryPaths != null;
     if (directoryPath == null
         || database == null
         || !database.isValid()
@@ -193,6 +278,12 @@ public final class EmbeddedDatabase {
         || !generation.isValid()
         || maximumActiveTransactions <= 0
         || maximumActiveTransactions > MAXIMUM_ACTIVE_TRANSACTIONS
+        || (!replicated && requiredDurableNodes != 1)
+        || (replicated
+            && (followerDirectoryPaths.length == 0
+                || followerDirectoryPaths.length > 6
+                || requiredDurableNodes < 2
+                || requiredDurableNodes > followerDirectoryPaths.length + 1))
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -284,6 +375,60 @@ public final class EmbeddedDatabase {
         return status;
       }
     }
+    NioDurableDirectory[] followerDirectories = replicated
+        ? new NioDurableDirectory[followerDirectoryPaths.length]
+        : NO_FOLLOWER_DIRECTORIES;
+    LocalWal[] followerWals = replicated
+        ? new LocalWal[followerDirectoryPaths.length]
+        : NO_FOLLOWER_WALS;
+    for (int index = 0; status.isOk() && index < followerWals.length; index++) {
+      Path followerPath = followerDirectoryPaths[index];
+      if (followerPath == null) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+        break;
+      }
+      NioDirectoryOpenResult followerDirectoryResult = new NioDirectoryOpenResult();
+      status = NioDurableDirectory.openExisting(
+          followerPath,
+          new FatalStateFence(),
+          new NioIoCounters(),
+          8,
+          followerDirectoryResult);
+      if (!status.isOk()) {
+        break;
+      }
+      NioDurableDirectory followerDirectory = followerDirectoryResult.directory();
+      followerDirectories[index] = followerDirectory;
+      if (directory.root().equals(followerDirectory.root())) {
+        status = StatusCode.CONFLICT;
+        break;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (followerDirectories[previous].root().equals(followerDirectory.root())) {
+          status = StatusCode.CONFLICT;
+          break;
+        }
+      }
+      if (!status.isOk()) {
+        break;
+      }
+      LocalWalOpenResult followerWalResult = new LocalWalOpenResult();
+      status = create
+          ? LocalWal.create(followerDirectory, database, generation, followerWalResult)
+          : LocalWal.openExisting(followerDirectory, database, generation, followerWalResult);
+      if (status.isOk()) {
+        followerWals[index] = followerWalResult.wal();
+      }
+    }
+    if (status.isOk() && replicated) {
+      status = wal.enableDurableQuorum(followerWals, requiredDurableNodes);
+    }
+    if (!status.isOk()) {
+      closeFollowers(followerWals, followerDirectories);
+      wal.close();
+      directory.close();
+      return status;
+    }
     IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
     if (create) {
       status = IndexedPageStore.create(directory, wal, database, generation, storeResult);
@@ -295,6 +440,7 @@ public final class EmbeddedDatabase {
           directory, wal, database, generation, storeResult);
     }
     if (!status.isOk()) {
+      closeFollowers(followerWals, followerDirectories);
       wal.close();
       directory.close();
       return status;
@@ -305,6 +451,7 @@ public final class EmbeddedDatabase {
         : IndexedTable.open(storeResult.store(), tableResult);
     if (!status.isOk()) {
       storeResult.store().close();
+      closeFollowers(followerWals, followerDirectories);
       wal.close();
       directory.close();
       return status;
@@ -314,6 +461,7 @@ public final class EmbeddedDatabase {
           directory, new ControlFile(database, generation), databaseControl);
       if (!status.isOk()) {
         tableResult.table().close();
+        closeFollowers(followerWals, followerDirectories);
         wal.close();
         directory.close();
         return status;
@@ -321,12 +469,29 @@ public final class EmbeddedDatabase {
     }
     result.set(new EmbeddedDatabase(
         directory,
+        followerDirectories,
         wal,
+        followerWals,
         storeResult.store(),
         tableResult.table(),
         maximumActiveTransactions,
         checkpointControl,
         checkpointAvailable ? checkpointState.checkpointId() : 0));
     return StatusCode.OK;
+  }
+
+  private static void closeFollowers(
+      LocalWal[] followerWals,
+      NioDurableDirectory[] followerDirectories) {
+    for (LocalWal followerWal : followerWals) {
+      if (followerWal != null) {
+        followerWal.close();
+      }
+    }
+    for (NioDurableDirectory followerDirectory : followerDirectories) {
+      if (followerDirectory != null) {
+        followerDirectory.close();
+      }
+    }
   }
 }

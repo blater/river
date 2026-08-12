@@ -49,6 +49,7 @@ public final class LocalWal {
   private long activeReservationToken;
   private long copiedPayloadBytes;
   private int pendingRecordCount;
+  private DurableWalQuorum durableQuorum;
   private boolean forcedBatch;
   private boolean failed;
   private boolean closed;
@@ -277,6 +278,74 @@ public final class LocalWal {
     return copiedPayloadBytes;
   }
 
+  /**
+   * Enables fixed-membership synchronous durable replication for all subsequent force batches.
+   */
+  public StatusCode enableDurableQuorum(LocalWal[] followers, int requiredNodeCount) {
+    if (followers == null
+        || followers.length == 0
+        || followers.length > DurableWalQuorum.MAXIMUM_FOLLOWERS
+        || requiredNodeCount < 2
+        || requiredNodeCount > followers.length + 1
+        || durableQuorum != null
+        || activeReservationToken != 0
+        || pendingRecordCount != 0
+        || forcedBatch) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode admission = admission();
+    if (!admission.isOk()) {
+      return admission;
+    }
+    for (int index = 0; index < followers.length; index++) {
+      LocalWal follower = followers[index];
+      if (follower == null
+          || follower == this
+          || follower.durableQuorum != null
+          || !databaseIncarnation.equals(follower.databaseIncarnation)
+          || !walGeneration.equals(follower.walGeneration)
+          || tailEnd != follower.tailEnd
+          || durableEnd != follower.durableEnd
+          || nextJournalSequence != follower.nextJournalSequence
+          || lastCommitSequence != follower.lastCommitSequence) {
+        return StatusCode.CONFLICT;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (followers[previous] == follower) {
+          return StatusCode.CONFLICT;
+        }
+      }
+      StatusCode equivalent = equivalentDurableHistory(follower);
+      if (!equivalent.isOk()) {
+        return equivalent;
+      }
+    }
+    LocalWal[] ownedFollowers = new LocalWal[followers.length];
+    System.arraycopy(followers, 0, ownedFollowers, 0, followers.length);
+    durableQuorum = new DurableWalQuorum(ownedFollowers, requiredNodeCount);
+    return StatusCode.OK;
+  }
+
+  public boolean hasDurableQuorum() {
+    return durableQuorum != null;
+  }
+
+  public int requiredDurableNodeCount() {
+    return durableQuorum == null ? 1 : durableQuorum.requiredNodeCount();
+  }
+
+  public int availableDurableNodeCount() {
+    return durableQuorum == null ? 1 : durableQuorum.availableNodeCount();
+  }
+
+  public long replicatedPayloadBytes() {
+    return durableQuorum == null ? 0 : durableQuorum.replicatedPayloadBytes();
+  }
+
+  public long quorumDurableCommitSequence() {
+    return durableQuorum == null ? 0 : durableQuorum.quorumDurableCommitSequence();
+  }
+
   public StatusCode reserve(int payloadBytes, LocalWalReservation reservation) {
     if (reservation == null || payloadBytes < 0
         || payloadBytes > WalRecordCodec.MAX_PAYLOAD_BYTES) {
@@ -434,6 +503,13 @@ public final class LocalWal {
     lastCommitSequence = lastAppendedCommitSequence;
     result.set(pendingStart, durableEnd, pendingRecordCount, lastCommitSequence);
     forcedBatch = true;
+    if (durableQuorum != null) {
+      status = durableQuorum.replicateForcedBatch(this, pendingRecordCount);
+      if (!status.isOk()) {
+        failed = true;
+        return status;
+      }
+    }
     return StatusCode.OK;
   }
 
@@ -659,6 +735,43 @@ public final class LocalWal {
       return StatusCode.IO_FAILURE;
     }
     return status;
+  }
+
+  private StatusCode equivalentDurableHistory(LocalWal follower) {
+    LocalWalReadResult primaryRead = new LocalWalReadResult();
+    LocalWalReadResult followerRead = new LocalWalReadResult();
+    long offset = WalFileHeaderCodec.HEADER_BYTES;
+    while (offset < durableEnd) {
+      StatusCode status = read(offset, primaryRead);
+      if (status.isOk()) {
+        status = follower.read(offset, followerRead);
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      WalRecordHeader primaryHeader = primaryRead.header();
+      WalRecordHeader followerHeader = followerRead.header();
+      if (primaryRead.nextOffset() != followerRead.nextOffset()
+          || primaryHeader.totalBytes() != followerHeader.totalBytes()
+          || primaryHeader.payloadBytes() != followerHeader.payloadBytes()
+          || primaryHeader.formatId() != followerHeader.formatId()
+          || primaryHeader.formatVersion() != followerHeader.formatVersion()
+          || primaryHeader.journalSequence() != followerHeader.journalSequence()
+          || primaryHeader.transactionId() != followerHeader.transactionId()
+          || primaryHeader.commitSequence() != followerHeader.commitSequence()
+          || primaryHeader.decisionCode() != followerHeader.decisionCode()) {
+        return StatusCode.CORRUPTION;
+      }
+      ByteBuffer primaryPayload = primaryRead.payload();
+      ByteBuffer followerPayload = followerRead.payload();
+      for (int index = 0; index < primaryHeader.payloadBytes(); index++) {
+        if (primaryPayload.get(index) != followerPayload.get(index)) {
+          return StatusCode.CORRUPTION;
+        }
+      }
+      offset = primaryRead.nextOffset();
+    }
+    return offset == durableEnd ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 
   private StatusCode admission() {

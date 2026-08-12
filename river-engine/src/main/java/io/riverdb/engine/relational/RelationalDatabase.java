@@ -93,6 +93,40 @@ public final class RelationalDatabase {
     return StatusCode.OK;
   }
 
+  public static StatusCode createWithDurableWalQuorum(
+      Path directory,
+      Path[] followerDirectories,
+      int requiredDurableNodes,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      RelationalDatabaseOpenResult result) {
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
+    StatusCode status = EmbeddedDatabase.createWithDurableWalQuorum(
+        directory,
+        followerDirectories,
+        requiredDurableNodes,
+        database,
+        generation,
+        maximumActiveTransactions,
+        embeddedResult);
+    if (!status.isOk()) {
+      return status;
+    }
+    RelationalDatabase relational = new RelationalDatabase(embeddedResult.database());
+    status = relational.initializeCatalog();
+    if (!status.isOk()) {
+      relational.close();
+      return status;
+    }
+    result.set(relational);
+    return StatusCode.OK;
+  }
+
   public static StatusCode openExisting(
       Path directory,
       DatabaseIncarnation database,
@@ -117,6 +151,56 @@ public final class RelationalDatabase {
     }
     result.set(relational);
     return StatusCode.OK;
+  }
+
+  public static StatusCode openWithDurableWalQuorum(
+      Path directory,
+      Path[] followerDirectories,
+      int requiredDurableNodes,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      RelationalDatabaseOpenResult result) {
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
+    StatusCode status = EmbeddedDatabase.openWithDurableWalQuorum(
+        directory,
+        followerDirectories,
+        requiredDurableNodes,
+        database,
+        generation,
+        maximumActiveTransactions,
+        embeddedResult);
+    if (!status.isOk()) {
+      return status;
+    }
+    RelationalDatabase relational = new RelationalDatabase(embeddedResult.database());
+    status = relational.validateCatalog();
+    if (!status.isOk()) {
+      relational.close();
+      return status;
+    }
+    result.set(relational);
+    return StatusCode.OK;
+  }
+
+  public int requiredDurableNodeCount() {
+    return embedded.requiredDurableNodeCount();
+  }
+
+  public int availableDurableNodeCount() {
+    return embedded.availableDurableNodeCount();
+  }
+
+  public long quorumDurableCommitSequence() {
+    return embedded.quorumDurableCommitSequence();
+  }
+
+  public long replicatedWalPayloadBytes() {
+    return embedded.replicatedWalPayloadBytes();
   }
 
   public synchronized StatusCode createTable(CharSequence name, TableDefinition result) {
