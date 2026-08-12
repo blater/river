@@ -427,10 +427,34 @@ final class RiverJdbcConnection extends AbstractConnection {
     return metadataResult;
   }
 
+  ResultSet openIndexInfo(
+      String tableName,
+      boolean uniqueOnly,
+      boolean scanCatalog) throws SQLException {
+    requireOpen();
+    requireMetadataResultAvailable();
+    RiverQuery query = null;
+    if (scanCatalog) {
+      query = openMetadataQuery("SHOW TABLES", "read index catalog");
+    }
+    metadataResult = new RiverIndexInfoResultSet(
+        this,
+        query,
+        tableName,
+        uniqueOnly);
+    return metadataResult;
+  }
+
   RiverQuery openColumnDescription(String tableName) throws SQLException {
     return openMetadataQuery(
         "SELECT * FROM " + tableName + " LIMIT 1",
         "describe catalog table");
+  }
+
+  RiverQuery openIndexDescription(String tableName) throws SQLException {
+    return openMetadataQuery(
+        "SHOW INDEXES FROM " + tableName,
+        "describe table indexes");
   }
 
   void metadataQueryCompleted(

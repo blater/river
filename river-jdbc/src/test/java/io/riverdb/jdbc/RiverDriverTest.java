@@ -2088,6 +2088,16 @@ final class RiverDriverTest {
       assertEquals(
           0,
           statement.executeUpdate(
+              "CREATE UNIQUE INDEX transaction_value_idx ON "
+                  + tableName + "(value)"));
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE INDEX transaction_label_idx ON "
+                  + tableName + "(label)"));
+      assertEquals(
+          0,
+          statement.executeUpdate(
               "CREATE TABLE alpha_catalog_table "
                   + "(id BIGINT PRIMARY KEY, value BIGINT)"));
       for (int index = 0; index < 20; index++) {
@@ -2239,6 +2249,63 @@ final class RiverDriverTest {
           tableName)) {
         assertFalse(keys.next());
       }
+      try (ResultSet indexes = metadata.getIndexInfo(
+          null,
+          null,
+          tableName,
+          false,
+          false)) {
+        ResultSetMetaData fields = indexes.getMetaData();
+        assertEquals(13, fields.getColumnCount());
+        assertEquals("NON_UNIQUE", fields.getColumnLabel(4));
+        assertEquals(Types.BOOLEAN, fields.getColumnType(4));
+        assertEquals(Types.SMALLINT, fields.getColumnType(7));
+        assertIndexMetadata(indexes, tableName, null, "id", false);
+        assertIndexMetadata(
+            indexes,
+            tableName,
+            "transaction_value_idx",
+            "value",
+            false);
+        assertIndexMetadata(
+            indexes,
+            tableName,
+            "transaction_label_idx",
+            "label",
+            true);
+        assertFalse(indexes.next());
+      }
+      try (ResultSet indexes = metadata.getIndexInfo(
+          "missing_catalog",
+          null,
+          tableName,
+          false,
+          false)) {
+        assertFalse(indexes.next());
+      }
+      try (ResultSet indexes = metadata.getIndexInfo(
+          null,
+          null,
+          tableName,
+          true,
+          true)) {
+        assertIndexMetadata(indexes, tableName, null, "id", false);
+        assertIndexMetadata(
+            indexes,
+            tableName,
+            "transaction_value_idx",
+            "value",
+            false);
+        assertFalse(indexes.next());
+      }
+      try (ResultSet indexes = metadata.getIndexInfo(
+          null,
+          null,
+          viewName,
+          false,
+          false)) {
+        assertFalse(indexes.next());
+      }
 
       ResultSet held = metadata.getColumns(null, null, "%", "%");
       assertTrue(held.next());
@@ -2264,6 +2331,10 @@ final class RiverDriverTest {
           SQLException.class,
           () -> metadata.getPrimaryKeys(null, null, ""));
       assertEquals("22000", invalidPrimaryTable.getSQLState());
+      SQLException invalidIndexTable = assertThrows(
+          SQLException.class,
+          () -> metadata.getIndexInfo(null, null, "", false, false));
+      assertEquals("22000", invalidIndexTable.getSQLState());
 
       connection.setAutoCommit(false);
       assertEquals(
@@ -2327,6 +2398,27 @@ final class RiverDriverTest {
       assertTrue(keys.next());
       assertEquals("id", keys.getString("COLUMN_NAME"));
       assertFalse(keys.next());
+    }
+    try (ResultSet indexes = connection.getMetaData().getIndexInfo(
+        null,
+        null,
+        tableName,
+        false,
+        false)) {
+      assertIndexMetadata(indexes, tableName, null, "id", false);
+      assertIndexMetadata(
+          indexes,
+          tableName,
+          "transaction_value_idx",
+          "value",
+          false);
+      assertIndexMetadata(
+          indexes,
+          tableName,
+          "transaction_label_idx",
+          "label",
+          true);
+      assertFalse(indexes.next());
     }
     ResultSet owned = connection.getMetaData().getColumns(null, null, "%", "%");
     assertTrue(owned.next());
@@ -2397,6 +2489,25 @@ final class RiverDriverTest {
     assertEquals("", columns.getString("IS_NULLABLE"));
     assertEquals("", columns.getString("IS_AUTOINCREMENT"));
     assertEquals("NO", columns.getString("IS_GENERATEDCOLUMN"));
+  }
+
+  private static void assertIndexMetadata(
+      ResultSet indexes,
+      String table,
+      String index,
+      String column,
+      boolean nonUnique) throws SQLException {
+    assertTrue(indexes.next());
+    assertEquals(table, indexes.getString("TABLE_NAME"));
+    assertEquals(nonUnique, indexes.getBoolean("NON_UNIQUE"));
+    assertEquals(index, indexes.getString("INDEX_NAME"));
+    assertEquals(index == null, indexes.wasNull());
+    assertEquals(DatabaseMetaData.tableIndexOther, indexes.getShort("TYPE"));
+    assertEquals(1, indexes.getShort("ORDINAL_POSITION"));
+    assertEquals(column, indexes.getString("COLUMN_NAME"));
+    assertEquals("A", indexes.getString("ASC_OR_DESC"));
+    assertEquals(0, indexes.getLong("CARDINALITY"));
+    assertEquals(0, indexes.getLong("PAGES"));
   }
 
   private static LoopbackRiverServer start(RiverDatabase database) {

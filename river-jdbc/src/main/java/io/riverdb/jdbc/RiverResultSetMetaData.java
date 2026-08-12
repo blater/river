@@ -148,6 +148,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     requireColumn(column);
     return switch (columnTypes[column - 1]) {
       case Types.VARCHAR -> displaySizes[column - 1];
+      case Types.BOOLEAN -> 1;
       case Types.SMALLINT -> 5;
       case Types.INTEGER -> 10;
       default -> 19;
@@ -183,6 +184,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     requireColumn(column);
     return switch (columnTypes[column - 1]) {
       case Types.VARCHAR -> "VARCHAR";
+      case Types.BOOLEAN -> "BOOLEAN";
       case Types.SMALLINT -> "SMALLINT";
       case Types.INTEGER -> "INTEGER";
       default -> "BIGINT";
@@ -212,6 +214,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     requireColumn(column);
     return switch (columnTypes[column - 1]) {
       case Types.VARCHAR -> String.class.getName();
+      case Types.BOOLEAN -> Boolean.class.getName();
       case Types.SMALLINT -> Short.class.getName();
       case Types.INTEGER -> Integer.class.getName();
       default -> Long.class.getName();
