@@ -37,4 +37,11 @@ replay_pid*
 benchmark-results/
 *.jfr
 
-docs/
+docs/*
+!docs/compatibility/
+docs/compatibility/*
+!docs/compatibility/sql-conformance-profile.md
+!docs/plans/
+docs/plans/*
+!docs/plans/river-vector-semantic-search-plan.md
+doc/legacy-references.md

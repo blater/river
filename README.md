@@ -1,31 +1,28 @@
 # River
 
-River is a new relational database implemented in Java. Its target is a
+River is a relational database implemented in Java. Its target is a
 high-performance, crash-safe single-node database with SQL and JDBC access,
 followed by a replicated journal and operational failover.
 
-Development is ordered around proved vertical slices: durable formats and a
-recoverable indexed table come before broad SQL or networking. The complete
-architecture and execution baseline lives in [docs/plans](docs/plans).
+### Current capabilities
 
-Useful database function is the priority. Infrastructure, observability, and
-review work must serve an immediate production-kernel consumer and stop when it
-is unblocked. Planned modules remain outside the active build and dependency
-graph until they receive production code.
-
-## Current milestone
-
-**P00 is passed and the foundation baseline is sufficient to proceed.** River's
-active delivery priority is **M1 (recoverable indexed table)**, beginning with
-S1, an inspectable empty database. Residual M0/G0 checks are performed only
-when an immediate kernel consumer needs them; they do not justify a continuing
-foundation-only workstream or block unrelated functional implementation.
-
-Interfaces, durable formats, and public behavior are not stable until their
-named gate has passed.
-
-See the [project implementation plan](docs/plans/river-project-implementation-plan.md)
-for deliverables, dependencies, gates, and milestone definitions.
+  - Recoverable heap and multi-level B+tree storage, WAL, checkpoints, torn-page repair and physical inspection.
+  - Concurrent MVCC transactions, read-committed and serializable execution, key/range locking, deadlock handling,
+    savepoints, group commit and version reclamation.
+  - Transactional tables, indexes, columns, sequences, identities and views.
+  - BIGINT, compact VARCHAR(7), NULLs, defaults and generated identity keys.
+  - Primary, duplicate secondary, unique and nullable indexes.
+  - NOT NULL, CHECK, UNIQUE and foreign-key constraints.
+  - Multi-row insert, update and delete.
+  - Comparisons, ranges, IN, OR, predicate conjunctions and NULL semantics.
+  - Sorting, disk spill/merge, DISTINCT, aggregates, grouping and HAVING.
+  - Indexed and unindexed inner joins plus left outer joins.
+  - Derived, scalar, EXISTS, membership and correlated subqueries with bounded deep nesting.
+  - Executable plans, EXPLAIN and EXPLAIN ANALYZE.
+  - Embedded API, TLS/token-authenticated server, bounded concurrent sessions, streaming client and JDBC.
+  - Prepared parameters, batching, generated keys and JDBC metadata subset.
+  - Remote SQL CLI.
+  - Quiescent backup/restore and offline corruption-aware inspection.
 
 ## Build and validation
 
@@ -37,13 +34,5 @@ JDK 25 is required. Run the complete initial-phase validation locally:
 
 The command uses the checksum-pinned Gradle wrapper and an isolated
 repository-local Gradle home, then runs a clean compile, static source policy,
-module dependency checks, and all tests. GitHub verification is intentionally
-manual during the initial build phase; local validation is the merge gate.
+module dependency checks, and all tests. 
 
-To prove that committed `HEAD` builds without ignored or untracked worktree
-inputs, reuse an already populated absolute Gradle user home and run the
-offline detached-checkout gate:
-
-```sh
-RIVER_GRADLE_HOME=/absolute/path/to/gradle-home ./verify-clean-checkout
-```
