@@ -9,6 +9,8 @@ import java.sql.Types;
 final class RiverResultSetMetaData implements ResultSetMetaData {
   private final String[] columnNames;
   private final boolean[] varcharColumns;
+  private final int[] nullability;
+  private final int[] displaySizes;
   private final boolean autoIncrement;
   private final int columnCount;
 
@@ -16,9 +18,13 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     columnCount = query.columnCount();
     columnNames = new String[columnCount];
     varcharColumns = new boolean[columnCount];
+    nullability = new int[columnCount];
+    displaySizes = new int[columnCount];
     autoIncrement = false;
     for (int index = 0; index < columnCount; index++) {
       varcharColumns[index] = query.columnIsVarchar(index);
+      nullability[index] = columnNoNulls;
+      displaySizes[index] = varcharColumns[index] ? 7 : 20;
       CharSequence name = query.columnName(index);
       if (name == null || name.length() <= 0) {
         throw JdbcExceptions.invalid("query column name is missing");
@@ -39,7 +45,22 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     columnCount = 1;
     columnNames = new String[] {columnName};
     varcharColumns = new boolean[1];
+    nullability = new int[] {columnNoNulls};
+    displaySizes = new int[] {20};
     autoIncrement = generated;
+  }
+
+  RiverResultSetMetaData(
+      String[] names,
+      boolean[] varchar,
+      int[] nullable,
+      int[] widths) {
+    columnCount = names.length;
+    columnNames = names;
+    varcharColumns = varchar;
+    nullability = nullable;
+    displaySizes = widths;
+    autoIncrement = false;
   }
 
   @Override
@@ -74,7 +95,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public int isNullable(int column) throws SQLException {
     requireColumn(column);
-    return columnNoNulls;
+    return nullability[column - 1];
   }
 
   @Override
@@ -86,7 +107,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public int getColumnDisplaySize(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1] ? 7 : 20;
+    return displaySizes[column - 1];
   }
 
   @Override
@@ -109,7 +130,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public int getPrecision(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1] ? 7 : 19;
+    return varcharColumns[column - 1] ? displaySizes[column - 1] : 19;
   }
 
   @Override

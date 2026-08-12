@@ -3,6 +3,8 @@ package io.riverdb.jdbc;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.client.RiverClientConnection;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.QueryOpenResult;
+import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -23,9 +25,11 @@ final class RiverJdbcConnection extends AbstractConnection {
   private final RiverSession session;
   private final RiverDatabaseMetaData metadata;
   private final CommandResult transactionResult = new CommandResult();
+  private final QueryOpenResult metadataQuery = new QueryOpenResult();
   private final RiverJdbcSavepoint[] savepoints =
       new RiverJdbcSavepoint[MAXIMUM_SAVEPOINTS];
   private RiverJdbcStatement statement;
+  private RiverCatalogResultSet metadataResult;
   private boolean autoCommit = true;
   private boolean transactionActive;
   private boolean closed;
@@ -180,11 +184,21 @@ final class RiverJdbcConnection extends AbstractConnection {
       return;
     }
     SQLException closeFailure = null;
+    RiverCatalogResultSet currentMetadata = metadataResult;
+    if (currentMetadata != null) {
+      try {
+        currentMetadata.close();
+      } catch (SQLException failure) {
+        closeFailure = failure;
+      }
+    }
     if (statement != null) {
       try {
         statement.close();
       } catch (SQLException failure) {
-        closeFailure = failure;
+        if (closeFailure == null) {
+          closeFailure = failure;
+        }
       }
     }
     StatusCode sessionStatus = session.close();
@@ -348,6 +362,59 @@ final class RiverJdbcConnection extends AbstractConnection {
   void statementClosed(RiverJdbcStatement closedStatement) {
     if (statement == closedStatement) {
       statement = null;
+    }
+  }
+
+  ResultSet openTables(
+      String tableNamePattern,
+      boolean includeTables,
+      boolean includeViews,
+      boolean scanCatalog) throws SQLException {
+    requireOpen();
+    requireMetadataResultAvailable();
+    RiverQuery query = null;
+    if (scanCatalog && (includeTables || includeViews)) {
+      beforeExecution();
+      metadataQuery.reset();
+      JdbcExceptions.require(
+          session.beginQuery("SHOW TABLES", metadataQuery),
+          "read table metadata");
+      query = metadataQuery.query();
+    }
+    metadataResult = RiverCatalogResultSet.tables(
+        this,
+        query,
+        tableNamePattern,
+        includeTables,
+        includeViews);
+    return metadataResult;
+  }
+
+  ResultSet openTableTypes() throws SQLException {
+    requireOpen();
+    requireMetadataResultAvailable();
+    metadataResult = RiverCatalogResultSet.tableTypes(this);
+    return metadataResult;
+  }
+
+  void metadataQueryCompleted(
+      RiverCatalogResultSet completed,
+      CommandResult result) {
+    commandCompleted(result);
+    metadataResultClosed(completed);
+  }
+
+  void metadataResultClosed(RiverCatalogResultSet completed) {
+    if (metadataResult == completed) {
+      metadataResult = null;
+    }
+  }
+
+  private void requireMetadataResultAvailable() throws SQLException {
+    if (metadataResult != null) {
+      throw JdbcExceptions.failure(
+          StatusCode.CONFLICT,
+          "open catalog metadata result");
     }
   }
 

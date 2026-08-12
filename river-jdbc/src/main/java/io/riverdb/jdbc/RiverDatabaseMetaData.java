@@ -11,6 +11,8 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   private static final String PRODUCT_VERSION = "0.1-pre-v1";
   private static final int MAXIMUM_COLUMNS = 8;
   private static final int MAXIMUM_IDENTIFIER_LENGTH = 64;
+  private static final int MAXIMUM_TABLE_PATTERN_LENGTH = 128;
+  private static final int MAXIMUM_TABLE_TYPES = 16;
 
   private final RiverJdbcConnection connection;
   private final String url;
@@ -225,6 +227,48 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   }
 
   @Override
+  public ResultSet getTables(
+      String catalog,
+      String schemaPattern,
+      String tableNamePattern,
+      String[] types) throws SQLException {
+    connection.requireOpen();
+    if (tableNamePattern != null
+        && tableNamePattern.length() > MAXIMUM_TABLE_PATTERN_LENGTH) {
+      throw JdbcExceptions.invalid("table name pattern is too long");
+    }
+    if (types != null && types.length > MAXIMUM_TABLE_TYPES) {
+      throw JdbcExceptions.invalid("too many table type filters");
+    }
+    boolean includeTables = types == null;
+    boolean includeViews = types == null;
+    if (types != null) {
+      for (String type : types) {
+        includeTables |= "TABLE".equalsIgnoreCase(type);
+        includeViews |= "VIEW".equalsIgnoreCase(type);
+      }
+    }
+    boolean namespaceMatches = absentNamespace(catalog) && matchesAbsentSchema(schemaPattern);
+    return connection.openTables(
+        tableNamePattern == null ? "%" : tableNamePattern,
+        includeTables,
+        includeViews,
+        namespaceMatches);
+  }
+
+  @Override
+  public ResultSet getTableTypes() throws SQLException {
+    connection.requireOpen();
+    return connection.openTableTypes();
+  }
+
+  @Override
+  public String getSearchStringEscape() throws SQLException {
+    connection.requireOpen();
+    return "\\";
+  }
+
+  @Override
   public boolean supportsSavepoints() throws SQLException {
     connection.requireOpen();
     return true;
@@ -357,5 +401,21 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   public boolean isWrapperFor(Class<?> type) throws SQLException {
     connection.requireOpen();
     return type != null && type.isInstance(this);
+  }
+
+  private static boolean absentNamespace(String value) {
+    return value == null || value.isEmpty();
+  }
+
+  private static boolean matchesAbsentSchema(String pattern) {
+    if (pattern == null) {
+      return true;
+    }
+    for (int index = 0; index < pattern.length(); index++) {
+      if (pattern.charAt(index) != '%') {
+        return false;
+      }
+    }
+    return true;
   }
 }
