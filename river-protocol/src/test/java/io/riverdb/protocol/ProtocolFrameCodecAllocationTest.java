@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
@@ -30,7 +31,16 @@ final class ProtocolFrameCodecAllocationTest {
     char[] decoded = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
     assertEquals(
         StatusCode.OK,
-        command.complete(1, 7, false, true, 3, new long[] {0, 10}, 0, 1, 2));
+        command.complete(
+            1,
+            7,
+            false,
+            true,
+            3,
+            new long[] {0, 10},
+            0,
+            new int[] {SqlTypeDescriptor.varchar(7), SqlTypeDescriptor.BIGINT},
+            2));
     assertEquals(StatusCode.OK, command.setTextAt(0, source, 0, source.length));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     for (int index = 0; index < 10_000; index++) {

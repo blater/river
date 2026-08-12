@@ -2,6 +2,7 @@ package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
 public final class SqlParser {
@@ -792,7 +793,7 @@ public final class SqlParser {
               rowResult.values,
               rowResult.nullMask,
               rowResult.defaultMask,
-              rowResult.varcharMask,
+              rowResult.typeDescriptors,
               rowResult.count);
         }
       }
@@ -809,7 +810,7 @@ public final class SqlParser {
                 rowResult.values,
                 rowResult.nullMask,
                 rowResult.defaultMask,
-                rowResult.varcharMask,
+                rowResult.typeDescriptors,
                 rowResult.count);
           }
         }
@@ -1060,7 +1061,11 @@ public final class SqlParser {
               nullValue || defaultValue ? 0 : numberResult.value,
               nullValue,
               defaultValue,
-              varchar,
+              nullValue || defaultValue
+                  ? 0
+                  : varchar
+                      ? SqlTypeDescriptor.varchar(7)
+                      : SqlTypeDescriptor.BIGINT,
               relative,
               subtract);
           if (result.updateColumnCount() == 1) {
@@ -1461,7 +1466,9 @@ public final class SqlParser {
     result.count = 0;
     result.nullMask = 0;
     result.defaultMask = 0;
-    result.varcharMask = 0;
+    for (int index = 0; index < result.typeDescriptors.length; index++) {
+      result.typeDescriptors[index] = 0;
+    }
     StatusCode status = requireCharacter(sql, '(');
     while (status.isOk()) {
       if (result.count >= SqlCommand.MAXIMUM_COLUMNS) {
@@ -1482,7 +1489,9 @@ public final class SqlParser {
         } else if (defaultValue) {
           result.defaultMask |= 1L << result.count;
         } else if (varchar) {
-          result.varcharMask |= 1L << result.count;
+          result.typeDescriptors[result.count] = SqlTypeDescriptor.varchar(7);
+        } else {
+          result.typeDescriptors[result.count] = SqlTypeDescriptor.BIGINT;
         }
         result.count++;
       }
@@ -1924,11 +1933,11 @@ public final class SqlParser {
 
   private static final class LongRow {
     private final long[] values = new long[SqlCommand.MAXIMUM_COLUMNS];
+    private final int[] typeDescriptors = new int[SqlCommand.MAXIMUM_COLUMNS];
     private final SqlIdentifier identifier = new SqlIdentifier();
     private int count;
     private long nullMask;
     private long defaultMask;
-    private long varcharMask;
   }
 
   private static final class SqlSourceView implements CharSequence {

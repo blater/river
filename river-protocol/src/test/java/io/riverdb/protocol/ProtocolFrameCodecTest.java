@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
@@ -39,7 +40,16 @@ final class ProtocolFrameCodecTest {
     char[] text = "catalog_table_identifier_longer_than_seven".toCharArray();
     assertEquals(
         StatusCode.OK,
-        command.complete(3, 19, true, true, 7, new long[] {11, 0}, 2, 1, 2));
+        command.complete(
+            3,
+            19,
+            true,
+            true,
+            7,
+            new long[] {11, 0},
+            2,
+            new int[] {SqlTypeDescriptor.varchar(7), SqlTypeDescriptor.BIGINT},
+            2));
     assertEquals(StatusCode.OK, command.setTextAt(0, text, 0, text.length));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     assertEquals(
@@ -62,6 +72,8 @@ final class ProtocolFrameCodecTest {
     assertTrue(response.isNull(1));
     assertTrue(response.isVarchar(0));
     assertFalse(response.isVarchar(1));
+    assertEquals(SqlTypeDescriptor.varchar(7), response.typeDescriptorAt(0));
+    assertEquals(SqlTypeDescriptor.BIGINT, response.typeDescriptorAt(1));
     char[] decoded = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
     assertEquals(text.length, response.copyTextAt(0, decoded, 0));
     assertEquals(new String(text), new String(decoded, 0, text.length));
@@ -74,7 +86,7 @@ final class ProtocolFrameCodecTest {
         StatusCode.OK,
         codec.encodeCommandResponse(
             bytes, ProtocolMessageType.EXECUTE, 8, StatusCode.OK, command, false));
-    bytes.putLong(ProtocolFrameCodec.HEADER_BYTES + 64, 1L << 2);
+    bytes.putInt(ProtocolFrameCodec.HEADER_BYTES + 64, 9);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));
@@ -96,7 +108,16 @@ final class ProtocolFrameCodecTest {
         codec.decodeResponse(bytes, frame, response));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
-        command.complete(0, 0, false, true, 0, new long[] {1}, 2, 1));
+        command.complete(
+            0,
+            0,
+            false,
+            true,
+            0,
+            new long[] {1},
+            2,
+            new int[] {SqlTypeDescriptor.BIGINT},
+            1));
   }
 
   @Test
@@ -119,6 +140,9 @@ final class ProtocolFrameCodecTest {
     assertEquals(0, response.valueAt(0));
     assertFalse(response.isVarchar(0));
     assertTrue(response.isVarchar(1));
+    assertEquals(SqlTypeDescriptor.BIGINT, response.typeDescriptorAt(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), response.typeDescriptorAt(1));
+    assertEquals(SqlTypeDescriptor.BOOLEAN, response.typeDescriptorAt(2));
 
     assertEquals(
         StatusCode.OK,
@@ -152,8 +176,15 @@ final class ProtocolFrameCodecTest {
 
     assertEquals(
         StatusCode.OK,
+        codec.encodeQueryOpenResponse(
+            bytes, 12, StatusCode.DATATYPE_MISMATCH, null));
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(StatusCode.DATATYPE_MISMATCH, response.status());
+
+    assertEquals(
+        StatusCode.OK,
         codec.encodeQueryOpenResponse(bytes, 13, StatusCode.OK, query));
-    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 72, (byte) 0);
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 76, (byte) 0);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));
@@ -247,8 +278,13 @@ final class ProtocolFrameCodecTest {
     }
 
     @Override
-    public boolean columnIsVarchar(int index) {
-      return index == 1;
+    public int columnTypeDescriptor(int index) {
+      return switch (index) {
+        case 0 -> SqlTypeDescriptor.BIGINT;
+        case 1 -> SqlTypeDescriptor.varchar(7);
+        case 2 -> SqlTypeDescriptor.BOOLEAN;
+        default -> 0;
+      };
     }
 
     @Override

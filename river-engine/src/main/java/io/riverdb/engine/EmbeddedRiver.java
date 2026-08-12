@@ -140,6 +140,7 @@ public final class EmbeddedRiver {
     private final SqlScanCursor scan = new SqlScanCursor();
     private final SqlScanRowResult scanRow = new SqlScanRowResult();
     private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
+    private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
     private final char[] textCharacters =
         new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
     private final EngineQuery query = new EngineQuery();
@@ -212,6 +213,7 @@ public final class EmbeddedRiver {
       int columns = execution.columnCount();
       for (int index = 0; index < columns; index++) {
         values[index] = execution.valueAt(index);
+        typeDescriptors[index] = execution.typeDescriptorAt(index);
       }
       return result.complete(
           execution.affectedRows(),
@@ -221,7 +223,7 @@ public final class EmbeddedRiver {
           execution.key(),
           values,
           execution.nullMask(),
-          execution.varcharMask(),
+          typeDescriptors,
           columns);
     }
 
@@ -250,12 +252,13 @@ public final class EmbeddedRiver {
         int columns = scanRow.columnCount();
         for (int index = 0; index < columns; index++) {
           values[index] = scanRow.valueAt(index);
+          typeDescriptors[index] = session.scanColumnTypeDescriptor(scan, index);
         }
         StatusCode completed = result.complete(
             scanRow.key(),
             values,
             scanRow.nullMask(),
-            scanRow.varcharMask(),
+            typeDescriptors,
             columns);
         for (int index = 0; completed.isOk() && index < columns; index++) {
           if (scanRow.isVarchar(index) && !scanRow.isNull(index)) {
@@ -304,8 +307,8 @@ public final class EmbeddedRiver {
       }
 
       @Override
-      public boolean columnIsVarchar(int index) {
-        return session.scanColumnIsVarchar(scan, index);
+      public int columnTypeDescriptor(int index) {
+        return session.scanColumnTypeDescriptor(scan, index);
       }
 
       @Override

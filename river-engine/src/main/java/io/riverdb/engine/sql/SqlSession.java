@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.CatalogObjectResult;
@@ -155,6 +156,8 @@ public final class SqlSession {
   private final long[] planOperators = new long[SqlScanCursor.MAXIMUM_PLAN_STEPS];
   private final long[] planDetails = new long[SqlScanCursor.MAXIMUM_PLAN_STEPS];
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] projectedTypeDescriptors =
+      new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] sortRunOffsets = new long[MAXIMUM_SORT_RUNS];
   private final long[] sortRunReadOffsets = new long[MAXIMUM_SORT_RUNS];
   private final int[] sortRunRowCounts = new int[MAXIMUM_SORT_RUNS];
@@ -1060,7 +1063,7 @@ public final class SqlSession {
             this,
             aggregateExecution.value(),
             aggregateExecution.isNull(0),
-            aggregateExecution.isVarchar(0),
+            aggregateExecution.typeDescriptorAt(0),
             aggregateExecution.transactionActive(),
             aggregateExecution.commitSequence());
       }
@@ -1101,13 +1104,14 @@ public final class SqlSession {
           if (aggregateColumn < 0) {
             status = StatusCode.INVALID_EXTERNAL_INPUT;
           } else if (command.type() == SqlCommandType.GROUP_SUM
-              && table.isVarchar(aggregateColumn)) {
-            status = StatusCode.INVALID_EXTERNAL_INPUT;
+              && table.typeDescriptor(aggregateColumn) != SqlTypeDescriptor.BIGINT) {
+            status = StatusCode.DATATYPE_MISMATCH;
           } else if (command.hasGroupHaving()
               && (command.type() == SqlCommandType.GROUP_MIN
                   || command.type() == SqlCommandType.GROUP_MAX)
-              && table.isVarchar(aggregateColumn)) {
-            status = StatusCode.INVALID_EXTERNAL_INPUT;
+              && table.typeDescriptor(aggregateColumn)
+                  != SqlTypeDescriptor.BIGINT) {
+            status = StatusCode.DATATYPE_MISMATCH;
           }
         }
       }
@@ -1680,7 +1684,12 @@ public final class SqlSession {
       }
       projectedValues[0] = 0;
       projectedValues[1] = 0;
-      result.set(0, projectedValues, 0, 3, 2);
+      result.set(
+          0,
+          projectedValues,
+          0,
+          scanProjectionTypeDescriptors(cursor),
+          2);
       status = result.setTextAt(0, catalogObject.name());
       if (status.isOk()) {
         status = result.setTextAt(
@@ -1708,7 +1717,12 @@ public final class SqlSession {
       projectedValues[3] = catalogIndex.isPrimary() ? 1 : 0;
       projectedValues[4] = catalogIndex.isConstraint() ? 1 : 0;
       long nullMask = catalogIndex.isPrimary() ? 1 : 0;
-      result.set(0, projectedValues, nullMask, 3, 5);
+      result.set(
+          0,
+          projectedValues,
+          nullMask,
+          scanProjectionTypeDescriptors(cursor),
+          5);
       if (!catalogIndex.isPrimary()) {
         status = result.setTextAt(0, catalogIndex.indexName());
       }
@@ -1729,7 +1743,12 @@ public final class SqlSession {
       projectedValues[1] = cursor.planDetail(step);
       projectedValues[2] = cursor.explainActualRows();
       long nullMask = cursor.explainAnalyzed() && step == 0 ? 0 : 1L << 2;
-      result.set(step, projectedValues, nullMask, 1, 3);
+      result.set(
+          step,
+          projectedValues,
+          nullMask,
+          scanProjectionTypeDescriptors(cursor),
+          3);
       cursor.advancePlanStep();
       cursor.rowReturned();
       return StatusCode.OK;
@@ -1746,7 +1765,7 @@ public final class SqlSession {
           0,
           projectedValues,
           cursor.aggregateNull() ? 1 : 0,
-          cursor.aggregateVarchar() ? 1 : 0,
+          scanProjectionTypeDescriptors(cursor),
           1);
       cursor.rowReturned();
       return StatusCode.OK;
@@ -1781,7 +1800,7 @@ public final class SqlSession {
             primaryKey,
             projectedValues,
             nullMask,
-            scanProjectionVarcharMask(cursor),
+            scanProjectionTypeDescriptors(cursor),
             cursor.projectedColumnCount());
         cursor.advanceSortedRow();
         cursor.rowReturned();
@@ -1877,7 +1896,7 @@ public final class SqlSession {
             primaryKey,
             projectedValues,
             nullMask,
-            scanProjectionVarcharMask(cursor),
+            scanProjectionTypeDescriptors(cursor),
             cursor.projectedColumnCount());
         cursor.rowReturned();
       }
@@ -1946,35 +1965,45 @@ public final class SqlSession {
         ? NULL_COLUMN_NAME : column < 0 ? null : table.columnName(column);
   }
 
-  public boolean scanColumnIsVarchar(SqlScanCursor cursor, int index) {
+  public int scanColumnTypeDescriptor(SqlScanCursor cursor, int index) {
     if (cursor == null
         || !cursor.isOwnedBy(this)
         || index < 0
         || index >= cursor.projectedColumnCount()) {
-      return false;
+      return 0;
     }
     if (cursor.explain()) {
-      return index == 0;
+      return index == 0
+          ? SqlTypeDescriptor.varchar(64) : SqlTypeDescriptor.BIGINT;
     }
     if (cursor.catalogObjectScan()) {
-      return true;
+      return SqlTypeDescriptor.varchar(64);
     }
     if (cursor.catalogIndexScan()) {
-      return index < 2;
+      return index < 2
+          ? SqlTypeDescriptor.varchar(64) : SqlTypeDescriptor.BOOLEAN;
     }
     if (cursor.aggregate()) {
-      return index == 0 && cursor.aggregateVarchar();
+      return index == 0 ? cursor.aggregateTypeDescriptor() : 0;
     }
     if (cursor.groupAggregate()) {
-      return (groupProjectionVarcharMask(cursor) & 1L << index) != 0;
+      if (index == 0) {
+        return table.typeDescriptor(cursor.groupColumn());
+      }
+      return cursor.groupAggregateType() == SqlCommandType.GROUP_MIN
+              || cursor.groupAggregateType() == SqlCommandType.GROUP_MAX
+          ? table.typeDescriptor(cursor.groupAggregateColumn())
+          : SqlTypeDescriptor.BIGINT;
     }
     if (cursor.distinct()) {
-      return index == 0 && table.isVarchar(cursor.groupColumn());
+      return index == 0 ? table.typeDescriptor(cursor.groupColumn()) : 0;
     }
     int projection = cursor.projectedColumn(index);
     return projection >= 0
-        ? table.isVarchar(projection)
-        : cursor.join() && joinTable.isVarchar(-projection - 1);
+        ? table.typeDescriptor(projection)
+        : cursor.join()
+            ? joinTable.typeDescriptor(-projection - 1)
+            : SqlTypeDescriptor.BIGINT;
   }
 
   private CharSequence groupAggregateColumnName(SqlScanCursor cursor) {
@@ -2252,7 +2281,7 @@ public final class SqlSession {
             0,
             projectedValues,
             valueAggregate && !aggregatePresent ? 1 : 0,
-            aggregateProjectionVarcharMask(),
+            aggregateProjectionTypeDescriptors(),
             1,
             0);
       }
@@ -2294,7 +2323,7 @@ public final class SqlSession {
           projectedValues,
           projectionNullMask(
               source, table, projectedColumns, projectedColumnCount),
-          projectionVarcharMask(projectedColumns, projectedColumnCount),
+            projectionTypeDescriptors(projectedColumns, projectedColumnCount),
           projectedColumnCount,
           0);
     }
@@ -2322,8 +2351,8 @@ public final class SqlSession {
       StatusCode status = bindProjections();
       if (status.isOk()
           && command.type() == SqlCommandType.SUM
-          && table.isVarchar(projectedColumns[0])) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
+          && table.typeDescriptor(projectedColumns[0]) != SqlTypeDescriptor.BIGINT) {
+        status = StatusCode.DATATYPE_MISMATCH;
       }
       return status.isOk() ? bindPredicates(false) : status;
     }
@@ -2370,16 +2399,17 @@ public final class SqlSession {
         if (!command.updateIsNull(index)
             && !command.updateIsDefault(index)
             && !command.isRelativeUpdate(index)
-            && command.updateIsVarchar(index) != table.isVarchar(column)) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
+            && !SqlTypeDescriptor.canImplicitlyCast(
+                command.updateTypeDescriptor(index), table.typeDescriptor(column))) {
+          return StatusCode.DATATYPE_MISMATCH;
         }
         updatedColumns[index] = column;
         if (command.isRelativeUpdate(index)) {
           int sourceColumn = table.findColumn(command.updateSourceColumnName(index));
           if (sourceColumn < 0
-              || table.isVarchar(column)
-              || table.isVarchar(sourceColumn)) {
-            return StatusCode.INVALID_EXTERNAL_INPUT;
+              || table.typeDescriptor(column) != SqlTypeDescriptor.BIGINT
+              || table.typeDescriptor(sourceColumn) != SqlTypeDescriptor.BIGINT) {
+            return StatusCode.DATATYPE_MISMATCH;
           }
           updateSourceColumns[index] = sourceColumn;
         } else {
@@ -2449,47 +2479,37 @@ public final class SqlSession {
     return StatusCode.OK;
   }
 
-  private long projectionVarcharMask(int[] projections, int count) {
-    long mask = 0;
+  private int[] projectionTypeDescriptors(int[] projections, int count) {
     for (int index = 0; index < count; index++) {
       int column = projections[index];
-      if (column >= 0 && table.isVarchar(column)) {
-        mask |= 1L << index;
-      }
+      projectedTypeDescriptors[index] = column >= 0
+          ? table.typeDescriptor(column) : SqlTypeDescriptor.BIGINT;
     }
-    return mask;
+    return projectedTypeDescriptors;
   }
 
-  private long scanProjectionVarcharMask(SqlScanCursor cursor) {
-    long mask = 0;
+  private int[] scanProjectionTypeDescriptors(SqlScanCursor cursor) {
     for (int index = 0; index < cursor.projectedColumnCount(); index++) {
-      int projection = cursor.projectedColumn(index);
-      boolean varchar = projection >= 0
-          ? table.isVarchar(projection)
-          : joinTable.isVarchar(-projection - 1);
-      if (varchar) {
-        mask |= 1L << index;
-      }
+      projectedTypeDescriptors[index] = scanColumnTypeDescriptor(cursor, index);
     }
-    return mask;
+    return projectedTypeDescriptors;
   }
 
-  private long aggregateProjectionVarcharMask() {
-    return (command.type() == SqlCommandType.MIN
+  private int[] aggregateProjectionTypeDescriptors() {
+    projectedTypeDescriptors[0] = (command.type() == SqlCommandType.MIN
             || command.type() == SqlCommandType.MAX)
         && projectedColumnCount > 0
-        && table.isVarchar(projectedColumns[0])
-        ? 1 : 0;
+        ? table.typeDescriptor(projectedColumns[0]) : SqlTypeDescriptor.BIGINT;
+    return projectedTypeDescriptors;
   }
 
-  private long groupProjectionVarcharMask(SqlScanCursor cursor) {
-    long mask = table.isVarchar(cursor.groupColumn()) ? 1 : 0;
-    if ((cursor.groupAggregateType() == SqlCommandType.GROUP_MIN
+  private int[] groupProjectionTypeDescriptors(SqlScanCursor cursor) {
+    projectedTypeDescriptors[0] = table.typeDescriptor(cursor.groupColumn());
+    projectedTypeDescriptors[1] = (cursor.groupAggregateType() == SqlCommandType.GROUP_MIN
             || cursor.groupAggregateType() == SqlCommandType.GROUP_MAX)
-        && table.isVarchar(cursor.groupAggregateColumn())) {
-      mask |= 1L << 1;
-    }
-    return mask;
+        ? table.typeDescriptor(cursor.groupAggregateColumn())
+        : SqlTypeDescriptor.BIGINT;
+    return projectedTypeDescriptors;
   }
 
   private int resolveOrderColumn() {
@@ -2517,11 +2537,13 @@ public final class SqlSession {
     }
     int outerJoinColumn = table.findColumn(command.joinOuterColumnName());
     int innerJoinColumn = joinTable.findColumn(command.joinInnerColumnName());
-    if (outerJoinColumn < 0
-        || innerJoinColumn < 0
-        || table.isVarchar(outerJoinColumn) != joinTable.isVarchar(innerJoinColumn)
-        || command.columnCount() <= 0) {
+    if (outerJoinColumn < 0 || innerJoinColumn < 0 || command.columnCount() <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (!SqlTypeDescriptor.canCompare(
+        table.typeDescriptor(outerJoinColumn),
+        joinTable.typeDescriptor(innerJoinColumn))) {
+      return StatusCode.DATATYPE_MISMATCH;
     }
     for (int index = 0; index < command.columnCount(); index++) {
       if (command.isNullProjection(index)) {
@@ -2567,14 +2589,18 @@ public final class SqlSession {
           ? -1 : definition.findColumn(command.predicateColumnName(index));
       if (column < 0
           || command.isColumnPredicate(index)
-          || !command.isNullPredicate(index)
-              && !(command.isLiteralMembership(index)
-                  && command.literalMembershipCount(index) == 0)
-              && definition.isVarchar(column) != command.predicateIsVarchar(index)
           || command.isRangePredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (!command.isNullPredicate(index)
+          && !(command.isLiteralMembership(index)
+              && command.literalMembershipCount(index) == 0)
+          && !SqlTypeDescriptor.canCompare(
+              definition.typeDescriptor(column),
+              command.predicateTypeDescriptor(index))) {
+        return StatusCode.DATATYPE_MISMATCH;
       }
       predicateColumns[index] = outer ? column : -column - 1;
       if (!outer || command.isNullPredicate(index)) {
@@ -2611,14 +2637,18 @@ public final class SqlSession {
       int column = table.findColumn(command.predicateColumnName(index));
       if (column < 0
           || command.isColumnPredicate(index)
-          || !command.isNullPredicate(index)
-              && !(command.isLiteralMembership(index)
-                  && command.literalMembershipCount(index) == 0)
-              && table.isVarchar(column) != command.predicateIsVarchar(index)
           || command.isRangePredicate(index)
               && command.predicateUpperExclusive(index)
                   <= command.predicateLowerInclusive(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      if (!command.isNullPredicate(index)
+          && !(command.isLiteralMembership(index)
+              && command.literalMembershipCount(index) == 0)
+          && !SqlTypeDescriptor.canCompare(
+              table.typeDescriptor(column),
+              command.predicateTypeDescriptor(index))) {
+        return StatusCode.DATATYPE_MISMATCH;
       }
       predicateColumns[index] = column;
       if (command.hasDisjunction()) {
@@ -2660,11 +2690,10 @@ public final class SqlSession {
     createSchema.reset();
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < command.columnCount(); index++) {
-      status = command.columnIsVarchar(index)
-          ? createSchema.addVarchar7(
-              command.columnName(index), !command.columnIsNotNull(index))
-          : createSchema.addBigint(
-              command.columnName(index), !command.columnIsNotNull(index));
+      status = createSchema.addColumn(
+          command.columnName(index),
+          command.columnTypeDescriptor(index),
+          !command.columnIsNotNull(index));
       if (status.isOk() && command.columnHasDefault(index)) {
         status = createSchema.setLastDefault(command.columnDefaultValue(index));
       }
@@ -2711,7 +2740,9 @@ public final class SqlSession {
       int referencedColumn = status.isOk()
           ? referencedTable.findColumn(command.columnReferenceColumnName(column)) : -1;
       if (status.isOk()
-          && (referencedColumn != 0 || referencedTable.isVarchar(referencedColumn))) {
+          && (referencedColumn != 0
+              || referencedTable.typeDescriptor(referencedColumn)
+                  != SqlTypeDescriptor.BIGINT)) {
         status = StatusCode.INVALID_EXTERNAL_INPUT;
       }
       if (status.isOk()) {
@@ -2778,9 +2809,13 @@ public final class SqlSession {
       } else {
         if (keySource < 0
             || command.insertIsNull(rowIndex, keySource)
-            || command.insertIsDefault(rowIndex, keySource)
-            || command.insertIsVarchar(rowIndex, keySource)) {
+            || command.insertIsDefault(rowIndex, keySource)) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+        if (!SqlTypeDescriptor.canImplicitlyCast(
+            command.insertTypeDescriptor(rowIndex, keySource),
+            table.typeDescriptor(0))) {
+          return StatusCode.DATATYPE_MISMATCH;
         }
       }
       for (int column = 1; column < table.columnCount(); column++) {
@@ -2793,8 +2828,10 @@ public final class SqlSession {
         if (source >= 0
             && !command.insertIsNull(rowIndex, source)
             && !command.insertIsDefault(rowIndex, source)
-            && command.insertIsVarchar(rowIndex, source) != table.isVarchar(column)) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
+            && !SqlTypeDescriptor.canImplicitlyCast(
+                command.insertTypeDescriptor(rowIndex, source),
+                table.typeDescriptor(column))) {
+          return StatusCode.DATATYPE_MISMATCH;
         }
         boolean nullValue = source < 0
             ? !table.hasDefault(column) : command.insertIsNull(rowIndex, source);
@@ -2959,7 +2996,7 @@ public final class SqlSession {
         groupValue,
         projectedValues,
         nullMask,
-        groupProjectionVarcharMask(cursor),
+        groupProjectionTypeDescriptors(cursor),
         2);
     return StatusCode.OK;
   }
@@ -2978,11 +3015,12 @@ public final class SqlSession {
         continue;
       }
       cursor.setDistinctValue(value, nullValue);
+      projectedTypeDescriptors[0] = table.typeDescriptor(cursor.groupColumn());
       result.set(
           value,
           projectedValues,
           nullValue ? 1 : 0,
-          table.isVarchar(cursor.groupColumn()) ? 1 : 0,
+          projectedTypeDescriptors,
           1);
       cursor.rowReturned();
       return StatusCode.OK;
@@ -3058,7 +3096,7 @@ public final class SqlSession {
             cursor.joinOuterKey(),
             projectedValues,
             nullMask,
-            scanProjectionVarcharMask(cursor),
+            scanProjectionTypeDescriptors(cursor),
             cursor.projectedColumnCount());
         cursor.rowReturned();
         return StatusCode.OK;
@@ -3175,7 +3213,7 @@ public final class SqlSession {
           outerKey,
           projectedValues,
           nullMask,
-          scanProjectionVarcharMask(cursor),
+          scanProjectionTypeDescriptors(cursor),
           cursor.projectedColumnCount());
       cursor.rowReturned();
       return StatusCode.OK;
@@ -3201,7 +3239,7 @@ public final class SqlSession {
         cursor.joinOuterKey(),
         projectedValues,
         nullMask,
-        scanProjectionVarcharMask(cursor),
+        scanProjectionTypeDescriptors(cursor),
         cursor.projectedColumnCount());
     cursor.rowReturned();
     return StatusCode.OK;

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.EmbeddedRiver;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
@@ -76,6 +77,7 @@ final class RiverClientConnectionTest {
         session.beginQuery("SELECT name FROM labels ORDER BY name", queryResult));
     RiverQuery query = queryResult.query();
     assertTrue(query.columnIsVarchar(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), query.columnTypeDescriptor(0));
     RowResult row = new RowResult();
     assertEquals(StatusCode.OK, query.next(row));
     assertText(row, 0, "alpha");

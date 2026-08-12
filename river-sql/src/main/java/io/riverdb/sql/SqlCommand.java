@@ -1,6 +1,7 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
 public final class SqlCommand {
@@ -45,15 +46,17 @@ public final class SqlCommand {
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
   private final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
   private final long[] insertDefaultMasks = new long[MAXIMUM_INSERT_ROWS];
-  private final long[] insertVarcharMasks = new long[MAXIMUM_INSERT_ROWS];
+  private final int[] insertTypeDescriptors =
+      new int[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
   private final long[] updateValues = new long[MAXIMUM_COLUMNS];
   private final long[] columnDefaultValues = new long[MAXIMUM_COLUMNS];
+  private final int[] columnTypeDescriptors = new int[MAXIMUM_COLUMNS];
   private final long[] columnCheckValues = new long[MAXIMUM_COLUMNS];
   private final SqlComparison[] columnCheckComparisons =
       new SqlComparison[MAXIMUM_COLUMNS];
   private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] defaultUpdates = new boolean[MAXIMUM_COLUMNS];
-  private final boolean[] varcharUpdates = new boolean[MAXIMUM_COLUMNS];
+  private final int[] updateTypeDescriptors = new int[MAXIMUM_COLUMNS];
   private final boolean[] relativeUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] subtractUpdates = new boolean[MAXIMUM_COLUMNS];
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
@@ -70,7 +73,7 @@ public final class SqlCommand {
   private final boolean[] nullPredicates = new boolean[MAXIMUM_PREDICATES];
   private final boolean[] negatedNullPredicates =
       new boolean[MAXIMUM_PREDICATES];
-  private final boolean[] varcharPredicates = new boolean[MAXIMUM_PREDICATES];
+  private final int[] predicateTypeDescriptors = new int[MAXIMUM_PREDICATES];
   private final boolean[] disjunctionPredicates =
       new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
@@ -83,7 +86,6 @@ public final class SqlCommand {
   private long scanUpperExclusive;
   private long columnNotNullMask;
   private long columnDefaultMask;
-  private long columnVarcharMask;
   private long columnUniqueMask;
   private long columnReferenceMask;
   private long rowLimit = Long.MAX_VALUE;
@@ -140,6 +142,7 @@ public final class SqlCommand {
       nullProjections[index] = false;
       columnCheckValues[index] = 0;
       columnCheckComparisons[index] = null;
+      columnTypeDescriptors[index] = 0;
       columnReferenceTableNames[index].reset();
       columnReferenceColumnNames[index].reset();
     }
@@ -167,7 +170,7 @@ public final class SqlCommand {
       columnPredicates[index] = false;
       nullPredicates[index] = false;
       negatedNullPredicates[index] = false;
-      varcharPredicates[index] = false;
+      predicateTypeDescriptors[index] = 0;
       disjunctionPredicates[index] = false;
     }
     orderColumnName.reset();
@@ -180,7 +183,6 @@ public final class SqlCommand {
     scanUpperExclusive = 0;
     columnNotNullMask = 0;
     columnDefaultMask = 0;
-    columnVarcharMask = 0;
     columnUniqueMask = 0;
     columnReferenceMask = 0;
     rowLimit = Long.MAX_VALUE;
@@ -204,12 +206,15 @@ public final class SqlCommand {
     for (int index = 0; index < insertNullMasks.length; index++) {
       insertNullMasks[index] = 0;
       insertDefaultMasks[index] = 0;
-      insertVarcharMasks[index] = 0;
+      int valueOffset = index * MAXIMUM_COLUMNS;
+      for (int column = 0; column < MAXIMUM_COLUMNS; column++) {
+        insertTypeDescriptors[valueOffset + column] = 0;
+      }
     }
     for (int index = 0; index < nullUpdates.length; index++) {
       nullUpdates[index] = false;
       defaultUpdates[index] = false;
-      varcharUpdates[index] = false;
+      updateTypeDescriptors[index] = 0;
       relativeUpdates[index] = false;
       subtractUpdates[index] = false;
     }
@@ -249,6 +254,7 @@ public final class SqlCommand {
     predicateUpperExclusive[index] = upperExclusive;
     comparisons[index] = equality
         ? SqlComparison.EQUAL : SqlComparison.HALF_OPEN_RANGE;
+    predicateTypeDescriptors[index] = SqlTypeDescriptor.BIGINT;
     if (index == 0) {
       key = equalityValue;
       scanLowerInclusive = lowerInclusive;
@@ -262,6 +268,7 @@ public final class SqlCommand {
     int index = predicateCount++;
     predicateValues[index] = predicateValue;
     comparisons[index] = comparison;
+    predicateTypeDescriptors[index] = SqlTypeDescriptor.BIGINT;
     if (index == 0) {
       key = predicateValue;
       equalityPredicate = comparison == SqlComparison.EQUAL;
@@ -295,6 +302,7 @@ public final class SqlCommand {
     literalMembershipOffsets[index] = literalMembershipValueCount;
     literalMembershipHasNull[index] = hasNull;
     comparisons[index] = negated ? SqlComparison.NOT_IN : SqlComparison.IN;
+    predicateTypeDescriptors[index] = SqlTypeDescriptor.BIGINT;
     for (int value = 0; value < count; value++) {
       long candidate = values[valueOffset + value];
       int lower = literalMembershipOffsets[index];
@@ -426,9 +434,8 @@ public final class SqlCommand {
           appendComparison(source.predicateValues[index], source.comparisons[index]);
         }
       }
-      if (source.varcharPredicates[index]) {
-        markLastPredicateVarchar();
-      }
+      predicateTypeDescriptors[predicateCount - 1] =
+          source.predicateTypeDescriptors[index];
       if (source.disjunctionPredicates[index]) {
         markLastPredicateDisjunction();
       }
@@ -459,16 +466,16 @@ public final class SqlCommand {
       long[] values,
       long nullMask,
       long defaultMask,
-      long varcharMask,
+      int[] typeDescriptors,
       int count) {
     int destination = insertRowCount * MAXIMUM_COLUMNS;
     for (int index = 0; index < count; index++) {
       insertValues[destination + index] = values[index];
+      insertTypeDescriptors[destination + index] = typeDescriptors[index];
     }
     insertColumnCount = count;
     insertNullMasks[insertRowCount] = nullMask;
     insertDefaultMasks[insertRowCount] = defaultMask;
-    insertVarcharMasks[insertRowCount] = varcharMask;
     insertRowCount++;
   }
 
@@ -483,13 +490,13 @@ public final class SqlCommand {
       long updateValue,
       boolean isNull,
       boolean isDefault,
-      boolean isVarchar,
+      int typeDescriptor,
       boolean relative,
       boolean subtract) {
     updateValues[updateColumnCount] = updateValue;
     nullUpdates[updateColumnCount] = isNull;
     defaultUpdates[updateColumnCount] = isDefault;
-    varcharUpdates[updateColumnCount] = isVarchar;
+    updateTypeDescriptors[updateColumnCount] = typeDescriptor;
     relativeUpdates[updateColumnCount] = relative;
     subtractUpdates[updateColumnCount++] = subtract;
   }
@@ -553,7 +560,11 @@ public final class SqlCommand {
   }
 
   SqlIdentifier writableNextColumnName() {
-    return columnCount < columnNames.length ? columnNames[columnCount++] : null;
+    if (columnCount >= columnNames.length) {
+      return null;
+    }
+    columnTypeDescriptors[columnCount] = SqlTypeDescriptor.BIGINT;
+    return columnNames[columnCount++];
   }
 
   void markLastColumnNotNull() {
@@ -576,7 +587,7 @@ public final class SqlCommand {
 
   void markLastColumnVarchar() {
     if (columnCount > 1) {
-      columnVarcharMask |= 1L << columnCount - 1;
+      columnTypeDescriptors[columnCount - 1] = SqlTypeDescriptor.varchar(7);
     }
   }
 
@@ -625,7 +636,7 @@ public final class SqlCommand {
 
   void markLastPredicateVarchar() {
     if (predicateCount > 0) {
-      varcharPredicates[predicateCount - 1] = true;
+      predicateTypeDescriptors[predicateCount - 1] = SqlTypeDescriptor.varchar(7);
     }
   }
 
@@ -774,7 +785,12 @@ public final class SqlCommand {
   public boolean columnIsVarchar(int index) {
     return index > 0
         && index < columnCount
-        && (columnVarcharMask & 1L << index) != 0;
+        && SqlTypeDescriptor.typeId(columnTypeDescriptors[index])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+  }
+
+  public int columnTypeDescriptor(int index) {
+    return index >= 0 && index < columnCount ? columnTypeDescriptors[index] : 0;
   }
 
   public boolean columnIsUnique(int index) {
@@ -959,12 +975,12 @@ public final class SqlCommand {
         && (insertDefaultMasks[rowIndex] & 1L << columnIndex) != 0;
   }
 
-  public boolean insertIsVarchar(int rowIndex, int columnIndex) {
+  public int insertTypeDescriptor(int rowIndex, int columnIndex) {
     return rowIndex >= 0
-        && rowIndex < insertRowCount
-        && columnIndex >= 0
-        && columnIndex < insertColumnCount
-        && (insertVarcharMasks[rowIndex] & 1L << columnIndex) != 0;
+            && rowIndex < insertRowCount
+            && columnIndex >= 0
+            && columnIndex < insertColumnCount
+        ? insertTypeDescriptors[rowIndex * MAXIMUM_COLUMNS + columnIndex] : 0;
   }
 
   public boolean updateIsNull(int index) {
@@ -975,8 +991,8 @@ public final class SqlCommand {
     return index >= 0 && index < updateColumnCount && defaultUpdates[index];
   }
 
-  public boolean updateIsVarchar(int index) {
-    return index >= 0 && index < updateColumnCount && varcharUpdates[index];
+  public int updateTypeDescriptor(int index) {
+    return index >= 0 && index < updateColumnCount ? updateTypeDescriptors[index] : 0;
   }
 
   public long scanLowerInclusive() {
@@ -1036,8 +1052,8 @@ public final class SqlCommand {
     return index >= 0 && index < predicateCount && nullPredicates[index];
   }
 
-  public boolean predicateIsVarchar(int index) {
-    return index >= 0 && index < predicateCount && varcharPredicates[index];
+  public int predicateTypeDescriptor(int index) {
+    return index >= 0 && index < predicateCount ? predicateTypeDescriptors[index] : 0;
   }
 
   public boolean predicateStartsDisjunction(int index) {

@@ -1,26 +1,29 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.TableSchema;
 
 /** Caller-owned result for one implicit-transaction SQL statement. */
 public final class SqlExecutionResult {
   private final long[] values = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   private long commitSequence;
   private long value;
   private long key;
   private long nullMask;
-  private long varcharMask;
   private int affectedRows;
   private int columnCount;
   private boolean hasValue;
   private boolean transactionActive;
 
   public void reset() {
+    for (int index = 0; index < columnCount; index++) {
+      typeDescriptors[index] = 0;
+    }
     commitSequence = 0;
     value = 0;
     key = 0;
     nullMask = 0;
-    varcharMask = 0;
     affectedRows = 0;
     columnCount = 0;
     hasValue = false;
@@ -40,15 +43,15 @@ public final class SqlExecutionResult {
       long selectedKey,
       long[] projectedValues,
       long projectedNullMask,
-      long projectedVarcharMask,
+      int[] projectedTypeDescriptors,
       int projectedColumnCount,
       long committedAt) {
     key = selectedKey;
     nullMask = projectedNullMask;
-    varcharMask = projectedVarcharMask;
     columnCount = projectedColumnCount;
     for (int index = 0; index < projectedColumnCount; index++) {
       values[index] = projectedValues[index];
+      typeDescriptors[index] = projectedTypeDescriptors[index];
     }
     value = projectedColumnCount == 0 ? 0 : values[projectedColumnCount - 1];
     hasValue = projectedColumnCount > 0;
@@ -65,7 +68,7 @@ public final class SqlExecutionResult {
     value = scalar;
     key = 0;
     nullMask = 0;
-    varcharMask = 0;
+    typeDescriptors[0] = SqlTypeDescriptor.BIGINT;
     affectedRows = 1;
     columnCount = 1;
     hasValue = true;
@@ -112,11 +115,12 @@ public final class SqlExecutionResult {
   public boolean isVarchar(int index) {
     return index >= 0
         && index < columnCount
-        && (varcharMask & 1L << index) != 0;
+        && SqlTypeDescriptor.typeId(typeDescriptors[index])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
   }
 
-  public long varcharMask() {
-    return varcharMask;
+  public int typeDescriptorAt(int index) {
+    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
   }
 
   public long commitSequence() {

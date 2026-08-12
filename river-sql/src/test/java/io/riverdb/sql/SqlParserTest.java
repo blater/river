@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import java.lang.management.ManagementFactory;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -90,15 +91,15 @@ final class SqlParserTest {
             "SELECT id FROM labels WHERE code >= 'alpha' AND code < 'omega'",
             command));
     assertEquals(2, command.predicateCount());
-    assertTrue(command.predicateIsVarchar(0));
-    assertTrue(command.predicateIsVarchar(1));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.predicateTypeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.predicateTypeDescriptor(1));
     assertEquals(PackedText.pack("alpha"), command.predicateValue(0));
     assertEquals(PackedText.pack("omega"), command.predicateValue(1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM labels WHERE code IN ('beta', 'alpha')", command));
-    assertTrue(command.predicateIsVarchar(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.predicateTypeDescriptor(0));
     assertEquals(PackedText.pack("alpha"), command.literalMembershipValue(0, 0));
     assertEquals(
         StatusCode.OK,
@@ -309,7 +310,7 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse(
             "INSERT INTO labels VALUES (1, 'river', 'it''s')", command));
-    assertTrue(command.insertIsVarchar(0, 1));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.insertTypeDescriptor(0, 1));
     assertEquals(PackedText.pack("river"), command.insertValue(0, 1));
     assertEquals(PackedText.pack("it's"), command.insertValue(0, 2));
     assertEquals(
@@ -319,8 +320,8 @@ final class SqlParserTest {
                 + "(1, 'beta', 10), (2, 'alpha', 20)",
             command));
     assertEquals(3, command.columnCount());
-    assertTrue(command.insertIsVarchar(0, 1));
-    assertFalse(command.insertIsVarchar(0, 2));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.insertTypeDescriptor(0, 1));
+    assertEquals(SqlTypeDescriptor.BIGINT, command.insertTypeDescriptor(0, 2));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -723,7 +724,7 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse("UPDATE labels SET code='fresh' WHERE id=1", command));
-    assertTrue(command.updateIsVarchar(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.updateTypeDescriptor(0));
     assertEquals(PackedText.pack("fresh"), command.updateValue(0));
     assertEquals(
         StatusCode.OK,

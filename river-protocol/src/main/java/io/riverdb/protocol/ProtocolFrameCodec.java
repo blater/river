@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
@@ -9,13 +10,13 @@ import java.nio.ByteOrder;
 
 /** Bounded v1 framing and value encoding over caller-owned buffers. */
 public final class ProtocolFrameCodec {
-  public static final int VERSION = 1;
+  public static final int VERSION = 2;
   public static final int HEADER_BYTES = 32;
   public static final int MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
   public static final int MAXIMUM_COLUMN_NAME_BYTES = 64;
-  public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 72
-      + CommandResult.MAXIMUM_COLUMNS * (1 + MAXIMUM_COLUMN_NAME_BYTES);
+  public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 64
+      + CommandResult.MAXIMUM_COLUMNS * (Integer.BYTES + 1 + MAXIMUM_COLUMN_NAME_BYTES);
   public static final int FLAG_ROW_AVAILABLE = 1;
   public static final int FLAG_TRANSACTION_ACTIVE = 1 << 1;
   public static final int FLAG_QUERY_ACTIVE = 1 << 2;
@@ -23,7 +24,7 @@ public final class ProtocolFrameCodec {
 
   private static final int MAGIC = 0x52495652;
   private static final int FRAME_RESPONSE = 1;
-  private static final int RESPONSE_FIXED_BYTES = 72;
+  private static final int RESPONSE_FIXED_BYTES = 64;
 
   public StatusCode decode(ByteBuffer source, ProtocolFrame result) {
     if (source == null || result == null) {
@@ -237,16 +238,13 @@ public final class ProtocolFrameCodec {
       return invalidTarget(target);
     }
     int metadataBytes = 0;
-    long varcharMask = 0;
     for (int index = 0; index < columns; index++) {
       CharSequence name = query.columnName(index);
-      if (!validColumnName(name)) {
+      if (!validColumnName(name)
+          || !SqlTypeDescriptor.isValid(query.columnTypeDescriptor(index))) {
         return invalidTarget(target);
       }
-      metadataBytes += 1 + name.length();
-      if (query.columnIsVarchar(index)) {
-        varcharMask |= 1L << index;
-      }
+      metadataBytes += Integer.BYTES + 1 + name.length();
     }
     int payloadBytes = RESPONSE_FIXED_BYTES + metadataBytes;
     StatusCode encoded = beginFrame(
@@ -269,9 +267,12 @@ public final class ProtocolFrameCodec {
         0,
         0,
         0,
-        0,
-        varcharMask);
+        0);
     int offset = HEADER_BYTES + RESPONSE_FIXED_BYTES;
+    for (int index = 0; index < columns; index++) {
+      target.putInt(offset, query.columnTypeDescriptor(index));
+      offset += Integer.BYTES;
+    }
     for (int index = 0; index < columns; index++) {
       CharSequence name = query.columnName(index);
       target.put(offset++, (byte) name.length());
@@ -370,7 +371,6 @@ public final class ProtocolFrameCodec {
     long challengeHigh = bytes.getLong(offset + 40);
     long challengeLow = bytes.getLong(offset + 48);
     long nullMask = bytes.getLong(offset + 56);
-    long varcharMask = bytes.getLong(offset + 64);
     boolean metadata = (flags & FLAG_COLUMN_METADATA) != 0;
     boolean rowAvailable = (flags & FLAG_ROW_AVAILABLE) != 0;
     if (status == null
@@ -384,7 +384,6 @@ public final class ProtocolFrameCodec {
         || commitSequence < 0
         || returned < 0
         || (nullMask & ~((1L << columns) - 1)) != 0
-        || (varcharMask & ~((1L << columns) - 1)) != 0
         || metadata && (frame.type() != ProtocolMessageType.BEGIN_QUERY
             || !status.isOk()
             || flags != (FLAG_QUERY_ACTIVE | FLAG_COLUMN_METADATA)
@@ -404,11 +403,26 @@ public final class ProtocolFrameCodec {
         returned,
         challengeHigh,
         challengeLow,
-        nullMask,
-        varcharMask);
+        nullMask);
+    int typeOffset = offset + RESPONSE_FIXED_BYTES;
+    int end = offset + frame.payloadBytes();
+    if (typeOffset > end - columns * Integer.BYTES) {
+      frame.reset();
+      result.reset();
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < columns; index++) {
+      int descriptor = bytes.getInt(typeOffset);
+      if (!SqlTypeDescriptor.isValid(descriptor)) {
+        frame.reset();
+        result.reset();
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      result.typeDescriptorAt(index, descriptor);
+      typeOffset += Integer.BYTES;
+    }
     if (metadata) {
-      int metadataOffset = offset + RESPONSE_FIXED_BYTES;
-      int end = offset + frame.payloadBytes();
+      int metadataOffset = typeOffset;
       for (int index = 0; index < columns; index++) {
         if (metadataOffset >= end) {
           frame.reset();
@@ -433,10 +447,9 @@ public final class ProtocolFrameCodec {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     } else {
-      int valueOffset = offset + RESPONSE_FIXED_BYTES;
-      int end = offset + frame.payloadBytes();
+      int valueOffset = typeOffset;
       for (int index = 0; index < columns; index++) {
-        if ((varcharMask & 1L << index) != 0) {
+        if (result.isVarchar(index)) {
           if (valueOffset >= end) {
             frame.reset();
             result.reset();
@@ -492,15 +505,18 @@ public final class ProtocolFrameCodec {
     }
     long nullMask = command != null
         ? command.nullMask() : row == null ? 0 : row.nullMask();
-    long varcharMask = command != null
-        ? command.varcharMask() : row == null ? 0 : row.varcharMask();
-    if ((nullMask & ~((1L << columns) - 1)) != 0
-        || (varcharMask & ~((1L << columns) - 1)) != 0) {
+    if ((nullMask & ~((1L << columns) - 1)) != 0) {
       return invalidTarget(target);
     }
     int valueBytes = 0;
     for (int index = 0; index < columns; index++) {
-      if ((varcharMask & 1L << index) != 0) {
+      int descriptor = command != null
+          ? command.typeDescriptorAt(index)
+          : row == null ? 0 : row.typeDescriptorAt(index);
+      if (!SqlTypeDescriptor.isValid(descriptor)) {
+        return invalidTarget(target);
+      }
+      if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         int length = (nullMask & 1L << index) != 0
             ? 0 : command != null
                 ? command.textLengthAt(index) : row == null
@@ -513,7 +529,7 @@ public final class ProtocolFrameCodec {
         valueBytes += Long.BYTES;
       }
     }
-    int payloadBytes = RESPONSE_FIXED_BYTES + valueBytes;
+    int payloadBytes = RESPONSE_FIXED_BYTES + columns * Integer.BYTES + valueBytes;
     StatusCode encoded = beginFrame(target, type, requestId, payloadBytes, FRAME_RESPONSE);
     if (!encoded.isOk()) {
       return encoded;
@@ -529,11 +545,18 @@ public final class ProtocolFrameCodec {
         returned,
         challengeHigh,
         challengeLow,
-        nullMask,
-        varcharMask);
+        nullMask);
     int valueOffset = HEADER_BYTES + RESPONSE_FIXED_BYTES;
     for (int index = 0; index < columns; index++) {
-      if ((varcharMask & 1L << index) != 0) {
+      int descriptor = command != null
+          ? command.typeDescriptorAt(index) : row.typeDescriptorAt(index);
+      target.putInt(valueOffset, descriptor);
+      valueOffset += Integer.BYTES;
+    }
+    for (int index = 0; index < columns; index++) {
+      int descriptor = command != null
+          ? command.typeDescriptorAt(index) : row.typeDescriptorAt(index);
+      if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         int length = (nullMask & 1L << index) != 0
             ? 0 : command != null
                 ? command.textLengthAt(index) : row.textLengthAt(index);
@@ -570,8 +593,7 @@ public final class ProtocolFrameCodec {
       long returned,
       long challengeHigh,
       long challengeLow,
-      long nullMask,
-      long varcharMask) {
+      long nullMask) {
     target.putInt(HEADER_BYTES, status.stableCode());
     target.putInt(HEADER_BYTES + 4, flags);
     target.putInt(HEADER_BYTES + 8, rows);
@@ -582,7 +604,6 @@ public final class ProtocolFrameCodec {
     target.putLong(HEADER_BYTES + 40, challengeHigh);
     target.putLong(HEADER_BYTES + 48, challengeLow);
     target.putLong(HEADER_BYTES + 56, nullMask);
-    target.putLong(HEADER_BYTES + 64, varcharMask);
   }
 
   private static boolean validColumnName(CharSequence name) {
@@ -715,6 +736,7 @@ public final class ProtocolFrameCodec {
       case 3003 -> StatusCode.CHECK_VIOLATION;
       case 3004 -> StatusCode.UNIQUE_VIOLATION;
       case 3005 -> StatusCode.FOREIGN_KEY_VIOLATION;
+      case 3006 -> StatusCode.DATATYPE_MISMATCH;
       case 4000 -> StatusCode.CONFLICT;
       case 4001 -> StatusCode.NOT_OWNER;
       case 5000 -> StatusCode.RESOURCE_EXHAUSTED;

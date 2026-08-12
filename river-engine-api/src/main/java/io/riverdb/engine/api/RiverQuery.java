@@ -1,6 +1,7 @@
 package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /**
  * Single-owner streaming query capability. An OK unavailable row is end of stream.
@@ -17,8 +18,11 @@ public interface RiverQuery {
   CharSequence columnName(int index);
 
   default boolean columnIsVarchar(int index) {
-    return false;
+    return SqlTypeDescriptor.typeId(columnTypeDescriptor(index))
+        == SqlTypeDescriptor.TYPE_ID_VARCHAR;
   }
+
+  int columnTypeDescriptor(int index);
 
   long rowsReturned();
 }

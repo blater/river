@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.CatalogObjectCursor;
 import io.riverdb.engine.relational.CatalogIndexCursor;
 import io.riverdb.engine.relational.RelationalScanCursor;
@@ -41,7 +42,7 @@ public final class SqlScanCursor {
   private boolean distinctValueNull;
   private boolean aggregateTransactionActive;
   private boolean aggregateNull;
-  private boolean aggregateVarchar;
+  private int aggregateTypeDescriptor;
   private long aggregateValue;
   private long aggregateCommitSequence;
   private long explainCommitSequence;
@@ -96,7 +97,7 @@ public final class SqlScanCursor {
     distinctValueNull = false;
     aggregateTransactionActive = false;
     aggregateNull = false;
-    aggregateVarchar = false;
+    aggregateTypeDescriptor = 0;
     aggregateValue = 0;
     aggregateCommitSequence = 0;
     explainCommitSequence = 0;
@@ -234,17 +235,20 @@ public final class SqlScanCursor {
       SqlSession session,
       long value,
       boolean nullValue,
-      boolean varchar,
+      int typeDescriptor,
       boolean transactionActive,
       long commitSequence) {
-    if (active || session == null || commitSequence < 0) {
+    if (active
+        || session == null
+        || !SqlTypeDescriptor.isValid(typeDescriptor)
+        || commitSequence < 0) {
       return StatusCode.CONFLICT;
     }
     owner = session;
     aggregate = true;
     aggregateValue = value;
     aggregateNull = nullValue;
-    aggregateVarchar = varchar;
+    aggregateTypeDescriptor = typeDescriptor;
     aggregateTransactionActive = transactionActive;
     aggregateCommitSequence = commitSequence;
     projectedColumnCount = 1;
@@ -629,8 +633,8 @@ public final class SqlScanCursor {
     return aggregateNull;
   }
 
-  boolean aggregateVarchar() {
-    return aggregateVarchar;
+  int aggregateTypeDescriptor() {
+    return aggregateTypeDescriptor;
   }
 
   boolean aggregateTransactionActive() {

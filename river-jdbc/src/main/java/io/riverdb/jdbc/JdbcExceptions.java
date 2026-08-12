@@ -1,6 +1,7 @@
 package io.riverdb.jdbc;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.error.SqlState;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 
@@ -29,7 +30,7 @@ final class JdbcExceptions {
   static SQLException invalid(String message) {
     return new SQLException(
         message,
-        "22000",
+        SqlState.DATA_EXCEPTION,
         StatusCode.INVALID_EXTERNAL_INPUT.stableCode());
   }
 
@@ -53,12 +54,13 @@ final class JdbcExceptions {
       case TIMEOUT -> "HYT00";
       case CANCELLED -> "57014";
       case CARDINALITY_VIOLATION -> "21000";
-      case NUMERIC_VALUE_OUT_OF_RANGE -> "22003";
+      case NUMERIC_VALUE_OUT_OF_RANGE -> SqlState.NUMERIC_VALUE_OUT_OF_RANGE;
       case CHECK_VIOLATION -> "23514";
       case UNIQUE_VIOLATION -> "23505";
       case FOREIGN_KEY_VIOLATION -> "23503";
-      case INVALID_EXTERNAL_INPUT -> "22000";
-      case OK -> "00000";
+      case DATATYPE_MISMATCH -> SqlState.DATATYPE_MISMATCH;
+      case INVALID_EXTERNAL_INPUT -> SqlState.DATA_EXCEPTION;
+      case OK -> SqlState.SUCCESS;
     };
   }
 }
