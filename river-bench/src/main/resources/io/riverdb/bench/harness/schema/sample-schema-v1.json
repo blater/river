@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://riverdb.io/schemas/benchmark/sample-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workload",
+    "mode",
+    "metric",
+    "operation_count",
+    "expected_interval_ns",
+    "histogram_count",
+    "minimum_ns",
+    "p50_ns",
+    "p95_ns",
+    "p99_ns",
+    "p999_ns",
+    "maximum_ns",
+    "mean_ns"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "workload": {"type": "string", "enum": ["riverbank_tiny", "riverpapers_tiny"]},
+    "mode": {"type": "string", "enum": ["closed_loop", "open_loop"]},
+    "metric": {
+      "type": "string",
+      "enum": ["service", "scheduled", "coordinated_omission_corrected_service"]
+    },
+    "operation_count": {"type": "integer", "minimum": 1},
+    "expected_interval_ns": {"type": "integer", "minimum": 0},
+    "histogram_count": {"type": "integer", "minimum": 1},
+    "minimum_ns": {"type": "integer", "minimum": 0},
+    "p50_ns": {"type": "integer", "minimum": 0},
+    "p95_ns": {"type": "integer", "minimum": 0},
+    "p99_ns": {"type": "integer", "minimum": 0},
+    "p999_ns": {"type": "integer", "minimum": 0},
+    "maximum_ns": {"type": "integer", "minimum": 0},
+    "mean_ns": {"type": "number", "minimum": 0}
+  }
+}

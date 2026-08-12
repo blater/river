@@ -1,0 +1,47 @@
+package io.riverdb.base.concurrent;
+
+import io.riverdb.base.error.StatusCode;
+import java.util.concurrent.atomic.AtomicReference;
+
+/** First-failure-wins implementation of the fatal-state fencing contract. */
+public final class FatalStateFence implements FatalState {
+  private final AtomicReference<StatusCode> fatalStatus =
+      new AtomicReference<>(StatusCode.OK);
+
+  @Override
+  public StatusCode admissionStatus() {
+    return fatalStatus.get() == StatusCode.OK ? StatusCode.OK : StatusCode.FENCED;
+  }
+
+  @Override
+  public StatusCode fatalStatus() {
+    return fatalStatus.get();
+  }
+
+  @Override
+  public boolean isFenced() {
+    return fatalStatus.get() != StatusCode.OK;
+  }
+
+  @Override
+  public StatusCode fence(StatusCode candidate) {
+    boolean misuse = candidate == StatusCode.OK;
+    StatusCode cause = misuse
+        ? StatusCode.INVARIANT_BROKEN
+        : candidate;
+    StatusCode observed = fatalStatus.get();
+    if (observed == cause) {
+      return misuse ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
+    }
+    if (observed != StatusCode.OK) {
+      return StatusCode.FENCED;
+    }
+    if (fatalStatus.compareAndSet(StatusCode.OK, cause)) {
+      return misuse ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
+    }
+    if (fatalStatus.get() != cause) {
+      return StatusCode.FENCED;
+    }
+    return misuse ? StatusCode.INVARIANT_BROKEN : StatusCode.OK;
+  }
+}

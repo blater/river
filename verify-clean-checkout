@@ -1,0 +1,163 @@
+#!/bin/sh
+set -eu
+
+river_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+checkout_parent=$(mktemp -d "${TMPDIR:-/tmp}/river-clean-checkout.XXXXXX")
+checkout_root="$checkout_parent/river"
+
+cleanup() {
+  rm -rf -- "$checkout_parent"
+}
+trap cleanup EXIT HUP INT TERM
+
+fail() {
+  echo "clean-checkout verification failed: $1" >&2
+  exit 1
+}
+
+run_git() {
+  GIT_CONFIG_NOSYSTEM=1 \
+  GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_COUNT=0 \
+  GIT_CONFIG_PARAMETERS= \
+  GIT_ATTR_NOSYSTEM=1 \
+    git "$@"
+}
+
+command -v git >/dev/null 2>&1 || fail "git is not available"
+[ -z "${GIT_DIR:-}" ] && [ -z "${GIT_WORK_TREE:-}" ] \
+    && [ -z "${GIT_INDEX_FILE:-}" ] && [ -z "${GIT_OBJECT_DIRECTORY:-}" ] \
+    && [ -z "${GIT_ALTERNATE_OBJECT_DIRECTORIES:-}" ] \
+  || fail "Git repository-selection environment is not allowed"
+run_git -C "$river_root" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || fail "the River root is not a Git worktree"
+
+source_commit=$(run_git -C "$river_root" rev-parse --verify 'HEAD^{commit}')
+
+if [ -n "${RIVER_GRADLE_HOME:-}" ]; then
+  clean_gradle_home=$RIVER_GRADLE_HOME
+elif [ -n "${GRADLE_USER_HOME:-}" ]; then
+  clean_gradle_home=$GRADLE_USER_HOME
+else
+  fail "RIVER_GRADLE_HOME or GRADLE_USER_HOME must name a populated offline cache"
+fi
+
+case "$clean_gradle_home" in
+  /*) ;;
+  *) fail "the selected Gradle user home must be an absolute path" ;;
+esac
+[ -d "$clean_gradle_home" ] \
+  || fail "the selected Gradle user home is not a directory"
+clean_gradle_home=$(CDPATH= cd -- "$clean_gradle_home" && pwd -P)
+
+for init_script in \
+  "$clean_gradle_home/init.gradle" \
+  "$clean_gradle_home/init.gradle.kts" \
+  "$clean_gradle_home/gradle.properties"; do
+  [ ! -e "$init_script" ] \
+    && [ ! -L "$init_script" ] \
+    || fail "Gradle user-home build configuration is not allowed: $init_script"
+done
+[ ! -e "$clean_gradle_home/init.d" ] \
+  && [ ! -L "$clean_gradle_home/init.d" ] \
+  || fail "Gradle user-home build configuration is not allowed: $clean_gradle_home/init.d"
+
+run_git clone --quiet --no-local --no-checkout "$river_root" "$checkout_root"
+run_git -c core.hooksPath=/dev/null -C "$checkout_root" \
+  checkout --quiet --detach "$source_commit"
+
+[ "$(run_git -C "$checkout_root" rev-parse --verify HEAD)" = "$source_commit" ] \
+  || fail "temporary checkout is not at the requested commit"
+[ "$(run_git -C "$checkout_root" symbolic-ref --quiet --short HEAD || true)" = "" ] \
+  || fail "temporary checkout is not detached"
+[ -z "$(run_git -C "$checkout_root" status \
+  --porcelain=v1 --untracked-files=all --ignored)" ] \
+  || fail "temporary checkout is dirty before the build"
+
+unsupported_entries=$(run_git -C "$checkout_root" ls-files --stage \
+  | awk '$1 != "100644" && $1 != "100755" { print $1 "\t" $4 }')
+[ -z "$unsupported_entries" ] \
+  || fail "tracked symlinks or gitlinks are not allowed: $unsupported_entries"
+
+wrapper_properties="$checkout_root/gradle/wrapper/gradle-wrapper.properties"
+cache_coordinates=$(java "$checkout_root/gradle/WrapperCacheKey.java" \
+  "$wrapper_properties") \
+  || fail "wrapper properties do not identify a supported distribution"
+distribution_archive=$(printf '%s\n' "$cache_coordinates" | sed -n '1p')
+distribution_hash=$(printf '%s\n' "$cache_coordinates" | sed -n '2p')
+[ -n "$distribution_hash" ] \
+  || fail "wrapper cache-key helper returned an incomplete result"
+distribution_directory=${distribution_archive%.zip}
+case "$distribution_archive" in
+  gradle-*-bin.zip|gradle-*-all.zip) ;;
+  *) fail "unsupported Gradle distribution archive: $distribution_archive" ;;
+esac
+distribution_install=${distribution_directory%-bin}
+distribution_install=${distribution_install%-all}
+wrapper_root="$clean_gradle_home/wrapper"
+wrapper_dists="$wrapper_root/dists"
+wrapper_distribution="$wrapper_dists/$distribution_directory"
+wrapper_cache="$wrapper_distribution/$distribution_hash"
+wrapper_install="$wrapper_cache/$distribution_install"
+wrapper_bin="$wrapper_install/bin"
+wrapper_lib="$wrapper_install/lib"
+[ -d "$wrapper_cache" ] \
+  || fail "the pinned Gradle wrapper distribution is not cached"
+for cache_directory in \
+  "$wrapper_root" \
+  "$wrapper_dists" \
+  "$wrapper_distribution" \
+  "$wrapper_cache" \
+  "$wrapper_install" \
+  "$wrapper_bin" \
+  "$wrapper_lib"; do
+  [ -d "$cache_directory" ] \
+    || fail "the pinned Gradle wrapper distribution is incomplete"
+  [ ! -L "$cache_directory" ] \
+    || fail "wrapper cache directories must not be symlinks: $cache_directory"
+done
+completion_marker="$wrapper_cache/$distribution_archive.ok"
+[ -f "$completion_marker" ] && [ ! -L "$completion_marker" ] \
+  || fail "the pinned Gradle wrapper distribution has no completion marker"
+wrapper_executable="$wrapper_bin/gradle"
+[ -f "$wrapper_executable" ] && [ ! -L "$wrapper_executable" ] \
+    && [ -x "$wrapper_executable" ] \
+  || fail "the pinned Gradle wrapper distribution is not installed"
+
+install_root_count=0
+for install_root in \
+  "$wrapper_cache"/* \
+  "$wrapper_cache"/.[!.]* \
+  "$wrapper_cache"/..?*; do
+  [ -e "$install_root" ] || [ -L "$install_root" ] || continue
+  [ -d "$install_root" ] || continue
+  install_root_count=$((install_root_count + 1))
+  [ "$install_root" = "$wrapper_install" ] \
+    || fail "wrapper cache contains a competing distribution directory"
+done
+[ "$install_root_count" -eq 1 ] \
+  || fail "wrapper cache must contain exactly one distribution directory"
+
+distribution_version=${distribution_install#gradle-}
+expected_launcher="$wrapper_lib/gradle-launcher-$distribution_version.jar"
+launcher_count=0
+for launcher in "$wrapper_lib"/gradle-launcher-*.jar; do
+  [ -e "$launcher" ] || [ -L "$launcher" ] || continue
+  launcher_count=$((launcher_count + 1))
+  [ "$launcher" = "$expected_launcher" ] \
+    || fail "wrapper distribution contains a competing launcher JAR"
+  [ -f "$launcher" ] && [ ! -L "$launcher" ] \
+    || fail "wrapper launcher JAR must be a regular file"
+done
+[ "$launcher_count" -eq 1 ] \
+  || fail "wrapper distribution must contain exactly one launcher JAR"
+
+echo "clean detached checkout ready: $source_commit"
+(
+  cd "$checkout_root"
+  RIVER_GRADLE_HOME=$clean_gradle_home \
+  RIVER_GRADLE_OFFLINE=true \
+    ./verify --rerun-tasks --no-build-cache
+)
+
+echo "clean detached checkout verification passed: $source_commit"

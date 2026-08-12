@@ -1,0 +1,4 @@
+sequence	operation	branch_id	from_account_id	to_account_id	amount_minor	idempotency_key
+0	deposit	15	5704	658	183776	rb-v1-5249564552-0
+1	card_authorize	15	5399	7734	212445	rb-v1-5249564552-1
+2	card_reverse	4	2540	7899	211559	rb-v1-5249564552-2
