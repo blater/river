@@ -1004,9 +1004,9 @@ final class RiverDriverTest {
           ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY));
       assertEquals(8, metadata.getMaxColumnsInTable());
       assertEquals(64, metadata.getMaxTableNameLength());
-      assertThrows(
-          java.sql.SQLFeatureNotSupportedException.class,
-          () -> metadata.getTables(null, null, null, null));
+      try (ResultSet tables = metadata.getTables(null, null, null, null)) {
+        assertFalse(tables.next());
+      }
       SQLException secondStatement = assertThrows(
           SQLException.class,
           connection::createStatement);
@@ -2063,7 +2063,7 @@ final class RiverDriverTest {
   }
 
   @Test
-  void streamsLongCatalogNamesThroughJdbc(@TempDir Path root) throws SQLException {
+  void streamsLongCatalogNamesThroughJdbcAndReopens(@TempDir Path root) throws SQLException {
     String tableName = "customer_account_transaction_history";
     String viewName = "customer_account_transaction_history_view";
     DatabaseOpenResult opened = new DatabaseOpenResult();
@@ -2106,9 +2106,155 @@ final class RiverDriverTest {
       }
       assertTrue(table);
       assertTrue(view);
+
+      DatabaseMetaData metadata = connection.getMetaData();
+      assertEquals("\\", metadata.getSearchStringEscape());
+      try (ResultSet types = metadata.getTableTypes()) {
+        assertEquals(1, types.getMetaData().getColumnCount());
+        assertEquals("TABLE_TYPE", types.getMetaData().getColumnLabel(1));
+        assertTrue(types.next());
+        assertEquals("TABLE", types.getString(1));
+        assertTrue(types.next());
+        assertEquals("VIEW", types.getString("TABLE_TYPE"));
+        assertFalse(types.next());
+      }
+      assertCatalogRows(
+          metadata,
+          null,
+          "%",
+          "%transaction_history%",
+          null,
+          new String[] {tableName, viewName},
+          new String[] {"TABLE", "VIEW"});
+      assertCatalogRows(
+          metadata,
+          null,
+          null,
+          "customer\\_account\\_transaction\\_history",
+          new String[] {"TABLE"},
+          new String[] {tableName},
+          new String[] {"TABLE"});
+      assertCatalogRows(
+          metadata,
+          "missing_catalog",
+          null,
+          "%",
+          null,
+          new String[0],
+          new String[0]);
+      assertCatalogRows(
+          metadata,
+          null,
+          null,
+          "%",
+          new String[] {"SYSTEM TABLE"},
+          new String[0],
+          new String[0]);
+
+      ResultSet held = metadata.getTables(null, null, "%", null);
+      SQLException concurrentMetadata = assertThrows(
+          SQLException.class,
+          () -> metadata.getTables(null, null, "%", null));
+      assertEquals("40001", concurrentMetadata.getSQLState());
+      held.close();
+
+      SQLException longPattern = assertThrows(
+          SQLException.class,
+          () -> metadata.getTables(null, null, "x".repeat(129), null));
+      assertEquals("22000", longPattern.getSQLState());
+      SQLException tooManyTypes = assertThrows(
+          SQLException.class,
+          () -> metadata.getTables(null, null, "%", new String[17]));
+      assertEquals("22000", tooManyTypes.getSQLState());
+
+      connection.setAutoCommit(false);
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE uncommitted_catalog_table "
+                  + "(id BIGINT PRIMARY KEY, value BIGINT)"));
+      assertCatalogRows(
+          metadata,
+          null,
+          null,
+          "uncommitted%",
+          null,
+          new String[] {"uncommitted_catalog_table"},
+          new String[] {"TABLE"});
+      connection.rollback();
+      assertCatalogRows(
+          metadata,
+          null,
+          null,
+          "uncommitted%",
+          null,
+          new String[0],
+          new String[0]);
+      connection.setAutoCommit(true);
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+    database = opened.database();
+    server = start(database);
+    Connection connection = DriverManager.getConnection(url(server));
+    assertCatalogRows(
+        connection.getMetaData(),
+        null,
+        null,
+        "%transaction_history%",
+        null,
+        new String[] {tableName, viewName},
+        new String[] {"TABLE", "VIEW"});
+    ResultSet owned = connection.getMetaData().getTables(null, null, "%", null);
+    assertFalse(owned.isClosed());
+    connection.close();
+    assertTrue(owned.isClosed());
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertCatalogRows(
+      DatabaseMetaData metadata,
+      String catalog,
+      String schema,
+      String pattern,
+      String[] types,
+      String[] expectedNames,
+      String[] expectedTypes) throws SQLException {
+    boolean[] found = new boolean[expectedNames.length];
+    int rows = 0;
+    try (ResultSet tables = metadata.getTables(catalog, schema, pattern, types)) {
+      ResultSetMetaData columns = tables.getMetaData();
+      assertEquals(10, columns.getColumnCount());
+      assertEquals("TABLE_CAT", columns.getColumnLabel(1));
+      assertEquals("TABLE_NAME", columns.getColumnLabel(3));
+      assertEquals("TABLE_TYPE", columns.getColumnLabel(4));
+      assertEquals(ResultSetMetaData.columnNoNulls, columns.isNullable(3));
+      assertEquals(ResultSetMetaData.columnNullable, columns.isNullable(5));
+      while (tables.next()) {
+        rows++;
+        assertNull(tables.getString("TABLE_CAT"));
+        assertTrue(tables.wasNull());
+        assertNull(tables.getString("TABLE_SCHEM"));
+        String name = tables.getString("TABLE_NAME");
+        String type = tables.getString("TABLE_TYPE");
+        assertNull(tables.getObject("REMARKS"));
+        assertTrue(tables.wasNull());
+        for (int index = 0; index < expectedNames.length; index++) {
+          if (expectedNames[index].equals(name) && expectedTypes[index].equals(type)) {
+            found[index] = true;
+          }
+        }
+      }
+    }
+    assertEquals(expectedNames.length, rows);
+    for (boolean value : found) {
+      assertTrue(value);
+    }
   }
 
   private static LoopbackRiverServer start(RiverDatabase database) {
