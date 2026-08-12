@@ -488,8 +488,19 @@ public final class SqlParser {
       type = SqlCommandType.CHECKPOINT;
       status = StatusCode.OK;
     } else if (consumeKeyword(sql, "SHOW")) {
-      type = SqlCommandType.SHOW_TABLES;
-      status = requireKeyword(sql, "TABLES");
+      if (consumeKeyword(sql, "TABLES")) {
+        type = SqlCommandType.SHOW_TABLES;
+        status = StatusCode.OK;
+      } else {
+        type = SqlCommandType.SHOW_INDEXES;
+        status = requireKeyword(sql, "INDEXES");
+        if (status.isOk()) {
+          status = requireKeyword(sql, "FROM");
+        }
+        if (status.isOk()) {
+          status = identifier(sql, result.writableTableName());
+        }
+      }
     } else if (consumeKeyword(sql, "ALTER")) {
       if (consumeKeyword(sql, "INDEX")) {
         type = SqlCommandType.ALTER_INDEX_RENAME;
@@ -1107,6 +1118,7 @@ public final class SqlParser {
           || reservedReferenceName(command);
       case CREATE_VIEW, DROP_VIEW, DROP_TABLE, ALTER_TABLE_RENAME_COLUMN ->
           reservedObjectName(command.tableName());
+      case SHOW_INDEXES -> reservedObjectName(command.tableName());
       case ALTER_TABLE_RENAME ->
           reservedObjectName(command.tableName())
               || reservedObjectName(command.renamedTableName());

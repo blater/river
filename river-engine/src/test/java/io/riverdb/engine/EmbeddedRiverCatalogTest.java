@@ -39,7 +39,18 @@ final class EmbeddedRiverCatalogTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
-            "CREATE TABLE " + TABLE + " (id BIGINT PRIMARY KEY, value BIGINT)",
+            "CREATE TABLE " + TABLE
+                + " (id BIGINT PRIMARY KEY, value BIGINT, region BIGINT, pending BIGINT)",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE INDEX history_value ON " + TABLE + "(value)",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE UNIQUE INDEX history_region ON " + TABLE + "(region)",
             command));
     assertEquals(
         StatusCode.OK,
@@ -47,6 +58,7 @@ final class EmbeddedRiverCatalogTest {
             "CREATE VIEW " + VIEW + " AS SELECT id, value FROM " + TABLE,
             command));
     assertCatalog(session, true, true, false);
+    assertIndexes(session, false);
 
     assertEquals(StatusCode.OK, session.execute("BEGIN", command));
     assertEquals(
@@ -55,9 +67,16 @@ final class EmbeddedRiverCatalogTest {
             "CREATE TABLE rolled_back_catalog_table "
                 + "(id BIGINT PRIMARY KEY, value BIGINT)",
             command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE INDEX rolled_back_index ON " + TABLE + "(pending)",
+            command));
     assertCatalog(session, true, true, true);
+    assertIndexes(session, true);
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", command));
     assertCatalog(session, true, true, false);
+    assertIndexes(session, false);
 
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
@@ -70,6 +89,7 @@ final class EmbeddedRiverCatalogTest {
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();
     assertCatalog(session, true, true, false);
+    assertIndexes(session, false);
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }
@@ -122,5 +142,56 @@ final class EmbeddedRiverCatalogTest {
     int length = row.copyTextAt(index, characters, 0);
     assertTrue(length >= 0);
     return new String(characters, 0, length);
+  }
+
+  private static void assertIndexes(RiverSession session, boolean expectedRolledBack) {
+    QueryOpenResult opened = new QueryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery("SHOW INDEXES FROM " + TABLE, opened));
+    RiverQuery query = opened.query();
+    assertEquals(5, query.columnCount());
+    assertEquals("index_name", query.columnName(0).toString());
+    assertEquals("column_name", query.columnName(1).toString());
+    assertEquals("is_unique", query.columnName(2).toString());
+    assertEquals("is_primary", query.columnName(3).toString());
+    assertEquals("is_constraint", query.columnName(4).toString());
+    assertTrue(query.columnIsVarchar(0));
+    assertTrue(query.columnIsVarchar(1));
+    assertFalse(query.columnIsVarchar(2));
+
+    boolean primary = false;
+    boolean value = false;
+    boolean region = false;
+    boolean rolledBack = false;
+    int rows = 0;
+    RowResult row = new RowResult();
+    while (true) {
+      assertEquals(StatusCode.OK, query.next(row));
+      if (!row.isAvailable()) {
+        break;
+      }
+      rows++;
+      String column = text(row, 1);
+      if (row.valueAt(3) == 1) {
+        assertTrue(row.isNull(0));
+        primary = "id".equals(column) && row.valueAt(2) == 1;
+      } else {
+        String name = text(row, 0);
+        if ("history_value".equals(name)) {
+          value = "value".equals(column) && row.valueAt(2) == 0;
+        } else if ("history_region".equals(name)) {
+          region = "region".equals(column) && row.valueAt(2) == 1;
+        } else if ("rolled_back_index".equals(name)) {
+          rolledBack = "pending".equals(column) && row.valueAt(2) == 0;
+        }
+      }
+    }
+    assertEquals(expectedRolledBack ? 4 : 3, rows);
+    assertTrue(primary);
+    assertTrue(value);
+    assertTrue(region);
+    assertEquals(expectedRolledBack, rolledBack);
+    assertEquals(StatusCode.OK, query.close(new CommandResult()));
   }
 }

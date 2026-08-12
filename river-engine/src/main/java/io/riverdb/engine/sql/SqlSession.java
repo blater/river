@@ -5,6 +5,7 @@ import io.riverdb.base.text.PackedText;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.CatalogObjectResult;
+import io.riverdb.engine.relational.CatalogIndexResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.SequenceValueResult;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
@@ -44,6 +45,11 @@ public final class SqlSession {
   private static final String PLAN_ROWS_COLUMN_NAME = "rows";
   private static final String TABLE_NAME_COLUMN_NAME = "table_name";
   private static final String TABLE_TYPE_COLUMN_NAME = "table_type";
+  private static final String INDEX_NAME_COLUMN_NAME = "index_name";
+  private static final String COLUMN_NAME_COLUMN_NAME = "column_name";
+  private static final String UNIQUE_COLUMN_NAME = "is_unique";
+  private static final String PRIMARY_COLUMN_NAME = "is_primary";
+  private static final String CONSTRAINT_COLUMN_NAME = "is_constraint";
   private static final String TABLE_TYPE = "TABLE";
   private static final String VIEW_TYPE = "VIEW";
   private static final long PLAN_AGGREGATE = PackedText.pack("agg");
@@ -80,6 +86,7 @@ public final class SqlSession {
   private final SqlQuery query = new SqlQuery();
   private final ViewDefinition viewDefinition = new ViewDefinition();
   private final CatalogObjectResult catalogObject = new CatalogObjectResult();
+  private final CatalogIndexResult catalogIndex = new CatalogIndexResult();
   private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
   private final SequenceValueResult sequenceValue = new SequenceValueResult();
   private final TableDefinition table = new TableDefinition();
@@ -979,6 +986,12 @@ public final class SqlSession {
       }
       return beginCatalogObjectScan(cursor);
     }
+    if (command.type() == SqlCommandType.SHOW_INDEXES) {
+      if (query.isExplain()) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      return beginCatalogIndexScan(cursor);
+    }
     explainOnly = query.isExplain() && !query.isAnalyze();
     planSort = false;
     planAccessColumn = -1;
@@ -1465,6 +1478,29 @@ public final class SqlSession {
     return failScanStart(status, cursor, implicit);
   }
 
+  private StatusCode beginCatalogIndexScan(SqlScanCursor cursor) {
+    boolean implicit = !transactionActive;
+    StatusCode status = implicit
+        ? session.begin(IsolationLevel.READ_COMMITTED) : StatusCode.OK;
+    if (status.isOk()) {
+      status = beginStatement();
+    }
+    if (status.isOk()) {
+      status = session.beginCatalogIndexScan(command.tableName(), cursor.catalogIndexes());
+    }
+    if (status.isOk()) {
+      status = cursor.claimCatalogIndexes(this, implicit);
+    }
+    if (status.isOk()) {
+      scanActive = true;
+      return StatusCode.OK;
+    }
+    if (cursor.catalogIndexes().isActive()) {
+      session.closeCatalogIndexScan(cursor.catalogIndexes());
+    }
+    return failScanStart(status, cursor, implicit);
+  }
+
   private StatusCode resolveQueryTable() {
     StatusCode tableStatus = session.resolveTable(command.tableName(), table);
     if (tableStatus.isOk()) {
@@ -1657,6 +1693,33 @@ public final class SqlSession {
       }
       return status;
     }
+    if (cursor.catalogIndexScan()) {
+      StatusCode status = session.nextCatalogIndex(
+          cursor.catalogIndexes(), catalogIndex);
+      if (!status.isOk()) {
+        return status;
+      }
+      if (!catalogIndex.isAvailable()) {
+        return StatusCode.CONFLICT;
+      }
+      projectedValues[0] = 0;
+      projectedValues[1] = 0;
+      projectedValues[2] = catalogIndex.isUnique() ? 1 : 0;
+      projectedValues[3] = catalogIndex.isPrimary() ? 1 : 0;
+      projectedValues[4] = catalogIndex.isConstraint() ? 1 : 0;
+      long nullMask = catalogIndex.isPrimary() ? 1 : 0;
+      result.set(0, projectedValues, nullMask, 3, 5);
+      if (!catalogIndex.isPrimary()) {
+        status = result.setTextAt(0, catalogIndex.indexName());
+      }
+      if (status.isOk()) {
+        status = result.setTextAt(1, catalogIndex.columnName());
+      }
+      if (status.isOk()) {
+        cursor.rowReturned();
+      }
+      return status;
+    }
     if (cursor.explain()) {
       int step = cursor.currentPlanStep();
       if (step < 0) {
@@ -1837,6 +1900,16 @@ public final class SqlSession {
       return index == 0
           ? TABLE_NAME_COLUMN_NAME : index == 1 ? TABLE_TYPE_COLUMN_NAME : null;
     }
+    if (cursor.catalogIndexScan()) {
+      return switch (index) {
+        case 0 -> INDEX_NAME_COLUMN_NAME;
+        case 1 -> COLUMN_NAME_COLUMN_NAME;
+        case 2 -> UNIQUE_COLUMN_NAME;
+        case 3 -> PRIMARY_COLUMN_NAME;
+        case 4 -> CONSTRAINT_COLUMN_NAME;
+        default -> null;
+      };
+    }
     if (cursor.aggregate()) {
       if (index != 0) {
         return null;
@@ -1885,6 +1958,9 @@ public final class SqlSession {
     }
     if (cursor.catalogObjectScan()) {
       return true;
+    }
+    if (cursor.catalogIndexScan()) {
+      return index < 2;
     }
     if (cursor.aggregate()) {
       return index == 0 && cursor.aggregateVarchar();
@@ -1947,13 +2023,19 @@ public final class SqlSession {
     if (cursor.catalogObjectScan()) {
       status = session.closeCatalogObjectScan(cursor.catalogObjects());
     }
+    if (cursor.catalogIndexScan()) {
+      status = session.closeCatalogIndexScan(cursor.catalogIndexes());
+    }
     if (cursor.joinInnerScanActive()) {
       status = session.closeScan(cursor.joinInnerRelational());
       if (status.isOk()) {
         cursor.completeJoinInnerScan();
       }
     }
-    if (status.isOk() && !cursor.sorted() && !cursor.catalogObjectScan()) {
+    if (status.isOk()
+        && !cursor.sorted()
+        && !cursor.catalogObjectScan()
+        && !cursor.catalogIndexScan()) {
       status = session.closeScan(cursor.relational());
     }
     if (status.isOk() && cursor.sorted()) {

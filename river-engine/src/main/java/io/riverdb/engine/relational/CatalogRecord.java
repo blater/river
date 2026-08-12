@@ -757,6 +757,15 @@ final class CatalogRecord {
       ByteBuffer scratch,
       int expectedTableId,
       IndexResult result) {
+    return decodeIndexForTable(source, scratch, expectedTableId, null, result);
+  }
+
+  static StatusCode decodeIndexForTable(
+      HeapRowResult source,
+      ByteBuffer scratch,
+      int expectedTableId,
+      TableSchema.ColumnName name,
+      IndexResult result) {
     scratch.clear();
     StatusCode status = source.copyTo(scratch);
     if (!status.isOk()) {
@@ -784,6 +793,12 @@ final class CatalogRecord {
     }
     if (scratch.getInt(12) != expectedTableId) {
       return StatusCode.CONFLICT;
+    }
+    if (name != null) {
+      name.set(scratch, 32, nameBytes);
+      if (!RelationalKey.validName(name)) {
+        return StatusCode.CORRUPTION;
+      }
     }
     result.set(
         scratch.getInt(12),
