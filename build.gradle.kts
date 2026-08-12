@@ -230,6 +230,7 @@ val eventPollResultDescriptor = "L$eventBinaryPackage/EventPollResult;"
 val severityDescriptor = "L$eventBinaryPackage/Severity;"
 val statusCodeDescriptor = "Lio/riverdb/base/error/StatusCode;"
 val localWalPackage = "io.riverdb.wal.local"
+val localWalDescriptor = "Lio/riverdb/wal/local/LocalWal;"
 val localWalReservationDescriptor = "Lio/riverdb/wal/local/LocalWalReservation;"
 val localWalAppendResultDescriptor = "Lio/riverdb/wal/local/LocalWalAppendResult;"
 val localWalForceResultDescriptor = "Lio/riverdb/wal/local/LocalWalForceResult;"
@@ -361,6 +362,11 @@ val liveHotPathMethods = setOf(
     "$localWalPackage.LocalWal",
     "forcePending",
     "($localWalForceResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "$localWalPackage.DurableWalQuorum",
+    "replicateForcedBatch",
+    "(${localWalDescriptor}I)$statusCodeDescriptor"
   ),
   hotMethod(
     "$localWalPackage.LocalWal",
