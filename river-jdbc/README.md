@@ -39,7 +39,8 @@ LOBs, callable statements, non-loopback URLs, and authenticated JDBC properties
 remain unsupported until their production consumers are implemented.
 `Connection.getMetaData()` truthfully reports the product, driver, JDBC version,
 transaction levels, result-set shape, identifier limits, and batching support.
-`getTables`, `getTableTypes`, and `getColumns` expose durable tables and views;
+`getTables`, `getTableTypes`, `getColumns`, and `getPrimaryKeys` expose durable
+tables and views;
 column names, order, aliases, and BIGINT/VARCHAR types come from the SQL binder,
 while unsupported nullability, default, and identity details are reported as
 unknown. Secure JDBC configuration is currently provided by `RiverDataSource`.

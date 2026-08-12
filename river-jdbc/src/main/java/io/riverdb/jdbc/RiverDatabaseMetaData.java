@@ -285,6 +285,20 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   }
 
   @Override
+  public ResultSet getPrimaryKeys(
+      String catalog,
+      String schema,
+      String table) throws SQLException {
+    connection.requireOpen();
+    if (table == null || table.isEmpty() || table.length() > MAXIMUM_IDENTIFIER_LENGTH) {
+      throw JdbcExceptions.invalid("table name is outside the bounded identifier domain");
+    }
+    return connection.openPrimaryKeys(
+        table,
+        absentNamespace(catalog) && absentNamespace(schema));
+  }
+
+  @Override
   public String getSearchStringEscape() throws SQLException {
     connection.requireOpen();
     return "\\";
