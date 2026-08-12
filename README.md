@@ -6,23 +6,36 @@ followed by a replicated journal and operational failover.
 
 ### Current capabilities
 
-  - Recoverable heap and multi-level B+tree storage, WAL, checkpoints, torn-page repair and physical inspection.
-  - Concurrent MVCC transactions, read-committed and serializable execution, key/range locking, deadlock handling,
-    savepoints, group commit and version reclamation.
-  - Transactional tables, indexes, columns, sequences, identities and views.
-  - BIGINT, compact VARCHAR(7), NULLs, defaults and generated identity keys.
-  - Primary, duplicate secondary, unique and nullable indexes.
-  - NOT NULL, CHECK, UNIQUE and foreign-key constraints.
+ Storage and recovery:
+
+  - Durable control files, Write-Ahead-Log (WAL), group commit, checkpoints and WAL rotation.
+  - Multi-page heap storage and multi-level B+trees.
+  - Unique, duplicate-secondary and nullable indexes.
+  - Recovery of committed operations before page flush.
+  - Torn-checkpoint-page repair and corruption rejection.
+  - Quiescent backup/restore and offline physical inspection.
+
+  Transactions:
+
+  - Concurrent MVCC sessions.
+  - Read committed, repeatable read and serializable isolation.
+  - Atomic multi-row writes and index/catalog visibility.
+  - Key and range locks, deadlock resolution and conflict handling.
+  - Statement rollback and nested named savepoints.
+  - Version reclamation, vacuum and bounded version-pressure admission.
+
+  Relational and SQL:
+
+  - Transactional tables, columns, indexes, views, sequences and identities.
+  - BIGINT, nullable values and compact VARCHAR(7).
+  - Defaults, generated identities, NOT NULL, CHECK, UNIQUE and foreign keys.
   - Multi-row insert, update and delete.
-  - Comparisons, ranges, IN, OR, predicate conjunctions and NULL semantics.
-  - Sorting, disk spill/merge, DISTINCT, aggregates, grouping and HAVING.
-  - Indexed and unindexed inner joins plus left outer joins.
-  - Derived, scalar, EXISTS, membership and correlated subqueries with bounded deep nesting.
-  - Executable plans, EXPLAIN and EXPLAIN ANALYZE.
-  - Embedded API, TLS/token-authenticated server, bounded concurrent sessions, streaming client and JDBC.
-  - Prepared parameters, batching, generated keys and JDBC metadata subset.
-  - Remote SQL CLI.
-  - Quiescent backup/restore and offline corruption-aware inspection.
+  - Indexed and unindexed predicates, ranges, IN, OR and conjunctions.
+  - Inner and left joins.
+  - Sorting, disk spill/merge, DISTINCT, grouping, HAVING, counts, sums and extrema.
+  - Derived tables, scalar subqueries, EXISTS, membership and correlated nested queries.
+  - EXPLAIN and EXPLAIN ANALYZE.
+
 
 ## Build and validation
 
