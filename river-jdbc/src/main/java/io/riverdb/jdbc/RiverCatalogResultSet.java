@@ -13,6 +13,8 @@ import java.sql.Statement;
 final class RiverCatalogResultSet extends AbstractResultSet {
   private static final int TABLES = 1;
   private static final int TABLE_TYPES = 2;
+  private static final int INITIAL_TABLE_CAPACITY = 16;
+  private static final int MAXIMUM_TABLES = 32_767;
   private static final String TABLE = "TABLE";
   private static final String VIEW = "VIEW";
   private static final String[] TABLE_COLUMNS = {
@@ -68,18 +70,26 @@ final class RiverCatalogResultSet extends AbstractResultSet {
   private final RiverQuery query;
   private final RowResult source = new RowResult();
   private final CommandResult completion = new CommandResult();
-  private final char[] tableName = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  private final char[] tableNameCharacters =
+      new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final char[] tableType = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final String pattern;
   private final boolean includeTables;
   private final boolean includeViews;
   private final int mode;
+  private String[] tableNames;
+  private byte[] tableTypes;
+  private String currentTableName;
   private int tableNameLength;
   private int tableTypeLength;
   private String currentTableType;
+  private int tableCount;
+  private int tableIndex;
   private int rowNumber;
   private int typeIndex;
   private boolean rowAvailable;
+  private boolean tablesLoaded;
+  private boolean queryClosed;
   private boolean completed;
   private boolean closed;
   private boolean lastValueRead;
@@ -98,6 +108,10 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     includeTables = tables;
     includeViews = views;
     mode = resultMode;
+    if (mode == TABLES) {
+      tableNames = new String[INITIAL_TABLE_CAPACITY];
+      tableTypes = new byte[INITIAL_TABLE_CAPACITY];
+    }
   }
 
   static RiverCatalogResultSet tables(
@@ -144,14 +158,32 @@ final class RiverCatalogResultSet extends AbstractResultSet {
       rowNumber++;
       return true;
     }
-    while (query != null) {
+    if (!tablesLoaded) {
+      loadTables();
+    }
+    if (completed) {
+      return false;
+    }
+    if (tableIndex >= tableCount) {
+      finishLocal();
+      return false;
+    }
+    currentTableName = tableNames[tableIndex];
+    currentTableType = tableTypes[tableIndex++] == 0 ? TABLE : VIEW;
+    rowAvailable = true;
+    rowNumber++;
+    return true;
+  }
+
+  private void loadTables() throws SQLException {
+    while (query != null && !queryClosed) {
       source.reset();
       JdbcExceptions.require(query.next(source), "fetch table metadata");
       if (!source.isAvailable()) {
-        completeQuery();
-        return false;
+        closeQuery(false);
+        break;
       }
-      tableNameLength = source.copyTextAt(0, tableName, 0);
+      tableNameLength = source.copyTextAt(0, tableNameCharacters, 0);
       tableTypeLength = source.copyTextAt(1, tableType, 0);
       if (tableNameLength < 0 || tableTypeLength < 0) {
         throw JdbcExceptions.failure(
@@ -161,15 +193,15 @@ final class RiverCatalogResultSet extends AbstractResultSet {
       boolean table = equals(tableType, tableTypeLength, TABLE);
       boolean view = equals(tableType, tableTypeLength, VIEW);
       if ((table && includeTables || view && includeViews)
-          && matches(tableName, tableNameLength, pattern)) {
-        currentTableType = table ? TABLE : VIEW;
-        rowAvailable = true;
-        rowNumber++;
-        return true;
+          && matches(tableNameCharacters, tableNameLength, pattern)) {
+        appendTable(table ? (byte) 0 : (byte) 1);
       }
     }
-    finishLocal();
-    return false;
+    sortTables();
+    tablesLoaded = true;
+    if (tableCount == 0) {
+      finishLocal();
+    }
   }
 
   @Override
@@ -177,13 +209,14 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     if (closed) {
       return;
     }
-    if (!completed && query != null) {
-      completeQuery();
+    if (!queryClosed && query != null) {
+      closeQuery(true);
     } else {
       connection.metadataResultClosed(this);
     }
     closed = true;
     rowAvailable = false;
+    releaseTables();
   }
 
   @Override
@@ -196,7 +229,7 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     }
     if (column == 3) {
       lastWasNull = false;
-      return new String(tableName, 0, tableNameLength);
+      return currentTableName;
     }
     if (column == 4) {
       lastWasNull = false;
@@ -357,18 +390,93 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     return mode == TABLES ? TABLE_METADATA : TYPE_METADATA;
   }
 
-  private void completeQuery() throws SQLException {
+  private void closeQuery(boolean completeResult) throws SQLException {
     completion.reset();
     JdbcExceptions.require(query.close(completion), "close table metadata");
-    completed = true;
+    queryClosed = true;
     rowAvailable = false;
-    connection.metadataQueryCompleted(this, completion);
+    if (completeResult) {
+      completed = true;
+      connection.metadataQueryCompleted(this, completion);
+    } else {
+      connection.metadataQueryClosed(completion);
+    }
   }
 
   private void finishLocal() {
     completed = true;
     rowAvailable = false;
+    releaseTables();
     connection.metadataResultClosed(this);
+  }
+
+  private void appendTable(byte type) throws SQLException {
+    if (tableCount >= MAXIMUM_TABLES) {
+      throw JdbcExceptions.failure(
+          StatusCode.RESOURCE_EXHAUSTED,
+          "materialize table metadata");
+    }
+    if (tableCount >= tableNames.length) {
+      int capacity = Math.min(MAXIMUM_TABLES, tableNames.length << 1);
+      String[] expandedNames = new String[capacity];
+      byte[] expandedTypes = new byte[capacity];
+      System.arraycopy(tableNames, 0, expandedNames, 0, tableCount);
+      System.arraycopy(tableTypes, 0, expandedTypes, 0, tableCount);
+      tableNames = expandedNames;
+      tableTypes = expandedTypes;
+    }
+    tableNames[tableCount] = new String(tableNameCharacters, 0, tableNameLength);
+    tableTypes[tableCount] = type;
+    tableCount++;
+  }
+
+  private void sortTables() {
+    for (int start = tableCount / 2 - 1; start >= 0; start--) {
+      siftDown(start, tableCount);
+    }
+    for (int end = tableCount - 1; end > 0; end--) {
+      swap(0, end);
+      siftDown(0, end);
+    }
+  }
+
+  private void siftDown(int root, int end) {
+    int current = root;
+    while (current * 2 + 1 < end) {
+      int child = current * 2 + 1;
+      if (child + 1 < end && compare(child, child + 1) < 0) {
+        child++;
+      }
+      if (compare(current, child) >= 0) {
+        return;
+      }
+      swap(current, child);
+      current = child;
+    }
+  }
+
+  private int compare(int left, int right) {
+    int typeComparison = Byte.compare(tableTypes[left], tableTypes[right]);
+    return typeComparison != 0
+        ? typeComparison : tableNames[left].compareTo(tableNames[right]);
+  }
+
+  private void swap(int left, int right) {
+    String name = tableNames[left];
+    tableNames[left] = tableNames[right];
+    tableNames[right] = name;
+    byte type = tableTypes[left];
+    tableTypes[left] = tableTypes[right];
+    tableTypes[right] = type;
+  }
+
+  private void releaseTables() {
+    if (tableNames != null) {
+      for (int index = 0; index < tableCount; index++) {
+        tableNames[index] = null;
+      }
+    }
+    currentTableName = null;
   }
 
   private void requireRow(int column) throws SQLException {
