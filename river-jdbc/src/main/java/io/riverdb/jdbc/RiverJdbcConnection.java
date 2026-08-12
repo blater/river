@@ -400,8 +400,12 @@ final class RiverJdbcConnection extends AbstractConnection {
   void metadataQueryCompleted(
       RiverCatalogResultSet completed,
       CommandResult result) {
-    commandCompleted(result);
+    metadataQueryClosed(result);
     metadataResultClosed(completed);
+  }
+
+  void metadataQueryClosed(CommandResult result) {
+    commandCompleted(result);
   }
 
   void metadataResultClosed(RiverCatalogResultSet completed) {
@@ -496,6 +500,10 @@ final class RiverJdbcConnection extends AbstractConnection {
   }
 
   private void closeTransactionResult() throws SQLException {
+    RiverCatalogResultSet currentMetadata = metadataResult;
+    if (currentMetadata != null) {
+      currentMetadata.close();
+    }
     if (statement != null) {
       statement.closeOpenResult();
     }

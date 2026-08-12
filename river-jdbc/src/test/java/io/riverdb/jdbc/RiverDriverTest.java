@@ -2085,6 +2085,18 @@ final class RiverDriverTest {
           statement.executeUpdate(
               "CREATE VIEW " + viewName
                   + " AS SELECT id, value FROM " + tableName));
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE alpha_catalog_table "
+                  + "(id BIGINT PRIMARY KEY, value BIGINT)"));
+      for (int index = 0; index < 20; index++) {
+        assertEquals(
+            0,
+            statement.executeUpdate(
+                "CREATE TABLE catalog_order_" + index
+                    + " (id BIGINT PRIMARY KEY, value BIGINT)"));
+      }
       boolean table = false;
       boolean view = false;
       try (ResultSet catalog = statement.executeQuery("SHOW TABLES")) {
@@ -2117,6 +2129,23 @@ final class RiverDriverTest {
         assertTrue(types.next());
         assertEquals("VIEW", types.getString("TABLE_TYPE"));
         assertFalse(types.next());
+      }
+      try (ResultSet ordered = metadata.getTables(null, null, "%", null)) {
+        String previousType = "";
+        String previousName = "";
+        int rows = 0;
+        while (ordered.next()) {
+          String type = ordered.getString("TABLE_TYPE");
+          String name = ordered.getString("TABLE_NAME");
+          int typeOrder = previousType.compareTo(type);
+          assertTrue(typeOrder < 0 || typeOrder == 0 && previousName.compareTo(name) < 0);
+          previousType = type;
+          previousName = name;
+          rows++;
+        }
+        assertEquals(23, rows);
+        assertEquals("VIEW", previousType);
+        assertEquals(viewName, previousName);
       }
       assertCatalogRows(
           metadata,
@@ -2190,6 +2219,10 @@ final class RiverDriverTest {
           null,
           new String[0],
           new String[0]);
+      ResultSet closedAtCommit = metadata.getTables(null, null, "%", null);
+      assertTrue(closedAtCommit.next());
+      connection.commit();
+      assertTrue(closedAtCommit.isClosed());
       connection.setAutoCommit(true);
     }
     assertEquals(StatusCode.OK, server.close());
