@@ -29,6 +29,7 @@ replay_pid*
 **/build/
 
 # IDEs and local tooling
+.DS_Store
 .idea/
 .vscode/
 *.iml
