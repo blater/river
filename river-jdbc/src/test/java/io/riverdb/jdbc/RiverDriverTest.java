@@ -2213,6 +2213,32 @@ final class RiverDriverTest {
           "%")) {
         assertFalse(columns.next());
       }
+      try (ResultSet keys = metadata.getPrimaryKeys(null, null, tableName)) {
+        ResultSetMetaData fields = keys.getMetaData();
+        assertEquals(6, fields.getColumnCount());
+        assertEquals("TABLE_NAME", fields.getColumnLabel(3));
+        assertEquals("COLUMN_NAME", fields.getColumnLabel(4));
+        assertEquals(Types.SMALLINT, fields.getColumnType(5));
+        assertEquals(ResultSetMetaData.columnNoNulls, fields.isNullable(4));
+        assertTrue(keys.next());
+        assertNull(keys.getString("TABLE_CAT"));
+        assertTrue(keys.wasNull());
+        assertEquals(tableName, keys.getString("TABLE_NAME"));
+        assertEquals("id", keys.getString("COLUMN_NAME"));
+        assertEquals(1, keys.getShort("KEY_SEQ"));
+        assertNull(keys.getString("PK_NAME"));
+        assertTrue(keys.wasNull());
+        assertFalse(keys.next());
+      }
+      try (ResultSet keys = metadata.getPrimaryKeys(null, null, viewName)) {
+        assertFalse(keys.next());
+      }
+      try (ResultSet keys = metadata.getPrimaryKeys(
+          "missing_catalog",
+          null,
+          tableName)) {
+        assertFalse(keys.next());
+      }
 
       ResultSet held = metadata.getColumns(null, null, "%", "%");
       assertTrue(held.next());
@@ -2234,6 +2260,10 @@ final class RiverDriverTest {
           SQLException.class,
           () -> metadata.getColumns(null, null, "%", "x".repeat(129)));
       assertEquals("22000", longColumnPattern.getSQLState());
+      SQLException invalidPrimaryTable = assertThrows(
+          SQLException.class,
+          () -> metadata.getPrimaryKeys(null, null, ""));
+      assertEquals("22000", invalidPrimaryTable.getSQLState());
 
       connection.setAutoCommit(false);
       assertEquals(
@@ -2289,6 +2319,14 @@ final class RiverDriverTest {
       assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1);
       assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2);
       assertFalse(columns.next());
+    }
+    try (ResultSet keys = connection.getMetaData().getPrimaryKeys(
+        null,
+        null,
+        tableName)) {
+      assertTrue(keys.next());
+      assertEquals("id", keys.getString("COLUMN_NAME"));
+      assertFalse(keys.next());
     }
     ResultSet owned = connection.getMetaData().getColumns(null, null, "%", "%");
     assertTrue(owned.next());

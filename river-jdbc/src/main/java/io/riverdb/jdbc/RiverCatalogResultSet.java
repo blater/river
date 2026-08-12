@@ -492,7 +492,7 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     }
   }
 
-  private static boolean equals(char[] value, int length, String expected) {
+  static boolean equals(char[] value, int length, String expected) {
     if (length != expected.length()) {
       return false;
     }

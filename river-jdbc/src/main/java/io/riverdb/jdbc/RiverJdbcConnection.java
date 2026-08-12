@@ -415,6 +415,18 @@ final class RiverJdbcConnection extends AbstractConnection {
     return metadataResult;
   }
 
+  ResultSet openPrimaryKeys(String tableName, boolean scanCatalog)
+      throws SQLException {
+    requireOpen();
+    requireMetadataResultAvailable();
+    RiverQuery query = null;
+    if (scanCatalog) {
+      query = openMetadataQuery("SHOW TABLES", "read primary-key catalog");
+    }
+    metadataResult = new RiverPrimaryKeyResultSet(this, query, tableName);
+    return metadataResult;
+  }
+
   RiverQuery openColumnDescription(String tableName) throws SQLException {
     return openMetadataQuery(
         "SELECT * FROM " + tableName + " LIMIT 1",
