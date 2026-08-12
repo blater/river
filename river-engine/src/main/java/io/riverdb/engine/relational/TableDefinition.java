@@ -436,6 +436,16 @@ public final class TableDefinition {
     return -1;
   }
 
+  int readyIndexSlotForTableId(int indexTableId) {
+    for (int index = 0; index < uniqueIndexCount; index++) {
+      if (uniqueIndexStates[index] == INDEX_READY
+          && uniqueIndexTableIds[index] == indexTableId) {
+        return index;
+      }
+    }
+    return -1;
+  }
+
   int readyIndexCount() {
     int count = 0;
     for (int index = 0; index < uniqueIndexCount; index++) {

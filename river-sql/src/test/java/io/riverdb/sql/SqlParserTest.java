@@ -804,6 +804,14 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parseQuery("SHOW TABLES EXTRA", query, command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery("SHOW INDEXES FROM accounts", query, command));
+    assertEquals(SqlCommandType.SHOW_INDEXES, command.type());
+    assertName("accounts", command.tableName());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery("SHOW INDEXES accounts", query, command));
   }
 
   @Test

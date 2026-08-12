@@ -42,7 +42,12 @@ public final class RelationalSession {
   private final ViewDefinition viewRecord = new ViewDefinition();
   private final ViewDefinition scannedViewRecord = new ViewDefinition();
   private final TableDefinition scannedTableRecord = new TableDefinition();
+  private final TableDefinition scannedIndexTable = new TableDefinition();
+  private final CatalogRecord.IndexResult scannedIndexRecord =
+      new CatalogRecord.IndexResult();
   private final TableSchema.ColumnName scannedObjectName =
+      new TableSchema.ColumnName();
+  private final TableSchema.ColumnName scannedIndexName =
       new TableSchema.ColumnName();
   private final TableDefinition valueIndexTable = new TableDefinition();
   private final TableDefinition referenceTable = new TableDefinition();
@@ -212,6 +217,94 @@ public final class RelationalSession {
     StatusCode status = session.closeScan(cursor.indexed());
     if (status.isOk()) {
       cursor.complete();
+    }
+    return status;
+  }
+
+  public StatusCode beginCatalogIndexScan(
+      CharSequence tableName,
+      CatalogIndexCursor cursor) {
+    if (!registeredTransaction || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = resolveTable(tableName, scannedIndexTable);
+    if (status.isOk()) {
+      status = cursor.reset();
+    }
+    if (status.isOk()) {
+      status = session.beginScan(Long.MIN_VALUE, 0, cursor.indexed());
+    }
+    if (status.isOk()) {
+      status = cursor.claim(
+          this,
+          scannedIndexTable.tableId(),
+          scannedIndexTable.readyIndexCount());
+    }
+    return status;
+  }
+
+  public StatusCode nextCatalogIndex(
+      CatalogIndexCursor cursor,
+      CatalogIndexResult result) {
+    if (cursor == null || result == null || !cursor.isOwnedBy(this)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    if (cursor.takePrimary()) {
+      result.setPrimary(scannedIndexTable.columnName(0));
+      return StatusCode.OK;
+    }
+    while (true) {
+      StatusCode status = session.nextScan(cursor.indexed(), catalogScanRow);
+      if (status == StatusCode.CONFLICT) {
+        return cursor.allSecondariesObserved()
+            ? StatusCode.OK : StatusCode.CORRUPTION;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      scannedIndexName.reset();
+      StatusCode decoded = CatalogRecord.decodeIndexForTable(
+          catalogScanRow.row(),
+          catalogScratch,
+          cursor.tableId(),
+          scannedIndexName,
+          scannedIndexRecord);
+      if (decoded == StatusCode.CONFLICT) {
+        continue;
+      }
+      if (!decoded.isOk()) {
+        return decoded;
+      }
+      if (scannedIndexRecord.state() != TableDefinition.INDEX_READY) {
+        continue;
+      }
+      int slot = scannedIndexTable.readyIndexSlotForTableId(
+          scannedIndexRecord.indexTableId());
+      if (slot < 0
+          || !cursor.recordSecondary(slot)
+          || scannedIndexTable.indexIsUnique(slot) != scannedIndexRecord.isUnique()
+          || scannedIndexTable.indexIsConstraint(slot)
+              != scannedIndexRecord.isConstraint()) {
+        return StatusCode.CORRUPTION;
+      }
+      result.set(
+          scannedIndexName,
+          scannedIndexTable.columnName(scannedIndexTable.uniqueIndexColumn(slot)),
+          scannedIndexRecord.isUnique(),
+          scannedIndexRecord.isConstraint());
+      return StatusCode.OK;
+    }
+  }
+
+  public StatusCode closeCatalogIndexScan(CatalogIndexCursor cursor) {
+    if (cursor == null || !cursor.isOwnedBy(this)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = session.closeScan(cursor.indexed());
+    if (status.isOk()) {
+      cursor.complete();
+      scannedIndexTable.reset();
     }
     return status;
   }
