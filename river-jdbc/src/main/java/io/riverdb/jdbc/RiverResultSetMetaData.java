@@ -8,7 +8,7 @@ import java.sql.Types;
 /** Metadata for River's bounded BIGINT and text result projection. */
 final class RiverResultSetMetaData implements ResultSetMetaData {
   private final String[] columnNames;
-  private final boolean[] varcharColumns;
+  private final int[] columnTypes;
   private final int[] nullability;
   private final int[] displaySizes;
   private final boolean autoIncrement;
@@ -17,14 +17,14 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   RiverResultSetMetaData(RiverQuery query) throws SQLException {
     columnCount = query.columnCount();
     columnNames = new String[columnCount];
-    varcharColumns = new boolean[columnCount];
+    columnTypes = new int[columnCount];
     nullability = new int[columnCount];
     displaySizes = new int[columnCount];
     autoIncrement = false;
     for (int index = 0; index < columnCount; index++) {
-      varcharColumns[index] = query.columnIsVarchar(index);
+      columnTypes[index] = query.columnIsVarchar(index) ? Types.VARCHAR : Types.BIGINT;
       nullability[index] = columnNoNulls;
-      displaySizes[index] = varcharColumns[index] ? 7 : 20;
+      displaySizes[index] = columnTypes[index] == Types.VARCHAR ? 7 : 20;
       CharSequence name = query.columnName(index);
       if (name == null || name.length() <= 0) {
         throw JdbcExceptions.invalid("query column name is missing");
@@ -44,7 +44,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   RiverResultSetMetaData(String columnName, boolean generated) {
     columnCount = 1;
     columnNames = new String[] {columnName};
-    varcharColumns = new boolean[1];
+    columnTypes = new int[] {Types.BIGINT};
     nullability = new int[] {columnNoNulls};
     displaySizes = new int[] {20};
     autoIncrement = generated;
@@ -57,7 +57,23 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
       int[] widths) {
     columnCount = names.length;
     columnNames = names;
-    varcharColumns = varchar;
+    columnTypes = new int[varchar.length];
+    for (int index = 0; index < varchar.length; index++) {
+      columnTypes[index] = varchar[index] ? Types.VARCHAR : Types.BIGINT;
+    }
+    nullability = nullable;
+    displaySizes = widths;
+    autoIncrement = false;
+  }
+
+  RiverResultSetMetaData(
+      String[] names,
+      int[] types,
+      int[] nullable,
+      int[] widths) {
+    columnCount = names.length;
+    columnNames = names;
+    columnTypes = types;
     nullability = nullable;
     displaySizes = widths;
     autoIncrement = false;
@@ -77,7 +93,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public boolean isCaseSensitive(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1];
+    return columnTypes[column - 1] == Types.VARCHAR;
   }
 
   @Override
@@ -101,7 +117,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public boolean isSigned(int column) throws SQLException {
     requireColumn(column);
-    return !varcharColumns[column - 1];
+    return numeric(columnTypes[column - 1]);
   }
 
   @Override
@@ -130,7 +146,12 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public int getPrecision(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1] ? displaySizes[column - 1] : 19;
+    return switch (columnTypes[column - 1]) {
+      case Types.VARCHAR -> displaySizes[column - 1];
+      case Types.SMALLINT -> 5;
+      case Types.INTEGER -> 10;
+      default -> 19;
+    };
   }
 
   @Override
@@ -154,13 +175,18 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public int getColumnType(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1] ? Types.VARCHAR : Types.BIGINT;
+    return columnTypes[column - 1];
   }
 
   @Override
   public String getColumnTypeName(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1] ? "VARCHAR" : "BIGINT";
+    return switch (columnTypes[column - 1]) {
+      case Types.VARCHAR -> "VARCHAR";
+      case Types.SMALLINT -> "SMALLINT";
+      case Types.INTEGER -> "INTEGER";
+      default -> "BIGINT";
+    };
   }
 
   @Override
@@ -184,8 +210,12 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public String getColumnClassName(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1]
-        ? String.class.getName() : Long.class.getName();
+    return switch (columnTypes[column - 1]) {
+      case Types.VARCHAR -> String.class.getName();
+      case Types.SMALLINT -> Short.class.getName();
+      case Types.INTEGER -> Integer.class.getName();
+      default -> Long.class.getName();
+    };
   }
 
   @Override
@@ -220,6 +250,10 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
 
   boolean isVarchar(int column) throws SQLException {
     requireColumn(column);
-    return varcharColumns[column - 1];
+    return columnTypes[column - 1] == Types.VARCHAR;
+  }
+
+  private static boolean numeric(int type) {
+    return type == Types.BIGINT || type == Types.INTEGER || type == Types.SMALLINT;
   }
 }

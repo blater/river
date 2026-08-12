@@ -188,6 +188,12 @@ public final class SqlQuery {
     }
     outerBlock.copyQueryFrom(outer);
     viewBlock.copyQueryFrom(view);
+    if (outerBlock.isSelectAll()) {
+      StatusCode expansion = outerBlock.expandSelectAllFrom(viewBlock);
+      if (!expansion.isOk()) {
+        return expansion;
+      }
+    }
     return compileDerived(destination);
   }
 

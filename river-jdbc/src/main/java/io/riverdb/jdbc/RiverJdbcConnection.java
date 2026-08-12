@@ -29,7 +29,7 @@ final class RiverJdbcConnection extends AbstractConnection {
   private final RiverJdbcSavepoint[] savepoints =
       new RiverJdbcSavepoint[MAXIMUM_SAVEPOINTS];
   private RiverJdbcStatement statement;
-  private RiverCatalogResultSet metadataResult;
+  private AbstractResultSet metadataResult;
   private boolean autoCommit = true;
   private boolean transactionActive;
   private boolean closed;
@@ -184,7 +184,7 @@ final class RiverJdbcConnection extends AbstractConnection {
       return;
     }
     SQLException closeFailure = null;
-    RiverCatalogResultSet currentMetadata = metadataResult;
+    AbstractResultSet currentMetadata = metadataResult;
     if (currentMetadata != null) {
       try {
         currentMetadata.close();
@@ -397,8 +397,32 @@ final class RiverJdbcConnection extends AbstractConnection {
     return metadataResult;
   }
 
+  ResultSet openColumns(
+      String tableNamePattern,
+      String columnNamePattern,
+      boolean scanCatalog) throws SQLException {
+    requireOpen();
+    requireMetadataResultAvailable();
+    RiverQuery query = null;
+    if (scanCatalog) {
+      query = openMetadataQuery("SHOW TABLES", "read column catalog");
+    }
+    metadataResult = new RiverColumnsResultSet(
+        this,
+        query,
+        tableNamePattern,
+        columnNamePattern);
+    return metadataResult;
+  }
+
+  RiverQuery openColumnDescription(String tableName) throws SQLException {
+    return openMetadataQuery(
+        "SELECT * FROM " + tableName + " LIMIT 1",
+        "describe catalog table");
+  }
+
   void metadataQueryCompleted(
-      RiverCatalogResultSet completed,
+      AbstractResultSet completed,
       CommandResult result) {
     metadataQueryClosed(result);
     metadataResultClosed(completed);
@@ -408,7 +432,7 @@ final class RiverJdbcConnection extends AbstractConnection {
     commandCompleted(result);
   }
 
-  void metadataResultClosed(RiverCatalogResultSet completed) {
+  void metadataResultClosed(AbstractResultSet completed) {
     if (metadataResult == completed) {
       metadataResult = null;
     }
@@ -420,6 +444,14 @@ final class RiverJdbcConnection extends AbstractConnection {
           StatusCode.CONFLICT,
           "open catalog metadata result");
     }
+  }
+
+  private RiverQuery openMetadataQuery(String sql, String operation)
+      throws SQLException {
+    beforeExecution();
+    metadataQuery.reset();
+    JdbcExceptions.require(session.beginQuery(sql, metadataQuery), operation);
+    return metadataQuery.query();
   }
 
   private void finishTransaction(String sql, String operation) throws SQLException {
@@ -500,7 +532,7 @@ final class RiverJdbcConnection extends AbstractConnection {
   }
 
   private void closeTransactionResult() throws SQLException {
-    RiverCatalogResultSet currentMetadata = metadataResult;
+    AbstractResultSet currentMetadata = metadataResult;
     if (currentMetadata != null) {
       currentMetadata.close();
     }

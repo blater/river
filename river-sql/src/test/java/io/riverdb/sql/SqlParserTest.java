@@ -929,6 +929,17 @@ final class SqlParserTest {
     assertName("amount", compiled.predicateColumnName(0));
     assertName("category", compiled.predicateColumnName(1));
     assertName("id", compiled.orderColumnName());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT * FROM valuable LIMIT 1", outer));
+    assertEquals(StatusCode.OK, query.compileView(outer, view, compiled));
+    assertEquals(3, compiled.columnCount());
+    assertName("id", compiled.columnName(0));
+    assertName("category", compiled.columnName(1));
+    assertName("kind", compiled.columnOutputName(1));
+    assertName("amount", compiled.columnName(2));
+    assertEquals(1, compiled.rowLimit());
   }
 
   @Test

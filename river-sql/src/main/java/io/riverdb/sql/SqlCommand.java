@@ -350,6 +350,21 @@ public final class SqlCommand {
     selectAll = true;
   }
 
+  StatusCode expandSelectAllFrom(SqlCommand source) {
+    if (!selectAll || columnCount != 0 || source == null || source.columnCount <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    selectAll = false;
+    for (int index = 0; index < source.columnCount; index++) {
+      SqlIdentifier column = writableNextColumnName();
+      if (column == null) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      column.copyFrom(source.columnOutputName(index));
+    }
+    return StatusCode.OK;
+  }
+
   void setRowLimit(long maximumRows) {
     rowLimit = maximumRows;
   }
