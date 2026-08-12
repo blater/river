@@ -8,6 +8,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import java.nio.file.Path;
@@ -55,8 +56,8 @@ final class SqlExplainTest {
     assertEquals("operator", session.scanColumnName(cursor, 0));
     assertEquals("detail", session.scanColumnName(cursor, 1));
     assertEquals("rows", session.scanColumnName(cursor, 2));
-    assertTrue(session.scanColumnIsVarchar(cursor, 0));
-    assertFalse(session.scanColumnIsVarchar(cursor, 1));
+    assertEquals(SqlTypeDescriptor.varchar(64), session.scanColumnTypeDescriptor(cursor, 0));
+    assertEquals(SqlTypeDescriptor.BIGINT, session.scanColumnTypeDescriptor(cursor, 1));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(PackedText.pack("filter"), row.valueAt(0));
     assertEquals(1, row.valueAt(1));

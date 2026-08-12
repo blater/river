@@ -1,13 +1,14 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
 /** Current catalog encoding for bounded relational schemas and index-build state. */
 final class CatalogRecord {
   static final int MAXIMUM_BYTES =
-      208 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
+      240 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
           + TableDefinition.MAXIMUM_INDEXES * 16
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
 
@@ -22,7 +23,7 @@ final class CatalogRecord {
   private static final int USER_SEQUENCE_VERSION = 1;
   private static final int IDENTITY_SEQUENCE_VERSION = 1;
   private static final int VIEW_VERSION = 1;
-  private static final int TABLE_VERSION = 10;
+  private static final int TABLE_VERSION = 11;
   private static final int INDEX_VERSION = 3;
   private static final int TABLE_CHECK_MASK_OFFSET = 60;
   private static final int TABLE_CHECKS_OFFSET = 68;
@@ -30,8 +31,10 @@ final class CatalogRecord {
   private static final int TABLE_DEFAULTS_OFFSET = 168;
   private static final int TABLE_REFERENCE_MASK_OFFSET = 232;
   private static final int TABLE_REFERENCE_IDS_OFFSET = 240;
-  private static final int TABLE_INDEXES_OFFSET =
+  static final int TABLE_TYPE_DESCRIPTORS_OFFSET =
       TABLE_REFERENCE_IDS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
+  private static final int TABLE_INDEXES_OFFSET =
+      TABLE_TYPE_DESCRIPTORS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
 
   private CatalogRecord() {
   }
@@ -305,7 +308,6 @@ final class CatalogRecord {
         2,
         1L,
         0,
-        0,
         null,
         null,
         true,
@@ -334,7 +336,6 @@ final class CatalogRecord {
         schema.columnCount(),
         schema.notNullMask(),
         schema.defaultMask(),
-        schema.varcharMask(),
         schema,
         null,
         true,
@@ -406,7 +407,6 @@ final class CatalogRecord {
         schema.columnCount(),
         schema.notNullMask(),
         schema.defaultMask(),
-        schema.varcharMask(),
         null,
         schema,
         unique,
@@ -578,7 +578,7 @@ final class CatalogRecord {
         ? scratch.getLong(28) : -1;
     long defaultMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(36) : -1;
-    long varcharMask = source.length() >= TABLE_INDEXES_OFFSET
+    long reservedTypeMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(44) : -1;
     long identityMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(52) : -1;
@@ -631,15 +631,13 @@ final class CatalogRecord {
         || (notNullMask & ~((1L << columnCount) - 1)) != 0
         || (defaultMask & 1) != 0
         || (defaultMask & ~((1L << columnCount) - 1)) != 0
-        || (varcharMask & 1) != 0
-        || (varcharMask & ~((1L << columnCount) - 1)) != 0
+        || reservedTypeMask != 0
+        || !validTypeDescriptors(scratch, columnCount)
         || (identityMask != 0 && identityMask != 1)
         || (checkMask & ~((1L << columnCount) - 1)) != 0
-        || (checkMask & varcharMask) != 0
         || !validChecks(scratch, columnCount, checkMask)
         || (referenceMask & 1) != 0
         || (referenceMask & ~((1L << columnCount) - 1)) != 0
-        || (referenceMask & varcharMask) != 0
         || !validReferences(
             scratch, columnCount, referenceMask, scratch.getInt(12))
         || nameBytes != expectedName.length()) {
@@ -661,7 +659,7 @@ final class CatalogRecord {
         columnCount,
         notNullMask,
         defaultMask,
-        varcharMask,
+        TABLE_TYPE_DESCRIPTORS_OFFSET,
         identityMask == 1,
         checkMask,
         TABLE_CHECKS_OFFSET,
@@ -819,7 +817,6 @@ final class CatalogRecord {
       int columnCount,
       long notNullMask,
       long defaultMask,
-      long varcharMask,
       TableSchema definition,
       TableDefinition existing,
       boolean unique,
@@ -849,7 +846,7 @@ final class CatalogRecord {
     target.putInt(24, indexCount);
     target.putLong(28, notNullMask);
     target.putLong(36, defaultMask);
-    target.putLong(44, varcharMask);
+    target.putLong(44, 0);
     boolean identity = definition != null
         ? definition.hasIdentity() : existing != null && existing.hasIdentity();
     target.putLong(52, identity ? 1 : 0);
@@ -889,6 +886,18 @@ final class CatalogRecord {
       target.putInt(
           TABLE_REFERENCE_IDS_OFFSET + index * Integer.BYTES,
           referenced ? referencedTableId : 0);
+    }
+    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
+      int descriptor = index >= columnCount
+          ? 0
+          : definition != null
+              ? definition.typeDescriptor(index)
+              : existing != null
+                  ? existing.typeDescriptor(index)
+                  : SqlTypeDescriptor.BIGINT;
+      target.putInt(
+          TABLE_TYPE_DESCRIPTORS_OFFSET + index * Integer.BYTES,
+          descriptor);
     }
     for (int index = 0; index < indexCount; index++) {
       int output = TABLE_INDEXES_OFFSET + index * 16;
@@ -946,7 +955,9 @@ final class CatalogRecord {
       long value = source.getLong(TABLE_CHECK_VALUES_OFFSET + index * Long.BYTES);
       boolean checked = index < columns && (checkMask & 1L << index) != 0;
       if (checked
-          ? !TableSchema.validCheckComparison(comparison)
+          ? source.getInt(TABLE_TYPE_DESCRIPTORS_OFFSET + index * Integer.BYTES)
+                  != SqlTypeDescriptor.BIGINT
+              || !TableSchema.validCheckComparison(comparison)
           : comparison != 0 || value != 0) {
         return false;
       }
@@ -964,10 +975,32 @@ final class CatalogRecord {
           TABLE_REFERENCE_IDS_OFFSET + column * Integer.BYTES);
       boolean referenced = column < columns && (referenceMask & 1L << column) != 0;
       if (referenced
-          ? referencedTableId <= 0
+          ? source.getInt(TABLE_TYPE_DESCRIPTORS_OFFSET + column * Integer.BYTES)
+                  != SqlTypeDescriptor.BIGINT
+              || referencedTableId <= 0
               || referencedTableId > RelationalKey.MAXIMUM_TABLE_ID
               || referencedTableId == tableId
           : referencedTableId != 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean validTypeDescriptors(ByteBuffer source, int columns) {
+    for (int column = 0; column < TableSchema.MAXIMUM_COLUMNS; column++) {
+      int descriptor = source.getInt(
+          TABLE_TYPE_DESCRIPTORS_OFFSET + column * Integer.BYTES);
+      if (column >= columns) {
+        if (descriptor != 0) {
+          return false;
+        }
+      } else if (column == 0) {
+        if (descriptor != SqlTypeDescriptor.BIGINT) {
+          return false;
+        }
+      } else if (descriptor != SqlTypeDescriptor.BIGINT
+          && descriptor != SqlTypeDescriptor.varchar(7)) {
         return false;
       }
     }

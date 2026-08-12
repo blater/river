@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.TableSchema;
@@ -13,10 +14,10 @@ public final class SqlScanRowResult {
   private final char[][] textValues =
       new char[TableSchema.MAXIMUM_COLUMNS][CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final int[] textLengths = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   private long key;
   private long value;
   private long nullMask;
-  private long varcharMask;
   private int columnCount;
   private boolean available;
 
@@ -25,11 +26,11 @@ public final class SqlScanRowResult {
     key = 0;
     value = 0;
     nullMask = 0;
-    varcharMask = 0;
     columnCount = 0;
     available = false;
     for (int index = 0; index < textLengths.length; index++) {
       textLengths[index] = 0;
+      typeDescriptors[index] = 0;
     }
   }
 
@@ -41,15 +42,15 @@ public final class SqlScanRowResult {
       long rowKey,
       long[] projectedValues,
       long projectedNullMask,
-      long projectedVarcharMask,
+      int[] projectedTypeDescriptors,
       int projectedColumnCount) {
     key = rowKey;
     columnCount = projectedColumnCount;
     nullMask = projectedNullMask;
-    varcharMask = projectedVarcharMask;
     for (int index = 0; index < projectedColumnCount; index++) {
       values[index] = projectedValues[index];
-      if ((projectedVarcharMask & 1L << index) != 0
+      typeDescriptors[index] = projectedTypeDescriptors[index];
+      if (isVarchar(index)
           && (projectedNullMask & 1L << index) == 0) {
         textLengths[index] = PackedText.copyTo(
             projectedValues[index], textValues[index], 0);
@@ -64,7 +65,8 @@ public final class SqlScanRowResult {
         || index < 0
         || index >= columnCount
         || source == null
-        || source.length() > CommandResult.MAXIMUM_TEXT_CHARACTERS) {
+        || source.length() > CommandResult.MAXIMUM_TEXT_CHARACTERS
+        || !isVarchar(index)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int character = 0; character < source.length(); character++) {
@@ -75,7 +77,6 @@ public final class SqlScanRowResult {
       textValues[index][character] = value;
     }
     textLengths[index] = source.length();
-    varcharMask |= 1L << index;
     return StatusCode.OK;
   }
 
@@ -106,11 +107,12 @@ public final class SqlScanRowResult {
   public boolean isVarchar(int index) {
     return index >= 0
         && index < columnCount
-        && (varcharMask & 1L << index) != 0;
+        && SqlTypeDescriptor.typeId(typeDescriptors[index])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
   }
 
-  public long varcharMask() {
-    return varcharMask;
+  public int typeDescriptorAt(int index) {
+    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
   }
 
   public int textLengthAt(int index) {

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.QueryOpenResult;
@@ -69,7 +70,9 @@ final class EmbeddedRiverVarcharTest {
     assertText(command, 0, "alpha");
     assertText(command, 1, "none");
     assertText(command, 2, "new");
-    assertEquals(0b111L, command.varcharMask());
+    assertEquals(SqlTypeDescriptor.varchar(7), command.typeDescriptorAt(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.typeDescriptorAt(1));
+    assertEquals(SqlTypeDescriptor.varchar(7), command.typeDescriptorAt(2));
 
     assertSingleKey(session, "SELECT id FROM products WHERE tag='group'", 4);
     assertEquals(
@@ -107,7 +110,7 @@ final class EmbeddedRiverVarcharTest {
         session.execute("SELECT MIN(code) FROM products", command));
     assertText(command, 0, "alpha");
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.DATATYPE_MISMATCH,
         session.execute("SELECT SUM(code) FROM products", command));
 
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
@@ -139,6 +142,7 @@ final class EmbeddedRiverVarcharTest {
         session.beginQuery("SELECT code FROM products ORDER BY code", opened));
     RiverQuery query = opened.query();
     assertEquals(true, query.columnIsVarchar(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), query.columnTypeDescriptor(0));
     RowResult row = new RowResult();
     String[] expected = {"alpha", "beta", "gamma", "it's"};
     for (String value : expected) {
@@ -188,6 +192,7 @@ final class EmbeddedRiverVarcharTest {
   private static void assertText(CommandResult result, int index, String expected) {
     char[] characters = new char[8];
     assertEquals(true, result.isVarchar(index));
+    assertEquals(SqlTypeDescriptor.varchar(7), result.typeDescriptorAt(index));
     assertEquals(expected.length(), result.textLengthAt(index));
     assertEquals(expected.length(), result.copyTextAt(index, characters, 0));
     assertEquals(expected, new String(characters, 0, expected.length()));
@@ -196,6 +201,7 @@ final class EmbeddedRiverVarcharTest {
   private static void assertText(RowResult result, int index, String expected) {
     char[] characters = new char[8];
     assertEquals(true, result.isVarchar(index));
+    assertEquals(SqlTypeDescriptor.varchar(7), result.typeDescriptorAt(index));
     assertEquals(expected.length(), result.textLengthAt(index));
     assertEquals(expected.length(), result.copyTextAt(index, characters, 0));
     assertEquals(expected, new String(characters, 0, expected.length()));

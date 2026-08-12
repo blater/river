@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
@@ -19,6 +20,68 @@ import org.junit.jupiter.api.io.TempDir;
 final class RelationalDatabaseTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(733, 739);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void persistsCanonicalColumnDescriptorsAndRejectsUnknownTypes(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RelationalSession session = sessionResult.session();
+    TableSchema schema = new TableSchema();
+    assertEquals(StatusCode.OK, schema.addBigint("account_id", false));
+    assertEquals(StatusCode.OK, schema.addVarchar7("region", true));
+    assertEquals(StatusCode.OK, schema.addBigint("balance", true));
+    TableDefinition created = new TableDefinition();
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.createTable("typed_accounts", schema, created));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(SqlTypeDescriptor.BIGINT, created.typeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), created.typeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.BIGINT, created.typeDescriptor(2));
+    assertEquals(StatusCode.OK, database.close());
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    session = sessionResult.session();
+    TableDefinition reopened = new TableDefinition();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.resolveTable("typed_accounts", reopened));
+    assertEquals(SqlTypeDescriptor.BIGINT, reopened.typeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.varchar(7), reopened.typeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.BIGINT, reopened.typeDescriptor(2));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+
+    ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
+    CatalogRecord.encodeTable(
+        encoded,
+        17,
+        0,
+        TableDefinition.INDEX_NONE,
+        -1,
+        "corrupt_types",
+        schema);
+    int encodedBytes = encoded.remaining();
+    encoded.putInt(CatalogRecord.TABLE_TYPE_DESCRIPTORS_OFFSET + Integer.BYTES, 9);
+    HeapRowResult corrupted = new HeapRowResult();
+    corrupted.set(encoded, 1, 0, encodedBytes);
+    assertEquals(
+        StatusCode.CORRUPTION,
+        CatalogRecord.decodeTable(
+            corrupted,
+            ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES),
+            "corrupt_types",
+            database,
+            new TableDefinition()));
+    assertEquals(StatusCode.OK, database.close());
+  }
 
   @Test
   void commitsCatalogAndRowsThroughDurableWalQuorum(@TempDir Path root)

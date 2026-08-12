@@ -2,6 +2,7 @@ package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Reusable bounded result for one command or query close. */
 public final class CommandResult {
@@ -12,10 +13,10 @@ public final class CommandResult {
   private final char[][] textValues =
       new char[MAXIMUM_COLUMNS][MAXIMUM_TEXT_CHARACTERS];
   private final int[] textLengths = new int[MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[MAXIMUM_COLUMNS];
   private long commitSequence;
   private long key;
   private long nullMask;
-  private long varcharMask;
   private int affectedRows;
   private int columnCount;
   private boolean rowAvailable;
@@ -25,13 +26,13 @@ public final class CommandResult {
     commitSequence = 0;
     key = 0;
     nullMask = 0;
-    varcharMask = 0;
     affectedRows = 0;
     columnCount = 0;
     rowAvailable = false;
     transactionActive = false;
     for (int index = 0; index < textLengths.length; index++) {
       textLengths[index] = 0;
+      typeDescriptors[index] = 0;
     }
   }
 
@@ -43,38 +44,22 @@ public final class CommandResult {
       long selectedKey,
       long[] sourceValues,
       long sourceNullMask,
-      int columns) {
-    return complete(
-        rows,
-        committedAt,
-        activeTransaction,
-        hasRow,
-        selectedKey,
-        sourceValues,
-        sourceNullMask,
-        0,
-        columns);
-  }
-
-  public StatusCode complete(
-      int rows,
-      long committedAt,
-      boolean activeTransaction,
-      boolean hasRow,
-      long selectedKey,
-      long[] sourceValues,
-      long sourceNullMask,
-      long sourceVarcharMask,
+      int[] sourceTypeDescriptors,
       int columns) {
     if (rows < 0
         || committedAt < 0
         || columns < 0
         || columns > values.length
         || hasRow != (columns > 0)
-        || columns > 0 && sourceValues == null
-        || (sourceNullMask & ~((1L << columns) - 1)) != 0
-        || (sourceVarcharMask & ~((1L << columns) - 1)) != 0) {
+        || columns > 0 && (sourceValues == null || sourceTypeDescriptors == null)
+        || sourceTypeDescriptors != null && columns > sourceTypeDescriptors.length
+        || (sourceNullMask & ~((1L << columns) - 1)) != 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < columns; index++) {
+      if (!SqlTypeDescriptor.isValid(sourceTypeDescriptors[index])) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
     }
     reset();
     affectedRows = rows;
@@ -83,12 +68,11 @@ public final class CommandResult {
     rowAvailable = hasRow;
     key = selectedKey;
     nullMask = sourceNullMask;
-    varcharMask = sourceVarcharMask;
     columnCount = columns;
     for (int index = 0; index < columns; index++) {
       values[index] = sourceValues[index];
-      if ((sourceVarcharMask & 1L << index) != 0
-          && (sourceNullMask & 1L << index) == 0) {
+      typeDescriptors[index] = sourceTypeDescriptors[index];
+      if (isVarchar(index) && (sourceNullMask & 1L << index) == 0) {
         textLengths[index] = PackedText.copyTo(
             sourceValues[index], textValues[index], 0);
       }
@@ -108,7 +92,8 @@ public final class CommandResult {
         || offset < 0
         || length < 0
         || length > MAXIMUM_TEXT_CHARACTERS
-        || offset > source.length - length) {
+        || offset > source.length - length
+        || !isVarchar(index)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int character = 0; character < length; character++) {
@@ -119,7 +104,6 @@ public final class CommandResult {
       textValues[index][character] = value;
     }
     textLengths[index] = length;
-    varcharMask |= 1L << index;
     return StatusCode.OK;
   }
 
@@ -162,7 +146,12 @@ public final class CommandResult {
   public boolean isVarchar(int index) {
     return index >= 0
         && index < columnCount
-        && (varcharMask & 1L << index) != 0;
+        && SqlTypeDescriptor.typeId(typeDescriptors[index])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+  }
+
+  public int typeDescriptorAt(int index) {
+    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
   }
 
   public int textLengthAt(int index) {
@@ -190,7 +179,4 @@ public final class CommandResult {
         ? textValues[index][character] : 0;
   }
 
-  public long varcharMask() {
-    return varcharMask;
-  }
 }

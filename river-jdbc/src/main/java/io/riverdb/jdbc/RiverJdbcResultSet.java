@@ -86,6 +86,9 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     if (lastWasNull) {
       return null;
     }
+    if (metadata.isBoolean(column)) {
+      return Boolean.toString(value != 0);
+    }
     if (!metadata.isVarchar(column)) {
       return Long.toString(value);
     }
@@ -155,7 +158,10 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     if (lastWasNull) {
       return null;
     }
-    return metadata.isVarchar(column) ? getString(column) : Long.valueOf(value);
+    if (metadata.isVarchar(column)) {
+      return getString(column);
+    }
+    return metadata.isBoolean(column) ? Boolean.valueOf(value != 0) : Long.valueOf(value);
   }
 
   @Override
@@ -173,6 +179,9 @@ final class RiverJdbcResultSet extends AbstractResultSet {
         throw JdbcExceptions.unsupported();
       }
       converted = getString(column);
+    } else if (metadata.isBoolean(column)
+        && (type == Boolean.class || type == Boolean.TYPE)) {
+      converted = Boolean.valueOf(value != 0);
     } else if (type == Long.class || type == Long.TYPE) {
       converted = Long.valueOf(value);
     } else if (type == Integer.class || type == Integer.TYPE) {

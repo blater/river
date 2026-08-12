@@ -1,6 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 
 /** Caller-owned resolved logical table identity. */
@@ -19,6 +20,7 @@ public final class TableDefinition {
   private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
   private final boolean[] constraintIndexes = new boolean[MAXIMUM_INDEXES];
   private final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[TableSchema.MAXIMUM_COLUMNS];
   private final int[] referenceTableIds = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -30,7 +32,6 @@ public final class TableDefinition {
   private int columnCount;
   private long notNullMask;
   private long defaultMask;
-  private long varcharMask;
   private long checkMask;
   private long referenceMask;
   private long schemaVersion;
@@ -59,10 +60,12 @@ public final class TableDefinition {
     for (int index = 0; index < columnCount - 2; index++) {
       additionalColumns[index].reset();
     }
+    for (int index = 0; index < columnCount; index++) {
+      typeDescriptors[index] = 0;
+    }
     columnCount = 0;
     notNullMask = 0;
     defaultMask = 0;
-    varcharMask = 0;
     checkMask = 0;
     referenceMask = 0;
     schemaVersion = 0;
@@ -90,7 +93,8 @@ public final class TableDefinition {
     columnCount = 2;
     notNullMask = 1;
     defaultMask = 0;
-    varcharMask = 0;
+    typeDescriptors[0] = SqlTypeDescriptor.BIGINT;
+    typeDescriptors[1] = SqlTypeDescriptor.BIGINT;
     checkMask = 0;
     referenceMask = 0;
     uniqueIndexCount = 0;
@@ -134,7 +138,7 @@ public final class TableDefinition {
     tableId = id;
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask;
-    varcharMask = schema.varcharMask;
+    copyTypes(schema);
     copyDefaults(schema);
     copyChecks(schema);
     copyReferences(schema);
@@ -162,12 +166,12 @@ public final class TableDefinition {
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask();
     defaultMask = schema.defaultMask();
-    varcharMask = schema.varcharMask();
     checkMask = schema.checkMask();
     referenceMask = schema.referenceMask();
     identity = schema.hasIdentity();
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = schema.defaultValue(index);
+      typeDescriptors[index] = schema.typeDescriptor(index);
       checkComparisons[index] = schema.checkComparison(index);
       checkValues[index] = schema.checkValue(index);
       referenceTableIds[index] = schema.referenceTableId(index);
@@ -195,7 +199,7 @@ public final class TableDefinition {
       int columns,
       long requiredNotNullMask,
       long requiredDefaultMask,
-      long requiredVarcharMask,
+      int typeDescriptorsOffset,
       boolean requiredIdentity,
       long requiredCheckMask,
       int checksOffset,
@@ -208,12 +212,13 @@ public final class TableDefinition {
     columnCount = columns;
     notNullMask = requiredNotNullMask;
     defaultMask = requiredDefaultMask;
-    varcharMask = requiredVarcharMask;
     identity = requiredIdentity;
     checkMask = requiredCheckMask;
     referenceMask = requiredReferenceMask;
     for (int index = 0; index < columns; index++) {
       defaultValues[index] = source.getLong(defaultsOffset + index * Long.BYTES);
+      typeDescriptors[index] = source.getInt(
+          typeDescriptorsOffset + index * Integer.BYTES);
       checkComparisons[index] = source.getInt(checksOffset + index * Integer.BYTES);
       checkValues[index] = source.getLong(checkValuesOffset + index * Long.BYTES);
       referenceTableIds[index] = source.getInt(
@@ -299,7 +304,12 @@ public final class TableDefinition {
   public boolean isVarchar(int column) {
     return column > 0
         && column < columnCount
-        && (varcharMask & 1L << column) != 0;
+        && SqlTypeDescriptor.typeId(typeDescriptors[column])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+  }
+
+  public int typeDescriptor(int column) {
+    return column >= 0 && column < columnCount ? typeDescriptors[column] : 0;
   }
 
   public boolean hasIdentity() {
@@ -373,10 +383,6 @@ public final class TableDefinition {
 
   long defaultMask() {
     return defaultMask;
-  }
-
-  long varcharMask() {
-    return varcharMask;
   }
 
   int uniqueValueIndexTableId() {
@@ -569,9 +575,14 @@ public final class TableDefinition {
 
   private void copyDefaults(TableDefinition source) {
     defaultMask = source.defaultMask;
-    varcharMask = source.varcharMask;
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = source.defaultValues[index];
+    }
+  }
+
+  private void copyTypes(TableDefinition source) {
+    for (int index = 0; index < columnCount; index++) {
+      typeDescriptors[index] = source.typeDescriptors[index];
     }
   }
 

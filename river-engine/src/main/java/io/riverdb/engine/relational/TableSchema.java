@@ -1,8 +1,9 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
-/** Caller-owned bounded schema for the current BIGINT and VARCHAR(7) relational slice. */
+/** Caller-owned bounded schema carrying one canonical descriptor per column. */
 public final class TableSchema {
   public static final int MAXIMUM_COLUMNS = 8;
   public static final int CHECK_EQUAL = 1;
@@ -15,13 +16,13 @@ public final class TableSchema {
 
   private final ColumnName[] columns = new ColumnName[MAXIMUM_COLUMNS];
   private final long[] defaultValues = new long[MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[MAXIMUM_COLUMNS];
   private final int[] referenceTableIds = new int[MAXIMUM_COLUMNS];
   private int columnCount;
   private long notNullMask;
   private long defaultMask;
-  private long varcharMask;
   private long checkMask;
   private long referenceMask;
   private boolean identity;
@@ -35,11 +36,11 @@ public final class TableSchema {
   public void reset() {
     for (int index = 0; index < columnCount; index++) {
       columns[index].reset();
+      typeDescriptors[index] = 0;
     }
     columnCount = 0;
     notNullMask = 0;
     defaultMask = 0;
-    varcharMask = 0;
     checkMask = 0;
     referenceMask = 0;
     identity = false;
@@ -50,17 +51,28 @@ public final class TableSchema {
   }
 
   public StatusCode addBigint(CharSequence name, boolean nullable) {
-    return addColumn(name, nullable, false);
+    return addColumn(name, nullable, SqlTypeDescriptor.BIGINT);
   }
 
   public StatusCode addVarchar7(CharSequence name, boolean nullable) {
-    return addColumn(name, nullable, true);
+    return addColumn(name, nullable, SqlTypeDescriptor.varchar(7));
+  }
+
+  public StatusCode addColumn(
+      CharSequence name,
+      int descriptor,
+      boolean nullable) {
+    if (descriptor != SqlTypeDescriptor.BIGINT
+        && descriptor != SqlTypeDescriptor.varchar(7)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return addColumn(name, nullable, descriptor);
   }
 
   private StatusCode addColumn(
       CharSequence name,
       boolean nullable,
-      boolean varchar) {
+      int descriptor) {
     if (!RelationalKey.validName(name)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -77,9 +89,7 @@ public final class TableSchema {
     if (!nullable) {
       notNullMask |= 1L << columnCount;
     }
-    if (varchar) {
-      varcharMask |= 1L << columnCount;
-    }
+    typeDescriptors[columnCount] = descriptor;
     columnCount++;
     return StatusCode.OK;
   }
@@ -95,7 +105,9 @@ public final class TableSchema {
   }
 
   public StatusCode setPrimaryKeyIdentity() {
-    if (columnCount < 1 || (defaultMask & 1L) != 0 || (varcharMask & 1L) != 0) {
+    if (columnCount < 1
+        || (defaultMask & 1L) != 0
+        || typeDescriptors[0] != SqlTypeDescriptor.BIGINT) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     identity = true;
@@ -105,7 +117,7 @@ public final class TableSchema {
   public StatusCode setLastCheck(int comparison, long value) {
     int column = columnCount - 1;
     if (column < 0
-        || (varcharMask & 1L << column) != 0
+        || typeDescriptors[column] != SqlTypeDescriptor.BIGINT
         || (checkMask & 1L << column) != 0
         || !validCheckComparison(comparison)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -124,7 +136,7 @@ public final class TableSchema {
     if (column <= 0
         || column >= columnCount
         || tableId <= 0
-        || (varcharMask & 1L << column) != 0
+        || typeDescriptors[column] != SqlTypeDescriptor.BIGINT
         || (referenceMask & 1L << column) != 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -172,15 +184,16 @@ public final class TableSchema {
   boolean isVarchar(int column) {
     return column > 0
         && column < columnCount
-        && (varcharMask & 1L << column) != 0;
+        && SqlTypeDescriptor.typeId(typeDescriptors[column])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
   }
 
   public boolean hasIdentity() {
     return identity;
   }
 
-  long varcharMask() {
-    return varcharMask;
+  public int typeDescriptor(int column) {
+    return column >= 0 && column < columnCount ? typeDescriptors[column] : 0;
   }
 
   long checkMask() {

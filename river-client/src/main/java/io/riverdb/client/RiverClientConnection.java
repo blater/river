@@ -45,6 +45,7 @@ public final class RiverClientConnection implements RiverDatabase {
   private final byte[] responseBytes = new byte[ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES];
   private final ByteBuffer responseBuffer = ByteBuffer.wrap(responseBytes);
   private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
   private final char[] textCharacters =
       new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final RemoteSession session = new RemoteSession();
@@ -339,6 +340,7 @@ public final class RiverClientConnection implements RiverDatabase {
     int columns = response.columnCount();
     for (int index = 0; index < columns; index++) {
       values[index] = response.valueAt(index);
+      typeDescriptors[index] = response.typeDescriptorAt(index);
     }
     StatusCode status = target.complete(
         response.affectedRows(),
@@ -348,7 +350,7 @@ public final class RiverClientConnection implements RiverDatabase {
         response.key(),
         values,
         response.nullMask(),
-        response.varcharMask(),
+        typeDescriptors,
         columns);
     for (int index = 0; status.isOk() && index < columns; index++) {
       if (response.isVarchar(index) && !response.isNull(index)) {
@@ -404,9 +406,9 @@ public final class RiverClientConnection implements RiverDatabase {
         query.active = true;
         query.rowsReturned = 0;
         query.columnCount = response.columnCount();
-        query.varcharMask = response.varcharMask();
         for (int index = 0; index < query.columnCount; index++) {
           query.columnNames[index] = response.columnName(index);
+          query.typeDescriptors[index] = response.typeDescriptorAt(index);
         }
         status = result.complete(query);
       }
@@ -427,7 +429,7 @@ public final class RiverClientConnection implements RiverDatabase {
         query.active = false;
         query.clearColumnNames();
         query.columnCount = 0;
-        query.varcharMask = 0;
+        query.clearTypeDescriptors();
         sessionClosed();
       }
       return status;
@@ -439,13 +441,13 @@ public final class RiverClientConnection implements RiverDatabase {
       query.rowsReturned = 0;
       query.clearColumnNames();
       query.columnCount = 0;
-      query.varcharMask = 0;
+      query.clearTypeDescriptors();
     }
 
     private final class RemoteQuery implements RiverQuery {
       private final String[] columnNames = new String[CommandResult.MAXIMUM_COLUMNS];
+      private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
       private long rowsReturned;
-      private long varcharMask;
       private int columnCount;
       private boolean active;
 
@@ -472,12 +474,14 @@ public final class RiverClientConnection implements RiverDatabase {
         int columns = response.columnCount();
         for (int index = 0; index < columns; index++) {
           values[index] = response.valueAt(index);
+          RiverClientConnection.this.typeDescriptors[index] =
+              response.typeDescriptorAt(index);
         }
         StatusCode completed = result.complete(
             response.key(),
             values,
             response.nullMask(),
-            response.varcharMask(),
+            RiverClientConnection.this.typeDescriptors,
             columns);
         for (int index = 0; completed.isOk() && index < columns; index++) {
           if (response.isVarchar(index) && !response.isNull(index)) {
@@ -506,8 +510,8 @@ public final class RiverClientConnection implements RiverDatabase {
         if (status.isOk()) {
           active = false;
           clearColumnNames();
+          clearTypeDescriptors();
           columnCount = 0;
-          varcharMask = 0;
           status = copyCommand(result);
         }
         return status;
@@ -529,10 +533,8 @@ public final class RiverClientConnection implements RiverDatabase {
       }
 
       @Override
-      public boolean columnIsVarchar(int index) {
-        return index >= 0
-            && index < columnCount
-            && (varcharMask & 1L << index) != 0;
+      public int columnTypeDescriptor(int index) {
+        return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
       }
 
       @Override
@@ -543,6 +545,12 @@ public final class RiverClientConnection implements RiverDatabase {
       private void clearColumnNames() {
         for (int index = 0; index < columnNames.length; index++) {
           columnNames[index] = null;
+        }
+      }
+
+      private void clearTypeDescriptors() {
+        for (int index = 0; index < typeDescriptors.length; index++) {
+          typeDescriptors[index] = 0;
         }
       }
     }

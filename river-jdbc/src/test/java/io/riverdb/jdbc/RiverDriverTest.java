@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.error.SqlState;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
@@ -1599,6 +1600,25 @@ final class RiverDriverTest {
             "CREATE UNIQUE INDEX text_values_label ON text_values(label)"));
         assertEquals(1, schema.executeUpdate(
             "INSERT INTO text_values (id, label) VALUES (3, NULL)"));
+      }
+
+      try (Statement catalog = connection.createStatement();
+          ResultSet indexes = catalog.executeQuery("SHOW INDEXES FROM text_values")) {
+        ResultSetMetaData metadata = indexes.getMetaData();
+        assertEquals(Types.VARCHAR, metadata.getColumnType(1));
+        assertEquals(64, metadata.getPrecision(1));
+        assertEquals(Types.BOOLEAN, metadata.getColumnType(3));
+        assertEquals("BOOLEAN", metadata.getColumnTypeName(3));
+        assertEquals(Boolean.class.getName(), metadata.getColumnClassName(3));
+        assertTrue(indexes.next());
+        assertEquals(Boolean.TRUE, indexes.getObject(3));
+        assertEquals(Boolean.TRUE, indexes.getObject(3, Boolean.class));
+      }
+      try (Statement typed = connection.createStatement()) {
+        SQLException mismatch = assertThrows(
+            SQLException.class,
+            () -> typed.executeQuery("SELECT SUM(label) FROM text_values"));
+        assertEquals(SqlState.DATATYPE_MISMATCH, mismatch.getSQLState());
       }
 
       try (PreparedStatement insert = connection.prepareStatement(

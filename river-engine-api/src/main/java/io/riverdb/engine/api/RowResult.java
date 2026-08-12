@@ -2,6 +2,7 @@ package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Reusable bounded row result; unavailable with OK denotes end of stream. */
 public final class RowResult {
@@ -9,20 +10,20 @@ public final class RowResult {
   private final char[][] textValues =
       new char[CommandResult.MAXIMUM_COLUMNS][CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final int[] textLengths = new int[CommandResult.MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
   private long key;
   private long nullMask;
-  private long varcharMask;
   private int columnCount;
   private boolean available;
 
   public void reset() {
     key = 0;
     nullMask = 0;
-    varcharMask = 0;
     columnCount = 0;
     available = false;
     for (int index = 0; index < textLengths.length; index++) {
       textLengths[index] = 0;
+      typeDescriptors[index] = 0;
     }
   }
 
@@ -30,33 +31,30 @@ public final class RowResult {
       long rowKey,
       long[] sourceValues,
       long sourceNullMask,
-      int columns) {
-    return complete(rowKey, sourceValues, sourceNullMask, 0, columns);
-  }
-
-  public StatusCode complete(
-      long rowKey,
-      long[] sourceValues,
-      long sourceNullMask,
-      long sourceVarcharMask,
+      int[] sourceTypeDescriptors,
       int columns) {
     if (sourceValues == null
+        || sourceTypeDescriptors == null
         || columns <= 0
         || columns > values.length
-        || (sourceNullMask & ~((1L << columns) - 1)) != 0
-        || (sourceVarcharMask & ~((1L << columns) - 1)) != 0) {
+        || columns > sourceTypeDescriptors.length
+        || (sourceNullMask & ~((1L << columns) - 1)) != 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < columns; index++) {
+      if (!SqlTypeDescriptor.isValid(sourceTypeDescriptors[index])) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
     }
     reset();
     key = rowKey;
     nullMask = sourceNullMask;
-    varcharMask = sourceVarcharMask;
     columnCount = columns;
     available = true;
     for (int index = 0; index < columns; index++) {
       values[index] = sourceValues[index];
-      if ((sourceVarcharMask & 1L << index) != 0
-          && (sourceNullMask & 1L << index) == 0) {
+      typeDescriptors[index] = sourceTypeDescriptors[index];
+      if (isVarchar(index) && (sourceNullMask & 1L << index) == 0) {
         textLengths[index] = PackedText.copyTo(
             sourceValues[index], textValues[index], 0);
       }
@@ -76,7 +74,8 @@ public final class RowResult {
         || offset < 0
         || length < 0
         || length > CommandResult.MAXIMUM_TEXT_CHARACTERS
-        || offset > source.length - length) {
+        || offset > source.length - length
+        || !isVarchar(index)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int character = 0; character < length; character++) {
@@ -87,7 +86,6 @@ public final class RowResult {
       textValues[index][character] = value;
     }
     textLengths[index] = length;
-    varcharMask |= 1L << index;
     return StatusCode.OK;
   }
 
@@ -114,7 +112,12 @@ public final class RowResult {
   public boolean isVarchar(int index) {
     return index >= 0
         && index < columnCount
-        && (varcharMask & 1L << index) != 0;
+        && SqlTypeDescriptor.typeId(typeDescriptors[index])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+  }
+
+  public int typeDescriptorAt(int index) {
+    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
   }
 
   public int textLengthAt(int index) {
@@ -140,10 +143,6 @@ public final class RowResult {
             && character >= 0
             && character < textLengths[index]
         ? textValues[index][character] : 0;
-  }
-
-  public long varcharMask() {
-    return varcharMask;
   }
 
   public boolean isAvailable() {

@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import java.nio.ByteBuffer;
 
@@ -10,6 +11,7 @@ public final class ProtocolResponse {
   private final char[][] textValues =
       new char[CommandResult.MAXIMUM_COLUMNS][CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final int[] textLengths = new int[CommandResult.MAXIMUM_COLUMNS];
+  private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
   private final char[][] columnNames =
       new char[CommandResult.MAXIMUM_COLUMNS][ProtocolFrameCodec.MAXIMUM_COLUMN_NAME_BYTES];
   private final int[] columnNameLengths = new int[CommandResult.MAXIMUM_COLUMNS];
@@ -23,7 +25,6 @@ public final class ProtocolResponse {
   private long challengeHigh;
   private long challengeLow;
   private long nullMask;
-  private long varcharMask;
 
   public void reset() {
     status = null;
@@ -36,10 +37,10 @@ public final class ProtocolResponse {
     challengeHigh = 0;
     challengeLow = 0;
     nullMask = 0;
-    varcharMask = 0;
     for (int index = 0; index < columnNameLengths.length; index++) {
       columnNameLengths[index] = 0;
       textLengths[index] = 0;
+      typeDescriptors[index] = 0;
     }
   }
 
@@ -53,8 +54,7 @@ public final class ProtocolResponse {
       long returned,
       long nonceHigh,
       long nonceLow,
-      long responseNullMask,
-      long responseVarcharMask) {
+      long responseNullMask) {
     status = responseStatus;
     flags = responseFlags;
     affectedRows = rows;
@@ -65,7 +65,10 @@ public final class ProtocolResponse {
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
     nullMask = responseNullMask;
-    varcharMask = responseVarcharMask;
+  }
+
+  void typeDescriptorAt(int index, int descriptor) {
+    typeDescriptors[index] = descriptor;
   }
 
   void valueAt(int index, long value) {
@@ -150,11 +153,12 @@ public final class ProtocolResponse {
   public boolean isVarchar(int index) {
     return index >= 0
         && index < columnCount
-        && (varcharMask & 1L << index) != 0;
+        && SqlTypeDescriptor.typeId(typeDescriptors[index])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
   }
 
-  public long varcharMask() {
-    return varcharMask;
+  public int typeDescriptorAt(int index) {
+    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
   }
 
   public int textLengthAt(int index) {
