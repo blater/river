@@ -2079,12 +2079,12 @@ final class RiverDriverTest {
           0,
           statement.executeUpdate(
               "CREATE TABLE " + tableName
-                  + " (id BIGINT PRIMARY KEY, value BIGINT)"));
+                  + " (id BIGINT PRIMARY KEY, value BIGINT, label VARCHAR(7))"));
       assertEquals(
           0,
           statement.executeUpdate(
               "CREATE VIEW " + viewName
-                  + " AS SELECT id, value FROM " + tableName));
+                  + " AS SELECT label AS code, id FROM " + tableName));
       assertEquals(
           0,
           statement.executeUpdate(
@@ -2180,7 +2180,42 @@ final class RiverDriverTest {
           new String[0],
           new String[0]);
 
-      ResultSet held = metadata.getTables(null, null, "%", null);
+      try (ResultSet columns = metadata.getColumns(
+          null,
+          null,
+          "%transaction_history%",
+          "%")) {
+        ResultSetMetaData fields = columns.getMetaData();
+        assertEquals(24, fields.getColumnCount());
+        assertEquals("TABLE_NAME", fields.getColumnLabel(3));
+        assertEquals("COLUMN_NAME", fields.getColumnLabel(4));
+        assertEquals(Types.INTEGER, fields.getColumnType(5));
+        assertEquals(ResultSetMetaData.columnNoNulls, fields.isNullable(4));
+        assertColumnMetadata(columns, tableName, "id", Types.BIGINT, 1);
+        assertColumnMetadata(columns, tableName, "value", Types.BIGINT, 2);
+        assertColumnMetadata(columns, tableName, "label", Types.VARCHAR, 3);
+        assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1);
+        assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2);
+        assertFalse(columns.next());
+      }
+      try (ResultSet columns = metadata.getColumns(
+          null,
+          null,
+          "customer\\_account\\_transaction\\_history\\_view",
+          "c_de")) {
+        assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1);
+        assertFalse(columns.next());
+      }
+      try (ResultSet columns = metadata.getColumns(
+          "missing_catalog",
+          null,
+          "%",
+          "%")) {
+        assertFalse(columns.next());
+      }
+
+      ResultSet held = metadata.getColumns(null, null, "%", "%");
+      assertTrue(held.next());
       SQLException concurrentMetadata = assertThrows(
           SQLException.class,
           () -> metadata.getTables(null, null, "%", null));
@@ -2195,6 +2230,10 @@ final class RiverDriverTest {
           SQLException.class,
           () -> metadata.getTables(null, null, "%", new String[17]));
       assertEquals("22000", tooManyTypes.getSQLState());
+      SQLException longColumnPattern = assertThrows(
+          SQLException.class,
+          () -> metadata.getColumns(null, null, "%", "x".repeat(129)));
+      assertEquals("22000", longColumnPattern.getSQLState());
 
       connection.setAutoCommit(false);
       assertEquals(
@@ -2219,7 +2258,7 @@ final class RiverDriverTest {
           null,
           new String[0],
           new String[0]);
-      ResultSet closedAtCommit = metadata.getTables(null, null, "%", null);
+      ResultSet closedAtCommit = metadata.getColumns(null, null, "%", "%");
       assertTrue(closedAtCommit.next());
       connection.commit();
       assertTrue(closedAtCommit.isClosed());
@@ -2242,7 +2281,17 @@ final class RiverDriverTest {
         null,
         new String[] {tableName, viewName},
         new String[] {"TABLE", "VIEW"});
-    ResultSet owned = connection.getMetaData().getTables(null, null, "%", null);
+    try (ResultSet columns = connection.getMetaData().getColumns(
+        null,
+        null,
+        "customer\\_account\\_transaction\\_history\\_view",
+        "%")) {
+      assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1);
+      assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2);
+      assertFalse(columns.next());
+    }
+    ResultSet owned = connection.getMetaData().getColumns(null, null, "%", "%");
+    assertTrue(owned.next());
     assertFalse(owned.isClosed());
     connection.close();
     assertTrue(owned.isClosed());
@@ -2288,6 +2337,28 @@ final class RiverDriverTest {
     for (boolean value : found) {
       assertTrue(value);
     }
+  }
+
+  private static void assertColumnMetadata(
+      ResultSet columns,
+      String table,
+      String column,
+      int type,
+      int ordinal) throws SQLException {
+    assertTrue(columns.next());
+    assertNull(columns.getString("TABLE_CAT"));
+    assertTrue(columns.wasNull());
+    assertNull(columns.getString("TABLE_SCHEM"));
+    assertEquals(table, columns.getString("TABLE_NAME"));
+    assertEquals(column, columns.getString("COLUMN_NAME"));
+    assertEquals(type, columns.getInt("DATA_TYPE"));
+    assertEquals(type == Types.VARCHAR ? "VARCHAR" : "BIGINT", columns.getString("TYPE_NAME"));
+    assertEquals(type == Types.VARCHAR ? 7 : 19, columns.getInt("COLUMN_SIZE"));
+    assertEquals(ResultSetMetaData.columnNullableUnknown, columns.getInt("NULLABLE"));
+    assertEquals(ordinal, columns.getInt("ORDINAL_POSITION"));
+    assertEquals("", columns.getString("IS_NULLABLE"));
+    assertEquals("", columns.getString("IS_AUTOINCREMENT"));
+    assertEquals("NO", columns.getString("IS_GENERATEDCOLUMN"));
   }
 
   private static LoopbackRiverServer start(RiverDatabase database) {

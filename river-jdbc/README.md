@@ -4,7 +4,8 @@ The pre-V1 driver accepts `jdbc:river://localhost:PORT` and uses the production
 River client, protocol, server, engine, WAL, and storage path. It currently
 supports one statement per connection, auto-commit or explicit repeatable-read
 and serializable transactions, update counts, and streaming forward-only,
-read-only BIGINT result sets. Each `next()` consumes one protocol fetch credit;
+read-only BIGINT and bounded VARCHAR result sets. Each `next()` consumes one
+protocol fetch credit;
 the driver does not buffer the result set. Primitive `next()`/`getLong()` use
 reusable row carriers and do not create per-row JDBC adapter objects.
 `COUNT(*)` is exposed as one streamed row. `ORDER BY column` streams in ascending
@@ -38,8 +39,10 @@ LOBs, callable statements, non-loopback URLs, and authenticated JDBC properties
 remain unsupported until their production consumers are implemented.
 `Connection.getMetaData()` truthfully reports the product, driver, JDBC version,
 transaction levels, result-set shape, identifier limits, and batching support.
-Catalog enumeration remains unsupported until River exposes a catalog query
-surface. Secure JDBC configuration is currently provided by `RiverDataSource`.
+`getTables`, `getTableTypes`, and `getColumns` expose durable tables and views;
+column names, order, aliases, and BIGINT/VARCHAR types come from the SQL binder,
+while unsupported nullability, default, and identity details are reported as
+unknown. Secure JDBC configuration is currently provided by `RiverDataSource`.
 
 River uses status returns internally. JDBC-mandated `SQLException` objects are
 created only at this external adapter boundary.

@@ -263,6 +263,28 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   }
 
   @Override
+  public ResultSet getColumns(
+      String catalog,
+      String schemaPattern,
+      String tableNamePattern,
+      String columnNamePattern) throws SQLException {
+    connection.requireOpen();
+    if (tableNamePattern != null
+        && tableNamePattern.length() > MAXIMUM_TABLE_PATTERN_LENGTH) {
+      throw JdbcExceptions.invalid("table name pattern is too long");
+    }
+    if (columnNamePattern != null
+        && columnNamePattern.length() > MAXIMUM_TABLE_PATTERN_LENGTH) {
+      throw JdbcExceptions.invalid("column name pattern is too long");
+    }
+    boolean namespaceMatches = absentNamespace(catalog) && matchesAbsentSchema(schemaPattern);
+    return connection.openColumns(
+        tableNamePattern == null ? "%" : tableNamePattern,
+        columnNamePattern == null ? "%" : columnNamePattern,
+        namespaceMatches);
+  }
+
+  @Override
   public String getSearchStringEscape() throws SQLException {
     connection.requireOpen();
     return "\\";

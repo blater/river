@@ -504,7 +504,7 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     return true;
   }
 
-  private static boolean matches(
+  static boolean matches(
       char[] value,
       int length,
       String candidatePattern) {
@@ -516,6 +516,39 @@ final class RiverCatalogResultSet extends AbstractResultSet {
       int tokenLength = literalTokenLength(candidatePattern, patternIndex);
       if (tokenLength > 0
           && literalToken(candidatePattern, patternIndex) == value[valueIndex]) {
+        patternIndex += tokenLength;
+        valueIndex++;
+      } else if (patternIndex < candidatePattern.length()
+          && candidatePattern.charAt(patternIndex) == '_') {
+        patternIndex++;
+        valueIndex++;
+      } else if (patternIndex < candidatePattern.length()
+          && candidatePattern.charAt(patternIndex) == '%') {
+        wildcardPattern = ++patternIndex;
+        wildcardValue = valueIndex;
+      } else if (wildcardPattern >= 0) {
+        patternIndex = wildcardPattern;
+        valueIndex = ++wildcardValue;
+      } else {
+        return false;
+      }
+    }
+    while (patternIndex < candidatePattern.length()
+        && candidatePattern.charAt(patternIndex) == '%') {
+      patternIndex++;
+    }
+    return patternIndex == candidatePattern.length();
+  }
+
+  static boolean matches(String value, String candidatePattern) {
+    int valueIndex = 0;
+    int patternIndex = 0;
+    int wildcardPattern = -1;
+    int wildcardValue = -1;
+    while (valueIndex < value.length()) {
+      int tokenLength = literalTokenLength(candidatePattern, patternIndex);
+      if (tokenLength > 0
+          && literalToken(candidatePattern, patternIndex) == value.charAt(valueIndex)) {
         patternIndex += tokenLength;
         valueIndex++;
       } else if (patternIndex < candidatePattern.length()
