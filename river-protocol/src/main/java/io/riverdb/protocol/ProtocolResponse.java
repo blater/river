@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import java.nio.ByteBuffer;
@@ -75,11 +76,10 @@ public final class ProtocolResponse {
     values[index] = value;
   }
 
-  void textAt(int index, ByteBuffer source, int offset, int length) {
-    for (int character = 0; character < length; character++) {
-      textValues[index][character] = (char) (source.get(offset + character) & 0xff);
-    }
-    textLengths[index] = length;
+  boolean textAt(int index, ByteBuffer source, int offset, int length) {
+    int chars = Utf8Text.decode(source, offset, length, textValues[index], 0);
+    textLengths[index] = Math.max(0, chars);
+    return chars >= 0;
   }
 
   void columnNameAt(int index, ByteBuffer source, int offset, int length) {

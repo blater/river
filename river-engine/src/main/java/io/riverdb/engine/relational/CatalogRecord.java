@@ -1,6 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
@@ -10,7 +11,8 @@ final class CatalogRecord {
   static final int MAXIMUM_BYTES =
       240 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
           + TableDefinition.MAXIMUM_INDEXES * 16
-          + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64);
+          + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64)
+          + TableSchema.MAXIMUM_ROW_BYTES;
 
   private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
   private static final long USER_SEQUENCE_MAGIC = 0x5249564552555345L; // RIVERUSE
@@ -23,7 +25,7 @@ final class CatalogRecord {
   private static final int USER_SEQUENCE_VERSION = 1;
   private static final int IDENTITY_SEQUENCE_VERSION = 1;
   private static final int VIEW_VERSION = 1;
-  private static final int TABLE_VERSION = 11;
+  private static final int TABLE_VERSION = 12;
   private static final int INDEX_VERSION = 3;
   private static final int TABLE_CHECK_MASK_OFFSET = 60;
   private static final int TABLE_CHECKS_OFFSET = 68;
@@ -343,6 +345,9 @@ final class CatalogRecord {
     for (int index = 0; index < schema.columnCount(); index++) {
       offset = encodeColumn(target, offset, schema.columnName(index));
     }
+    for (int index = 0; index < schema.defaultTextBytes(); index++) {
+      target.put(offset++, schema.defaultTextByte(index));
+    }
     target.position(0);
     target.limit(offset);
   }
@@ -413,6 +418,9 @@ final class CatalogRecord {
         constraint);
     for (int index = 0; index < schema.columnCount(); index++) {
       offset = encodeColumn(target, offset, schema.columnName(index));
+    }
+    for (int index = 0; index < schema.defaultTextBytes(); index++) {
+      target.put(offset++, schema.defaultTextByte(index));
     }
     target.position(0);
     target.limit(offset);
@@ -578,7 +586,7 @@ final class CatalogRecord {
         ? scratch.getLong(28) : -1;
     long defaultMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(36) : -1;
-    long reservedTypeMask = source.length() >= TABLE_INDEXES_OFFSET
+    long defaultTextBytes = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(44) : -1;
     long identityMask = source.length() >= TABLE_INDEXES_OFFSET
         ? scratch.getLong(52) : -1;
@@ -613,6 +621,14 @@ final class CatalogRecord {
         }
         expectedBytes += Integer.BYTES + columnBytes;
       }
+      if (expectedBytes >= 0
+          && defaultTextBytes >= 0
+          && defaultTextBytes <= TableSchema.MAXIMUM_ROW_BYTES
+          && expectedBytes <= source.length() - defaultTextBytes) {
+        expectedBytes += (int) defaultTextBytes;
+      } else {
+        expectedBytes = -1;
+      }
     }
     if (!status.isOk()
         || version != TABLE_VERSION
@@ -631,8 +647,13 @@ final class CatalogRecord {
         || (notNullMask & ~((1L << columnCount) - 1)) != 0
         || (defaultMask & 1) != 0
         || (defaultMask & ~((1L << columnCount) - 1)) != 0
-        || reservedTypeMask != 0
         || !validTypeDescriptors(scratch, columnCount)
+        || !validDefaults(
+            scratch,
+            columnCount,
+            defaultMask,
+            (int) defaultTextBytes,
+            expectedBytes - (int) defaultTextBytes)
         || (identityMask != 0 && identityMask != 1)
         || (checkMask & ~((1L << columnCount) - 1)) != 0
         || !validChecks(scratch, columnCount, checkMask)
@@ -666,7 +687,9 @@ final class CatalogRecord {
         TABLE_CHECK_VALUES_OFFSET,
         referenceMask,
         TABLE_REFERENCE_IDS_OFFSET,
-        TABLE_DEFAULTS_OFFSET);
+        TABLE_DEFAULTS_OFFSET,
+        expectedBytes - (int) defaultTextBytes,
+        (int) defaultTextBytes);
     int buildingIndexes = 0;
     for (int index = 0; status.isOk() && index < indexCount; index++) {
       int offset = TABLE_INDEXES_OFFSET + index * 16;
@@ -846,7 +869,10 @@ final class CatalogRecord {
     target.putInt(24, indexCount);
     target.putLong(28, notNullMask);
     target.putLong(36, defaultMask);
-    target.putLong(44, 0);
+    int defaultTextBytes = definition != null
+        ? definition.defaultTextBytes()
+        : existing != null ? existing.defaultTextBytes() : 0;
+    target.putLong(44, defaultTextBytes);
     boolean identity = definition != null
         ? definition.hasIdentity() : existing != null && existing.hasIdentity();
     target.putLong(52, identity ? 1 : 0);
@@ -999,12 +1025,51 @@ final class CatalogRecord {
         if (descriptor != SqlTypeDescriptor.BIGINT) {
           return false;
         }
-      } else if (descriptor != SqlTypeDescriptor.BIGINT
-          && descriptor != SqlTypeDescriptor.varchar(7)) {
+      } else if (!SqlTypeDescriptor.isValid(descriptor)
+          || SqlTypeDescriptor.typeId(descriptor) != SqlTypeDescriptor.TYPE_ID_BIGINT
+              && SqlTypeDescriptor.typeId(descriptor)
+                  != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         return false;
       }
     }
     return true;
+  }
+
+  private static boolean validDefaults(
+      ByteBuffer source,
+      int columns,
+      long defaultMask,
+      int defaultTextBytes,
+      int defaultTextOffset) {
+    int expectedOffset = 0;
+    for (int column = 0; column < TableSchema.MAXIMUM_COLUMNS; column++) {
+      long value = source.getLong(TABLE_DEFAULTS_OFFSET + column * Long.BYTES);
+      boolean present = column < columns && (defaultMask & 1L << column) != 0;
+      int descriptor = column < columns
+          ? source.getInt(TABLE_TYPE_DESCRIPTORS_OFFSET + column * Integer.BYTES) : 0;
+      boolean varchar = SqlTypeDescriptor.typeId(descriptor)
+          == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+      if (!present || !varchar) {
+        if (!present && value != 0) {
+          return false;
+        }
+        continue;
+      }
+      int offset = (int) (value >>> 32);
+      int length = (int) value;
+      if (offset != expectedOffset
+          || length < 0
+          || offset > defaultTextBytes - length
+          || Utf8Text.validate(
+              source,
+              defaultTextOffset + offset,
+              length,
+              SqlTypeDescriptor.parameterOne(descriptor)) < 0) {
+        return false;
+      }
+      expectedOffset += length;
+    }
+    return expectedOffset == defaultTextBytes;
   }
 
   private static boolean duplicateIndex(

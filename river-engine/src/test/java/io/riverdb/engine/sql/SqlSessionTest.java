@@ -264,6 +264,131 @@ final class SqlSessionTest {
   }
 
   @Test
+  void activeScanRejectsExecuteBeforeMutatingItsBoundState(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE messages (id BIGINT PRIMARY KEY, body VARCHAR(32))",
+            execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO messages VALUES (1, 'first')", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO messages VALUES (2, 'second')", execution));
+
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT body AS message FROM messages WHERE id >= 1 AND id < 3",
+            cursor));
+    assertEquals("message", session.scanColumnName(cursor, 0).toString());
+    int descriptor = session.scanColumnTypeDescriptor(cursor, 0);
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    char[] text = new char[32];
+    int length = row.copyTextAt(0, text, 0);
+    assertEquals("first", new String(text, 0, length));
+
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("SELECT COUNT(*) FROM messages", execution));
+    assertEquals("message", session.scanColumnName(cursor, 0).toString());
+    assertEquals(descriptor, session.scanColumnTypeDescriptor(cursor, 0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    length = row.copyTextAt(0, text, 0);
+    assertEquals("second", new String(text, 0, length));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void scanCapabilitiesRejectWrongOwnersAndStaleGenerations(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession owner = sessionResult.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession other = sessionResult.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, owner.execute("CREATE TABLE tokens", execution));
+    assertEquals(
+        StatusCode.OK,
+        owner.execute("INSERT INTO tokens VALUES (1, 10), (2, 20)", execution));
+
+    SqlScanCursor first = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        owner.beginScan("SELECT key, value FROM tokens", first));
+    assertEquals(
+        StatusCode.CONFLICT,
+        other.beginScan("SELECT key, value FROM tokens", first));
+    assertEquals(StatusCode.CONFLICT, other.nextScan(first, row));
+    assertEquals(StatusCode.CONFLICT, other.closeScan(first, execution));
+    assertEquals(
+        StatusCode.OK,
+        other.execute("SELECT COUNT(*) FROM tokens", execution));
+    assertEquals(2, execution.value());
+    assertEquals(StatusCode.OK, owner.nextScan(first, row));
+    assertEquals(1, row.key());
+    assertEquals(StatusCode.OK, owner.closeScan(first, execution));
+
+    SqlScanCursor second = new SqlScanCursor();
+    assertEquals(
+        StatusCode.OK,
+        owner.beginScan("SELECT key, value FROM tokens", second));
+    assertEquals(StatusCode.CONFLICT, owner.nextScan(first, row));
+    assertEquals(StatusCode.CONFLICT, owner.closeScan(first, execution));
+    assertEquals(StatusCode.OK, owner.nextScan(second, row));
+    assertEquals(1, row.key());
+    assertEquals(StatusCode.OK, owner.closeScan(second, execution));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void sequenceValueCanBeConsumedThroughScanCapability(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE SEQUENCE scan_ids START WITH 41", execution));
+
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan("SELECT NEXT VALUE FOR scan_ids", cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(41, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void explicitTransactionCommitsOrRollsBackMultipleStatements(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
@@ -1534,6 +1659,57 @@ final class SqlSessionTest {
                 + "(SELECT category FROM events WHERE category=10)",
             unindexedOrder));
     assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertUnindexedRows(
+        session,
+        result,
+        "SELECT id, amount FROM events WHERE category IN "
+            + "(SELECT category FROM events WHERE id=3)",
+        new long[] {3},
+        new long[] {300});
+    assertUnindexedRows(
+        session,
+        result,
+        "SELECT id, amount FROM events WHERE category NOT IN "
+            + "(SELECT category FROM events WHERE id=999)",
+        new long[] {1, 2, 3, 4, 5},
+        new long[] {100, 200, 300, 400, 500});
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id FROM events WHERE category NOT IN "
+                + "(SELECT NULL FROM events WHERE id=1)",
+            unindexedOrder));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT e.id FROM events e WHERE e.category IN "
+                + "(SELECT i.category FROM events i WHERE i.id=e.id)",
+            unindexedOrder));
+    int correlatedMembershipRows = 0;
+    while (session.nextScan(unindexedOrder, orderedRow).isOk()) {
+      correlatedMembershipRows++;
+    }
+    assertEquals(5, correlatedMembershipRows);
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT e.id FROM events e WHERE e.amount="
+                + "(SELECT i.amount FROM events i WHERE i.category=e.category)",
+            unindexedOrder));
+    assertEquals(
+        StatusCode.CARDINALITY_VIOLATION,
+        session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT COUNT(*) FROM events", result));
+    assertEquals(5, result.value());
     assertEquals(
         StatusCode.OK,
         session.beginScan(

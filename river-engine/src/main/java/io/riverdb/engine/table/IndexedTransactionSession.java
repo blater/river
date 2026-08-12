@@ -1,7 +1,6 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.page.IndexedPageStore;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.Transaction;
@@ -239,13 +238,13 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     int pendingIndex = findLatestPendingIndex(key);
     if (pendingIndex >= 0) {
       int pendingOperation = pendingOperations[pendingIndex];
-      if (pendingOperation != IndexedTable.MUTATION_DELETE
+      if (pendingOperation != IndexedWalCodec.MUTATION_DELETE
           && pendingOperation != MUTATION_NONE) {
         return StatusCode.CONFLICT;
       }
       appendPending(
-          pendingOperation == IndexedTable.MUTATION_DELETE
-              ? IndexedTable.MUTATION_UPDATE : IndexedTable.MUTATION_INSERT,
+          pendingOperation == IndexedWalCodec.MUTATION_DELETE
+              ? IndexedWalCodec.MUTATION_UPDATE : IndexedWalCodec.MUTATION_INSERT,
           key,
           pendingPreviousRowIds[pendingIndex],
           row,
@@ -263,7 +262,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return status;
     }
     appendPending(
-        IndexedTable.MUTATION_INSERT,
+        IndexedWalCodec.MUTATION_INSERT,
         key,
         mutationTarget.rowId(),
         row,
@@ -291,8 +290,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     int pendingIndex = findLatestPendingIndex(key);
     if (pendingIndex >= 0) {
       int pendingOperation = pendingOperations[pendingIndex];
-      if (pendingOperation != IndexedTable.MUTATION_INSERT
-          && pendingOperation != IndexedTable.MUTATION_UPDATE) {
+      if (pendingOperation != IndexedWalCodec.MUTATION_INSERT
+          && pendingOperation != IndexedWalCodec.MUTATION_UPDATE) {
         return StatusCode.CONFLICT;
       }
       appendPending(
@@ -314,7 +313,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return status;
     }
     appendPending(
-        IndexedTable.MUTATION_UPDATE,
+        IndexedWalCodec.MUTATION_UPDATE,
         key,
         mutationTarget.rowId(),
         row,
@@ -338,13 +337,13 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     int pendingIndex = findLatestPendingIndex(key);
     if (pendingIndex >= 0) {
       int pendingOperation = pendingOperations[pendingIndex];
-      if (pendingOperation != IndexedTable.MUTATION_INSERT
-          && pendingOperation != IndexedTable.MUTATION_UPDATE) {
+      if (pendingOperation != IndexedWalCodec.MUTATION_INSERT
+          && pendingOperation != IndexedWalCodec.MUTATION_UPDATE) {
         return StatusCode.CONFLICT;
       }
       appendPendingDeletion(
-          pendingOperation == IndexedTable.MUTATION_INSERT
-              ? MUTATION_NONE : IndexedTable.MUTATION_DELETE,
+          pendingOperation == IndexedWalCodec.MUTATION_INSERT
+              ? MUTATION_NONE : IndexedWalCodec.MUTATION_DELETE,
           key,
           pendingPreviousRowIds[pendingIndex]);
       return StatusCode.OK;
@@ -358,7 +357,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return status;
     }
     appendPendingDeletion(
-        IndexedTable.MUTATION_DELETE, key, mutationTarget.rowId());
+        IndexedWalCodec.MUTATION_DELETE, key, mutationTarget.rowId());
     return StatusCode.OK;
   }
 
@@ -402,7 +401,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     }
     for (int index = pendingInsertCount - 1; index >= 0; index--) {
       if (pendingKeys[index] == key) {
-        if (pendingOperations[index] == IndexedTable.MUTATION_DELETE
+        if (pendingOperations[index] == IndexedWalCodec.MUTATION_DELETE
             || pendingOperations[index] == MUTATION_NONE) {
           result.reset();
           return StatusCode.CONFLICT;
@@ -532,7 +531,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
           cursor.setCommittedLookahead(false);
         }
         cursor.returned(pendingKey);
-        if (pendingOperations[pendingIndex] == IndexedTable.MUTATION_DELETE
+        if (pendingOperations[pendingIndex] == IndexedWalCodec.MUTATION_DELETE
             || pendingOperations[pendingIndex] == MUTATION_NONE) {
           continue;
         }
@@ -685,7 +684,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return transaction;
   }
 
-  StatusCode preflightPreparedWrites(IndexedPageStore store) {
+  StatusCode preflightPreparedWrites(IndexedTableStore store) {
     return containsNonInsertMutation()
         ? store.preflightPreparedMutationBatch(
             pendingOperations,
@@ -703,7 +702,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
             pendingInsertCount);
   }
 
-  StatusCode appendPreparedWrites(IndexedPageStore store, long commitSequence) {
+  StatusCode appendPreparedWrites(IndexedTableStore store, long commitSequence) {
     StatusCode status = containsNonInsertMutation()
         ? store.appendPreparedMutationBatch(
             transaction.transactionId(),
@@ -919,7 +918,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   private boolean containsNonInsertMutation() {
     for (int index = 0; index < pendingInsertCount; index++) {
-      if (pendingOperations[index] != IndexedTable.MUTATION_INSERT
+      if (pendingOperations[index] != IndexedWalCodec.MUTATION_INSERT
           || pendingPreviousRowIds[index] != 0) {
         return true;
       }

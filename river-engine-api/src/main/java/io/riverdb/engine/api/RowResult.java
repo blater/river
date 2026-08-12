@@ -1,7 +1,7 @@
 package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.PackedText;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Reusable bounded row result; unavailable with OK denotes end of stream. */
@@ -54,10 +54,6 @@ public final class RowResult {
     for (int index = 0; index < columns; index++) {
       values[index] = sourceValues[index];
       typeDescriptors[index] = sourceTypeDescriptors[index];
-      if (isVarchar(index) && (sourceNullMask & 1L << index) == 0) {
-        textLengths[index] = PackedText.copyTo(
-            sourceValues[index], textValues[index], 0);
-      }
     }
     return StatusCode.OK;
   }
@@ -78,16 +74,18 @@ public final class RowResult {
         || !isVarchar(index)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int character = 0; character < length; character++) {
-      char value = source[offset + character];
-      if (value < 0x20 || value > 0x7e) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      textValues[index][character] = value;
+    if (Utf8Text.encodedLength(
+        source,
+        offset,
+        length,
+        SqlTypeDescriptor.parameterOne(typeDescriptors[index])) < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    System.arraycopy(source, offset, textValues[index], 0, length);
     textLengths[index] = length;
     return StatusCode.OK;
   }
+
 
   public long key() {
     return key;

@@ -1,7 +1,7 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.PackedText;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
@@ -13,7 +13,8 @@ public final class SqlParser {
   private final SqlScalarSourceView scalarSourceView = new SqlScalarSourceView();
   private final long[] literalMembershipValues =
       new long[SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES];
-  private final char[] textCharacters = new char[PackedText.MAXIMUM_LENGTH];
+  private final char[] textCharacters = new char[Utf8Text.MAXIMUM_SCALARS * 2];
+  private SqlCommand activeCommand;
   private int offset;
   private int scalarPredicateIndex = -1;
   private int existenceWhereStart = -1;
@@ -442,6 +443,7 @@ public final class SqlParser {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
+    activeCommand = result;
     offset = 0;
     skipSpaces(sql);
     StatusCode status;
@@ -641,14 +643,15 @@ public final class SqlParser {
                   status = number(sql, numberResult);
                 }
                 if (status.isOk()
-                    && numberResult.value != PackedText.MAXIMUM_LENGTH) {
+                    && (numberResult.value < 1
+                        || numberResult.value > Utf8Text.MAXIMUM_SCALARS)) {
                   status = StatusCode.INVALID_EXTERNAL_INPUT;
                 }
                 if (status.isOk()) {
                   status = requireCharacter(sql, ')');
                 }
                 if (status.isOk()) {
-                  result.markLastColumnVarchar();
+                  result.markLastColumnVarchar((int) numberResult.value);
                 }
               }
             }
@@ -1064,7 +1067,8 @@ public final class SqlParser {
               nullValue || defaultValue
                   ? 0
                   : varchar
-                      ? SqlTypeDescriptor.varchar(7)
+                      ? SqlTypeDescriptor.varchar(
+                          Math.max(1, numberResult.textScalars))
                       : SqlTypeDescriptor.BIGINT,
               relative,
               subtract);
@@ -1323,7 +1327,7 @@ public final class SqlParser {
           result.appendComparison(value, comparison);
         }
         if (varchar && !columnEquality && !nullPredicate) {
-          result.markLastPredicateVarchar();
+          result.markLastPredicateVarchar(numberResult.textScalars);
         }
         if (disjunction) {
           result.markLastPredicateDisjunction();
@@ -1489,7 +1493,8 @@ public final class SqlParser {
         } else if (defaultValue) {
           result.defaultMask |= 1L << result.count;
         } else if (varchar) {
-          result.typeDescriptors[result.count] = SqlTypeDescriptor.varchar(7);
+          result.typeDescriptors[result.count] = SqlTypeDescriptor.varchar(
+              Math.max(1, numberResult.textScalars));
         } else {
           result.typeDescriptors[result.count] = SqlTypeDescriptor.BIGINT;
         }
@@ -1767,6 +1772,7 @@ public final class SqlParser {
 
   private StatusCode number(CharSequence sql, LongResult result) {
     result.varchar = false;
+    result.textScalars = 0;
     skipSpaces(sql);
     if (offset >= sql.length()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1814,14 +1820,13 @@ public final class SqlParser {
         if (offset < sql.length() && sql.charAt(offset) == '\'') {
           offset++;
         } else {
-          result.value = PackedText.pack(textCharacters, 0, length);
-          return StatusCode.OK;
+          result.value = activeCommand.storeText(textCharacters, 0, length);
+          result.textScalars = Character.codePointCount(textCharacters, 0, length);
+          return result.value == SqlCommand.INVALID_TEXT_HANDLE
+              ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
         }
       }
-      if (character < 0x20 || character > 0x7e) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      if (length >= PackedText.MAXIMUM_LENGTH) {
+      if (length >= textCharacters.length) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
       textCharacters[length++] = character;
@@ -1929,6 +1934,7 @@ public final class SqlParser {
   private static final class LongResult {
     private long value;
     private boolean varchar;
+    private int textScalars;
   }
 
   private static final class LongRow {

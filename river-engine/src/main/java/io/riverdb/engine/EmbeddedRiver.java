@@ -215,7 +215,7 @@ public final class EmbeddedRiver {
         values[index] = execution.valueAt(index);
         typeDescriptors[index] = execution.typeDescriptorAt(index);
       }
-      return result.complete(
+      StatusCode status = result.complete(
           execution.affectedRows(),
           execution.commitSequence(),
           execution.transactionActive(),
@@ -225,6 +225,15 @@ public final class EmbeddedRiver {
           execution.nullMask(),
           typeDescriptors,
           columns);
+      for (int index = 0; status.isOk() && index < columns; index++) {
+        if (execution.isVarchar(index) && !execution.isNull(index)) {
+          int length = execution.copyTextAt(index, textCharacters, 0);
+          status = length < 0
+              ? StatusCode.INVARIANT_BROKEN
+              : result.setTextAt(index, textCharacters, 0, length);
+        }
+      }
+      return status;
     }
 
     private final class EngineQuery implements RiverQuery {

@@ -7,8 +7,6 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.page.IndexedPageStore;
-import io.riverdb.engine.page.IndexedPageStoreOpenResult;
 import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
@@ -494,10 +492,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -608,10 +606,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -668,10 +666,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -824,10 +822,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -877,7 +875,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(300, table.obsoleteVersionCount());
     assertEquals(
         true,
-        IndexedPageStore.VACUUM_COMMIT_PAYLOAD_BYTES
+        IndexedTableStore.VACUUM_COMMIT_PAYLOAD_BYTES
             + 300L * (4096 + 24) > WalRecordCodec.MAX_PAYLOAD_BYTES);
 
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
@@ -891,10 +889,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -925,7 +923,7 @@ final class IndexedTransactionSessionTest {
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     assertEquals(StatusCode.OK, vacuum.run(outcome));
     long incompleteEnd = wal.durableEnd()
-        - WalRecordCodec.encodedBytes(IndexedPageStore.VACUUM_COMMIT_PAYLOAD_BYTES);
+        - WalRecordCodec.encodedBytes(IndexedTableStore.VACUUM_COMMIT_PAYLOAD_BYTES);
     try (FileChannel channel = FileChannel.open(
         root.resolve(LocalWal.FILE_NAME), StandardOpenOption.WRITE)) {
       channel.truncate(incompleteEnd);
@@ -936,10 +934,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1002,10 +1000,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1039,7 +1037,7 @@ final class IndexedTransactionSessionTest {
         null,
         vacuum,
         100,
-        IndexedPageStore.MAX_ROWS);
+        IndexedTableStore.MAX_ROWS);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.update(401, row(4011)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
@@ -1104,7 +1102,7 @@ final class IndexedTransactionSessionTest {
     NioIoCounters counters = new NioIoCounters();
     NioDurableDirectory directory = openDirectory(root, counters);
     LocalWal wal = openWal(directory);
-    IndexedPageStore store = createStore(directory, wal);
+    IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
     IndexedTable committingTable = table;
     TransactionManager manager = new TransactionManager(
@@ -1144,10 +1142,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1165,7 +1163,7 @@ final class IndexedTransactionSessionTest {
     NioIoCounters counters = new NioIoCounters();
     NioDurableDirectory directory = openDirectory(root, counters);
     LocalWal wal = openWal(directory);
-    IndexedPageStore store = createStore(directory, wal);
+    IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
@@ -1217,10 +1215,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1248,10 +1246,10 @@ final class IndexedTransactionSessionTest {
 
     directory = openDirectory(root);
     wal = openWal(directory);
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1443,17 +1441,17 @@ final class IndexedTransactionSessionTest {
     return result.wal();
   }
 
-  private static IndexedPageStore createStore(
+  private static IndexedTableStore createStore(
       NioDurableDirectory directory,
       LocalWal wal) {
-    IndexedPageStoreOpenResult result = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.create(directory, wal, DATABASE, GENERATION, result));
+        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, result));
     return result.store();
   }
 
-  private static IndexedTable createTable(IndexedPageStore store) {
+  private static IndexedTable createTable(IndexedTableStore store) {
     IndexedTableOpenResult result = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(store, result));
     return result.table();

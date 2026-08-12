@@ -1,11 +1,14 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import java.nio.ByteBuffer;
 
 /** Caller-owned bounded schema carrying one canonical descriptor per column. */
 public final class TableSchema {
   public static final int MAXIMUM_COLUMNS = 8;
+  public static final int MAXIMUM_ROW_BYTES = 4096;
   public static final int CHECK_EQUAL = 1;
   public static final int CHECK_NOT_EQUAL = 2;
   public static final int CHECK_LESS_THAN = 3;
@@ -20,12 +23,14 @@ public final class TableSchema {
   private final long[] checkValues = new long[MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[MAXIMUM_COLUMNS];
   private final int[] referenceTableIds = new int[MAXIMUM_COLUMNS];
+  private final byte[] defaultTextBytes = new byte[MAXIMUM_ROW_BYTES];
   private int columnCount;
   private long notNullMask;
   private long defaultMask;
   private long checkMask;
   private long referenceMask;
   private boolean identity;
+  private int defaultTextBytesUsed;
 
   public TableSchema() {
     for (int index = 0; index < columns.length; index++) {
@@ -44,6 +49,7 @@ public final class TableSchema {
     checkMask = 0;
     referenceMask = 0;
     identity = false;
+    defaultTextBytesUsed = 0;
   }
 
   public StatusCode addBigint(CharSequence name) {
@@ -55,15 +61,26 @@ public final class TableSchema {
   }
 
   public StatusCode addVarchar7(CharSequence name, boolean nullable) {
-    return addColumn(name, nullable, SqlTypeDescriptor.varchar(7));
+    return addVarchar(name, 7, nullable);
+  }
+
+  public StatusCode addVarchar(
+      CharSequence name,
+      int maximumScalars,
+      boolean nullable) {
+    int descriptor = SqlTypeDescriptor.varchar(maximumScalars);
+    return descriptor == 0
+        ? StatusCode.INVALID_EXTERNAL_INPUT : addColumn(name, nullable, descriptor);
   }
 
   public StatusCode addColumn(
       CharSequence name,
       int descriptor,
       boolean nullable) {
-    if (descriptor != SqlTypeDescriptor.BIGINT
-        && descriptor != SqlTypeDescriptor.varchar(7)) {
+    int typeId = SqlTypeDescriptor.typeId(descriptor);
+    if (!SqlTypeDescriptor.isValid(descriptor)
+        || typeId != SqlTypeDescriptor.TYPE_ID_BIGINT
+            && typeId != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return addColumn(name, nullable, descriptor);
@@ -77,6 +94,13 @@ public final class TableSchema {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (columnCount >= columns.length) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int addedBytes = Long.BYTES;
+    if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      addedBytes += SqlTypeDescriptor.parameterOne(descriptor) * 4;
+    }
+    if (maximumRowBytes() > MAXIMUM_ROW_BYTES - addedBytes) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (find(name) >= 0) {
@@ -101,6 +125,29 @@ public final class TableSchema {
     int column = columnCount - 1;
     defaultMask |= 1L << column;
     defaultValues[column] = value;
+    return StatusCode.OK;
+  }
+
+  public StatusCode setLastTextDefault(ByteBuffer source) {
+    if (columnCount <= 1 || source == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int column = columnCount - 1;
+    int maximumScalars = SqlTypeDescriptor.parameterOne(typeDescriptors[column]);
+    int length = source.remaining();
+    if (SqlTypeDescriptor.typeId(typeDescriptors[column])
+            != SqlTypeDescriptor.TYPE_ID_VARCHAR
+        || defaultTextBytesUsed > defaultTextBytes.length - length
+        || Utf8Text.validate(
+            source, source.position(), length, maximumScalars) < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int start = defaultTextBytesUsed;
+    for (int index = 0; index < length; index++) {
+      defaultTextBytes[defaultTextBytesUsed++] = source.get(source.position() + index);
+    }
+    defaultMask |= 1L << column;
+    defaultValues[column] = (long) start << 32 | Integer.toUnsignedLong(length);
     return StatusCode.OK;
   }
 
@@ -181,6 +228,14 @@ public final class TableSchema {
         ? defaultValues[column] : 0;
   }
 
+  int defaultTextBytes() {
+    return defaultTextBytesUsed;
+  }
+
+  byte defaultTextByte(int index) {
+    return index >= 0 && index < defaultTextBytesUsed ? defaultTextBytes[index] : 0;
+  }
+
   boolean isVarchar(int column) {
     return column > 0
         && column < columnCount
@@ -194,6 +249,17 @@ public final class TableSchema {
 
   public int typeDescriptor(int column) {
     return column >= 0 && column < columnCount ? typeDescriptors[column] : 0;
+  }
+
+  public int maximumRowBytes() {
+    int bytes = columnCount * Long.BYTES;
+    for (int column = 1; column < columnCount; column++) {
+      if (SqlTypeDescriptor.typeId(typeDescriptors[column])
+          == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+        bytes += SqlTypeDescriptor.parameterOne(typeDescriptors[column]) * 4;
+      }
+    }
+    return bytes;
   }
 
   long checkMask() {

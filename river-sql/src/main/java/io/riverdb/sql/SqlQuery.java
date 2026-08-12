@@ -176,7 +176,6 @@ public final class SqlQuery {
     if (outer == null
         || view == null
         || destination == null
-        || destination == outer
         || destination == view) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

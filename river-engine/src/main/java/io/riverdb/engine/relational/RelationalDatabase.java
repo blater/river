@@ -1253,23 +1253,36 @@ public final class RelationalDatabase {
         break;
       }
       if (status.isOk()
-          && (indexBuildRow.row().length() != indexedTable.rowBytes()
-              || !indexedTable.isValidNullMask(
-                  indexBuildRow.row().getLong(indexedTable.nullMaskOffset())))) {
+          && (indexBuildRow.row().length() < indexedTable.fixedRowBytes()
+              || indexBuildRow.row().length() > indexedTable.maximumRowBytes())) {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
         catalogScratch.clear();
         status = indexBuildRow.row().copyTo(catalogScratch);
+        if (status.isOk()) {
+          catalogScratch.flip();
+          status = indexedTable.isValidRow(catalogScratch)
+              ? StatusCode.OK : StatusCode.CORRUPTION;
+        }
       }
       boolean nullValue = status.isOk()
           && (catalogScratch.getLong(indexedTable.nullMaskOffset())
               & 1L << indexedTable.uniqueValueIndexColumn()) != 0;
       if (status.isOk() && !nullValue) {
-        long value = catalogScratch.getLong(
-            (indexedTable.uniqueValueIndexColumn() - 1) * Long.BYTES);
         int buildingSlot = indexedTable.buildingIndexSlot();
-        status = indexedTable.indexIsUnique(buildingSlot)
+        int column = indexedTable.uniqueValueIndexColumn();
+        long value = indexedTable.isVarchar(column) ? 0 : catalogScratch.getLong(
+            (column - 1) * Long.BYTES);
+        status = indexedTable.isVarchar(column)
+            ? session.ensureTextIndexedValue(
+                indexStorageTable,
+                indexedTable,
+                column,
+                catalogScratch,
+                indexBuildRow.key(),
+                indexedTable.indexIsUnique(buildingSlot))
+            : indexedTable.indexIsUnique(buildingSlot)
             ? session.ensureIndexedValue(
                 indexStorageTable, value, indexBuildRow.key())
             : session.ensureNonUniqueIndexedValue(
@@ -1635,129 +1648,233 @@ public final class RelationalDatabase {
       CharSequence columnName,
       boolean unique,
       boolean constraint) {
-    StatusCode status = session.resolveTable(tableName, indexedTable);
-    int indexColumn = status.isOk() ? indexedTable.findColumn(columnName) : -1;
-    if (status.isOk() && indexColumn <= 0) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk() && indexedTable.hasIndexOn(indexColumn)) {
-      status = StatusCode.CONFLICT;
-    }
-    if (status.isOk() && indexedTable.hasBuildingUniqueValueIndex()) {
-      status = StatusCode.RETRY;
-    }
-    if (status.isOk()
-        && indexedTable.uniqueIndexCount() >= TableDefinition.MAXIMUM_INDEXES) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(indexName, catalogKey);
-    }
-    if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
-      if (status.isOk()) {
-        status = StatusCode.CONFLICT;
-      } else if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-      }
-    }
-    if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(
-          RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
-    }
-    if (status.isOk()) {
-      status = CatalogRecord.decodeSequence(catalogRow, catalogScratch, nextTableId);
-    }
-    int indexTableId = nextTableId.value();
-    if (status.isOk() && indexTableId > RelationalKey.MAXIMUM_TABLE_ID) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (status.isOk()) {
-      indexStorageTable.set(
-          this, indexTableId, 0, TableDefinition.INDEX_NONE);
-      status = session.beginScan(indexedTable, indexBuildCursor);
-    }
-    boolean scanActive = status.isOk();
-    while (status.isOk()) {
-      status = session.nextScan(indexBuildCursor, indexBuildRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (status.isOk()
-          && (indexBuildRow.row().length() != indexedTable.rowBytes()
-              || !indexedTable.isValidNullMask(
-                  indexBuildRow.row().getLong(indexedTable.nullMaskOffset())))) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (status.isOk()) {
-        catalogScratch.clear();
-        status = indexBuildRow.row().copyTo(catalogScratch);
-      }
-      boolean nullValue = status.isOk()
-          && (catalogScratch.getLong(indexedTable.nullMaskOffset())
-              & 1L << indexColumn) != 0;
-      if (status.isOk() && !nullValue) {
-        long value = catalogScratch.getLong(
-            (indexColumn - 1) * Long.BYTES);
-        if (unique) {
-          indexKeyOutput.clear();
-          indexKeyOutput.putLong(0, indexBuildRow.key());
-          indexKeyOutput.position(0);
-          indexKeyOutput.limit(Long.BYTES);
-          status = session.insertIndexedValue(indexStorageTable, value, indexKeyOutput);
-          if (status == StatusCode.CONFLICT && constraint) {
-            status = StatusCode.UNIQUE_VIOLATION;
-          }
-        } else {
-          status = session.insertNonUniqueIndexedValue(
-              indexStorageTable, value, indexBuildRow.key());
-        }
-      }
-    }
-    if (scanActive) {
-      StatusCode close = session.closeScan(indexBuildCursor);
-      if (status.isOk()) {
-        status = close;
-      }
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeSequence(catalogOutput, indexTableId + 1);
-      status = session.indexedSession().update(
-          RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
-    }
-    if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(tableName, catalogKey);
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeTable(
-          catalogOutput,
-          indexedTable.tableId(),
-          indexTableId,
-          TableDefinition.INDEX_READY,
-          indexColumn,
-          tableName,
-          indexedTable,
-          unique,
-          constraint);
-      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
-    }
-    if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(indexName, catalogKey);
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeIndex(
-          catalogOutput,
-          indexedTable.tableId(),
-          indexTableId,
-          TableDefinition.INDEX_READY,
-          indexName,
-          unique,
-          constraint);
-      status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
-    }
+    StatusCode status = performValueIndexBuild(
+        session, indexName, tableName, columnName, unique, constraint);
     indexBuildCursor.reset();
     return status;
+  }
+
+  private StatusCode performValueIndexBuild(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName,
+      CharSequence columnName,
+      boolean unique,
+      boolean constraint) {
+    StatusCode status = session.resolveTable(tableName, indexedTable);
+    if (!status.isOk()) {
+      return status;
+    }
+    int indexColumn = indexedTable.findColumn(columnName);
+    status = validateValueIndexBuild(indexColumn);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = loadNextValueIndexTableId(session, indexName);
+    if (!status.isOk()) {
+      return status;
+    }
+    int indexTableId = nextTableId.value();
+    if (indexTableId > RelationalKey.MAXIMUM_TABLE_ID) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    status = populateValueIndex(
+        session, indexTableId, indexColumn, unique, constraint);
+    if (!status.isOk()) {
+      return status;
+    }
+    return publishValueIndex(
+        session,
+        indexName,
+        tableName,
+        indexColumn,
+        indexTableId,
+        unique,
+        constraint);
+  }
+
+  private StatusCode validateValueIndexBuild(int indexColumn) {
+    if (indexColumn <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (indexedTable.hasIndexOn(indexColumn)) {
+      return StatusCode.CONFLICT;
+    }
+    if (indexedTable.hasBuildingUniqueValueIndex()) {
+      return StatusCode.RETRY;
+    }
+    if (indexedTable.uniqueIndexCount() >= TableDefinition.MAXIMUM_INDEXES) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode loadNextValueIndexTableId(
+      RelationalSession session, CharSequence indexName) {
+    StatusCode status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    if (status.isOk()) {
+      return StatusCode.CONFLICT;
+    }
+    if (status != StatusCode.CONFLICT) {
+      return status;
+    }
+    status = session.indexedSession().fetchByKey(
+        RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
+    return status.isOk()
+        ? CatalogRecord.decodeSequence(catalogRow, catalogScratch, nextTableId)
+        : status;
+  }
+
+  private StatusCode populateValueIndex(
+      RelationalSession session,
+      int indexTableId,
+      int indexColumn,
+      boolean unique,
+      boolean constraint) {
+    indexStorageTable.set(
+        this, indexTableId, 0, TableDefinition.INDEX_NONE);
+    StatusCode status = session.beginScan(indexedTable, indexBuildCursor);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = scanValueIndexRows(session, indexColumn, unique, constraint);
+    StatusCode close = session.closeScan(indexBuildCursor);
+    if (status.isOk()) {
+      status = close;
+    }
+    return status;
+  }
+
+  private StatusCode scanValueIndexRows(
+      RelationalSession session,
+      int indexColumn,
+      boolean unique,
+      boolean constraint) {
+    while (true) {
+      StatusCode status = session.nextScan(indexBuildCursor, indexBuildRow);
+      if (status == StatusCode.CONFLICT) {
+        return StatusCode.OK;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+      status = copyAndValidateIndexBuildRow();
+      if (!status.isOk()) {
+        return status;
+      }
+      status = insertValueIndexEntry(
+          session, indexColumn, unique, constraint);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+  }
+
+  private StatusCode copyAndValidateIndexBuildRow() {
+    int rowBytes = indexBuildRow.row().length();
+    if (rowBytes < indexedTable.fixedRowBytes()
+        || rowBytes > indexedTable.maximumRowBytes()) {
+      return StatusCode.CORRUPTION;
+    }
+    catalogScratch.clear();
+    StatusCode status = indexBuildRow.row().copyTo(catalogScratch);
+    if (!status.isOk()) {
+      return status;
+    }
+    catalogScratch.flip();
+    return indexedTable.isValidRow(catalogScratch)
+        ? StatusCode.OK : StatusCode.CORRUPTION;
+  }
+
+  private StatusCode insertValueIndexEntry(
+      RelationalSession session,
+      int indexColumn,
+      boolean unique,
+      boolean constraint) {
+    boolean nullValue = (catalogScratch.getLong(indexedTable.nullMaskOffset())
+        & 1L << indexColumn) != 0;
+    if (nullValue) {
+      return StatusCode.OK;
+    }
+    if (indexedTable.isVarchar(indexColumn)) {
+      StatusCode status = session.ensureTextIndexedValue(
+          indexStorageTable,
+          indexedTable,
+          indexColumn,
+          catalogScratch,
+          indexBuildRow.key(),
+          unique);
+      return indexConstraintStatus(status, constraint);
+    }
+    long value = catalogScratch.getLong((indexColumn - 1) * Long.BYTES);
+    if (!unique) {
+      return session.insertNonUniqueIndexedValue(
+          indexStorageTable, value, indexBuildRow.key());
+    }
+    indexKeyOutput.clear();
+    indexKeyOutput.putLong(0, indexBuildRow.key());
+    indexKeyOutput.position(0);
+    indexKeyOutput.limit(Long.BYTES);
+    StatusCode status = session.insertIndexedValue(
+        indexStorageTable, value, indexKeyOutput);
+    return indexConstraintStatus(status, constraint);
+  }
+
+  private static StatusCode indexConstraintStatus(
+      StatusCode status, boolean constraint) {
+    return status == StatusCode.CONFLICT && constraint
+        ? StatusCode.UNIQUE_VIOLATION : status;
+  }
+
+  private StatusCode publishValueIndex(
+      RelationalSession session,
+      CharSequence indexName,
+      CharSequence tableName,
+      int indexColumn,
+      int indexTableId,
+      boolean unique,
+      boolean constraint) {
+    CatalogRecord.encodeSequence(catalogOutput, indexTableId + 1);
+    StatusCode status = session.indexedSession().update(
+        RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = RelationalKey.catalogTableKey(tableName, catalogKey);
+    if (!status.isOk()) {
+      return status;
+    }
+    CatalogRecord.encodeTable(
+        catalogOutput,
+        indexedTable.tableId(),
+        indexTableId,
+        TableDefinition.INDEX_READY,
+        indexColumn,
+        tableName,
+        indexedTable,
+        unique,
+        constraint);
+    status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = RelationalKey.catalogTableKey(indexName, catalogKey);
+    if (!status.isOk()) {
+      return status;
+    }
+    CatalogRecord.encodeIndex(
+        catalogOutput,
+        indexedTable.tableId(),
+        indexTableId,
+        TableDefinition.INDEX_READY,
+        indexName,
+        unique,
+        constraint);
+    return session.indexedSession().insert(catalogKey.key(), catalogOutput);
   }
 
   public StatusCode createSession(RelationalSessionOpenResult result) {

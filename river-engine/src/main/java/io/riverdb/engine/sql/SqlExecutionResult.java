@@ -1,12 +1,20 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.relational.TableSchema;
+import io.riverdb.storage.heap.HeapRowResult;
+import java.nio.ByteBuffer;
 
 /** Caller-owned result for one implicit-transaction SQL statement. */
 public final class SqlExecutionResult {
   private final long[] values = new long[TableSchema.MAXIMUM_COLUMNS];
   private final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final char[][] textValues =
+      new char[TableSchema.MAXIMUM_COLUMNS][CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  private final int[] textLengths = new int[TableSchema.MAXIMUM_COLUMNS];
   private long commitSequence;
   private long value;
   private long key;
@@ -19,6 +27,7 @@ public final class SqlExecutionResult {
   public void reset() {
     for (int index = 0; index < columnCount; index++) {
       typeDescriptors[index] = 0;
+      textLengths[index] = 0;
     }
     commitSequence = 0;
     value = 0;
@@ -61,6 +70,42 @@ public final class SqlExecutionResult {
 
   void setCommitSequence(long committedAt) {
     commitSequence = committedAt;
+  }
+
+  StatusCode setUtf8At(
+      int index,
+      HeapRowResult source,
+      int offset,
+      int length) {
+    if (index < 0
+        || index >= columnCount
+        || source == null
+        || offset < 0
+        || length < 0
+        || !isVarchar(index)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    textLengths[index] = Utf8RowText.decode(
+        source, offset, length, textValues[index]);
+    return StatusCode.OK;
+  }
+
+  StatusCode setUtf8At(int index, ByteBuffer source, int offset, int length) {
+    if (index < 0
+        || index >= columnCount
+        || source == null
+        || offset < 0
+        || length < 0
+        || !isVarchar(index)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int chars = Utf8Text.decode(
+        source, offset, length, textValues[index], 0);
+    if (chars < 0) {
+      return StatusCode.CORRUPTION;
+    }
+    textLengths[index] = chars;
+    return StatusCode.OK;
   }
 
   void setScalar(long scalar, long committedAt) {
@@ -121,6 +166,22 @@ public final class SqlExecutionResult {
 
   public int typeDescriptorAt(int index) {
     return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
+  }
+
+  public int textLengthAt(int index) {
+    return isVarchar(index) && !isNull(index) ? textLengths[index] : -1;
+  }
+
+  public int copyTextAt(int index, char[] target, int offset) {
+    int length = textLengthAt(index);
+    if (length < 0
+        || target == null
+        || offset < 0
+        || offset > target.length - length) {
+      return -1;
+    }
+    System.arraycopy(textValues[index], 0, target, offset, length);
+    return length;
   }
 
   public long commitSequence() {

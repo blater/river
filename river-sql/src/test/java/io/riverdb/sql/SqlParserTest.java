@@ -6,8 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.lang.management.ManagementFactory;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -76,7 +77,7 @@ final class SqlParserTest {
             command));
     assertTrue(command.columnIsVarchar(1));
     assertTrue(command.columnIsNotNull(1));
-    assertEquals(PackedText.pack("new"), command.columnDefaultValue(1));
+    assertText("new", command, command.columnDefaultValue(1));
     assertTrue(command.columnIsVarchar(2));
     assertEquals(
         StatusCode.OK,
@@ -91,16 +92,17 @@ final class SqlParserTest {
             "SELECT id FROM labels WHERE code >= 'alpha' AND code < 'omega'",
             command));
     assertEquals(2, command.predicateCount());
-    assertEquals(SqlTypeDescriptor.varchar(7), command.predicateTypeDescriptor(0));
-    assertEquals(SqlTypeDescriptor.varchar(7), command.predicateTypeDescriptor(1));
-    assertEquals(PackedText.pack("alpha"), command.predicateValue(0));
-    assertEquals(PackedText.pack("omega"), command.predicateValue(1));
+    assertEquals(SqlTypeDescriptor.varchar(5), command.predicateTypeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.varchar(5), command.predicateTypeDescriptor(1));
+    assertText("alpha", command, command.predicateValue(0));
+    assertText("omega", command, command.predicateValue(1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM labels WHERE code IN ('beta', 'alpha')", command));
-    assertEquals(SqlTypeDescriptor.varchar(7), command.predicateTypeDescriptor(0));
-    assertEquals(PackedText.pack("alpha"), command.literalMembershipValue(0, 0));
+    assertEquals(SqlTypeDescriptor.varchar(5), command.predicateTypeDescriptor(0));
+    assertText("beta", command, command.literalMembershipValue(0, 0));
+    assertText("alpha", command, command.literalMembershipValue(0, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id, NULL FROM accounts WHERE id=1", command));
@@ -310,9 +312,9 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse(
             "INSERT INTO labels VALUES (1, 'river', 'it''s')", command));
-    assertEquals(SqlTypeDescriptor.varchar(7), command.insertTypeDescriptor(0, 1));
-    assertEquals(PackedText.pack("river"), command.insertValue(0, 1));
-    assertEquals(PackedText.pack("it's"), command.insertValue(0, 2));
+    assertEquals(SqlTypeDescriptor.varchar(5), command.insertTypeDescriptor(0, 1));
+    assertText("river", command, command.insertValue(0, 1));
+    assertText("it's", command, command.insertValue(0, 2));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -320,7 +322,7 @@ final class SqlParserTest {
                 + "(1, 'beta', 10), (2, 'alpha', 20)",
             command));
     assertEquals(3, command.columnCount());
-    assertEquals(SqlTypeDescriptor.varchar(7), command.insertTypeDescriptor(0, 1));
+    assertEquals(SqlTypeDescriptor.varchar(4), command.insertTypeDescriptor(0, 1));
     assertEquals(SqlTypeDescriptor.BIGINT, command.insertTypeDescriptor(0, 2));
     assertEquals(
         StatusCode.OK,
@@ -724,8 +726,8 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse("UPDATE labels SET code='fresh' WHERE id=1", command));
-    assertEquals(SqlTypeDescriptor.varchar(7), command.updateTypeDescriptor(0));
-    assertEquals(PackedText.pack("fresh"), command.updateValue(0));
+    assertEquals(SqlTypeDescriptor.varchar(5), command.updateTypeDescriptor(0));
+    assertText("fresh", command, command.updateValue(0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -844,12 +846,7 @@ final class SqlParserTest {
             "CREATE TABLE text_key (id VARCHAR(7) PRIMARY KEY, value BIGINT)",
             command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        parser.parse(
-            "CREATE TABLE wide_text (id BIGINT PRIMARY KEY, value VARCHAR(8))",
-            command));
-    assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse("INSERT INTO labels VALUES (1, 'ninechars', NULL)", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -1584,6 +1581,17 @@ final class SqlParserTest {
 
   private static void assertName(String expected, SqlIdentifier actual) {
     assertText(expected, actual);
+  }
+
+  private static void assertText(
+      String expected, SqlCommand command, long handle) {
+    ByteBuffer bytes = ByteBuffer.allocate(64);
+    int length = command.copyText(handle, bytes);
+    assertTrue(length >= 0);
+    bytes.flip();
+    byte[] encoded = new byte[length];
+    bytes.get(encoded);
+    assertEquals(expected, new String(encoded, StandardCharsets.UTF_8));
   }
 
   private static void assertText(String expected, CharSequence actual) {

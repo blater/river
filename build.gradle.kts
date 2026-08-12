@@ -257,7 +257,7 @@ val lockScopeDescriptor = "Lio/riverdb/tx/api/lock/LockScope;"
 val lockTokenDescriptor = "Lio/riverdb/tx/api/lock/LockToken;"
 val indexedCommitResultDescriptor = "Lio/riverdb/engine/table/IndexedCommitResult;"
 val indexedMutationTargetDescriptor = "Lio/riverdb/engine/table/IndexedMutationTarget;"
-val indexedPageStoreDescriptor = "Lio/riverdb/engine/page/IndexedPageStore;"
+val indexedTableDescriptor = "Lio/riverdb/engine/table/IndexedTable;"
 val indexedScanCursorDescriptor = "Lio/riverdb/engine/table/IndexedScanCursor;"
 val indexedScanResultDescriptor = "Lio/riverdb/engine/table/IndexedScanResult;"
 val relationalScanCursorDescriptor = "Lio/riverdb/engine/relational/RelationalScanCursor;"
@@ -416,25 +416,25 @@ val liveHotPathMethods = setOf(
         + "JJJJI$byteBufferDescriptor$crc32cDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableStore",
     "appendPreparedInsertBatch",
     "(JJ$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableStore",
     "appendPreparedMutationBatch",
     "(JJ$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableStore",
     "forcePreparedInserts",
     "()$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableStore",
     "publishForcedInserts",
     "()$statusCodeDescriptor"
   ),
@@ -587,125 +587,458 @@ val liveHotPathMethods = setOf(
     "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableStore",
     "commitInsert",
     "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableStore",
     "commitInsertBatch",
     "(JJ$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableStore",
     "commitMutationBatch",
     "(JJ$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "applyInsertOperation",
     "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateNewIndexEntry",
+    "(JI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateNewIndexEntryAt",
+    "(IJI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateNewIndexEntryIn",
+    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateMutationTarget",
+    "(IJII)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateMutationTargetAt",
+    "(IIJII)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateMutationTargetIn",
+    "($byteBufferDescriptor" + "IJII)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateVacuumHead",
+    "(JI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validatedLeafPageId",
+    "()I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
     "applyInsertBatchOperation",
     "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
-    "batchContainsEarlierKey",
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "containsEarlierInsertKey",
     "($byteBufferDescriptor" + "IJ)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
-    "countEarlierBatchEntriesInLeaf",
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "countEarlierInsertEntriesInLeaf",
     "($byteBufferDescriptor" + "II)I"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "applyMutationBatchOperation",
     "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
-    "mutationContainsEarlierKey",
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "containsEarlierMutationKey",
     "($byteBufferDescriptor" + "IJ)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "countEarlierMutationInsertsInLeaf",
     "($byteBufferDescriptor" + "II)I"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "rowCommitSequence",
     "(I)J"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "previousRowId",
     "(I)I"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "isDeletedRow",
     "(I)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedPageSet",
     "stageExisting",
-    "(I)$byteBufferDescriptor"
+    "(II)$byteBufferDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedPageSet",
     "operationPayload",
     "(I)$byteBufferDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
-    "stageRow",
-    "($byteBufferDescriptor" + "II$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "io.riverdb.engine.table.IndexedPageSet",
+    "currentPayload",
+    "(I)$byteBufferDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
-    "canAppendRow",
+    "io.riverdb.engine.table.IndexedPageSet",
+    "stageNew",
+    "(II)$byteBufferDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedPageSet",
+    "publish",
+    "(JJ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedPageSet",
+    "copyPage",
+    "($byteBufferDescriptor$byteBufferDescriptor)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedPageSet",
+    "currentPayloadUnchecked",
+    "(I)$byteBufferDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedPageSet",
+    "copyStagedToRecord",
+    "(I${byteBufferDescriptor}I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedPageSet",
+    "installFromRecord",
+    "($byteBufferDescriptor" + "IIJJ)V"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "isPresent", "(I)Z"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "isStaged", "(I)Z"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "isDirty", "(I)Z"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "recordStart", "(I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "recordEnd", "(I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "changedPageCount", "()I"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "changedPageId", "(I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "highestPageId", "()I"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "stagedCopyBytes", "()J"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "resetChanges", "()V"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedPageSet",
+    "markCurrentChanged",
+    "(IJJ)V"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "installPresent", "(I)V"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedPageSet",
+    "installChanged",
+    "(IJJ)V"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "markClean", "(I)V"),
+  hotMethod("io.riverdb.engine.table.IndexedPageSet", "markRebased", "(I)V"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "hasCommonHeader",
+    "($byteBufferDescriptor)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "operationType",
+    "($byteBufferDescriptor)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "pageOperationBytes",
+    "(II)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "insertOperationBytes",
+    "(I)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "insertBatchEntryBytes",
+    "(I)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "mutationBatchEntryBytes",
+    "(I)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "vacuumEntryBytes",
+    "(I)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodePageOperationHeader",
+    "($byteBufferDescriptor" + "II)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodePageOperationVersion",
+    "($byteBufferDescriptor" + "IIZ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeInsertHeader",
+    "($byteBufferDescriptor" + "JII)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeInsertBatchHeader",
+    "($byteBufferDescriptor" + "I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeInsertBatchEntry",
+    "($byteBufferDescriptor" + "IJII)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeMutationBatchHeader",
+    "($byteBufferDescriptor" + "I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeMutationBatchEntry",
+    "($byteBufferDescriptor" + "IIJIII)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeVacuumChunkHeader",
+    "($byteBufferDescriptor" + "IIIII)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeVacuumEntry",
+    "($byteBufferDescriptor" + "IJIIZ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeVacuumCommit",
+    "($byteBufferDescriptor" + "III)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validatePageOperation",
+    "($byteBufferDescriptor" + "II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validateInsert",
+    "($byteBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validateInsertBatch",
+    "($byteBufferDescriptor" + "I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validateMutationBatch",
+    "($byteBufferDescriptor" + "I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validateVacuumChunk",
+    "($byteBufferDescriptor" + "II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validateVacuumCommit",
+    "($byteBufferDescriptor" + "II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validInsertBatchEntry",
+    "($byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validMutationBatchEntry",
+    "($byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validVacuumEntry",
+    "($byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "validPageOperationVersion",
+    "($byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "containsEarlierPageId",
+    "($intArrayDescriptor" + "II)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "putInt",
+    "($byteBufferDescriptor" + "II)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "getInt",
+    "($byteBufferDescriptor" + "I)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "putLong",
+    "($byteBufferDescriptor" + "IJ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "getLong",
+    "($byteBufferDescriptor" + "I)J"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "encodeCommonHeader",
+    "($byteBufferDescriptor" + "I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "hasOperationType",
+    "($byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "isMutation",
     "(I)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedWalCodec",
+    "checkedVariableBytes",
+    "(II)I"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationPageCount", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationVersionCount", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationPageOffset", "(I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationVersionsOffset", "(I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertKey", "($byteBufferDescriptor)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertRowId", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertRowBytes", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "batchEntryCount", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchKey", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchRowBytes", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationOperation", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationKey", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationPreviousRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationRowBytes", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "encodedRowBytes", "($byteBufferDescriptor" + "II)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageVersionPreviousRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageVersionDeleted", "($byteBufferDescriptor" + "I)Z"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumRetainedRows", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumFirstRow", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumRowCount", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumChunk", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumChunkCount", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryKey", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryRowBytes", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryDeleted", "($byteBufferDescriptor" + "I)Z"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumCommitRowsBefore", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumCommitChunkCount", "($byteBufferDescriptor)I"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "stageVersionRow",
+    "($byteBufferDescriptor" + "IIIZ$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "canAppendRow", "(I)Z"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
     "fetchRow",
     "(I$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "rowLength",
     "(I)I"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "copyRowTo",
     "(I$byteBufferDescriptor" + "I)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "canAppendRows",
     "(${intArrayDescriptor}I)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "canAppendEncodedRows",
     "($byteBufferDescriptor" + "IIII)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.page.IndexedPageStore",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "appendCurrentRow",
     "($byteBufferDescriptor" + "IIIJJJIZ)$statusCodeDescriptor"
   ),
+  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "indexedEntryCount", "()I"),
+  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkCount", "()I"),
+  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkRowCount", "(I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkPayloadBytes", "(II)I"),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "encodeVacuumChunk",
+    "($byteBufferDescriptor" + "IIIIII)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "beginVacuumApply",
+    "()$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "applyVacuumEntry",
+    "($byteBufferDescriptor" + "II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateCurrentPage",
+    "(I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "validateAppliedPages",
+    "($intArrayDescriptor" + "I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
     "insert",
     "(JJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
@@ -720,30 +1053,30 @@ val liveHotPathMethods = setOf(
     "($indexedScanResultDescriptor)V"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "commitInsert",
     "(JJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "commitInserts",
     "(J$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "commitMutations",
     "(J$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "prepareMutation",
     "(JJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "prepareInsert",
     "(JJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
   ),
@@ -763,32 +1096,32 @@ val liveHotPathMethods = setOf(
     "()V"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "insertCommitted",
     "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "splitAndInsert",
     "(I$byteBufferDescriptor" + "JI)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "findOperationLeafPageId",
     "(J)I"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "versionRowsInLeaf",
-    "($indexedPageStoreDescriptor$byteBufferDescriptor" + "I)I"
+    "($byteBufferDescriptor" + "I)I"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "fetchByKey",
     "(J$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "fetchByKeyAt",
     "(JJ$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
@@ -901,14 +1234,15 @@ val liveHotPathMethods = setOf(
     "(Ljava/lang/String;$sqlExecutionResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "beginScan",
-    "(JJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+    "($indexedTableDescriptor" + "JJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTable",
+    "io.riverdb.engine.table.IndexedTableKernel",
     "nextScan",
-    "($indexedScanCursorDescriptor$indexedScanResultDescriptor)$statusCodeDescriptor"
+    "($indexedTableDescriptor$indexedScanCursorDescriptor$indexedScanResultDescriptor)"
+        + statusCodeDescriptor
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",

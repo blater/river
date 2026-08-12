@@ -1,7 +1,9 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import java.nio.ByteBuffer;
 
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
 public final class SqlCommand {
@@ -11,6 +13,9 @@ public final class SqlCommand {
   public static final int MAXIMUM_PREDICATES = MAXIMUM_COLUMNS;
   public static final int MAXIMUM_LITERAL_MEMBERSHIP_VALUES = 256;
   public static final int MAXIMUM_VIEW_QUERY_LENGTH = 768;
+  public static final int MAXIMUM_TEXT_BYTES = 64 * 1024;
+
+  static final long INVALID_TEXT_HANDLE = Long.MIN_VALUE;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier renamedTableName = new SqlIdentifier();
@@ -77,6 +82,7 @@ public final class SqlCommand {
   private final boolean[] disjunctionPredicates =
       new boolean[MAXIMUM_PREDICATES];
   private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
+  private final byte[] textBytes = new byte[MAXIMUM_TEXT_BYTES];
   private SqlCommandType type;
   private SqlComparison groupHavingComparison;
   private long key;
@@ -106,6 +112,7 @@ public final class SqlCommand {
   private int literalMembershipValueCount;
   private int columnCount;
   private boolean available;
+  private int textBytesUsed;
 
   public SqlCommand() {
     for (int index = 0; index < columnNames.length; index++) {
@@ -203,6 +210,7 @@ public final class SqlCommand {
     literalMembershipValueCount = 0;
     columnCount = 0;
     available = false;
+    textBytesUsed = 0;
     for (int index = 0; index < insertNullMasks.length; index++) {
       insertNullMasks[index] = 0;
       insertDefaultMasks[index] = 0;
@@ -395,6 +403,8 @@ public final class SqlCommand {
 
   void copyQueryFrom(SqlCommand source) {
     reset();
+    System.arraycopy(source.textBytes, 0, textBytes, 0, source.textBytesUsed);
+    textBytesUsed = source.textBytesUsed;
     tableName.copyFrom(source.tableName);
     tableAlias.copyFrom(source.tableAlias);
     for (int index = 0; index < source.columnCount; index++) {
@@ -585,9 +595,10 @@ public final class SqlCommand {
     }
   }
 
-  void markLastColumnVarchar() {
+  void markLastColumnVarchar(int maximumScalars) {
     if (columnCount > 1) {
-      columnTypeDescriptors[columnCount - 1] = SqlTypeDescriptor.varchar(7);
+      columnTypeDescriptors[columnCount - 1] =
+          SqlTypeDescriptor.varchar(maximumScalars);
     }
   }
 
@@ -634,10 +645,52 @@ public final class SqlCommand {
     }
   }
 
-  void markLastPredicateVarchar() {
+  void markLastPredicateVarchar(int literalScalars) {
     if (predicateCount > 0) {
-      predicateTypeDescriptors[predicateCount - 1] = SqlTypeDescriptor.varchar(7);
+      predicateTypeDescriptors[predicateCount - 1] =
+          SqlTypeDescriptor.varchar(Math.max(1, literalScalars));
     }
+  }
+
+  long storeText(char[] source, int offset, int length) {
+    int bytes = Utf8Text.encode(
+        source,
+        offset,
+        length,
+        Utf8Text.MAXIMUM_SCALARS,
+        textBytes,
+        textBytesUsed);
+    if (bytes < 0) {
+      return INVALID_TEXT_HANDLE;
+    }
+    long handle = (long) textBytesUsed << 32 | Integer.toUnsignedLong(bytes);
+    textBytesUsed += bytes;
+    return handle;
+  }
+
+  public int textByteLength(long handle) {
+    int textOffset = (int) (handle >>> 32);
+    int length = (int) handle;
+    return textOffset >= 0
+            && length >= 0
+            && textOffset <= textBytesUsed - length
+        ? length : -1;
+  }
+
+  public int copyText(long handle, ByteBuffer target) {
+    int textOffset = (int) (handle >>> 32);
+    int length = textByteLength(handle);
+    if (length < 0 || target == null || target.remaining() < length) {
+      return -1;
+    }
+    target.put(textBytes, textOffset, length);
+    return length;
+  }
+
+  public byte textByteAt(long handle, int index) {
+    int textOffset = (int) (handle >>> 32);
+    int length = textByteLength(handle);
+    return index >= 0 && index < length ? textBytes[textOffset + index] : 0;
   }
 
   void markLastPredicateDisjunction() {

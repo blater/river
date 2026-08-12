@@ -1509,7 +1509,9 @@ final class RiverDriverTest {
       insert.setLong(1, 3);
       insert.setLong(2, Long.MIN_VALUE);
       assertEquals(1, insert.executeUpdate());
-      assertThrows(SQLException.class, () -> insert.setString(1, "1 OR 1=1"));
+      insert.setString(1, "1 OR 1=1");
+      SQLException mismatch = assertThrows(SQLException.class, insert::executeUpdate);
+      assertEquals(SqlState.DATATYPE_MISMATCH, mismatch.getSQLState());
       insert.clearParameters();
       assertThrows(SQLException.class, () -> insert.setLong(3, 3));
     }
@@ -1629,7 +1631,10 @@ final class RiverDriverTest {
         insert.setLong(1, 2);
         insert.setObject(2, "alpha", Types.VARCHAR);
         assertEquals(1, insert.executeUpdate());
-        assertThrows(SQLException.class, () -> insert.setString(2, "too long"));
+        insert.setLong(1, 4);
+        insert.setString(2, "too long");
+        SQLException tooLong = assertThrows(SQLException.class, insert::executeUpdate);
+        assertEquals(SqlState.DATATYPE_MISMATCH, tooLong.getSQLState());
       }
 
       try (PreparedStatement select = connection.prepareStatement(

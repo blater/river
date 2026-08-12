@@ -73,6 +73,19 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
+            "CREATE TABLE nested_labels "
+                + "(id BIGINT PRIMARY KEY, region BIGINT, padding VARCHAR(128))",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO nested_labels VALUES "
+                + "(1, 7, 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+                + "abcdefghijklmnopqrstuvwxyz')",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
             "CREATE TABLE texts (id BIGINT PRIMARY KEY, label VARCHAR(7) NOT NULL)",
             result));
     assertEquals(
@@ -109,6 +122,8 @@ final class SqlSessionAllocationTest {
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
       exerciseExists(session, cursor, scanRow, result);
+      exerciseCorrelatedMembership(session, cursor, scanRow, result);
+      exerciseRecursiveExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
@@ -123,6 +138,8 @@ final class SqlSessionAllocationTest {
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
       exerciseExists(session, cursor, scanRow, result);
+      exerciseCorrelatedMembership(session, cursor, scanRow, result);
+      exerciseRecursiveExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
@@ -227,6 +244,41 @@ final class SqlSessionAllocationTest {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
         "SELECT id FROM t WHERE EXISTS (SELECT id FROM labels WHERE labels.region=7)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseCorrelatedMembership(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT t.id FROM t WHERE t.region IN "
+            + "(SELECT labels.region FROM labels WHERE labels.region=t.region)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseRecursiveExists(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT t.id FROM t WHERE EXISTS "
+            + "(SELECT nested_labels.id FROM nested_labels "
+            + "WHERE nested_labels.region=t.region AND EXISTS "
+            + "(SELECT raw_labels.id FROM raw_labels "
+            + "WHERE raw_labels.region=nested_labels.region))",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);

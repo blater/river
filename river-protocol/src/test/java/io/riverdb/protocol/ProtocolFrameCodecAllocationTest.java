@@ -39,7 +39,7 @@ final class ProtocolFrameCodecAllocationTest {
             3,
             new long[] {0, 10},
             0,
-            new int[] {SqlTypeDescriptor.varchar(7), SqlTypeDescriptor.BIGINT},
+            new int[] {SqlTypeDescriptor.varchar(64), SqlTypeDescriptor.BIGINT},
             2));
     assertEquals(StatusCode.OK, command.setTextAt(0, source, 0, source.length));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);

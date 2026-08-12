@@ -1,6 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.engine.table.IndexedScanResult;
@@ -60,7 +61,7 @@ public final class RelationalSession {
   private final ByteBuffer valueScratch = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer indexEntryScratch = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
   private final ByteBuffer rowScratch = ByteBuffer.allocateDirect(
-      TableSchema.MAXIMUM_COLUMNS * Long.BYTES);
+      TableSchema.MAXIMUM_ROW_BYTES);
   private final ByteBuffer indexRow = ByteBuffer.allocateDirect(Long.BYTES);
   private final ByteBuffer nonUniqueIndexRow = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
   private final long[] previousIndexedValues = new long[TableDefinition.MAXIMUM_INDEXES];
@@ -849,7 +850,18 @@ public final class RelationalSession {
         continue;
       }
       prepareValueIndex(table, slot);
-      if (table.indexIsUnique(slot)) {
+      if (table.isVarchar(table.uniqueIndexColumn(slot))) {
+        status = ensureTextIndexedValue(
+            valueIndexTable,
+            table,
+            table.uniqueIndexColumn(slot),
+            row,
+            key,
+            table.indexIsUnique(slot));
+        if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
+          status = StatusCode.UNIQUE_VIOLATION;
+        }
+      } else if (table.indexIsUnique(slot)) {
         encodeLong(indexRow, key);
         status = insertIndexedValue(
             valueIndexTable, indexedValue(table, row, slot), indexRow);
@@ -903,13 +915,27 @@ public final class RelationalSession {
       }
       prepareValueIndex(table, slot);
       if (!previousIndexedNulls[slot]) {
-        status = table.indexIsUnique(slot)
+        status = table.isVarchar(table.uniqueIndexColumn(slot))
+            ? deleteNonUniqueIndexedValue(
+                valueIndexTable, previousIndexedValues[slot], key)
+            : table.indexIsUnique(slot)
             ? deleteIndexedValue(valueIndexTable, previousIndexedValues[slot])
             : deleteNonUniqueIndexedValue(
                 valueIndexTable, previousIndexedValues[slot], key);
       }
       if (status.isOk() && !nextNull) {
-        if (table.indexIsUnique(slot)) {
+        if (table.isVarchar(table.uniqueIndexColumn(slot))) {
+          status = ensureTextIndexedValue(
+              valueIndexTable,
+              table,
+              table.uniqueIndexColumn(slot),
+              row,
+              key,
+              table.indexIsUnique(slot));
+          if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
+            status = StatusCode.UNIQUE_VIOLATION;
+          }
+        } else if (table.indexIsUnique(slot)) {
           encodeLong(indexRow, key);
           status = insertIndexedValue(valueIndexTable, nextValue, indexRow);
           if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
@@ -947,7 +973,10 @@ public final class RelationalSession {
         continue;
       }
       prepareValueIndex(table, slot);
-      status = table.indexIsUnique(slot)
+      status = table.isVarchar(table.uniqueIndexColumn(slot))
+          ? deleteNonUniqueIndexedValue(
+              valueIndexTable, previousIndexedValues[slot], key)
+          : table.indexIsUnique(slot)
           ? deleteIndexedValue(valueIndexTable, previousIndexedValues[slot])
           : deleteNonUniqueIndexedValue(
               valueIndexTable, previousIndexedValues[slot], key);
@@ -1480,6 +1509,64 @@ public final class RelationalSession {
         ? StatusCode.OK : StatusCode.CONFLICT;
   }
 
+  StatusCode ensureTextIndexedValue(
+      TableDefinition indexTable,
+      TableDefinition baseTable,
+      int column,
+      ByteBuffer candidate,
+      long primaryKey,
+      boolean unique) {
+    long fingerprint = textFingerprint(baseTable, candidate, column);
+    if (!validNonUniqueIndexedValue(fingerprint)) {
+      return StatusCode.CORRUPTION;
+    }
+    if (unique) {
+      long headKey = normalizeNonUniqueIndexedValue(fingerprint);
+      StatusCode status = fetch(indexTable, headKey, indexHeadRow);
+      boolean headExists = status.isOk();
+      if (status.isOk()) {
+        status = decodeLong(indexHeadRow, valueScratch);
+      } else if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+      }
+      long entryId = status.isOk() && headExists
+          ? valueScratch.getLong(0) : 0;
+      int visited = 0;
+      while (status.isOk() && entryId != 0) {
+        if (visited++ >= MAXIMUM_DUPLICATE_CHAIN) {
+          return StatusCode.CORRUPTION;
+        }
+        status = fetch(indexTable, nonUniqueEntryKey(entryId), indexEntryRow);
+        if (status.isOk()) {
+          status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
+        }
+        long indexedFingerprint = status.isOk() ? indexEntryScratch.getLong(0) : 0;
+        long indexedPrimaryKey = status.isOk() ? indexEntryScratch.getLong(8) : 0;
+        long nextEntryId = status.isOk() ? indexEntryScratch.getLong(16) : 0;
+        if (status.isOk()
+            && (indexedFingerprint != fingerprint
+                || nextEntryId < 0
+                || nextEntryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
+          return StatusCode.CORRUPTION;
+        }
+        if (status.isOk() && indexedPrimaryKey != primaryKey) {
+          status = fetch(baseTable, indexedPrimaryKey, indexedKeyRow);
+          if (status.isOk()) {
+            status = copyRow(baseTable, indexedKeyRow, rowScratch);
+          }
+          if (status.isOk() && textEquals(baseTable, candidate, rowScratch, column)) {
+            return StatusCode.CONFLICT;
+          }
+        }
+        entryId = nextEntryId;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return insertNonUniqueIndexedValue(indexTable, fingerprint, primaryKey);
+  }
+
   StatusCode insertNonUniqueIndexedValue(
       TableDefinition indexTable,
       long value,
@@ -1756,16 +1843,54 @@ public final class RelationalSession {
   }
 
   private static boolean validRow(TableDefinition table, ByteBuffer row) {
-    return table != null
-        && row != null
-        && row.remaining() == table.rowBytes()
-        && table.isValidNullMask(
-            row.getLong(row.position() + table.nullMaskOffset()));
+    return table != null && table.isValidRow(row);
   }
 
   private static long indexedValue(TableDefinition table, ByteBuffer row, int slot) {
-    return row.getLong(
-        row.position() + (table.uniqueIndexColumn(slot) - 1) * Long.BYTES);
+    int column = table.uniqueIndexColumn(slot);
+    return table.isVarchar(column)
+        ? textFingerprint(table, row, column)
+        : row.getLong(row.position() + (column - 1) * Long.BYTES);
+  }
+
+  private static long textFingerprint(
+      TableDefinition table,
+      ByteBuffer row,
+      int column) {
+    int offset = table.textOffset(row, column);
+    int length = table.textLength(row, column);
+    if (offset < 0 || length < 0) {
+      return Long.MIN_VALUE;
+    }
+    long hash = 0xcbf29ce484222325L;
+    for (int index = 0; index < length; index++) {
+      hash ^= Byte.toUnsignedLong(row.get(row.position() + offset + index));
+      hash *= 0x100000001b3L;
+    }
+    long fingerprint = hash & ((1L << 46) - 1);
+    return fingerprint == MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE
+        ? MAXIMUM_NON_UNIQUE_VALUE : fingerprint;
+  }
+
+  private static boolean textEquals(
+      TableDefinition table,
+      ByteBuffer left,
+      ByteBuffer right,
+      int column) {
+    int leftOffset = table.textOffset(left, column);
+    int leftLength = table.textLength(left, column);
+    int rightOffset = table.textOffset(right, column);
+    int rightLength = table.textLength(right, column);
+    return leftOffset >= 0
+        && rightOffset >= 0
+        && leftLength == rightLength
+        && Utf8Text.compare(
+            left,
+            left.position() + leftOffset,
+            leftLength,
+            right,
+            right.position() + rightOffset,
+            rightLength) == 0;
   }
 
   private static int firstReadyIndexSlot(TableDefinition table) {
@@ -1781,14 +1906,16 @@ public final class RelationalSession {
       TableDefinition table,
       HeapRowResult source,
       ByteBuffer target) {
-    if (source.length() != table.rowBytes()) {
+    if (source.length() < table.fixedRowBytes()
+        || source.length() > table.maximumRowBytes()) {
       return StatusCode.CORRUPTION;
     }
     target.clear();
-    target.limit(table.rowBytes());
+    target.limit(source.length());
     StatusCode status = source.copyTo(target);
     if (status.isOk()) {
       target.position(0);
+      status = table.isValidRow(target) ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     return status;
   }

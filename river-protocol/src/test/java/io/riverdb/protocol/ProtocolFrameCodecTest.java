@@ -48,7 +48,7 @@ final class ProtocolFrameCodecTest {
             7,
             new long[] {11, 0},
             2,
-            new int[] {SqlTypeDescriptor.varchar(7), SqlTypeDescriptor.BIGINT},
+            new int[] {SqlTypeDescriptor.varchar(64), SqlTypeDescriptor.BIGINT},
             2));
     assertEquals(StatusCode.OK, command.setTextAt(0, text, 0, text.length));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
@@ -72,7 +72,7 @@ final class ProtocolFrameCodecTest {
     assertTrue(response.isNull(1));
     assertTrue(response.isVarchar(0));
     assertFalse(response.isVarchar(1));
-    assertEquals(SqlTypeDescriptor.varchar(7), response.typeDescriptorAt(0));
+    assertEquals(SqlTypeDescriptor.varchar(64), response.typeDescriptorAt(0));
     assertEquals(SqlTypeDescriptor.BIGINT, response.typeDescriptorAt(1));
     char[] decoded = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
     assertEquals(text.length, response.copyTextAt(0, decoded, 0));

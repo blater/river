@@ -23,6 +23,11 @@ public final class HeapRowResult {
     return page.getLong(offset + relativeOffset);
   }
 
+  /** Reads one validated internal row byte without creating a buffer view. */
+  public byte getByte(int relativeOffset) {
+    return page.get(offset + relativeOffset);
+  }
+
   public StatusCode copyTo(ByteBuffer destination) {
     if (destination == null || destination.remaining() < length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

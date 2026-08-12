@@ -1,6 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 
@@ -20,6 +21,7 @@ public final class TableDefinition {
   private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
   private final boolean[] constraintIndexes = new boolean[MAXIMUM_INDEXES];
   private final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final byte[] defaultTextBytes = new byte[TableSchema.MAXIMUM_ROW_BYTES];
   private final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -37,6 +39,7 @@ public final class TableDefinition {
   private long schemaVersion;
   private boolean available;
   private boolean identity;
+  private int defaultTextBytesUsed;
 
   public TableDefinition() {
     for (int index = 0; index < additionalColumns.length; index++) {
@@ -66,11 +69,13 @@ public final class TableDefinition {
     columnCount = 0;
     notNullMask = 0;
     defaultMask = 0;
+    defaultTextBytesUsed = 0;
     checkMask = 0;
     referenceMask = 0;
     schemaVersion = 0;
     available = false;
     identity = false;
+    defaultTextBytesUsed = 0;
   }
 
   void set(
@@ -176,6 +181,10 @@ public final class TableDefinition {
       checkValues[index] = schema.checkValue(index);
       referenceTableIds[index] = schema.referenceTableId(index);
     }
+    defaultTextBytesUsed = schema.defaultTextBytes();
+    for (int index = 0; index < defaultTextBytesUsed; index++) {
+      defaultTextBytes[index] = schema.defaultTextByte(index);
+    }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
       setIndex(0, valueIndexTableId, valueIndexState, indexColumn, true);
@@ -206,7 +215,9 @@ public final class TableDefinition {
       int checkValuesOffset,
       long requiredReferenceMask,
       int referenceTableIdsOffset,
-      int defaultsOffset) {
+      int defaultsOffset,
+      int defaultTextOffset,
+      int defaultTextLength) {
     owner = database;
     tableId = id;
     columnCount = columns;
@@ -223,6 +234,10 @@ public final class TableDefinition {
       checkValues[index] = source.getLong(checkValuesOffset + index * Long.BYTES);
       referenceTableIds[index] = source.getInt(
           referenceTableIdsOffset + index * Integer.BYTES);
+    }
+    defaultTextBytesUsed = defaultTextLength;
+    for (int index = 0; index < defaultTextLength; index++) {
+      defaultTextBytes[index] = source.get(defaultTextOffset + index);
     }
     uniqueIndexCount = 0;
     if (valueIndexTableId > 0) {
@@ -345,6 +360,35 @@ public final class TableDefinition {
     return hasDefault(column) ? defaultValues[column] : 0;
   }
 
+  public int defaultTextLength(int column) {
+    if (!hasDefault(column) || !isVarchar(column)) {
+      return -1;
+    }
+    long handle = defaultValues[column];
+    int offset = (int) (handle >>> 32);
+    int length = (int) handle;
+    return offset >= 0 && length >= 0 && offset <= defaultTextBytesUsed - length
+        ? length : -1;
+  }
+
+  public int copyDefaultText(int column, ByteBuffer target) {
+    int length = defaultTextLength(column);
+    if (length < 0 || target == null || target.remaining() < length) {
+      return -1;
+    }
+    int offset = (int) (defaultValues[column] >>> 32);
+    target.put(defaultTextBytes, offset, length);
+    return length;
+  }
+
+  int defaultTextBytes() {
+    return defaultTextBytesUsed;
+  }
+
+  byte defaultTextByte(int index) {
+    return index >= 0 && index < defaultTextBytesUsed ? defaultTextBytes[index] : 0;
+  }
+
   public int findColumn(CharSequence name) {
     for (int index = 0; index < columnCount; index++) {
       if (writableColumn(index).matches(name)) {
@@ -355,7 +399,21 @@ public final class TableDefinition {
   }
 
   public int rowBytes() {
+    return maximumRowBytes();
+  }
+
+  public int fixedRowBytes() {
     return columnCount * Long.BYTES;
+  }
+
+  public int maximumRowBytes() {
+    int bytes = fixedRowBytes();
+    for (int column = 1; column < columnCount; column++) {
+      if (isVarchar(column)) {
+        bytes += SqlTypeDescriptor.parameterOne(typeDescriptors[column]) * 4;
+      }
+    }
+    return bytes;
   }
 
   public int nullMaskOffset() {
@@ -366,8 +424,64 @@ public final class TableDefinition {
     return row != null
         && column > 0
         && column < columnCount
-        && row.remaining() == rowBytes()
+        && row.remaining() >= fixedRowBytes()
+        && row.remaining() <= maximumRowBytes()
         && (row.getLong(row.position() + nullMaskOffset()) & 1L << column) != 0;
+  }
+
+  public boolean isValidRow(ByteBuffer row) {
+    if (row == null
+        || row.remaining() < fixedRowBytes()
+        || row.remaining() > maximumRowBytes()) {
+      return false;
+    }
+    int base = row.position();
+    long nullMask = row.getLong(base + nullMaskOffset());
+    if (!isValidNullMask(nullMask)) {
+      return false;
+    }
+    int payloadOffset = fixedRowBytes();
+    for (int column = 1; column < columnCount; column++) {
+      if (!isVarchar(column)) {
+        continue;
+      }
+      long slot = row.getLong(base + (column - 1) * Long.BYTES);
+      if ((nullMask & 1L << column) != 0) {
+        if (slot != 0) {
+          return false;
+        }
+        continue;
+      }
+      int offset = (int) (slot >>> 32);
+      int length = (int) slot;
+      if (offset != payloadOffset
+          || length < 0
+          || offset > row.remaining() - length
+          || Utf8Text.validate(
+              row,
+              base + offset,
+              length,
+              SqlTypeDescriptor.parameterOne(typeDescriptors[column])) < 0) {
+        return false;
+      }
+      payloadOffset += length;
+    }
+    return payloadOffset == row.remaining();
+  }
+
+  public int textOffset(ByteBuffer row, int column) {
+    if (!isVarchar(column) || isNull(row, column)) {
+      return -1;
+    }
+    return (int) (row.getLong(
+        row.position() + (column - 1) * Long.BYTES) >>> 32);
+  }
+
+  public int textLength(ByteBuffer row, int column) {
+    if (!isVarchar(column) || isNull(row, column)) {
+      return -1;
+    }
+    return (int) row.getLong(row.position() + (column - 1) * Long.BYTES);
   }
 
   public boolean isValidNullMask(long nullMask) {
@@ -578,6 +692,13 @@ public final class TableDefinition {
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = source.defaultValues[index];
     }
+    defaultTextBytesUsed = source.defaultTextBytesUsed;
+    System.arraycopy(
+        source.defaultTextBytes,
+        0,
+        defaultTextBytes,
+        0,
+        defaultTextBytesUsed);
   }
 
   private void copyTypes(TableDefinition source) {

@@ -6,8 +6,6 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.page.IndexedPageStore;
-import io.riverdb.engine.page.IndexedPageStoreOpenResult;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableFile;
@@ -35,7 +33,7 @@ final class IndexedTableTest {
   void forcedWalDoesNotAdvancePublishedTableSnapshot(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
-    IndexedPageStore store = createStore(directory, wal);
+    IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
     long[] keys = {77};
     int[] rowLengths = {Long.BYTES};
@@ -428,7 +426,7 @@ final class IndexedTableTest {
     DirectoryOperationResult operation = new DirectoryOperationResult();
     assertEquals(
         StatusCode.OK,
-        directory.reopen(IndexedPageStore.FILE_NAME, operation));
+        directory.reopen(IndexedTableStore.FILE_NAME, operation));
     DurableFile file = operation.file();
     long offset = (long) (rootPageId - 1) * PageCodec.PAGE_BYTES + 10;
     ByteBuffer oneByte = ByteBuffer.allocate(1);
@@ -461,33 +459,33 @@ final class IndexedTableTest {
     return result.wal();
   }
 
-  private static IndexedPageStore createStore(
+  private static IndexedTableStore createStore(
       NioDurableDirectory directory,
       LocalWal wal) {
-    IndexedPageStoreOpenResult result = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.create(directory, wal, DATABASE, GENERATION, result));
+        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, result));
     return result.store();
   }
 
-  private static IndexedPageStore openStore(
+  private static IndexedTableStore openStore(
       NioDurableDirectory directory,
       LocalWal wal) {
-    IndexedPageStoreOpenResult result = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedPageStore.open(directory, wal, DATABASE, GENERATION, result));
+        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, result));
     return result.store();
   }
 
-  private static IndexedTable createTable(IndexedPageStore store) {
+  private static IndexedTable createTable(IndexedTableStore store) {
     IndexedTableOpenResult result = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(store, result));
     return result.table();
   }
 
-  private static IndexedTable openTable(IndexedPageStore store) {
+  private static IndexedTable openTable(IndexedTableStore store) {
     IndexedTableOpenResult result = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(store, result));
     return result.table();

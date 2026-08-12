@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
@@ -16,7 +17,8 @@ public final class ProtocolFrameCodec {
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
   public static final int MAXIMUM_COLUMN_NAME_BYTES = 64;
   public static final int MAXIMUM_RESPONSE_BYTES = HEADER_BYTES + 64
-      + CommandResult.MAXIMUM_COLUMNS * (Integer.BYTES + 1 + MAXIMUM_COLUMN_NAME_BYTES);
+      + CommandResult.MAXIMUM_COLUMNS
+          * (Integer.BYTES + Short.BYTES + Utf8Text.MAXIMUM_BYTES);
   public static final int FLAG_ROW_AVAILABLE = 1;
   public static final int FLAG_TRANSACTION_ACTIVE = 1 << 1;
   public static final int FLAG_QUERY_ACTIVE = 1 << 2;
@@ -455,16 +457,25 @@ public final class ProtocolFrameCodec {
             result.reset();
             return StatusCode.INVALID_EXTERNAL_INPUT;
           }
-          int length = bytes.get(valueOffset++) & 0xff;
-          if (length > CommandResult.MAXIMUM_TEXT_CHARACTERS
-              || (nullMask & 1L << index) != 0 && length != 0
-              || valueOffset + length > end
-              || !validTextValue(bytes, valueOffset, length)) {
+          if (valueOffset > end - Short.BYTES) {
             frame.reset();
             result.reset();
             return StatusCode.INVALID_EXTERNAL_INPUT;
           }
-          result.textAt(index, bytes, valueOffset, length);
+          int length = Short.toUnsignedInt(bytes.getShort(valueOffset));
+          valueOffset += Short.BYTES;
+          int maximumScalars = SqlTypeDescriptor.parameterOne(
+              result.typeDescriptorAt(index));
+          if (length > Utf8Text.MAXIMUM_BYTES
+              || (nullMask & 1L << index) != 0 && length != 0
+              || valueOffset + length > end
+              || Utf8Text.validate(
+                  bytes, valueOffset, length, maximumScalars) < 0
+              || !result.textAt(index, bytes, valueOffset, length)) {
+            frame.reset();
+            result.reset();
+            return StatusCode.INVALID_EXTERNAL_INPUT;
+          }
           valueOffset += length;
         } else {
           if (valueOffset > end - Long.BYTES) {
@@ -517,14 +528,15 @@ public final class ProtocolFrameCodec {
         return invalidTarget(target);
       }
       if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        int length = (nullMask & 1L << index) != 0
+        int characters = (nullMask & 1L << index) != 0
             ? 0 : command != null
                 ? command.textLengthAt(index) : row == null
                     ? -1 : row.textLengthAt(index);
-        if (length < 0 || length > CommandResult.MAXIMUM_TEXT_CHARACTERS) {
+        int length = encodedTextBytes(command, row, index, characters, descriptor);
+        if (length < 0) {
           return invalidTarget(target);
         }
-        valueBytes += 1 + length;
+        valueBytes += Short.BYTES + length;
       } else {
         valueBytes += Long.BYTES;
       }
@@ -557,19 +569,14 @@ public final class ProtocolFrameCodec {
       int descriptor = command != null
           ? command.typeDescriptorAt(index) : row.typeDescriptorAt(index);
       if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        int length = (nullMask & 1L << index) != 0
+        int characters = (nullMask & 1L << index) != 0
             ? 0 : command != null
                 ? command.textLengthAt(index) : row.textLengthAt(index);
-        target.put(valueOffset++, (byte) length);
-        for (int character = 0; character < length; character++) {
-          char value = command != null
-              ? command.textCharacterAt(index, character)
-              : row.textCharacterAt(index, character);
-          if (value < 0x20 || value > 0x7e) {
-            return invalidTarget(target);
-          }
-          target.put(valueOffset++, (byte) value);
-        }
+        int length = encodedTextBytes(command, row, index, characters, descriptor);
+        target.putShort(valueOffset, (short) length);
+        valueOffset += Short.BYTES;
+        valueOffset = writeText(
+            target, valueOffset, command, row, index, characters);
       } else {
         long value = command != null
             ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
@@ -633,14 +640,81 @@ public final class ProtocolFrameCodec {
     return true;
   }
 
-  private static boolean validTextValue(ByteBuffer source, int offset, int length) {
-    for (int index = 0; index < length; index++) {
-      int value = source.get(offset + index) & 0xff;
-      if (value < 0x20 || value > 0x7e) {
-        return false;
+  private static int encodedTextBytes(
+      CommandResult command,
+      RowResult row,
+      int index,
+      int characters,
+      int descriptor) {
+    if (characters < 0 || characters > CommandResult.MAXIMUM_TEXT_CHARACTERS) {
+      return -1;
+    }
+    int bytes = 0;
+    int scalars = 0;
+    for (int character = 0; character < characters; character++) {
+      char first = textCharacter(command, row, index, character);
+      int scalar;
+      if (Character.isHighSurrogate(first)) {
+        if (++character >= characters) {
+          return -1;
+        }
+        char second = textCharacter(command, row, index, character);
+        if (!Character.isLowSurrogate(second)) {
+          return -1;
+        }
+        scalar = Character.toCodePoint(first, second);
+      } else if (Character.isLowSurrogate(first)) {
+        return -1;
+      } else {
+        scalar = first;
+      }
+      if (++scalars > SqlTypeDescriptor.parameterOne(descriptor)) {
+        return -1;
+      }
+      bytes += scalar <= 0x7f ? 1 : scalar <= 0x7ff ? 2 : scalar <= 0xffff ? 3 : 4;
+    }
+    return bytes;
+  }
+
+  private static int writeText(
+      ByteBuffer target,
+      int offset,
+      CommandResult command,
+      RowResult row,
+      int index,
+      int characters) {
+    for (int character = 0; character < characters; character++) {
+      char first = textCharacter(command, row, index, character);
+      int scalar = Character.isHighSurrogate(first)
+          ? Character.toCodePoint(
+              first, textCharacter(command, row, index, ++character)) : first;
+      if (scalar <= 0x7f) {
+        target.put(offset++, (byte) scalar);
+      } else if (scalar <= 0x7ff) {
+        target.put(offset++, (byte) (0xc0 | scalar >>> 6));
+        target.put(offset++, (byte) (0x80 | scalar & 0x3f));
+      } else if (scalar <= 0xffff) {
+        target.put(offset++, (byte) (0xe0 | scalar >>> 12));
+        target.put(offset++, (byte) (0x80 | scalar >>> 6 & 0x3f));
+        target.put(offset++, (byte) (0x80 | scalar & 0x3f));
+      } else {
+        target.put(offset++, (byte) (0xf0 | scalar >>> 18));
+        target.put(offset++, (byte) (0x80 | scalar >>> 12 & 0x3f));
+        target.put(offset++, (byte) (0x80 | scalar >>> 6 & 0x3f));
+        target.put(offset++, (byte) (0x80 | scalar & 0x3f));
       }
     }
-    return true;
+    return offset;
+  }
+
+  private static char textCharacter(
+      CommandResult command,
+      RowResult row,
+      int index,
+      int character) {
+    return command != null
+        ? command.textCharacterAt(index, character)
+        : row.textCharacterAt(index, character);
   }
 
   private static boolean identifierStart(char value) {

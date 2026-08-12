@@ -2,7 +2,7 @@ package io.riverdb.engine.checkpoint;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.engine.page.IndexedPageStore;
+import io.riverdb.engine.table.IndexedTableStore;
 import io.riverdb.engine.table.IndexedTable;
 import io.riverdb.engine.table.IndexedVacuumResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
@@ -19,7 +19,7 @@ public final class EmbeddedCheckpoint implements TransactionCommitParticipant {
   private final TransactionManager manager;
   private final DurableDirectory directory;
   private final LocalWal wal;
-  private final IndexedPageStore store;
+  private final IndexedTableStore store;
   private final IndexedTable table;
   private final CheckpointControlStore control;
   private final CheckpointState state = new CheckpointState();
@@ -35,7 +35,7 @@ public final class EmbeddedCheckpoint implements TransactionCommitParticipant {
       TransactionManager transactionManager,
       DurableDirectory durableDirectory,
       LocalWal localWal,
-      IndexedPageStore pageStore,
+      IndexedTableStore pageStore,
       IndexedTable indexedTable,
       CheckpointControlStore checkpointControl,
       long checkpointId) {
@@ -134,7 +134,7 @@ public final class EmbeddedCheckpoint implements TransactionCommitParticipant {
     boolean retained = !removeObsoleteFile(previousFileName).isOk();
     if (lastCheckpointId > 1) {
       StatusCode baseCleanup = removeObsoleteFile(
-          IndexedPageStore.checkpointFileName(WalGeneration.of(previousGeneration)));
+          IndexedTableStore.checkpointFileName(WalGeneration.of(previousGeneration)));
       retained |= !baseCleanup.isOk();
     }
     activeResult.set(

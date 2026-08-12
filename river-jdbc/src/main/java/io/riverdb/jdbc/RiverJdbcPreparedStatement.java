@@ -1,6 +1,6 @@
 package io.riverdb.jdbc;
 
-import io.riverdb.base.text.PackedText;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.engine.api.RiverSession;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -138,7 +138,7 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   @Override
   public void setString(int index, String value) throws SQLException {
     requireParameter(index);
-    if (!PackedText.isValid(value)) {
+    if (Utf8Text.encodedLength(value, Utf8Text.MAXIMUM_SCALARS) < 0) {
       throw JdbcExceptions.invalid("VARCHAR parameter exceeds the supported domain");
     }
     parameters[index - 1] = 0;

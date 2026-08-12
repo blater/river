@@ -50,11 +50,7 @@ public final class SqlScanRowResult {
     for (int index = 0; index < projectedColumnCount; index++) {
       values[index] = projectedValues[index];
       typeDescriptors[index] = projectedTypeDescriptors[index];
-      if (isVarchar(index)
-          && (projectedNullMask & 1L << index) == 0) {
-        textLengths[index] = PackedText.copyTo(
-            projectedValues[index], textValues[index], 0);
-      }
+      textLengths[index] = 0;
     }
     value = projectedColumnCount == 0 ? 0 : values[projectedColumnCount - 1];
     available = true;
@@ -77,6 +73,37 @@ public final class SqlScanRowResult {
       textValues[index][character] = value;
     }
     textLengths[index] = source.length();
+    return StatusCode.OK;
+  }
+
+  StatusCode setPackedTextAt(int index, long packed) {
+    if (!available || index < 0 || index >= columnCount || !isVarchar(index)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int length = PackedText.length(packed);
+    for (int character = 0; character < length; character++) {
+      textValues[index][character] = PackedText.charAt(packed, character);
+    }
+    textLengths[index] = length;
+    return StatusCode.OK;
+  }
+
+  StatusCode setUtf8At(
+      int index,
+      io.riverdb.storage.heap.HeapRowResult source,
+      int offset,
+      int length) {
+    if (!available
+        || index < 0
+        || index >= columnCount
+        || source == null
+        || offset < 0
+        || length < 0
+        || !isVarchar(index)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    textLengths[index] = Utf8RowText.decode(
+        source, offset, length, textValues[index]);
     return StatusCode.OK;
   }
 

@@ -10,8 +10,8 @@ import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.engine.checkpoint.EmbeddedCheckpoint;
 import io.riverdb.engine.control.DatabaseControlResult;
 import io.riverdb.engine.control.DatabaseControlStore;
-import io.riverdb.engine.page.IndexedPageStore;
-import io.riverdb.engine.page.IndexedPageStoreOpenResult;
+import io.riverdb.engine.table.IndexedTableStore;
+import io.riverdb.engine.table.IndexedTableStoreOpenResult;
 import io.riverdb.engine.table.IndexedTable;
 import io.riverdb.engine.table.IndexedTableOpenResult;
 import io.riverdb.engine.table.IndexedGroupCommitCoordinator;
@@ -29,7 +29,7 @@ import java.nio.file.Path;
 
 /** Minimal embedded lifecycle over the first durable indexed transaction kernel. */
 public final class EmbeddedDatabase {
-  private static final int MAXIMUM_ROW_BYTES = 4096;
+  private static final int MAXIMUM_ROW_BYTES = 8192;
   private static final int MAXIMUM_ACTIVE_TRANSACTIONS = 1024;
   private static final NioDurableDirectory[] NO_FOLLOWER_DIRECTORIES =
       new NioDurableDirectory[0];
@@ -51,7 +51,7 @@ public final class EmbeddedDatabase {
       NioDurableDirectory[] openedFollowerDirectories,
       LocalWal openedWal,
       LocalWal[] openedFollowerWals,
-      IndexedPageStore openedStore,
+      IndexedTableStore openedStore,
       IndexedTable openedTable,
       int maximumActiveTransactions,
       CheckpointControlStore checkpointControl,
@@ -429,14 +429,14 @@ public final class EmbeddedDatabase {
       directory.close();
       return status;
     }
-    IndexedPageStoreOpenResult storeResult = new IndexedPageStoreOpenResult();
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     if (create) {
-      status = IndexedPageStore.create(directory, wal, database, generation, storeResult);
+      status = IndexedTableStore.create(directory, wal, database, generation, storeResult);
     } else if (checkpointAvailable) {
-      status = IndexedPageStore.openCheckpoint(
+      status = IndexedTableStore.openCheckpoint(
           directory, wal, database, checkpointState, storeResult);
     } else {
-      status = IndexedPageStore.openExisting(
+      status = IndexedTableStore.openExisting(
           directory, wal, database, generation, storeResult);
     }
     if (!status.isOk()) {
