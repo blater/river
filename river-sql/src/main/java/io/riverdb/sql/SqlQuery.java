@@ -10,6 +10,7 @@ public final class SqlQuery {
   private final int[] scalarPredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private final int[] existencePredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private final int[] membershipPredicates = new int[MAXIMUM_QUERY_BLOCKS];
+  private final SqlDerivedQueryCompiler derivedCompiler = new SqlDerivedQueryCompiler(this);
   private int blockCount;
   private boolean explain;
   private boolean analyze;
@@ -75,101 +76,7 @@ public final class SqlQuery {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     destination.reset();
-    if (blockCount < 2) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int index = 0; index < blockCount; index++) {
-      SqlCommand block = blocks[index];
-      if (block.type() != SqlCommandType.SCAN
-          && block.type() != SqlCommandType.SELECT
-          || block.hasDisjunction()
-          || block.isSelectAll()
-          || block.columnCount() <= 0
-          || index > 0 && block.rowLimit() != Long.MAX_VALUE) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      if (index + 1 < blockCount) {
-        StatusCode visibility = validateOuterBlock(block, blocks[index + 1]);
-        if (!visibility.isOk()) {
-          return visibility;
-        }
-      } else {
-        StatusCode qualifiers = validateBaseBlock(block);
-        if (!qualifiers.isOk()) {
-          return qualifiers;
-        }
-      }
-    }
-    SqlCommand root = blocks[0];
-    SqlCommand base = blocks[blockCount - 1];
-    destination.writableTableName().copyFrom(base.tableName());
-    for (int index = 0; index < root.columnCount(); index++) {
-      SqlIdentifier column = destination.writableNextColumnName();
-      if (column == null) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      int resolvedNull = root.isNullProjection(index)
-          ? 1 : copyResolvedColumn(0, root.columnName(index), column);
-      if (resolvedNull < 0) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      if (resolvedNull > 0) {
-        column.copyFrom(root.columnName(index));
-        destination.markLastProjectionNull();
-      }
-      destination.writableColumnAlias(index).copyFrom(
-          root.columnOutputName(index));
-    }
-    for (int blockIndex = blockCount - 1; blockIndex >= 0; blockIndex--) {
-      SqlCommand block = blocks[blockIndex];
-      for (int predicate = 0; predicate < block.predicateCount(); predicate++) {
-        SqlIdentifier column = destination.writableNextPredicateColumnName();
-        if (column == null) {
-          return StatusCode.RESOURCE_EXHAUSTED;
-        }
-        int resolvedNull = copyResolvedColumn(
-            blockIndex, block.predicateColumnName(predicate), column);
-        if (resolvedNull != 0) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-        if (block.isNullPredicate(predicate)) {
-          destination.appendNullPredicate(
-              block.isNullPredicateNegated(predicate));
-        } else if (block.isColumnPredicate(predicate)) {
-          destination.writableNextPredicateValueTableName().copyFrom(
-              block.predicateValueTableName(predicate));
-          destination.writableNextPredicateValueColumnName().copyFrom(
-              block.predicateValueColumnName(predicate));
-          destination.appendColumnPredicate();
-        } else {
-          if (block.isRangePredicate(predicate)) {
-            destination.appendPredicate(
-                block.predicateValue(predicate),
-                block.predicateLowerInclusive(predicate),
-                block.predicateUpperExclusive(predicate),
-                false);
-          } else {
-            destination.appendComparison(
-                block.predicateValue(predicate),
-                block.comparison(predicate));
-          }
-        }
-      }
-    }
-    if (root.isOrdered()) {
-      int projection = outputIndex(root, root.orderColumnName());
-      CharSequence ordered = projection >= 0
-          ? root.columnName(projection) : root.orderColumnName();
-      int resolvedNull = copyResolvedColumn(
-          0, ordered, destination.writableOrderColumnName());
-      if (resolvedNull != 0) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      destination.setDescendingOrder(root.isDescendingOrder());
-    }
-    destination.setRowLimit(root.rowLimit());
-    destination.setScan(0, 0, false);
-    return destination.finish();
+    return derivedCompiler.compile(destination);
   }
 
   public StatusCode compileView(
@@ -243,24 +150,7 @@ public final class SqlQuery {
 
   private StatusCode compileNestedPredicates(SqlCommand destination) {
     for (int index = 0; index < blockCount; index++) {
-      SqlCommand block = blocks[index];
-      int scalar = scalarPredicate(index);
-      int membership = membershipPredicate(index);
-      int edgeCount = (scalar >= 0 ? 1 : 0)
-          + (existencePredicates[index] != 0 ? 1 : 0)
-          + (membership >= 0 ? 1 : 0);
-      if (block.type() != SqlCommandType.SCAN
-          && block.type() != SqlCommandType.SELECT
-          || block.hasDisjunction()
-          || index > 0 && (block.isSelectAll() || block.columnCount() != 1)
-          || index + 1 < blockCount
-              && (edgeCount != 1
-                  || scalar >= 0
-                      && (scalar >= block.predicateCount()
-                          || !block.isEqualityPredicate(scalar))
-                  || membership >= 0
-                      && (membership >= block.predicateCount()
-                          || !block.isEqualityPredicate(membership)))) {
+      if (!validNestedBlock(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
@@ -268,102 +158,30 @@ public final class SqlQuery {
     return destination.finish();
   }
 
-  private static StatusCode validateOuterBlock(
-      SqlCommand outer,
-      SqlCommand inner) {
-    for (int index = 0; index < outer.columnCount(); index++) {
-      if (!validQualifier(outer.columnTableName(index), outer)
-          || !outer.isNullProjection(index)
-              && !outputContains(inner, outer.columnName(index))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
-    for (int index = 0; index < outer.predicateCount(); index++) {
-      if (!validQualifier(outer.predicateTableName(index), outer)
-          || !outputContains(inner, outer.predicateColumnName(index))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
-    if (outer.isOrdered()
-        && !outputContains(inner, outer.orderColumnName())
-        && outputIndex(outer, outer.orderColumnName()) < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return StatusCode.OK;
-  }
-
-  private static StatusCode validateBaseBlock(SqlCommand base) {
-    for (int index = 0; index < base.columnCount(); index++) {
-      if (!validQualifier(base.columnTableName(index), base)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
-    for (int index = 0; index < base.predicateCount(); index++) {
-      if (!validQualifier(base.predicateTableName(index), base)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private static boolean outputContains(SqlCommand command, CharSequence name) {
-    return outputIndex(command, name) >= 0;
-  }
-
-  private static int outputIndex(SqlCommand command, CharSequence name) {
-    int found = -1;
-    for (int index = 0; index < command.columnCount(); index++) {
-      if (sameName(command.columnOutputName(index), name)) {
-        if (found >= 0) {
-          return -2;
-        }
-        found = index;
-      }
-    }
-    return found;
-  }
-
-  private int copyResolvedColumn(
-      int blockIndex,
-      CharSequence name,
-      SqlIdentifier destination) {
-    CharSequence resolved = name;
-    for (int sourceIndex = blockIndex + 1;
-        sourceIndex < blockCount;
-        sourceIndex++) {
-      SqlCommand source = blocks[sourceIndex];
-      int projection = outputIndex(source, resolved);
-      if (projection < 0) {
-        return -1;
-      }
-      if (source.isNullProjection(projection)) {
-        return 1;
-      }
-      resolved = source.columnName(projection);
-    }
-    destination.copyFrom(resolved);
-    return 0;
-  }
-
-  private static boolean validQualifier(
-      CharSequence qualifier,
-      SqlCommand command) {
-    return qualifier.length() == 0
-        || sameName(qualifier, command.tableName())
-        || command.tableAlias().length() > 0
-            && sameName(qualifier, command.tableAlias());
-  }
-
-  private static boolean sameName(CharSequence left, CharSequence right) {
-    if (left.length() != right.length()) {
+  private boolean validNestedBlock(int index) {
+    SqlCommand block = blocks[index];
+    if ((block.type() != SqlCommandType.SCAN && block.type() != SqlCommandType.SELECT)
+        || block.hasDisjunction()
+        || index > 0 && (block.isSelectAll() || block.columnCount() != 1)) {
       return false;
     }
-    for (int index = 0; index < left.length(); index++) {
-      if (left.charAt(index) != right.charAt(index)) {
-        return false;
-      }
-    }
-    return true;
+    return index + 1 == blockCount || validNestedEdge(index, block);
+  }
+
+  private boolean validNestedEdge(int index, SqlCommand block) {
+    int scalar = scalarPredicate(index);
+    int membership = membershipPredicate(index);
+    int edgeCount = (scalar >= 0 ? 1 : 0)
+        + (existencePredicates[index] != 0 ? 1 : 0)
+        + (membership >= 0 ? 1 : 0);
+    return edgeCount == 1
+        && validNestedPredicate(block, scalar)
+        && validNestedPredicate(block, membership);
+  }
+
+  private static boolean validNestedPredicate(SqlCommand block, int predicate) {
+    return predicate < 0
+        || predicate < block.predicateCount() && block.isEqualityPredicate(predicate);
   }
 
   public int blockCount() {
