@@ -15,6 +15,20 @@ public final class SqlCommand {
   public static final int MAXIMUM_VIEW_QUERY_LENGTH = 768;
   public static final int MAXIMUM_TEXT_BYTES = 64 * 1024;
 
+  public static final int UPDATE_LITERAL = 0;
+  public static final int UPDATE_ADD = 1;
+  public static final int UPDATE_SUBTRACT = 2;
+  public static final int UPDATE_MULTIPLY = 3;
+  public static final int UPDATE_DIVIDE = 4;
+  public static final int UPDATE_REMAINDER = 5;
+  public static final int UPDATE_NEGATE = 6;
+  public static final int UPDATE_ABSOLUTE = 7;
+  public static final int UPDATE_CEILING = 8;
+  public static final int UPDATE_FLOOR = 9;
+  public static final int UPDATE_ROUND = 10;
+  public static final int UPDATE_TRUNCATE = 11;
+  public static final int UPDATE_CAST = 12;
+
   static final long INVALID_TEXT_HANDLE = Long.MIN_VALUE;
 
   private final SqlIdentifier tableName = new SqlIdentifier();
@@ -29,6 +43,7 @@ public final class SqlCommand {
   private final SqlIdentifier sequenceName = new SqlIdentifier();
   private final SqlIdentifier savepointName = new SqlIdentifier();
   private final ViewQuery viewQuery = new ViewQuery();
+  private final SqlScalarExpression scalarExpression = new SqlScalarExpression();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
   private final SqlIdentifier[] columnAliases = new SqlIdentifier[MAXIMUM_COLUMNS];
@@ -62,8 +77,8 @@ public final class SqlCommand {
   private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
   private final boolean[] defaultUpdates = new boolean[MAXIMUM_COLUMNS];
   private final int[] updateTypeDescriptors = new int[MAXIMUM_COLUMNS];
-  private final boolean[] relativeUpdates = new boolean[MAXIMUM_COLUMNS];
-  private final boolean[] subtractUpdates = new boolean[MAXIMUM_COLUMNS];
+  private final int[] updateOperators = new int[MAXIMUM_COLUMNS];
+  private final int[] updateExpressionTypeDescriptors = new int[MAXIMUM_COLUMNS];
   private final long[] predicateValues = new long[MAXIMUM_PREDICATES];
   private final long[] predicateLowerInclusive = new long[MAXIMUM_PREDICATES];
   private final long[] predicateUpperExclusive = new long[MAXIMUM_PREDICATES];
@@ -88,6 +103,7 @@ public final class SqlCommand {
   private long key;
   private long value;
   private long groupHavingValue;
+  private int groupHavingTypeDescriptor;
   private long scanLowerInclusive;
   private long scanUpperExclusive;
   private long columnNotNullMask;
@@ -142,6 +158,7 @@ public final class SqlCommand {
     sequenceName.reset();
     savepointName.reset();
     viewQuery.reset();
+    scalarExpression.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
     }
@@ -186,6 +203,7 @@ public final class SqlCommand {
     key = 0;
     value = 0;
     groupHavingValue = 0;
+    groupHavingTypeDescriptor = 0;
     scanLowerInclusive = 0;
     scanUpperExclusive = 0;
     columnNotNullMask = 0;
@@ -223,8 +241,8 @@ public final class SqlCommand {
       nullUpdates[index] = false;
       defaultUpdates[index] = false;
       updateTypeDescriptors[index] = 0;
-      relativeUpdates[index] = false;
-      subtractUpdates[index] = false;
+      updateOperators[index] = UPDATE_LITERAL;
+      updateExpressionTypeDescriptors[index] = 0;
     }
   }
 
@@ -234,7 +252,6 @@ public final class SqlCommand {
       key = primaryKey;
     }
     value = rowValue;
-    available = true;
   }
 
   void setLeftJoin() {
@@ -248,7 +265,6 @@ public final class SqlCommand {
       scanUpperExclusive = upperExclusive;
       boundedScan = bounded;
     }
-    available = true;
   }
 
   void appendPredicate(
@@ -289,7 +305,18 @@ public final class SqlCommand {
       int count,
       boolean hasNull,
       boolean negated) {
-    return appendLiteralMembership(values, 0, count, hasNull, negated);
+    return appendLiteralMembership(
+        values, count, hasNull, negated, SqlTypeDescriptor.BIGINT);
+  }
+
+  StatusCode appendLiteralMembership(
+      long[] values,
+      int count,
+      boolean hasNull,
+      boolean negated,
+      int typeDescriptor) {
+    return appendLiteralMembership(
+        values, 0, count, hasNull, negated, typeDescriptor);
   }
 
   private StatusCode appendLiteralMembership(
@@ -297,7 +324,8 @@ public final class SqlCommand {
       int valueOffset,
       int count,
       boolean hasNull,
-      boolean negated) {
+      boolean negated,
+      int typeDescriptor) {
     if (values == null
         || valueOffset < 0
         || count < 0
@@ -310,7 +338,7 @@ public final class SqlCommand {
     literalMembershipOffsets[index] = literalMembershipValueCount;
     literalMembershipHasNull[index] = hasNull;
     comparisons[index] = negated ? SqlComparison.NOT_IN : SqlComparison.IN;
-    predicateTypeDescriptors[index] = SqlTypeDescriptor.BIGINT;
+    predicateTypeDescriptors[index] = typeDescriptor;
     for (int value = 0; value < count; value++) {
       long candidate = values[valueOffset + value];
       int lower = literalMembershipOffsets[index];
@@ -385,9 +413,11 @@ public final class SqlCommand {
     rowLimit = maximumRows;
   }
 
-  void setGroupHaving(SqlComparison comparison, long expected) {
+  void setGroupHaving(
+      SqlComparison comparison, long expected, int typeDescriptor) {
     groupHavingComparison = comparison;
     groupHavingValue = expected;
+    groupHavingTypeDescriptor = typeDescriptor;
   }
 
   void setPredicateValue(int index, long predicateValue) {
@@ -403,6 +433,7 @@ public final class SqlCommand {
 
   void copyQueryFrom(SqlCommand source) {
     reset();
+    scalarExpression.copyFrom(source.scalarExpression);
     System.arraycopy(source.textBytes, 0, textBytes, 0, source.textBytesUsed);
     textBytesUsed = source.textBytesUsed;
     tableName.copyFrom(source.tableName);
@@ -433,7 +464,8 @@ public final class SqlCommand {
               offset,
               count,
               source.literalMembershipHasNull[index],
-              source.comparisons[index] == SqlComparison.NOT_IN);
+              source.comparisons[index] == SqlComparison.NOT_IN,
+              source.predicateTypeDescriptors[index]);
         } else if (source.comparisons[index] == SqlComparison.HALF_OPEN_RANGE) {
           appendPredicate(
               source.predicateValues[index],
@@ -454,6 +486,7 @@ public final class SqlCommand {
     descendingOrder = source.descendingOrder;
     groupHavingComparison = source.groupHavingComparison;
     groupHavingValue = source.groupHavingValue;
+    groupHavingTypeDescriptor = source.groupHavingTypeDescriptor;
     if (source.selectAll) {
       setSelectAll();
     }
@@ -469,7 +502,6 @@ public final class SqlCommand {
     type = SqlCommandType.BEGIN;
     readCommittedTransaction = readCommitted;
     serializableTransaction = serializable;
-    available = true;
   }
 
   void appendInsert(
@@ -493,7 +525,16 @@ public final class SqlCommand {
     type = SqlCommandType.INSERT;
     key = insertValues[0];
     value = insertValues[1];
+  }
+
+  StatusCode finish() {
+    boolean wasAvailable = available;
+    available = false;
+    if (wasAvailable || type == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     available = true;
+    return StatusCode.OK;
   }
 
   void appendUpdate(
@@ -501,14 +542,14 @@ public final class SqlCommand {
       boolean isNull,
       boolean isDefault,
       int typeDescriptor,
-      boolean relative,
-      boolean subtract) {
+      int operator,
+      int expressionTypeDescriptor) {
     updateValues[updateColumnCount] = updateValue;
     nullUpdates[updateColumnCount] = isNull;
     defaultUpdates[updateColumnCount] = isDefault;
     updateTypeDescriptors[updateColumnCount] = typeDescriptor;
-    relativeUpdates[updateColumnCount] = relative;
-    subtractUpdates[updateColumnCount++] = subtract;
+    updateOperators[updateColumnCount] = operator;
+    updateExpressionTypeDescriptors[updateColumnCount++] = expressionTypeDescriptor;
   }
 
   SqlIdentifier writableNextUpdateSourceColumnName() {
@@ -596,9 +637,12 @@ public final class SqlCommand {
   }
 
   void markLastColumnVarchar(int maximumScalars) {
-    if (columnCount > 1) {
-      columnTypeDescriptors[columnCount - 1] =
-          SqlTypeDescriptor.varchar(maximumScalars);
+    markLastColumnType(SqlTypeDescriptor.varchar(maximumScalars));
+  }
+
+  void markLastColumnType(int descriptor) {
+    if (columnCount > 0 && SqlTypeDescriptor.isValid(descriptor)) {
+      columnTypeDescriptors[columnCount - 1] = descriptor;
     }
   }
 
@@ -646,9 +690,12 @@ public final class SqlCommand {
   }
 
   void markLastPredicateVarchar(int literalScalars) {
-    if (predicateCount > 0) {
-      predicateTypeDescriptors[predicateCount - 1] =
-          SqlTypeDescriptor.varchar(Math.max(1, literalScalars));
+    markLastPredicateType(SqlTypeDescriptor.varchar(Math.max(1, literalScalars)));
+  }
+
+  void markLastPredicateType(int descriptor) {
+    if (predicateCount > 0 && SqlTypeDescriptor.isValid(descriptor)) {
+      predicateTypeDescriptors[predicateCount - 1] = descriptor;
     }
   }
 
@@ -801,6 +848,10 @@ public final class SqlCommand {
 
   public CharSequence viewQuery() {
     return viewQuery;
+  }
+
+  public SqlScalarExpression scalarExpression() {
+    return scalarExpression;
   }
 
   public SqlIdentifier firstColumnName() {
@@ -981,11 +1032,21 @@ public final class SqlCommand {
   }
 
   public boolean isRelativeUpdate(int index) {
-    return index >= 0 && index < updateColumnCount && relativeUpdates[index];
+    return updateOperator(index) != UPDATE_LITERAL;
   }
 
   public boolean isSubtractUpdate(int index) {
-    return index >= 0 && index < updateColumnCount && subtractUpdates[index];
+    return updateOperator(index) == UPDATE_SUBTRACT;
+  }
+
+  public int updateOperator(int index) {
+    return index >= 0 && index < updateColumnCount
+        ? updateOperators[index] : UPDATE_LITERAL;
+  }
+
+  public int updateExpressionTypeDescriptor(int index) {
+    return index >= 0 && index < updateColumnCount
+        ? updateExpressionTypeDescriptors[index] : 0;
   }
 
   public int insertRowCount() {
@@ -1161,6 +1222,10 @@ public final class SqlCommand {
 
   public long groupHavingValue() {
     return groupHavingValue;
+  }
+
+  public int groupHavingTypeDescriptor() {
+    return groupHavingTypeDescriptor;
   }
 
   public boolean isSerializableTransaction() {

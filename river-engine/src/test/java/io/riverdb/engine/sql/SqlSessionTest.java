@@ -529,7 +529,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         writer.execute("INSERT INTO staged VALUES (1, 100)", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.RETRY,
         observer.execute("SELECT value FROM staged WHERE key=1", result));
     assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
     assertEquals(
@@ -1613,6 +1613,39 @@ final class SqlSessionTest {
     assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
     assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
     assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT amount AS category, id FROM events ORDER BY category",
+            unindexedOrder));
+    long[] baseFirstOrder = {100, 200, 400, 300, 500};
+    for (long amount : baseFirstOrder) {
+      assertEquals(StatusCode.OK, session.nextScan(unindexedOrder, orderedRow));
+      assertEquals(amount, orderedRow.valueAt(0));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id AS chosen, category FROM events ORDER BY chosen DESC LIMIT 1",
+            unindexedOrder));
+    assertEquals(StatusCode.OK, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(5, orderedRow.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(unindexedOrder, orderedRow));
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertEquals(StatusCode.OK, unindexedOrder.reset());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT id AS chosen, amount AS chosen FROM events ORDER BY chosen",
+            unindexedOrder));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT NULL AS chosen FROM events ORDER BY chosen",
+            unindexedOrder));
     assertEquals(
         StatusCode.OK,
         session.beginScan(

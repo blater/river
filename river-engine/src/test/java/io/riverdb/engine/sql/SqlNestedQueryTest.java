@@ -34,6 +34,42 @@ final class SqlNestedQueryTest {
             "CREATE TABLE names "
                 + "(id BIGINT PRIMARY KEY, value VARCHAR(32), number BIGINT)",
             result));
+
+    SqlScanCursor explain = new SqlScanCursor();
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.beginScan(
+            "EXPLAIN SELECT o.id FROM names o WHERE EXISTS "
+                + "(SELECT i.id FROM missing_names i WHERE i.id=o.id)",
+            explain));
+    assertEquals(StatusCode.OK, explain.reset());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "EXPLAIN SELECT o.id FROM names o WHERE EXISTS "
+                + "(SELECT i.missing FROM names i WHERE i.id=o.id)",
+            explain));
+    assertEquals(StatusCode.OK, explain.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "EXPLAIN SELECT o.id FROM names o WHERE EXISTS "
+                + "(SELECT i.id FROM names i WHERE i.id=o.id)",
+            explain));
+    assertEquals(StatusCode.OK, session.closeScan(explain, result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "SELECT o.id FROM names o WHERE EXISTS "
+                + "(SELECT i.id FROM names i WHERE i.id=o.id)",
+            result));
+    assertEquals(StatusCode.OK, explain.reset());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT COUNT(*) FROM names o WHERE EXISTS "
+                + "(SELECT i.id FROM names i WHERE i.id=o.id)",
+            explain));
     assertEquals(
         StatusCode.OK,
         session.execute(

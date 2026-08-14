@@ -23,7 +23,12 @@ final class Utf8TextTest {
   void countsScalarsRatherThanUtf16Units() {
     assertEquals(4, Utf8Text.encodedLength("🌊", 1));
     assertEquals(-1, Utf8Text.encodedLength("🌊a", 1));
-    assertEquals(-1, Utf8Text.encodedLength("\ud800", 1));
+    assertEquals(-1, Utf8Text.encodedLength(String.valueOf((char) 0xd800), 1));
+    char[] valid = {'a', Character.highSurrogate(0x1f30a),
+        Character.lowSurrogate(0x1f30a)};
+    assertEquals(2, Utf8Text.scalarCount(valid, 0, valid.length));
+    char[] invalid = {'a', Character.highSurrogate(0x1f30a)};
+    assertEquals(-1, Utf8Text.scalarCount(invalid, 0, invalid.length));
   }
 
   @Test

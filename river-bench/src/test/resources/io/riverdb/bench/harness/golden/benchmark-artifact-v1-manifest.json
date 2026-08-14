@@ -1,0 +1,30 @@
+{
+  "schema_version" : 1,
+  "artifact_type" : "manifest",
+  "evidence_class" : "local_smoke",
+  "run_id" : "golden-v1-run",
+  "created_at" : "1970-01-01T00:00:00Z",
+  "river_commit" : "golden-commit",
+  "environment" : {
+    "os" : "GoldenOS 1.0",
+    "architecture" : "golden-arch",
+    "java_runtime" : "25-golden",
+    "java_vm" : "GoldenVM",
+    "available_processors" : __AVAILABLE_PROCESSORS__
+  },
+  "workloads" : [ {
+    "name" : "riverbank_tiny",
+    "version" : 1,
+    "seed" : 7,
+    "record_count" : 1,
+    "config" : "schema=partial_tiny_v1;rows=1",
+    "sha256" : "a761aa75ee5152b56f10b962d5bc1d473bca04f6d3c463b004901fb512fd32fe"
+  } ],
+  "measurement" : {
+    "clock" : "synthetic_monotonic_smoke",
+    "highest_trackable_ns" : 1000000,
+    "significant_digits" : 3,
+    "modes" : [ "closed_loop", "open_loop" ]
+  },
+  "canonical_gaps" : [ "reserved calibrated Linux runner and accepted control variance", "approved Ingres comparison build on identical hardware", "declared durable device filesystem and network calibration", "repeated interleaved uninstrumented samples plus attributed profiles", "reviewed numeric budgets and promotion decision", "provenance clearance before any optional external dataset use", "streaming canonical-scale workload generators and adapters" ]
+}

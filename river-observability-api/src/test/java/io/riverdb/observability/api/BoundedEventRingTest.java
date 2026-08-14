@@ -149,7 +149,7 @@ class BoundedEventRingTest {
         2,
         Severity.DEBUG,
         SaturationPolicy.DROP_AND_COUNT,
-        ObservabilityBuildMode.TEST);
+        ObservabilityBuildMode.DIAGNOSTIC);
     DiagnosticEvent target = new DiagnosticEvent();
     assertEquals(EventPollResult.EMPTY, ring.poll(target));
 

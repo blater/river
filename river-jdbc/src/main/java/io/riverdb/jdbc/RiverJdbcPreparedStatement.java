@@ -1,12 +1,14 @@
 package io.riverdb.jdbc;
 
 import io.riverdb.base.text.Utf8Text;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.RiverSession;
+import java.math.BigDecimal;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 
-/** Bounded BIGINT/VARCHAR prepared statement with injection-safe rendering. */
+/** Bounded typed prepared statement with injection-safe rendering. */
 final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   static final int MAXIMUM_PARAMETERS = 512;
   static final int MAXIMUM_RENDERED_CHARACTERS = 16 * 1024;
@@ -15,6 +17,8 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   private static final byte PARAMETER_UNSET = 0;
   private static final byte PARAMETER_LONG = 1;
   private static final byte PARAMETER_VARCHAR = 2;
+  private static final byte PARAMETER_BOOLEAN = 3;
+  private static final byte PARAMETER_DECIMAL = 4;
 
   private final String template;
   private final long[] parameters;
@@ -46,7 +50,7 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
     if (count > MAXIMUM_PARAMETERS) {
       throw JdbcExceptions.invalid("prepared SQL has too many parameters");
     }
-    int capacity = sql.length() + count * 19;
+    int capacity = sql.length() + count * 22;
     if (capacity > MAXIMUM_RENDERED_CHARACTERS) {
       throw JdbcExceptions.invalid("rendered SQL exceeds the bounded protocol payload");
     }
@@ -109,7 +113,24 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
 
   @Override
   public void setBoolean(int index, boolean value) throws SQLException {
-    setLong(index, value ? 1 : 0);
+    requireParameter(index);
+    parameters[index - 1] = value ? 1 : 0;
+    textParameters[index - 1] = null;
+    parameterTypes[index - 1] = PARAMETER_BOOLEAN;
+  }
+
+  @Override
+  public void setBigDecimal(int index, BigDecimal value) throws SQLException {
+    requireParameter(index);
+    int precision = value == null ? 0 : Math.max(value.precision(), value.scale());
+    if (value == null
+        || value.scale() < 0
+        || precision > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) {
+      throw JdbcExceptions.invalid("DECIMAL parameter exceeds the supported domain");
+    }
+    parameters[index - 1] = 0;
+    textParameters[index - 1] = value.toPlainString();
+    parameterTypes[index - 1] = PARAMETER_DECIMAL;
   }
 
   @Override
@@ -156,6 +177,10 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
       setLong(index, number.longValue());
     } else if (value instanceof Long number) {
       setLong(index, number.longValue());
+    } else if (value instanceof Boolean bool) {
+      setBoolean(index, bool.booleanValue());
+    } else if (value instanceof BigDecimal decimal) {
+      setBigDecimal(index, decimal);
     } else if (value instanceof String text) {
       setString(index, text);
     } else {
@@ -167,6 +192,14 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
   public void setObject(int index, Object value, int targetType) throws SQLException {
     if (targetType == Types.VARCHAR && value instanceof String text) {
       setString(index, text);
+      return;
+    }
+    if (targetType == Types.BOOLEAN && value instanceof Boolean bool) {
+      setBoolean(index, bool.booleanValue());
+      return;
+    }
+    if (targetType == Types.DECIMAL && value instanceof BigDecimal decimal) {
+      setBigDecimal(index, decimal);
       return;
     }
     if (targetType != Types.BIGINT) {
@@ -209,9 +242,17 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
     for (int index = 0; index < template.length(); index++) {
       char value = template.charAt(index);
       if (value == '?') {
-        output = parameterTypes[parameter] == PARAMETER_VARCHAR
-            ? writeText(rendered, output, textParameters[parameter++])
-            : writeLong(rendered, output, parameters[parameter++]);
+        byte type = parameterTypes[parameter];
+        output = switch (type) {
+          case PARAMETER_VARCHAR ->
+              writeText(rendered, output, textParameters[parameter]);
+          case PARAMETER_BOOLEAN ->
+              writeBoolean(rendered, output, parameters[parameter] != 0);
+          case PARAMETER_DECIMAL ->
+              writeDecimal(rendered, output, textParameters[parameter]);
+          default -> writeLong(rendered, output, parameters[parameter]);
+        };
+        parameter++;
       } else {
         rendered[output++] = value;
       }
@@ -278,5 +319,16 @@ final class RiverJdbcPreparedStatement extends AbstractPreparedStatement {
     }
     target[offset++] = '\'';
     return offset;
+  }
+
+  private static int writeBoolean(char[] target, int offset, boolean value) {
+    String text = value ? "TRUE" : "FALSE";
+    text.getChars(0, text.length(), target, offset);
+    return offset + text.length();
+  }
+
+  private static int writeDecimal(char[] target, int offset, String value) {
+    value.getChars(0, value.length(), target, offset);
+    return offset + value.length();
   }
 }

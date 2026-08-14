@@ -46,9 +46,7 @@ public final class SqlScanCursor {
     generation = scanGeneration;
     maximumRows = rowLimit;
     projectedColumnCount = projectionCount;
-    for (int index = 0; index < projectionCount; index++) {
-      projectedColumns[index] = projections[index];
-    }
+    System.arraycopy(projections, 0, projectedColumns, 0, projectionCount);
     rowsReturned = 0;
     active = true;
     return StatusCode.OK;

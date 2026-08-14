@@ -33,7 +33,7 @@ class BoundedEventRingWraparoundStressTest {
         64,
         Severity.DEBUG,
         SaturationPolicy.REPORT_BACKPRESSURE,
-        ObservabilityBuildMode.TEST);
+        ObservabilityBuildMode.DIAGNOSTIC);
     AtomicIntegerArray seen = new AtomicIntegerArray(eventCount);
     CountDownLatch start = new CountDownLatch(1);
 

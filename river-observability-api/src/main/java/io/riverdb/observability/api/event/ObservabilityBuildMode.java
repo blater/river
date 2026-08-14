@@ -3,8 +3,7 @@ package io.riverdb.observability.api.event;
 /** Build/runtime mode which owns the diagnostic consumer guard choice. */
 public enum ObservabilityBuildMode {
   PRODUCTION(ConsumerAccess.UNCHECKED),
-  DIAGNOSTIC(ConsumerAccess.GUARDED),
-  TEST(ConsumerAccess.GUARDED);
+  DIAGNOSTIC(ConsumerAccess.GUARDED);
 
   private final ConsumerAccess consumerAccess;
 

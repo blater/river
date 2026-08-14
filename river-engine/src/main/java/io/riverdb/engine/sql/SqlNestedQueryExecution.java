@@ -1,20 +1,18 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
-import io.riverdb.sql.SqlComparison;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
 /** Owns bounded cursors, row copies, and value sets used by nested queries. */
 final class SqlNestedQueryExecution {
-  static final int MAXIMUM_MEMBERSHIP_VALUES = 1_024;
+  static final int MAXIMUM_MEMBERSHIP_VALUES = SqlMembershipValues.MAXIMUM_VALUES;
   private static final int NULL_PROJECTION = BoundSqlStatement.NULL_PROJECTION;
   private static final int NESTED_SCALAR = 1;
   private static final int NESTED_EXISTENCE = 2;
@@ -25,15 +23,8 @@ final class SqlNestedQueryExecution {
   private final BoundSqlQuery.Block command;
   private final BoundSqlQuery query;
   private final SqlExpressionEvaluator expressions;
+  private final SqlNestedPredicateEvaluator predicates;
 
-  private final int[] scalarPredicateColumns =
-      new int[BoundSqlQuery.MAXIMUM_PREDICATES];
-  private final int[] scalarPredicateValueColumns =
-      new int[BoundSqlQuery.MAXIMUM_PREDICATES];
-  private final boolean[] scalarPredicateValueOuter =
-      new boolean[BoundSqlQuery.MAXIMUM_PREDICATES];
-  private final TableDefinition[] recursiveTables =
-      new TableDefinition[BoundSqlQuery.MAXIMUM_BLOCKS];
   private final RelationalScanCursor[] recursiveCursors =
       new RelationalScanCursor[BoundSqlQuery.MAXIMUM_BLOCKS];
   private final RelationalScanResult[] recursiveRows =
@@ -44,14 +35,6 @@ final class SqlNestedQueryExecution {
       new HeapRowResult[BoundSqlQuery.MAXIMUM_BLOCKS];
   private final long[] recursiveKeys =
       new long[BoundSqlQuery.MAXIMUM_BLOCKS];
-  private final int[] recursiveProjections =
-      new int[BoundSqlQuery.MAXIMUM_BLOCKS];
-  private final int[] recursivePredicateColumns = new int[
-      BoundSqlQuery.MAXIMUM_BLOCKS * BoundSqlQuery.MAXIMUM_PREDICATES];
-  private final int[] recursivePredicateValueColumns = new int[
-      BoundSqlQuery.MAXIMUM_BLOCKS * BoundSqlQuery.MAXIMUM_PREDICATES];
-  private final int[] recursivePredicateValueScopes = new int[
-      BoundSqlQuery.MAXIMUM_BLOCKS * BoundSqlQuery.MAXIMUM_PREDICATES];
   private final boolean[] recursiveScalarNulls =
       new boolean[BoundSqlQuery.MAXIMUM_BLOCKS];
   private final long[] recursiveScalarValues =
@@ -70,35 +53,28 @@ final class SqlNestedQueryExecution {
       new int[BoundSqlQuery.MAXIMUM_BLOCKS];
   private final boolean[] recursiveMembershipNulls =
       new boolean[BoundSqlQuery.MAXIMUM_BLOCKS];
-  private final long[] membershipValues = new long[MAXIMUM_MEMBERSHIP_VALUES];
-  private final long[] membershipScratchValues =
-      new long[MAXIMUM_MEMBERSHIP_VALUES];
-  // Each membership bank owns copied UTF-8 bytes until that bank is reused by
-  // the next nested evaluation. No handle below refers to a relational scan row.
-  private final ByteBuffer membershipText = ByteBuffer.allocateDirect(
-      MAXIMUM_MEMBERSHIP_VALUES * Utf8Text.MAXIMUM_BYTES);
-  private final ByteBuffer membershipScratchText = ByteBuffer.allocateDirect(
-      MAXIMUM_MEMBERSHIP_VALUES * Utf8Text.MAXIMUM_BYTES);
+  private final boolean[] recursiveRowAccepted =
+      new boolean[BoundSqlQuery.MAXIMUM_BLOCKS];
+  private final NestedChainState nestedChainState = new NestedChainState();
+  private final SqlMembershipValues memberships = new SqlMembershipValues();
   private final RelationalScanCursor scalarCursor = new RelationalScanCursor();
   private final RelationalScanResult scalarRow = new RelationalScanResult();
-  private final TableDefinition parentResultTable = new TableDefinition();
   // The outer copy remains valid through both predicate phases for one outer row
   // and is overwritten only by the next evaluateBeforePredicates call.
   private final HeapRowResult correlatedOuterRow = new HeapRowResult();
   private final ByteBuffer correlatedOuterBuffer = ByteBuffer.allocateDirect(
       TableSchema.MAXIMUM_ROW_BYTES);
-  private long[] recursiveMembershipValues;
-  private ByteBuffer recursiveMembershipText;
-  private int[] recursiveMembershipTextUsed;
   private boolean subqueryPredicateFalse;
   private boolean membershipHasNull;
   private boolean nestedCorrelated;
+  private boolean nestedCandidateAccepted;
   private boolean correlatedScalar;
   private boolean correlatedExistence;
   private boolean correlatedMembership;
   private boolean correlatedNestedChain;
   private boolean recursiveNestedChain;
   private boolean recursiveRootCorrelated;
+  private boolean preparingCandidate;
   private boolean existenceResult;
   private boolean scalarResultNull;
   private boolean outerCopied;
@@ -108,11 +84,9 @@ final class SqlNestedQueryExecution {
   private int membershipCandidateOffset;
   private int nestedProjection;
   private int nestedProjectionType;
+  private TableDefinition nestedTable;
+  private BoundSqlQuery.Block nestedCommand;
   private int membershipValueCount;
-  private int membershipTextUsed;
-  private int membershipScratchTextUsed;
-  private int membershipType;
-  private int membershipScratchType;
 
   SqlNestedQueryExecution(
       RelationalSession relationalSession,
@@ -123,6 +97,7 @@ final class SqlNestedQueryExecution {
     query = bound.executableQuery;
     command = query.root();
     expressions = evaluator;
+    predicates = new SqlNestedPredicateEvaluator(expressions);
   }
 
   StatusCode resetForStatement() {
@@ -136,10 +111,7 @@ final class SqlNestedQueryExecution {
     membershipCandidateBank = 0;
     membershipCandidateDepth = -1;
     membershipCandidateOffset = 0;
-    membershipTextUsed = 0;
-    membershipScratchTextUsed = 0;
-    membershipType = 0;
-    membershipScratchType = 0;
+    memberships.resetStatement();
     nestedCorrelated = false;
     correlatedScalar = false;
     correlatedExistence = false;
@@ -185,66 +157,109 @@ final class SqlNestedQueryExecution {
   }
 
   StatusCode prepare(boolean explainOnly) {
-    if (query.blockCount() > 2
-        && (query.hasScalarPredicate()
-            || query.hasExistencePredicate()
-            || query.hasMembershipPredicate())) {
-      return explainOnly ? StatusCode.OK : prepareNestedChain();
+    preparingCandidate = true;
+    correlatedScalar = query.correlatedScalar();
+    correlatedExistence = query.correlatedExistence();
+    correlatedMembership = query.correlatedMembership();
+    correlatedNestedChain = query.correlatedNestedChain();
+    recursiveNestedChain = query.recursiveNestedChain();
+    recursiveRootCorrelated = query.recursiveRootCorrelated();
+    try {
+      if (query.blockCount() > 2
+          && (query.hasScalarPredicate()
+              || query.hasExistencePredicate()
+              || query.hasMembershipPredicate())) {
+        return prepareNestedChain(explainOnly);
+      }
+      if (query.hasScalarPredicate()) {
+        return explainOnly
+            ? selectBoundBlock(query.scalarCommand()) : evaluateScalarPredicate();
+      }
+      if (query.hasExistencePredicate()) {
+        return explainOnly
+            ? selectBoundBlock(query.existenceCommand()) : evaluateExistencePredicate();
+      }
+      if (query.hasMembershipPredicate()) {
+        return explainOnly
+            ? selectBoundBlock(query.membershipCommand()) : evaluateMembershipPredicate();
+      }
+      return StatusCode.OK;
+    } finally {
+      preparingCandidate = false;
     }
-    if (query.hasScalarPredicate()) {
-      return explainOnly ? StatusCode.OK : evaluateScalarPredicate();
-    }
-    if (query.hasExistencePredicate()) {
-      return explainOnly ? StatusCode.OK : evaluateExistencePredicate();
-    }
-    if (query.hasMembershipPredicate()) {
-      return explainOnly ? StatusCode.OK : evaluateMembershipPredicate();
-    }
-    return StatusCode.OK;
   }
 
   StatusCode evaluateBeforePredicates(
       long primaryKey, HeapRowResult source) {
+    if (query.blockCount() > 1 && !query.isExecutable()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     outerCopied = false;
     if (correlatedScalar || correlatedExistence) {
       subqueryPredicateFalse = false;
     }
-    StatusCode status = StatusCode.OK;
-    if (recursiveNestedChain && recursiveRootCorrelated) {
-      subqueryPredicateFalse = false;
-      status = copyOuter(source);
-      if (status.isOk()) {
-        status = evaluateRecursiveChain(primaryKey, correlatedOuterRow);
-      }
+    StatusCode status = evaluateCorrelatedRecursive(primaryKey, source);
+    if (canContinue(status) && correlatedNestedChain) {
+      resetMembershipResult();
+      status = withOuterCopy(source, primaryKey, NESTED_CHAIN_EVALUATION);
     }
-    if (status.isOk() && !subqueryPredicateFalse && correlatedNestedChain) {
-      subqueryPredicateFalse = false;
-      membershipValueCount = 0;
-      membershipHasNull = false;
-      status = copyOuter(source);
-      if (status.isOk()) {
-        status = evaluateNestedChain(primaryKey, correlatedOuterRow);
-      }
+    if (canContinue(status) && correlatedScalar) {
+      status = withOuterCopy(source, primaryKey, SCALAR_EVALUATION);
     }
-    if (status.isOk() && !subqueryPredicateFalse && correlatedScalar) {
-      status = copyOuter(source);
-      if (status.isOk()) {
-        status = evaluateCorrelatedScalar(primaryKey, correlatedOuterRow);
-      }
-    }
-    if (status.isOk() && !subqueryPredicateFalse && correlatedMembership) {
-      membershipValueCount = 0;
-      membershipHasNull = false;
-      status = copyOuter(source);
-      if (status.isOk()) {
-        status = evaluateCorrelatedMembership(primaryKey, correlatedOuterRow);
-      }
+    if (canContinue(status) && correlatedMembership) {
+      resetMembershipResult();
+      status = withOuterCopy(source, primaryKey, MEMBERSHIP_EVALUATION);
     }
     return status;
   }
 
+  private static final int SCALAR_EVALUATION = 1;
+  private static final int MEMBERSHIP_EVALUATION = 2;
+  private static final int NESTED_CHAIN_EVALUATION = 3;
+
+  private boolean canContinue(StatusCode status) {
+    return status.isOk() && !subqueryPredicateFalse;
+  }
+
+  private void resetMembershipResult() {
+    subqueryPredicateFalse = false;
+    membershipValueCount = 0;
+    membershipHasNull = false;
+  }
+
+  private StatusCode evaluateCorrelatedRecursive(
+      long primaryKey, HeapRowResult source) {
+    if (!recursiveNestedChain || !recursiveRootCorrelated) {
+      return StatusCode.OK;
+    }
+    subqueryPredicateFalse = false;
+    StatusCode status = copyOuter(source);
+    return status.isOk()
+        ? evaluateRecursiveChain(primaryKey, correlatedOuterRow) : status;
+  }
+
+  private StatusCode withOuterCopy(
+      HeapRowResult source, long primaryKey, int evaluation) {
+    StatusCode status = copyOuter(source);
+    if (!status.isOk()) {
+      return status;
+    }
+    return switch (evaluation) {
+      case SCALAR_EVALUATION ->
+          evaluateCorrelatedScalar(primaryKey, correlatedOuterRow);
+      case MEMBERSHIP_EVALUATION ->
+          evaluateCorrelatedMembership(primaryKey, correlatedOuterRow);
+      case NESTED_CHAIN_EVALUATION ->
+          evaluateNestedChain(primaryKey, correlatedOuterRow);
+      default -> StatusCode.INVARIANT_BROKEN;
+    };
+  }
+
   StatusCode evaluateAfterPredicates(
       long primaryKey, HeapRowResult source) {
+    if (query.blockCount() > 1 && !query.isExecutable()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (!correlatedExistence) {
       return StatusCode.OK;
     }
@@ -262,7 +277,10 @@ final class SqlNestedQueryExecution {
   }
 
   boolean matchesMembership(
-      long value, HeapRowResult source, int column) {
+      long value,
+      int valueDescriptor,
+      HeapRowResult source,
+      int column) {
     boolean equal = false;
     for (int candidate = 0; candidate < membershipValueCount; candidate++) {
       if (isTextType(membershipResultType(
@@ -273,10 +291,15 @@ final class SqlNestedQueryExecution {
               membershipCandidateBank,
               membershipCandidateDepth,
               membershipCandidateOffset + candidate)
-          : value == membershipValue(
-              membershipCandidateBank,
-              membershipCandidateDepth,
-              membershipCandidateOffset + candidate)) {
+          : expressions.compareExact(
+              value,
+              valueDescriptor,
+              membershipValue(
+                  membershipCandidateBank,
+                  membershipCandidateDepth,
+                  membershipCandidateOffset + candidate),
+              membershipResultType(
+                  membershipCandidateBank, membershipCandidateDepth)) == 0) {
         equal = true;
         break;
       }
@@ -285,30 +308,14 @@ final class SqlNestedQueryExecution {
         && (equal || !membershipHasNull);
   }
 
-  boolean matchesScalar(long value) {
+  boolean matchesScalar(long value, int valueDescriptor) {
     return !dynamicScalarNulls[0]
         && expressions.matchesComparison(
-            value, command.comparison(query.scalarPredicate()), dynamicScalarValues[0]);
-  }
-
-  boolean correlatedScalar() {
-    return correlatedScalar;
-  }
-
-  boolean correlatedExistence() {
-    return correlatedExistence;
-  }
-
-  boolean correlatedNestedChain() {
-    return correlatedNestedChain;
-  }
-
-  boolean recursiveNestedChain() {
-    return recursiveNestedChain;
-  }
-
-  boolean recursiveRootCorrelated() {
-    return recursiveRootCorrelated;
+            value,
+            valueDescriptor,
+            command.comparison(query.scalarPredicate()),
+            dynamicScalarValues[0],
+            dynamicScalarTypes[0]);
   }
 
   private StatusCode copyOuter(HeapRowResult source) {
@@ -331,28 +338,6 @@ final class SqlNestedQueryExecution {
     return expressions.isNull(source, definition, column);
   }
 
-  private boolean matchesComparison(
-      long actual, BoundSqlQuery.Block source, int predicate) {
-    SqlComparison comparison = source.comparison(predicate);
-    if (comparison == SqlComparison.HALF_OPEN_RANGE) {
-      return actual >= source.predicateLowerInclusive(predicate)
-          && actual < source.predicateUpperExclusive(predicate);
-    }
-    if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
-      boolean equal = false;
-      for (int index = 0; index < source.literalMembershipCount(predicate); index++) {
-        if (actual == source.literalMembershipValue(predicate, index)) {
-          equal = true;
-          break;
-        }
-      }
-      return comparison == SqlComparison.IN
-          ? equal : !equal && !source.literalMembershipHasNull(predicate);
-    }
-    return expressions.matchesComparison(
-        actual, comparison, source.predicateValue(predicate));
-  }
-
   private boolean matchesLiteralComparison(
       long primaryKey,
       HeapRowResult source,
@@ -360,70 +345,8 @@ final class SqlNestedQueryExecution {
       int column,
       BoundSqlQuery.Block predicateSource,
       int predicate) {
-    if (!definition.isVarchar(column)) {
-      return matchesComparison(
-          readColumn(primaryKey, source, column), predicateSource, predicate);
-    }
-    SqlComparison comparison = predicateSource.comparison(predicate);
-    if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
-      boolean equal = false;
-      for (int index = 0;
-          index < predicateSource.literalMembershipCount(predicate);
-          index++) {
-        if (compareText(
-            source, column, predicateSource,
-            predicateSource.literalMembershipValue(predicate, index)) == 0) {
-          equal = true;
-          break;
-        }
-      }
-      return comparison == SqlComparison.IN
-          ? equal : !equal && !predicateSource.literalMembershipHasNull(predicate);
-    }
-    if (comparison == SqlComparison.HALF_OPEN_RANGE) {
-      return compareText(
-              source, column, predicateSource,
-              predicateSource.predicateLowerInclusive(predicate)) >= 0
-          && compareText(
-              source, column, predicateSource,
-              predicateSource.predicateUpperExclusive(predicate)) < 0;
-    }
-    int compared = compareText(
-        source, column, predicateSource, predicateSource.predicateValue(predicate));
-    return switch (comparison) {
-      case EQUAL -> compared == 0;
-      case NOT_EQUAL -> compared != 0;
-      case LESS_THAN -> compared < 0;
-      case LESS_OR_EQUAL -> compared <= 0;
-      case GREATER_THAN -> compared > 0;
-      case GREATER_OR_EQUAL -> compared >= 0;
-      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
-    };
-  }
-
-  private int compareText(
-      HeapRowResult actual,
-      int column,
-      BoundSqlQuery.Block expected,
-      long expectedHandle) {
-    long actualHandle = actual.getLong((column - 1) * Long.BYTES);
-    int actualOffset = (int) (actualHandle >>> 32);
-    int actualLength = (int) actualHandle;
-    int expectedLength = expected.textByteLength(expectedHandle);
-    if (!validTextHandle(actual, actualOffset, actualLength)
-        || expectedLength < 0) {
-      return Integer.MIN_VALUE;
-    }
-    int common = Math.min(actualLength, expectedLength);
-    for (int index = 0; index < common; index++) {
-      int comparison = Integer.compare(
-          Byte.toUnsignedInt(actual.getByte(actualOffset + index)),
-          Byte.toUnsignedInt(expected.textByteAt(expectedHandle, index)));
-      if (comparison != 0) {
-        return comparison;
-      }
-    }
-    return Integer.compare(actualLength, expectedLength);
+    return predicates.matchesLiteral(
+        primaryKey, source, definition, column, predicateSource, predicate);
   }
 
   private boolean equalColumns(
@@ -435,32 +358,15 @@ final class SqlNestedQueryExecution {
       HeapRowResult right,
       TableDefinition rightDefinition,
       int rightColumn) {
-    if (!leftDefinition.isVarchar(leftColumn)) {
-      return readColumn(leftKey, left, leftColumn)
-          == readColumn(rightKey, right, rightColumn);
-    }
-    long leftHandle = readColumn(leftKey, left, leftColumn);
-    long rightHandle = readColumn(rightKey, right, rightColumn);
-    int leftOffset = (int) (leftHandle >>> 32);
-    int leftLength = (int) leftHandle;
-    int rightOffset = (int) (rightHandle >>> 32);
-    int rightLength = (int) rightHandle;
-    if (!validTextHandle(left, leftOffset, leftLength)
-        || !validTextHandle(right, rightOffset, rightLength)
-        || leftLength != rightLength) {
-      return false;
-    }
-    for (int index = 0; index < leftLength; index++) {
-      if (left.getByte(leftOffset + index) != right.getByte(rightOffset + index)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  private static boolean validTextHandle(
-      HeapRowResult source, int offset, int length) {
-    return offset >= 0 && length >= 0 && offset <= source.length() - length;
+    return predicates.equalColumns(
+        leftKey,
+        left,
+        leftDefinition,
+        leftColumn,
+        rightKey,
+        right,
+        rightDefinition,
+        rightColumn);
   }
 
   private static boolean isTextType(int descriptor) {
@@ -473,25 +379,6 @@ final class SqlNestedQueryExecution {
     return source.length() >= definition.fixedRowBytes()
             && source.length() <= definition.maximumRowBytes()
         ? StatusCode.OK : StatusCode.CORRUPTION;
-  }
-
-  private static boolean matchesTableQualifier(
-      BoundSqlQuery.Block qualified, CharSequence name) {
-    return sameName(qualified.tableName(), name)
-        || qualified.tableAlias().length() > 0
-            && sameName(qualified.tableAlias(), name);
-  }
-
-  private static boolean sameName(CharSequence left, CharSequence right) {
-    if (left.length() != right.length()) {
-      return false;
-    }
-    for (int index = 0; index < left.length(); index++) {
-      if (left.charAt(index) != right.charAt(index)) {
-        return false;
-      }
-    }
-    return true;
   }
 
   RelationalScanCursor scalarCursor() {
@@ -507,29 +394,21 @@ final class SqlNestedQueryExecution {
   }
 
   int scalarPredicateColumn(int predicate) {
-    return scalarPredicateColumns[predicate];
-  }
-
-  void setScalarPredicateColumn(int predicate, int column) {
-    scalarPredicateColumns[predicate] = column;
+    return nestedCommand.resolvedPredicateColumn(predicate);
   }
 
   int scalarPredicateValueColumn(int predicate) {
-    return scalarPredicateValueColumns[predicate];
+    return nestedCommand.resolvedPredicateValueColumn(predicate);
   }
 
   boolean scalarPredicateValueOuter(int predicate) {
-    return scalarPredicateValueOuter[predicate];
-  }
-
-  void setScalarPredicateValue(
-      int predicate, int column, boolean outer) {
-    scalarPredicateValueColumns[predicate] = column;
-    scalarPredicateValueOuter[predicate] = outer;
+    int scope = nestedCommand.resolvedPredicateValueScope(predicate);
+    return scope >= 0 && scope < nestedCommand.blockIndex();
   }
 
   TableDefinition recursiveTable(int depth) {
-    return recursiveTables[depth];
+    BoundSqlQuery.Block block = query.block(depth);
+    return block == null ? null : block.table();
   }
 
   RelationalScanCursor recursiveCursor(int depth) {
@@ -557,30 +436,25 @@ final class SqlNestedQueryExecution {
   }
 
   int recursiveProjection(int depth) {
-    return recursiveProjections[depth];
-  }
-
-  void setRecursiveProjection(int depth, int projection) {
-    recursiveProjections[depth] = projection;
+    return query.block(depth).projection();
   }
 
   int recursivePredicateColumn(int slot) {
-    return recursivePredicateColumns[slot];
+    int depth = slot / BoundSqlQuery.MAXIMUM_PREDICATES;
+    return query.block(depth).resolvedPredicateColumn(
+        slot % BoundSqlQuery.MAXIMUM_PREDICATES);
   }
 
   int recursivePredicateValueColumn(int slot) {
-    return recursivePredicateValueColumns[slot];
+    int depth = slot / BoundSqlQuery.MAXIMUM_PREDICATES;
+    return query.block(depth).resolvedPredicateValueColumn(
+        slot % BoundSqlQuery.MAXIMUM_PREDICATES);
   }
 
   int recursivePredicateValueScope(int slot) {
-    return recursivePredicateValueScopes[slot];
-  }
-
-  void setRecursivePredicate(
-      int slot, int column, int valueColumn, int valueScope) {
-    recursivePredicateColumns[slot] = column;
-    recursivePredicateValueColumns[slot] = valueColumn;
-    recursivePredicateValueScopes[slot] = valueScope;
+    int depth = slot / BoundSqlQuery.MAXIMUM_PREDICATES;
+    return query.block(depth).resolvedPredicateValueScope(
+        slot % BoundSqlQuery.MAXIMUM_PREDICATES);
   }
 
   boolean recursiveScalarNull(int depth) {
@@ -597,10 +471,7 @@ final class SqlNestedQueryExecution {
     recursiveExistenceResults[depth] = false;
     recursiveMembershipCounts[depth] = 0;
     recursiveMembershipNulls[depth] = false;
-    if (recursiveMembershipTextUsed != null) {
-      recursiveMembershipTextUsed[depth] =
-          depth * MAXIMUM_MEMBERSHIP_VALUES * Utf8Text.MAXIMUM_BYTES;
-    }
+    memberships.resetRecursive(depth);
   }
 
   void setRecursiveScalar(int depth, long value) {
@@ -633,14 +504,11 @@ final class SqlNestedQueryExecution {
   }
 
   long membershipValue(boolean scratch, int index) {
-    return scratch ? membershipScratchValues[index] : membershipValues[index];
+    return memberships.value(scratch, index);
   }
 
   long membershipValue(int bank, int depth, int index) {
-    if (bank == 2) {
-      return recursiveMembershipValue(depth, index);
-    }
-    return membershipValue(bank == 1, index);
+    return memberships.value(bank, depth, index);
   }
 
   int membershipCapacity() {
@@ -648,34 +516,19 @@ final class SqlNestedQueryExecution {
   }
 
   void setMembershipValue(boolean scratch, int index, long value) {
-    if (scratch) {
-      membershipScratchValues[index] = value;
-    } else {
-      membershipValues[index] = value;
-    }
+    memberships.setValue(scratch, index, value);
   }
 
   private void resetMembershipOutput(int bank) {
-    if (bank == 1) {
-      membershipScratchTextUsed = 0;
-      membershipScratchType = 0;
-    } else {
-      membershipTextUsed = 0;
-      membershipType = 0;
-    }
+    memberships.resetOutput(bank);
   }
 
   private void setMembershipOutputType(int bank, int type) {
-    if (bank == 1) {
-      membershipScratchType = type;
-    } else {
-      membershipType = type;
-    }
+    memberships.setType(bank, type);
   }
 
   private int membershipResultType(int bank, int depth) {
-    return bank == 2 ? recursiveResultTypes[depth]
-        : bank == 1 ? membershipScratchType : membershipType;
+    return memberships.type(bank, depth, recursiveResultTypes);
   }
 
   private StatusCode appendMembershipValue(
@@ -686,52 +539,13 @@ final class SqlNestedQueryExecution {
       HeapRowResult source,
       TableDefinition definition,
       int projection) {
-    if (!definition.isVarchar(projection)) {
-      if (bank == 2) {
-        setRecursiveMembershipValue(
-            depth, index, readColumn(primaryKey, source, projection));
-      } else {
-        setMembershipValue(
-            bank == 1, index, readColumn(primaryKey, source, projection));
-      }
-      return StatusCode.OK;
-    }
-    long sourceHandle = readColumn(primaryKey, source, projection);
-    int sourceOffset = (int) (sourceHandle >>> 32);
-    int sourceLength = (int) sourceHandle;
-    ByteBuffer target = membershipTextBuffer(bank);
-    int targetOffset = membershipTextUsed(bank, depth);
-    if (!validTextHandle(source, sourceOffset, sourceLength)
-        || targetOffset > target.capacity() - sourceLength) {
-      return StatusCode.CORRUPTION;
-    }
-    for (int byteIndex = 0; byteIndex < sourceLength; byteIndex++) {
-      target.put(targetOffset + byteIndex, source.getByte(sourceOffset + byteIndex));
-    }
-    long targetHandle = (long) targetOffset << 32
-        | Integer.toUnsignedLong(sourceLength);
-    if (bank == 2) {
-      setRecursiveMembershipValue(depth, index, targetHandle);
-      recursiveMembershipTextUsed[depth] = targetOffset + sourceLength;
-    } else {
-      setMembershipValue(bank == 1, index, targetHandle);
-      if (bank == 1) {
-        membershipScratchTextUsed = targetOffset + sourceLength;
-      } else {
-        membershipTextUsed = targetOffset + sourceLength;
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private ByteBuffer membershipTextBuffer(int bank) {
-    return bank == 2 ? recursiveMembershipText
-        : bank == 1 ? membershipScratchText : membershipText;
-  }
-
-  private int membershipTextUsed(int bank, int depth) {
-    return bank == 2 ? recursiveMembershipTextUsed[depth]
-        : bank == 1 ? membershipScratchTextUsed : membershipTextUsed;
+    return memberships.append(
+        bank,
+        depth,
+        index,
+        readColumn(primaryKey, source, projection),
+        source,
+        definition.isVarchar(projection));
   }
 
   private boolean membershipTextEquals(
@@ -740,52 +554,22 @@ final class SqlNestedQueryExecution {
       int bank,
       int depth,
       int index) {
-    long sourceHandle = readColumn(0, source, column);
-    int sourceOffset = (int) (sourceHandle >>> 32);
-    int sourceLength = (int) sourceHandle;
-    long candidate = membershipValue(bank, depth, index);
-    int candidateOffset = (int) (candidate >>> 32);
-    int candidateLength = (int) candidate;
-    ByteBuffer candidateBytes = membershipTextBuffer(bank);
-    int used = membershipTextUsed(bank, depth);
-    if (!validTextHandle(source, sourceOffset, sourceLength)
-        || candidateOffset < 0
-        || candidateLength < 0
-        || candidateOffset > used - candidateLength) {
-      return false;
-    }
-    if (sourceLength != candidateLength) {
-      return false;
-    }
-    for (int byteIndex = 0; byteIndex < sourceLength; byteIndex++) {
-      if (source.getByte(sourceOffset + byteIndex)
-          != candidateBytes.get(candidateOffset + byteIndex)) {
-        return false;
-      }
-    }
-    return true;
+    return memberships.textEquals(
+        source, readColumn(0, source, column), bank, depth, index);
   }
 
   long recursiveMembershipValue(int depth, int index) {
-    return recursiveMembershipValues[depth * MAXIMUM_MEMBERSHIP_VALUES + index];
+    return memberships.recursiveValue(depth, index);
   }
 
   void setRecursiveMembershipValue(int depth, int index, long value) {
-    recursiveMembershipValues[depth * MAXIMUM_MEMBERSHIP_VALUES + index] = value;
+    memberships.setRecursiveValue(depth, index, value);
   }
 
   void ensureRecursiveState() {
-    if (recursiveMembershipValues == null) {
-      recursiveMembershipValues = new long[
-          BoundSqlQuery.MAXIMUM_BLOCKS * MAXIMUM_MEMBERSHIP_VALUES];
-      recursiveMembershipText = ByteBuffer.allocateDirect(
-          BoundSqlQuery.MAXIMUM_BLOCKS
-              * MAXIMUM_MEMBERSHIP_VALUES * Utf8Text.MAXIMUM_BYTES);
-      recursiveMembershipTextUsed = new int[BoundSqlQuery.MAXIMUM_BLOCKS];
-    }
-    for (int block = 0; block < recursiveTables.length; block++) {
-      if (recursiveTables[block] == null) {
-        recursiveTables[block] = new TableDefinition();
+    memberships.ensureRecursiveState(BoundSqlQuery.MAXIMUM_BLOCKS);
+    for (int block = 0; block < BoundSqlQuery.MAXIMUM_BLOCKS; block++) {
+      if (recursiveCursors[block] == null) {
         recursiveCursors[block] = new RelationalScanCursor();
         recursiveRows[block] = new RelationalScanResult();
         recursiveRowBuffers[block] = ByteBuffer.allocateDirect(
@@ -795,17 +579,13 @@ final class SqlNestedQueryExecution {
     }
   }
 
-  private StatusCode prepareNestedChain() {
-    StatusCode status = StatusCode.OK;
-    if (hasIntermediateReference()) {
-      ensureRecursiveState();
-      status = bindRecursiveChain();
-    }
+  private StatusCode prepareNestedChain(boolean explainOnly) {
+    StatusCode status = prepareRecursiveChain(explainOnly);
     if (!status.isOk()) {
       return status;
     }
     if (recursiveNestedChain) {
-      return recursiveRootCorrelated
+      return explainOnly || recursiveRootCorrelated
           ? StatusCode.OK : evaluateRecursiveChain(0, null);
     }
     boolean correlated = false;
@@ -816,8 +596,11 @@ final class SqlNestedQueryExecution {
       if (nested == null || nested.isOrdered()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      status = bindNestedCommand(nested);
+      status = selectBoundBlock(nested);
       correlated |= nestedCorrelated;
+    }
+    if (explainOnly) {
+      return status;
     }
     if (status.isOk() && correlated) {
       correlatedNestedChain = true;
@@ -826,152 +609,31 @@ final class SqlNestedQueryExecution {
     return status.isOk() ? evaluateNestedChain(0, null) : status;
   }
 
-  private boolean hasIntermediateReference() {
-    for (int depth = 2; depth < query.blockCount(); depth++) {
-      BoundSqlQuery.Block nested = query.block(depth);
-      for (int index = 0; index < nested.predicateCount(); index++) {
-        if (!nested.isColumnPredicate(index)) {
-          continue;
-        }
-        CharSequence qualifier = nested.predicateValueTableName(index);
-        if (matchesTableQualifier(nested, qualifier)) {
-          continue;
-        }
-        for (int scope = depth - 1; scope > 0; scope--) {
-          if (matchesTableQualifier(query.block(scope), qualifier)) {
-            return true;
-          }
-        }
-      }
+  private StatusCode prepareRecursiveChain(boolean explainOnly) {
+    if (!hasIntermediateReference()) {
+      return StatusCode.OK;
     }
-    return false;
+    if (!explainOnly) {
+      ensureRecursiveState();
+    }
+    return bindRecursiveChain();
+  }
+
+  private boolean hasIntermediateReference() {
+    return query.recursiveNestedChain();
   }
 
   private StatusCode bindRecursiveChain() {
-    recursiveNestedChain = false;
-    recursiveRootCorrelated = false;
+    recursiveNestedChain = query.recursiveNestedChain();
+    recursiveRootCorrelated = query.recursiveRootCorrelated();
     for (int depth = 1; depth < query.blockCount(); depth++) {
       BoundSqlQuery.Block nested = query.block(depth);
-      if (nested == null || nested.isOrdered()) {
+      if (!availableBlock(nested)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      TableDefinition definition = recursiveTable(depth);
-      StatusCode status = session.resolveTable(nested.tableName(), definition);
-      if (!status.isOk()) {
-        return status;
-      }
-      if (nested.columnCount() != 1
-          || nested.isSelectAll()
-          || nested.columnTableName(0).length() > 0
-              && !matchesTableQualifier(nested, nested.columnTableName(0))) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      int projection = nested.isNullProjection(0)
-          ? NULL_PROJECTION : definition.findColumn(nested.firstColumnName());
-      if (projection < 0 && projection != NULL_PROJECTION) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      setRecursiveProjection(depth, projection);
-      int parent = depth - 1;
-      recursiveResultTypes[depth] = projection == NULL_PROJECTION
-          ? 0 : definition.typeDescriptor(projection);
-      TableDefinition parentDefinition = parent == 0
-          ? bound.table : recursiveTable(parent);
-      StatusCode edgeStatus = validateNestedResultEdge(
-          parent, recursiveResultTypes[depth], parentDefinition);
-      if (!edgeStatus.isOk()) {
-        return edgeStatus;
-      }
-      int base = depth * BoundSqlQuery.MAXIMUM_PREDICATES;
-      for (int index = 0; index < nested.predicateCount(); index++) {
-        if (nested.predicateTableName(index).length() > 0
-            && !matchesTableQualifier(
-                nested, nested.predicateTableName(index))) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-        int column = definition.findColumn(nested.predicateColumnName(index));
-        if (column < 0
-            || nested.isRangePredicate(index)
-                && nested.predicateUpperExclusive(index)
-                    <= nested.predicateLowerInclusive(index)) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-        int slot = base + index;
-        setRecursivePredicate(slot, column, -1, -1);
-        if (nested.isColumnPredicate(index)) {
-          int scope = recursiveScope(
-              depth, nested.predicateValueTableName(index));
-          if (scope < 0) {
-            return StatusCode.INVALID_EXTERNAL_INPUT;
-          }
-          TableDefinition valueDefinition = scope == 0
-              ? bound.table : recursiveTable(scope);
-          int valueColumn = valueDefinition.findColumn(
-              nested.predicateValueColumnName(index));
-          if (valueColumn < 0) {
-            return StatusCode.INVALID_EXTERNAL_INPUT;
-          }
-          if (!SqlTypeDescriptor.canCompare(
-              definition.typeDescriptor(column),
-              valueDefinition.typeDescriptor(valueColumn))) {
-            return StatusCode.DATATYPE_MISMATCH;
-          }
-          setRecursivePredicate(
-              slot, column, valueColumn, scope);
-          recursiveRootCorrelated |= scope == 0;
-          recursiveNestedChain |= scope > 0 && scope < depth;
-        } else if (!nested.isNullPredicate(index)
-            && index != query.membershipPredicate(depth)
-            && !SqlTypeDescriptor.canCompare(
-                definition.typeDescriptor(column),
-                nested.predicateTypeDescriptor(index))) {
-          return StatusCode.DATATYPE_MISMATCH;
-        }
-      }
+      recursiveResultTypes[depth] = nested.projectionType();
     }
     return StatusCode.OK;
-  }
-
-  private StatusCode validateNestedResultEdge(
-      int parent, int childType, TableDefinition parentDefinition) {
-    boolean scalar = query.hasScalarPredicate(parent);
-    boolean membership = query.hasMembershipPredicate(parent);
-    if (!scalar && !membership) {
-      return StatusCode.OK;
-    }
-    BoundSqlQuery.Block parentCommand = parent == 0 ? command : query.block(parent);
-    int predicate = scalar
-        ? query.scalarPredicate(parent) : query.membershipPredicate(parent);
-    int parentColumn = predicate < 0 ? -1 : parentDefinition.findColumn(
-        parentCommand.predicateColumnName(predicate));
-    if (parentColumn < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (childType != 0
-        && !SqlTypeDescriptor.canCompare(
-            parentDefinition.typeDescriptor(parentColumn), childType)) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    // Text scalar results need an owned typed scalar carrier; membership owns
-    // UTF-8 bytes already, while scalar storage is currently primitive-only.
-    return scalar && isTextType(childType)
-        ? StatusCode.DATATYPE_MISMATCH : StatusCode.OK;
-  }
-
-  private int recursiveScope(int depth, CharSequence qualifier) {
-    if (qualifier.length() == 0) {
-      return -1;
-    }
-    BoundSqlQuery.Block local = query.block(depth);
-    if (matchesTableQualifier(local, qualifier)) {
-      return depth;
-    }
-    for (int scope = depth - 1; scope > 0; scope--) {
-      if (matchesTableQualifier(query.block(scope), qualifier)) {
-        return scope;
-      }
-    }
-    return matchesTableQualifier(command, qualifier) ? 0 : -1;
   }
 
   private StatusCode evaluateRecursiveChain(
@@ -990,26 +652,37 @@ final class SqlNestedQueryExecution {
     if (!status.isOk()) {
       return status;
     }
+    publishRecursiveResult(resultKind);
+    return status;
+  }
+
+  private void publishRecursiveResult(int resultKind) {
     if (resultKind == NESTED_SCALAR) {
-      subqueryPredicateFalse = recursiveScalarNull(1);
-      if (!subqueryPredicateFalse) {
-        dynamicScalarNulls[0] = false;
-        dynamicScalarValues[0] = recursiveScalarValue(1);
-        dynamicScalarTypes[0] = recursiveResultTypes[1];
-      }
+      publishRecursiveScalar();
     } else if (resultKind == NESTED_EXISTENCE) {
       subqueryPredicateFalse = query.existenceNegated()
-          ? recursiveExistence(1)
-          : !recursiveExistence(1);
+          ? recursiveExistence(1) : !recursiveExistence(1);
     } else {
-      subqueryPredicateFalse = false;
-      membershipCandidateBank = 2;
-      membershipCandidateDepth = 1;
-      membershipCandidateOffset = 0;
-      membershipValueCount = recursiveMembershipCount(1);
-      membershipHasNull = recursiveMembershipNull(1);
+      publishRecursiveMembership();
     }
-    return status;
+  }
+
+  private void publishRecursiveScalar() {
+    subqueryPredicateFalse = recursiveScalarNull(1);
+    if (!subqueryPredicateFalse) {
+      dynamicScalarNulls[0] = false;
+      dynamicScalarValues[0] = recursiveScalarValue(1);
+      dynamicScalarTypes[0] = recursiveResultTypes[1];
+    }
+  }
+
+  private void publishRecursiveMembership() {
+    subqueryPredicateFalse = false;
+    membershipCandidateBank = 2;
+    membershipCandidateDepth = 1;
+    membershipCandidateOffset = 0;
+    membershipValueCount = recursiveMembershipCount(1);
+    membershipHasNull = recursiveMembershipNull(1);
   }
 
   private StatusCode evaluateRecursiveBlock(
@@ -1029,81 +702,164 @@ final class SqlNestedQueryExecution {
     boolean cursorActive = status.isOk();
     long matchedRows = 0;
     while (status.isOk()) {
-      status = session.nextScan(cursor, rowResult);
+      status = nextRecursiveCandidate(
+          depth, outerPrimaryKey, outerSource, definition, cursor, rowResult);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
-      HeapRowResult source = rowResult.row();
-      long primaryKey = rowResult.key();
-      if (status.isOk()) {
-        status = validateRow(source, definition);
-      }
-      if (status.isOk()
-          && !matchesRecursivePredicates(
-              depth, primaryKey, source, outerPrimaryKey, outerSource)) {
-        continue;
-      }
-      if (status.isOk() && depth + 1 < query.blockCount()) {
-        status = copyRecursiveRow(depth, primaryKey, source);
-        if (status.isOk()) {
-          source = recursiveRowCopy(depth);
-          int childKind = recursiveResultKind(depth);
-          status = childKind == 0
-              ? StatusCode.INVALID_EXTERNAL_INPUT
-              : evaluateRecursiveBlock(
-                  depth + 1, childKind, outerPrimaryKey, outerSource);
-        }
-        if (status.isOk()
-            && !matchesRecursiveChild(depth, primaryKey, source)) {
-          continue;
-        }
-      }
       if (!status.isOk()) {
         break;
       }
+      if (!recursiveRowAccepted[depth]) {
+        continue;
+      }
       matchedRows++;
-      int projection = recursiveProjection(depth);
-      if (resultKind == NESTED_EXISTENCE) {
-        setRecursiveExistence(depth);
-        break;
-      }
-      if (resultKind == NESTED_SCALAR) {
-        if (matchedRows > 1) {
-          status = StatusCode.CARDINALITY_VIOLATION;
-        } else if (projection != NULL_PROJECTION
-            && !isNull(source, definition, projection)) {
-          setRecursiveScalar(
-              depth, readColumn(primaryKey, source, projection));
-        }
-      } else if (projection == NULL_PROJECTION
-          || isNull(source, definition, projection)) {
-        setRecursiveMembershipNull(depth);
-      } else {
-        int count = recursiveMembershipCount(depth);
-        if (count >= MAXIMUM_MEMBERSHIP_VALUES) {
-          status = StatusCode.RESOURCE_EXHAUSTED;
-        } else {
-          status = appendMembershipValue(
-              2, depth, count, primaryKey, source, definition, projection);
-          if (status.isOk()) {
-            setRecursiveMembershipCount(depth, count + 1);
-          }
-        }
-      }
-      if (status.isOk() && matchedRows >= nested.rowLimit()) {
+      status = accumulateRecursiveResult(
+          depth, resultKind, matchedRows, definition, rowResult);
+      if (status.isOk()
+          && (resultKind == NESTED_EXISTENCE
+              || matchedRows >= nested.rowLimit())) {
         break;
       }
     }
-    if (cursorActive) {
-      StatusCode close = session.closeScan(cursor);
-      if (close.isOk()) {
-        cursor.reset();
-        rowResult.reset();
+    return closeRecursiveCursor(cursorActive, cursor, rowResult, status);
+  }
+
+  private StatusCode nextRecursiveCandidate(
+      int depth,
+      long outerPrimaryKey,
+      HeapRowResult outerSource,
+      TableDefinition definition,
+      RelationalScanCursor cursor,
+      RelationalScanResult rowResult) {
+    StatusCode status = session.nextScan(cursor, rowResult);
+    return status.isOk()
+        ? evaluateRecursiveRow(
+            depth, outerPrimaryKey, outerSource, definition, rowResult)
+        : status;
+  }
+
+  private StatusCode closeRecursiveCursor(
+      boolean cursorActive,
+      RelationalScanCursor cursor,
+      RelationalScanResult rowResult,
+      StatusCode bodyStatus) {
+    if (!cursorActive) {
+      return bodyStatus;
+    }
+    StatusCode close = closeCursor(cursor, rowResult);
+    return bodyStatus.isOk() ? close : bodyStatus;
+  }
+
+  private StatusCode evaluateRecursiveRow(
+      int depth,
+      long outerPrimaryKey,
+      HeapRowResult outerSource,
+      TableDefinition definition,
+      RelationalScanResult rowResult) {
+    recursiveRowAccepted[depth] = false;
+    HeapRowResult source = rowResult.row();
+    long primaryKey = rowResult.key();
+    StatusCode status = validateRow(source, definition);
+    if (!status.isOk()
+        || !matchesRecursivePredicates(
+            depth, primaryKey, source, outerPrimaryKey, outerSource)) {
+      return status;
+    }
+    if (depth + 1 < query.blockCount()) {
+      status = evaluateRecursiveDescendant(
+          depth, primaryKey, source, outerPrimaryKey, outerSource);
+      if (!status.isOk() || !recursiveRowAccepted[depth]) {
+        return status;
       }
-      if (status.isOk()) {
-        status = close;
-      }
+    }
+    recursiveRowAccepted[depth] = true;
+    return StatusCode.OK;
+  }
+
+  private StatusCode evaluateRecursiveDescendant(
+      int depth,
+      long primaryKey,
+      HeapRowResult source,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    StatusCode status = copyRecursiveRow(depth, primaryKey, source);
+    if (!status.isOk()) {
+      return status;
+    }
+    int childKind = recursiveResultKind(depth);
+    if (childKind == 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    status = evaluateRecursiveBlock(
+        depth + 1, childKind, outerPrimaryKey, outerSource);
+    if (status.isOk()) {
+      recursiveRowAccepted[depth] = matchesRecursiveChild(
+          depth, primaryKey, recursiveRowCopy(depth));
+    }
+    return status;
+  }
+
+  private StatusCode accumulateRecursiveResult(
+      int depth,
+      int resultKind,
+      long matchedRows,
+      TableDefinition definition,
+      RelationalScanResult rowResult) {
+    if (resultKind == NESTED_EXISTENCE) {
+      setRecursiveExistence(depth);
+      return StatusCode.OK;
+    }
+    HeapRowResult source = depth + 1 < query.blockCount()
+        ? recursiveRowCopy(depth) : rowResult.row();
+    long primaryKey = rowResult.key();
+    int projection = recursiveProjection(depth);
+    if (resultKind == NESTED_SCALAR) {
+      return accumulateRecursiveScalar(
+          depth, matchedRows, primaryKey, source, definition, projection);
+    }
+    return accumulateRecursiveMembership(
+        depth, primaryKey, source, definition, projection);
+  }
+
+  private StatusCode accumulateRecursiveScalar(
+      int depth,
+      long matchedRows,
+      long primaryKey,
+      HeapRowResult source,
+      TableDefinition definition,
+      int projection) {
+    if (matchedRows > 1) {
+      return StatusCode.CARDINALITY_VIOLATION;
+    }
+    if (projection != NULL_PROJECTION
+        && !isNull(source, definition, projection)) {
+      setRecursiveScalar(
+          depth, readColumn(primaryKey, source, projection));
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode accumulateRecursiveMembership(
+      int depth,
+      long primaryKey,
+      HeapRowResult source,
+      TableDefinition definition,
+      int projection) {
+    if (projection == NULL_PROJECTION
+        || isNull(source, definition, projection)) {
+      setRecursiveMembershipNull(depth);
+      return StatusCode.OK;
+    }
+    int count = recursiveMembershipCount(depth);
+    if (count >= MAXIMUM_MEMBERSHIP_VALUES) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = appendMembershipValue(
+        2, depth, count, primaryKey, source, definition, projection);
+    if (status.isOk()) {
+      setRecursiveMembershipCount(depth, count + 1);
     }
     return status;
   }
@@ -1153,51 +909,85 @@ final class SqlNestedQueryExecution {
       if (index == skipped) {
         continue;
       }
-      int slot = base + index;
-      int column = recursivePredicateColumn(slot);
-      long value = readColumn(primaryKey, source, column);
-      boolean nullValue = isNull(source, definition, column);
-      if (nested.isNullPredicate(index)) {
-        if (nullValue == nested.isNullPredicateNegated(index)) {
-          return false;
-        }
-        continue;
-      }
-      if (nullValue) {
-        return false;
-      }
-      if (nested.isColumnPredicate(index)) {
-        int scope = recursivePredicateValueScope(slot);
-        int valueColumn = recursivePredicateValueColumn(slot);
-        HeapRowResult valueSource = scope == 0
-            ? outerSource : scope == depth
-                ? source : recursiveRowCopy(scope);
-        TableDefinition valueDefinition = scope == 0
-            ? bound.table : recursiveTable(scope);
-        long valueKey = scope == 0
-            ? outerPrimaryKey : scope == depth
-                ? primaryKey : recursiveKey(scope);
-        if (valueSource == null
-            || isNull(valueSource, valueDefinition, valueColumn)
-            || !equalColumns(
-                primaryKey,
-                source,
-                definition,
-                column,
-                valueKey,
-                valueSource,
-                valueDefinition,
-                valueColumn)) {
-          return false;
-        }
-        continue;
-      }
-      if (!matchesLiteralComparison(
-          primaryKey, source, definition, column, nested, index)) {
+      if (!matchesRecursivePredicate(
+          depth,
+          base + index,
+          index,
+          primaryKey,
+          source,
+          definition,
+          nested,
+          outerPrimaryKey,
+          outerSource)) {
         return false;
       }
     }
     return true;
+  }
+
+  private boolean matchesRecursivePredicate(
+      int depth,
+      int slot,
+      int predicate,
+      long primaryKey,
+      HeapRowResult source,
+      TableDefinition definition,
+      BoundSqlQuery.Block nested,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    int column = recursivePredicateColumn(slot);
+    boolean nullValue = isNull(source, definition, column);
+    if (nested.isNullPredicate(predicate)) {
+      return nullValue != nested.isNullPredicateNegated(predicate);
+    }
+    if (nullValue) {
+      return false;
+    }
+    if (nested.isColumnPredicate(predicate)) {
+      return matchesRecursiveColumn(
+          depth,
+          slot,
+          primaryKey,
+          source,
+          definition,
+          column,
+          outerPrimaryKey,
+          outerSource);
+    }
+    return matchesLiteralComparison(
+        primaryKey, source, definition, column, nested, predicate);
+  }
+
+  private boolean matchesRecursiveColumn(
+      int depth,
+      int slot,
+      long primaryKey,
+      HeapRowResult source,
+      TableDefinition definition,
+      int column,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    int scope = recursivePredicateValueScope(slot);
+    int valueColumn = recursivePredicateValueColumn(slot);
+    HeapRowResult valueSource = scope == 0
+        ? outerSource : scope == depth ? source : recursiveRowCopy(scope);
+    if (valueSource == null) {
+      return false;
+    }
+    TableDefinition valueDefinition = scope == 0
+        ? bound.table : recursiveTable(scope);
+    long valueKey = scope == 0
+        ? outerPrimaryKey : scope == depth ? primaryKey : recursiveKey(scope);
+    return !isNull(valueSource, valueDefinition, valueColumn)
+        && equalColumns(
+            primaryKey,
+            source,
+            definition,
+            column,
+            valueKey,
+            valueSource,
+            valueDefinition,
+            valueColumn);
   }
 
   private boolean matchesRecursiveChild(
@@ -1224,15 +1014,21 @@ final class SqlNestedQueryExecution {
               definition.typeDescriptor(column), recursiveResultTypes[child])
           && expressions.matchesComparison(
               value,
+              definition.typeDescriptor(column),
               query.block(depth).comparison(predicate),
-              recursiveScalarValue(child));
+              recursiveScalarValue(child),
+              recursiveResultTypes[child]);
     }
     int count = recursiveMembershipCount(child);
     boolean equal = false;
     for (int index = 0; index < count; index++) {
       if (isTextType(recursiveResultTypes[child])
           ? membershipTextEquals(source, column, 2, child, index)
-          : value == recursiveMembershipValue(child, index)) {
+          : expressions.compareExact(
+              value,
+              definition.typeDescriptor(column),
+              recursiveMembershipValue(child, index),
+              recursiveResultTypes[child]) == 0) {
         equal = true;
         break;
       }
@@ -1244,81 +1040,106 @@ final class SqlNestedQueryExecution {
   private StatusCode evaluateNestedChain(
       long outerPrimaryKey,
       HeapRowResult outerSource) {
-    StatusCode status = StatusCode.OK;
-    boolean commandEnabled = true;
-    int candidates = 0;
-    int candidateCount = 0;
-    boolean candidateHasNull = false;
-    for (int block = query.blockCount() - 1;
-        status.isOk() && block > 0;
-        block--) {
+    nestedChainState.reset();
+    for (int block = query.blockCount() - 1; block > 0; block--) {
       BoundSqlQuery.Block nested = query.block(block);
       if (nested == null || nested.isOrdered()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      status = bindNestedCommand(nested);
-      if (status.isOk() && nestedCorrelated && outerSource == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      int parent = block - 1;
-      int resultKind = query.hasScalarPredicate(parent)
-          ? NESTED_SCALAR
-          : query.hasExistencePredicate(parent)
-              ? NESTED_EXISTENCE
-              : query.hasMembershipPredicate(parent)
-                  ? NESTED_MEMBERSHIP : 0;
-      if (status.isOk() && resultKind == 0) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      int output = candidates == 0 ? 1 : 0;
-      membershipValueCount = 0;
-      membershipHasNull = false;
-      resetMembershipOutput(output);
-      if (status.isOk()) {
-        status = evaluateNestedRows(
-            nested,
-            commandEnabled,
-            resultKind,
-            output,
-            outerPrimaryKey,
-            outerSource,
-            query.membershipPredicate(block),
-            query.membershipNegated(block),
-            candidates,
-            candidateCount,
-            candidateHasNull);
-      }
+      StatusCode status = evaluateNestedBlock(
+          block, nested, outerPrimaryKey, outerSource, nestedChainState);
       if (!status.isOk()) {
-        break;
-      }
-      if (resultKind == NESTED_SCALAR) {
-        commandEnabled = !scalarResultNull;
-        if (commandEnabled) {
-          dynamicScalarNulls[parent] = false;
-          dynamicScalarValues[parent] = scalarResultValue;
-          dynamicScalarTypes[parent] = nestedProjectionType;
-        }
-      } else if (resultKind == NESTED_EXISTENCE) {
-        commandEnabled = query.existenceNegated(parent)
-            ? !existenceResult : existenceResult;
-      } else {
-        commandEnabled = true;
-        setMembershipOutputType(output, nestedProjectionType);
-        candidates = output;
-        candidateCount = membershipValueCount;
-        candidateHasNull = membershipHasNull;
+        return status;
       }
     }
+    publishNestedChain(nestedChainState);
+    return StatusCode.OK;
+  }
+
+  private StatusCode evaluateNestedBlock(
+      int block,
+      BoundSqlQuery.Block nested,
+      long outerPrimaryKey,
+      HeapRowResult outerSource,
+      NestedChainState state) {
+    StatusCode status = selectBoundBlock(nested);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (nestedCorrelated && outerSource == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int parent = block - 1;
+    int kind = nestedResultKind(parent);
+    if (kind == 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int output = state.candidates == 0 ? 1 : 0;
+    membershipValueCount = 0;
+    membershipHasNull = false;
+    resetMembershipOutput(output);
+    status = evaluateNestedRows(
+        nested,
+        state.commandEnabled,
+        kind,
+        output,
+        outerPrimaryKey,
+        outerSource,
+        query.membershipPredicate(block),
+        query.membershipNegated(block),
+        state.candidates,
+        state.candidateCount,
+        state.candidateHasNull);
     if (status.isOk()) {
-      subqueryPredicateFalse = !commandEnabled;
-      if (query.hasMembershipPredicate()) {
-        membershipCandidateBank = candidates;
-        membershipCandidateDepth = -1;
-        membershipValueCount = candidateCount;
-        membershipHasNull = candidateHasNull;
-      }
+      acceptNestedResult(parent, kind, output, state);
     }
     return status;
+  }
+
+  private int nestedResultKind(int parent) {
+    if (query.hasScalarPredicate(parent)) {
+      return NESTED_SCALAR;
+    }
+    if (query.hasExistencePredicate(parent)) {
+      return NESTED_EXISTENCE;
+    }
+    return query.hasMembershipPredicate(parent) ? NESTED_MEMBERSHIP : 0;
+  }
+
+  private void acceptNestedResult(
+      int parent,
+      int kind,
+      int output,
+      NestedChainState state) {
+    if (kind == NESTED_SCALAR) {
+      state.commandEnabled = !scalarResultNull;
+      if (state.commandEnabled) {
+        dynamicScalarNulls[parent] = false;
+        dynamicScalarValues[parent] = scalarResultValue;
+        dynamicScalarTypes[parent] = nestedProjectionType;
+      }
+      return;
+    }
+    if (kind == NESTED_EXISTENCE) {
+      state.commandEnabled = query.existenceNegated(parent)
+          ? !existenceResult : existenceResult;
+      return;
+    }
+    state.commandEnabled = true;
+    setMembershipOutputType(output, nestedProjectionType);
+    state.candidates = output;
+    state.candidateCount = membershipValueCount;
+    state.candidateHasNull = membershipHasNull;
+  }
+
+  private void publishNestedChain(NestedChainState state) {
+    subqueryPredicateFalse = !state.commandEnabled;
+    if (query.hasMembershipPredicate()) {
+      membershipCandidateBank = state.candidates;
+      membershipCandidateDepth = -1;
+      membershipValueCount = state.candidateCount;
+      membershipHasNull = state.candidateHasNull;
+    }
   }
 
   private StatusCode evaluateNestedRows(
@@ -1342,81 +1163,118 @@ final class SqlNestedQueryExecution {
     if (!commandEnabled || nested.rowLimit() == 0) {
       return StatusCode.OK;
     }
-    StatusCode status = session.beginScan(bound.scalarTable, scalarCursor);
+    StatusCode status = session.beginScan(nestedTable, scalarCursor);
     boolean cursorActive = status.isOk();
     long matchedRows = 0;
     while (status.isOk()) {
-      status = session.nextScan(scalarCursor, scalarRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      if (status.isOk()) {
-        status = validateRow(scalarRow.row(), bound.scalarTable);
-      }
-      if (status.isOk()
-          && !matchesScalarPredicates(
-              nested,
-              scalarRow.key(),
-              scalarRow.row(),
-              outerPrimaryKey,
-              outerSource,
-              nestedMembershipPredicate,
-              nestedMembershipNegated,
-              inputBank,
-              inputCount,
-              inputHasNull)) {
-        continue;
-      }
-      if (!status.isOk()) {
-        break;
-      }
+      status = nextNestedCandidate(
+          nested,
+          outerPrimaryKey,
+          outerSource,
+          nestedMembershipPredicate,
+          nestedMembershipNegated,
+          inputBank,
+          inputCount,
+          inputHasNull);
+      if (status == StatusCode.CONFLICT) return closeScalarCursor(cursorActive, StatusCode.OK);
+      if (!status.isOk()) break;
+      if (!nestedCandidateAccepted) continue;
       matchedRows++;
-      if (resultKind == NESTED_EXISTENCE) {
-        existenceResult = true;
-        break;
-      }
-      if (resultKind == NESTED_SCALAR) {
-        if (matchedRows > 1) {
-          status = StatusCode.CARDINALITY_VIOLATION;
-        } else if (nestedProjection != NULL_PROJECTION
-            && !isNull(scalarRow.row(), bound.scalarTable, nestedProjection)) {
-          scalarResultNull = false;
-          scalarResultValue = readColumn(
-              scalarRow.key(), scalarRow.row(), nestedProjection);
-        }
-      } else if (nestedProjection == NULL_PROJECTION
-          || isNull(scalarRow.row(), bound.scalarTable, nestedProjection)) {
-        membershipHasNull = true;
-      } else if (membershipValueCount
-          >= membershipCapacity()) {
-        status = StatusCode.RESOURCE_EXHAUSTED;
-      } else {
-        status = appendMembershipValue(
-            outputBank,
-            -1,
-            membershipValueCount,
-            scalarRow.key(),
-            scalarRow.row(),
-            bound.scalarTable,
-            nestedProjection);
-        if (status.isOk()) {
-          membershipValueCount++;
-        }
-      }
-      if (status.isOk() && matchedRows >= nested.rowLimit()) {
+      status = accumulateNestedResult(resultKind, outputBank, matchedRows);
+      if (status.isOk()
+          && (resultKind == NESTED_EXISTENCE
+              || matchedRows >= nested.rowLimit())) {
         break;
       }
     }
-    if (cursorActive) {
-      StatusCode close = session.closeScan(scalarCursor);
-      if (close.isOk()) {
-        scalarCursor.reset();
-        scalarRow.reset();
-      }
-      if (status.isOk()) {
-        status = close;
-      }
+    return closeScalarCursor(cursorActive, status);
+  }
+
+  private StatusCode nextNestedCandidate(
+      BoundSqlQuery.Block nested,
+      long outerPrimaryKey,
+      HeapRowResult outerSource,
+      int nestedMembershipPredicate,
+      boolean nestedMembershipNegated,
+      int inputBank,
+      int inputCount,
+      boolean inputHasNull) {
+    StatusCode status = session.nextScan(scalarCursor, scalarRow);
+    nestedCandidateAccepted = false;
+    if (!status.isOk()) {
+      return status;
+    }
+    status = validateRow(scalarRow.row(), nestedTable);
+    if (!status.isOk()) {
+      return status;
+    }
+    nestedCandidateAccepted = matchesScalarPredicates(
+        nested,
+        scalarRow.key(),
+        scalarRow.row(),
+        outerPrimaryKey,
+        outerSource,
+        nestedMembershipPredicate,
+        nestedMembershipNegated,
+        inputBank,
+        inputCount,
+        inputHasNull);
+    return StatusCode.OK;
+  }
+
+  private StatusCode closeScalarCursor(
+      boolean cursorActive, StatusCode bodyStatus) {
+    if (!cursorActive) {
+      return bodyStatus;
+    }
+    StatusCode close = closeCursor(scalarCursor, scalarRow);
+    return bodyStatus.isOk() ? close : bodyStatus;
+  }
+
+  private StatusCode accumulateNestedResult(
+      int resultKind, int outputBank, long matchedRows) {
+    if (resultKind == NESTED_EXISTENCE) {
+      existenceResult = true;
+      return StatusCode.OK;
+    }
+    if (resultKind == NESTED_SCALAR) {
+      return accumulateNestedScalar(matchedRows);
+    }
+    return accumulateNestedMembership(outputBank);
+  }
+
+  private StatusCode accumulateNestedScalar(long matchedRows) {
+    if (matchedRows > 1) {
+      return StatusCode.CARDINALITY_VIOLATION;
+    }
+    if (nestedProjection != NULL_PROJECTION
+        && !isNull(scalarRow.row(), nestedTable, nestedProjection)) {
+      scalarResultNull = false;
+      scalarResultValue = readColumn(
+          scalarRow.key(), scalarRow.row(), nestedProjection);
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode accumulateNestedMembership(int outputBank) {
+    if (nestedProjection == NULL_PROJECTION
+        || isNull(scalarRow.row(), nestedTable, nestedProjection)) {
+      membershipHasNull = true;
+      return StatusCode.OK;
+    }
+    if (membershipValueCount >= membershipCapacity()) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = appendMembershipValue(
+        outputBank,
+        -1,
+        membershipValueCount,
+        scalarRow.key(),
+        scalarRow.row(),
+        nestedTable,
+        nestedProjection);
+    if (status.isOk()) {
+      membershipValueCount++;
     }
     return status;
   }
@@ -1430,7 +1288,7 @@ final class SqlNestedQueryExecution {
       if (scalar == null || scalar.isOrdered()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      status = bindNestedCommand(scalar);
+      status = selectBoundBlock(scalar);
       if (status.isOk() && nestedCorrelated) {
         if (query.blockCount() != 2) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -1461,73 +1319,54 @@ final class SqlNestedQueryExecution {
       long outerPrimaryKey,
       HeapRowResult outerSource,
       int destinationBlock) {
-    StatusCode status = StatusCode.OK;
     if (scalar.rowLimit() == 0) {
       subqueryPredicateFalse = true;
       return StatusCode.OK;
     }
-    status = session.beginScan(bound.scalarTable, scalarCursor);
+    StatusCode status = session.beginScan(nestedTable, scalarCursor);
     boolean cursorActive = status.isOk();
     int rows = 0;
     long value = 0;
     while (status.isOk()) {
-      status = session.nextScan(scalarCursor, scalarRow);
+      status = nextNestedCandidate(
+          scalar, outerPrimaryKey, outerSource, -1, false, 1, 0, false);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
-      if (status.isOk()) {
-        status = validateRow(scalarRow.row(), bound.scalarTable);
-      }
-      if (status.isOk()
-          && !matchesScalarPredicates(
-              scalar,
-              scalarRow.key(),
-              scalarRow.row(),
-              outerPrimaryKey,
-              outerSource,
-              -1,
-              false,
-              1,
-              0,
-              false)) {
-        continue;
-      }
-      if (status.isOk()) {
-        rows++;
-        if (rows > 1) {
-          status = StatusCode.CARDINALITY_VIOLATION;
-        } else {
-          if (nestedProjection == NULL_PROJECTION
-              || isNull(scalarRow.row(), bound.scalarTable, nestedProjection)) {
-            subqueryPredicateFalse = true;
-          } else {
-            value = readColumn(scalarRow.key(), scalarRow.row(), nestedProjection);
-          }
-          if (scalar.rowLimit() == 1) {
-            break;
-          }
-        }
-      }
+      if (!status.isOk()) break;
+      if (!nestedCandidateAccepted) continue;
+      rows++;
+      if (rows > 1) status = StatusCode.CARDINALITY_VIOLATION;
+      else value = captureScalarValue();
+      if (status.isOk() && scalar.rowLimit() == 1) break;
     }
-    if (cursorActive) {
-      StatusCode close = session.closeScan(scalarCursor);
-      if (close.isOk()) {
-        scalarCursor.reset();
-        scalarRow.reset();
-      }
-      if (status.isOk()) {
-        status = close;
-      }
+    status = closeScalarCursor(cursorActive, status);
+    publishScalarResult(status, rows, value, destinationBlock);
+    return status;
+  }
+
+  private void publishScalarResult(
+      StatusCode status, int rows, long value, int destinationBlock) {
+    if (!status.isOk()) {
+      return;
     }
-    if (status.isOk() && rows == 0) {
+    if (rows == 0) {
       subqueryPredicateFalse = true;
-    } else if (status.isOk() && !subqueryPredicateFalse) {
+    } else if (!subqueryPredicateFalse) {
       dynamicScalarNulls[destinationBlock] = false;
       dynamicScalarValues[destinationBlock] = value;
       dynamicScalarTypes[destinationBlock] = nestedProjectionType;
     }
-    return status;
+  }
+
+  private long captureScalarValue() {
+    if (nestedProjection == NULL_PROJECTION
+        || isNull(scalarRow.row(), nestedTable, nestedProjection)) {
+      subqueryPredicateFalse = true;
+      return 0;
+    }
+    return readColumn(scalarRow.key(), scalarRow.row(), nestedProjection);
   }
 
   private StatusCode evaluateExistencePredicate() {
@@ -1537,23 +1376,10 @@ final class SqlNestedQueryExecution {
         status.isOk() && block > 0;
         block--) {
       BoundSqlQuery.Block nested = query.block(block);
-      if (nested == null || nested.isOrdered()) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      status = bindNestedCommand(nested);
+      status = prepareExistenceBlock(nested, nestedPredicateTrue);
       if (status.isOk() && nestedCorrelated) {
-        if (query.blockCount() != 2) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
         correlatedExistence = true;
         return StatusCode.OK;
-      }
-      if (status.isOk()) {
-        if (nestedPredicateTrue) {
-          status = evaluateExistenceRows(nested, 0, null);
-        } else {
-          existenceResult = false;
-        }
       }
       if (status.isOk()) {
         nestedPredicateTrue = query.existenceNegated(block - 1)
@@ -1564,6 +1390,26 @@ final class SqlNestedQueryExecution {
       subqueryPredicateFalse = !nestedPredicateTrue;
     }
     return status;
+  }
+
+  private StatusCode prepareExistenceBlock(
+      BoundSqlQuery.Block nested, boolean nestedPredicateTrue) {
+    if (nested == null || nested.isOrdered()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = selectBoundBlock(nested);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (nestedCorrelated) {
+      return query.blockCount() == 2
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (!nestedPredicateTrue) {
+      existenceResult = false;
+      return StatusCode.OK;
+    }
+    return evaluateExistenceRows(nested, 0, null);
   }
 
   private StatusCode evaluateCorrelatedExistence(
@@ -1586,20 +1432,20 @@ final class SqlNestedQueryExecution {
       BoundSqlQuery.Block nested,
       long outerPrimaryKey,
       HeapRowResult outerSource) {
-    StatusCode status = StatusCode.OK;
     existenceResult = false;
-    if (status.isOk() && nested.rowLimit() > 0) {
-      status = session.beginScan(bound.scalarTable, scalarCursor);
+    if (nested.rowLimit() == 0) {
+      return StatusCode.OK;
     }
-    boolean cursorActive = status.isOk() && nested.rowLimit() > 0;
-    while (status.isOk() && cursorActive) {
+    StatusCode status = session.beginScan(nestedTable, scalarCursor);
+    boolean cursorActive = status.isOk();
+    while (status.isOk()) {
       status = session.nextScan(scalarCursor, scalarRow);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
       if (status.isOk()) {
-        status = validateRow(scalarRow.row(), bound.scalarTable);
+        status = validateRow(scalarRow.row(), nestedTable);
       }
       if (status.isOk()
           && matchesScalarPredicates(
@@ -1617,17 +1463,7 @@ final class SqlNestedQueryExecution {
         break;
       }
     }
-    if (cursorActive) {
-      StatusCode close = session.closeScan(scalarCursor);
-      if (close.isOk()) {
-        scalarCursor.reset();
-        scalarRow.reset();
-      }
-      if (status.isOk()) {
-        status = close;
-      }
-    }
-    return status;
+    return closeScalarCursor(cursorActive, status);
   }
 
   private StatusCode evaluateMembershipPredicate() {
@@ -1642,15 +1478,9 @@ final class SqlNestedQueryExecution {
       if (nested == null || nested.isOrdered()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      status = bindNestedCommand(nested);
+      status = selectBoundBlock(nested);
       if (status.isOk() && nestedCorrelated) {
-        if (query.blockCount() != 2) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-        correlatedMembership = true;
-        membershipCandidateBank = 0;
-        membershipCandidateDepth = -1;
-        return StatusCode.OK;
+        return prepareCorrelatedMembership();
       }
       int output = input == 0 ? 1 : 0;
       membershipValueCount = 0;
@@ -1675,6 +1505,16 @@ final class SqlNestedQueryExecution {
     membershipCandidateBank = input;
     membershipCandidateDepth = -1;
     return status;
+  }
+
+  private StatusCode prepareCorrelatedMembership() {
+    if (query.blockCount() != 2) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    correlatedMembership = true;
+    membershipCandidateBank = 0;
+    membershipCandidateDepth = -1;
+    return StatusCode.OK;
   }
 
   private StatusCode evaluateCorrelatedMembership(
@@ -1713,7 +1553,7 @@ final class SqlNestedQueryExecution {
     if (nested.rowLimit() == 0) {
       return StatusCode.OK;
     }
-    StatusCode status = session.beginScan(bound.scalarTable, scalarCursor);
+    StatusCode status = session.beginScan(nestedTable, scalarCursor);
     boolean cursorActive = status.isOk();
     long matchedRows = 0;
     while (status.isOk()) {
@@ -1723,7 +1563,7 @@ final class SqlNestedQueryExecution {
         break;
       }
       if (status.isOk()) {
-        status = validateRow(scalarRow.row(), bound.scalarTable);
+        status = validateRow(scalarRow.row(), nestedTable);
       }
       if (status.isOk()
           && !matchesScalarPredicates(
@@ -1739,150 +1579,60 @@ final class SqlNestedQueryExecution {
               inputHasNull)) {
         continue;
       }
-      if (status.isOk()) {
-        matchedRows++;
-        if (nestedProjection == NULL_PROJECTION
-            || isNull(scalarRow.row(), bound.scalarTable, nestedProjection)) {
-          membershipHasNull = true;
-        } else if (membershipValueCount
-            >= membershipCapacity()) {
-          status = StatusCode.RESOURCE_EXHAUSTED;
-        } else {
-          status = appendMembershipValue(
-              outputBank,
-              -1,
-              membershipValueCount,
-              scalarRow.key(),
-              scalarRow.row(),
-              bound.scalarTable,
-              nestedProjection);
-          if (status.isOk()) {
-            membershipValueCount++;
-          }
-        }
-        if (status.isOk() && matchedRows >= nested.rowLimit()) {
-          break;
-        }
+      if (!status.isOk()) {
+        break;
+      }
+      matchedRows++;
+      status = appendCurrentMembershipValue(outputBank);
+      if (status.isOk() && matchedRows >= nested.rowLimit()) {
+        break;
       }
     }
-    if (cursorActive) {
-      StatusCode close = session.closeScan(scalarCursor);
-      if (close.isOk()) {
-        scalarCursor.reset();
-        scalarRow.reset();
-      }
-      if (status.isOk()) {
-        status = close;
-      }
+    return closeScalarCursor(cursorActive, status);
+  }
+
+  private StatusCode appendCurrentMembershipValue(int outputBank) {
+    if (nestedProjection == NULL_PROJECTION
+        || isNull(scalarRow.row(), nestedTable, nestedProjection)) {
+      membershipHasNull = true;
+      return StatusCode.OK;
+    }
+    if (membershipValueCount >= membershipCapacity()) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = appendMembershipValue(
+        outputBank,
+        -1,
+        membershipValueCount,
+        scalarRow.key(),
+        scalarRow.row(),
+        nestedTable,
+        nestedProjection);
+    if (status.isOk()) {
+      membershipValueCount++;
     }
     return status;
   }
 
-  private StatusCode bindNestedCommand(BoundSqlQuery.Block nested) {
+  private StatusCode selectBoundBlock(BoundSqlQuery.Block nested) {
     nestedCorrelated = false;
-    if (nested.columnCount() != 1 || nested.isSelectAll()) {
+    if (!availableBlock(nested)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = session.resolveTable(nested.tableName(), bound.scalarTable);
-    if (status.isOk()
-        && nested.columnTableName(0).length() > 0
-        && !matchesTableQualifier(nested, nested.columnTableName(0))) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    nestedProjection = status.isOk() && nested.isNullProjection(0)
-        ? NULL_PROJECTION
-        : status.isOk() ? bound.scalarTable.findColumn(nested.firstColumnName()) : -1;
-    nestedProjectionType = nestedProjection == NULL_PROJECTION
-        ? 0 : nestedProjection < 0 ? 0
-            : bound.scalarTable.typeDescriptor(nestedProjection);
-    if (status.isOk()
-        && nestedProjection < 0
-        && nestedProjection != NULL_PROJECTION) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    for (int index = 0; status.isOk() && index < nested.predicateCount(); index++) {
-      if (nested.predicateTableName(index).length() > 0
-          && !matchesTableQualifier(nested, nested.predicateTableName(index))) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-        break;
-      }
-      int column = bound.scalarTable.findColumn(nested.predicateColumnName(index));
-      if (column < 0
-          || nested.isRangePredicate(index)
-              && nested.predicateUpperExclusive(index)
-                  <= nested.predicateLowerInclusive(index)) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-        break;
-      }
-      setScalarPredicateColumn(index, column);
-      setScalarPredicateValue(index, -1, false);
-      if (status.isOk() && nested.isColumnPredicate(index)) {
-        CharSequence valueTable = nested.predicateValueTableName(index);
-        int valueColumn;
-        if (valueTable.length() == 0) {
-          status = StatusCode.INVALID_EXTERNAL_INPUT;
-          break;
-        } else if (matchesTableQualifier(nested, valueTable)) {
-          valueColumn = bound.scalarTable.findColumn(
-              nested.predicateValueColumnName(index));
-        } else if (matchesTableQualifier(command, valueTable)) {
-          valueColumn = bound.table.findColumn(nested.predicateValueColumnName(index));
-          setScalarPredicateValue(index, -1, true);
-          nestedCorrelated = true;
-        } else {
-          status = StatusCode.INVALID_EXTERNAL_INPUT;
-          break;
-        }
-        if (valueColumn < 0) {
-          status = StatusCode.INVALID_EXTERNAL_INPUT;
-          break;
-        }
-        TableDefinition valueDefinition = scalarPredicateValueOuter(index)
-            ? bound.table : bound.scalarTable;
-        if (!SqlTypeDescriptor.canCompare(
-            bound.scalarTable.typeDescriptor(column),
-            valueDefinition.typeDescriptor(valueColumn))) {
-          status = StatusCode.DATATYPE_MISMATCH;
-          break;
-        }
-        setScalarPredicateValue(
-            index,
-            valueColumn,
-            scalarPredicateValueOuter(index));
-      } else if (status.isOk()
-          && !nested.isNullPredicate(index)
-          && index != query.membershipPredicate(nestedBlock(nested))
-          && !SqlTypeDescriptor.canCompare(
-              bound.scalarTable.typeDescriptor(column),
-              nested.predicateTypeDescriptor(index))) {
-        status = StatusCode.DATATYPE_MISMATCH;
-        break;
-      }
-    }
-    int block = nestedBlock(nested);
-    if (status.isOk() && block > 0) {
-      int parent = block - 1;
-      TableDefinition parentDefinition = bound.table;
-      if (parent > 0) {
-        status = session.resolveTable(
-            query.block(parent).tableName(), parentResultTable);
-        parentDefinition = parentResultTable;
-      }
-      if (status.isOk()) {
-        status = validateNestedResultEdge(
-            parent, nestedProjectionType, parentDefinition);
-      }
-    }
-    return status;
+    nestedCommand = nested;
+    nestedTable = nested.table();
+    nestedProjection = nested.projection();
+    nestedProjectionType = nested.projectionType();
+    nestedCorrelated = nested.isCorrelated();
+    return StatusCode.OK;
   }
 
-  private int nestedBlock(BoundSqlQuery.Block nested) {
-    for (int block = 1; block < query.blockCount(); block++) {
-      if (query.block(block) == nested) {
-        return block;
-      }
-    }
-    return -1;
+  private boolean availableBlock(BoundSqlQuery.Block block) {
+    return block != null
+        && (preparingCandidate
+            ? block.table() != null
+            : query.isExecutable()
+                && block.isBound(query.executableGeneration()));
   }
 
   private boolean matchesScalarPredicates(
@@ -1897,88 +1647,156 @@ final class SqlNestedQueryExecution {
       int nestedMembershipValueCount,
       boolean nestedMembershipHasNull) {
     for (int index = 0; index < scalar.predicateCount(); index++) {
-      int predicateColumn = scalarPredicateColumn(index);
-      long value = readColumn(primaryKey, source, predicateColumn);
-      boolean nullValue = isNull(
-          source, bound.scalarTable, predicateColumn);
-      if (scalar.isNullPredicate(index)) {
-        if (nullValue == scalar.isNullPredicateNegated(index)) {
-          return false;
-        }
-        continue;
-      }
-      if (nullValue) {
-        return false;
-      }
-      int block = nestedBlock(scalar);
-      if (block >= 0
-          && query.hasScalarPredicate(block)
-          && query.scalarPredicate(block) == index) {
-        if (dynamicScalarNulls[block]
-            || !SqlTypeDescriptor.canCompare(
-                bound.scalarTable.typeDescriptor(predicateColumn),
-                dynamicScalarTypes[block])
-            || !expressions.matchesComparison(
-                value, scalar.comparison(index), dynamicScalarValues[block])) {
-          return false;
-        }
-        continue;
-      }
-      if (index == nestedMembershipPredicate) {
-        boolean equal = false;
-        for (int candidate = 0;
-            candidate < nestedMembershipValueCount;
-            candidate++) {
-          if (isTextType(membershipResultType(nestedMembershipBank, -1))
-              ? membershipTextEquals(
-                  source,
-                  predicateColumn,
-                  nestedMembershipBank,
-                  -1,
-                  candidate)
-              : value == membershipValue(
-                  nestedMembershipBank, -1, candidate)) {
-            equal = true;
-            break;
-          }
-        }
-        if (equal == nestedMembershipNegated
-            || !equal && nestedMembershipHasNull) {
-          return false;
-        }
-        continue;
-      }
-      if (scalar.isColumnPredicate(index)) {
-        boolean outer = scalarPredicateValueOuter(index);
-        HeapRowResult valueSource = outer ? outerSource : source;
-        TableDefinition valueTable = outer ? bound.table : bound.scalarTable;
-        int valueColumn = scalarPredicateValueColumn(index);
-        if (valueSource == null
-            || isNull(valueSource, valueTable, valueColumn)
-            || !equalColumns(
-                primaryKey,
-                source,
-                bound.scalarTable,
-                predicateColumn,
-                outer ? outerPrimaryKey : primaryKey,
-                valueSource,
-                valueTable,
-                valueColumn)) {
-          return false;
-        }
-        continue;
-      }
-      if (!matchesLiteralComparison(
+      if (!matchesScalarPredicate(
+          scalar,
           primaryKey,
           source,
-          bound.scalarTable,
-          predicateColumn,
-          scalar,
-          index)) {
+          outerPrimaryKey,
+          outerSource,
+          index,
+          nestedMembershipPredicate,
+          nestedMembershipNegated,
+          nestedMembershipBank,
+          nestedMembershipValueCount,
+          nestedMembershipHasNull)) {
         return false;
       }
     }
     return true;
+  }
+
+  private boolean matchesScalarPredicate(
+      BoundSqlQuery.Block scalar,
+      long primaryKey,
+      HeapRowResult source,
+      long outerPrimaryKey,
+      HeapRowResult outerSource,
+      int index,
+      int nestedMembershipPredicate,
+      boolean nestedMembershipNegated,
+      int nestedMembershipBank,
+      int nestedMembershipValueCount,
+      boolean nestedMembershipHasNull) {
+    int predicateColumn = scalarPredicateColumn(index);
+    boolean nullValue = isNull(source, nestedTable, predicateColumn);
+    if (scalar.isNullPredicate(index)) {
+      return nullValue != scalar.isNullPredicateNegated(index);
+    }
+    if (nullValue) {
+      return false;
+    }
+    long value = readColumn(primaryKey, source, predicateColumn);
+    int block = scalar.blockIndex();
+    if (isDynamicScalarPredicate(block, index)) {
+      return matchesDynamicScalar(scalar, index, predicateColumn, value, block);
+    }
+    if (index == nestedMembershipPredicate) {
+      return matchesNestedMembership(
+          source,
+          predicateColumn,
+          value,
+          nestedMembershipNegated,
+          nestedMembershipBank,
+          nestedMembershipValueCount,
+          nestedMembershipHasNull);
+    }
+    if (scalar.isColumnPredicate(index)) {
+      return matchesScalarColumn(
+          index,
+          primaryKey,
+          source,
+          predicateColumn,
+          outerPrimaryKey,
+          outerSource);
+    }
+    return matchesLiteralComparison(
+        primaryKey, source, nestedTable, predicateColumn, scalar, index);
+  }
+
+  private boolean isDynamicScalarPredicate(int block, int index) {
+    return block >= 0
+        && query.hasScalarPredicate(block)
+        && query.scalarPredicate(block) == index;
+  }
+
+  private boolean matchesDynamicScalar(
+      BoundSqlQuery.Block scalar,
+      int index,
+      int predicateColumn,
+      long value,
+      int block) {
+    return !dynamicScalarNulls[block]
+        && SqlTypeDescriptor.canCompare(
+            nestedTable.typeDescriptor(predicateColumn),
+            dynamicScalarTypes[block])
+        && expressions.matchesComparison(
+            value,
+            nestedTable.typeDescriptor(predicateColumn),
+            scalar.comparison(index),
+            dynamicScalarValues[block],
+            dynamicScalarTypes[block]);
+  }
+
+  private boolean matchesNestedMembership(
+      HeapRowResult source,
+      int predicateColumn,
+      long value,
+      boolean negated,
+      int bank,
+      int count,
+      boolean hasNull) {
+    boolean equal = false;
+    for (int candidate = 0; candidate < count; candidate++) {
+      if (isTextType(membershipResultType(bank, -1))
+          ? membershipTextEquals(source, predicateColumn, bank, -1, candidate)
+          : expressions.compareExact(
+              value,
+              nestedTable.typeDescriptor(predicateColumn),
+              membershipValue(bank, -1, candidate),
+              membershipResultType(bank, -1)) == 0) {
+        equal = true;
+        break;
+      }
+    }
+    return equal != negated && (equal || !hasNull);
+  }
+
+  private boolean matchesScalarColumn(
+      int index,
+      long primaryKey,
+      HeapRowResult source,
+      int predicateColumn,
+      long outerPrimaryKey,
+      HeapRowResult outerSource) {
+    boolean outer = scalarPredicateValueOuter(index);
+    HeapRowResult valueSource = outer ? outerSource : source;
+    TableDefinition valueTable = outer ? bound.table : nestedTable;
+    int valueColumn = scalarPredicateValueColumn(index);
+    return valueSource != null
+        && !isNull(valueSource, valueTable, valueColumn)
+        && equalColumns(
+            primaryKey,
+            source,
+            nestedTable,
+            predicateColumn,
+            outer ? outerPrimaryKey : primaryKey,
+            valueSource,
+            valueTable,
+            valueColumn);
+  }
+
+  private static final class NestedChainState {
+    private boolean commandEnabled;
+    private int candidates;
+    private int candidateCount;
+    private boolean candidateHasNull;
+
+    private void reset() {
+      commandEnabled = true;
+      candidates = 0;
+      candidateCount = 0;
+      candidateHasNull = false;
+    }
   }
 
   StatusCode copyCorrelatedOuterRow(HeapRowResult source) {

@@ -1,0 +1,17 @@
+{
+  "schema_version" : 2,
+  "artifact_type" : "result",
+  "evidence_class" : "local_smoke",
+  "run_id" : "golden-v2-run",
+  "manifest_sha256" : "__MANIFEST_SHA256__",
+  "samples_sha256" : "ca54d84fa951851c1d9e5f66e9db08f85f392cf2a9192d5613acc1680c2c8eff",
+  "workload_artifacts" : [ {
+    "name" : "riverbank_equivalent",
+    "path" : "riverbank_equivalent-v2.tsv",
+    "record_count" : 1,
+    "byte_count" : 14,
+    "sha256" : "42dd9006108ef3d4eca8a83c92d8be173c70c5b433bb9245a58f96624ef6df85"
+  } ],
+  "sample_count" : 1,
+  "status" : "developer_smoke_not_promotion_evidence"
+}

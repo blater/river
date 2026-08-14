@@ -1,5 +1,6 @@
 package io.riverdb.protocol;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,11 +11,82 @@ import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import org.junit.jupiter.api.Test;
 
 final class ProtocolFrameCodecTest {
   private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
   private final ProtocolFrame frame = new ProtocolFrame();
+
+  @Test
+  void preservesGoldenRequestAndResponseBytesForEveryMessageKind() {
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    for (ProtocolMessageType type : ProtocolMessageType.values()) {
+      int wireCode = expectedWireCode(type);
+      byte[] payload;
+      StatusCode encoded;
+      switch (type) {
+        case AUTHENTICATE -> {
+          payload = new byte[] {0x5a};
+          encoded = codec.encodeBinaryRequest(bytes, type, 9, payload, payload.length);
+        }
+        case EXECUTE, BEGIN_QUERY -> {
+          payload = new byte[] {'A'};
+          encoded = codec.encodeTextRequest(bytes, type, 9, "A");
+        }
+        case HELLO, OPEN_SESSION, FETCH, CLOSE_QUERY, CLOSE_SESSION -> {
+          payload = new byte[0];
+          encoded = codec.encodeRequest(bytes, type, 9);
+        }
+        default -> throw new AssertionError("uncovered message kind " + type);
+      }
+      assertEquals(StatusCode.OK, encoded);
+      assertArrayEquals(goldenFrame(wireCode, 0, 9, payload), encodedBytes(bytes));
+
+      assertEquals(
+          StatusCode.OK,
+          codec.encodeStatusResponse(bytes, type, 9, StatusCode.OK, false));
+      assertArrayEquals(
+          goldenFrame(wireCode, 1, 9, new byte[64]),
+          encodedBytes(bytes));
+    }
+    assertEquals(8, ProtocolMessageType.values().length);
+  }
+
+  @Test
+  void preservesGoldenSpecializedResponsePayloads() {
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeHelloResponse(
+            bytes,
+            11,
+            StatusCode.OK,
+            0x0102_0304_0506_0708L,
+            0x1112_1314_1516_1718L));
+    byte[] helloPayload = new byte[64];
+    ByteBuffer hello = ByteBuffer.wrap(helloPayload).order(ByteOrder.BIG_ENDIAN);
+    hello.putLong(40, 0x0102_0304_0506_0708L);
+    hello.putLong(48, 0x1112_1314_1516_1718L);
+    assertArrayEquals(goldenFrame(1, 1, 11, helloPayload), encodedBytes(bytes));
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeQueryOpenResponse(
+            bytes, 12, StatusCode.OK, new MetadataQuery("id", "balance", "region")));
+    byte[] metadataPayload = new byte[94];
+    ByteBuffer metadata = ByteBuffer.wrap(metadataPayload).order(ByteOrder.BIG_ENDIAN);
+    metadata.putInt(4, 12);
+    metadata.putInt(12, 3);
+    metadata.putInt(64, 1);
+    metadata.putInt(68, 0x0000_0702);
+    metadata.putInt(72, 3);
+    int offset = 76;
+    offset = putAsciiName(metadata, offset, "id");
+    offset = putAsciiName(metadata, offset, "balance");
+    assertEquals(94, putAsciiName(metadata, offset, "region"));
+    assertArrayEquals(goldenFrame(5, 1, 12, metadataPayload), encodedBytes(bytes));
+  }
 
   @Test
   void roundTripsStrictUtf8WithoutPayloadCopies() {
@@ -123,7 +195,7 @@ final class ProtocolFrameCodecTest {
   @Test
   void roundTripsQueryMetadataWithoutClaimingARow() {
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
-    MetadataQuery query = new MetadataQuery("id", "balance", "region");
+    MetadataQuery query = new MetadataQuery("id", "balance", "region", "amount");
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(bytes, 9, StatusCode.OK, query));
@@ -133,16 +205,19 @@ final class ProtocolFrameCodecTest {
     assertEquals(StatusCode.OK, response.status());
     assertTrue(response.queryActive());
     assertFalse(response.rowAvailable());
-    assertEquals(3, response.columnCount());
+    assertEquals(4, response.columnCount());
     assertEquals("id", response.columnName(0));
     assertEquals("balance", response.columnName(1));
     assertEquals("region", response.columnName(2));
+    assertEquals("amount", response.columnName(3));
     assertEquals(0, response.valueAt(0));
     assertFalse(response.isVarchar(0));
     assertTrue(response.isVarchar(1));
     assertEquals(SqlTypeDescriptor.BIGINT, response.typeDescriptorAt(0));
     assertEquals(SqlTypeDescriptor.varchar(7), response.typeDescriptorAt(1));
     assertEquals(SqlTypeDescriptor.BOOLEAN, response.typeDescriptorAt(2));
+    assertEquals(
+        SqlTypeDescriptor.decimal(18, 6), response.typeDescriptorAt(3));
 
     assertEquals(
         StatusCode.OK,
@@ -184,7 +259,7 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(bytes, 13, StatusCode.OK, query));
-    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 76, (byte) 0);
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 80, (byte) 0);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));
@@ -221,6 +296,155 @@ final class ProtocolFrameCodecTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.encodeRequest(readOnly, ProtocolMessageType.HELLO, 1));
     assertEquals(0, readOnly.remaining());
+  }
+
+  @Test
+  void inspectsRoleSpecificHeadersBeforePayloadUse() {
+    ProtocolFrameHeader header = new ProtocolFrameHeader();
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeTextRequest(bytes, ProtocolMessageType.EXECUTE, 41, "SELECT 1"));
+    int requestLimit = bytes.limit();
+    bytes.limit(ProtocolFrameCodec.HEADER_BYTES);
+    assertEquals(StatusCode.OK, codec.inspectRequestHeader(bytes, header));
+    assertTrue(header.isAvailable());
+    assertFalse(header.isResponse());
+    assertEquals(ProtocolMessageType.EXECUTE.wireCode(), header.typeWireCode());
+    assertEquals(41, header.requestId());
+    assertEquals(requestLimit - ProtocolFrameCodec.HEADER_BYTES, header.payloadBytes());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectResponseHeader(bytes, header));
+    assertFalse(header.isAvailable());
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeStatusResponse(
+            bytes, ProtocolMessageType.EXECUTE, 41, StatusCode.OK, false));
+    int responseLimit = bytes.limit();
+    bytes.limit(ProtocolFrameCodec.HEADER_BYTES);
+    assertEquals(StatusCode.OK, codec.inspectResponseHeader(bytes, header));
+    assertTrue(header.isResponse());
+    assertEquals(responseLimit - ProtocolFrameCodec.HEADER_BYTES, header.payloadBytes());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+  }
+
+  @Test
+  void headerInspectionPreservesCallerBufferStateAtNonZeroPosition() {
+    ProtocolFrameHeader header = new ProtocolFrameHeader();
+    ByteBuffer encoded = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeTextRequest(encoded, ProtocolMessageType.EXECUTE, 17, "SELECT 1"));
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.HEADER_BYTES + 7)
+        .order(ByteOrder.LITTLE_ENDIAN);
+    for (int index = 0; index < ProtocolFrameCodec.HEADER_BYTES; index++) {
+      bytes.put(3 + index, encoded.get(index));
+    }
+    bytes.position(3);
+    bytes.limit(3 + ProtocolFrameCodec.HEADER_BYTES);
+
+    assertEquals(StatusCode.OK, codec.inspectRequestHeader(bytes, header));
+    assertEquals(3, bytes.position());
+    assertEquals(3 + ProtocolFrameCodec.HEADER_BYTES, bytes.limit());
+    assertEquals(ByteOrder.LITTLE_ENDIAN, bytes.order());
+    assertEquals(17, header.requestId());
+
+    bytes.put(3, (byte) 0);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+    assertFalse(header.isAvailable());
+    assertEquals(3, bytes.position());
+    assertEquals(3 + ProtocolFrameCodec.HEADER_BYTES, bytes.limit());
+    assertEquals(ByteOrder.LITTLE_ENDIAN, bytes.order());
+  }
+
+  @Test
+  void rejectsCorruptHeaderFieldsDuringRoleSpecificInspection() {
+    ProtocolFrameHeader header = new ProtocolFrameHeader();
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.limit(ProtocolFrameCodec.HEADER_BYTES - 1);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putInt(0, 0);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putInt(4, ProtocolFrameCodec.VERSION + 1);
+    assertEquals(StatusCode.CONFLICT, codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putInt(8, Integer.MAX_VALUE);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putInt(12, 2);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putLong(16, 0);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putInt(28, 1);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES + 1);
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    bytes.putInt(24, 1);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectRequestHeader(bytes, header));
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeStatusResponse(
+            bytes, ProtocolMessageType.HELLO, 1, StatusCode.OK, false));
+    bytes.putInt(24, 63);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.inspectResponseHeader(bytes, header));
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeStatusResponse(
+            bytes, ProtocolMessageType.HELLO, 1, StatusCode.OK, false));
+    assertEquals(StatusCode.OK, codec.inspectResponseHeader(bytes, header));
+    assertEquals(64, header.payloadBytes());
+
+    bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES
+        - ProtocolFrameCodec.HEADER_BYTES);
+    assertEquals(StatusCode.OK, codec.inspectResponseHeader(bytes, header));
+
+    bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        codec.inspectResponseHeader(bytes, header));
+    assertFalse(header.isAvailable());
   }
 
   @Test
@@ -283,6 +507,7 @@ final class ProtocolFrameCodecTest {
         case 0 -> SqlTypeDescriptor.BIGINT;
         case 1 -> SqlTypeDescriptor.varchar(7);
         case 2 -> SqlTypeDescriptor.BOOLEAN;
+        case 3 -> SqlTypeDescriptor.decimal(18, 6);
         default -> 0;
       };
     }
@@ -291,5 +516,54 @@ final class ProtocolFrameCodecTest {
     public long rowsReturned() {
       return 0;
     }
+  }
+
+  private static byte[] encodedBytes(ByteBuffer source) {
+    byte[] result = new byte[source.remaining()];
+    for (int index = 0; index < result.length; index++) {
+      result[index] = source.get(source.position() + index);
+    }
+    return result;
+  }
+
+  private static byte[] goldenFrame(
+      int typeWireCode,
+      int flags,
+      long requestId,
+      byte[] payload) {
+    byte[] result = new byte[32 + payload.length];
+    ByteBuffer expected = ByteBuffer.wrap(result).order(ByteOrder.BIG_ENDIAN);
+    expected.putInt(0, 0x52495652);
+    expected.putInt(4, 2);
+    expected.putInt(8, typeWireCode);
+    expected.putInt(12, flags);
+    expected.putLong(16, requestId);
+    expected.putInt(24, payload.length);
+    expected.putInt(28, 0);
+    for (int index = 0; index < payload.length; index++) {
+      expected.put(32 + index, payload[index]);
+    }
+    return result;
+  }
+
+  private static int expectedWireCode(ProtocolMessageType type) {
+    return switch (type) {
+      case HELLO -> 1;
+      case AUTHENTICATE -> 2;
+      case OPEN_SESSION -> 3;
+      case EXECUTE -> 4;
+      case BEGIN_QUERY -> 5;
+      case FETCH -> 6;
+      case CLOSE_QUERY -> 7;
+      case CLOSE_SESSION -> 8;
+    };
+  }
+
+  private static int putAsciiName(ByteBuffer target, int offset, String name) {
+    target.put(offset++, (byte) name.length());
+    for (int index = 0; index < name.length(); index++) {
+      target.put(offset++, (byte) name.charAt(index));
+    }
+    return offset;
   }
 }

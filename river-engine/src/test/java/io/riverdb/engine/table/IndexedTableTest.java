@@ -35,22 +35,18 @@ final class IndexedTableTest {
     LocalWal wal = openWal(directory);
     IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
-    long[] keys = {77};
-    int[] rowLengths = {Long.BYTES};
     ByteBuffer rows = ByteBuffer.allocateDirect(Long.BYTES);
     rows.putLong(0, 770);
     HeapInsertResult inserted = new HeapInsertResult();
+    PendingMutationBuffer mutations = new PendingMutationBuffer(1, Long.BYTES);
+    mutations.append(IndexedWalCodec.MUTATION_INSERT, 77, 0, rows, 0, Long.BYTES);
 
     assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
-    assertEquals(
-        StatusCode.OK,
-        store.preflightPreparedInsertBatch(
-            keys, rows, Long.BYTES, rowLengths, 1));
+    assertEquals(StatusCode.OK, store.preflightPreparedWrites(mutations));
     assertEquals(StatusCode.OK, store.finishPreparedInsertPreflight(1));
     assertEquals(
         StatusCode.OK,
-        store.appendPreparedInsertBatch(
-            2, 2, keys, rows, Long.BYTES, rowLengths, 1, inserted));
+        store.appendPreparedWrites(2, 2, mutations, inserted));
     assertEquals(StatusCode.OK, store.forcePreparedInserts());
     assertEquals(2, wal.currentCommitSequence());
     assertEquals(1, store.currentCommitSequence());

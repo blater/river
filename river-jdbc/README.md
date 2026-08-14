@@ -33,6 +33,13 @@ that copy per connection, and erases both snapshots and retained credentials.
 Username/password connection overloads remain unsupported; River tokens are
 high-entropy credentials, not human passwords.
 
+The audited server path binds that token to a configured service-principal
+permission mask. Authorization denial is reported as SQLSTATE `42501`; audit
+capacity exhaustion is `53000`. `Statement.cancel()` deliberately fences and
+closes the ordered connection so a blocked request unwinds on both peers, and
+`Connection.abort(Executor)` uses the same transport cancellation. Any open
+remote transaction is rolled back when the server observes the disconnect.
+
 Projection names, column count, and BIGINT type metadata are available when the
 query opens. Server-side prepared plans, other parameter types, generated keys,
 LOBs, callable statements, non-loopback URLs, and authenticated JDBC properties

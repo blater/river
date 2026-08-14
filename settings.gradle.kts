@@ -20,7 +20,6 @@ include(
   "river-platform",
   "river-format",
   "river-tx-api",
-  "river-journal-api",
   "river-wal",
   "river-buffer",
   "river-storage",
@@ -42,6 +41,5 @@ include(
   "river-inspect",
   "river-migration",
   "river-observability",
-  "river-testkit",
   "river-bench"
 )

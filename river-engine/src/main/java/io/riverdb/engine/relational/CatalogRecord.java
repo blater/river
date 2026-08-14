@@ -8,255 +8,29 @@ import java.nio.ByteBuffer;
 
 /** Current catalog encoding for bounded relational schemas and index-build state. */
 final class CatalogRecord {
+  private static final CatalogTableScanDecoder TABLE_SCAN_DECODER =
+      new CatalogTableScanDecoder();
   static final int MAXIMUM_BYTES =
       240 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
           + TableDefinition.MAXIMUM_INDEXES * 16
           + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64)
           + TableSchema.MAXIMUM_ROW_BYTES;
 
-  private static final long SEQUENCE_MAGIC = 0x5249564552534551L; // RIVERSEQ
-  private static final long USER_SEQUENCE_MAGIC = 0x5249564552555345L; // RIVERUSE
-  private static final long IDENTITY_SEQUENCE_MAGIC = 0x5249564552494453L; // RIVERIDS
-  private static final long VIEW_MAGIC = 0x5249564552564945L; // RIVERVIE
-  private static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
-  private static final long DROPPING_TABLE_MAGIC = 0x524956455244524fL; // RIVERDRO
-  private static final long INDEX_MAGIC = 0x5249564552494e44L; // RIVERIND
-  private static final int SEQUENCE_VERSION = 1;
-  private static final int USER_SEQUENCE_VERSION = 1;
-  private static final int IDENTITY_SEQUENCE_VERSION = 1;
-  private static final int VIEW_VERSION = 1;
-  private static final int TABLE_VERSION = 12;
-  private static final int INDEX_VERSION = 3;
-  private static final int TABLE_CHECK_MASK_OFFSET = 60;
-  private static final int TABLE_CHECKS_OFFSET = 68;
-  private static final int TABLE_CHECK_VALUES_OFFSET = 104;
-  private static final int TABLE_DEFAULTS_OFFSET = 168;
-  private static final int TABLE_REFERENCE_MASK_OFFSET = 232;
-  private static final int TABLE_REFERENCE_IDS_OFFSET = 240;
+  static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
+  static final long DROPPING_TABLE_MAGIC = 0x524956455244524fL; // RIVERDRO
+  static final int TABLE_VERSION = 12;
+  static final int TABLE_CHECK_MASK_OFFSET = 60;
+  static final int TABLE_CHECKS_OFFSET = 68;
+  static final int TABLE_CHECK_VALUES_OFFSET = 104;
+  static final int TABLE_DEFAULTS_OFFSET = 168;
+  static final int TABLE_REFERENCE_MASK_OFFSET = 232;
+  static final int TABLE_REFERENCE_IDS_OFFSET = 240;
   static final int TABLE_TYPE_DESCRIPTORS_OFFSET =
       TABLE_REFERENCE_IDS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
-  private static final int TABLE_INDEXES_OFFSET =
+  static final int TABLE_INDEXES_OFFSET =
       TABLE_TYPE_DESCRIPTORS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
 
   private CatalogRecord() {
-  }
-
-  static void encodeSequence(ByteBuffer target, int nextTableId) {
-    clear(target);
-    target.putLong(0, SEQUENCE_MAGIC);
-    target.putInt(8, SEQUENCE_VERSION);
-    target.putInt(12, nextTableId);
-    target.position(0);
-    target.limit(16);
-  }
-
-  static StatusCode decodeSequence(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      IntResult result) {
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    if (!status.isOk()
-        || source.length() != 16
-        || scratch.getLong(0) != SEQUENCE_MAGIC
-        || scratch.getInt(8) != SEQUENCE_VERSION
-        || scratch.getInt(12) <= 0) {
-      return StatusCode.CORRUPTION;
-    }
-    result.set(scratch.getInt(12));
-    return StatusCode.OK;
-  }
-
-  static void encodeUserSequence(
-      ByteBuffer target,
-      CharSequence name,
-      long nextValue,
-      long increment,
-      boolean exhausted) {
-    clear(target);
-    target.putLong(0, USER_SEQUENCE_MAGIC);
-    target.putInt(8, USER_SEQUENCE_VERSION);
-    target.putInt(12, name.length());
-    target.putLong(16, nextValue);
-    target.putLong(24, increment);
-    target.putInt(32, exhausted ? 1 : 0);
-    for (int index = 0; index < name.length(); index++) {
-      target.put(36 + index, (byte) name.charAt(index));
-    }
-    target.position(0);
-    target.limit(36 + name.length());
-  }
-
-  static StatusCode decodeUserSequence(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      CharSequence expectedName,
-      UserSequenceResult result) {
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    if (!status.isOk()) {
-      return status;
-    }
-    if (source.length() < Long.BYTES) {
-      return StatusCode.CORRUPTION;
-    }
-    if (scratch.getLong(0) != USER_SEQUENCE_MAGIC) {
-      return StatusCode.CONFLICT;
-    }
-    int nameBytes = source.length() >= 16 ? scratch.getInt(12) : -1;
-    long increment = source.length() >= 32 ? scratch.getLong(24) : 0;
-    int exhausted = source.length() >= 36 ? scratch.getInt(32) : -1;
-    if (source.length() < 37
-        || scratch.getInt(8) != USER_SEQUENCE_VERSION
-        || nameBytes <= 0
-        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
-        || source.length() != 36 + nameBytes
-        || increment == 0
-        || (exhausted != 0 && exhausted != 1)
-        || nameBytes != expectedName.length()) {
-      return StatusCode.CORRUPTION;
-    }
-    for (int index = 0; index < nameBytes; index++) {
-      if (Byte.toUnsignedInt(scratch.get(36 + index)) != expectedName.charAt(index)) {
-        return StatusCode.CONFLICT;
-      }
-    }
-    result.set(scratch.getLong(16), increment, exhausted == 1);
-    return StatusCode.OK;
-  }
-
-  static void encodeIdentitySequence(
-      ByteBuffer target,
-      int tableId,
-      long nextValue,
-      boolean exhausted) {
-    clear(target);
-    target.putLong(0, IDENTITY_SEQUENCE_MAGIC);
-    target.putInt(8, IDENTITY_SEQUENCE_VERSION);
-    target.putInt(12, tableId);
-    target.putLong(16, nextValue);
-    target.putInt(24, exhausted ? 1 : 0);
-    target.position(0);
-    target.limit(28);
-  }
-
-  static StatusCode decodeIdentitySequence(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      int expectedTableId,
-      UserSequenceResult result) {
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    if (!status.isOk()) {
-      return status;
-    }
-    int exhausted = source.length() >= 28 ? scratch.getInt(24) : -1;
-    if (source.length() != 28
-        || scratch.getLong(0) != IDENTITY_SEQUENCE_MAGIC
-        || scratch.getInt(8) != IDENTITY_SEQUENCE_VERSION
-        || scratch.getInt(12) != expectedTableId
-        || scratch.getLong(16) < 1
-        || scratch.getLong(16) > RelationalKey.MAXIMUM_USER_KEY
-        || (exhausted != 0 && exhausted != 1)) {
-      return StatusCode.CORRUPTION;
-    }
-    result.set(scratch.getLong(16), 1, exhausted == 1);
-    return StatusCode.OK;
-  }
-
-  static void encodeView(
-      ByteBuffer target,
-      CharSequence name,
-      CharSequence query,
-      int baseTableId) {
-    clear(target);
-    target.putLong(0, VIEW_MAGIC);
-    target.putInt(8, VIEW_VERSION);
-    target.putInt(12, name.length());
-    target.putInt(16, query.length());
-    target.putInt(20, baseTableId);
-    int offset = 24;
-    for (int index = 0; index < name.length(); index++) {
-      target.put(offset++, (byte) name.charAt(index));
-    }
-    for (int index = 0; index < query.length(); index++) {
-      target.put(offset++, (byte) query.charAt(index));
-    }
-    target.position(0);
-    target.limit(offset);
-  }
-
-  static StatusCode decodeView(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      CharSequence expectedName,
-      ViewDefinition result) {
-    result.reset();
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    if (!status.isOk()) {
-      return status;
-    }
-    if (source.length() < Long.BYTES) {
-      return StatusCode.CORRUPTION;
-    }
-    if (scratch.getLong(0) != VIEW_MAGIC) {
-      return StatusCode.CONFLICT;
-    }
-    int nameBytes = source.length() >= 20 ? scratch.getInt(12) : -1;
-    int queryBytes = source.length() >= 20 ? scratch.getInt(16) : -1;
-    if (source.length() < 25
-        || scratch.getInt(8) != VIEW_VERSION
-        || scratch.getInt(20) <= 0
-        || scratch.getInt(20) > RelationalKey.MAXIMUM_TABLE_ID
-        || nameBytes <= 0
-        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
-        || queryBytes <= 0
-        || queryBytes > ViewDefinition.MAXIMUM_QUERY_LENGTH
-        || source.length() != 24 + nameBytes + queryBytes
-        || expectedName.length() != nameBytes) {
-      return StatusCode.CORRUPTION;
-    }
-    for (int index = 0; index < nameBytes; index++) {
-      if (Byte.toUnsignedInt(scratch.get(24 + index))
-          != expectedName.charAt(index)) {
-        return StatusCode.CONFLICT;
-      }
-    }
-    for (int index = 0; index < queryBytes; index++) {
-      result.append((char) Byte.toUnsignedInt(scratch.get(24 + nameBytes + index)));
-    }
-    result.setBaseTableId(scratch.getInt(20));
-    return StatusCode.OK;
-  }
-
-  static StatusCode decodeViewForScan(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      TableSchema.ColumnName name,
-      ViewDefinition result) {
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    long magic = status.isOk() && source.length() >= Long.BYTES
-        ? scratch.getLong(0) : 0;
-    if (!status.isOk()) {
-      return status;
-    }
-    if (magic != VIEW_MAGIC) {
-      return StatusCode.CONFLICT;
-    }
-    int nameBytes = source.length() >= 20 ? scratch.getInt(12) : -1;
-    if (source.length() < 25
-        || nameBytes <= 0
-        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
-        || nameBytes > source.length() - 24) {
-      return StatusCode.CORRUPTION;
-    }
-    name.set(scratch, 24, nameBytes);
-    if (!RelationalKey.validName(name)) {
-      return StatusCode.CORRUPTION;
-    }
-    return decodeView(source, scratch, name, result);
   }
 
   static void encodeTable(
@@ -264,15 +38,7 @@ final class CatalogRecord {
       int tableId,
       int uniqueValueIndexTableId,
       CharSequence name) {
-    encodeTable(
-        target,
-        tableId,
-        uniqueValueIndexTableId,
-        uniqueValueIndexTableId == 0
-            ? TableDefinition.INDEX_NONE : TableDefinition.INDEX_READY,
-        name,
-        "key",
-        "value");
+    CatalogTableEncoder.encode(target, tableId, uniqueValueIndexTableId, name);
   }
 
   static void encodeTable(
@@ -281,14 +47,8 @@ final class CatalogRecord {
       int uniqueValueIndexTableId,
       int uniqueValueIndexState,
       CharSequence name) {
-    encodeTable(
-        target,
-        tableId,
-        uniqueValueIndexTableId,
-        uniqueValueIndexState,
-        name,
-        "key",
-        "value");
+    CatalogTableEncoder.encode(
+        target, tableId, uniqueValueIndexTableId, uniqueValueIndexState, name);
   }
 
   static void encodeTable(
@@ -299,25 +59,14 @@ final class CatalogRecord {
       CharSequence name,
       CharSequence keyColumnName,
       CharSequence valueColumnName) {
-    int indexColumn = uniqueValueIndexTableId == 0 ? -1 : 1;
-    int offset = encodeTableHeader(
+    CatalogTableEncoder.encode(
         target,
         tableId,
         uniqueValueIndexTableId,
         uniqueValueIndexState,
-        indexColumn,
         name,
-        2,
-        1L,
-        0,
-        null,
-        null,
-        true,
-        false);
-    offset = encodeColumn(target, offset, keyColumnName);
-    offset = encodeColumn(target, offset, valueColumnName);
-    target.position(0);
-    target.limit(offset);
+        keyColumnName,
+        valueColumnName);
   }
 
   static void encodeTable(
@@ -328,28 +77,14 @@ final class CatalogRecord {
       int indexColumn,
       CharSequence name,
       TableSchema schema) {
-    int offset = encodeTableHeader(
+    CatalogTableEncoder.encode(
         target,
         tableId,
         uniqueValueIndexTableId,
         uniqueValueIndexState,
         indexColumn,
         name,
-        schema.columnCount(),
-        schema.notNullMask(),
-        schema.defaultMask(),
-        schema,
-        null,
-        true,
-        false);
-    for (int index = 0; index < schema.columnCount(); index++) {
-      offset = encodeColumn(target, offset, schema.columnName(index));
-    }
-    for (int index = 0; index < schema.defaultTextBytes(); index++) {
-      target.put(offset++, schema.defaultTextByte(index));
-    }
-    target.position(0);
-    target.limit(offset);
+        schema);
   }
 
   static void encodeTable(
@@ -360,7 +95,7 @@ final class CatalogRecord {
       int indexColumn,
       CharSequence name,
       TableDefinition schema) {
-    encodeTable(
+    CatalogTableEncoder.encode(
         target,
         tableId,
         uniqueValueIndexTableId,
@@ -380,7 +115,7 @@ final class CatalogRecord {
       CharSequence name,
       TableDefinition schema,
       boolean unique) {
-    encodeTable(
+    CatalogTableEncoder.encode(
         target,
         tableId,
         valueIndexTableId,
@@ -402,104 +137,36 @@ final class CatalogRecord {
       TableDefinition schema,
       boolean unique,
       boolean constraint) {
-    int offset = encodeTableHeader(
+    CatalogTableEncoder.encode(
         target,
         tableId,
         valueIndexTableId,
         valueIndexState,
         indexColumn,
         name,
-        schema.columnCount(),
-        schema.notNullMask(),
-        schema.defaultMask(),
-        null,
         schema,
         unique,
         constraint);
-    for (int index = 0; index < schema.columnCount(); index++) {
-      offset = encodeColumn(target, offset, schema.columnName(index));
-    }
-    for (int index = 0; index < schema.defaultTextBytes(); index++) {
-      target.put(offset++, schema.defaultTextByte(index));
-    }
-    target.position(0);
-    target.limit(offset);
-  }
-
-  static void encodeIndex(
-      ByteBuffer target,
-      int tableId,
-      int indexTableId,
-      CharSequence name) {
-    encodeIndex(
-        target,
-        tableId,
-        indexTableId,
-        TableDefinition.INDEX_READY,
-        name,
-        true);
-  }
-
-  static void encodeIndex(
-      ByteBuffer target,
-      int tableId,
-      int indexTableId,
-      int indexState,
-      CharSequence name) {
-    encodeIndex(target, tableId, indexTableId, indexState, name, true);
-  }
-
-  static void encodeIndex(
-      ByteBuffer target,
-      int tableId,
-      int indexTableId,
-      int indexState,
-      CharSequence name,
-      boolean unique) {
-    encodeIndex(target, tableId, indexTableId, indexState, name, unique, false);
-  }
-
-  static void encodeIndex(
-      ByteBuffer target,
-      int tableId,
-      int indexTableId,
-      int indexState,
-      CharSequence name,
-      boolean unique,
-      boolean constraint) {
-    clear(target);
-    target.putLong(0, INDEX_MAGIC);
-    target.putInt(8, INDEX_VERSION);
-    target.putInt(12, tableId);
-    target.putInt(16, indexTableId);
-    target.putInt(20, indexState);
-    target.putInt(24, (unique ? 1 : 0) | (constraint ? 2 : 0));
-    target.putInt(28, name.length());
-    for (int index = 0; index < name.length(); index++) {
-      target.put(32 + index, (byte) name.charAt(index));
-    }
-    target.position(0);
-    target.limit(32 + name.length());
   }
 
   static StatusCode decodeTable(
       HeapRowResult source,
       ByteBuffer scratch,
       CharSequence expectedName,
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       TableDefinition result) {
     return decodeTable(
-        source, scratch, expectedName, database, result, TABLE_MAGIC);
+        source, scratch, expectedName, schemaGate, result, TABLE_MAGIC);
   }
 
   static StatusCode decodeDroppingTable(
       HeapRowResult source,
       ByteBuffer scratch,
       CharSequence expectedName,
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       TableDefinition result) {
     return decodeTable(
-        source, scratch, expectedName, database, result, DROPPING_TABLE_MAGIC);
+        source, scratch, expectedName, schemaGate, result, DROPPING_TABLE_MAGIC);
   }
 
   static boolean isDroppingTable(HeapRowResult source, ByteBuffer scratch) {
@@ -512,39 +179,11 @@ final class CatalogRecord {
   static StatusCode decodeTableForScan(
       HeapRowResult source,
       ByteBuffer scratch,
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       TableSchema.ColumnName name,
       TableDefinition result) {
-    if (source == null || scratch == null || database == null || name == null || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    long magic = status.isOk() && source.length() >= Long.BYTES
-        ? scratch.getLong(0) : 0;
-    if (!status.isOk()) {
-      return status;
-    }
-    if (magic != TABLE_MAGIC && magic != DROPPING_TABLE_MAGIC) {
-      return StatusCode.CONFLICT;
-    }
-    int indexCount = source.length() >= 28 ? scratch.getInt(24) : -1;
-    int nameBytes = source.length() >= 20 ? scratch.getInt(16) : -1;
-    int nameOffset = indexCount >= 0 && indexCount <= TableDefinition.MAXIMUM_INDEXES
-        ? TABLE_INDEXES_OFFSET + indexCount * 16 : -1;
-    if (source.length() < 28
-        || scratch.getInt(8) != TABLE_VERSION
-        || nameBytes <= 0
-        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
-        || nameOffset < 0
-        || nameOffset > source.length() - nameBytes) {
-      return StatusCode.CORRUPTION;
-    }
-    name.set(scratch, nameOffset, nameBytes);
-    if (!RelationalKey.validName(name)) {
-      return StatusCode.CORRUPTION;
-    }
-    return decodeTable(source, scratch, name, database, result, magic);
+    return TABLE_SCAN_DECODER.decode(
+        source, scratch, schemaGate, name, result);
   }
 
   static void encodeDroppingTable(
@@ -552,125 +191,76 @@ final class CatalogRecord {
       int tableId,
       CharSequence name,
       TableDefinition schema) {
-    encodeTable(
-        target,
-        tableId,
-        0,
-        TableDefinition.INDEX_NONE,
-        -1,
-        name,
-        schema);
-    target.putLong(0, DROPPING_TABLE_MAGIC);
+    CatalogTableEncoder.encodeDropping(target, tableId, name, schema);
   }
 
   private static StatusCode decodeTable(
       HeapRowResult source,
       ByteBuffer scratch,
       CharSequence expectedName,
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       TableDefinition result,
       long expectedMagic) {
     scratch.clear();
     StatusCode status = source.copyTo(scratch);
-    long actualMagic = status.isOk() && source.length() >= Long.BYTES
-        ? scratch.getLong(0) : 0;
-    if (status.isOk() && actualMagic != expectedMagic) {
+    if (!status.isOk()) {
+      return status;
+    }
+    long actualMagic = longAt(scratch, source.length(), 0, 0);
+    if (actualMagic != expectedMagic) {
       return knownCatalogMagic(actualMagic)
           ? StatusCode.CONFLICT : StatusCode.CORRUPTION;
     }
-    int version = source.length() >= 12 ? scratch.getInt(8) : -1;
-    int nameBytes = source.length() >= 20 ? scratch.getInt(16) : -1;
-    int columnCount = source.length() >= 24 ? scratch.getInt(20) : -1;
-    int indexCount = source.length() >= 28 ? scratch.getInt(24) : -1;
-    long notNullMask = source.length() >= TABLE_INDEXES_OFFSET
-        ? scratch.getLong(28) : -1;
-    long defaultMask = source.length() >= TABLE_INDEXES_OFFSET
-        ? scratch.getLong(36) : -1;
-    long defaultTextBytes = source.length() >= TABLE_INDEXES_OFFSET
-        ? scratch.getLong(44) : -1;
-    long identityMask = source.length() >= TABLE_INDEXES_OFFSET
-        ? scratch.getLong(52) : -1;
-    long checkMask = source.length() >= TABLE_INDEXES_OFFSET
-        ? scratch.getLong(TABLE_CHECK_MASK_OFFSET) : -1;
-    long referenceMask = source.length() >= TABLE_INDEXES_OFFSET
-        ? scratch.getLong(TABLE_REFERENCE_MASK_OFFSET) : -1;
+    int version = intAt(scratch, source.length(), 8, -1);
+    int nameBytes = intAt(scratch, source.length(), 16, -1);
+    int columnCount = intAt(scratch, source.length(), 20, -1);
+    int indexCount = intAt(scratch, source.length(), 24, -1);
+    long notNullMask = longAt(scratch, source.length(), 28, -1);
+    long defaultMask = longAt(scratch, source.length(), 36, -1);
+    long defaultTextBytes = longAt(scratch, source.length(), 44, -1);
+    long identityMask = longAt(scratch, source.length(), 52, -1);
+    long checkMask = longAt(
+        scratch, source.length(), TABLE_CHECK_MASK_OFFSET, -1);
+    long referenceMask = longAt(
+        scratch, source.length(), TABLE_REFERENCE_MASK_OFFSET, -1);
     boolean validIndexCount = indexCount >= 0
         && indexCount <= TableDefinition.MAXIMUM_INDEXES;
     int nameOffset = validIndexCount
         ? TABLE_INDEXES_OFFSET + indexCount * 16 : -1;
     int columnsOffset = nameOffset < 0 ? -1 : nameOffset + nameBytes;
-    int expectedBytes = columnsOffset;
-    if (validIndexCount
-        && nameBytes > 0
-        && nameBytes <= TableSchema.MAXIMUM_NAME_LENGTH
-        && columnsOffset >= nameOffset
-        && columnsOffset <= source.length()
-        && columnCount >= 2
-        && columnCount <= TableSchema.MAXIMUM_COLUMNS) {
-      for (int index = 0; index < columnCount; index++) {
-        if (expectedBytes > source.length() - Integer.BYTES) {
-          expectedBytes = -1;
-          break;
-        }
-        int columnBytes = scratch.getInt(expectedBytes);
-        if (columnBytes <= 0
-            || columnBytes > TableSchema.MAXIMUM_NAME_LENGTH
-            || expectedBytes > source.length() - Integer.BYTES - columnBytes) {
-          expectedBytes = -1;
-          break;
-        }
-        expectedBytes += Integer.BYTES + columnBytes;
-      }
-      if (expectedBytes >= 0
-          && defaultTextBytes >= 0
-          && defaultTextBytes <= TableSchema.MAXIMUM_ROW_BYTES
-          && expectedBytes <= source.length() - defaultTextBytes) {
-        expectedBytes += (int) defaultTextBytes;
-      } else {
-        expectedBytes = -1;
-      }
-    }
-    if (!status.isOk()
-        || version != TABLE_VERSION
-        || !validIndexCount
-        || nameOffset < 0
-        || source.length() < nameOffset + 1
-        || source.length() != expectedBytes
-        || scratch.getLong(0) != expectedMagic
-        || scratch.getInt(12) <= 0
-        || scratch.getInt(12) > RelationalKey.MAXIMUM_TABLE_ID
-        || nameBytes <= 0
-        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
-        || columnCount < 2
-        || columnCount > TableSchema.MAXIMUM_COLUMNS
-        || (notNullMask & 1) == 0
-        || (notNullMask & ~((1L << columnCount) - 1)) != 0
-        || (defaultMask & 1) != 0
-        || (defaultMask & ~((1L << columnCount) - 1)) != 0
-        || !validTypeDescriptors(scratch, columnCount)
-        || !validDefaults(
+    int expectedBytes = tableRecordBytes(
+        scratch,
+        source.length(),
+        validIndexCount,
+        nameBytes,
+        nameOffset,
+        columnsOffset,
+        columnCount,
+        defaultTextBytes);
+    if (!validTableRecord(
             scratch,
+            source.length(),
+            expectedMagic,
+            version,
+            validIndexCount,
+            nameBytes,
+            nameOffset,
             columnCount,
+            expectedBytes,
+            notNullMask,
             defaultMask,
-            (int) defaultTextBytes,
-            expectedBytes - (int) defaultTextBytes)
-        || (identityMask != 0 && identityMask != 1)
-        || (checkMask & ~((1L << columnCount) - 1)) != 0
-        || !validChecks(scratch, columnCount, checkMask)
-        || (referenceMask & 1) != 0
-        || (referenceMask & ~((1L << columnCount) - 1)) != 0
-        || !validReferences(
-            scratch, columnCount, referenceMask, scratch.getInt(12))
-        || nameBytes != expectedName.length()) {
+            defaultTextBytes,
+            identityMask,
+            checkMask,
+            referenceMask,
+            expectedName.length())) {
       return StatusCode.CORRUPTION;
     }
-    for (int index = 0; index < nameBytes; index++) {
-      if (Byte.toUnsignedInt(scratch.get(nameOffset + index)) != expectedName.charAt(index)) {
-        return StatusCode.CONFLICT;
-      }
+    if (!tableNameMatches(scratch, nameOffset, nameBytes, expectedName)) {
+      return StatusCode.CONFLICT;
     }
     result.set(
-        database,
+        schemaGate,
         scratch.getInt(12),
         0,
         TableDefinition.INDEX_NONE,
@@ -690,40 +280,8 @@ final class CatalogRecord {
         TABLE_DEFAULTS_OFFSET,
         expectedBytes - (int) defaultTextBytes,
         (int) defaultTextBytes);
-    int buildingIndexes = 0;
-    for (int index = 0; status.isOk() && index < indexCount; index++) {
-      int offset = TABLE_INDEXES_OFFSET + index * 16;
-      int indexTableId = scratch.getInt(offset);
-      int indexState = scratch.getInt(offset + 4);
-      int indexColumn = scratch.getInt(offset + 8);
-      int flags = scratch.getInt(offset + 12);
-      if (indexTableId <= 0
-          || indexTableId > RelationalKey.MAXIMUM_TABLE_ID
-          || indexTableId == scratch.getInt(12)
-          || (indexState != TableDefinition.INDEX_BUILDING
-              && indexState != TableDefinition.INDEX_READY
-              && indexState != TableDefinition.INDEX_DROPPING)
-          || indexColumn <= 0
-          || indexColumn >= columnCount
-          || (flags & ~3) != 0
-          || ((flags & 3) == 2 && (referenceMask & 1L << indexColumn) == 0)
-          || duplicateIndex(scratch, index, indexTableId, indexColumn)
-          || (indexState == TableDefinition.INDEX_BUILDING && ++buildingIndexes > 1)) {
-        status = StatusCode.CORRUPTION;
-      } else {
-        status = result.upsertIndex(
-            indexTableId,
-            indexState,
-            indexColumn,
-            (flags & 1) != 0,
-            (flags & 2) != 0);
-        if (status == StatusCode.CONFLICT
-            || status == StatusCode.RESOURCE_EXHAUSTED
-            || status == StatusCode.INVALID_EXTERNAL_INPUT) {
-          status = StatusCode.CORRUPTION;
-        }
-      }
-    }
+    status = decodeTableIndexes(
+        scratch, indexCount, columnCount, referenceMask, result);
     if (!status.isOk() || !validColumns(result)) {
       result.reset();
       return status.isOk() ? StatusCode.CORRUPTION : status;
@@ -731,233 +289,179 @@ final class CatalogRecord {
     return StatusCode.OK;
   }
 
-  static StatusCode decodeIndex(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      CharSequence expectedName,
-      IndexResult result) {
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    int version = source.length() >= 12 ? scratch.getInt(8) : -1;
-    int state = source.length() >= 24 ? scratch.getInt(20) : -1;
-    int flags = source.length() >= 28 ? scratch.getInt(24) : -1;
-    int nameOffset = 32;
-    int nameBytes = source.length() >= 32 ? scratch.getInt(28) : -1;
-    if (!status.isOk()
-        || version != INDEX_VERSION
-        || source.length() < nameOffset + 1
-        || source.length() != nameOffset + nameBytes
-        || scratch.getLong(0) != INDEX_MAGIC
-        || scratch.getInt(12) <= 0
-        || scratch.getInt(12) > RelationalKey.MAXIMUM_TABLE_ID
-        || scratch.getInt(16) <= 0
-        || scratch.getInt(16) > RelationalKey.MAXIMUM_TABLE_ID
-        || (state != TableDefinition.INDEX_BUILDING
-            && state != TableDefinition.INDEX_READY
-            && state != TableDefinition.INDEX_DROPPING)
-        || (flags & ~3) != 0
-        || nameBytes != expectedName.length()) {
-      return StatusCode.CORRUPTION;
-    }
-    for (int index = 0; index < nameBytes; index++) {
-      if (Byte.toUnsignedInt(scratch.get(nameOffset + index)) != expectedName.charAt(index)) {
-        return StatusCode.CONFLICT;
-      }
-    }
-    result.set(
-        scratch.getInt(12),
-        scratch.getInt(16),
-        state,
-        (flags & 1) != 0,
-        (flags & 2) != 0);
-    return StatusCode.OK;
+  private static int intAt(
+      ByteBuffer source,
+      int sourceBytes,
+      int offset,
+      int fallback) {
+    return offset <= sourceBytes - Integer.BYTES ? source.getInt(offset) : fallback;
   }
 
-  static StatusCode decodeIndexForTable(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      int expectedTableId,
-      IndexResult result) {
-    return decodeIndexForTable(source, scratch, expectedTableId, null, result);
+  private static long longAt(
+      ByteBuffer source,
+      int sourceBytes,
+      int offset,
+      long fallback) {
+    return offset <= sourceBytes - Long.BYTES ? source.getLong(offset) : fallback;
   }
 
-  static StatusCode decodeIndexForTable(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      int expectedTableId,
-      TableSchema.ColumnName name,
-      IndexResult result) {
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
-    if (!status.isOk()) {
-      return status;
-    }
-    if (source.length() < 32 || scratch.getLong(0) != INDEX_MAGIC) {
-      return StatusCode.CONFLICT;
-    }
-    int nameBytes = scratch.getInt(28);
-    int state = scratch.getInt(20);
-    int flags = scratch.getInt(24);
-    if (scratch.getInt(8) != INDEX_VERSION
-        || source.length() != 32 + nameBytes
-        || scratch.getInt(12) <= 0
-        || scratch.getInt(12) > RelationalKey.MAXIMUM_TABLE_ID
-        || scratch.getInt(16) <= 0
-        || scratch.getInt(16) > RelationalKey.MAXIMUM_TABLE_ID
-        || (state != TableDefinition.INDEX_BUILDING
-            && state != TableDefinition.INDEX_READY
-            && state != TableDefinition.INDEX_DROPPING)
-        || (flags & ~3) != 0
-        || nameBytes <= 0
-        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH) {
-      return StatusCode.CORRUPTION;
-    }
-    if (scratch.getInt(12) != expectedTableId) {
-      return StatusCode.CONFLICT;
-    }
-    if (name != null) {
-      name.set(scratch, 32, nameBytes);
-      if (!RelationalKey.validName(name)) {
-        return StatusCode.CORRUPTION;
-      }
-    }
-    result.set(
-        scratch.getInt(12),
-        scratch.getInt(16),
-        state,
-        (flags & 1) != 0,
-        (flags & 2) != 0);
-    return StatusCode.OK;
-  }
-
-  private static int encodeTableHeader(
-      ByteBuffer target,
-      int tableId,
-      int indexTableId,
-      int indexState,
-      int indexColumn,
-      CharSequence name,
+  private static int tableRecordBytes(
+      ByteBuffer source,
+      int sourceBytes,
+      boolean validIndexCount,
+      int nameBytes,
+      int nameOffset,
+      int columnsOffset,
       int columnCount,
+      long defaultTextBytes) {
+    if (!validIndexCount
+        || nameBytes <= 0
+        || nameBytes > TableSchema.MAXIMUM_NAME_LENGTH
+        || columnsOffset < nameOffset
+        || columnsOffset > sourceBytes
+        || columnCount < 2
+        || columnCount > TableSchema.MAXIMUM_COLUMNS) {
+      return -1;
+    }
+    int expectedBytes = columnsOffset;
+    for (int index = 0; index < columnCount; index++) {
+      if (expectedBytes > sourceBytes - Integer.BYTES) {
+        return -1;
+      }
+      int columnBytes = source.getInt(expectedBytes);
+      if (columnBytes <= 0
+          || columnBytes > TableSchema.MAXIMUM_NAME_LENGTH
+          || expectedBytes > sourceBytes - Integer.BYTES - columnBytes) {
+        return -1;
+      }
+      expectedBytes += Integer.BYTES + columnBytes;
+    }
+    if (defaultTextBytes < 0
+        || defaultTextBytes > TableSchema.MAXIMUM_ROW_BYTES
+        || expectedBytes > sourceBytes - defaultTextBytes) {
+      return -1;
+    }
+    return expectedBytes + (int) defaultTextBytes;
+  }
+
+  private static boolean validTableRecord(
+      ByteBuffer source,
+      int sourceBytes,
+      long expectedMagic,
+      int version,
+      boolean validIndexCount,
+      int nameBytes,
+      int nameOffset,
+      int columnCount,
+      int expectedBytes,
       long notNullMask,
       long defaultMask,
-      TableSchema definition,
-      TableDefinition existing,
-      boolean unique,
-      boolean constraint) {
-    clear(target);
-    int existingCount = existing == null ? 0 : existing.uniqueIndexCount();
-    int overrideSlot = -1;
-    if (indexTableId > 0 && existing != null) {
-      for (int index = 0; index < existingCount; index++) {
-        if (existing.uniqueIndexTableId(index) == indexTableId
-            || existing.uniqueIndexColumn(index) == indexColumn) {
-          overrideSlot = index;
-          break;
-        }
-      }
-    }
-    int indexCount = existingCount
-        + (indexTableId > 0 && overrideSlot < 0 ? 1 : 0);
-    if (existing == null && indexTableId > 0) {
-      indexCount = 1;
-    }
-    target.putLong(0, TABLE_MAGIC);
-    target.putInt(8, TABLE_VERSION);
-    target.putInt(12, tableId);
-    target.putInt(16, name.length());
-    target.putInt(20, columnCount);
-    target.putInt(24, indexCount);
-    target.putLong(28, notNullMask);
-    target.putLong(36, defaultMask);
-    int defaultTextBytes = definition != null
-        ? definition.defaultTextBytes()
-        : existing != null ? existing.defaultTextBytes() : 0;
-    target.putLong(44, defaultTextBytes);
-    boolean identity = definition != null
-        ? definition.hasIdentity() : existing != null && existing.hasIdentity();
-    target.putLong(52, identity ? 1 : 0);
-    long checkMask = definition != null
-        ? definition.checkMask() : existing != null ? existing.checkMask() : 0;
-    target.putLong(TABLE_CHECK_MASK_OFFSET, checkMask);
-    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
-      boolean checked = (checkMask & 1L << index) != 0;
-      int comparison = definition != null
-          ? definition.checkComparison(index)
-          : existing != null ? existing.checkComparison(index) : 0;
-      long value = definition != null
-          ? definition.checkValue(index)
-          : existing != null ? existing.checkValue(index) : 0;
-      target.putInt(
-          TABLE_CHECKS_OFFSET + index * Integer.BYTES,
-          checked ? comparison : 0);
-      target.putLong(
-          TABLE_CHECK_VALUES_OFFSET + index * Long.BYTES,
-          checked ? value : 0);
-    }
-    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
-      long value = definition != null
-          ? definition.defaultValue(index)
-          : existing != null ? existing.defaultValue(index) : 0;
-      target.putLong(TABLE_DEFAULTS_OFFSET + index * Long.BYTES, value);
-    }
-    long referenceMask = definition != null
-        ? definition.referenceMask()
-        : existing != null ? existing.referenceMask() : 0;
-    target.putLong(TABLE_REFERENCE_MASK_OFFSET, referenceMask);
-    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
-      boolean referenced = (referenceMask & 1L << index) != 0;
-      int referencedTableId = definition != null
-          ? definition.referenceTableId(index)
-          : existing != null ? existing.referenceTableId(index) : 0;
-      target.putInt(
-          TABLE_REFERENCE_IDS_OFFSET + index * Integer.BYTES,
-          referenced ? referencedTableId : 0);
-    }
-    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
-      int descriptor = index >= columnCount
-          ? 0
-          : definition != null
-              ? definition.typeDescriptor(index)
-              : existing != null
-                  ? existing.typeDescriptor(index)
-                  : SqlTypeDescriptor.BIGINT;
-      target.putInt(
-          TABLE_TYPE_DESCRIPTORS_OFFSET + index * Integer.BYTES,
-          descriptor);
-    }
-    for (int index = 0; index < indexCount; index++) {
-      int output = TABLE_INDEXES_OFFSET + index * 16;
-      boolean override = index == overrideSlot
-          || existing == null && index == 0
-          || existing != null && index == existingCount;
-      target.putInt(
-          output,
-          override ? indexTableId : existing.uniqueIndexTableId(index));
-      target.putInt(
-          output + 4,
-          override ? indexState : existing.uniqueIndexState(index));
-      target.putInt(
-          output + 8,
-          override ? indexColumn : existing.uniqueIndexColumn(index));
-      target.putInt(
-          output + 12,
-          ((override ? unique : existing.indexIsUnique(index)) ? 1 : 0)
-              | ((override ? constraint : existing.indexIsConstraint(index)) ? 2 : 0));
-    }
-    int nameOffset = TABLE_INDEXES_OFFSET + indexCount * 16;
-    for (int index = 0; index < name.length(); index++) {
-      target.put(nameOffset + index, (byte) name.charAt(index));
-    }
-    return nameOffset + name.length();
+      long defaultTextBytes,
+      long identityMask,
+      long checkMask,
+      long referenceMask,
+      int expectedNameBytes) {
+    int tableId = source.getInt(12);
+    long columnMask = (1L << columnCount) - 1;
+    return version == TABLE_VERSION
+        && validIndexCount
+        && nameOffset >= 0
+        && sourceBytes >= nameOffset + 1
+        && sourceBytes == expectedBytes
+        && source.getLong(0) == expectedMagic
+        && tableId > 0
+        && tableId <= RelationalKey.MAXIMUM_TABLE_ID
+        && nameBytes > 0
+        && nameBytes <= TableSchema.MAXIMUM_NAME_LENGTH
+        && columnCount >= 2
+        && columnCount <= TableSchema.MAXIMUM_COLUMNS
+        && (notNullMask & 1) != 0
+        && (notNullMask & ~columnMask) == 0
+        && (defaultMask & 1) == 0
+        && (defaultMask & ~columnMask) == 0
+        && validTypeDescriptors(source, columnCount)
+        && validDefaults(
+            source,
+            columnCount,
+            defaultMask,
+            (int) defaultTextBytes,
+            expectedBytes - (int) defaultTextBytes)
+        && (identityMask == 0 || identityMask == 1)
+        && (checkMask & ~columnMask) == 0
+        && validChecks(source, columnCount, checkMask)
+        && (referenceMask & 1) == 0
+        && (referenceMask & ~columnMask) == 0
+        && validReferences(source, columnCount, referenceMask, tableId)
+        && nameBytes == expectedNameBytes;
   }
 
-  private static int encodeColumn(ByteBuffer target, int offset, CharSequence name) {
-    target.putInt(offset, name.length());
-    offset += Integer.BYTES;
-    for (int index = 0; index < name.length(); index++) {
-      target.put(offset + index, (byte) name.charAt(index));
+  private static boolean tableNameMatches(
+      ByteBuffer source,
+      int offset,
+      int bytes,
+      CharSequence expected) {
+    for (int index = 0; index < bytes; index++) {
+      if (Byte.toUnsignedInt(source.get(offset + index)) != expected.charAt(index)) {
+        return false;
+      }
     }
-    return offset + name.length();
+    return true;
+  }
+
+  private static StatusCode decodeTableIndexes(
+      ByteBuffer source,
+      int indexCount,
+      int columnCount,
+      long referenceMask,
+      TableDefinition result) {
+    int buildingIndexes = 0;
+    for (int index = 0; index < indexCount; index++) {
+      int offset = TABLE_INDEXES_OFFSET + index * 16;
+      int tableId = source.getInt(offset);
+      int state = source.getInt(offset + 4);
+      int column = source.getInt(offset + 8);
+      int flags = source.getInt(offset + 12);
+      if (!validIndex(
+          source, index, tableId, state, column, flags, columnCount, referenceMask)) {
+        return StatusCode.CORRUPTION;
+      }
+      if (state == TableDefinition.INDEX_BUILDING && ++buildingIndexes > 1) {
+        return StatusCode.CORRUPTION;
+      }
+      StatusCode status = result.upsertIndex(
+          tableId, state, column, (flags & 1) != 0, (flags & 2) != 0);
+      if (status == StatusCode.CONFLICT
+          || status == StatusCode.RESOURCE_EXHAUSTED
+          || status == StatusCode.INVALID_EXTERNAL_INPUT) {
+        return StatusCode.CORRUPTION;
+      }
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private static boolean validIndex(
+      ByteBuffer source,
+      int slot,
+      int tableId,
+      int state,
+      int column,
+      int flags,
+      int columnCount,
+      long referenceMask) {
+    return tableId > 0
+        && tableId <= RelationalKey.MAXIMUM_TABLE_ID
+        && tableId != source.getInt(12)
+        && (state == TableDefinition.INDEX_BUILDING
+            || state == TableDefinition.INDEX_READY
+            || state == TableDefinition.INDEX_DROPPING)
+        && column > 0
+        && column < columnCount
+        && (flags & ~3) == 0
+        && ((flags & 3) != 2 || (referenceMask & 1L << column) != 0)
+        && !duplicateIndex(source, slot, tableId, column);
   }
 
   private static boolean validColumns(TableDefinition table) {
@@ -980,9 +484,11 @@ final class CatalogRecord {
       int comparison = source.getInt(TABLE_CHECKS_OFFSET + index * Integer.BYTES);
       long value = source.getLong(TABLE_CHECK_VALUES_OFFSET + index * Long.BYTES);
       boolean checked = index < columns && (checkMask & 1L << index) != 0;
+      int descriptor = index < columns
+          ? source.getInt(TABLE_TYPE_DESCRIPTORS_OFFSET + index * Integer.BYTES) : 0;
       if (checked
-          ? source.getInt(TABLE_TYPE_DESCRIPTORS_OFFSET + index * Integer.BYTES)
-                  != SqlTypeDescriptor.BIGINT
+          ? SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
+              || !TableSchema.validFixedValue(descriptor, value)
               || !TableSchema.validCheckComparison(comparison)
           : comparison != 0 || value != 0) {
         return false;
@@ -1028,7 +534,11 @@ final class CatalogRecord {
       } else if (!SqlTypeDescriptor.isValid(descriptor)
           || SqlTypeDescriptor.typeId(descriptor) != SqlTypeDescriptor.TYPE_ID_BIGINT
               && SqlTypeDescriptor.typeId(descriptor)
-                  != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+                  != SqlTypeDescriptor.TYPE_ID_VARCHAR
+              && SqlTypeDescriptor.typeId(descriptor)
+                  != SqlTypeDescriptor.TYPE_ID_BOOLEAN
+              && SqlTypeDescriptor.typeId(descriptor)
+                  != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
         return false;
       }
     }
@@ -1050,7 +560,8 @@ final class CatalogRecord {
       boolean varchar = SqlTypeDescriptor.typeId(descriptor)
           == SqlTypeDescriptor.TYPE_ID_VARCHAR;
       if (!present || !varchar) {
-        if (!present && value != 0) {
+        if (!present && value != 0
+            || present && !varchar && !TableSchema.validFixedValue(descriptor, value)) {
           return false;
         }
         continue;
@@ -1098,97 +609,12 @@ final class CatalogRecord {
     return false;
   }
 
-  private static void clear(ByteBuffer target) {
-    target.clear();
-    for (int index = 0; index < target.capacity(); index++) {
-      target.put(index, (byte) 0);
-    }
-  }
-
   private static boolean knownCatalogMagic(long magic) {
-    return magic == SEQUENCE_MAGIC
-        || magic == USER_SEQUENCE_MAGIC
-        || magic == IDENTITY_SEQUENCE_MAGIC
-        || magic == VIEW_MAGIC
+    return CatalogSequenceCodec.matchesMagic(magic)
+        || CatalogViewCodec.matchesMagic(magic)
         || magic == TABLE_MAGIC
         || magic == DROPPING_TABLE_MAGIC
-        || magic == INDEX_MAGIC;
+        || CatalogIndexCodec.matchesMagic(magic);
   }
 
-  static final class IntResult {
-    private int value;
-
-    void set(int result) {
-      value = result;
-    }
-
-    int value() {
-      return value;
-    }
-  }
-
-  static final class IndexResult {
-    private int tableId;
-    private int indexTableId;
-    private int state;
-    private boolean unique;
-    private boolean constraint;
-
-    void set(
-        int ownerTableId,
-        int storageTableId,
-        int indexState,
-        boolean isUnique,
-        boolean isConstraint) {
-      tableId = ownerTableId;
-      indexTableId = storageTableId;
-      state = indexState;
-      unique = isUnique;
-      constraint = isConstraint;
-    }
-
-    int tableId() {
-      return tableId;
-    }
-
-    int indexTableId() {
-      return indexTableId;
-    }
-
-    int state() {
-      return state;
-    }
-
-    boolean isUnique() {
-      return unique;
-    }
-
-    boolean isConstraint() {
-      return constraint;
-    }
-  }
-
-  static final class UserSequenceResult {
-    private long nextValue;
-    private long increment;
-    private boolean exhausted;
-
-    void set(long value, long step, boolean isExhausted) {
-      nextValue = value;
-      increment = step;
-      exhausted = isExhausted;
-    }
-
-    long nextValue() {
-      return nextValue;
-    }
-
-    long increment() {
-      return increment;
-    }
-
-    boolean isExhausted() {
-      return exhausted;
-    }
-  }
 }

@@ -1,6 +1,5 @@
 package io.riverdb.engine.table;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.concurrent.FatalStateFence;
@@ -11,8 +10,6 @@ import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
-import io.riverdb.storage.btree.BTreeLookupResult;
-import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.wal.local.LocalWal;
@@ -30,13 +27,10 @@ final class IndexedTableStoreDifferentialRecoveryTest {
   private static final int ROW_STRIDE = Long.BYTES;
 
   @Test
-  void compactLogicalAndPageImageMutationReopenToEquivalentState(@TempDir Path root)
+  void compactMutationReopensThroughPublicTablePath(@TempDir Path root)
       throws Exception {
     Fixture compact = createFixture(root.resolve("compact"));
-    Fixture pageImage = createFixture(root.resolve("page-image"));
     seed(compact.table);
-    seed(pageImage.table);
-
     int[] operations = {
         IndexedWalCodec.MUTATION_UPDATE,
         IndexedWalCodec.MUTATION_DELETE,
@@ -58,83 +52,35 @@ final class IndexedTableStoreDifferentialRecoveryTest {
             rowLengths,
             operations.length,
             new IndexedCommitResult()));
-    assertEquals(
-        StatusCode.OK,
-        commitPageImageMutations(
-            pageImage.store,
-            3,
-            operations,
-            keys,
-            previousRowIds,
-            mutationRows(),
-            ROW_STRIDE,
-            rowLengths));
     assertLastOperationType(
         compact.wal, IndexedWalCodec.OPERATION_TYPE_MUTATION_BATCH);
-    assertLastOperationType(
-        pageImage.wal, IndexedWalCodec.OPERATION_TYPE_PAGE_IMAGES);
-
-    assertEquivalent(compact, pageImage);
+    assertCompactState(compact.table);
     compact = crashAndReopen(compact);
-    pageImage = crashAndReopen(pageImage);
-    assertEquivalent(compact, pageImage);
-
+    assertCompactState(compact.table);
     close(compact);
-    close(pageImage);
   }
 
-  private static StatusCode commitPageImageMutations(
-      IndexedTableStore store,
-      long transactionId,
-      int[] operations,
-      long[] keys,
-      int[] previousRowIds,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths) {
-    StatusCode status = store.beginOperation();
-    if (!status.isOk()) {
-      return status;
-    }
-    IndexedPageSet pages = store.pages();
-    IndexedTableKernel kernel = store.kernel();
+  @Test
+  void naturalLeafSplitPageImagesReopenThroughPublicTablePath(@TempDir Path root)
+      throws Exception {
+    Fixture split = createFixture(root.resolve("split"));
+    ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     HeapInsertResult inserted = new HeapInsertResult();
-    BTreeLookupResult lookup = new BTreeLookupResult();
-    for (int index = 0; index < operations.length; index++) {
-      int leafPageId = kernel.findLeafPageId(keys[index]);
-      ByteBuffer leaf = pages.stageExisting(
-          leafPageId, IndexedTableStore.MAX_CHANGED_PAGES);
-      if (leaf == null) {
-        store.cancelOperation();
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      status = BTreePage.lookupLeaf(leaf, keys[index], lookup);
-      boolean newEntry = operations[index] == IndexedWalCodec.MUTATION_INSERT
-          && previousRowIds[index] == 0;
-      if ((newEntry && status != StatusCode.CONFLICT)
-          || (!newEntry
-              && (!status.isOk() || lookup.rowId() != previousRowIds[index]))) {
-        store.cancelOperation();
-        return StatusCode.CORRUPTION;
-      }
-      status = kernel.stageVersionRow(
-          rows,
-          index * rowStride,
-          rowLengths[index],
-          previousRowIds[index],
-          operations[index] == IndexedWalCodec.MUTATION_DELETE,
-          inserted);
-      if (status.isOk()) {
-        status = newEntry
-            ? BTreePage.insertLeaf(leaf, keys[index], inserted.rowId())
-            : BTreePage.updateLeaf(leaf, keys[index], inserted.rowId());
-      }
-      if (!status.isOk()) {
-        store.cancelOperation();
-        return status;
-      }
+    for (int key = 0; key < 256; key++) {
+      row.putLong(0, key * 10L);
+      row.position(0);
+      row.limit(Long.BYTES);
+      assertEquals(StatusCode.OK, split.table.insert(2L + key, key, row, inserted));
     }
-    return store.commit(transactionId, store.nextCommitSequence());
+    row.putLong(0, 2560L);
+    row.position(0);
+    row.limit(Long.BYTES);
+    assertEquals(StatusCode.OK, split.table.insert(258, 256, row, inserted));
+    assertLastOperationType(split.wal, IndexedWalCodec.OPERATION_TYPE_PAGE_IMAGES);
+    assertSplitState(split.table);
+    split = crashAndReopen(split);
+    assertSplitState(split.table);
+    close(split);
   }
 
   private static void seed(IndexedTable table) {
@@ -167,38 +113,21 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     return rows;
   }
 
-  private static void assertEquivalent(Fixture first, Fixture second) {
-    assertEquals(first.table.rowCount(), second.table.rowCount());
-    assertEquals(first.table.obsoleteVersionCount(), second.table.obsoleteVersionCount());
-    assertEquals(first.table.currentCommitSequence(), second.table.currentCommitSequence());
-    assertEquals(first.table.nextCommitSequence(), second.table.nextCommitSequence());
-    assertEquals(first.table.nextTransactionId(), second.table.nextTransactionId());
-    for (int rowId = 1; rowId <= first.table.rowCount(); rowId++) {
-      assertEquals(
-          first.store.rowCommitSequence(rowId), second.store.rowCommitSequence(rowId));
-      assertEquals(first.store.previousRowId(rowId), second.store.previousRowId(rowId));
-      assertEquals(first.store.isDeletedRow(rowId), second.store.isDeletedRow(rowId));
-      assertArrayEquals(rowBytes(first.store, rowId), rowBytes(second.store, rowId));
-    }
-    assertVisibleValue(first.table, 10, 101);
-    assertVisibleValue(second.table, 10, 101);
-    assertEquals(StatusCode.CONFLICT, first.table.fetchByKey(20, new HeapRowResult()));
-    assertEquals(StatusCode.CONFLICT, second.table.fetchByKey(20, new HeapRowResult()));
-    assertVisibleValue(first.table, 30, 300);
-    assertVisibleValue(second.table, 30, 300);
-    assertScan(first.table);
-    assertScan(second.table);
+  private static void assertCompactState(IndexedTable table) {
+    assertEquals(5, table.rowCount());
+    assertEquals(2, table.obsoleteVersionCount());
+    assertVisibleValue(table, 10, 101);
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(20, new HeapRowResult()));
+    assertVisibleValue(table, 30, 300);
+    assertCompactScan(table);
   }
 
-  private static byte[] rowBytes(IndexedTableStore store, int rowId) {
-    HeapRowResult row = new HeapRowResult();
-    assertEquals(StatusCode.OK, store.fetchRow(rowId, row));
-    ByteBuffer copied = ByteBuffer.allocate(row.length());
-    assertEquals(StatusCode.OK, row.copyTo(copied));
-    byte[] bytes = new byte[row.length()];
-    copied.position(0);
-    copied.get(bytes);
-    return bytes;
+  private static void assertSplitState(IndexedTable table) {
+    assertEquals(257, table.rowCount());
+    assertVisibleValue(table, 0, 0);
+    assertVisibleValue(table, 127, 1270);
+    assertVisibleValue(table, 255, 2550);
+    assertVisibleValue(table, 256, 2560);
   }
 
   private static void assertVisibleValue(IndexedTable table, long key, long expected) {
@@ -209,7 +138,7 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     assertEquals(expected, copied.getLong(0));
   }
 
-  private static void assertScan(IndexedTable table) {
+  private static void assertCompactScan(IndexedTable table) {
     IndexedScanCursor cursor = new IndexedScanCursor();
     IndexedScanResult result = new IndexedScanResult();
     assertEquals(

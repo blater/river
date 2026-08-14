@@ -186,6 +186,66 @@ final class SqlExplainTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void explainAndExecutionShareCompleteFamilyBinding(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE events "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, label VARCHAR(16))",
+            execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE labels "
+                + "(id BIGINT PRIMARY KEY, category BIGINT, label VARCHAR(16))",
+            execution));
+
+    String[] invalid = {
+      "SELECT wrong.category, COUNT(*) FROM events GROUP BY category",
+      "SELECT category, SUM(missing) FROM events GROUP BY category",
+      "SELECT DISTINCT wrong.category FROM events",
+      "SELECT events.id, labels.id FROM events "
+          + "JOIN labels ON events.missing=labels.category"
+    };
+    for (String sql : invalid) {
+      assertEquals(
+          StatusCode.INVALID_EXTERNAL_INPUT,
+          session.beginScan(sql, new SqlScanCursor()),
+          sql);
+      assertEquals(
+          StatusCode.INVALID_EXTERNAL_INPUT,
+          session.beginScan("EXPLAIN " + sql, new SqlScanCursor()),
+          sql);
+    }
+    String[] mismatched = {
+      "SELECT category, SUM(label) FROM events GROUP BY category",
+      "SELECT events.id, labels.id FROM events "
+          + "JOIN labels ON events.category=labels.label"
+    };
+    for (String sql : mismatched) {
+      assertEquals(
+          StatusCode.DATATYPE_MISMATCH,
+          session.beginScan(sql, new SqlScanCursor()),
+          sql);
+      assertEquals(
+          StatusCode.DATATYPE_MISMATCH,
+          session.beginScan("EXPLAIN " + sql, new SqlScanCursor()),
+          sql);
+    }
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static void assertPlanRow(
       SqlSession session,
       SqlScanCursor cursor,

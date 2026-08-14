@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.tx.Transaction;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -135,7 +136,16 @@ public final class IndexedGroupCommitCoordinator {
     for (int index = 0; status.isOk() && index < count; index++) {
       long commitSequence = table.nextCommitSequence();
       commitSequences[index] = commitSequence;
-      status = table.appendPreparedWrites(sessions[index], commitSequence);
+      IndexedTransactionSession session = sessions[index];
+      HeapInsertResult prepared = session.preparedInsertResult();
+      status = table.appendPreparedWrites(
+          session.groupTransaction().transactionId(),
+          commitSequence,
+          session.pendingMutations(),
+          prepared);
+      if (status.isOk()) {
+        session.recordPreparedAppend(prepared.rowId(), commitSequence);
+      }
     }
     if (status.isOk()) {
       status = table.forcePreparedInserts();

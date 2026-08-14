@@ -16,6 +16,7 @@ import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.auth.TokenAuthenticator;
 import io.riverdb.protocol.auth.TokenAuthenticatorOpenResult;
 import io.riverdb.server.LoopbackRiverServer;
+import io.riverdb.server.LoopbackServerLimits;
 import io.riverdb.server.LoopbackServerOpenResult;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
@@ -1596,8 +1597,8 @@ final class RiverDriverTest {
       try (Statement schema = connection.createStatement()) {
         assertEquals(0, schema.executeUpdate(
             "CREATE TABLE text_values "
-                + "(id BIGINT PRIMARY KEY, label VARCHAR(7), "
-                + "state VARCHAR(7) DEFAULT 'new')"));
+                + "(id BIGINT PRIMARY KEY, label VARCHAR(32), "
+                + "state VARCHAR(12) DEFAULT '新規')"));
         assertEquals(0, schema.executeUpdate(
             "CREATE UNIQUE INDEX text_values_label ON text_values(label)"));
         assertEquals(1, schema.executeUpdate(
@@ -1626,20 +1627,20 @@ final class RiverDriverTest {
       try (PreparedStatement insert = connection.prepareStatement(
           "INSERT INTO text_values (id, label) VALUES (?, ?)")) {
         insert.setLong(1, 1);
-        insert.setString(2, "it's");
+        insert.setString(2, "河川データ庫");
         assertEquals(1, insert.executeUpdate());
         insert.setLong(1, 2);
         insert.setObject(2, "alpha", Types.VARCHAR);
         assertEquals(1, insert.executeUpdate());
         insert.setLong(1, 4);
-        insert.setString(2, "too long");
+        insert.setString(2, "x".repeat(33));
         SQLException tooLong = assertThrows(SQLException.class, insert::executeUpdate);
         assertEquals(SqlState.DATATYPE_MISMATCH, tooLong.getSQLState());
       }
 
       try (PreparedStatement select = connection.prepareStatement(
           "SELECT id, label, state FROM text_values WHERE label=?")) {
-        select.setString(1, "it's");
+        select.setString(1, "河川データ庫");
         try (ResultSet rows = select.executeQuery()) {
           ResultSetMetaData metadata = rows.getMetaData();
           assertEquals(Types.BIGINT, metadata.getColumnType(1));
@@ -1648,13 +1649,13 @@ final class RiverDriverTest {
           assertEquals(String.class.getName(), metadata.getColumnClassName(2));
           assertTrue(metadata.isCaseSensitive(2));
           assertFalse(metadata.isSigned(2));
-          assertEquals(7, metadata.getPrecision(2));
+          assertEquals(32, metadata.getPrecision(2));
           assertTrue(rows.next());
           assertEquals(1, rows.getLong("id"));
-          assertEquals("it's", rows.getString("label"));
-          assertEquals("it's", rows.getObject("label"));
-          assertEquals("it's", rows.getObject("label", String.class));
-          assertEquals("new", rows.getString("state"));
+          assertEquals("河川データ庫", rows.getString("label"));
+          assertEquals("河川データ庫", rows.getObject("label"));
+          assertEquals("河川データ庫", rows.getObject("label", String.class));
+          assertEquals("新規", rows.getString("state"));
           assertThrows(SQLException.class, () -> rows.getLong("label"));
           assertFalse(rows.next());
         }
@@ -1934,7 +1935,7 @@ final class RiverDriverTest {
         EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = startAuthenticated(
-        database, serverContext, authenticator.authenticator());
+        database, root, serverContext, authenticator.authenticator());
 
     RiverDataSource source = new RiverDataSource();
     source.setPort(server.port());
@@ -2543,13 +2544,21 @@ final class RiverDriverTest {
 
   private static LoopbackRiverServer startAuthenticated(
       RiverDatabase database,
+      Path auditDirectory,
       SSLContext context,
       TokenAuthenticator authenticator) {
     LoopbackServerOpenResult result = new LoopbackServerOpenResult();
     assertEquals(
         StatusCode.OK,
         LoopbackRiverServer.startAuthenticated(
-            database, 0, context, authenticator, result));
+            database,
+            0,
+            context,
+            authenticator,
+            auditDirectory,
+            LoopbackServerLimits.defaults(
+                LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS),
+            result));
     return result.server();
   }
 

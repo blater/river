@@ -7,6 +7,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -22,7 +23,7 @@ final class RelationalDatabaseTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void persistsCanonicalColumnDescriptorsAndRejectsUnknownTypes(@TempDir Path root) {
+  void persistsCanonicalColumnDescriptorsAndRejectsCorruptTypes(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -78,7 +79,19 @@ final class RelationalDatabaseTest {
             corrupted,
             ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES),
             "corrupt_types",
-            database,
+            new RelationalSchemaGate(),
+            new TableDefinition()));
+    encoded.putInt(
+        CatalogRecord.TABLE_TYPE_DESCRIPTORS_OFFSET + Integer.BYTES,
+        SqlTypeDescriptor.TYPE_ID_DECIMAL | 19 << 8 | 20 << 16);
+    corrupted.set(encoded, 1, 0, encodedBytes);
+    assertEquals(
+        StatusCode.CORRUPTION,
+        CatalogRecord.decodeTable(
+            corrupted,
+            ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES),
+            "corrupt_types",
+            new RelationalSchemaGate(),
             new TableDefinition()));
     assertEquals(StatusCode.OK, database.close());
   }
@@ -201,6 +214,10 @@ final class RelationalDatabaseTest {
     RelationalSession session = sessionResult.session();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    accounts.reset();
+    papers.reset();
+    assertEquals(StatusCode.OK, session.resolveTable("accounts", accounts));
+    assertEquals(StatusCode.OK, session.resolveTable("papers", papers));
     assertEquals(StatusCode.OK, session.insert(accounts, 7, row(700)));
     assertEquals(StatusCode.OK, session.insert(papers, 7, row(701)));
     assertEquals(StatusCode.OK, session.commit(outcome));
@@ -265,6 +282,80 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, session.abort(new TransactionOutcome()));
     assertEquals(StatusCode.OK, second.close());
     assertEquals(StatusCode.OK, first.close());
+  }
+
+  @Test
+  void tableCreationRequiresOneWriterAndKeepsCommittedResultFresh(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    RelationalDatabase database = opened.database();
+    RelationalSessionOpenResult firstResult = new RelationalSessionOpenResult();
+    RelationalSessionOpenResult secondResult = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(firstResult));
+    assertEquals(StatusCode.OK, database.createSession(secondResult));
+    RelationalSession first = firstResult.session();
+    RelationalSession second = secondResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    TableDefinition created = new TableDefinition();
+
+    assertEquals(StatusCode.OK, first.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.RETRY, first.createTable("blocked", created));
+    assertEquals(false, created.isAvailable());
+    assertEquals(StatusCode.OK, second.abort(outcome));
+
+    assertEquals(StatusCode.OK, first.createTable("committed", created));
+    assertEquals(StatusCode.RETRY, second.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, first.commit(outcome));
+    assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, second.insert(created, 1, row(10)));
+    assertEquals(StatusCode.OK, second.commit(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void abortedAndSavepointRolledBackDefinitionsStayInvalid(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    RelationalDatabase database = opened.database();
+    RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RelationalSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+    TableDefinition aborted = new TableDefinition();
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.createTable("aborted", aborted));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(
+        StatusCode.OK,
+        session.createTable("replacement", new TableDefinition()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.insert(aborted, 1, row(10)));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+
+    TableDefinition rolledBack = new TableDefinition();
+    IndexedSavepoint savepoint = new IndexedSavepoint();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.createSavepoint(savepoint));
+    assertEquals(StatusCode.OK, session.createTable("rolled_back", rolledBack));
+    assertEquals(StatusCode.OK, session.rollbackToSavepoint(savepoint));
+    assertEquals(
+        StatusCode.OK,
+        session.createTable("after_savepoint", new TableDefinition()));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.insert(rolledBack, 1, row(10)));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, database.close());
   }
 
   @Test

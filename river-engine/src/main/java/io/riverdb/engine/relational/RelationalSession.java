@@ -1,7 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.engine.table.IndexedScanResult;
@@ -13,60 +12,19 @@ import java.nio.ByteBuffer;
 
 /** Transaction session over catalog-resolved logical tables in one physical keyspace. */
 public final class RelationalSession {
-  private static final long INDEX_VALUE_BIAS = 1L << 47;
-  private static final long MINIMUM_INDEXED_VALUE = -INDEX_VALUE_BIAS;
-  private static final long MAXIMUM_INDEXED_VALUE = INDEX_VALUE_BIAS - 2;
-  private static final long MAXIMUM_INDEXED_VALUE_EXCLUSIVE = INDEX_VALUE_BIAS - 1;
-  private static final long NON_UNIQUE_VALUE_BIAS = 1L << 46;
-  private static final long MINIMUM_NON_UNIQUE_VALUE = -NON_UNIQUE_VALUE_BIAS;
-  private static final long MAXIMUM_NON_UNIQUE_VALUE = NON_UNIQUE_VALUE_BIAS - 2;
-  private static final long MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE =
-      NON_UNIQUE_VALUE_BIAS - 1;
-  private static final long NON_UNIQUE_ENTRY_FLAG = 1L << 47;
-  private static final long NON_UNIQUE_ALLOCATOR_KEY = NON_UNIQUE_ENTRY_FLAG - 1;
-  private static final int NON_UNIQUE_ENTRY_BYTES = 3 * Long.BYTES;
-  private static final int MAXIMUM_DUPLICATE_CHAIN = 64 * 1024;
   private static final int PENDING_DROP_NONE = 0;
   private static final int PENDING_DROP_INDEX = 1;
   private static final int PENDING_DROP_TABLE = 2;
 
-  private final RelationalDatabase database;
+  private final RelationalSchemaLifecycle schemaLifecycle;
+  private final RelationalSchemaGate schemaGate;
   private final IndexedTransactionSession session;
-  private final RelationalKey.LongKeyResult physicalKey = new RelationalKey.LongKeyResult();
-  private final HeapRowResult catalogRow = new HeapRowResult();
-  private final IndexedScanResult catalogScanRow = new IndexedScanResult();
-  private final ByteBuffer catalogScratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
-  private final ByteBuffer catalogOutput = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
-  private final CatalogRecord.IntResult nextTableId = new CatalogRecord.IntResult();
-  private final CatalogRecord.UserSequenceResult userSequenceRecord =
-      new CatalogRecord.UserSequenceResult();
-  private final ViewDefinition viewRecord = new ViewDefinition();
-  private final ViewDefinition scannedViewRecord = new ViewDefinition();
-  private final TableDefinition scannedTableRecord = new TableDefinition();
-  private final TableDefinition scannedIndexTable = new TableDefinition();
-  private final CatalogRecord.IndexResult scannedIndexRecord =
-      new CatalogRecord.IndexResult();
-  private final TableSchema.ColumnName scannedObjectName =
-      new TableSchema.ColumnName();
-  private final TableSchema.ColumnName scannedIndexName =
-      new TableSchema.ColumnName();
-  private final TableDefinition valueIndexTable = new TableDefinition();
-  private final TableDefinition referenceTable = new TableDefinition();
-  private final TableSchema schemaScratch = new TableSchema();
-  private final HeapRowResult indexedKeyRow = new HeapRowResult();
-  private final HeapRowResult indexHeadRow = new HeapRowResult();
-  private final HeapRowResult indexEntryRow = new HeapRowResult();
-  private final HeapRowResult indexAllocatorRow = new HeapRowResult();
-  private final HeapRowResult referencedRow = new HeapRowResult();
-  private final ByteBuffer valueScratch = ByteBuffer.allocateDirect(Long.BYTES);
-  private final ByteBuffer indexEntryScratch = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
-  private final ByteBuffer rowScratch = ByteBuffer.allocateDirect(
-      TableSchema.MAXIMUM_ROW_BYTES);
-  private final ByteBuffer indexRow = ByteBuffer.allocateDirect(Long.BYTES);
-  private final ByteBuffer nonUniqueIndexRow = ByteBuffer.allocateDirect(NON_UNIQUE_ENTRY_BYTES);
-  private final long[] previousIndexedValues = new long[TableDefinition.MAXIMUM_INDEXES];
-  private final boolean[] previousIndexedNulls =
-      new boolean[TableDefinition.MAXIMUM_INDEXES];
+  private final RelationalSecondaryIndexStore secondaryIndexes;
+  private final RelationalIndexLookup indexLookup;
+  private final RelationalCatalogDdl catalogDdl;
+  private final RelationalCatalogReader catalogReader;
+  private final RelationalReferentialIntegrity referentialIntegrity;
+  private final RelationalRowMutation rowMutations;
   private final TableSchema.ColumnName pendingDropIndexName =
       new TableSchema.ColumnName();
   private final TableSchema.ColumnName pendingDropTableName =
@@ -78,9 +36,19 @@ public final class RelationalSession {
   private int pendingDropMutationStart;
   private int pendingDropType;
 
-  RelationalSession(RelationalDatabase owner, IndexedTransactionSession indexedSession) {
-    database = owner;
+  RelationalSession(
+      RelationalSchemaLifecycle lifecycle,
+      RelationalSchemaGate gate,
+      IndexedTransactionSession indexedSession) {
+    schemaLifecycle = lifecycle;
+    schemaGate = gate;
     session = indexedSession;
+    secondaryIndexes = new RelationalSecondaryIndexStore(gate, indexedSession);
+    indexLookup = new RelationalIndexLookup(gate, indexedSession);
+    catalogDdl = new RelationalCatalogDdl(gate);
+    catalogReader = new RelationalCatalogReader(gate, indexedSession);
+    referentialIntegrity = new RelationalReferentialIntegrity(gate);
+    rowMutations = new RelationalRowMutation(gate, indexedSession, secondaryIndexes);
   }
 
   public boolean isTransactionActive() {
@@ -91,7 +59,7 @@ public final class RelationalSession {
     if (registeredTransaction) {
       return StatusCode.CONFLICT;
     }
-    StatusCode status = database.enterTransaction(this);
+    StatusCode status = schemaGate.enterTransaction(this);
     boolean entered = status.isOk();
     if (status.isOk()) {
       status = session.begin(isolationLevel);
@@ -99,7 +67,7 @@ public final class RelationalSession {
     if (status.isOk()) {
       registeredTransaction = true;
     } else if (entered) {
-      database.leaveTransaction();
+      schemaGate.leaveTransaction();
     }
     return status;
   }
@@ -113,201 +81,49 @@ public final class RelationalSession {
   }
 
   public StatusCode resolveTable(CharSequence name, TableDefinition result) {
-    if (result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = RelationalKey.catalogTableKey(name, physicalKey);
-    if (!status.isOk()) {
-      return status;
-    }
-    status = session.fetchByKey(physicalKey.key(), catalogRow);
-    if (status.isOk() && CatalogRecord.isDroppingTable(catalogRow, catalogScratch)) {
-      return StatusCode.CONFLICT;
-    }
-    return status.isOk()
-        ? CatalogRecord.decodeTable(
-            catalogRow, catalogScratch, name, database, result)
-        : status;
+    return catalogReader.resolveTable(name, result);
   }
 
   public StatusCode resolveView(
       CharSequence name,
       ViewDefinition result) {
-    if (result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = RelationalKey.catalogTableKey(name, physicalKey);
-    if (status.isOk()) {
-      status = session.fetchByKey(physicalKey.key(), catalogRow);
-    }
-    return status.isOk()
-        ? CatalogRecord.decodeView(
-            catalogRow, catalogScratch, name, result)
-        : status;
+    return catalogReader.resolveView(name, result);
   }
 
   public StatusCode beginCatalogObjectScan(CatalogObjectCursor cursor) {
-    if (!registeredTransaction || cursor == null) {
+    if (!registeredTransaction) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = cursor.reset();
-    if (status.isOk()) {
-      status = session.beginScan(Long.MIN_VALUE, 0, cursor.indexed());
-    }
-    if (status.isOk()) {
-      status = cursor.claim(this);
-    }
-    return status;
+    return catalogReader.beginObjectScan(this, cursor);
   }
 
   public StatusCode nextCatalogObject(
       CatalogObjectCursor cursor,
       CatalogObjectResult result) {
-    if (cursor == null
-        || result == null
-        || !cursor.isOwnedBy(this)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    while (true) {
-      StatusCode status = session.nextScan(cursor.indexed(), catalogScanRow);
-      if (status == StatusCode.CONFLICT) {
-        return StatusCode.OK;
-      }
-      if (!status.isOk()) {
-        return status;
-      }
-      HeapRowResult row = catalogScanRow.row();
-      if (CatalogRecord.isDroppingTable(row, catalogScratch)) {
-        continue;
-      }
-      StatusCode tableStatus = CatalogRecord.decodeTableForScan(
-          row,
-          catalogScratch,
-          database,
-          scannedObjectName,
-          scannedTableRecord);
-      if (tableStatus.isOk()) {
-        result.set(scannedObjectName, CatalogObjectResult.TABLE);
-        return StatusCode.OK;
-      }
-      if (tableStatus != StatusCode.CONFLICT) {
-        return tableStatus;
-      }
-      StatusCode viewStatus = CatalogRecord.decodeViewForScan(
-          row,
-          catalogScratch,
-          scannedObjectName,
-          scannedViewRecord);
-      if (viewStatus.isOk()) {
-        result.set(scannedObjectName, CatalogObjectResult.VIEW);
-        return StatusCode.OK;
-      }
-      if (viewStatus != StatusCode.CONFLICT) {
-        return viewStatus;
-      }
-    }
+    return catalogReader.nextObject(this, cursor, result);
   }
 
   public StatusCode closeCatalogObjectScan(CatalogObjectCursor cursor) {
-    if (cursor == null || !cursor.isOwnedBy(this)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = session.closeScan(cursor.indexed());
-    if (status.isOk()) {
-      cursor.complete();
-    }
-    return status;
+    return catalogReader.closeObjectScan(this, cursor);
   }
 
   public StatusCode beginCatalogIndexScan(
       CharSequence tableName,
       CatalogIndexCursor cursor) {
-    if (!registeredTransaction || cursor == null) {
+    if (!registeredTransaction) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = resolveTable(tableName, scannedIndexTable);
-    if (status.isOk()) {
-      status = cursor.reset();
-    }
-    if (status.isOk()) {
-      status = session.beginScan(Long.MIN_VALUE, 0, cursor.indexed());
-    }
-    if (status.isOk()) {
-      status = cursor.claim(
-          this,
-          scannedIndexTable.tableId(),
-          scannedIndexTable.readyIndexCount());
-    }
-    return status;
+    return catalogReader.beginIndexScan(this, tableName, cursor);
   }
 
   public StatusCode nextCatalogIndex(
       CatalogIndexCursor cursor,
       CatalogIndexResult result) {
-    if (cursor == null || result == null || !cursor.isOwnedBy(this)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    if (cursor.takePrimary()) {
-      result.setPrimary(scannedIndexTable.columnName(0));
-      return StatusCode.OK;
-    }
-    while (true) {
-      StatusCode status = session.nextScan(cursor.indexed(), catalogScanRow);
-      if (status == StatusCode.CONFLICT) {
-        return cursor.allSecondariesObserved()
-            ? StatusCode.OK : StatusCode.CORRUPTION;
-      }
-      if (!status.isOk()) {
-        return status;
-      }
-      scannedIndexName.reset();
-      StatusCode decoded = CatalogRecord.decodeIndexForTable(
-          catalogScanRow.row(),
-          catalogScratch,
-          cursor.tableId(),
-          scannedIndexName,
-          scannedIndexRecord);
-      if (decoded == StatusCode.CONFLICT) {
-        continue;
-      }
-      if (!decoded.isOk()) {
-        return decoded;
-      }
-      if (scannedIndexRecord.state() != TableDefinition.INDEX_READY) {
-        continue;
-      }
-      int slot = scannedIndexTable.readyIndexSlotForTableId(
-          scannedIndexRecord.indexTableId());
-      if (slot < 0
-          || !cursor.recordSecondary(slot)
-          || scannedIndexTable.indexIsUnique(slot) != scannedIndexRecord.isUnique()
-          || scannedIndexTable.indexIsConstraint(slot)
-              != scannedIndexRecord.isConstraint()) {
-        return StatusCode.CORRUPTION;
-      }
-      result.set(
-          scannedIndexName,
-          scannedIndexTable.columnName(scannedIndexTable.uniqueIndexColumn(slot)),
-          scannedIndexRecord.isUnique(),
-          scannedIndexRecord.isConstraint());
-      return StatusCode.OK;
-    }
+    return catalogReader.nextIndex(this, cursor, result);
   }
 
   public StatusCode closeCatalogIndexScan(CatalogIndexCursor cursor) {
-    if (cursor == null || !cursor.isOwnedBy(this)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = session.closeScan(cursor.indexed());
-    if (status.isOk()) {
-      cursor.complete();
-      scannedIndexTable.reset();
-    }
-    return status;
+    return catalogReader.closeIndexScan(this, cursor);
   }
 
   /** Adds one catalog table entry within this session's active transaction. */
@@ -321,13 +137,21 @@ public final class RelationalSession {
       CharSequence keyColumnName,
       CharSequence valueColumnName,
       TableDefinition result) {
-    schemaScratch.reset();
-    StatusCode status = schemaScratch.addBigint(keyColumnName);
-    if (status.isOk()) {
-      status = schemaScratch.addBigint(valueColumnName);
+    if (!registeredTransaction || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return status.isOk()
-        ? createTable(name, schemaScratch, result) : status;
+    result.reset();
+    if (pendingDropType != PENDING_DROP_NONE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
+    if (status.isOk()) {
+      status = catalogDdl.createTable(
+          this, name, keyColumnName, valueColumnName, result);
+    }
+    finishFailedSchemaCreation(status, acquired, result);
+    return status;
   }
 
   public StatusCode createTable(
@@ -341,54 +165,49 @@ public final class RelationalSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode status = RelationalKey.catalogTableKey(name, physicalKey);
+    if (!registeredTransaction) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (pendingDropType != PENDING_DROP_NONE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = session.fetchByKey(physicalKey.key(), catalogRow);
-      if (status.isOk()) {
-        status = StatusCode.CONFLICT;
-      } else if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-      }
+      status = catalogDdl.createTable(this, name, schema, result);
     }
+    finishFailedSchemaCreation(status, acquired, result);
+    return status;
+  }
+
+  private StatusCode acquireSchemaChange() {
+    if (schemaChangeActive) {
+      return StatusCode.OK;
+    }
+    StatusCode status = schemaGate.beginSchemaChange(this);
     if (status.isOk()) {
-      status = session.fetchByKey(RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
-    }
-    if (status.isOk()) {
-      status = CatalogRecord.decodeSequence(catalogRow, catalogScratch, nextTableId);
-    }
-    int tableId = nextTableId.value();
-    if (status.isOk() && tableId > RelationalKey.MAXIMUM_TABLE_ID) {
-      status = StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeSequence(catalogOutput, tableId + 1);
-      status = session.update(RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeTable(
-          catalogOutput,
-          tableId,
-          0,
-          TableDefinition.INDEX_NONE,
-          -1,
-          name,
-          schema);
-      status = session.insert(physicalKey.key(), catalogOutput);
-    }
-    if (status.isOk() && schema.hasIdentity()) {
-      CatalogRecord.encodeIdentitySequence(catalogOutput, tableId, 1, false);
-      status = session.insert(RelationalKey.identitySequenceKey(tableId), catalogOutput);
-    }
-    if (status.isOk()) {
-      result.set(
-          database,
-          tableId,
-          0,
-          TableDefinition.INDEX_NONE,
-          -1,
-          schema);
+      schemaChangeMutationStart = session.pendingMutationCount();
+      schemaChangeActive = true;
     }
     return status;
+  }
+
+  private void finishFailedSchemaCreation(
+      StatusCode status, boolean acquired, TableDefinition result) {
+    if (status.isOk()) {
+      return;
+    }
+    result.reset();
+    finishFailedSchemaChange(status, acquired);
+  }
+
+  private void finishFailedSchemaChange(StatusCode status, boolean acquired) {
+    if (status.isOk() || !acquired) {
+      return;
+    }
+    schemaGate.completeSchemaChange(this, false);
+    schemaChangeActive = false;
+    schemaChangeMutationStart = 0;
   }
 
   public StatusCode createSequence(
@@ -403,37 +222,12 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(name, physicalKey);
+      status = catalogDdl.createSequence(this, name, start, increment);
     }
-    if (status.isOk()) {
-      status = session.fetchByKey(physicalKey.key(), catalogRow);
-      if (status.isOk()) {
-        status = StatusCode.CONFLICT;
-      } else if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-      }
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeUserSequence(
-          catalogOutput, name, start, increment, false);
-      status = session.insert(physicalKey.key(), catalogOutput);
-    }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -453,36 +247,12 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(name, physicalKey);
+      status = catalogDdl.createView(this, name, query, baseTableId);
     }
-    if (status.isOk()) {
-      status = session.fetchByKey(physicalKey.key(), catalogRow);
-      if (status.isOk()) {
-        status = StatusCode.CONFLICT;
-      } else if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-      }
-    }
-    if (status.isOk()) {
-      CatalogRecord.encodeView(catalogOutput, name, query, baseTableId);
-      status = session.insert(physicalKey.key(), catalogOutput);
-    }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -493,34 +263,12 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(name, physicalKey);
+      status = catalogDdl.dropView(this, name);
     }
-    if (status.isOk()) {
-      status = session.fetchByKey(physicalKey.key(), catalogRow);
-    }
-    if (status.isOk()) {
-      status = CatalogRecord.decodeView(
-          catalogRow, catalogScratch, name, viewRecord);
-    }
-    if (status.isOk()) {
-      status = session.delete(physicalKey.key());
-    }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -531,40 +279,17 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(name, physicalKey);
+      status = catalogDdl.dropSequence(this, name);
     }
-    if (status.isOk()) {
-      status = session.fetchByKey(physicalKey.key(), catalogRow);
-    }
-    if (status.isOk()) {
-      status = CatalogRecord.decodeUserSequence(
-          catalogRow, catalogScratch, name, userSequenceRecord);
-    }
-    if (status.isOk()) {
-      status = session.delete(physicalKey.key());
-    }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
   public StatusCode insert(TableDefinition table, long key, ByteBuffer row) {
-    StatusCode status = resolveWriteKey(table, key);
-    return status.isOk() ? session.insert(physicalKey.key(), row) : status;
+    return rowMutations.insert(table, key, row);
   }
 
   /** Builds and publishes a unique value index as part of this transaction. */
@@ -619,25 +344,13 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = database.buildValueIndex(
+      status = schemaLifecycle.buildValueIndex(
           this, indexName, tableName, columnName, unique, constraint);
     }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -652,30 +365,19 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     int mutationStart = session.pendingMutationCount();
     if (status.isOk()) {
-      status = database.markDroppingValueIndex(this, indexName, tableName);
+      status = schemaLifecycle.markDroppingValueIndex(this, indexName, tableName);
     }
     if (status.isOk()) {
       pendingDropIndexName.set(indexName);
       pendingDropTableName.set(tableName);
       pendingDropMutationStart = mutationStart;
       pendingDropType = PENDING_DROP_INDEX;
-    } else if (acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
     }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -686,29 +388,18 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     int mutationStart = session.pendingMutationCount();
     if (status.isOk()) {
-      status = database.markDroppingTable(this, tableName);
+      status = schemaLifecycle.markDroppingTable(this, tableName);
     }
     if (status.isOk()) {
       pendingDropTableName.set(tableName);
       pendingDropMutationStart = mutationStart;
       pendingDropType = PENDING_DROP_TABLE;
-    } else if (acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
     }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -724,24 +415,12 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = database.renameTable(this, currentName, renamedName);
+      status = schemaLifecycle.renameTable(this, currentName, renamedName);
     }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -758,25 +437,13 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = database.renameColumn(
+      status = schemaLifecycle.renameColumn(
           this, tableName, currentName, renamedName);
     }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
@@ -792,40 +459,25 @@ public final class RelationalSession {
     if (pendingDropType != PENDING_DROP_NONE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    boolean acquired = false;
-    StatusCode status = StatusCode.OK;
-    if (!schemaChangeActive) {
-      status = database.beginSchemaChange(this);
-      if (status.isOk()) {
-        schemaChangeMutationStart = session.pendingMutationCount();
-        schemaChangeActive = true;
-        acquired = true;
-      }
-    }
+    boolean acquired = !schemaChangeActive;
+    StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = database.renameIndex(this, currentName, renamedName);
+      status = schemaLifecycle.renameIndex(this, currentName, renamedName);
     }
-    if (!status.isOk() && acquired) {
-      database.completeSchemaChange(this, false);
-      schemaChangeActive = false;
-      schemaChangeMutationStart = 0;
-    }
+    finishFailedSchemaChange(status, acquired);
     return status;
   }
 
   public StatusCode update(TableDefinition table, long key, ByteBuffer row) {
-    StatusCode status = resolveWriteKey(table, key);
-    return status.isOk() ? session.update(physicalKey.key(), row) : status;
+    return rowMutations.update(table, key, row);
   }
 
   public StatusCode delete(TableDefinition table, long key) {
-    StatusCode status = resolveWriteKey(table, key);
-    return status.isOk() ? session.delete(physicalKey.key()) : status;
+    return rowMutations.delete(table, key);
   }
 
   public StatusCode fetch(TableDefinition table, long key, HeapRowResult result) {
-    StatusCode status = resolveKey(table, key);
-    return status.isOk() ? session.fetchByKey(physicalKey.key(), result) : status;
+    return rowMutations.fetch(table, key, result);
   }
 
   public StatusCode insertLong(
@@ -837,43 +489,7 @@ public final class RelationalSession {
   }
 
   public StatusCode insertRow(TableDefinition table, long key, ByteBuffer row) {
-    if (!validRow(table, row)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = validateReferences(table, row);
-    if (status.isOk()) {
-      status = insert(table, key, row);
-    }
-    for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
-      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY
-          || table.isNull(row, table.uniqueIndexColumn(slot))) {
-        continue;
-      }
-      prepareValueIndex(table, slot);
-      if (table.isVarchar(table.uniqueIndexColumn(slot))) {
-        status = ensureTextIndexedValue(
-            valueIndexTable,
-            table,
-            table.uniqueIndexColumn(slot),
-            row,
-            key,
-            table.indexIsUnique(slot));
-        if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
-          status = StatusCode.UNIQUE_VIOLATION;
-        }
-      } else if (table.indexIsUnique(slot)) {
-        encodeLong(indexRow, key);
-        status = insertIndexedValue(
-            valueIndexTable, indexedValue(table, row, slot), indexRow);
-        if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
-          status = StatusCode.UNIQUE_VIOLATION;
-        }
-      } else {
-        status = insertNonUniqueIndexedValue(
-            valueIndexTable, indexedValue(table, row, slot), key);
-      }
-    }
-    return status;
+    return rowMutations.insertRow(table, key, row);
   }
 
   public StatusCode updateLong(
@@ -885,144 +501,19 @@ public final class RelationalSession {
   }
 
   public StatusCode updateRow(TableDefinition table, long key, ByteBuffer row) {
-    if (!validRow(table, row)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = validateReferences(table, row);
-    if (status.isOk() && table.hasUniqueValueIndex()) {
-      status = fetch(table, key, indexedKeyRow);
-      if (status.isOk()) {
-        status = copyRow(table, indexedKeyRow, rowScratch);
-        for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
-          previousIndexedValues[slot] = indexedValue(table, rowScratch, slot);
-          previousIndexedNulls[slot] = table.isNull(
-              rowScratch, table.uniqueIndexColumn(slot));
-        }
-      }
-    }
-    if (status.isOk()) {
-      status = update(table, key, row);
-    }
-    for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
-      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY) {
-        continue;
-      }
-      boolean nextNull = table.isNull(row, table.uniqueIndexColumn(slot));
-      long nextValue = indexedValue(table, row, slot);
-      if (previousIndexedNulls[slot] == nextNull
-          && (nextNull || previousIndexedValues[slot] == nextValue)) {
-        continue;
-      }
-      prepareValueIndex(table, slot);
-      if (!previousIndexedNulls[slot]) {
-        status = table.isVarchar(table.uniqueIndexColumn(slot))
-            ? deleteNonUniqueIndexedValue(
-                valueIndexTable, previousIndexedValues[slot], key)
-            : table.indexIsUnique(slot)
-            ? deleteIndexedValue(valueIndexTable, previousIndexedValues[slot])
-            : deleteNonUniqueIndexedValue(
-                valueIndexTable, previousIndexedValues[slot], key);
-      }
-      if (status.isOk() && !nextNull) {
-        if (table.isVarchar(table.uniqueIndexColumn(slot))) {
-          status = ensureTextIndexedValue(
-              valueIndexTable,
-              table,
-              table.uniqueIndexColumn(slot),
-              row,
-              key,
-              table.indexIsUnique(slot));
-          if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
-            status = StatusCode.UNIQUE_VIOLATION;
-          }
-        } else if (table.indexIsUnique(slot)) {
-          encodeLong(indexRow, key);
-          status = insertIndexedValue(valueIndexTable, nextValue, indexRow);
-          if (status == StatusCode.CONFLICT && table.indexIsConstraint(slot)) {
-            status = StatusCode.UNIQUE_VIOLATION;
-          }
-        } else {
-          status = insertNonUniqueIndexedValue(valueIndexTable, nextValue, key);
-        }
-      }
-    }
-    return status;
+    return rowMutations.updateRow(table, key, row);
   }
 
   public StatusCode deleteLong(TableDefinition table, long key) {
-    StatusCode status = database.checkDeleteReferences(this, table, key);
-    if (status.isOk() && table.hasUniqueValueIndex()) {
-      status = fetch(table, key, indexedKeyRow);
-      if (status.isOk()) {
-        status = copyRow(table, indexedKeyRow, rowScratch);
-        for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
-          previousIndexedValues[slot] = indexedValue(table, rowScratch, slot);
-          previousIndexedNulls[slot] = table.isNull(
-              rowScratch, table.uniqueIndexColumn(slot));
-        }
-      }
-    }
-    if (status.isOk()) {
-      status = delete(table, key);
-    }
-    for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
-      if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY) {
-        continue;
-      }
-      if (previousIndexedNulls[slot]) {
-        continue;
-      }
-      prepareValueIndex(table, slot);
-      status = table.isVarchar(table.uniqueIndexColumn(slot))
-          ? deleteNonUniqueIndexedValue(
-              valueIndexTable, previousIndexedValues[slot], key)
-          : table.indexIsUnique(slot)
-          ? deleteIndexedValue(valueIndexTable, previousIndexedValues[slot])
-          : deleteNonUniqueIndexedValue(
-              valueIndexTable, previousIndexedValues[slot], key);
-    }
-    return status;
-  }
-
-  private StatusCode validateReferences(TableDefinition table, ByteBuffer row) {
-    if (!table.hasReferences()) {
-      return StatusCode.OK;
-    }
-    for (int column = 1; column < table.columnCount(); column++) {
-      if (!table.hasReference(column) || table.isNull(row, column)) {
-        continue;
-      }
-      long referencedKey = row.getLong(row.position() + (column - 1) * Long.BYTES);
-      referenceTable.set(
-          database,
-          table.referenceTableId(column),
-          0,
-          TableDefinition.INDEX_NONE);
-      StatusCode status = resolveKey(referenceTable, referencedKey);
-      if (status.isOk()) {
-        status = session.protectKey(physicalKey.key());
-      }
-      if (status.isOk()) {
-        status = session.fetchByKey(physicalKey.key(), referencedRow);
-      }
-      if (status == StatusCode.CONFLICT || status == StatusCode.INVALID_EXTERNAL_INPUT) {
-        return StatusCode.FOREIGN_KEY_VIOLATION;
-      }
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    return StatusCode.OK;
+    StatusCode status = referentialIntegrity.checkDelete(this, table, key);
+    return status.isOk() ? rowMutations.deleteRow(table, key) : status;
   }
 
   public StatusCode fetchByUniqueValue(
       TableDefinition table,
       long value,
       ValueIndexLookupResult result) {
-    int slot = table == null ? -1 : firstReadyIndexSlot(table);
-    return slot < 0
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : fetchByUniqueValue(table, table.uniqueIndexColumn(slot), value, result);
+    return indexLookup.fetch(this, table, value, result);
   }
 
   public StatusCode fetchByUniqueValue(
@@ -1030,54 +521,14 @@ public final class RelationalSession {
       int column,
       long value,
       ValueIndexLookupResult result) {
-    int slot = table == null ? -1 : table.readyIndexSlotOn(column);
-    if (table == null
-        || !table.isOwnedBy(database)
-        || slot < 0
-        || !table.indexIsUnique(slot)
-        || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    prepareValueIndex(table, slot);
-    StatusCode status = fetchIndexedValue(valueIndexTable, value, indexedKeyRow);
-    if (status.isOk()) {
-      status = decodeLong(indexedKeyRow, valueScratch);
-    }
-    long primaryKey = status.isOk() ? valueScratch.getLong(0) : 0;
-    if (status.isOk()) {
-      status = fetch(table, primaryKey, result.row());
-      if (status == StatusCode.CONFLICT) {
-        return StatusCode.CORRUPTION;
-      }
-    }
-    if (status.isOk()) {
-      status = copyRow(table, result.row(), rowScratch);
-    }
-    if (status.isOk() && indexedValue(table, rowScratch, slot) != value) {
-      return StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      result.setKey(primaryKey);
-    }
-    return status;
+    return indexLookup.fetch(this, table, column, value, result);
   }
 
   public StatusCode beginValueScan(
       TableDefinition table,
       int column,
       RelationalScanCursor cursor) {
-    int slot = table == null ? -1 : table.readyIndexSlotOn(column);
-    boolean unique = slot >= 0 && table.indexIsUnique(slot);
-    return slot < 0
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : beginValueScan(
-            table,
-            column,
-            unique ? MINIMUM_INDEXED_VALUE : MINIMUM_NON_UNIQUE_VALUE,
-            unique ? MAXIMUM_INDEXED_VALUE_EXCLUSIVE
-                : MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE,
-            cursor);
+    return indexLookup.beginScan(this, table, column, cursor);
   }
 
   public StatusCode beginValueScan(
@@ -1086,33 +537,8 @@ public final class RelationalSession {
       long lowerInclusive,
       long upperExclusive,
       RelationalScanCursor cursor) {
-    int slot = table == null ? -1 : table.readyIndexSlotOn(column);
-    boolean unique = slot >= 0 && table.indexIsUnique(slot);
-    if (table == null
-        || !table.isOwnedBy(database)
-        || slot < 0
-        || (unique
-            ? !validIndexedValue(lowerInclusive)
-            : !validNonUniqueIndexedValue(lowerInclusive))
-        || upperExclusive <= lowerInclusive
-        || upperExclusive > (unique
-            ? MAXIMUM_INDEXED_VALUE_EXCLUSIVE
-            : MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE)
-        || cursor == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    prepareValueIndex(table, slot);
-    StatusCode status = beginScan(
-        valueIndexTable,
-        unique
-            ? normalizeIndexedValue(lowerInclusive)
-            : normalizeNonUniqueIndexedValue(lowerInclusive),
-        unique
-            ? normalizeIndexedValue(upperExclusive)
-            : normalizeNonUniqueIndexedValue(upperExclusive),
-        cursor);
-    return status.isOk()
-        ? cursor.setIndexedColumn(this, column, unique) : status;
+    return indexLookup.beginScan(
+        this, table, column, lowerInclusive, upperExclusive, cursor);
   }
 
   public StatusCode nextValueScan(
@@ -1120,42 +546,8 @@ public final class RelationalSession {
       RelationalScanCursor cursor,
       RelationalScanResult indexResult,
       ValueIndexLookupResult result) {
-    if (table == null
-        || !table.isOwnedBy(database)
-        || table.readyIndexSlotOn(cursor == null ? -1 : cursor.indexedColumn()) < 0
-        || cursor == null
-        || cursor.exactValueLookup()
-        || indexResult == null
-        || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    int slot = table.readyIndexSlotOn(cursor.indexedColumn());
-    if (!cursor.uniqueIndex()) {
-      return nextNonUniqueValueScan(table, cursor, indexResult, result, slot);
-    }
-    StatusCode status = nextScan(cursor, indexResult);
-    if (status.isOk()) {
-      status = decodeLong(indexResult.row(), valueScratch);
-    }
-    long primaryKey = status.isOk() ? valueScratch.getLong(0) : 0;
-    long value = status.isOk() ? denormalizeIndexedValue(indexResult.key()) : 0;
-    if (status.isOk()) {
-      status = fetch(table, primaryKey, result.row());
-      if (status == StatusCode.CONFLICT) {
-        return StatusCode.CORRUPTION;
-      }
-    }
-    if (status.isOk()) {
-      status = copyRow(table, result.row(), rowScratch);
-    }
-    if (status.isOk() && indexedValue(table, rowScratch, slot) != value) {
-      return StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      result.setKey(primaryKey);
-    }
-    return status;
+    return indexLookup.next(
+        this, table, cursor, indexResult, result);
   }
 
   public StatusCode beginNonUniqueValueLookup(
@@ -1163,124 +555,15 @@ public final class RelationalSession {
       int column,
       long value,
       RelationalScanCursor cursor) {
-    int slot = table == null ? -1 : table.readyIndexSlotOn(column);
-    if (table == null
-        || !table.isOwnedBy(database)
-        || slot < 0
-        || table.indexIsUnique(slot)
-        || !validNonUniqueIndexedValue(value)
-        || cursor == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    prepareValueIndex(table, slot);
-    StatusCode status = fetch(
-        valueIndexTable, normalizeNonUniqueIndexedValue(value), indexedKeyRow);
-    if (status.isOk()) {
-      status = decodeLong(indexedKeyRow, valueScratch);
-    }
-    long headEntryId = status.isOk() ? valueScratch.getLong(0) : 0;
-    if (status.isOk() && !validNonUniqueEntryId(headEntryId)) {
-      status = StatusCode.CORRUPTION;
-    }
-    return status.isOk()
-        ? cursor.claimExactValueLookup(this, column, value, headEntryId)
-        : status;
+    return indexLookup.beginNonUnique(
+        this, table, column, value, cursor);
   }
 
   public StatusCode nextNonUniqueValueLookup(
       TableDefinition table,
       RelationalScanCursor cursor,
       ValueIndexLookupResult result) {
-    int slot = table == null || cursor == null
-        ? -1 : table.readyIndexSlotOn(cursor.indexedColumn());
-    if (table == null
-        || !table.isOwnedBy(database)
-        || slot < 0
-        || table.indexIsUnique(slot)
-        || cursor == null
-        || !cursor.isOwnedBy(this)
-        || !cursor.exactValueLookup()
-        || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    prepareValueIndex(table, slot);
-    return nextNonUniqueEntry(table, cursor, result, slot);
-  }
-
-  private StatusCode nextNonUniqueValueScan(
-      TableDefinition table,
-      RelationalScanCursor cursor,
-      RelationalScanResult indexResult,
-      ValueIndexLookupResult result,
-      int slot) {
-    prepareValueIndex(table, slot);
-    StatusCode status = StatusCode.OK;
-    if (cursor.duplicateEntryId() == 0) {
-      status = nextScan(cursor, indexResult);
-      if (!status.isOk()) {
-        return status;
-      }
-      status = decodeLong(indexResult.row(), valueScratch);
-      long headEntryId = status.isOk() ? valueScratch.getLong(0) : 0;
-      if (status.isOk() && !validNonUniqueEntryId(headEntryId)) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (status.isOk()) {
-        cursor.startDuplicateChain(
-            denormalizeNonUniqueIndexedValue(indexResult.key()), headEntryId);
-      }
-    }
-    return status.isOk()
-        ? nextNonUniqueEntry(table, cursor, result, slot) : status;
-  }
-
-  private StatusCode nextNonUniqueEntry(
-      TableDefinition table,
-      RelationalScanCursor cursor,
-      ValueIndexLookupResult result,
-      int slot) {
-    if (cursor.duplicateEntryId() == 0) {
-      return StatusCode.CONFLICT;
-    }
-    StatusCode status = cursor.duplicateEntriesVisited() >= MAXIMUM_DUPLICATE_CHAIN
-        ? StatusCode.CORRUPTION : StatusCode.OK;
-    long entryId = cursor.duplicateEntryId();
-    if (status.isOk()) {
-      status = fetch(valueIndexTable, nonUniqueEntryKey(entryId), indexEntryRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.CORRUPTION;
-      }
-    }
-    if (status.isOk()) {
-      status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
-    }
-    long value = status.isOk() ? indexEntryScratch.getLong(0) : 0;
-    long primaryKey = status.isOk() ? indexEntryScratch.getLong(8) : 0;
-    long nextEntryId = status.isOk() ? indexEntryScratch.getLong(16) : 0;
-    if (status.isOk()
-        && (value != cursor.duplicateValue()
-            || nextEntryId < 0
-            || nextEntryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      cursor.advanceDuplicateChain(nextEntryId);
-      status = fetch(table, primaryKey, result.row());
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.CORRUPTION;
-      }
-    }
-    if (status.isOk()) {
-      status = copyRow(table, result.row(), rowScratch);
-    }
-    if (status.isOk() && indexedValue(table, rowScratch, slot) != value) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      result.setKey(primaryKey);
-    }
-    return status;
+    return indexLookup.nextNonUnique(this, table, cursor, result);
   }
 
   public StatusCode beginScan(TableDefinition table, RelationalScanCursor cursor) {
@@ -1293,7 +576,7 @@ public final class RelationalSession {
       long upperExclusive,
       RelationalScanCursor cursor) {
     if (table == null
-        || !table.isOwnedBy(database)
+        || !table.isOwnedBy(schemaGate)
         || lowerInclusive < 0
         || lowerInclusive > RelationalKey.MAXIMUM_USER_KEY
         || upperExclusive <= lowerInclusive
@@ -1348,7 +631,7 @@ public final class RelationalSession {
     if (status.isOk()
         && schemaChangeActive
         && session.pendingMutationCount() <= schemaChangeMutationStart) {
-      database.completeSchemaChange(this, false);
+      schemaGate.completeSchemaChange(this, false);
       schemaChangeActive = false;
       schemaChangeMutationStart = 0;
     }
@@ -1374,12 +657,12 @@ public final class RelationalSession {
       pendingDropType = PENDING_DROP_NONE;
       schemaCleanupOutcome.reset();
       status = cleanupType == PENDING_DROP_INDEX
-          ? database.finishDroppingValueIndex(
+          ? schemaLifecycle.finishDroppingValueIndex(
               this,
               pendingDropIndexName,
               pendingDropTableName,
               schemaCleanupOutcome)
-          : database.finishDroppingTable(
+          : schemaLifecycle.finishDroppingTable(
               this,
               pendingDropTableName,
               schemaCleanupOutcome);
@@ -1421,7 +704,7 @@ public final class RelationalSession {
     if (!registeredTransaction || schemaChangeActive) {
       return StatusCode.CONFLICT;
     }
-    StatusCode status = database.beginSchemaChange(this);
+    StatusCode status = schemaGate.beginSchemaChange(this);
     if (status.isOk()) {
       schemaChangeMutationStart = session.pendingMutationCount();
       schemaChangeActive = true;
@@ -1431,17 +714,10 @@ public final class RelationalSession {
 
   void releasePersistentSchemaChange() {
     if (schemaChangeActive && !session.transaction().isActiveHandle()) {
-      database.completeSchemaChange(this, false);
+      schemaGate.completeSchemaChange(this, false);
       schemaChangeActive = false;
       schemaChangeMutationStart = 0;
     }
-  }
-
-  private StatusCode resolveKey(TableDefinition table, long key) {
-    if (table == null || !table.isOwnedBy(database)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return RelationalKey.tableRowKey(table.tableId(), key, physicalKey);
   }
 
   private static boolean sameName(
@@ -1465,48 +741,18 @@ public final class RelationalSession {
     pendingDropType = PENDING_DROP_NONE;
   }
 
-  private StatusCode resolveWriteKey(TableDefinition table, long key) {
-    if (table != null && table.hasBuildingUniqueValueIndex()) {
-      return StatusCode.RETRY;
-    }
-    return resolveKey(table, key);
-  }
-
-  private void prepareValueIndex(TableDefinition table, int slot) {
-    valueIndexTable.set(
-        database,
-        table.uniqueIndexTableId(slot),
-        0,
-        TableDefinition.INDEX_NONE);
-  }
-
   StatusCode insertIndexedValue(
       TableDefinition indexTable,
       long value,
-      ByteBuffer row) {
-    return validIndexedValue(value)
-        ? insert(indexTable, normalizeIndexedValue(value), row)
-        : StatusCode.INVALID_EXTERNAL_INPUT;
+      long primaryKey) {
+    return secondaryIndexes.insertUnique(indexTable, value, primaryKey);
   }
 
   StatusCode ensureIndexedValue(
       TableDefinition indexTable,
       long value,
       long primaryKey) {
-    if (!validIndexedValue(value)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = fetchIndexedValue(indexTable, value, indexedKeyRow);
-    if (status == StatusCode.CONFLICT) {
-      encodeLong(indexRow, primaryKey);
-      return insertIndexedValue(indexTable, value, indexRow);
-    }
-    if (!status.isOk()) {
-      return status;
-    }
-    status = decodeLong(indexedKeyRow, valueScratch);
-    return status.isOk() && valueScratch.getLong(0) == primaryKey
-        ? StatusCode.OK : StatusCode.CONFLICT;
+    return secondaryIndexes.ensureUnique(indexTable, value, primaryKey);
   }
 
   StatusCode ensureTextIndexedValue(
@@ -1516,420 +762,34 @@ public final class RelationalSession {
       ByteBuffer candidate,
       long primaryKey,
       boolean unique) {
-    long fingerprint = textFingerprint(baseTable, candidate, column);
-    if (!validNonUniqueIndexedValue(fingerprint)) {
-      return StatusCode.CORRUPTION;
-    }
-    if (unique) {
-      long headKey = normalizeNonUniqueIndexedValue(fingerprint);
-      StatusCode status = fetch(indexTable, headKey, indexHeadRow);
-      boolean headExists = status.isOk();
-      if (status.isOk()) {
-        status = decodeLong(indexHeadRow, valueScratch);
-      } else if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-      }
-      long entryId = status.isOk() && headExists
-          ? valueScratch.getLong(0) : 0;
-      int visited = 0;
-      while (status.isOk() && entryId != 0) {
-        if (visited++ >= MAXIMUM_DUPLICATE_CHAIN) {
-          return StatusCode.CORRUPTION;
-        }
-        status = fetch(indexTable, nonUniqueEntryKey(entryId), indexEntryRow);
-        if (status.isOk()) {
-          status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
-        }
-        long indexedFingerprint = status.isOk() ? indexEntryScratch.getLong(0) : 0;
-        long indexedPrimaryKey = status.isOk() ? indexEntryScratch.getLong(8) : 0;
-        long nextEntryId = status.isOk() ? indexEntryScratch.getLong(16) : 0;
-        if (status.isOk()
-            && (indexedFingerprint != fingerprint
-                || nextEntryId < 0
-                || nextEntryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
-          return StatusCode.CORRUPTION;
-        }
-        if (status.isOk() && indexedPrimaryKey != primaryKey) {
-          status = fetch(baseTable, indexedPrimaryKey, indexedKeyRow);
-          if (status.isOk()) {
-            status = copyRow(baseTable, indexedKeyRow, rowScratch);
-          }
-          if (status.isOk() && textEquals(baseTable, candidate, rowScratch, column)) {
-            return StatusCode.CONFLICT;
-          }
-        }
-        entryId = nextEntryId;
-      }
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    return insertNonUniqueIndexedValue(indexTable, fingerprint, primaryKey);
+    return secondaryIndexes.ensureText(
+        indexTable, baseTable, column, candidate, primaryKey, unique);
   }
 
   StatusCode insertNonUniqueIndexedValue(
       TableDefinition indexTable,
       long value,
       long primaryKey) {
-    if (!validNonUniqueIndexedValue(value)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = fetch(indexTable, NON_UNIQUE_ALLOCATOR_KEY, indexAllocatorRow);
-    long entryId = 1;
-    if (status.isOk()) {
-      status = decodeLong(indexAllocatorRow, valueScratch);
-      entryId = status.isOk() ? valueScratch.getLong(0) : 0;
-      if (status.isOk()
-          && (entryId <= 0 || entryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
-        status = entryId == NON_UNIQUE_ENTRY_FLAG - 1
-            ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.CORRUPTION;
-      }
-      if (status.isOk()) {
-        encodeLong(indexRow, entryId + 1);
-        status = update(indexTable, NON_UNIQUE_ALLOCATOR_KEY, indexRow);
-      }
-    } else if (status == StatusCode.CONFLICT) {
-      encodeLong(indexRow, 2);
-      status = insert(indexTable, NON_UNIQUE_ALLOCATOR_KEY, indexRow);
-    }
-    long headKey = normalizeNonUniqueIndexedValue(value);
-    long previousHead = 0;
-    boolean headExists = false;
-    if (status.isOk()) {
-      status = fetch(indexTable, headKey, indexHeadRow);
-      if (status.isOk()) {
-        headExists = true;
-        status = decodeLong(indexHeadRow, valueScratch);
-        previousHead = status.isOk() ? valueScratch.getLong(0) : 0;
-        if (status.isOk() && !validNonUniqueEntryId(previousHead)) {
-          status = StatusCode.CORRUPTION;
-        }
-      } else if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-      }
-    }
-    if (status.isOk()) {
-      encodeNonUniqueEntry(nonUniqueIndexRow, value, primaryKey, previousHead);
-      status = insert(indexTable, nonUniqueEntryKey(entryId), nonUniqueIndexRow);
-    }
-    if (status.isOk()) {
-      encodeLong(indexRow, entryId);
-      status = headExists
-          ? update(indexTable, headKey, indexRow)
-          : insert(indexTable, headKey, indexRow);
-    }
-    return status;
+    return secondaryIndexes.insertNonUnique(indexTable, value, primaryKey);
   }
 
   StatusCode ensureNonUniqueIndexedValue(
       TableDefinition indexTable,
       long value,
       long primaryKey) {
-    if (!validNonUniqueIndexedValue(value)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    long headKey = normalizeNonUniqueIndexedValue(value);
-    StatusCode status = fetch(indexTable, headKey, indexHeadRow);
-    if (status == StatusCode.CONFLICT) {
-      return insertNonUniqueIndexedValue(indexTable, value, primaryKey);
-    }
-    if (status.isOk()) {
-      status = decodeLong(indexHeadRow, valueScratch);
-    }
-    long entryId = status.isOk() ? valueScratch.getLong(0) : 0;
-    if (status.isOk() && !validNonUniqueEntryId(entryId)) {
-      status = StatusCode.CORRUPTION;
-    }
-    int visited = 0;
-    while (status.isOk() && entryId != 0) {
-      if (visited++ >= MAXIMUM_DUPLICATE_CHAIN) {
-        status = StatusCode.CORRUPTION;
-        break;
-      }
-      status = fetch(indexTable, nonUniqueEntryKey(entryId), indexEntryRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (status.isOk()) {
-        status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
-      }
-      long storedValue = status.isOk() ? indexEntryScratch.getLong(0) : 0;
-      long storedPrimaryKey = status.isOk() ? indexEntryScratch.getLong(8) : 0;
-      long nextEntryId = status.isOk() ? indexEntryScratch.getLong(16) : 0;
-      if (status.isOk()
-          && (storedValue != value
-              || nextEntryId < 0
-              || nextEntryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (status.isOk() && storedPrimaryKey == primaryKey) {
-        return StatusCode.OK;
-      }
-      entryId = nextEntryId;
-    }
-    return status.isOk()
-        ? insertNonUniqueIndexedValue(indexTable, value, primaryKey) : status;
-  }
-
-  private StatusCode deleteNonUniqueIndexedValue(
-      TableDefinition indexTable,
-      long value,
-      long primaryKey) {
-    if (!validNonUniqueIndexedValue(value)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    long headKey = normalizeNonUniqueIndexedValue(value);
-    StatusCode status = fetch(indexTable, headKey, indexHeadRow);
-    if (!status.isOk()) {
-      return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
-    }
-    status = decodeLong(indexHeadRow, valueScratch);
-    long entryId = status.isOk() ? valueScratch.getLong(0) : 0;
-    if (status.isOk() && !validNonUniqueEntryId(entryId)) {
-      status = StatusCode.CORRUPTION;
-    }
-    long previousEntryId = 0;
-    long nextEntryId = 0;
-    boolean found = false;
-    int visited = 0;
-    while (status.isOk() && entryId != 0) {
-      if (visited++ >= MAXIMUM_DUPLICATE_CHAIN) {
-        status = StatusCode.CORRUPTION;
-        break;
-      }
-      status = fetch(indexTable, nonUniqueEntryKey(entryId), indexEntryRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (status.isOk()) {
-        status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
-      }
-      long storedValue = status.isOk() ? indexEntryScratch.getLong(0) : 0;
-      long storedPrimaryKey = status.isOk() ? indexEntryScratch.getLong(8) : 0;
-      nextEntryId = status.isOk() ? indexEntryScratch.getLong(16) : 0;
-      if (status.isOk()
-          && (storedValue != value
-              || nextEntryId < 0
-              || nextEntryId > NON_UNIQUE_ENTRY_FLAG - 2)) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (status.isOk() && storedPrimaryKey == primaryKey) {
-        found = true;
-        break;
-      }
-      previousEntryId = entryId;
-      entryId = nextEntryId;
-    }
-    if (status.isOk() && !found) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (status.isOk() && previousEntryId == 0) {
-      if (nextEntryId == 0) {
-        status = delete(indexTable, headKey);
-      } else {
-        encodeLong(indexRow, nextEntryId);
-        status = update(indexTable, headKey, indexRow);
-      }
-    } else if (status.isOk()) {
-      status = fetch(
-          indexTable, nonUniqueEntryKey(previousEntryId), indexEntryRow);
-      if (status.isOk()) {
-        status = copyNonUniqueEntry(indexEntryRow, indexEntryScratch);
-      }
-      if (status.isOk() && indexEntryScratch.getLong(16) != entryId) {
-        status = StatusCode.CORRUPTION;
-      }
-      if (status.isOk()) {
-        indexEntryScratch.putLong(16, nextEntryId);
-        indexEntryScratch.position(0);
-        indexEntryScratch.limit(NON_UNIQUE_ENTRY_BYTES);
-        status = update(
-            indexTable, nonUniqueEntryKey(previousEntryId), indexEntryScratch);
-      }
-    }
-    if (status.isOk()) {
-      status = delete(indexTable, nonUniqueEntryKey(entryId));
-    }
-    return status;
-  }
-
-  private StatusCode deleteIndexedValue(TableDefinition indexTable, long value) {
-    return validIndexedValue(value)
-        ? delete(indexTable, normalizeIndexedValue(value))
-        : StatusCode.INVALID_EXTERNAL_INPUT;
-  }
-
-  private StatusCode fetchIndexedValue(
-      TableDefinition indexTable,
-      long value,
-      HeapRowResult result) {
-    return validIndexedValue(value)
-        ? fetch(indexTable, normalizeIndexedValue(value), result)
-        : StatusCode.INVALID_EXTERNAL_INPUT;
-  }
-
-  static boolean validIndexedValue(long value) {
-    return value >= MINIMUM_INDEXED_VALUE && value <= MAXIMUM_INDEXED_VALUE;
-  }
-
-  private static boolean validNonUniqueIndexedValue(long value) {
-    return value >= MINIMUM_NON_UNIQUE_VALUE && value <= MAXIMUM_NON_UNIQUE_VALUE;
-  }
-
-  private static boolean validNonUniqueEntryId(long entryId) {
-    return entryId > 0 && entryId <= NON_UNIQUE_ENTRY_FLAG - 2;
-  }
-
-  private static long normalizeIndexedValue(long value) {
-    return value + INDEX_VALUE_BIAS;
-  }
-
-  private static long denormalizeIndexedValue(long value) {
-    return value - INDEX_VALUE_BIAS;
-  }
-
-  private static long normalizeNonUniqueIndexedValue(long value) {
-    return value + NON_UNIQUE_VALUE_BIAS;
-  }
-
-  private static long denormalizeNonUniqueIndexedValue(long value) {
-    return value - NON_UNIQUE_VALUE_BIAS;
-  }
-
-  private static long nonUniqueEntryKey(long entryId) {
-    return NON_UNIQUE_ENTRY_FLAG | entryId;
-  }
-
-  private static void encodeNonUniqueEntry(
-      ByteBuffer target,
-      long value,
-      long primaryKey,
-      long nextEntryId) {
-    target.clear();
-    target.putLong(0, value);
-    target.putLong(8, primaryKey);
-    target.putLong(16, nextEntryId);
-    target.position(0);
-    target.limit(NON_UNIQUE_ENTRY_BYTES);
-  }
-
-  private static StatusCode copyNonUniqueEntry(
-      HeapRowResult source,
-      ByteBuffer target) {
-    if (source.length() != NON_UNIQUE_ENTRY_BYTES) {
-      return StatusCode.CORRUPTION;
-    }
-    target.clear();
-    StatusCode status = source.copyTo(target);
-    if (status.isOk()) {
-      target.position(0);
-      target.limit(NON_UNIQUE_ENTRY_BYTES);
-    }
-    return status;
-  }
-
-  private static void encodeLong(ByteBuffer target, long value) {
-    target.clear();
-    target.putLong(0, value);
-    target.position(0);
-    target.limit(Long.BYTES);
-  }
-
-  private static StatusCode decodeLong(HeapRowResult source, ByteBuffer target) {
-    target.clear();
-    StatusCode status = source.length() == Long.BYTES
-        ? source.copyTo(target) : StatusCode.CORRUPTION;
-    return status;
-  }
-
-  private static boolean validRow(TableDefinition table, ByteBuffer row) {
-    return table != null && table.isValidRow(row);
-  }
-
-  private static long indexedValue(TableDefinition table, ByteBuffer row, int slot) {
-    int column = table.uniqueIndexColumn(slot);
-    return table.isVarchar(column)
-        ? textFingerprint(table, row, column)
-        : row.getLong(row.position() + (column - 1) * Long.BYTES);
-  }
-
-  private static long textFingerprint(
-      TableDefinition table,
-      ByteBuffer row,
-      int column) {
-    int offset = table.textOffset(row, column);
-    int length = table.textLength(row, column);
-    if (offset < 0 || length < 0) {
-      return Long.MIN_VALUE;
-    }
-    long hash = 0xcbf29ce484222325L;
-    for (int index = 0; index < length; index++) {
-      hash ^= Byte.toUnsignedLong(row.get(row.position() + offset + index));
-      hash *= 0x100000001b3L;
-    }
-    long fingerprint = hash & ((1L << 46) - 1);
-    return fingerprint == MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE
-        ? MAXIMUM_NON_UNIQUE_VALUE : fingerprint;
-  }
-
-  private static boolean textEquals(
-      TableDefinition table,
-      ByteBuffer left,
-      ByteBuffer right,
-      int column) {
-    int leftOffset = table.textOffset(left, column);
-    int leftLength = table.textLength(left, column);
-    int rightOffset = table.textOffset(right, column);
-    int rightLength = table.textLength(right, column);
-    return leftOffset >= 0
-        && rightOffset >= 0
-        && leftLength == rightLength
-        && Utf8Text.compare(
-            left,
-            left.position() + leftOffset,
-            leftLength,
-            right,
-            right.position() + rightOffset,
-            rightLength) == 0;
-  }
-
-  private static int firstReadyIndexSlot(TableDefinition table) {
-    for (int slot = 0; slot < table.uniqueIndexCount(); slot++) {
-      if (table.uniqueIndexState(slot) == TableDefinition.INDEX_READY) {
-        return slot;
-      }
-    }
-    return -1;
-  }
-
-  private static StatusCode copyRow(
-      TableDefinition table,
-      HeapRowResult source,
-      ByteBuffer target) {
-    if (source.length() < table.fixedRowBytes()
-        || source.length() > table.maximumRowBytes()) {
-      return StatusCode.CORRUPTION;
-    }
-    target.clear();
-    target.limit(source.length());
-    StatusCode status = source.copyTo(target);
-    if (status.isOk()) {
-      target.position(0);
-      status = table.isValidRow(target) ? StatusCode.OK : StatusCode.CORRUPTION;
-    }
-    return status;
+    return secondaryIndexes.ensureNonUnique(indexTable, value, primaryKey);
   }
 
   private void releaseTerminalTransaction() {
     if (registeredTransaction && !session.transaction().isActiveHandle()) {
       registeredTransaction = false;
-      database.leaveTransaction();
+      schemaGate.leaveTransaction();
     }
   }
 
   private void completeTerminalSchemaChange(boolean committed) {
     if (schemaChangeActive && !session.transaction().isActiveHandle()) {
-      database.completeSchemaChange(this, committed);
+      schemaGate.completeSchemaChange(this, committed);
       schemaChangeActive = false;
       schemaChangeMutationStart = 0;
     }

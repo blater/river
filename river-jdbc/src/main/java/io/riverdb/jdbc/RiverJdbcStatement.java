@@ -90,6 +90,12 @@ class RiverJdbcStatement extends AbstractStatement {
   }
 
   @Override
+  public void cancel() throws SQLException {
+    requireOpen();
+    connection.cancelCurrentOperation();
+  }
+
+  @Override
   public int getMaxFieldSize() throws SQLException {
     requireOpen();
     return 0;

@@ -11,6 +11,7 @@ import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
 import io.riverdb.engine.api.RowResult;
 import io.riverdb.engine.api.SessionOpenResult;
+import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.sql.SqlExecutionResult;
@@ -94,6 +95,12 @@ public final class EmbeddedRiver {
 
     @Override
     public synchronized StatusCode createSession(SessionOpenResult result) {
+      return createSession(null, result);
+    }
+
+    @Override
+    public synchronized StatusCode createSession(
+        SessionAuthorizer authorizer, SessionOpenResult result) {
       if (result == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -102,7 +109,9 @@ public final class EmbeddedRiver {
         return StatusCode.CLOSED;
       }
       SqlSessionOpenResult opened = new SqlSessionOpenResult();
-      StatusCode status = SqlSession.create(database, opened);
+      StatusCode status = authorizer == null
+          ? SqlSession.create(database, opened)
+          : SqlSession.create(database, authorizer, opened);
       if (!status.isOk()) {
         return status;
       }

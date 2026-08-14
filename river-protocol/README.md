@@ -29,11 +29,19 @@ server stores only the token hash; proof buffers and channel-binding material
 are erased after authentication. Tokens are therefore required to be random,
 high-entropy credentials rather than human passwords.
 
+The secure loopback service maps its configured token to one positive service
+principal ID and a fixed `READ`, `WRITE`, `SCHEMA`, and `ADMIN` permission
+mask. The engine checks that immutable mask after parsing and before admission.
+Authentication decisions and statement admissions are appended to a bounded,
+forced audit file before they take effect. A full or corrupt audit refuses new
+work; rotation and repair are explicit operator actions.
+
 The production server admits connections into a fixed number of preallocated
 slots. Each admitted connection owns its frame buffers and a virtual thread;
 an idle connection therefore cannot serialize other sessions. Connections
 above the configured cap are closed before a database session is created.
 
 The only production listeners remain deliberately bound to the operating
-system's loopback address. Non-loopback service remains unavailable until
-authorization is implemented.
+system's loopback address. Non-loopback service remains unavailable until a
+multi-principal credential and administration consumer requires SQL-managed
+roles/grants and a network listener policy.

@@ -2,1337 +2,752 @@ package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
+import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
 public final class SqlParser {
   private final LongResult numberResult = new LongResult();
+  private final ExactDecimal.LongValue decimalResult = new ExactDecimal.LongValue();
   private final LongRow rowResult = new LongRow();
   private final SqlIdentifier identifierScratch = new SqlIdentifier();
-  private final SqlSourceView sourceView = new SqlSourceView();
-  private final SqlScalarSourceView scalarSourceView = new SqlScalarSourceView();
+  private final SqlQueryParser queryParser = new SqlQueryParser(this);
+  private final PredicateResult predicateResult = new PredicateResult();
   private final long[] literalMembershipValues =
       new long[SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES];
-  private final char[] textCharacters = new char[Utf8Text.MAXIMUM_SCALARS * 2];
-  private SqlCommand activeCommand;
-  private int offset;
-  private int scalarPredicateIndex = -1;
-  private int existenceWhereStart = -1;
-  private boolean existenceNegated;
-  private int membershipOperatorStart = -1;
-  private boolean membershipNegated;
+  private final SqlParserInput input = new SqlParserInput();
+  private final SqlScalarExpressionParser scalarExpressions =
+      new SqlScalarExpressionParser(input);
+  private final SqlUpdateValueParser updateValues =
+      new SqlUpdateValueParser(input);
+  private final SqlCatalogCommandParser catalogCommands =
+      new SqlCatalogCommandParser(input);
+  private int syntheticPredicateOffset = -1;
+  private int syntheticPredicateIndex = -1;
 
   public StatusCode parse(String sql, SqlCommand result) {
-    return parseText(sql, result);
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    return sql == null ? StatusCode.INVALID_EXTERNAL_INPUT : parseText(sql, result);
   }
 
   public StatusCode parse(CharSequence sql, SqlCommand result) {
-    return parseText(sql, result);
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    return sql == null ? StatusCode.INVALID_EXTERNAL_INPUT : parseText(sql, result);
   }
 
   public StatusCode parseQuery(
       String sql,
       SqlQuery query,
       SqlCommand result) {
+    if (query != null) {
+      query.reset();
+    }
+    if (result != null) {
+      result.reset();
+    }
     if (sql == null || query == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    query.reset();
-    int start = skipExplainPrefix(sql, query);
-    if (start < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int derived = findDerivedSource(sql, start, sql.length());
-    if (derived >= 0) {
-      StatusCode status = parseDerivedBlocks(sql, start, sql.length(), query);
-      return status.isOk() ? query.compileDerived(result) : status;
-    }
-    int exists = findExistenceSource(sql, start, sql.length());
-    if (exists >= 0) {
-      return parseExistencePredicate(sql, start, exists, query, result);
-    }
-    int membership = findMembershipSource(sql, start, sql.length());
-    if (membership >= 0) {
-      return parseMembershipPredicate(sql, start, membership, query, result);
-    }
-    int scalar = findScalarSource(sql, start, sql.length());
-    sourceView.set(sql, start, sql.length(), sql.length(), sql.length());
-    return scalar < 0
-        ? parseText(sourceView, result)
-        : parseScalarPredicate(sql, start, scalar, query, result);
+    return queryParser.parse(sql, query, result);
   }
 
-  private static int skipExplainPrefix(String sql, SqlQuery query) {
-    int start = skipSpaces(sql, 0);
-    if (!matchesKeyword(sql, start, sql.length(), "EXPLAIN")) {
-      return start;
-    }
-    start = skipSpaces(sql, start + 7);
-    boolean analyze = matchesKeyword(sql, start, sql.length(), "ANALYZE");
-    if (analyze) {
-      start = skipSpaces(sql, start + 7);
-    }
-    if (start >= sql.length()) {
-      return -1;
-    }
-    query.setExplain(analyze);
-    return start;
+  StatusCode parseQueryBlock(CharSequence sql, SqlCommand result) {
+    syntheticPredicateOffset = -1;
+    syntheticPredicateIndex = -1;
+    return parseText(sql, result);
   }
 
-  private static int skipSpaces(String sql, int start) {
-    int index = start;
-    while (index < sql.length() && Character.isWhitespace(sql.charAt(index))) {
-      index++;
-    }
-    return index;
+  StatusCode parseSyntheticQueryBlock(
+      CharSequence sql, int replacementOffset, SqlCommand result) {
+    syntheticPredicateOffset = replacementOffset;
+    syntheticPredicateIndex = -1;
+    return parseText(sql, result);
   }
 
-  private StatusCode parseExistencePredicate(
-      String sql,
-      int start,
-      int open,
-      SqlQuery query,
-      SqlCommand result) {
-    StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : parseExistenceBlocks(sql, start, sql.length(), query);
-    return status.isOk()
-        ? query.compileExistencePredicate(result, query.existenceNegated()) : status;
+  int syntheticPredicateIndex() {
+    return syntheticPredicateIndex;
   }
 
-  private StatusCode parseExistenceBlocks(
-      String sql,
-      int start,
-      int end,
-      SqlQuery query) {
-    int open = findExistenceSource(sql, start, end);
-    int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
-    int whereStart = existenceWhereStart;
-    boolean negated = existenceNegated;
-    if (open < 0 || close < 0 || whereStart < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int parentIndex = query.blockCount();
-    SqlCommand parent = query.nextBlock();
-    if (parent == null) {
-      return StatusCode.QUERY_TOO_COMPLEX;
-    }
-    sourceView.set(sql, start, whereStart, close + 1, end);
-    StatusCode status = parseText(sourceView, parent);
-    if (status.isOk()) {
-      query.setExistencePredicate(parentIndex, negated);
-      status = parseNestedBlocks(sql, open + 1, close, query);
-    }
-    return status;
-  }
-
-  private StatusCode parseScalarPredicate(
-      String sql,
-      int start,
-      int open,
-      SqlQuery query,
-      SqlCommand result) {
-    StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : parseScalarBlocks(sql, start, sql.length(), query);
-    return status.isOk()
-        ? query.compileScalarPredicate(result, query.scalarPredicate()) : status;
-  }
-
-  private StatusCode parseScalarBlocks(
-      String sql,
-      int start,
-      int end,
-      SqlQuery query) {
-    int open = findScalarSource(sql, start, end);
-    int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
-    if (open < 0 || close < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int parentIndex = query.blockCount();
-    SqlCommand parent = query.nextBlock();
-    if (parent == null) {
-      return StatusCode.QUERY_TOO_COMPLEX;
-    }
-    scalarSourceView.set(sql, start, open, close + 1, end, false);
-    scalarPredicateIndex = -1;
-    StatusCode status = parseText(scalarSourceView, parent);
-    if (status.isOk() && scalarPredicateIndex < 0) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk()) {
-      query.setScalarPredicate(parentIndex, scalarPredicateIndex);
-      status = parseNestedBlocks(sql, open + 1, close, query);
-    }
-    return status;
-  }
-
-  private StatusCode parseMembershipPredicate(
-      String sql,
-      int start,
-      int open,
-      SqlQuery query,
-      SqlCommand result) {
-    StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
-        ? StatusCode.INVALID_EXTERNAL_INPUT
-        : parseMembershipBlocks(sql, start, sql.length(), query);
-    return status.isOk()
-        ? query.compileMembershipPredicate(
-            result, query.membershipPredicate(), query.membershipNegated())
-        : status;
-  }
-
-  private StatusCode parseMembershipBlocks(
-      String sql,
-      int start,
-      int end,
-      SqlQuery query) {
-    int open = findMembershipSource(sql, start, end);
-    int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
-    int operatorStart = membershipOperatorStart;
-    boolean negated = membershipNegated;
-    if (open < 0 || close < 0 || operatorStart < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int parentIndex = query.blockCount();
-    SqlCommand parent = query.nextBlock();
-    if (parent == null) {
-      return StatusCode.QUERY_TOO_COMPLEX;
-    }
-    scalarSourceView.set(sql, start, operatorStart, close + 1, end, true);
-    scalarPredicateIndex = -1;
-    StatusCode status = parseText(scalarSourceView, parent);
-    if (status.isOk() && scalarPredicateIndex < 0) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk()) {
-      query.setMembershipPredicate(parentIndex, scalarPredicateIndex, negated);
-      status = parseNestedBlocks(sql, open + 1, close, query);
-    }
-    return status;
-  }
-
-  private StatusCode parseNestedBlocks(
-      String sql,
-      int start,
-      int end,
-      SqlQuery query) {
-    if (findExistenceSource(sql, start, end) >= 0) {
-      return parseExistenceBlocks(sql, start, end, query);
-    }
-    if (findMembershipSource(sql, start, end) >= 0) {
-      return parseMembershipBlocks(sql, start, end, query);
-    }
-    if (findScalarSource(sql, start, end) >= 0) {
-      return parseScalarBlocks(sql, start, end, query);
-    }
-    SqlCommand nested = query.nextBlock();
-    if (nested == null) {
-      return StatusCode.QUERY_TOO_COMPLEX;
-    }
-    sourceView.set(sql, start, end, end, end);
-    return parseText(sourceView, nested);
-  }
-
-  private StatusCode parseDerivedBlocks(
-      String sql,
-      int start,
-      int end,
-      SqlQuery query) {
-    SqlCommand block = query.nextBlock();
-    if (block == null) {
-      return StatusCode.QUERY_TOO_COMPLEX;
-    }
-    int open = findDerivedSource(sql, start, end);
-    if (open < 0) {
-      sourceView.set(sql, start, end, end, end);
-      return parseText(sourceView, block);
-    }
-    int close = matchingCloseParenthesis(sql, open, end);
-    if (close < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    sourceView.set(sql, start, open, close + 1, end);
-    StatusCode status = parseText(sourceView, block);
-    return status.isOk()
-        ? parseDerivedBlocks(sql, open + 1, close, query) : status;
-  }
-
-  private static int findDerivedSource(String sql, int start, int end) {
-    int depth = 0;
-    for (int index = start; index < end; index++) {
-      char character = sql.charAt(index);
-      if (character == '(') {
-        depth++;
-      } else if (character == ')') {
-        if (depth <= 0) {
-          return -1;
-        }
-        depth--;
-      } else if (depth == 0
-          && matchesKeyword(sql, index, end, "FROM")) {
-        int source = index + 4;
-        while (source < end && Character.isWhitespace(sql.charAt(source))) {
-          source++;
-        }
-        return source < end && sql.charAt(source) == '(' ? source : -1;
-      }
-    }
-    return -1;
-  }
-
-  private static int matchingCloseParenthesis(String sql, int open, int end) {
-    int depth = 0;
-    for (int index = open; index < end; index++) {
-      char character = sql.charAt(index);
-      if (character == '(') {
-        depth++;
-      } else if (character == ')' && --depth == 0) {
-        return index;
-      }
-    }
-    return -1;
-  }
-
-  private static int findScalarSource(String sql, int start, int end) {
-    int depth = 0;
-    for (int index = start; index < end; index++) {
-      char character = sql.charAt(index);
-      if (character == '(') {
-        depth++;
-      } else if (character == ')') {
-        if (depth <= 0) {
-          return -1;
-        }
-        depth--;
-      } else if (depth == 0 && character == '=') {
-        int open = index + 1;
-        while (open < end && Character.isWhitespace(sql.charAt(open))) {
-          open++;
-        }
-        if (open >= end || sql.charAt(open) != '(') {
-          continue;
-        }
-        int select = open + 1;
-        while (select < end && Character.isWhitespace(sql.charAt(select))) {
-          select++;
-        }
-        if (matchesKeyword(sql, select, end, "SELECT")) {
-          return open;
-        }
-      }
-    }
-    return -1;
-  }
-
-  private int findMembershipSource(String sql, int start, int end) {
-    membershipOperatorStart = -1;
-    membershipNegated = false;
-    int depth = 0;
-    for (int index = start; index < end; index++) {
-      char character = sql.charAt(index);
-      if (character == '(') {
-        depth++;
-      } else if (character == ')') {
-        if (depth <= 0) {
-          return -1;
-        }
-        depth--;
-      } else if (depth == 0 && matchesKeyword(sql, index, end, "IN")) {
-        int open = index + 2;
-        while (open < end && Character.isWhitespace(sql.charAt(open))) {
-          open++;
-        }
-        if (open >= end || sql.charAt(open) != '(') {
-          continue;
-        }
-        int select = open + 1;
-        while (select < end && Character.isWhitespace(sql.charAt(select))) {
-          select++;
-        }
-        if (!matchesKeyword(sql, select, end, "SELECT")) {
-          continue;
-        }
-        int operator = index;
-        int priorEnd = index;
-        while (priorEnd > start && Character.isWhitespace(sql.charAt(priorEnd - 1))) {
-          priorEnd--;
-        }
-        int priorStart = priorEnd - 3;
-        if (priorStart >= start
-            && matchesKeyword(sql, priorStart, priorEnd, "NOT")) {
-          membershipNegated = true;
-          operator = priorStart;
-        }
-        membershipOperatorStart = operator;
-        return open;
-      }
-    }
-    return -1;
-  }
-
-  private int findExistenceSource(String sql, int start, int end) {
-    existenceWhereStart = -1;
-    existenceNegated = false;
-    int depth = 0;
-    for (int index = start; index < end; index++) {
-      char character = sql.charAt(index);
-      if (character == '(') {
-        depth++;
-      } else if (character == ')') {
-        if (depth <= 0) {
-          return -1;
-        }
-        depth--;
-      } else if (depth == 0 && matchesKeyword(sql, index, end, "WHERE")) {
-        int predicate = index + 5;
-        while (predicate < end && Character.isWhitespace(sql.charAt(predicate))) {
-          predicate++;
-        }
-        if (matchesKeyword(sql, predicate, end, "NOT")) {
-          existenceNegated = true;
-          predicate += 3;
-          while (predicate < end && Character.isWhitespace(sql.charAt(predicate))) {
-            predicate++;
-          }
-        }
-        if (!matchesKeyword(sql, predicate, end, "EXISTS")) {
-          return -1;
-        }
-        int open = predicate + 6;
-        while (open < end && Character.isWhitespace(sql.charAt(open))) {
-          open++;
-        }
-        if (open >= end || sql.charAt(open) != '(') {
-          return -1;
-        }
-        int select = open + 1;
-        while (select < end && Character.isWhitespace(sql.charAt(select))) {
-          select++;
-        }
-        if (matchesKeyword(sql, select, end, "SELECT")) {
-          existenceWhereStart = index;
-          return open;
-        }
-        return -1;
-      }
-    }
-    return -1;
-  }
-
-  private static boolean matchesKeyword(
-      String sql,
-      int start,
-      int end,
-      String keyword) {
-    if (start > 0 && identifierPart(sql.charAt(start - 1))
-        || end - start < keyword.length()) {
-      return false;
-    }
-    for (int index = 0; index < keyword.length(); index++) {
-      if (upper(sql.charAt(start + index)) != keyword.charAt(index)) {
-        return false;
-      }
-    }
-    int keywordEnd = start + keyword.length();
-    return keywordEnd >= end || !identifierPart(sql.charAt(keywordEnd));
-  }
 
   private StatusCode parseText(CharSequence sql, SqlCommand result) {
-    if (sql == null || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    activeCommand = result;
-    offset = 0;
+    input.reset(result);
     skipSpaces(sql);
-    StatusCode status;
-    SqlCommandType type;
-    long key = 0;
-    long value = 0;
-    long scanLower = 0;
-    long scanUpper = 0;
-    boolean boundedScan = false;
-    boolean readCommittedTransaction = false;
-    boolean serializableTransaction = false;
-    if (consumeKeyword(sql, "BEGIN")) {
-      type = SqlCommandType.BEGIN;
-      status = StatusCode.OK;
-      if (consumeKeyword(sql, "SERIALIZABLE")) {
-        serializableTransaction = true;
-      } else if (consumeKeyword(sql, "READ")) {
-        status = requireKeyword(sql, "COMMITTED");
-        readCommittedTransaction = status.isOk();
-      } else if (consumeKeyword(sql, "REPEATABLE")) {
-        status = requireKeyword(sql, "READ");
-      }
-    } else if (consumeKeyword(sql, "SAVEPOINT")) {
-      type = SqlCommandType.SAVEPOINT;
-      status = identifier(sql, result.writableSavepointName());
-    } else if (consumeKeyword(sql, "COMMIT")) {
-      type = SqlCommandType.COMMIT;
-      status = StatusCode.OK;
-    } else if (consumeKeyword(sql, "ROLLBACK")) {
-      if (consumeKeyword(sql, "TO")) {
-        type = SqlCommandType.ROLLBACK_TO_SAVEPOINT;
-        consumeKeyword(sql, "SAVEPOINT");
-        status = identifier(sql, result.writableSavepointName());
-      } else {
-        type = SqlCommandType.ROLLBACK;
-        status = StatusCode.OK;
-      }
-    } else if (consumeKeyword(sql, "RELEASE")) {
-      type = SqlCommandType.RELEASE_SAVEPOINT;
-      status = requireKeyword(sql, "SAVEPOINT");
-      if (status.isOk()) {
-        status = identifier(sql, result.writableSavepointName());
-      }
-    } else if (consumeKeyword(sql, "CHECKPOINT")) {
-      type = SqlCommandType.CHECKPOINT;
-      status = StatusCode.OK;
-    } else if (consumeKeyword(sql, "SHOW")) {
-      if (consumeKeyword(sql, "TABLES")) {
-        type = SqlCommandType.SHOW_TABLES;
-        status = StatusCode.OK;
-      } else {
-        type = SqlCommandType.SHOW_INDEXES;
-        status = requireKeyword(sql, "INDEXES");
-        if (status.isOk()) {
-          status = requireKeyword(sql, "FROM");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-      }
-    } else if (consumeKeyword(sql, "ALTER")) {
-      if (consumeKeyword(sql, "INDEX")) {
-        type = SqlCommandType.ALTER_INDEX_RENAME;
-        status = identifier(sql, result.writableIndexName());
-        if (status.isOk()) {
-          status = requireKeyword(sql, "RENAME");
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "TO");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableRenamedIndexName());
-        }
-      } else {
-        type = SqlCommandType.ALTER_TABLE_RENAME;
-        status = requireKeyword(sql, "TABLE");
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "RENAME");
-        }
-        if (status.isOk() && consumeKeyword(sql, "COLUMN")) {
-          type = SqlCommandType.ALTER_TABLE_RENAME_COLUMN;
-          status = identifier(sql, result.writableNextColumnName());
-          if (status.isOk()) {
-            status = requireKeyword(sql, "TO");
-          }
-          if (status.isOk()) {
-            status = identifier(sql, result.writableNextColumnName());
-          }
-        } else if (status.isOk()) {
-          status = requireKeyword(sql, "TO");
-          if (status.isOk()) {
-            status = identifier(sql, result.writableRenamedTableName());
-          }
-        }
-      }
-    } else if (consumeKeyword(sql, "DROP")) {
-      if (consumeKeyword(sql, "VIEW")) {
-        type = SqlCommandType.DROP_VIEW;
-        status = identifier(sql, result.writableTableName());
-      } else if (consumeKeyword(sql, "SEQUENCE")) {
-        type = SqlCommandType.DROP_SEQUENCE;
-        status = identifier(sql, result.writableSequenceName());
-      } else if (consumeKeyword(sql, "INDEX")) {
-        type = SqlCommandType.DROP_INDEX;
-        status = identifier(sql, result.writableIndexName());
-        if (status.isOk()) {
-          status = requireKeyword(sql, "ON");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-      } else {
-        type = SqlCommandType.DROP_TABLE;
-        status = requireKeyword(sql, "TABLE");
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-      }
-    } else if (consumeKeyword(sql, "CREATE")) {
-      if (consumeKeyword(sql, "VIEW")) {
-        type = SqlCommandType.CREATE_VIEW;
-        status = identifier(sql, result.writableTableName());
-        if (status.isOk()) {
-          status = requireKeyword(sql, "AS");
-        }
-        skipSpaces(sql);
-        int definitionStart = offset;
-        int definitionEnd = sql.length();
-        while (definitionEnd > definitionStart
-            && Character.isWhitespace(sql.charAt(definitionEnd - 1))) {
-          definitionEnd--;
-        }
-        if (definitionEnd > definitionStart
-            && sql.charAt(definitionEnd - 1) == ';') {
-          definitionEnd--;
-          while (definitionEnd > definitionStart
-              && Character.isWhitespace(sql.charAt(definitionEnd - 1))) {
-            definitionEnd--;
-          }
-        }
-        if (status.isOk()) {
-          status = result.setViewQuery(sql, definitionStart, definitionEnd);
-        }
-        offset = sql.length();
-      } else if (consumeKeyword(sql, "TABLE")) {
-        type = SqlCommandType.CREATE_TABLE;
-        status = identifier(sql, result.writableTableName());
-        if (status.isOk() && consumeCharacter(sql, '(')) {
-          status = columnIdentifier(sql, result);
-          if (status.isOk()) {
-            status = requireKeyword(sql, "BIGINT");
-          }
-          if (status.isOk() && consumeKeyword(sql, "NOT")) {
-            status = requireKeyword(sql, "NULL");
-          }
-          if (status.isOk() && consumeKeyword(sql, "GENERATED")) {
-            status = requireKeyword(sql, "ALWAYS");
-            if (status.isOk()) {
-              status = requireKeyword(sql, "AS");
-            }
-            if (status.isOk()) {
-              status = requireKeyword(sql, "IDENTITY");
-            }
-            if (status.isOk()) {
-              result.markPrimaryKeyIdentity();
-            }
-          }
-          if (status.isOk() && consumeKeyword(sql, "CHECK")) {
-            status = columnCheck(sql, result);
-          }
-          if (status.isOk()) {
-            status = requireKeyword(sql, "PRIMARY");
-          }
-          if (status.isOk()) {
-            status = requireKeyword(sql, "KEY");
-          }
-          if (status.isOk()) {
-            result.markLastColumnNotNull();
-          }
-          while (status.isOk() && !consumeCharacter(sql, ')')) {
-            status = requireCharacter(sql, ',');
-            if (status.isOk()) {
-              status = columnIdentifier(sql, result);
-            }
-            if (status.isOk()) {
-              if (consumeKeyword(sql, "BIGINT")) {
-                status = StatusCode.OK;
-              } else {
-                status = requireKeyword(sql, "VARCHAR");
-                if (status.isOk()) {
-                  status = requireCharacter(sql, '(');
-                }
-                if (status.isOk()) {
-                  status = number(sql, numberResult);
-                }
-                if (status.isOk()
-                    && (numberResult.value < 1
-                        || numberResult.value > Utf8Text.MAXIMUM_SCALARS)) {
-                  status = StatusCode.INVALID_EXTERNAL_INPUT;
-                }
-                if (status.isOk()) {
-                  status = requireCharacter(sql, ')');
-                }
-                if (status.isOk()) {
-                  result.markLastColumnVarchar((int) numberResult.value);
-                }
-              }
-            }
-            boolean notNull = false;
-            boolean hasDefault = false;
-            boolean constraints = true;
-            while (status.isOk() && constraints) {
-              if (consumeKeyword(sql, "NOT")) {
-                if (notNull) {
-                  status = StatusCode.INVALID_EXTERNAL_INPUT;
-                } else {
-                  status = requireKeyword(sql, "NULL");
-                  notNull = status.isOk();
-                  if (status.isOk()) {
-                    result.markLastColumnNotNull();
-                  }
-                }
-              } else if (consumeKeyword(sql, "DEFAULT")) {
-                if (hasDefault) {
-                  status = StatusCode.INVALID_EXTERNAL_INPUT;
-                } else {
-                  status = result.columnIsVarchar(result.columnCount() - 1)
-                      ? packedText(sql, numberResult) : number(sql, numberResult);
-                  hasDefault = status.isOk();
-                  if (status.isOk()) {
-                    result.markLastColumnDefault(numberResult.value);
-                  }
-                }
-              } else if (consumeKeyword(sql, "CHECK")) {
-                if (result.columnHasCheck(result.columnCount() - 1)) {
-                  status = StatusCode.INVALID_EXTERNAL_INPUT;
-                } else {
-                  status = columnCheck(sql, result);
-                }
-              } else if (consumeKeyword(sql, "UNIQUE")) {
-                status = result.markLastColumnUnique();
-              } else if (consumeKeyword(sql, "REFERENCES")) {
-                status = result.columnHasReference(result.columnCount() - 1)
-                    ? StatusCode.INVALID_EXTERNAL_INPUT
-                    : columnReference(sql, result);
-              } else {
-                constraints = false;
-              }
-            }
-          }
-          if (status.isOk() && result.columnCount() < 2) {
-            status = StatusCode.INVALID_EXTERNAL_INPUT;
-          }
-        } else if (status.isOk()) {
-          setIdentifier(result.writableNextColumnName(), "key");
-          result.markLastColumnNotNull();
-          setIdentifier(result.writableNextColumnName(), "value");
-        }
-      } else if (consumeKeyword(sql, "SEQUENCE")) {
-        type = SqlCommandType.CREATE_SEQUENCE;
-        status = identifier(sql, result.writableSequenceName());
-        long start = 1;
-        long increment = 1;
-        boolean startSeen = false;
-        boolean incrementSeen = false;
-        boolean options = true;
-        while (status.isOk() && options) {
-          if (consumeKeyword(sql, "START")) {
-            if (startSeen) {
-              status = StatusCode.INVALID_EXTERNAL_INPUT;
-            } else {
-              status = requireKeyword(sql, "WITH");
-              if (status.isOk()) {
-                status = number(sql, numberResult);
-                start = numberResult.value;
-                startSeen = status.isOk();
-              }
-            }
-          } else if (consumeKeyword(sql, "INCREMENT")) {
-            if (incrementSeen) {
-              status = StatusCode.INVALID_EXTERNAL_INPUT;
-            } else {
-              status = requireKeyword(sql, "BY");
-              if (status.isOk()) {
-                status = number(sql, numberResult);
-                increment = numberResult.value;
-                incrementSeen = status.isOk();
-              }
-              if (status.isOk() && increment == 0) {
-                status = StatusCode.INVALID_EXTERNAL_INPUT;
-              }
-            }
-          } else {
-            options = false;
-          }
-        }
-        if (status.isOk()) {
-          result.setSequenceOptions(start, increment);
-        }
-      } else {
-        boolean unique = consumeKeyword(sql, "UNIQUE");
-        type = unique ? SqlCommandType.CREATE_UNIQUE_INDEX : SqlCommandType.CREATE_INDEX;
-        status = requireKeyword(sql, "INDEX");
-        if (status.isOk()) {
-          status = identifier(sql, result.writableIndexName());
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "ON");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-        if (status.isOk()) {
-          status = requireCharacter(sql, '(');
-        }
-        if (status.isOk()) {
-          status = columnIdentifier(sql, result);
-        }
-        if (status.isOk()) {
-          status = requireCharacter(sql, ')');
-        }
-      }
-    } else if (consumeKeyword(sql, "INSERT")) {
-      type = SqlCommandType.INSERT;
-      status = requireKeyword(sql, "INTO");
-      if (status.isOk()) {
-        status = identifier(sql, result.writableTableName());
-      }
-      if (status.isOk() && consumeCharacter(sql, '(')) {
-        while (status.isOk()) {
-          status = columnIdentifier(sql, result);
-          if (!status.isOk() || consumeCharacter(sql, ')')) {
-            break;
-          }
-          status = requireCharacter(sql, ',');
-        }
-      }
-      if (status.isOk()) {
-        status = requireKeyword(sql, "VALUES");
-      }
-      if (status.isOk()) {
-        status = row(sql, rowResult);
-        key = rowResult.values[0];
-        value = rowResult.values[1];
-        if (status.isOk()) {
-          result.appendInsert(
-              rowResult.values,
-              rowResult.nullMask,
-              rowResult.defaultMask,
-              rowResult.typeDescriptors,
-              rowResult.count);
-        }
-      }
-      while (status.isOk() && consumeCharacter(sql, ',')) {
-        if (result.insertRowCount() >= SqlCommand.MAXIMUM_INSERT_ROWS) {
-          status = StatusCode.RESOURCE_EXHAUSTED;
-        } else {
-          status = row(sql, rowResult);
-          if (status.isOk() && rowResult.count != result.insertColumnCount()) {
-            status = StatusCode.INVALID_EXTERNAL_INPUT;
-          }
-          if (status.isOk()) {
-            result.appendInsert(
-                rowResult.values,
-                rowResult.nullMask,
-                rowResult.defaultMask,
-                rowResult.typeDescriptors,
-                rowResult.count);
-          }
-        }
-      }
-    } else if (consumeKeyword(sql, "SELECT")) {
-      if (consumeKeyword(sql, "NEXT")) {
-        type = SqlCommandType.NEXT_SEQUENCE_VALUE;
-        status = requireKeyword(sql, "VALUE");
-        if (status.isOk()) {
-          status = requireKeyword(sql, "FOR");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableSequenceName());
-        }
-      } else if (consumeKeyword(sql, "COUNT")) {
-        type = SqlCommandType.COUNT;
-        status = requireCharacter(sql, '(');
-        if (status.isOk() && consumeCharacter(sql, '*')) {
-          status = requireCharacter(sql, ')');
-        } else if (status.isOk()) {
-          type = SqlCommandType.COUNT_VALUE;
-          status = aggregateColumn(sql, result);
-        }
-        if (status.isOk()) {
-          status = aggregateSource(sql, result);
-        }
-      } else if (consumeKeyword(sql, "SUM")) {
-        type = SqlCommandType.SUM;
-        status = valueAggregate(sql, result);
-      } else if (consumeKeyword(sql, "MIN")) {
-        type = SqlCommandType.MIN;
-        status = valueAggregate(sql, result);
-      } else if (consumeKeyword(sql, "MAX")) {
-        type = SqlCommandType.MAX;
-        status = valueAggregate(sql, result);
-      } else {
-        boolean distinct = consumeKeyword(sql, "DISTINCT");
-        type = distinct ? SqlCommandType.DISTINCT_SCAN : SqlCommandType.SCAN;
-        if (!distinct && consumeCharacter(sql, '*')) {
-          result.setSelectAll();
-          status = StatusCode.OK;
-        } else {
-          status = selectColumnIdentifier(sql, result);
-          if (!distinct && status.isOk() && consumeCharacter(sql, ',')) {
-            if (consumeKeyword(sql, "COUNT")) {
-              type = SqlCommandType.GROUP_COUNT;
-              status = requireCharacter(sql, '(');
-              if (status.isOk() && consumeCharacter(sql, '*')) {
-                status = requireCharacter(sql, ')');
-              } else if (status.isOk()) {
-                type = SqlCommandType.GROUP_COUNT_VALUE;
-                status = groupAggregateColumn(sql, result);
-              }
-            } else if (consumeKeyword(sql, "SUM")) {
-              type = SqlCommandType.GROUP_SUM;
-              status = requireCharacter(sql, '(');
-              if (status.isOk()) {
-                status = groupAggregateColumn(sql, result);
-              }
-            } else if (consumeKeyword(sql, "MIN")) {
-              type = SqlCommandType.GROUP_MIN;
-              status = requireCharacter(sql, '(');
-              if (status.isOk()) {
-                status = groupAggregateColumn(sql, result);
-              }
-            } else if (consumeKeyword(sql, "MAX")) {
-              type = SqlCommandType.GROUP_MAX;
-              status = requireCharacter(sql, '(');
-              if (status.isOk()) {
-                status = groupAggregateColumn(sql, result);
-              }
-            } else {
-              status = selectColumnIdentifier(sql, result);
-              while (status.isOk() && consumeCharacter(sql, ',')) {
-                status = selectColumnIdentifier(sql, result);
-              }
-            }
-          }
-        }
-        if (status.isOk()) {
-          status = requireKeyword(sql, "FROM");
-        }
-        if (status.isOk()) {
-          status = identifier(sql, result.writableTableName());
-        }
-        if (status.isOk()) {
-          status = optionalTableAlias(sql, result);
-        }
-        boolean leftJoin = status.isOk()
-            && !isGroupAggregate(type)
-            && consumeKeyword(sql, "LEFT");
-        if (leftJoin) {
-          consumeKeyword(sql, "OUTER");
-          status = requireKeyword(sql, "JOIN");
-        }
-        if (status.isOk()
-            && !isGroupAggregate(type)
-            && (leftJoin || consumeKeyword(sql, "JOIN"))) {
-          type = SqlCommandType.JOIN_SCAN;
-          if (leftJoin) {
-            result.setLeftJoin();
-          }
-          status = identifier(sql, result.writableJoinTableName());
-          if (status.isOk()) {
-            status = optionalJoinTableAlias(sql, result);
-          }
-          if (status.isOk()) {
-            status = requireKeyword(sql, "ON");
-          }
-          if (status.isOk()) {
-            status = matchingEitherIdentifier(
-                sql, result.tableName(), result.tableAlias());
-          }
-          if (status.isOk()) {
-            status = requireCharacter(sql, '.');
-          }
-          if (status.isOk()) {
-            status = identifier(sql, result.writableJoinOuterColumnName());
-          }
-          if (status.isOk()) {
-            status = requireCharacter(sql, '=');
-          }
-          if (status.isOk()) {
-            status = matchingEitherIdentifier(
-                sql, result.joinTableName(), result.joinTableAlias());
-          }
-          if (status.isOk()) {
-            status = requireCharacter(sql, '.');
-          }
-          if (status.isOk()) {
-            status = identifier(sql, result.writableJoinInnerColumnName());
-          }
-        }
-        if (status.isOk()
-            && type == SqlCommandType.JOIN_SCAN
-            && consumeKeyword(sql, "WHERE")) {
-          status = predicates(sql, result, true);
-        }
-        if (status.isOk()
-            && type != SqlCommandType.JOIN_SCAN
-            && consumeKeyword(sql, "WHERE")) {
-          status = predicates(sql, result, false);
-        }
-        if (status.isOk() && isGroupAggregate(type)) {
-          status = requireKeyword(sql, "GROUP");
-          if (status.isOk()) {
-            status = requireKeyword(sql, "BY");
-          }
-          if (status.isOk()) {
-            status = matchingIdentifier(sql, result.firstColumnName());
-          }
-          if (status.isOk() && consumeKeyword(sql, "HAVING")) {
-            status = groupHaving(sql, result, type);
-          }
-        } else if (status.isOk()
-            && type == SqlCommandType.SCAN
-            && result.hasPredicate()) {
-          if (status.isOk() && result.isEqualityPredicate()) {
-            type = SqlCommandType.SELECT;
-          }
-        }
-        if (status.isOk()
-            && type != SqlCommandType.JOIN_SCAN
-            && consumeKeyword(sql, "ORDER")) {
-          status = requireKeyword(sql, "BY");
-          if (status.isOk()) {
-            status = isGroupAggregate(type)
-                    || type == SqlCommandType.DISTINCT_SCAN
-                ? matchingEitherIdentifier(
-                    sql,
-                    result.firstColumnName(),
-                    result.columnOutputName(0))
-                : identifier(sql, result.writableOrderColumnName());
-          }
-          if (status.isOk()) {
-            if (consumeKeyword(sql, "ASC")) {
-              result.setDescendingOrder(false);
-            } else if (consumeKeyword(sql, "DESC")) {
-              if (isGroupAggregate(type)
-                  || type == SqlCommandType.DISTINCT_SCAN) {
-                status = StatusCode.INVALID_EXTERNAL_INPUT;
-              } else {
-                result.setDescendingOrder(true);
-              }
-            }
-          }
-        }
-        if (status.isOk() && consumeKeyword(sql, "LIMIT")) {
-          status = number(sql, numberResult);
-          if (status.isOk() && numberResult.value < 0) {
-            status = StatusCode.INVALID_EXTERNAL_INPUT;
-          }
-          if (status.isOk()) {
-            result.setRowLimit(numberResult.value);
-          }
-        }
-      }
-    } else if (consumeKeyword(sql, "UPDATE")) {
-      type = SqlCommandType.UPDATE;
-      status = identifier(sql, result.writableTableName());
-      if (status.isOk()) {
-        status = requireKeyword(sql, "SET");
-      }
-      while (status.isOk()) {
-        status = columnIdentifier(sql, result);
-        if (status.isOk()) {
-          status = requireCharacter(sql, '=');
-        }
-        boolean nullValue = status.isOk() && consumeKeyword(sql, "NULL");
-        boolean defaultValue = status.isOk()
-            && !nullValue
-            && consumeKeyword(sql, "DEFAULT");
-        boolean varchar = status.isOk()
-            && !nullValue
-            && !defaultValue
-            && startsText(sql);
-        boolean relative = false;
-        boolean subtract = false;
-        if (status.isOk() && varchar) {
-          status = packedText(sql, numberResult);
-        } else if (status.isOk() && !nullValue && !defaultValue) {
-          if (startsNumber(sql)) {
-            status = number(sql, numberResult);
-          } else {
-            SqlIdentifier source = result.writableNextUpdateSourceColumnName();
-            if (source == null) {
-              status = StatusCode.RESOURCE_EXHAUSTED;
-            } else {
-              status = identifier(sql, source);
-            }
-            if (status.isOk()) {
-              if (consumeCharacter(sql, '+')) {
-                relative = true;
-              } else if (consumeCharacter(sql, '-')) {
-                relative = true;
-                subtract = true;
-              } else {
-                status = StatusCode.INVALID_EXTERNAL_INPUT;
-              }
-            }
-            if (status.isOk()) {
-              status = number(sql, numberResult);
-            }
-          }
-        }
-        if (status.isOk()) {
-          result.appendUpdate(
-              nullValue || defaultValue ? 0 : numberResult.value,
-              nullValue,
-              defaultValue,
-              nullValue || defaultValue
-                  ? 0
-                  : varchar
-                      ? SqlTypeDescriptor.varchar(
-                          Math.max(1, numberResult.textScalars))
-                      : SqlTypeDescriptor.BIGINT,
-              relative,
-              subtract);
-          if (result.updateColumnCount() == 1) {
-            value = nullValue || defaultValue ? 0 : numberResult.value;
-          }
-        }
-        if (!status.isOk() || !consumeCharacter(sql, ',')) {
-          break;
-        }
-      }
-      if (status.isOk()) {
-        status = requireKeyword(sql, "WHERE");
-      }
-      if (status.isOk()) {
-        status = predicates(sql, result, false);
-      }
-    } else if (consumeKeyword(sql, "DELETE")) {
-      type = SqlCommandType.DELETE;
-      status = requireKeyword(sql, "FROM");
-      if (status.isOk()) {
-        status = identifier(sql, result.writableTableName());
-      }
-      if (status.isOk()) {
-        status = requireKeyword(sql, "WHERE");
-      }
-      if (status.isOk()) {
-        status = predicates(sql, result, false);
-      }
-    } else {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
+    StatusCode status = parseStatement(sql, result);
+    SqlCommandType type = result.type();
     if (!status.isOk() || !finish(sql)) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    if (usesReservedObjectName(type, result)) {
+    if (catalogCommands.usesReservedObjectName(type, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (type == SqlCommandType.INSERT) {
-      result.setInsert();
-    } else if (type == SqlCommandType.SCAN) {
-      result.setScan(scanLower, scanUpper, boundedScan);
-    } else if (type == SqlCommandType.BEGIN) {
-      result.setBegin(readCommittedTransaction, serializableTransaction);
-    } else {
-      result.set(type, key, value);
+    return result.finish();
+  }
+
+  private StatusCode parseStatement(CharSequence sql, SqlCommand result) {
+    StatusCode transaction = parseTransactionStatement(sql, result);
+    if (transaction != null) return transaction;
+    return parseDataStatement(sql, result);
+  }
+
+  private StatusCode parseTransactionStatement(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "BEGIN")) {
+      return parseBegin(sql, result);
+    }
+    if (consumeKeyword(sql, "SAVEPOINT")) {
+      return parseNamedCommand(
+          sql, result, SqlCommandType.SAVEPOINT, result.writableSavepointName());
+    }
+    if (consumeKeyword(sql, "COMMIT")) {
+      result.set(SqlCommandType.COMMIT, 0, 0);
+      return StatusCode.OK;
+    }
+    if (consumeKeyword(sql, "ROLLBACK")) return parseRollback(sql, result);
+    if (consumeKeyword(sql, "RELEASE")) return parseReleaseSavepoint(sql, result);
+    if (consumeKeyword(sql, "CHECKPOINT")) {
+      result.set(SqlCommandType.CHECKPOINT, 0, 0);
+      return StatusCode.OK;
+    }
+    return null;
+  }
+
+  private StatusCode parseDataStatement(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "SHOW")) return parseShow(sql, result);
+    if (consumeKeyword(sql, "ALTER")) return catalogCommands.parseAlter(sql, result);
+    if (consumeKeyword(sql, "DROP")) return catalogCommands.parseDrop(sql, result);
+    if (consumeKeyword(sql, "CREATE")) return parseCreate(sql, result);
+    if (consumeKeyword(sql, "INSERT")) {
+      StatusCode status = parseInsert(sql, result);
+      if (status.isOk()) result.setInsert();
+      return status;
+    }
+    if (consumeKeyword(sql, "SELECT")) return parseSelect(sql, result);
+    if (consumeKeyword(sql, "UPDATE")) {
+      StatusCode status = parseUpdate(sql, result);
+      if (status.isOk()) result.set(SqlCommandType.UPDATE, 0, result.updateValue(0));
+      return status;
+    }
+    if (consumeKeyword(sql, "DELETE")) {
+      StatusCode status = parseDelete(sql, result);
+      if (status.isOk()) result.set(SqlCommandType.DELETE, 0, 0);
+      return status;
+    }
+    return StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private StatusCode parseBegin(CharSequence sql, SqlCommand result) {
+    StatusCode status = StatusCode.OK;
+    boolean readCommitted = false;
+    boolean serializable = false;
+    if (consumeKeyword(sql, "SERIALIZABLE")) {
+      serializable = true;
+    } else if (consumeKeyword(sql, "READ")) {
+      status = requireKeyword(sql, "COMMITTED");
+      readCommitted = status.isOk();
+    } else if (consumeKeyword(sql, "REPEATABLE")) {
+      status = requireKeyword(sql, "READ");
+    }
+    result.setBegin(readCommitted, serializable);
+    return status;
+  }
+
+  private StatusCode parseInsert(CharSequence sql, SqlCommand result) {
+    StatusCode status = requireKeyword(sql, "INTO");
+    if (status.isOk()) {
+      status = identifier(sql, result.writableTableName());
+    }
+    if (status.isOk() && consumeCharacter(sql, '(')) {
+      status = insertColumns(sql, result);
+    }
+    if (status.isOk()) {
+      status = requireKeyword(sql, "VALUES");
+    }
+    if (status.isOk()) {
+      status = appendInsertRow(sql, result, false);
+    }
+    while (status.isOk() && consumeCharacter(sql, ',')) {
+      status = appendInsertRow(sql, result, true);
+    }
+    return status;
+  }
+
+  private StatusCode parseSelect(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "NEXT")) {
+      result.set(SqlCommandType.NEXT_SEQUENCE_VALUE, 0, 0);
+      StatusCode status = requireKeyword(sql, "VALUE");
+      if (status.isOk()) {
+        status = requireKeyword(sql, "FOR");
+      }
+      return status.isOk()
+          ? identifier(sql, result.writableSequenceName()) : status;
+    }
+    if (consumeKeyword(sql, "COUNT")) {
+      return parseCount(sql, result);
+    }
+    if (consumeKeyword(sql, "SUM")) {
+      result.set(SqlCommandType.SUM, 0, 0);
+      return valueAggregate(sql, result);
+    }
+    if (consumeKeyword(sql, "AVG")) {
+      result.set(SqlCommandType.AVG, 0, 0);
+      return valueAggregate(sql, result);
+    }
+    if (consumeKeyword(sql, "MIN")) {
+      result.set(SqlCommandType.MIN, 0, 0);
+      return valueAggregate(sql, result);
+    }
+    if (consumeKeyword(sql, "MAX")) {
+      result.set(SqlCommandType.MAX, 0, 0);
+      return valueAggregate(sql, result);
+    }
+    if (scalarExpressions.starts(sql)) {
+      result.set(SqlCommandType.SCALAR_EXPRESSION, 0, 0);
+      return scalarExpressions.parse(sql, result.scalarExpression());
+    }
+    return parseRowSelect(sql, result);
+  }
+
+  private StatusCode parseCount(CharSequence sql, SqlCommand result) {
+    result.set(SqlCommandType.COUNT, 0, 0);
+    StatusCode status = requireCharacter(sql, '(');
+    if (status.isOk() && consumeCharacter(sql, '*')) {
+      status = requireCharacter(sql, ')');
+    } else if (status.isOk()) {
+      result.set(SqlCommandType.COUNT_VALUE, 0, 0);
+      status = aggregateColumn(sql, result);
+    }
+    return status.isOk() ? aggregateSource(sql, result) : status;
+  }
+
+  private StatusCode parseRowSelect(
+      CharSequence sql, SqlCommand result) {
+    boolean distinct = consumeKeyword(sql, "DISTINCT");
+    result.set(
+        distinct ? SqlCommandType.DISTINCT_SCAN : SqlCommandType.SCAN,
+        0,
+        0);
+    StatusCode status = parseSelectProjection(sql, result, distinct);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = requireKeyword(sql, "FROM");
+    if (!status.isOk()) {
+      return status;
+    }
+    status = identifier(sql, result.writableTableName());
+    if (!status.isOk()) {
+      return status;
+    }
+    status = optionalTableAlias(sql, result);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (!isGroupAggregate(result.type())) {
+      status = parseOptionalJoin(sql, result);
+    }
+    if (!status.isOk()) {
+      return status;
+    }
+    if (consumeKeyword(sql, "WHERE")) {
+      status = predicates(
+          sql, result, result.type() == SqlCommandType.JOIN_SCAN);
+    }
+    if (!status.isOk()) {
+      return status;
+    }
+    status = parseGroupOrPointSelection(sql, result);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = parseOrder(sql, result);
+    return status.isOk() ? parseLimit(sql, result) : status;
+  }
+
+  private StatusCode parseSelectProjection(
+      CharSequence sql, SqlCommand result, boolean distinct) {
+    if (!distinct && consumeCharacter(sql, '*')) {
+      result.setSelectAll();
+      return StatusCode.OK;
+    }
+    StatusCode status = selectColumnIdentifier(sql, result);
+    if (distinct || !status.isOk() || !consumeCharacter(sql, ',')) {
+      return status;
+    }
+    if (consumeKeyword(sql, "COUNT")) {
+      return parseGroupedCount(sql, result);
+    }
+    if (consumeKeyword(sql, "SUM")) {
+      result.set(SqlCommandType.GROUP_SUM, 0, 0);
+      return parseGroupedValueAggregate(sql, result);
+    }
+    if (consumeKeyword(sql, "AVG")) {
+      result.set(SqlCommandType.GROUP_AVG, 0, 0);
+      return parseGroupedValueAggregate(sql, result);
+    }
+    if (consumeKeyword(sql, "MIN")) {
+      result.set(SqlCommandType.GROUP_MIN, 0, 0);
+      return parseGroupedValueAggregate(sql, result);
+    }
+    if (consumeKeyword(sql, "MAX")) {
+      result.set(SqlCommandType.GROUP_MAX, 0, 0);
+      return parseGroupedValueAggregate(sql, result);
+    }
+    status = selectColumnIdentifier(sql, result);
+    while (status.isOk() && consumeCharacter(sql, ',')) {
+      status = selectColumnIdentifier(sql, result);
+    }
+    return status;
+  }
+
+  private StatusCode parseGroupedCount(
+      CharSequence sql, SqlCommand result) {
+    result.set(SqlCommandType.GROUP_COUNT, 0, 0);
+    StatusCode status = requireCharacter(sql, '(');
+    if (status.isOk() && consumeCharacter(sql, '*')) {
+      return requireCharacter(sql, ')');
+    }
+    if (status.isOk()) {
+      result.set(SqlCommandType.GROUP_COUNT_VALUE, 0, 0);
+      status = groupAggregateColumn(sql, result);
+    }
+    return status;
+  }
+
+  private StatusCode parseGroupedValueAggregate(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = requireCharacter(sql, '(');
+    return status.isOk() ? groupAggregateColumn(sql, result) : status;
+  }
+
+  private StatusCode parseOptionalJoin(
+      CharSequence sql, SqlCommand result) {
+    boolean left = consumeKeyword(sql, "LEFT");
+    if (left) {
+      consumeKeyword(sql, "OUTER");
+      StatusCode status = requireKeyword(sql, "JOIN");
+      if (!status.isOk()) {
+        return status;
+      }
+    } else if (!consumeKeyword(sql, "JOIN")) {
+      return StatusCode.OK;
+    }
+    result.set(SqlCommandType.JOIN_SCAN, 0, 0);
+    if (left) {
+      result.setLeftJoin();
+    }
+    StatusCode status = identifier(sql, result.writableJoinTableName());
+    if (!status.isOk()) {
+      return status;
+    }
+    status = optionalJoinTableAlias(sql, result);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = requireKeyword(sql, "ON");
+    return status.isOk() ? parseJoinEquality(sql, result) : status;
+  }
+
+  private StatusCode parseJoinEquality(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = matchingEitherIdentifier(
+        sql, result.tableName(), result.tableAlias());
+    if (!status.isOk()) {
+      return status;
+    }
+    status = requireCharacter(sql, '.');
+    if (!status.isOk()) {
+      return status;
+    }
+    status = identifier(sql, result.writableJoinOuterColumnName());
+    if (!status.isOk()) {
+      return status;
+    }
+    status = requireCharacter(sql, '=');
+    if (!status.isOk()) {
+      return status;
+    }
+    status = matchingEitherIdentifier(
+        sql, result.joinTableName(), result.joinTableAlias());
+    if (!status.isOk()) {
+      return status;
+    }
+    status = requireCharacter(sql, '.');
+    return status.isOk()
+        ? identifier(sql, result.writableJoinInnerColumnName()) : status;
+  }
+
+  private StatusCode parseGroupOrPointSelection(
+      CharSequence sql, SqlCommand result) {
+    SqlCommandType type = result.type();
+    if (isGroupAggregate(type)) {
+      StatusCode status = requireKeyword(sql, "GROUP");
+      if (status.isOk()) {
+        status = requireKeyword(sql, "BY");
+      }
+      if (status.isOk()) {
+        status = matchingIdentifier(sql, result.firstColumnName());
+      }
+      if (status.isOk() && consumeKeyword(sql, "HAVING")) {
+        status = groupHaving(sql, result, type);
+      }
+      return status;
+    }
+    if (type == SqlCommandType.SCAN
+        && result.hasPredicate()
+        && result.isEqualityPredicate()) {
+      result.set(SqlCommandType.SELECT, 0, 0);
     }
     return StatusCode.OK;
   }
 
-  private static boolean usesReservedObjectName(
+  private StatusCode parseOrder(CharSequence sql, SqlCommand result) {
+    SqlCommandType type = result.type();
+    if (type == SqlCommandType.JOIN_SCAN || !consumeKeyword(sql, "ORDER")) {
+      return StatusCode.OK;
+    }
+    StatusCode status = requireKeyword(sql, "BY");
+    if (status.isOk()) {
+      status = isGroupAggregate(type) || type == SqlCommandType.DISTINCT_SCAN
+          ? matchingEitherIdentifier(
+              sql, result.firstColumnName(), result.columnOutputName(0))
+          : identifier(sql, result.writableOrderColumnName());
+    }
+    if (status.isOk() && consumeKeyword(sql, "ASC")) {
+      result.setDescendingOrder(false);
+    } else if (status.isOk() && consumeKeyword(sql, "DESC")) {
+      if (isGroupAggregate(type) || type == SqlCommandType.DISTINCT_SCAN) {
+        status = StatusCode.INVALID_EXTERNAL_INPUT;
+      } else {
+        result.setDescendingOrder(true);
+      }
+    }
+    return status;
+  }
+
+  private StatusCode parseLimit(CharSequence sql, SqlCommand result) {
+    if (!consumeKeyword(sql, "LIMIT")) {
+      return StatusCode.OK;
+    }
+    StatusCode status = number(sql, numberResult);
+    if (status.isOk() && numberResult.value < 0) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      result.setRowLimit(numberResult.value);
+    }
+    return status;
+  }
+
+  private StatusCode parseCreateTable(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = identifier(sql, result.writableTableName());
+    if (!status.isOk()) {
+      return status;
+    }
+    if (!consumeCharacter(sql, '(')) {
+      setIdentifier(result.writableNextColumnName(), "key");
+      result.markLastColumnNotNull();
+      setIdentifier(result.writableNextColumnName(), "value");
+      return StatusCode.OK;
+    }
+    status = parsePrimaryKeyColumn(sql, result);
+    while (status.isOk() && !consumeCharacter(sql, ')')) {
+      status = requireCharacter(sql, ',');
+      if (status.isOk()) {
+        status = parseTableColumn(sql, result);
+      }
+    }
+    return status.isOk() && result.columnCount() < 2
+        ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+  }
+
+  private StatusCode parseCreate(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "VIEW")) {
+      return catalogCommands.parseCreateView(sql, result);
+    }
+    if (consumeKeyword(sql, "TABLE")) {
+      result.set(SqlCommandType.CREATE_TABLE, 0, 0);
+      return parseCreateTable(sql, result);
+    }
+    return catalogCommands.parseCreateRemainder(sql, result);
+  }
+
+  private StatusCode parsePrimaryKeyColumn(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = columnIdentifier(sql, result);
+    if (!status.isOk()) {
+      return status;
+    }
+    status = requireKeyword(sql, "BIGINT");
+    if (!status.isOk()) {
+      return status;
+    }
+    if (consumeKeyword(sql, "NOT")) {
+      status = requireKeyword(sql, "NULL");
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    if (consumeKeyword(sql, "GENERATED")) {
+      status = parseIdentityClause(sql, result);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    if (consumeKeyword(sql, "CHECK")) {
+      status = columnCheck(sql, result);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    status = requireKeyword(sql, "PRIMARY");
+    if (!status.isOk()) {
+      return status;
+    }
+    status = requireKeyword(sql, "KEY");
+    if (!status.isOk()) {
+      return status;
+    }
+    result.markLastColumnNotNull();
+    return StatusCode.OK;
+  }
+
+  private StatusCode parseIdentityClause(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = requireKeyword(sql, "ALWAYS");
+    if (status.isOk()) {
+      status = requireKeyword(sql, "AS");
+    }
+    if (status.isOk()) {
+      status = requireKeyword(sql, "IDENTITY");
+    }
+    if (status.isOk()) {
+      result.markPrimaryKeyIdentity();
+    }
+    return status;
+  }
+
+  private StatusCode parseTableColumn(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = columnIdentifier(sql, result);
+    if (status.isOk()) {
+      status = parseColumnType(sql, result);
+    }
+    return status.isOk() ? parseColumnConstraints(sql, result) : status;
+  }
+
+  private StatusCode parseColumnType(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = input.typeDescriptor(sql, numberResult);
+    if (status.isOk()) {
+      result.markLastColumnType((int) numberResult.value);
+    }
+    return status;
+  }
+
+  private StatusCode parseColumnConstraints(
+      CharSequence sql, SqlCommand result) {
+    StatusCode status = StatusCode.OK;
+    boolean notNull = false;
+    boolean hasDefault = false;
+    while (status.isOk()) {
+      if (consumeKeyword(sql, "NOT")) {
+        if (notNull) return StatusCode.INVALID_EXTERNAL_INPUT;
+        status = parseNotNull(sql, result);
+        notNull = status.isOk();
+      } else if (consumeKeyword(sql, "DEFAULT")) {
+        if (hasDefault) return StatusCode.INVALID_EXTERNAL_INPUT;
+        status = parseColumnDefault(sql, result);
+        hasDefault = status.isOk();
+      } else if (consumeKeyword(sql, "CHECK")) {
+        status = parseColumnCheck(sql, result);
+      } else if (consumeKeyword(sql, "UNIQUE")) {
+        status = result.markLastColumnUnique();
+      } else if (consumeKeyword(sql, "REFERENCES")) {
+        status = parseColumnReference(sql, result);
+      } else {
+        break;
+      }
+    }
+    return status;
+  }
+
+  private StatusCode parseNotNull(CharSequence sql, SqlCommand result) {
+    StatusCode status = requireKeyword(sql, "NULL");
+    if (status.isOk()) result.markLastColumnNotNull();
+    return status;
+  }
+
+  private StatusCode parseColumnDefault(CharSequence sql, SqlCommand result) {
+    StatusCode status = literal(sql, numberResult);
+    if (status.isOk()) {
+      status = coerceLiteral(result.columnTypeDescriptor(result.columnCount() - 1));
+    }
+    if (status.isOk()) result.markLastColumnDefault(numberResult.value);
+    return status;
+  }
+
+  private StatusCode coerceLiteral(int targetDescriptor) {
+    if (numberResult.typeDescriptor == targetDescriptor
+        || SqlTypeDescriptor.typeId(targetDescriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
+            && SqlTypeDescriptor.canImplicitlyCast(
+                numberResult.typeDescriptor, targetDescriptor)) {
+      return StatusCode.OK;
+    }
+    if (SqlTypeDescriptor.typeId(targetDescriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
+        && ExactDecimal.widenScale(
+            numberResult.value,
+            numberResult.typeDescriptor,
+            targetDescriptor,
+            decimalResult)) {
+      numberResult.value = decimalResult.value;
+      numberResult.typeDescriptor = targetDescriptor;
+      return StatusCode.OK;
+    }
+    return SqlTypeDescriptor.canImplicitlyCast(
+        numberResult.typeDescriptor, targetDescriptor)
+        ? StatusCode.NUMERIC_VALUE_OUT_OF_RANGE : StatusCode.DATATYPE_MISMATCH;
+  }
+
+  private StatusCode parseColumnCheck(CharSequence sql, SqlCommand result) {
+    return result.columnHasCheck(result.columnCount() - 1)
+        ? StatusCode.INVALID_EXTERNAL_INPUT : columnCheck(sql, result);
+  }
+
+  private StatusCode parseColumnReference(CharSequence sql, SqlCommand result) {
+    return result.columnHasReference(result.columnCount() - 1)
+        ? StatusCode.INVALID_EXTERNAL_INPUT : columnReference(sql, result);
+  }
+
+  private StatusCode insertColumns(CharSequence sql, SqlCommand result) {
+    StatusCode status = StatusCode.OK;
+    while (status.isOk()) {
+      status = columnIdentifier(sql, result);
+      if (!status.isOk() || consumeCharacter(sql, ')')) {
+        return status;
+      }
+      status = requireCharacter(sql, ',');
+    }
+    return status;
+  }
+
+  private StatusCode appendInsertRow(
+      CharSequence sql, SqlCommand result, boolean subsequent) {
+    if (subsequent
+        && result.insertRowCount() >= SqlCommand.MAXIMUM_INSERT_ROWS) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = row(sql, rowResult);
+    if (status.isOk()
+        && subsequent
+        && rowResult.count != result.insertColumnCount()) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (status.isOk()) {
+      result.appendInsert(
+          rowResult.values,
+          rowResult.nullMask,
+          rowResult.defaultMask,
+          rowResult.typeDescriptors,
+          rowResult.count);
+    }
+    return status;
+  }
+
+  private StatusCode parseUpdate(CharSequence sql, SqlCommand result) {
+    StatusCode status = identifier(sql, result.writableTableName());
+    if (status.isOk()) {
+      status = requireKeyword(sql, "SET");
+    }
+    while (status.isOk()) {
+      status = appendUpdate(sql, result);
+      if (!status.isOk() || !consumeCharacter(sql, ',')) {
+        break;
+      }
+    }
+    if (status.isOk()) {
+      status = requireKeyword(sql, "WHERE");
+    }
+    return status.isOk() ? predicates(sql, result, false) : status;
+  }
+
+  private StatusCode appendUpdate(CharSequence sql, SqlCommand result) {
+    StatusCode status = columnIdentifier(sql, result);
+    if (status.isOk()) status = requireCharacter(sql, '=');
+    return status.isOk() ? appendUpdateValue(sql, result) : status;
+  }
+
+  private StatusCode appendUpdateValue(CharSequence sql, SqlCommand result) {
+    return updateValues.parse(sql, result);
+  }
+
+  private StatusCode parseDelete(CharSequence sql, SqlCommand result) {
+    StatusCode status = requireKeyword(sql, "FROM");
+    if (status.isOk()) {
+      status = identifier(sql, result.writableTableName());
+    }
+    if (status.isOk()) {
+      status = requireKeyword(sql, "WHERE");
+    }
+    return status.isOk() ? predicates(sql, result, false) : status;
+  }
+
+  private StatusCode parseNamedCommand(
+      CharSequence sql,
+      SqlCommand result,
       SqlCommandType type,
-      SqlCommand command) {
-    return switch (type) {
-      case CREATE_TABLE -> reservedObjectName(command.tableName())
-          || reservedReferenceName(command);
-      case CREATE_VIEW, DROP_VIEW, DROP_TABLE, ALTER_TABLE_RENAME_COLUMN ->
-          reservedObjectName(command.tableName());
-      case SHOW_INDEXES -> reservedObjectName(command.tableName());
-      case ALTER_TABLE_RENAME ->
-          reservedObjectName(command.tableName())
-              || reservedObjectName(command.renamedTableName());
-      case CREATE_SEQUENCE, DROP_SEQUENCE -> reservedObjectName(command.sequenceName());
-      case CREATE_INDEX, CREATE_UNIQUE_INDEX, DROP_INDEX ->
-          reservedObjectName(command.indexName())
-              || reservedObjectName(command.tableName());
-      case ALTER_INDEX_RENAME ->
-          reservedObjectName(command.indexName())
-              || reservedObjectName(command.renamedIndexName());
-      default -> false;
-    };
+      SqlIdentifier name) {
+    result.set(type, 0, 0);
+    return identifier(sql, name);
   }
 
-  private static boolean reservedObjectName(CharSequence name) {
-    String prefix = "_river_";
-    if (name == null || name.length() < prefix.length()) {
-      return false;
+  private StatusCode parseRollback(CharSequence sql, SqlCommand result) {
+    if (!consumeKeyword(sql, "TO")) {
+      result.set(SqlCommandType.ROLLBACK, 0, 0);
+      return StatusCode.OK;
     }
-    for (int index = 0; index < prefix.length(); index++) {
-      if (upper(name.charAt(index)) != upper(prefix.charAt(index))) {
-        return false;
-      }
-    }
-    return true;
+    consumeKeyword(sql, "SAVEPOINT");
+    return parseNamedCommand(
+        sql,
+        result,
+        SqlCommandType.ROLLBACK_TO_SAVEPOINT,
+        result.writableSavepointName());
   }
 
-  private static boolean reservedReferenceName(SqlCommand command) {
-    for (int column = 1; column < command.columnCount(); column++) {
-      if (command.columnHasReference(column)
-          && reservedObjectName(command.columnReferenceTableName(column))) {
-        return true;
-      }
+  private StatusCode parseReleaseSavepoint(
+      CharSequence sql, SqlCommand result) {
+    result.set(SqlCommandType.RELEASE_SAVEPOINT, 0, 0);
+    StatusCode status = requireKeyword(sql, "SAVEPOINT");
+    return status.isOk()
+        ? identifier(sql, result.writableSavepointName()) : status;
+  }
+
+  private StatusCode parseShow(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "TABLES")) {
+      result.set(SqlCommandType.SHOW_TABLES, 0, 0);
+      return StatusCode.OK;
     }
-    return false;
+    result.set(SqlCommandType.SHOW_INDEXES, 0, 0);
+    StatusCode status = requireKeyword(sql, "INDEXES");
+    if (status.isOk()) {
+      status = requireKeyword(sql, "FROM");
+    }
+    return status.isOk()
+        ? identifier(sql, result.writableTableName()) : status;
   }
 
   private StatusCode predicates(
       CharSequence sql,
       SqlCommand result,
       boolean qualified) {
-    StatusCode status = StatusCode.OK;
     boolean disjunction = false;
-    while (status.isOk()) {
-      SqlIdentifier table = result.writableNextPredicateTableName();
-      SqlIdentifier column = result.writableNextPredicateColumnName();
-      if (table == null || column == null) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      identifierScratch.reset();
-      if (status.isOk()) {
-        status = identifier(sql, identifierScratch);
-      }
-      boolean predicateQualified = status.isOk() && consumeCharacter(sql, '.');
-      if (status.isOk() && qualified && !predicateQualified) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      if (status.isOk() && predicateQualified) {
-        table.copyFrom(identifierScratch);
-        status = identifier(sql, column);
-      } else if (status.isOk()) {
-        column.copyFrom(identifierScratch);
-      }
-      boolean nullPredicate = status.isOk() && consumeKeyword(sql, "IS");
-      boolean nullPredicateNegated = nullPredicate && consumeKeyword(sql, "NOT");
-      if (nullPredicate) {
-        status = requireKeyword(sql, "NULL");
-      }
-      boolean betweenPredicate = !nullPredicate
-          && status.isOk()
-          && consumeKeyword(sql, "BETWEEN");
-      SqlComparison comparison = betweenPredicate
-          ? SqlComparison.HALF_OPEN_RANGE
-          : !nullPredicate && status.isOk() ? comparisonOperator(sql) : null;
-      if (!nullPredicate && status.isOk() && comparison == null) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      long value = 0;
-      long lower = 0;
-      long upper = 0;
-      boolean columnEquality = false;
-      boolean varchar = false;
-      int membershipCount = 0;
-      boolean membershipHasNull = false;
-      if (betweenPredicate) {
-        status = literal(sql, numberResult);
-        lower = numberResult.value;
-        varchar = numberResult.varchar;
-        if (status.isOk()) {
-          status = requireKeyword(sql, "AND");
-        }
-        if (status.isOk()) {
-          status = literal(sql, numberResult);
-          upper = numberResult.value;
-          if (status.isOk() && varchar != numberResult.varchar) {
-            status = StatusCode.INVALID_EXTERNAL_INPUT;
-          }
-        }
-        if (status.isOk() && lower > upper) {
-          status = StatusCode.INVALID_EXTERNAL_INPUT;
-        }
-        if (status.isOk() && upper == Long.MAX_VALUE) {
-          comparison = SqlComparison.GREATER_OR_EQUAL;
-          value = lower;
-        } else if (status.isOk()) {
-          upper++;
-        }
-      } else if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
-        status = requireCharacter(sql, '(');
-        boolean complete = false;
-        boolean membershipTypeSet = false;
-        while (status.isOk() && !complete) {
-          if (status.isOk() && consumeKeyword(sql, "NULL")) {
-            membershipHasNull = true;
-          } else if (status.isOk()) {
-            if (membershipCount >= literalMembershipValues.length) {
-              status = StatusCode.RESOURCE_EXHAUSTED;
-            } else {
-              status = literal(sql, numberResult);
-              if (status.isOk()) {
-                if (membershipTypeSet && varchar != numberResult.varchar) {
-                  status = StatusCode.INVALID_EXTERNAL_INPUT;
-                } else {
-                  varchar = numberResult.varchar;
-                  membershipTypeSet = true;
-                }
-              }
-              if (status.isOk()) {
-                literalMembershipValues[membershipCount++] = numberResult.value;
-              }
-            }
-          }
-          if (status.isOk()) {
-            complete = consumeCharacter(sql, ')');
-            if (!complete) {
-              status = requireCharacter(sql, ',');
-            }
-          }
-        }
-      } else if (comparison == SqlComparison.EQUAL) {
-        skipSpaces(sql);
-        if (sql == scalarSourceView && scalarSourceView.isReplacement(offset)) {
-          scalarPredicateIndex = result.predicateCount();
-          status = number(sql, numberResult);
-          value = numberResult.value;
-        } else if (startsNumber(sql) || startsText(sql)) {
-          status = literal(sql, numberResult);
-          value = numberResult.value;
-          varchar = numberResult.varchar;
-        } else {
-          SqlIdentifier valueTable = result.writableNextPredicateValueTableName();
-          SqlIdentifier valueColumn = result.writableNextPredicateValueColumnName();
-          if (valueTable == null || valueColumn == null) {
-            return StatusCode.RESOURCE_EXHAUSTED;
-          }
-          identifierScratch.reset();
-          status = identifier(sql, identifierScratch);
-          boolean valueQualified = status.isOk() && consumeCharacter(sql, '.');
-          if (status.isOk() && valueQualified) {
-            valueTable.copyFrom(identifierScratch);
-            status = identifier(sql, valueColumn);
-          } else if (status.isOk()) {
-            valueColumn.copyFrom(identifierScratch);
-          }
-          columnEquality = status.isOk();
-        }
-      } else if (!nullPredicate && status.isOk()) {
-        status = literal(sql, numberResult);
-        if (status.isOk()) {
-          value = numberResult.value;
-          varchar = numberResult.varchar;
-          if (comparison == SqlComparison.GREATER_OR_EQUAL
-              && !varchar
-              && consumeHalfOpenUpper(
-                  sql, table, column, predicateQualified)) {
-            lower = value;
-            upper = numberResult.value;
-            comparison = SqlComparison.HALF_OPEN_RANGE;
-          }
-        }
-      }
-      if (status.isOk()) {
-        if (nullPredicate) {
-          result.appendNullPredicate(nullPredicateNegated);
-        } else if (comparison == SqlComparison.IN
-            || comparison == SqlComparison.NOT_IN) {
-          status = result.appendLiteralMembership(
-              literalMembershipValues,
-              membershipCount,
-              membershipHasNull,
-              comparison == SqlComparison.NOT_IN);
-        } else if (columnEquality) {
-          result.appendColumnPredicate();
-        } else if (comparison == SqlComparison.HALF_OPEN_RANGE) {
-          result.appendPredicate(0, lower, upper, false);
-        } else {
-          result.appendComparison(value, comparison);
-        }
-        if (varchar && !columnEquality && !nullPredicate) {
-          result.markLastPredicateVarchar(numberResult.textScalars);
-        }
-        if (disjunction) {
-          result.markLastPredicateDisjunction();
-        }
-      }
+    while (true) {
+      StatusCode status = parsePredicate(sql, result, qualified, disjunction);
       if (!status.isOk()) {
         return status;
       }
@@ -1341,8 +756,355 @@ public final class SqlParser {
       } else if (consumeKeyword(sql, "OR")) {
         disjunction = true;
       } else {
-        return status;
+        return StatusCode.OK;
       }
+    }
+  }
+
+  private StatusCode parsePredicate(
+      CharSequence sql,
+      SqlCommand result,
+      boolean qualified,
+      boolean disjunction) {
+    predicateResult.reset();
+    SqlIdentifier table = result.writableNextPredicateTableName();
+    SqlIdentifier column = result.writableNextPredicateColumnName();
+    if (table == null || column == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = parsePredicateReference(sql, table, column, qualified);
+    if (status.isOk()) {
+      status = parsePredicateOperator(sql);
+    }
+    if (status.isOk()) {
+      status = parsePredicateValue(sql, result, table, column);
+    }
+    if (status.isOk()) {
+      status = appendPredicate(result, disjunction);
+    }
+    return status;
+  }
+
+  private StatusCode parsePredicateReference(
+      CharSequence sql,
+      SqlIdentifier table,
+      SqlIdentifier column,
+      boolean qualified) {
+    identifierScratch.reset();
+    StatusCode status = identifier(sql, identifierScratch);
+    predicateResult.qualified = status.isOk() && consumeCharacter(sql, '.');
+    if (status.isOk() && qualified && !predicateResult.qualified) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (!status.isOk()) {
+      return status;
+    }
+    if (!predicateResult.qualified) {
+      column.copyFrom(identifierScratch);
+      return StatusCode.OK;
+    }
+    table.copyFrom(identifierScratch);
+    return identifier(sql, column);
+  }
+
+  private StatusCode parsePredicateOperator(CharSequence sql) {
+    if (consumeKeyword(sql, "IS")) {
+      return parseIsPredicate(sql);
+    }
+    predicateResult.between = consumeKeyword(sql, "BETWEEN");
+    predicateResult.comparison = predicateResult.between
+        ? SqlComparison.HALF_OPEN_RANGE : comparisonOperator(sql);
+    return predicateResult.comparison == null
+        ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
+  }
+
+  private StatusCode parseIsPredicate(CharSequence sql) {
+    boolean negated = consumeKeyword(sql, "NOT");
+    if (consumeKeyword(sql, "NULL") || consumeKeyword(sql, "UNKNOWN")) {
+      predicateResult.nullPredicate = true;
+      predicateResult.nullNegated = negated;
+      return StatusCode.OK;
+    }
+    if (negated) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (consumeKeyword(sql, "TRUE")) {
+      predicateResult.value = 1;
+    } else if (consumeKeyword(sql, "FALSE")) {
+      predicateResult.value = 0;
+    } else {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    predicateResult.comparison = SqlComparison.EQUAL;
+    predicateResult.typeDescriptor = SqlTypeDescriptor.BOOLEAN;
+    predicateResult.truthPredicate = true;
+    return StatusCode.OK;
+  }
+
+  private StatusCode parsePredicateValue(
+      CharSequence sql,
+      SqlCommand result,
+      SqlIdentifier table,
+      SqlIdentifier column) {
+    if (predicateResult.nullPredicate) {
+      return StatusCode.OK;
+    }
+    if (predicateResult.truthPredicate) {
+      return StatusCode.OK;
+    }
+    if (predicateResult.between) {
+      return parseBetweenPredicate(sql);
+    }
+    if (predicateResult.comparison == SqlComparison.IN
+        || predicateResult.comparison == SqlComparison.NOT_IN) {
+      return parseMembershipPredicate(sql);
+    }
+    if (predicateResult.comparison == SqlComparison.EQUAL) {
+      return parseEqualityPredicate(sql, result);
+    }
+    return parseLiteralPredicate(sql, table, column);
+  }
+
+  private StatusCode parseBetweenPredicate(CharSequence sql) {
+    StatusCode status = literal(sql, numberResult);
+    if (!status.isOk()) {
+      return status;
+    }
+    predicateResult.lower = numberResult.value;
+    predicateResult.varchar = numberResult.varchar;
+    predicateResult.typeDescriptor = numberResult.typeDescriptor;
+    status = requireKeyword(sql, "AND");
+    if (status.isOk()) {
+      status = literal(sql, numberResult);
+    }
+    if (!status.isOk()) {
+      return status;
+    }
+    predicateResult.upper = numberResult.value;
+    predicateResult.textScalars = numberResult.textScalars;
+    if (predicateResult.typeDescriptor != numberResult.typeDescriptor) {
+      int common = commonLiteralDescriptor(
+          predicateResult.typeDescriptor, numberResult.typeDescriptor);
+      if (common == 0
+          || !normalizePredicateRange(common, numberResult.typeDescriptor)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+    }
+    if (predicateResult.lower > predicateResult.upper) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (predicateResult.upper == Long.MAX_VALUE) {
+      predicateResult.comparison = SqlComparison.GREATER_OR_EQUAL;
+      predicateResult.value = predicateResult.lower;
+    } else {
+      predicateResult.upper++;
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode parseMembershipPredicate(CharSequence sql) {
+    StatusCode status = requireCharacter(sql, '(');
+    boolean complete = false;
+    boolean typeSet = false;
+    while (status.isOk() && !complete) {
+      if (consumeKeyword(sql, "NULL")) {
+        predicateResult.membershipHasNull = true;
+      } else if (predicateResult.membershipCount >= literalMembershipValues.length) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      } else {
+        status = appendMembershipLiteral(sql, typeSet);
+        typeSet = status.isOk();
+      }
+      if (status.isOk()) {
+        complete = consumeCharacter(sql, ')');
+        if (!complete) {
+          status = requireCharacter(sql, ',');
+        }
+      }
+    }
+    return status;
+  }
+
+  private StatusCode appendMembershipLiteral(CharSequence sql, boolean typeSet) {
+    StatusCode status = literal(sql, numberResult);
+    if (!status.isOk()) return status;
+    if (typeSet && predicateResult.typeDescriptor != numberResult.typeDescriptor) {
+      int common = commonLiteralDescriptor(
+          predicateResult.typeDescriptor, numberResult.typeDescriptor);
+      if (common == 0 || !normalizeMembership(common, numberResult.typeDescriptor)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+    }
+    predicateResult.varchar = numberResult.varchar;
+    predicateResult.textScalars = numberResult.textScalars;
+    predicateResult.typeDescriptor = numberResult.typeDescriptor;
+    literalMembershipValues[predicateResult.membershipCount++] = numberResult.value;
+    return StatusCode.OK;
+  }
+
+  private boolean normalizePredicateRange(int target, int upperDescriptor) {
+    if (SqlTypeDescriptor.typeId(target) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      predicateResult.typeDescriptor = target;
+      numberResult.typeDescriptor = target;
+      return true;
+    }
+    if (!ExactDecimal.widenScale(
+        predicateResult.lower,
+        predicateResult.typeDescriptor,
+        target,
+        decimalResult)) {
+      return false;
+    }
+    predicateResult.lower = decimalResult.value;
+    if (!ExactDecimal.widenScale(
+        predicateResult.upper,
+        upperDescriptor,
+        target,
+        decimalResult)) {
+      return false;
+    }
+    predicateResult.upper = decimalResult.value;
+    predicateResult.typeDescriptor = target;
+    return true;
+  }
+
+  private boolean normalizeMembership(int target, int candidateDescriptor) {
+    if (SqlTypeDescriptor.typeId(target) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      predicateResult.typeDescriptor = target;
+      numberResult.typeDescriptor = target;
+      return true;
+    }
+    for (int index = 0; index < predicateResult.membershipCount; index++) {
+      if (!ExactDecimal.widenScale(
+          literalMembershipValues[index],
+          predicateResult.typeDescriptor,
+          target,
+          decimalResult)) {
+        return false;
+      }
+      literalMembershipValues[index] = decimalResult.value;
+    }
+    if (!ExactDecimal.widenScale(
+        numberResult.value,
+        candidateDescriptor,
+        target,
+        decimalResult)) {
+      return false;
+    }
+    numberResult.value = decimalResult.value;
+    numberResult.typeDescriptor = target;
+    predicateResult.typeDescriptor = target;
+    return true;
+  }
+
+  private static int commonLiteralDescriptor(int left, int right) {
+    if (SqlTypeDescriptor.typeId(left) == SqlTypeDescriptor.TYPE_ID_VARCHAR
+        && SqlTypeDescriptor.typeId(right) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      return SqlTypeDescriptor.varchar(Math.max(
+          SqlTypeDescriptor.parameterOne(left), SqlTypeDescriptor.parameterOne(right)));
+    }
+    if (SqlTypeDescriptor.typeId(left) != SqlTypeDescriptor.TYPE_ID_DECIMAL
+        || SqlTypeDescriptor.typeId(right) != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
+      return 0;
+    }
+    int scale = Math.max(
+        SqlTypeDescriptor.parameterTwo(left), SqlTypeDescriptor.parameterTwo(right));
+    int integerDigits = Math.max(
+        SqlTypeDescriptor.parameterOne(left) - SqlTypeDescriptor.parameterTwo(left),
+        SqlTypeDescriptor.parameterOne(right) - SqlTypeDescriptor.parameterTwo(right));
+    return SqlTypeDescriptor.decimal(integerDigits + scale, scale);
+  }
+
+  private StatusCode parseEqualityPredicate(CharSequence sql, SqlCommand result) {
+    skipSpaces(sql);
+    if (input.position() == syntheticPredicateOffset) {
+      syntheticPredicateIndex = result.predicateCount();
+      StatusCode status = number(sql, numberResult);
+      predicateResult.value = numberResult.value;
+      return status;
+    }
+    if (input.startsLiteral(sql)) {
+      return parsePredicateLiteral(sql);
+    }
+    return parsePredicateColumn(sql, result);
+  }
+
+  private StatusCode parsePredicateColumn(CharSequence sql, SqlCommand result) {
+    SqlIdentifier table = result.writableNextPredicateValueTableName();
+    SqlIdentifier column = result.writableNextPredicateValueColumnName();
+    if (table == null || column == null) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    identifierScratch.reset();
+    StatusCode status = identifier(sql, identifierScratch);
+    boolean qualified = status.isOk() && consumeCharacter(sql, '.');
+    if (!status.isOk()) {
+      return status;
+    }
+    if (qualified) {
+      table.copyFrom(identifierScratch);
+      status = identifier(sql, column);
+    } else {
+      column.copyFrom(identifierScratch);
+    }
+    predicateResult.columnEquality = status.isOk();
+    return status;
+  }
+
+  private StatusCode parseLiteralPredicate(
+      CharSequence sql,
+      SqlIdentifier table,
+      SqlIdentifier column) {
+    StatusCode status = parsePredicateLiteral(sql);
+    if (status.isOk()
+        && predicateResult.comparison == SqlComparison.GREATER_OR_EQUAL
+        && predicateResult.typeDescriptor == SqlTypeDescriptor.BIGINT
+        && consumeHalfOpenUpper(sql, table, column, predicateResult.qualified)) {
+      predicateResult.lower = predicateResult.value;
+      predicateResult.upper = numberResult.value;
+      predicateResult.comparison = SqlComparison.HALF_OPEN_RANGE;
+    }
+    return status;
+  }
+
+  private StatusCode parsePredicateLiteral(CharSequence sql) {
+    StatusCode status = literal(sql, numberResult);
+    if (status.isOk()) {
+      predicateResult.value = numberResult.value;
+      predicateResult.varchar = numberResult.varchar;
+      predicateResult.textScalars = numberResult.textScalars;
+      predicateResult.typeDescriptor = numberResult.typeDescriptor;
+    }
+    return status;
+  }
+
+  private StatusCode appendPredicate(SqlCommand result, boolean disjunction) {
+    StatusCode status = StatusCode.OK;
+    if (predicateResult.nullPredicate) {
+      result.appendNullPredicate(predicateResult.nullNegated);
+    } else if (predicateResult.comparison == SqlComparison.IN
+        || predicateResult.comparison == SqlComparison.NOT_IN) {
+      status = result.appendLiteralMembership(
+          literalMembershipValues,
+          predicateResult.membershipCount,
+          predicateResult.membershipHasNull,
+          predicateResult.comparison == SqlComparison.NOT_IN,
+          predicateResult.typeDescriptor);
+    } else if (predicateResult.columnEquality) {
+      result.appendColumnPredicate();
+    } else if (predicateResult.comparison == SqlComparison.HALF_OPEN_RANGE) {
+      result.appendPredicate(
+          0, predicateResult.lower, predicateResult.upper, false);
+    } else {
+      result.appendComparison(predicateResult.value, predicateResult.comparison);
+    }
+    if (status.isOk()
+        && !predicateResult.columnEquality
+        && !predicateResult.nullPredicate) {
+      result.markLastPredicateType(predicateResult.typeDescriptor);
+    }
+    if (status.isOk() && disjunction) {
+      result.markLastPredicateDisjunction();
     }
     return status;
   }
@@ -1360,49 +1122,57 @@ public final class SqlParser {
     if (consumeCharacter(sql, '!')) {
       return consumeCharacter(sql, '=') ? SqlComparison.NOT_EQUAL : null;
     }
-    if (consumeCharacter(sql, '<')) {
-      if (consumeCharacter(sql, '>')) {
-        return SqlComparison.NOT_EQUAL;
-      }
-      return consumeCharacter(sql, '=')
-          ? SqlComparison.LESS_OR_EQUAL : SqlComparison.LESS_THAN;
-    }
-    if (consumeCharacter(sql, '>')) {
-      return consumeCharacter(sql, '=')
-          ? SqlComparison.GREATER_OR_EQUAL : SqlComparison.GREATER_THAN;
-    }
+    if (consumeCharacter(sql, '<')) return lessComparison(sql);
+    if (consumeCharacter(sql, '>')) return greaterComparison(sql);
     return null;
+  }
+
+  private SqlComparison lessComparison(CharSequence sql) {
+    if (consumeCharacter(sql, '>')) return SqlComparison.NOT_EQUAL;
+    return consumeCharacter(sql, '=')
+        ? SqlComparison.LESS_OR_EQUAL : SqlComparison.LESS_THAN;
+  }
+
+  private SqlComparison greaterComparison(CharSequence sql) {
+    return consumeCharacter(sql, '=')
+        ? SqlComparison.GREATER_OR_EQUAL : SqlComparison.GREATER_THAN;
   }
 
   private StatusCode columnCheck(CharSequence sql, SqlCommand result) {
     StatusCode status = requireCharacter(sql, '(');
+    if (!status.isOk()) {
+      return status;
+    }
     identifierScratch.reset();
-    if (status.isOk()) {
-      status = identifier(sql, identifierScratch);
+    status = identifier(sql, identifierScratch);
+    if (!status.isOk()) {
+      return status;
     }
     int column = result.columnCount() - 1;
-    if (status.isOk()
-        && !sameIdentifier(identifierScratch, result.columnName(column))) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!sameIdentifier(identifierScratch, result.columnName(column))) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlComparison comparison = status.isOk() ? comparisonOperator(sql) : null;
-    if (status.isOk()
-        && (comparison == null
-            || comparison == SqlComparison.HALF_OPEN_RANGE
-            || comparison == SqlComparison.IN
-            || comparison == SqlComparison.NOT_IN)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    SqlComparison comparison = comparisonOperator(sql);
+    if (comparison == null
+        || comparison == SqlComparison.HALF_OPEN_RANGE
+        || comparison == SqlComparison.IN
+        || comparison == SqlComparison.NOT_IN) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (status.isOk()) {
-      status = number(sql, numberResult);
+    status = literal(sql, numberResult);
+    if (!status.isOk()) {
+      return status;
     }
-    if (status.isOk()) {
-      status = requireCharacter(sql, ')');
+    status = coerceLiteral(result.columnTypeDescriptor(column));
+    if (!status.isOk()) {
+      return status;
     }
-    if (status.isOk()) {
-      result.markLastColumnCheck(comparison, numberResult.value);
+    status = requireCharacter(sql, ')');
+    if (!status.isOk()) {
+      return status;
     }
-    return status;
+    result.markLastColumnCheck(comparison, numberResult.value);
+    return StatusCode.OK;
   }
 
   private StatusCode columnReference(CharSequence sql, SqlCommand result) {
@@ -1429,7 +1199,7 @@ public final class SqlParser {
       CharSequence table,
       CharSequence column,
       boolean qualified) {
-    int start = offset;
+    int start = input.position();
     if (!consumeKeyword(sql, "AND")) {
       return false;
     }
@@ -1455,51 +1225,25 @@ public final class SqlParser {
     if (status.isOk()) {
       return true;
     }
-    offset = start;
+    input.position(start);
     return false;
   }
 
   private boolean nextCharacter(CharSequence sql, char expected) {
-    int start = offset;
+    int start = input.position();
     boolean matches = consumeCharacter(sql, expected);
-    offset = start;
+    input.position(start);
     return matches;
   }
 
   private StatusCode row(CharSequence sql, LongRow result) {
-    result.count = 0;
-    result.nullMask = 0;
-    result.defaultMask = 0;
-    for (int index = 0; index < result.typeDescriptors.length; index++) {
-      result.typeDescriptors[index] = 0;
-    }
+    resetRow(result);
     StatusCode status = requireCharacter(sql, '(');
     while (status.isOk()) {
       if (result.count >= SqlCommand.MAXIMUM_COLUMNS) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      boolean nullValue = consumeKeyword(sql, "NULL");
-      boolean defaultValue = !nullValue && consumeKeyword(sql, "DEFAULT");
-      boolean varchar = !nullValue && !defaultValue && startsText(sql);
-      if (varchar) {
-        status = packedText(sql, numberResult);
-      } else if (!nullValue && !defaultValue) {
-        status = number(sql, numberResult);
-      }
-      if (status.isOk()) {
-        result.values[result.count] = nullValue ? 0 : numberResult.value;
-        if (nullValue) {
-          result.nullMask |= 1L << result.count;
-        } else if (defaultValue) {
-          result.defaultMask |= 1L << result.count;
-        } else if (varchar) {
-          result.typeDescriptors[result.count] = SqlTypeDescriptor.varchar(
-              Math.max(1, numberResult.textScalars));
-        } else {
-          result.typeDescriptors[result.count] = SqlTypeDescriptor.BIGINT;
-        }
-        result.count++;
-      }
+      status = appendRowValue(sql, result);
       if (!status.isOk() || consumeCharacter(sql, ')')) {
         break;
       }
@@ -1509,6 +1253,44 @@ public final class SqlParser {
       return status;
     }
     return result.count >= 1 ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private static void resetRow(LongRow result) {
+    result.count = 0;
+    result.nullMask = 0;
+    result.defaultMask = 0;
+    for (int index = 0; index < result.typeDescriptors.length; index++) {
+      result.typeDescriptors[index] = 0;
+    }
+  }
+
+  private StatusCode appendRowValue(CharSequence sql, LongRow result) {
+    boolean nullValue = consumeKeyword(sql, "NULL");
+    boolean defaultValue = !nullValue && consumeKeyword(sql, "DEFAULT");
+    StatusCode status = parseRowLiteral(sql, nullValue, defaultValue);
+    if (!status.isOk()) {
+      return status;
+    }
+    int index = result.count++;
+    result.values[index] = nullValue ? 0 : numberResult.value;
+    if (nullValue) {
+      result.nullMask |= 1L << index;
+    } else if (defaultValue) {
+      result.defaultMask |= 1L << index;
+    } else {
+      result.typeDescriptors[index] = numberResult.typeDescriptor;
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode parseRowLiteral(
+      CharSequence sql,
+      boolean nullValue,
+      boolean defaultValue) {
+    if (nullValue || defaultValue) {
+      return StatusCode.OK;
+    }
+    return literal(sql, numberResult);
   }
 
   private StatusCode columnIdentifier(CharSequence sql, SqlCommand result) {
@@ -1586,6 +1368,7 @@ public final class SqlParser {
     return type == SqlCommandType.GROUP_COUNT
         || type == SqlCommandType.GROUP_COUNT_VALUE
         || type == SqlCommandType.GROUP_SUM
+        || type == SqlCommandType.GROUP_AVG
         || type == SqlCommandType.GROUP_MIN
         || type == SqlCommandType.GROUP_MAX;
   }
@@ -1595,35 +1378,42 @@ public final class SqlParser {
       SqlCommand result,
       SqlCommandType type) {
     String function = type == SqlCommandType.GROUP_SUM
-        ? "SUM" : type == SqlCommandType.GROUP_MIN
+        ? "SUM" : type == SqlCommandType.GROUP_AVG
+            ? "AVG" : type == SqlCommandType.GROUP_MIN
             ? "MIN" : type == SqlCommandType.GROUP_MAX ? "MAX" : "COUNT";
     StatusCode status = requireKeyword(sql, function);
     if (status.isOk()) {
       status = requireCharacter(sql, '(');
     }
-    if (status.isOk() && type == SqlCommandType.GROUP_COUNT) {
-      status = requireCharacter(sql, '*');
-    } else if (status.isOk()) {
-      status = matchingIdentifier(sql, result.secondColumnName());
-    }
+    if (status.isOk()) status = groupHavingOperand(sql, result, type);
     if (status.isOk()) {
       status = requireCharacter(sql, ')');
     }
-    SqlComparison comparison = status.isOk() ? comparisonOperator(sql) : null;
-    if (status.isOk()
-        && (comparison == null
-            || comparison == SqlComparison.HALF_OPEN_RANGE
-            || comparison == SqlComparison.IN
-            || comparison == SqlComparison.NOT_IN)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    return status.isOk() ? parseGroupHavingComparison(sql, result) : status;
+  }
+
+  private StatusCode parseGroupHavingComparison(
+      CharSequence sql, SqlCommand result) {
+    SqlComparison comparison = comparisonOperator(sql);
+    if (comparison == null
+        || comparison == SqlComparison.HALF_OPEN_RANGE
+        || comparison == SqlComparison.IN
+        || comparison == SqlComparison.NOT_IN) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    StatusCode status = literal(sql, numberResult);
     if (status.isOk()) {
-      status = number(sql, numberResult);
-    }
-    if (status.isOk()) {
-      result.setGroupHaving(comparison, numberResult.value);
+      result.setGroupHaving(
+          comparison, numberResult.value, numberResult.typeDescriptor);
     }
     return status;
+  }
+
+  private StatusCode groupHavingOperand(
+      CharSequence sql, SqlCommand result, SqlCommandType type) {
+    return type == SqlCommandType.GROUP_COUNT
+        ? requireCharacter(sql, '*')
+        : matchingIdentifier(sql, result.secondColumnName());
   }
 
   private StatusCode aggregateSource(CharSequence sql, SqlCommand result) {
@@ -1648,10 +1438,11 @@ public final class SqlParser {
       return identifier(sql, result.writableColumnAlias(columnIndex));
     }
     skipSpaces(sql);
-    if (offset >= sql.length()
-        || sql.charAt(offset) == ','
-        || sql.charAt(offset) == ';'
-        || sql.charAt(offset) == ')'
+    int position = input.position();
+    if (position >= sql.length()
+        || sql.charAt(position) == ','
+        || sql.charAt(position) == ';'
+        || sql.charAt(position) == ')'
         || nextKeyword(sql, "FROM")
         || nextKeyword(sql, "JOIN")
         || nextKeyword(sql, "WHERE")
@@ -1660,23 +1451,13 @@ public final class SqlParser {
         || nextKeyword(sql, "LIMIT")) {
       return StatusCode.OK;
     }
-    return identifierStart(sql.charAt(offset))
+    return identifierStart(sql.charAt(input.position()))
         ? identifier(sql, result.writableColumnAlias(columnIndex))
         : StatusCode.OK;
   }
 
   private StatusCode identifier(CharSequence sql, SqlIdentifier result) {
-    skipSpaces(sql);
-    if (offset >= sql.length() || !identifierStart(sql.charAt(offset))) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    while (offset < sql.length() && identifierPart(sql.charAt(offset))) {
-      if (result.length() >= SqlIdentifier.MAXIMUM_LENGTH) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      result.append(lower(sql.charAt(offset++)));
-    }
-    return StatusCode.OK;
+    return input.identifier(sql, result);
   }
 
   private StatusCode optionalTableAlias(
@@ -1686,9 +1467,10 @@ public final class SqlParser {
       return identifier(sql, result.writableTableAlias());
     }
     skipSpaces(sql);
-    if (offset >= sql.length()
-        || sql.charAt(offset) == ';'
-        || sql.charAt(offset) == ')'
+    int position = input.position();
+    if (position >= sql.length()
+        || sql.charAt(position) == ';'
+        || sql.charAt(position) == ')'
         || nextKeyword(sql, "LEFT")
         || nextKeyword(sql, "JOIN")
         || nextKeyword(sql, "WHERE")
@@ -1697,7 +1479,7 @@ public final class SqlParser {
         || nextKeyword(sql, "LIMIT")) {
       return StatusCode.OK;
     }
-    return identifierStart(sql.charAt(offset))
+    return identifierStart(sql.charAt(input.position()))
         ? identifier(sql, result.writableTableAlias())
         : StatusCode.OK;
   }
@@ -1709,19 +1491,19 @@ public final class SqlParser {
       return identifier(sql, result.writableJoinTableAlias());
     }
     skipSpaces(sql);
-    if (offset >= sql.length()
+    if (input.position() >= sql.length()
         || nextKeyword(sql, "ON")) {
       return StatusCode.OK;
     }
-    return identifierStart(sql.charAt(offset))
+    return identifierStart(sql.charAt(input.position()))
         ? identifier(sql, result.writableJoinTableAlias())
         : StatusCode.OK;
   }
 
   private boolean nextKeyword(CharSequence sql, String keyword) {
-    int start = offset;
+    int start = input.position();
     boolean matches = consumeKeyword(sql, keyword);
-    offset = start;
+    input.position(start);
     return matches;
   }
 
@@ -1771,170 +1553,98 @@ public final class SqlParser {
   }
 
   private StatusCode number(CharSequence sql, LongResult result) {
-    result.varchar = false;
-    result.textScalars = 0;
-    skipSpaces(sql);
-    if (offset >= sql.length()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    boolean negative = sql.charAt(offset) == '-';
-    if (negative) {
-      offset++;
-    }
-    if (offset >= sql.length() || !digit(sql.charAt(offset))) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
-    long multiplyMinimum = limit / 10;
-    long value = 0;
-    while (offset < sql.length() && digit(sql.charAt(offset))) {
-      int digit = sql.charAt(offset++) - '0';
-      if (value < multiplyMinimum) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      value *= 10;
-      if (value < limit + digit) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      value -= digit;
-    }
-    result.value = negative ? value : -value;
-    return StatusCode.OK;
+    return input.number(sql, result);
   }
 
   private StatusCode literal(CharSequence sql, LongResult result) {
-    return startsText(sql) ? packedText(sql, result) : number(sql, result);
+    return input.literal(sql, result);
   }
 
   private StatusCode packedText(CharSequence sql, LongResult result) {
-    skipSpaces(sql);
-    result.varchar = true;
-    if (offset >= sql.length() || sql.charAt(offset) != '\'') {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    offset++;
-    int length = 0;
-    while (offset < sql.length()) {
-      char character = sql.charAt(offset++);
-      if (character == '\'') {
-        if (offset < sql.length() && sql.charAt(offset) == '\'') {
-          offset++;
-        } else {
-          result.value = activeCommand.storeText(textCharacters, 0, length);
-          result.textScalars = Character.codePointCount(textCharacters, 0, length);
-          return result.value == SqlCommand.INVALID_TEXT_HANDLE
-              ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
-        }
-      }
-      if (length >= textCharacters.length) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      textCharacters[length++] = character;
-    }
-    return StatusCode.INVALID_EXTERNAL_INPUT;
+    return input.packedText(sql, result);
   }
 
   private boolean startsText(CharSequence sql) {
-    int start = offset;
-    skipSpaces(sql);
-    boolean text = offset < sql.length() && sql.charAt(offset) == '\'';
-    offset = start;
-    return text;
+    return input.startsText(sql);
   }
 
   private boolean startsNumber(CharSequence sql) {
-    skipSpaces(sql);
-    if (offset >= sql.length()) {
-      return false;
-    }
-    char first = sql.charAt(offset);
-    return digit(first)
-        || first == '-'
-            && offset + 1 < sql.length()
-            && digit(sql.charAt(offset + 1));
+    return input.startsNumber(sql);
   }
 
   private StatusCode requireKeyword(CharSequence sql, String keyword) {
-    return consumeKeyword(sql, keyword) ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    return input.requireKeyword(sql, keyword);
   }
 
   private boolean consumeKeyword(CharSequence sql, String keyword) {
-    skipSpaces(sql);
-    if (sql.length() - offset < keyword.length()) {
-      return false;
-    }
-    for (int index = 0; index < keyword.length(); index++) {
-      if (upper(sql.charAt(offset + index)) != keyword.charAt(index)) {
-        return false;
-      }
-    }
-    int end = offset + keyword.length();
-    if (end < sql.length() && identifierPart(sql.charAt(end))) {
-      return false;
-    }
-    offset = end;
-    return true;
+    return input.consumeKeyword(sql, keyword);
   }
 
   private StatusCode requireCharacter(CharSequence sql, char expected) {
-    skipSpaces(sql);
-    if (offset >= sql.length() || sql.charAt(offset) != expected) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    offset++;
-    return StatusCode.OK;
+    return input.requireCharacter(sql, expected);
   }
 
   private boolean consumeCharacter(CharSequence sql, char expected) {
-    skipSpaces(sql);
-    if (offset >= sql.length() || sql.charAt(offset) != expected) {
-      return false;
-    }
-    offset++;
-    return true;
+    return input.consumeCharacter(sql, expected);
   }
 
   private boolean finish(CharSequence sql) {
-    skipSpaces(sql);
-    if (offset < sql.length() && sql.charAt(offset) == ';') {
-      offset++;
-      skipSpaces(sql);
-    }
-    return offset == sql.length();
+    return input.finish(sql);
   }
 
   private void skipSpaces(CharSequence sql) {
-    while (offset < sql.length() && Character.isWhitespace(sql.charAt(offset))) {
-      offset++;
-    }
+    input.skipSpaces(sql);
   }
 
   private static char upper(char character) {
-    return character >= 'a' && character <= 'z' ? (char) (character - 32) : character;
-  }
-
-  private static char lower(char character) {
-    return character >= 'A' && character <= 'Z' ? (char) (character + 32) : character;
+    return SqlParserInput.upper(character);
   }
 
   private static boolean identifierStart(char character) {
-    return character >= 'A' && character <= 'Z'
-        || character >= 'a' && character <= 'z'
-        || character == '_';
+    return SqlParserInput.identifierStart(character);
   }
 
-  private static boolean identifierPart(char character) {
-    return identifierStart(character) || digit(character);
+  static final class LongResult {
+    long value;
+    boolean varchar;
+    int textScalars;
+    int typeDescriptor;
   }
 
-  private static boolean digit(char character) {
-    return character >= '0' && character <= '9';
-  }
-
-  private static final class LongResult {
+  private static final class PredicateResult {
+    private SqlComparison comparison;
     private long value;
-    private boolean varchar;
+    private long lower;
+    private long upper;
+    private int membershipCount;
     private int textScalars;
+    private int typeDescriptor;
+    private boolean qualified;
+    private boolean nullPredicate;
+    private boolean nullNegated;
+    private boolean between;
+    private boolean membershipHasNull;
+    private boolean columnEquality;
+    private boolean varchar;
+    private boolean truthPredicate;
+
+    private void reset() {
+      comparison = null;
+      value = 0;
+      lower = 0;
+      upper = 0;
+      membershipCount = 0;
+      textScalars = 0;
+      typeDescriptor = 0;
+      qualified = false;
+      nullPredicate = false;
+      nullNegated = false;
+      between = false;
+      membershipHasNull = false;
+      columnEquality = false;
+      varchar = false;
+      truthPredicate = false;
+    }
   }
 
   private static final class LongRow {
@@ -1944,101 +1654,5 @@ public final class SqlParser {
     private int count;
     private long nullMask;
     private long defaultMask;
-  }
-
-  private static final class SqlSourceView implements CharSequence {
-    private String source;
-    private int firstStart;
-    private int firstLength;
-    private int secondStart;
-    private int secondLength;
-
-    void set(
-        String text,
-        int firstFrom,
-        int firstTo,
-        int secondFrom,
-        int secondTo) {
-      source = text;
-      firstStart = firstFrom;
-      firstLength = firstTo - firstFrom;
-      secondStart = secondFrom;
-      secondLength = secondTo - secondFrom;
-    }
-
-    @Override
-    public int length() {
-      return firstLength + secondLength;
-    }
-
-    @Override
-    public char charAt(int index) {
-      if (index < 0 || index >= length()) {
-        throw new IndexOutOfBoundsException(index);
-      }
-      return index < firstLength
-          ? source.charAt(firstStart + index)
-          : source.charAt(secondStart + index - firstLength);
-    }
-
-    @Override
-    public CharSequence subSequence(int start, int end) {
-      throw new UnsupportedOperationException();
-    }
-  }
-
-  private static final class SqlScalarSourceView implements CharSequence {
-    private String source;
-    private int firstStart;
-    private int firstLength;
-    private int secondStart;
-    private int secondLength;
-
-    void set(
-        String text,
-        int firstFrom,
-        int firstTo,
-        int secondFrom,
-        int secondTo,
-        boolean includeEquality) {
-      source = text;
-      firstStart = firstFrom;
-      firstLength = firstTo - firstFrom;
-      secondStart = secondFrom;
-      secondLength = secondTo - secondFrom;
-      equality = includeEquality;
-    }
-
-    @Override
-    public int length() {
-      return firstLength + (equality ? 2 : 1) + secondLength;
-    }
-
-    @Override
-    public char charAt(int index) {
-      if (index < 0 || index >= length()) {
-        throw new IndexOutOfBoundsException(index);
-      }
-      if (index < firstLength) {
-        return source.charAt(firstStart + index);
-      }
-      if (equality && index == firstLength) {
-        return '=';
-      }
-      int replacement = firstLength + (equality ? 1 : 0);
-      return index == replacement
-          ? '0' : source.charAt(secondStart + index - replacement - 1);
-    }
-
-    @Override
-    public CharSequence subSequence(int start, int end) {
-      throw new UnsupportedOperationException();
-    }
-
-    boolean isReplacement(int index) {
-      return index == firstLength + (equality ? 1 : 0);
-    }
-
-    private boolean equality;
   }
 }

@@ -6,7 +6,7 @@ public final class BoundedEventRingFactory {
   }
 
   /**
-   * Creates a ring with guarded consumer ownership in diagnostic and test modes.
+   * Creates a ring with guarded consumer ownership in diagnostic mode.
    *
    * <p>Production selects the lower-overhead unchecked path only after the database lifecycle has
    * established a single owning exporter thread. Callers that cannot establish that invariant

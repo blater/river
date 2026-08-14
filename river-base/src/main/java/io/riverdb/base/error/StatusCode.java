@@ -17,6 +17,8 @@ public enum StatusCode {
   UNIQUE_VIOLATION(3004, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   FOREIGN_KEY_VIOLATION(3005, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   DATATYPE_MISMATCH(3006, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
+  ACCESS_DENIED(3007, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
+  DIVISION_BY_ZERO(3008, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   CONFLICT(4000, StatusFamily.CONFLICT, true, false),
   NOT_OWNER(4001, StatusFamily.CONFLICT, false, false),
   RESOURCE_EXHAUSTED(5000, StatusFamily.RESOURCE_EXHAUSTED, false, false),

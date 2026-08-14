@@ -8,6 +8,7 @@ import io.riverdb.engine.relational.CatalogIndexCursor;
 import io.riverdb.engine.relational.CatalogObjectCursor;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlParser;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -64,7 +65,7 @@ final class SqlExecutionOwnershipTest {
   void queryExecutionBorrowsBoundStateWithoutOwningCoordinatorResponsibilities() {
     int physicalPlans = 0;
     int nestedExecutions = 0;
-    int sortWorkspaces = 0;
+    int sortExecutions = 0;
     for (Field field : SqlQueryExecution.class.getDeclaredFields()) {
       if (Modifier.isStatic(field.getModifiers())) {
         continue;
@@ -83,11 +84,11 @@ final class SqlExecutionOwnershipTest {
       }
       physicalPlans += type == SqlPhysicalPlan.class ? 1 : 0;
       nestedExecutions += type == SqlNestedQueryExecution.class ? 1 : 0;
-      sortWorkspaces += type == SqlSortWorkspace.class ? 1 : 0;
+      sortExecutions += type == SqlSortExecution.class ? 1 : 0;
     }
     assertEquals(1, physicalPlans);
     assertEquals(1, nestedExecutions);
-    assertEquals(1, sortWorkspaces);
+    assertEquals(1, sortExecutions);
   }
 
   @Test
@@ -120,6 +121,33 @@ final class SqlExecutionOwnershipTest {
         assertTrue(Modifier.isPrivate(field.getModifiers()), field.getName());
       }
     }
+  }
+
+  @Test
+  void executableGenerationPublishesOnlyAfterBindingAndInvalidatesOnReuse() {
+    BoundSqlStatement bound = new BoundSqlStatement();
+    SqlParser parser = new SqlParser();
+    SqlBinder binder = new SqlBinder();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT o.id FROM t o WHERE EXISTS "
+                + "(SELECT i.id FROM t i WHERE i.id=o.id)",
+            bound.query,
+            bound.command));
+    assertEquals(StatusCode.OK, binder.captureExecutableQuery(bound));
+    assertFalse(bound.executableQuery.isExecutable());
+    bound.executableQuery.beginBinding(bound.table);
+    assertFalse(bound.executableQuery.isExecutable());
+    bound.executableQuery.publishBinding();
+    assertTrue(bound.executableQuery.isExecutable());
+    long published = bound.executableQuery.executableGeneration();
+
+    assertEquals(StatusCode.OK, binder.captureExecutableQuery(bound));
+    assertFalse(bound.executableQuery.isExecutable());
+    bound.executableQuery.beginBinding(bound.table);
+    bound.executableQuery.publishBinding();
+    assertTrue(bound.executableQuery.executableGeneration() > published);
   }
 
   private static boolean hasWorkspaceName(String name) {

@@ -79,6 +79,30 @@ public final class Utf8Text {
     return bytes;
   }
 
+  /** Returns the Unicode scalar count, or {@code -1} for invalid UTF-16 or bounds. */
+  public static int scalarCount(char[] value, int offset, int length) {
+    if (value == null
+        || offset < 0
+        || length < 0
+        || offset > value.length - length) {
+      return -1;
+    }
+    int scalars = 0;
+    int end = offset + length;
+    for (int index = offset; index < end; index++) {
+      char first = value[index];
+      if (Character.isHighSurrogate(first)) {
+        if (++index >= end || !Character.isLowSurrogate(value[index])) {
+          return -1;
+        }
+      } else if (Character.isLowSurrogate(first)) {
+        return -1;
+      }
+      scalars++;
+    }
+    return scalars;
+  }
+
   /** Encodes at the target's current position and advances it on success. */
   public static int encode(
       CharSequence value,

@@ -25,6 +25,7 @@ final class ProtocolFrameCodecAllocationTest {
 
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
+    ProtocolFrameHeader header = new ProtocolFrameHeader();
     ProtocolResponse response = new ProtocolResponse();
     CommandResult command = new CommandResult();
     char[] source = "catalog_table_identifier_longer_than_seven".toCharArray();
@@ -44,13 +45,13 @@ final class ProtocolFrameCodecAllocationTest {
     assertEquals(StatusCode.OK, command.setTextAt(0, source, 0, source.length));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     for (int index = 0; index < 10_000; index++) {
-      exercise(codec, frame, response, command, bytes, decoded);
+      exercise(codec, frame, header, response, command, bytes, decoded);
     }
 
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
-      exercise(codec, frame, response, command, bytes, decoded);
+      exercise(codec, frame, header, response, command, bytes, decoded);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed protocol allocated bytes: " + allocated);
@@ -59,6 +60,7 @@ final class ProtocolFrameCodecAllocationTest {
   private static void exercise(
       ProtocolFrameCodec codec,
       ProtocolFrame frame,
+      ProtocolFrameHeader header,
       ProtocolResponse response,
       CommandResult command,
       ByteBuffer bytes,
@@ -70,6 +72,8 @@ final class ProtocolFrameCodecAllocationTest {
         StatusCode.OK,
         command,
         false).ordinal();
+    allocationGuard += codec.inspectResponseHeader(bytes, header).ordinal();
+    allocationGuard += header.payloadBytes();
     allocationGuard += codec.decodeResponse(bytes, frame, response).ordinal();
     allocationGuard += response.valueAt(1);
     allocationGuard += response.copyTextAt(0, decoded, 0);

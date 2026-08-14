@@ -224,7 +224,9 @@ final class SqlGroupedAggregateTest {
             "SELECT category, SUM(amount) FROM events "
                 + "WHERE category=40 GROUP BY category",
             overflow));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(overflow, row));
+    assertEquals(
+        StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
+        session.nextScan(overflow, row));
     assertEquals(StatusCode.OK, session.closeScan(overflow, result));
 
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));

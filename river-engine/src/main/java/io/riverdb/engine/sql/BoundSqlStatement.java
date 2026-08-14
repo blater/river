@@ -15,10 +15,10 @@ final class BoundSqlStatement {
   final BoundSqlQuery executableQuery = new BoundSqlQuery();
   final TableDefinition table = new TableDefinition();
   final TableDefinition joinTable = new TableDefinition();
-  final TableDefinition scalarTable = new TableDefinition();
   final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updateSourceColumns = new int[TableSchema.MAXIMUM_COLUMNS];
+  final int[] updateResultTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] predicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
   final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] projectedTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -26,8 +26,17 @@ final class BoundSqlStatement {
   int predicateColumn;
   int predicateCount;
   int accessPredicate;
+  long accessValue;
+  long accessLowerInclusive;
+  long accessUpperExclusive;
   int updatedColumnCount;
   int projectedColumnCount;
+  int groupColumn;
+  int groupAggregateColumn;
+  int distinctColumn;
+  int joinOuterColumn;
+  int joinInnerColumn;
+  int orderColumn;
 
   void reset() {
     command.reset();
@@ -35,11 +44,19 @@ final class BoundSqlStatement {
     executableQuery.reset();
     table.reset();
     joinTable.reset();
-    scalarTable.reset();
     predicateColumn = -1;
     predicateCount = 0;
     accessPredicate = -1;
+    accessValue = 0;
+    accessLowerInclusive = 0;
+    accessUpperExclusive = 0;
     updatedColumnCount = 0;
     projectedColumnCount = 0;
+    groupColumn = -1;
+    groupAggregateColumn = -1;
+    distinctColumn = -1;
+    joinOuterColumn = -1;
+    joinInnerColumn = -1;
+    orderColumn = -1;
   }
 }

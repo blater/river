@@ -78,17 +78,79 @@ final class EmbeddedRiverVariableVarcharTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
+            "INSERT INTO names VALUES (6, 'é', DEFAULT), (7, 'é', DEFAULT)",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id FROM names WHERE value='é'", command));
+    assertEquals(6, command.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT id FROM names WHERE value='é'", command));
+    assertEquals(7, command.valueAt(0));
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
             "CREATE TABLE bounded (id BIGINT PRIMARY KEY, value VARCHAR(3))",
             command));
     assertEquals(
         StatusCode.DATATYPE_MISMATCH,
         session.execute("INSERT INTO bounded VALUES (1, 'four')", command));
     assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO bounded VALUES (2, '🌊🌊🌊')", command));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        session.execute("INSERT INTO bounded VALUES (3, '🌊🌊🌊🌊')", command));
+    String malformed = "INSERT INTO bounded VALUES (4, '"
+        + Character.toString((char) 0xd800) + "')";
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(malformed, command));
+    assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         session.execute(
             "CREATE TABLE too_wide (id BIGINT PRIMARY KEY, a VARCHAR(255), "
                 + "b VARCHAR(255), c VARCHAR(255), d VARCHAR(255))",
             command));
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE sorted_text (id BIGINT PRIMARY KEY, value VARCHAR(32))",
+            command));
+    int spillRows = 1_025;
+    for (int first = 0; first < spillRows; first += 64) {
+      int end = Math.min(first + 64, spillRows);
+      StringBuilder insert = new StringBuilder("INSERT INTO sorted_text VALUES ");
+      for (int key = first; key < end; key++) {
+        if (key > first) {
+          insert.append(',');
+        }
+        insert.append('(')
+            .append(key)
+            .append(",'entry-")
+            .append(paddedKey(key))
+            .append("-東京🌊')");
+      }
+      assertEquals(StatusCode.OK, session.execute(insert.toString(), command));
+    }
+    queryResult = new QueryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery(
+            "SELECT id, value FROM sorted_text ORDER BY value", queryResult));
+    query = queryResult.query();
+    for (int key = 0; key < spillRows; key++) {
+      assertEquals(StatusCode.OK, query.next(row));
+      assertEquals(key, row.valueAt(0));
+      assertText(row, 1, "entry-" + paddedKey(key) + "-東京🌊",
+          SqlTypeDescriptor.varchar(32));
+    }
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(false, row.isAvailable());
+    assertEquals(StatusCode.OK, query.close(command));
 
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
@@ -128,5 +190,10 @@ final class EmbeddedRiverVariableVarcharTest {
     assertEquals(descriptor, result.typeDescriptorAt(index));
     assertEquals(expected.length(), result.copyTextAt(index, text, 0));
     assertEquals(expected, new String(text, 0, expected.length()));
+  }
+
+  private static String paddedKey(int key) {
+    String value = Integer.toString(key);
+    return "0".repeat(4 - value.length()) + value;
   }
 }

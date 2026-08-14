@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
+import io.riverdb.engine.api.SessionAuthorizer;
 
 /** Public SQL session façade; mutable execution state is owned by its components. */
 public final class SqlSession {
@@ -15,6 +16,13 @@ public final class SqlSession {
   public static StatusCode create(
       RelationalDatabase database,
       SqlSessionOpenResult result) {
+    return create(database, null, result);
+  }
+
+  public static StatusCode create(
+      RelationalDatabase database,
+      SessionAuthorizer authorizer,
+      SqlSessionOpenResult result) {
     if (database == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -23,7 +31,8 @@ public final class SqlSession {
     StatusCode status = database.createSession(sessionResult);
     if (status.isOk()) {
       result.set(new SqlSession(
-          new SqlSessionExecutionCoordinator(database, sessionResult.session())));
+          new SqlSessionExecutionCoordinator(
+              database, sessionResult.session(), authorizer)));
     }
     return status;
   }

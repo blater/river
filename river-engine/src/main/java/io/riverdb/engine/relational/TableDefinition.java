@@ -13,7 +13,7 @@ public final class TableDefinition {
   static final int INDEX_READY = 2;
   static final int INDEX_DROPPING = 3;
 
-  private RelationalDatabase owner;
+  private RelationalSchemaGate owner;
   private int tableId;
   private final int[] uniqueIndexTableIds = new int[MAXIMUM_INDEXES];
   private final int[] uniqueIndexStates = new int[MAXIMUM_INDEXES];
@@ -37,6 +37,7 @@ public final class TableDefinition {
   private long checkMask;
   private long referenceMask;
   private long schemaVersion;
+  private long schemaAdmission;
   private boolean available;
   private boolean identity;
   private int defaultTextBytesUsed;
@@ -73,27 +74,28 @@ public final class TableDefinition {
     checkMask = 0;
     referenceMask = 0;
     schemaVersion = 0;
+    schemaAdmission = 0;
     available = false;
     identity = false;
     defaultTextBytesUsed = 0;
   }
 
   void set(
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState) {
-    set(database, id, valueIndexTableId, valueIndexState, "key", "value");
+    set(schemaGate, id, valueIndexTableId, valueIndexState, "key", "value");
   }
 
   void set(
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
       CharSequence keyName,
       CharSequence valueName) {
-    owner = database;
+    owner = schemaGate;
     tableId = id;
     columnCount = 2;
     notNullMask = 1;
@@ -110,19 +112,20 @@ public final class TableDefinition {
     }
     keyColumnName.set(keyName);
     valueColumnName.set(valueName);
-    schemaVersion = database.schemaVersion();
+    schemaVersion = schemaGate.version();
+    schemaAdmission = 0;
     available = true;
   }
 
   void set(
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
       int indexColumn,
       TableDefinition schema) {
     set(
-        database,
+        schemaGate,
         id,
         valueIndexTableId,
         valueIndexState,
@@ -132,14 +135,14 @@ public final class TableDefinition {
   }
 
   void set(
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
       int indexColumn,
       TableDefinition schema,
       boolean unique) {
-    owner = database;
+    owner = schemaGate;
     tableId = id;
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask;
@@ -155,18 +158,19 @@ public final class TableDefinition {
     if (valueIndexTableId > 0) {
       upsertIndex(valueIndexTableId, valueIndexState, indexColumn, unique);
     }
-    schemaVersion = database.schemaVersion();
+    schemaVersion = schemaGate.version();
+    schemaAdmission = 0;
     available = true;
   }
 
   void set(
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
       int indexColumn,
       TableSchema schema) {
-    owner = database;
+    owner = schemaGate;
     tableId = id;
     columnCount = schema.columnCount();
     notNullMask = schema.notNullMask();
@@ -193,12 +197,13 @@ public final class TableDefinition {
     for (int index = 0; index < columnCount; index++) {
       writableColumn(index).set(schema.columnName(index));
     }
-    schemaVersion = database.schemaVersion();
+    schemaVersion = schemaGate.version();
+    schemaAdmission = 0;
     available = true;
   }
 
   void set(
-      RelationalDatabase database,
+      RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
@@ -218,7 +223,7 @@ public final class TableDefinition {
       int defaultsOffset,
       int defaultTextOffset,
       int defaultTextLength) {
-    owner = database;
+    owner = schemaGate;
     tableId = id;
     columnCount = columns;
     notNullMask = requiredNotNullMask;
@@ -251,7 +256,8 @@ public final class TableDefinition {
       writableColumn(index).set(source, offset, length);
       offset += length;
     }
-    schemaVersion = database.schemaVersion();
+    schemaVersion = schemaGate.version();
+    schemaAdmission = 0;
     available = true;
   }
 
@@ -442,10 +448,14 @@ public final class TableDefinition {
     }
     int payloadOffset = fixedRowBytes();
     for (int column = 1; column < columnCount; column++) {
+      long slot = row.getLong(base + (column - 1) * Long.BYTES);
       if (!isVarchar(column)) {
+        if ((nullMask & 1L << column) != 0
+            ? slot != 0 : !TableSchema.validFixedValue(typeDescriptors[column], slot)) {
+          return false;
+        }
         continue;
       }
-      long slot = row.getLong(base + (column - 1) * Long.BYTES);
       if ((nullMask & 1L << column) != 0) {
         if (slot != 0) {
           return false;
@@ -654,10 +664,34 @@ public final class TableDefinition {
     return StatusCode.OK;
   }
 
-  boolean isOwnedBy(RelationalDatabase database) {
+  boolean isOwnedBy(RelationalSchemaGate schemaGate) {
+    return schemaGate != null && schemaGate.owns(this);
+  }
+
+  void bindSchema(
+      RelationalSchemaGate schemaGate,
+      long requiredSchemaVersion,
+      long requiredSchemaAdmission) {
+    owner = schemaGate;
+    schemaVersion = requiredSchemaVersion;
+    schemaAdmission = requiredSchemaAdmission;
+  }
+
+  boolean matchesSchema(
+      RelationalSchemaGate schemaGate,
+      long publishedSchemaVersion,
+      long publishedSchemaAdmission,
+      long activeSchemaAdmission) {
     return available
-        && owner == database
-        && schemaVersion == database.schemaVersion();
+        && owner == schemaGate
+        && (schemaAdmission == 0 && schemaVersion == publishedSchemaVersion
+            || schemaAdmission != 0
+                && schemaVersion == publishedSchemaVersion
+                && schemaAdmission == publishedSchemaAdmission
+            || schemaAdmission != 0
+                && activeSchemaAdmission != 0
+                && schemaAdmission == activeSchemaAdmission
+                && schemaVersion == publishedSchemaVersion + 1);
   }
 
   private ColumnName writableColumn(int index) {

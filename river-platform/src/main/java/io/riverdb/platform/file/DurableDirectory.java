@@ -6,7 +6,7 @@ import io.riverdb.base.error.StatusCode;
  * Durable namespace operations rooted at one validated database directory.
  *
  * <p>Operations are synchronous: they never return an applied-but-completion-pending state.
- * Asynchronous installation and authenticated polling belong to {@link AtomicFileInstaller}.
+ * Owners compose their own bounded installation protocol from these operations.
  *
  * <p>Every name is a validated direct child, never a path. Creation, rename, and removal become
  * namespace-durable only after {@link #force}. A file truncation becomes content/length durable

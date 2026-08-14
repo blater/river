@@ -1,5 +1,7 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlCommand;
@@ -40,6 +42,48 @@ final class SqlExpressionEvaluator {
             && actual < source.predicateUpperExclusive(predicate);
       case IN, NOT_IN -> matchesLiteralMembership(actual, source, predicate);
     };
+  }
+
+  boolean matchesComparison(
+      long actual,
+      int actualDescriptor,
+      SqlCommand source,
+      int predicate) {
+    int expectedDescriptor = source.predicateTypeDescriptor(predicate);
+    SqlComparison comparison = source.comparison(predicate);
+    if (comparison == SqlComparison.HALF_OPEN_RANGE) {
+      return compareExact(
+              actual,
+              actualDescriptor,
+              source.predicateLowerInclusive(predicate),
+              expectedDescriptor) >= 0
+          && compareExact(
+              actual,
+              actualDescriptor,
+              source.predicateUpperExclusive(predicate),
+              expectedDescriptor) < 0;
+    }
+    if (comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN) {
+      boolean equal = false;
+      for (int index = 0; index < source.literalMembershipCount(predicate); index++) {
+        if (compareExact(
+            actual,
+            actualDescriptor,
+            source.literalMembershipValue(predicate, index),
+            expectedDescriptor) == 0) {
+          equal = true;
+          break;
+        }
+      }
+      return comparison == SqlComparison.IN
+          ? equal : !equal && !source.literalMembershipHasNull(predicate);
+    }
+    return matchesComparison(
+        actual,
+        actualDescriptor,
+        comparison,
+        source.predicateValue(predicate),
+        expectedDescriptor);
   }
 
   boolean matchesTextComparison(
@@ -148,6 +192,36 @@ final class SqlExpressionEvaluator {
       case GREATER_OR_EQUAL -> actual >= expected;
       case HALF_OPEN_RANGE, IN, NOT_IN -> false;
     };
+  }
+
+  boolean matchesComparison(
+      long actual,
+      int actualDescriptor,
+      SqlComparison comparison,
+      long expected,
+      int expectedDescriptor) {
+    int compared = compareExact(actual, actualDescriptor, expected, expectedDescriptor);
+    return switch (comparison) {
+      case EQUAL -> compared == 0;
+      case NOT_EQUAL -> compared != 0;
+      case LESS_THAN -> compared < 0;
+      case LESS_OR_EQUAL -> compared <= 0;
+      case GREATER_THAN -> compared > 0;
+      case GREATER_OR_EQUAL -> compared >= 0;
+      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
+    };
+  }
+
+  int compareExact(
+      long left,
+      int leftDescriptor,
+      long right,
+      int rightDescriptor) {
+    return SqlTypeDescriptor.typeId(leftDescriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
+            || SqlTypeDescriptor.typeId(rightDescriptor)
+                == SqlTypeDescriptor.TYPE_ID_DECIMAL
+        ? ExactDecimal.compare(left, leftDescriptor, right, rightDescriptor)
+        : Long.compare(left, right);
   }
 
   boolean matchesLiteralMembership(

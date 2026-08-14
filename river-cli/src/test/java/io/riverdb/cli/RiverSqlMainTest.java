@@ -41,8 +41,8 @@ final class RiverSqlMainTest {
         CREATE TABLE regions (id BIGINT PRIMARY KEY, code BIGINT);
         INSERT INTO regions VALUES (7, 7000), (8, 8000);
         CREATE TABLE labels
-          (id BIGINT PRIMARY KEY, name VARCHAR(7), state VARCHAR(7) DEFAULT 'new');
-        INSERT INTO labels (id, name) VALUES (1, 'alpha');
+          (id BIGINT PRIMARY KEY, name VARCHAR(32), state VARCHAR(12) DEFAULT '新規');
+        INSERT INTO labels (id, name) VALUES (1, '河川データ庫');
         INSERT INTO labels VALUES (2, NULL, 'old');
         SELECT id, name, state FROM labels ORDER BY id;
         SELECT accounts.id, regions.code FROM accounts
@@ -82,7 +82,7 @@ final class RiverSqlMainTest {
     assertTrue(output.contains("id\tbalance\n3\t200\nROWS\t1\n"));
     assertTrue(output.contains("id\n1\n2\n3\nROWS\t3\n"));
     assertTrue(output.contains(
-        "id\tname\tstate\n1\talpha\tnew\n2\tNULL\told\nROWS\t2\n"));
+        "id\tname\tstate\n1\t河川データ庫\t新規\n2\tNULL\told\nROWS\t2\n"));
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
   }

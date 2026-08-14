@@ -50,7 +50,7 @@ final class SqlArithmeticUpdateTest {
             result));
 
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
         session.execute(
             "UPDATE accounts SET balance=adjustment+25 WHERE region=7",
             result));
@@ -59,7 +59,7 @@ final class SqlArithmeticUpdateTest {
         StatusCode.CONFLICT,
         session.execute("SELECT id FROM accounts WHERE balance=125", result));
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
         session.execute("UPDATE accounts SET balance=adjustment-1 WHERE id=4", result));
     assertValue(
         session,

@@ -28,7 +28,7 @@ class SanitizedExporterTest {
         2,
         Severity.DEBUG,
         SaturationPolicy.DROP_AND_COUNT,
-        ObservabilityBuildMode.TEST);
+        ObservabilityBuildMode.DIAGNOSTIC);
     DiagnosticContext context = new DiagnosticContext().databaseId(31).sessionId(32);
     DiagnosticEvent raw = new DiagnosticEvent().set(
         EventTypeId.DATABASE_STARTED,
@@ -73,7 +73,7 @@ class SanitizedExporterTest {
         2,
         Severity.DEBUG,
         SaturationPolicy.DROP_AND_COUNT,
-        ObservabilityBuildMode.TEST);
+        ObservabilityBuildMode.DIAGNOSTIC);
     DiagnosticContext context = new DiagnosticContext().databaseId(51).sessionId(52);
     DiagnosticEvent raw = new DiagnosticEvent().set(
         EventTypeId.DATABASE_STARTED,

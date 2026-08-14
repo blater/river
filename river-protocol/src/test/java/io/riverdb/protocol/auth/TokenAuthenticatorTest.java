@@ -3,6 +3,7 @@ package io.riverdb.protocol.auth;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.SessionPermissions;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
@@ -87,6 +88,29 @@ final class TokenAuthenticatorTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         opened.authenticator().verify(frame, 1, 2, new byte[] {1}));
     assertPayloadErased(bytes, malformed.length);
+  }
+
+  @Test
+  void bindsValidatedPrincipalAndLeastPrivilegeMask() {
+    byte[] token = new byte[TokenProof.MINIMUM_TOKEN_BYTES];
+    Arrays.fill(token, (byte) 9);
+    TokenAuthenticatorOpenResult opened = new TokenAuthenticatorOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        TokenAuthenticator.create(
+            token, token.length, 91, SessionPermissions.NONE, opened));
+    assertEquals(91, opened.authenticator().principalId());
+    assertEquals(SessionPermissions.NONE, opened.authenticator().permissions());
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        TokenAuthenticator.create(
+            token, token.length, 0, SessionPermissions.READ, opened));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        TokenAuthenticator.create(
+            token, token.length, 91, SessionPermissions.ALL | 16, opened));
+    Arrays.fill(token, (byte) 0);
   }
 
   private static void assertPayloadErased(ByteBuffer bytes, int length) {

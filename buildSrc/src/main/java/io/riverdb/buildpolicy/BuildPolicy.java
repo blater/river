@@ -42,6 +42,9 @@ public final class BuildPolicy {
   private static final Pattern RAW_UNICODE_ESCAPE = Pattern.compile(
       "\\\\u+[0-9a-fA-F]{4}"
   );
+  private static final Pattern TEST_SUPPORT_IDENTIFIER = Pattern.compile(
+      "\\b[A-Za-z_$][\\w$]*(?:ForTest|TestOnly)[A-Za-z0-9_$]*\\b"
+  );
 
   private BuildPolicy() {
   }
@@ -116,6 +119,20 @@ public final class BuildPolicy {
               + packageName + " owned by " + owner);
         }
       });
+
+      if (source.productionSource()) {
+        if ("io.riverdb.platform.fault".equals(parsed.packageName())) {
+          violations.add(relativePath
+              + ": production source owns the test-only platform fault package");
+        }
+        if (referencesPackage(parsed.code(), "io.riverdb.testkit")) {
+          violations.add(relativePath + ": production source references testkit code");
+        }
+        if (TEST_SUPPORT_IDENTIFIER.matcher(parsed.code()).find()) {
+          violations.add(relativePath
+              + ": production source declares or references a test-support identifier");
+        }
+      }
 
       if (source.productionSource()
           && isHotPathPackage(parsed.packageName(), hotPathPackagePrefixes)) {

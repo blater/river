@@ -5,13 +5,10 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.format.page.PageCodec;
-import io.riverdb.format.page.PageHeader;
-import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.ForceMode;
-import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
 import io.riverdb.storage.btree.BTreeLookupResult;
 import io.riverdb.storage.heap.HeapInsertResult;
@@ -29,36 +26,37 @@ public final class IndexedTableStore {
   public static final String FILE_NAME = "river.indexed.pages";
   public static final int WAL_FORMAT_ID = IndexedWalCodec.FORMAT_ID;
   public static final int WAL_FORMAT_VERSION = IndexedWalCodec.FORMAT_VERSION;
-  public static final int MAX_PAGES = 512;
-  public static final int MAX_CHANGED_PAGES = 63;
-  public static final int MAX_ROWS = CheckpointState.MAXIMUM_ROWS;
+  public static final int MAX_PAGES = IndexedTableLimits.MAX_PAGES;
+  public static final int MAX_CHANGED_PAGES = IndexedTableLimits.MAX_CHANGED_PAGES;
+  public static final int MAX_ROWS = IndexedTableLimits.MAX_ROWS;
   public static final int VACUUM_COMMIT_PAYLOAD_BYTES =
       IndexedWalCodec.VACUUM_COMMIT_PAYLOAD_BYTES;
 
   private static final int HEAP_PAGE_ID = IndexedTableKernel.HEAP_PAGE_ID;
   private static final int ROOT_META_PAGE_ID = IndexedTableKernel.ROOT_META_PAGE_ID;
-  private static final int MAX_PREPARED_INSERT_ROWS = LocalWal.MAX_PENDING_RECORDS * 64;
-  static final int MAX_OPERATION_ROWS = MAX_PREPARED_INSERT_ROWS;
+  private static final long BOOTSTRAP_TRANSACTION_ID = 1;
+  private static final int MAX_PREPARED_INSERT_ROWS = IndexedTableLimits.MAX_OPERATION_ROWS;
+  static final int MAX_OPERATION_ROWS = IndexedTableLimits.MAX_OPERATION_ROWS;
 
   private final DurableDirectory directory;
   private final DurableFile file;
   private final LocalWal wal;
   private final DatabaseIncarnation database;
   private final IndexedTableKernel kernel;
+  private final IndexedCheckpointWriter checkpointWriter;
+  private final IndexedCheckpointLoader checkpointLoader;
+  private final IndexedWalRecovery recovery;
+  private final IndexedVacuumWriter vacuumWriter;
   private WalGeneration walGeneration;
   private final IndexedPageSet pages = new IndexedPageSet();
-  private final int[] recoveryPageIds = new int[MAX_CHANGED_PAGES];
   private final long[] preparedKeys = new long[MAX_PREPARED_INSERT_ROWS];
   private final int[] preparedLeafPageIds = new int[MAX_PREPARED_INSERT_ROWS];
   private final boolean[] preparedNewIndexEntries = new boolean[MAX_PREPARED_INSERT_ROWS];
   private final long[] preparedRecordStarts = new long[LocalWal.MAX_PENDING_RECORDS];
   private final long[] preparedCommitSequences = new long[LocalWal.MAX_PENDING_RECORDS];
   private final long[] preparedTransactionIds = new long[LocalWal.MAX_PENDING_RECORDS];
-  private final long[] vacuumRecordStarts = new long[LocalWal.MAX_PENDING_RECORDS];
   private final CRC32C checksum = new CRC32C();
   private final IoResult ioResult = new IoResult();
-  private final FileSizeResult fileSizeResult = new FileSizeResult();
-  private final PageHeader pageHeader = new PageHeader();
   private final LocalWalReservation walReservation = new LocalWalReservation();
   private final LocalWalAppendResult walAppendResult = new LocalWalAppendResult();
   private final LocalWalForceResult walForceResult = new LocalWalForceResult();
@@ -67,20 +65,14 @@ public final class IndexedTableStore {
   private int preparedRecordCount;
   private int preparedRowCount;
   private int preparedHeapBytes;
-  private int vacuumExpectedRows;
-  private int vacuumAppliedRows;
-  private int vacuumExpectedChunks;
-  private int vacuumAppliedChunks;
   private final IndexedStorePhase phase = new IndexedStorePhase();
   private boolean failed;
   private boolean closed;
   private boolean baseLoaded;
   private long walCopyBytes;
-  private long vacuumTransactionId;
-  private long vacuumRecordStart;
   private volatile long lastCommitSequence;
 
-  private IndexedTableStore(
+  IndexedTableStore(
       DurableDirectory durableDirectory,
       DurableFile durableFile,
       LocalWal localWal,
@@ -91,15 +83,333 @@ public final class IndexedTableStore {
     wal = localWal;
     database = databaseIncarnation;
     walGeneration = generation;
-    kernel = new IndexedTableKernel(this);
+    kernel = new IndexedTableKernel(pages);
+    checkpointWriter = new IndexedCheckpointWriter(directory, pages, database);
+    checkpointLoader = new IndexedCheckpointLoader(
+        directory, file, pages, kernel, database);
+    recovery = new IndexedWalRecovery(wal, pages, kernel, database, phase);
+    vacuumWriter = new IndexedVacuumWriter(wal, kernel, recovery);
   }
 
-  IndexedTableKernel kernel() {
-    return kernel;
+  StatusCode initialize() {
+    StatusCode status = beginOperation();
+    if (!status.isOk()) {
+      return status;
+    }
+    status = kernel.initializePages();
+    if (status.isOk()) {
+      status = commit(BOOTSTRAP_TRANSACTION_ID, nextCommitSequence());
+    }
+    if (status.isOk()) {
+      status = flush();
+    }
+    if (!status.isOk()) {
+      cancelOperation();
+    }
+    return status;
   }
 
-  IndexedPageSet pages() {
-    return pages;
+  StatusCode validate() {
+    return kernel.validate();
+  }
+
+  StatusCode insert(
+      long transactionId,
+      long key,
+      ByteBuffer row,
+      HeapInsertResult result) {
+    return insertCommitted(transactionId, nextCommitSequence(), key, row, result);
+  }
+
+  StatusCode commitInsert(
+      long transactionId,
+      long key,
+      ByteBuffer row,
+      IndexedCommitResult result) {
+    if (result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    long commitSequence = nextCommitSequence();
+    HeapInsertResult inserted = kernel.heapInsertResult();
+    StatusCode status = insertCommitted(
+        transactionId, commitSequence, key, row, inserted);
+    if (status.isOk()) {
+      result.set(inserted.rowId(), commitSequence);
+    }
+    return status;
+  }
+
+  StatusCode commitInserts(
+      long transactionId,
+      long[] keys,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int insertCount,
+      IndexedCommitResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID
+        || keys == null
+        || rows == null
+        || rowStride <= 0
+        || rowLengths == null
+        || insertCount <= 0
+        || insertCount > keys.length
+        || insertCount > rowLengths.length
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    if (insertCount == 1) {
+      rows.position(0);
+      rows.limit(rowLengths[0]);
+      return commitInsert(transactionId, keys[0], rows, result);
+    }
+    long commitSequence = nextCommitSequence();
+    HeapInsertResult inserted = kernel.heapInsertResult();
+    StatusCode status = commitInsertBatch(
+        transactionId,
+        commitSequence,
+        keys,
+        rows,
+        rowStride,
+        rowLengths,
+        insertCount,
+        inserted);
+    if (status.isOk()) {
+      result.set(inserted.rowId(), commitSequence);
+      return StatusCode.OK;
+    }
+    if (status != StatusCode.RESOURCE_EXHAUSTED) {
+      return status;
+    }
+    status = beginOperation();
+    if (!status.isOk()) {
+      return status;
+    }
+    status = kernel.stageInsertBatch(
+        keys, rows, rowStride, rowLengths, insertCount, inserted);
+    if (!status.isOk()) {
+      cancelOperation();
+      return status;
+    }
+    status = commit(transactionId, commitSequence);
+    if (status.isOk()) {
+      result.set(inserted.rowId(), commitSequence);
+    }
+    return status;
+  }
+
+  StatusCode commitMutations(
+      long transactionId,
+      int[] operations,
+      long[] keys,
+      int[] previousRowIds,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int mutationCount,
+      IndexedCommitResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    long commitSequence = nextCommitSequence();
+    HeapInsertResult inserted = kernel.heapInsertResult();
+    StatusCode status = commitMutationBatch(
+        transactionId,
+        commitSequence,
+        operations,
+        keys,
+        previousRowIds,
+        rows,
+        rowStride,
+        rowLengths,
+        mutationCount,
+        inserted);
+    if (status.isOk()) {
+      result.set(inserted.rowId(), commitSequence);
+      return StatusCode.OK;
+    }
+    if (status != StatusCode.RESOURCE_EXHAUSTED) {
+      return status;
+    }
+    status = beginOperation();
+    if (!status.isOk()) {
+      return status;
+    }
+    status = kernel.stageMutationBatch(
+        operations,
+        keys,
+        previousRowIds,
+        rows,
+        rowStride,
+        rowLengths,
+        mutationCount,
+        inserted);
+    if (!status.isOk()) {
+      cancelOperation();
+      return status;
+    }
+    status = commit(transactionId, commitSequence);
+    if (status.isOk()) {
+      result.set(inserted.rowId(), commitSequence);
+    }
+    return status;
+  }
+
+  StatusCode commitMutations(
+      long transactionId,
+      PendingMutationBuffer mutations,
+      IndexedCommitResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID
+        || mutations == null
+        || mutations.count() <= 0
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    long commitSequence = nextCommitSequence();
+    HeapInsertResult inserted = kernel.heapInsertResult();
+    boolean mixed = mutations.containsNonInsertMutation();
+    StatusCode status = mixed
+        ? commitMutationBatch(transactionId, commitSequence, mutations, inserted)
+        : commitInsertBatch(transactionId, commitSequence, mutations, inserted);
+    if (status.isOk()) {
+      result.set(inserted.rowId(), commitSequence);
+      return StatusCode.OK;
+    }
+    if (status != StatusCode.RESOURCE_EXHAUSTED) {
+      return status;
+    }
+    status = beginOperation();
+    if (!status.isOk()) {
+      return status;
+    }
+    status = mixed
+        ? kernel.stageMutationBatch(mutations, inserted)
+        : kernel.stageInsertBatch(mutations, inserted);
+    if (!status.isOk()) {
+      cancelOperation();
+      return status;
+    }
+    status = commit(transactionId, commitSequence);
+    if (status.isOk()) {
+      result.set(inserted.rowId(), commitSequence);
+    }
+    return status;
+  }
+
+  StatusCode appendPreparedWrites(
+      long transactionId,
+      long commitSequence,
+      PendingMutationBuffer mutations,
+      HeapInsertResult result) {
+    return mutations.containsNonInsertMutation()
+        ? appendPreparedMutationBatch(transactionId, commitSequence, mutations, result)
+        : appendPreparedInsertBatch(transactionId, commitSequence, mutations, result);
+  }
+
+  StatusCode cancelPreparedInsertGroup() {
+    return cancelPreparedInsertPreflight();
+  }
+
+  StatusCode publishForcedGroup() {
+    return publishForcedInserts();
+  }
+
+  StatusCode vacuum(long transactionId, IndexedVacuumResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return commitVacuum(transactionId, nextCommitSequence(), result);
+  }
+
+  StatusCode insertCommitted(
+      long transactionId,
+      long commitSequence,
+      long key,
+      ByteBuffer row,
+      HeapInsertResult result) {
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID
+        || commitSequence <= 0
+        || key == Long.MAX_VALUE
+        || row == null
+        || !row.hasRemaining()
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    int leafPageId = kernel.findLeafPageId(key);
+    StatusCode status = kernel.validateNewIndexEntryAt(leafPageId, key, 0);
+    if (!status.isOk() && status != StatusCode.RESOURCE_EXHAUSTED) {
+      return status;
+    }
+    if (!kernel.canAppendRow(row.remaining())) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (status.isOk()) {
+      return commitInsert(transactionId, commitSequence, key, row, result);
+    }
+    status = beginOperation();
+    if (!status.isOk()) {
+      return status;
+    }
+    status = kernel.stageInsert(leafPageId, key, row);
+    if (!status.isOk()) {
+      cancelOperation();
+      return status;
+    }
+    status = commit(transactionId, commitSequence);
+    if (status.isOk()) {
+      result.setRowId(kernel.heapInsertResult().rowId());
+    }
+    return status;
+  }
+
+  StatusCode fetchByKey(long key, io.riverdb.storage.heap.HeapRowResult result) {
+    return kernel.fetchByKeyAt(lastCommitSequence, key, result);
+  }
+
+  StatusCode fetchByKeyAt(
+      long visibleCommitSequence,
+      long key,
+      io.riverdb.storage.heap.HeapRowResult result) {
+    return kernel.fetchByKeyAt(visibleCommitSequence, key, result);
+  }
+
+  int firstLeafPageId(long lowerKey) {
+    return kernel.findLeafPageId(lowerKey);
+  }
+
+  StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
+    return kernel.nextScan(cursor, result);
+  }
+
+  StatusCode prepareMutation(
+      long visibleCommitSequence,
+      long key,
+      IndexedMutationTarget result) {
+    return kernel.prepareMutation(visibleCommitSequence, key, result);
+  }
+
+  StatusCode prepareInsert(
+      long visibleCommitSequence,
+      long key,
+      IndexedMutationTarget result) {
+    return kernel.prepareInsert(visibleCommitSequence, key, result);
+  }
+
+  int rootPageId() {
+    return kernel.rootPageId();
+  }
+
+  int pageCount() {
+    return pages.highestPageId();
+  }
+
+  int treeHeight() {
+    return kernel.treeHeight();
   }
 
   public static StatusCode create(
@@ -108,18 +418,8 @@ public final class IndexedTableStore {
       DatabaseIncarnation database,
       WalGeneration walGeneration,
       IndexedTableStoreOpenResult result) {
-    if (!validInput(directory, wal, database, walGeneration, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.createFile(FILE_NAME, operation);
-    if (!status.isOk()) {
-      return status;
-    }
-    result.set(new IndexedTableStore(
-        directory, operation.file(), wal, database, walGeneration));
-    return StatusCode.OK;
+    return IndexedTableStoreFactory.create(
+        directory, wal, database, walGeneration, result);
   }
 
   public static StatusCode open(
@@ -128,7 +428,8 @@ public final class IndexedTableStore {
       DatabaseIncarnation database,
       WalGeneration walGeneration,
       IndexedTableStoreOpenResult result) {
-    return open(directory, wal, database, walGeneration, true, result);
+    return IndexedTableStoreFactory.open(
+        directory, wal, database, walGeneration, true, result);
   }
 
   public static StatusCode openExisting(
@@ -137,7 +438,8 @@ public final class IndexedTableStore {
       DatabaseIncarnation database,
       WalGeneration walGeneration,
       IndexedTableStoreOpenResult result) {
-    return open(directory, wal, database, walGeneration, false, result);
+    return IndexedTableStoreFactory.open(
+        directory, wal, database, walGeneration, false, result);
   }
 
   public static StatusCode openCheckpoint(
@@ -146,74 +448,13 @@ public final class IndexedTableStore {
       DatabaseIncarnation database,
       CheckpointState checkpoint,
       IndexedTableStoreOpenResult result) {
-    if (checkpoint == null
-        || !checkpoint.isAvailable()
-        || !checkpoint.database().equals(database)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    WalGeneration generation = checkpoint.walGeneration();
-    if (!validInput(directory, wal, database, generation, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.reopen(FILE_NAME, operation);
-    if (!status.isOk()) {
-      return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
-    }
-    IndexedTableStore store = new IndexedTableStore(
-        directory, operation.file(), wal, database, generation);
-    status = store.loadCheckpoint(checkpoint);
-    if (status.isOk()) {
-      status = store.recoverFromWal();
-    }
-    if (status.isOk()) {
-      status = store.flush();
-    }
-    if (!status.isOk()) {
-      store.file.close();
-      return status;
-    }
-    result.set(store);
-    return StatusCode.OK;
+    return IndexedTableStoreFactory.openCheckpoint(
+        directory, wal, database, checkpoint, result);
   }
 
   public static String checkpointFileName(WalGeneration generation) {
     return generation == null || !generation.isValid()
         ? "" : FILE_NAME + ".checkpoint." + generation.value();
-  }
-
-  private static StatusCode open(
-      DurableDirectory directory,
-      LocalWal wal,
-      DatabaseIncarnation database,
-      WalGeneration walGeneration,
-      boolean createWhenMissing,
-      IndexedTableStoreOpenResult result) {
-    if (!validInput(directory, wal, database, walGeneration, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.reopen(FILE_NAME, operation);
-    if (status == StatusCode.CONFLICT && createWhenMissing) {
-      status = directory.createFile(FILE_NAME, operation);
-    }
-    if (!status.isOk()) {
-      return status;
-    }
-    IndexedTableStore store = new IndexedTableStore(
-        directory, operation.file(), wal, database, walGeneration);
-    status = store.recoverFromWal();
-    if (status.isOk()) {
-      status = store.flush();
-    }
-    if (!status.isOk()) {
-      store.file.close();
-      return status;
-    }
-    result.set(store);
-    return StatusCode.OK;
   }
 
   StatusCode beginOperation() {
@@ -402,6 +643,162 @@ public final class IndexedTableStore {
   StatusCode commitInsertBatch(
       long transactionId,
       long commitSequence,
+      PendingMutationBuffer mutations,
+      HeapInsertResult result) {
+    if (transactionId <= 0
+        || commitSequence <= lastCommitSequence
+        || mutations == null
+        || mutations.count() <= 0
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = admission();
+    if (!status.isOk()) {
+      return status;
+    }
+    if (phase.operationActive() || phase.preparedInsertGroupActive()) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    status = validatePendingInsertBatch(mutations);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (!kernel.canAppendRows(mutations)) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int operationBytes = pendingInsertOperationBytes(mutations);
+    status = wal.reserve(operationBytes, walReservation);
+    if (!status.isOk()) {
+      return status;
+    }
+    ByteBuffer recordPayload = walReservation.writablePayload();
+    int firstRowId = kernel.rowCount() + 1;
+    encodePendingInsertRecord(
+        mutations, recordPayload, operationBytes, firstRowId);
+    status = publishInsertRecord(
+        transactionId,
+        commitSequence,
+        recordPayload,
+        mutations.count() == 1);
+    if (!status.isOk()) {
+      return status;
+    }
+    lastCommitSequence = commitSequence;
+    result.setRowId(firstRowId + mutations.count() - 1);
+    return StatusCode.OK;
+  }
+
+  private StatusCode validatePendingInsertBatch(PendingMutationBuffer mutations) {
+    for (int index = 0; index < mutations.count(); index++) {
+      StatusCode status = validatePendingInsert(mutations, index);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode validatePendingInsert(
+      PendingMutationBuffer mutations, int index) {
+    int rowBytes = mutations.rowLengthAt(index);
+    long key = mutations.keyAt(index);
+    if (key == Long.MAX_VALUE
+        || rowBytes <= 0
+        || rowBytes > mutations.rowStride()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int leafPageId = kernel.findLeafPageId(key);
+    int earlierInLeaf = 0;
+    for (int previous = 0; previous < index; previous++) {
+      if (mutations.keyAt(previous) == key) {
+        return StatusCode.CONFLICT;
+      }
+      if (kernel.findLeafPageId(mutations.keyAt(previous)) == leafPageId) {
+        earlierInLeaf++;
+      }
+    }
+    return kernel.validateNewIndexEntryAt(leafPageId, key, earlierInLeaf);
+  }
+
+  private int pendingInsertOperationBytes(PendingMutationBuffer mutations) {
+    if (mutations.count() == 1) {
+      return IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES
+          + mutations.rowLengthAt(0);
+    }
+    int operationBytes = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
+    for (int index = 0; index < mutations.count(); index++) {
+      operationBytes += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES
+          + mutations.rowLengthAt(index);
+    }
+    return operationBytes;
+  }
+
+  private void encodePendingInsertRecord(
+      PendingMutationBuffer mutations,
+      ByteBuffer recordPayload,
+      int operationBytes,
+      int firstRowId) {
+    if (mutations.count() == 1) {
+      IndexedWalCodec.encodeInsertHeader(
+          recordPayload, mutations.keyAt(0), firstRowId, mutations.rowLengthAt(0));
+      mutations.copyRowTo(0, recordPayload, IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES);
+      walCopyBytes += mutations.rowLengthAt(0);
+    } else {
+      IndexedWalCodec.encodeInsertBatchHeader(recordPayload, mutations.count());
+      int outputOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
+      for (int index = 0; index < mutations.count(); index++) {
+        int rowBytes = mutations.rowLengthAt(index);
+        IndexedWalCodec.encodeInsertBatchEntry(
+            recordPayload, outputOffset, mutations.keyAt(index), firstRowId + index, rowBytes);
+        int rowOffset = outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
+        mutations.copyRowTo(index, recordPayload, rowOffset);
+        walCopyBytes += rowBytes;
+        outputOffset = rowOffset + rowBytes;
+      }
+    }
+    recordPayload.position(operationBytes);
+  }
+
+  private StatusCode publishInsertRecord(
+      long transactionId,
+      long commitSequence,
+      ByteBuffer recordPayload,
+      boolean singleInsert) {
+    StatusCode status = wal.publish(
+        walReservation,
+        transactionId,
+        commitSequence,
+        1,
+        WAL_FORMAT_ID,
+        WAL_FORMAT_VERSION,
+        walAppendResult);
+    if (!status.isOk()) {
+      failed = true;
+      return status;
+    }
+    status = singleInsert
+        ? kernel.applyInsertOperation(
+            recordPayload,
+            walAppendResult.startOffset(),
+            walAppendResult.endOffset(),
+            commitSequence)
+        : kernel.applyInsertBatchOperation(
+            recordPayload,
+            walAppendResult.startOffset(),
+            walAppendResult.endOffset(),
+            commitSequence);
+    if (!status.isOk()) {
+      failed = true;
+      return status;
+    }
+    return StatusCode.OK;
+  }
+
+  /** Commits multiple non-splitting inserts as one compact logical WAL record. */
+  StatusCode commitInsertBatch(
+      long transactionId,
+      long commitSequence,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
@@ -428,83 +825,114 @@ public final class IndexedTableStore {
     if (phase.operationActive() || phase.preparedInsertGroupActive()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    int operationBytes = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
-    for (int index = 0; index < insertCount; index++) {
-      int rowBytes = rowLengths[index];
-      int rowOffset = index * rowStride;
-      long key = keys[index];
-      if (key == Long.MAX_VALUE
-          || rowBytes <= 0
-          || rowBytes > rowStride
-          || rows.limit() - rowOffset < rowBytes) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (keys[previous] == key) {
-          return StatusCode.CONFLICT;
-        }
-      }
-      int leafPageId = kernel.findLeafPageId(key);
-      int earlierInLeaf = 0;
-      for (int previous = 0; previous < index; previous++) {
-        if (kernel.findLeafPageId(keys[previous]) == leafPageId) {
-          earlierInLeaf++;
-        }
-      }
-      status = kernel.validateNewIndexEntryAt(leafPageId, key, earlierInLeaf);
-      if (!status.isOk()) {
-        return status;
-      }
-      operationBytes += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES + rowBytes;
+    status = validateRawInsertBatch(
+        keys, rows, rowStride, rowLengths, insertCount);
+    if (!status.isOk()) {
+      return status;
     }
     if (!canAppendRows(rowLengths, insertCount)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    int operationBytes = rawInsertOperationBytes(rowLengths, insertCount);
     status = wal.reserve(operationBytes, walReservation);
     if (!status.isOk()) {
       return status;
     }
     ByteBuffer recordPayload = walReservation.writablePayload();
-    IndexedWalCodec.encodeInsertBatchHeader(recordPayload, insertCount);
-    int outputOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
     int firstRowId = kernel.rowCount() + 1;
-    for (int index = 0; index < insertCount; index++) {
-      int rowBytes = rowLengths[index];
-      IndexedWalCodec.encodeInsertBatchEntry(
-          recordPayload, outputOffset, keys[index], firstRowId + index, rowBytes);
-      int sourceOffset = index * rowStride;
-      int rowOffset = outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
-      for (int byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
-        recordPayload.put(rowOffset + byteIndex, rows.get(sourceOffset + byteIndex));
-      }
-      walCopyBytes += rowBytes;
-      outputOffset = rowOffset + rowBytes;
-    }
-    recordPayload.position(operationBytes);
-    status = wal.publish(
-        walReservation,
-        transactionId,
-        commitSequence,
-        1,
-        WAL_FORMAT_ID,
-        WAL_FORMAT_VERSION,
-        walAppendResult);
-    if (!status.isOk()) {
-      failed = true;
-      return status;
-    }
-    status = kernel.applyInsertBatchOperation(
+    encodeRawInsertBatch(
         recordPayload,
-        walAppendResult.startOffset(),
-        walAppendResult.endOffset(),
-        commitSequence);
+        keys,
+        rows,
+        rowStride,
+        rowLengths,
+        insertCount,
+        firstRowId,
+        operationBytes);
+    status = publishInsertRecord(
+        transactionId, commitSequence, recordPayload, false);
     if (!status.isOk()) {
-      failed = true;
       return status;
     }
     lastCommitSequence = commitSequence;
     result.setRowId(firstRowId + insertCount - 1);
     return StatusCode.OK;
+  }
+
+  private StatusCode validateRawInsertBatch(
+      long[] keys,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int insertCount) {
+    for (int index = 0; index < insertCount; index++) {
+      StatusCode status = validateRawInsert(
+          keys, rows, rowStride, rowLengths, index);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode validateRawInsert(
+      long[] keys,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int index) {
+    int rowBytes = rowLengths[index];
+    int rowOffset = index * rowStride;
+    long key = keys[index];
+    if (key == Long.MAX_VALUE
+        || rowBytes <= 0
+        || rowBytes > rowStride
+        || rows.limit() - rowOffset < rowBytes) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int previous = 0; previous < index; previous++) {
+      if (keys[previous] == key) {
+        return StatusCode.CONFLICT;
+      }
+    }
+    int leafPageId = kernel.findLeafPageId(key);
+    int earlierInLeaf = 0;
+    for (int previous = 0; previous < index; previous++) {
+      if (kernel.findLeafPageId(keys[previous]) == leafPageId) {
+        earlierInLeaf++;
+      }
+    }
+    return kernel.validateNewIndexEntryAt(leafPageId, key, earlierInLeaf);
+  }
+
+  private static int rawInsertOperationBytes(int[] rowLengths, int insertCount) {
+    int bytes = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
+    for (int index = 0; index < insertCount; index++) {
+      bytes += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES + rowLengths[index];
+    }
+    return bytes;
+  }
+
+  private void encodeRawInsertBatch(
+      ByteBuffer payload,
+      long[] keys,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int insertCount,
+      int firstRowId,
+      int operationBytes) {
+    IndexedWalCodec.encodeInsertBatchHeader(payload, insertCount);
+    int outputOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
+    for (int index = 0; index < insertCount; index++) {
+      int rowBytes = rowLengths[index];
+      IndexedWalCodec.encodeInsertBatchEntry(
+          payload, outputOffset, keys[index], firstRowId + index, rowBytes);
+      int rowOffset = outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
+      copyRawMutationRow(rows, index * rowStride, payload, rowOffset, rowBytes);
+      outputOffset = rowOffset + rowBytes;
+    }
+    payload.position(operationBytes);
   }
 
   /** Starts bounded validation for a group of independent insert-only transactions. */
@@ -523,172 +951,146 @@ public final class IndexedTableStore {
     return phase.beginPreparedPreflight() ? StatusCode.OK : StatusCode.INVARIANT_BROKEN;
   }
 
-  /** Adds one transaction's insert set to cumulative capacity and uniqueness validation. */
-  StatusCode preflightPreparedInsertBatch(
-      long[] keys,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int insertCount) {
+  StatusCode preflightPreparedWrites(PendingMutationBuffer mutations) {
+    if (mutations == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return mutations.containsNonInsertMutation()
+        ? preflightPreparedMutationBatch(mutations)
+        : preflightPreparedInsertBatch(mutations);
+  }
+
+  private StatusCode preflightPreparedInsertBatch(PendingMutationBuffer mutations) {
     if (!phase.preparedInsertGroupActive()
         || phase.preparedInsertEncoding()
-        || keys == null
-        || rows == null
-        || rowStride <= 0
-        || rowLengths == null
-        || insertCount <= 0
-        || insertCount > keys.length
-        || insertCount > rowLengths.length
-        || preparedKeyCount + insertCount > preparedKeys.length
-        || kernel.rowCount() + preparedKeyCount + insertCount > MAX_ROWS) {
+        || mutations.count() <= 0
+        || preparedKeyCount + mutations.count() > preparedKeys.length
+        || kernel.rowCount() + preparedKeyCount + mutations.count() > MAX_ROWS) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int originalKeyCount = preparedKeyCount;
     int originalHeapBytes = preparedHeapBytes;
     StatusCode status = StatusCode.OK;
-    for (int index = 0; status.isOk() && index < insertCount; index++) {
-      long key = keys[index];
-      int rowBytes = rowLengths[index];
-      int rowOffset = index * rowStride;
-      if (key == Long.MAX_VALUE
-          || rowBytes <= 0
-          || rowBytes > rowStride
-          || rows.limit() - rowOffset < rowBytes) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-        break;
-      }
-      for (int previous = 0; previous < preparedKeyCount; previous++) {
-        if (preparedKeys[previous] == key) {
-          status = StatusCode.CONFLICT;
-          break;
-        }
-      }
+    for (int index = 0; status.isOk() && index < mutations.count(); index++) {
+      long key = mutations.keyAt(index);
+      int rowBytes = mutations.rowLengthAt(index);
+      status = validatePreparedInput(key, rowBytes, mutations.rowStride());
       int leafPageId = status.isOk() ? kernel.findLeafPageId(key) : 0;
-      int entriesInLeaf = 0;
-      for (int previous = 0; status.isOk() && previous < preparedKeyCount; previous++) {
-        if (preparedLeafPageIds[previous] == leafPageId) {
-          entriesInLeaf++;
-        }
-      }
-      if (status.isOk()) {
-        status = kernel.validateNewIndexEntryAt(leafPageId, key, entriesInLeaf);
-        leafPageId = kernel.validatedLeafPageId();
-      }
+      int entriesInLeaf = status.isOk()
+          ? preparedEntriesInLeaf(leafPageId, false) : 0;
+      status = status.isOk()
+          ? kernel.validateNewIndexEntryAt(leafPageId, key, entriesInLeaf) : status;
+      leafPageId = status.isOk() ? kernel.validatedLeafPageId() : leafPageId;
       int required = HeapPage.SLOT_BYTES + rowBytes;
-      if (status.isOk()
-          && preparedHeapBytes + required
-              > kernel.currentHeapAvailableBytes()) {
-        status = StatusCode.RESOURCE_EXHAUSTED;
-      }
+      status = validatePreparedHeap(status, required);
       if (status.isOk()) {
-        preparedKeys[preparedKeyCount] = key;
-        preparedLeafPageIds[preparedKeyCount] = leafPageId;
-        preparedNewIndexEntries[preparedKeyCount] = true;
-        preparedKeyCount++;
-        preparedHeapBytes += required;
+        addPreparedKey(key, leafPageId, true, required);
       }
     }
-    if (!status.isOk()) {
-      for (int index = originalKeyCount; index < preparedKeyCount; index++) {
-        preparedKeys[index] = 0;
-        preparedLeafPageIds[index] = 0;
-        preparedNewIndexEntries[index] = false;
-      }
-      preparedKeyCount = originalKeyCount;
-      preparedHeapBytes = originalHeapBytes;
-    }
+    rollbackPreparedPreflight(originalKeyCount, originalHeapBytes, status);
     return status;
   }
 
-  /** Adds one transaction's mixed write set to cumulative group validation. */
-  StatusCode preflightPreparedMutationBatch(
-      int[] operations,
-      long[] keys,
-      int[] expectedPreviousRowIds,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int mutationCount) {
-    if (!phase.preparedInsertGroupActive()
-        || phase.preparedInsertEncoding()
-        || operations == null
-        || keys == null
-        || expectedPreviousRowIds == null
-        || rows == null
-        || rowStride <= 0
-        || rowLengths == null
-        || mutationCount <= 0
-        || mutationCount > operations.length
-        || mutationCount > keys.length
-        || mutationCount > expectedPreviousRowIds.length
-        || mutationCount > rowLengths.length
-        || preparedKeyCount + mutationCount > preparedKeys.length
-        || kernel.rowCount() + preparedKeyCount + mutationCount > MAX_ROWS) {
+  private StatusCode preflightPreparedMutationBatch(PendingMutationBuffer mutations) {
+    if (!validPreparedPreflight(mutations)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int originalKeyCount = preparedKeyCount;
     int originalHeapBytes = preparedHeapBytes;
     StatusCode status = StatusCode.OK;
-    for (int index = 0; status.isOk() && index < mutationCount; index++) {
-      int operation = operations[index];
-      long key = keys[index];
-      int previousRowId = expectedPreviousRowIds[index];
-      int rowBytes = rowLengths[index];
-      int rowOffset = index * rowStride;
-      if ((operation != IndexedWalCodec.MUTATION_INSERT
-              && operation != IndexedWalCodec.MUTATION_UPDATE
-              && operation != IndexedWalCodec.MUTATION_DELETE)
-          || key == Long.MAX_VALUE
-          || rowBytes <= 0
-          || rowBytes > rowStride
-          || rows.limit() - rowOffset < rowBytes) {
-        status = StatusCode.INVALID_EXTERNAL_INPUT;
-        break;
-      }
-      for (int previous = 0; previous < preparedKeyCount; previous++) {
-        if (preparedKeys[previous] == key) {
-          status = StatusCode.CONFLICT;
-          break;
-        }
-      }
+    for (int index = 0; status.isOk() && index < mutations.count(); index++) {
+      int operation = mutations.operationAt(index);
+      long key = mutations.keyAt(index);
+      int previousRowId = mutations.previousRowIdAt(index);
+      int rowBytes = mutations.rowLengthAt(index);
+      status = validPreparedMutation(operation)
+          ? validatePreparedInput(key, rowBytes, mutations.rowStride())
+          : StatusCode.INVALID_EXTERNAL_INPUT;
       int leafPageId = status.isOk() ? kernel.findLeafPageId(key) : 0;
       boolean newIndexEntry = operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0;
-      int entriesInLeaf = 0;
-      for (int previous = 0; status.isOk() && previous < preparedKeyCount; previous++) {
-        if (preparedNewIndexEntries[previous]
-            && preparedLeafPageIds[previous] == leafPageId) {
-          entriesInLeaf++;
-        }
-      }
+      int entriesInLeaf = status.isOk()
+          ? preparedEntriesInLeaf(leafPageId, true) : 0;
       if (status.isOk()) {
         status = kernel.validateMutationTargetAt(
             leafPageId, operation, key, previousRowId, entriesInLeaf);
         leafPageId = kernel.validatedLeafPageId();
       }
       int required = HeapPage.SLOT_BYTES + rowBytes;
-      if (status.isOk()
-          && preparedHeapBytes + required
-              > kernel.currentHeapAvailableBytes()) {
-        status = StatusCode.RESOURCE_EXHAUSTED;
-      }
+      status = validatePreparedHeap(status, required);
       if (status.isOk()) {
-        preparedKeys[preparedKeyCount] = key;
-        preparedLeafPageIds[preparedKeyCount] = leafPageId;
-        preparedNewIndexEntries[preparedKeyCount] = newIndexEntry;
-        preparedKeyCount++;
-        preparedHeapBytes += required;
+        addPreparedKey(key, leafPageId, newIndexEntry, required);
       }
     }
-    if (!status.isOk()) {
-      for (int index = originalKeyCount; index < preparedKeyCount; index++) {
-        preparedKeys[index] = 0;
-        preparedLeafPageIds[index] = 0;
-        preparedNewIndexEntries[index] = false;
-      }
-      preparedKeyCount = originalKeyCount;
-      preparedHeapBytes = originalHeapBytes;
-    }
+    rollbackPreparedPreflight(originalKeyCount, originalHeapBytes, status);
     return status;
+  }
+
+  private boolean validPreparedPreflight(PendingMutationBuffer mutations) {
+    return phase.preparedInsertGroupActive()
+        && !phase.preparedInsertEncoding()
+        && mutations.count() > 0
+        && preparedKeyCount + mutations.count() <= preparedKeys.length
+        && kernel.rowCount() + preparedKeyCount + mutations.count() <= MAX_ROWS;
+  }
+
+  private StatusCode validatePreparedInput(long key, int rowBytes, int rowStride) {
+    if (key == Long.MAX_VALUE || rowBytes <= 0 || rowBytes > rowStride) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int previous = 0; previous < preparedKeyCount; previous++) {
+      if (preparedKeys[previous] == key) {
+        return StatusCode.CONFLICT;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private boolean validPreparedMutation(int operation) {
+    return operation == IndexedWalCodec.MUTATION_INSERT
+        || operation == IndexedWalCodec.MUTATION_UPDATE
+        || operation == IndexedWalCodec.MUTATION_DELETE;
+  }
+
+  private int preparedEntriesInLeaf(int leafPageId, boolean newEntriesOnly) {
+    int entries = 0;
+    for (int previous = 0; previous < preparedKeyCount; previous++) {
+      if ((!newEntriesOnly || preparedNewIndexEntries[previous])
+          && preparedLeafPageIds[previous] == leafPageId) {
+        entries++;
+      }
+    }
+    return entries;
+  }
+
+  private StatusCode validatePreparedHeap(StatusCode status, int required) {
+    return status.isOk()
+            && preparedHeapBytes + required > kernel.currentHeapAvailableBytes()
+        ? StatusCode.RESOURCE_EXHAUSTED : status;
+  }
+
+  private void addPreparedKey(
+      long key, int leafPageId, boolean newIndexEntry, int required) {
+    preparedKeys[preparedKeyCount] = key;
+    preparedLeafPageIds[preparedKeyCount] = leafPageId;
+    preparedNewIndexEntries[preparedKeyCount] = newIndexEntry;
+    preparedKeyCount++;
+    preparedHeapBytes += required;
+  }
+
+  private void rollbackPreparedPreflight(
+      int originalKeyCount,
+      int originalHeapBytes,
+      StatusCode status) {
+    if (status.isOk()) {
+      return;
+    }
+    for (int index = originalKeyCount; index < preparedKeyCount; index++) {
+      preparedKeys[index] = 0;
+      preparedLeafPageIds[index] = 0;
+      preparedNewIndexEntries[index] = false;
+    }
+    preparedKeyCount = originalKeyCount;
+    preparedHeapBytes = originalHeapBytes;
   }
 
   StatusCode finishPreparedInsertPreflight(int transactionCount) {
@@ -703,36 +1105,28 @@ public final class IndexedTableStore {
   }
 
   /** Encodes and appends one preflighted transaction without forcing or publishing pages. */
-  StatusCode appendPreparedInsertBatch(
+  private StatusCode appendPreparedInsertBatch(
       long transactionId,
       long commitSequence,
-      long[] keys,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int insertCount,
+      PendingMutationBuffer mutations,
       HeapInsertResult result) {
     if (!phase.preparedInsertGroupActive()
         || !phase.preparedInsertEncoding()
         || preparedRecordCount >= LocalWal.MAX_PENDING_RECORDS
         || transactionId <= 0
         || commitSequence != wal.nextCommitSequence()
-        || keys == null
-        || rows == null
-        || rowLengths == null
-        || insertCount <= 0
-        || insertCount > keys.length
-        || insertCount > rowLengths.length
+        || mutations.count() <= 0
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    int operationBytes = insertCount == 1
-        ? IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES + rowLengths[0]
+    int operationBytes = mutations.count() == 1
+        ? IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES + mutations.rowLengthAt(0)
         : IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
-    if (insertCount > 1) {
-      for (int index = 0; index < insertCount; index++) {
-        operationBytes += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES + rowLengths[index];
+    if (mutations.count() > 1) {
+      for (int index = 0; index < mutations.count(); index++) {
+        operationBytes += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES
+            + mutations.rowLengthAt(index);
       }
     }
     StatusCode status = wal.reserve(operationBytes, walReservation);
@@ -742,81 +1136,47 @@ public final class IndexedTableStore {
     }
     ByteBuffer payload = walReservation.writablePayload();
     int firstRowId = kernel.rowCount() + preparedRowCount + 1;
-    if (insertCount == 1) {
-      IndexedWalCodec.encodeInsertHeader(payload, keys[0], firstRowId, rowLengths[0]);
-      copyPreparedRow(rows, 0, payload, IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES, rowLengths[0]);
+    if (mutations.count() == 1) {
+      IndexedWalCodec.encodeInsertHeader(
+          payload, mutations.keyAt(0), firstRowId, mutations.rowLengthAt(0));
+      mutations.copyRowTo(0, payload, IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES);
+      walCopyBytes += mutations.rowLengthAt(0);
     } else {
-      IndexedWalCodec.encodeInsertBatchHeader(payload, insertCount);
+      IndexedWalCodec.encodeInsertBatchHeader(payload, mutations.count());
       int outputOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
-      for (int index = 0; index < insertCount; index++) {
-        int rowBytes = rowLengths[index];
+      for (int index = 0; index < mutations.count(); index++) {
+        int rowBytes = mutations.rowLengthAt(index);
         IndexedWalCodec.encodeInsertBatchEntry(
-            payload, outputOffset, keys[index], firstRowId + index, rowBytes);
-        copyPreparedRow(
-            rows,
-            index * rowStride,
-            payload,
-            outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES,
-            rowBytes);
-        outputOffset += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES + rowBytes;
+            payload, outputOffset, mutations.keyAt(index), firstRowId + index, rowBytes);
+        int rowOffset = outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
+        mutations.copyRowTo(index, payload, rowOffset);
+        walCopyBytes += rowBytes;
+        outputOffset = rowOffset + rowBytes;
       }
     }
-    payload.position(operationBytes);
-    status = wal.appendUnforced(
-        walReservation,
-        transactionId,
-        commitSequence,
-        1,
-        WAL_FORMAT_ID,
-        WAL_FORMAT_VERSION,
-        walAppendResult);
-    if (!status.isOk()) {
-      failed = true;
-      return status;
-    }
-    preparedRecordStarts[preparedRecordCount] = walAppendResult.startOffset();
-    preparedCommitSequences[preparedRecordCount] = commitSequence;
-    preparedTransactionIds[preparedRecordCount] = transactionId;
-    preparedRecordCount++;
-    preparedRowCount += insertCount;
-    result.setRowId(firstRowId + insertCount - 1);
-    return StatusCode.OK;
+    return finishPreparedAppend(
+        transactionId, commitSequence, operationBytes, mutations.count(), firstRowId, result);
   }
 
-  /** Encodes and appends one preflighted mixed write set without forcing or publishing. */
-  StatusCode appendPreparedMutationBatch(
+  private StatusCode appendPreparedMutationBatch(
       long transactionId,
       long commitSequence,
-      int[] operations,
-      long[] keys,
-      int[] expectedPreviousRowIds,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int mutationCount,
+      PendingMutationBuffer mutations,
       HeapInsertResult result) {
     if (!phase.preparedInsertGroupActive()
         || !phase.preparedInsertEncoding()
         || preparedRecordCount >= LocalWal.MAX_PENDING_RECORDS
         || transactionId <= 0
         || commitSequence != wal.nextCommitSequence()
-        || operations == null
-        || keys == null
-        || expectedPreviousRowIds == null
-        || rows == null
-        || rowLengths == null
-        || mutationCount <= 0
-        || mutationCount > operations.length
-        || mutationCount > keys.length
-        || mutationCount > expectedPreviousRowIds.length
-        || mutationCount > rowLengths.length
+        || mutations.count() <= 0
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     int operationBytes = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
-    for (int index = 0; index < mutationCount; index++) {
-      operationBytes += IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES + rowLengths[index];
+    for (int index = 0; index < mutations.count(); index++) {
+      operationBytes += IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES
+          + mutations.rowLengthAt(index);
     }
     StatusCode status = wal.reserve(operationBytes, walReservation);
     if (!status.isOk()) {
@@ -824,29 +1184,38 @@ public final class IndexedTableStore {
       return status;
     }
     ByteBuffer payload = walReservation.writablePayload();
-    IndexedWalCodec.encodeMutationBatchHeader(payload, mutationCount);
+    IndexedWalCodec.encodeMutationBatchHeader(payload, mutations.count());
     int outputOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
     int firstRowId = kernel.rowCount() + preparedRowCount + 1;
-    for (int index = 0; index < mutationCount; index++) {
-      int rowBytes = rowLengths[index];
+    for (int index = 0; index < mutations.count(); index++) {
+      int rowBytes = mutations.rowLengthAt(index);
       IndexedWalCodec.encodeMutationBatchEntry(
           payload,
           outputOffset,
-          operations[index],
-          keys[index],
+          mutations.operationAt(index),
+          mutations.keyAt(index),
           firstRowId + index,
-          expectedPreviousRowIds[index],
+          mutations.previousRowIdAt(index),
           rowBytes);
-      copyPreparedRow(
-          rows,
-          index * rowStride,
-          payload,
-          outputOffset + IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES,
-          rowBytes);
-      outputOffset += IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES + rowBytes;
+      int rowOffset = outputOffset + IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES;
+      mutations.copyRowTo(index, payload, rowOffset);
+      walCopyBytes += rowBytes;
+      outputOffset = rowOffset + rowBytes;
     }
+    return finishPreparedAppend(
+        transactionId, commitSequence, operationBytes, mutations.count(), firstRowId, result);
+  }
+
+  private StatusCode finishPreparedAppend(
+      long transactionId,
+      long commitSequence,
+      int operationBytes,
+      int mutationCount,
+      int firstRowId,
+      HeapInsertResult result) {
+    ByteBuffer payload = walReservation.writablePayload();
     payload.position(operationBytes);
-    status = wal.appendUnforced(
+    StatusCode status = wal.appendUnforced(
         walReservation,
         transactionId,
         commitSequence,
@@ -902,10 +1271,11 @@ public final class IndexedTableStore {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
-        status = applyOperation(
+        status = recovery.applyOperation(
             preparedRecordStarts[index],
             walReadResult,
-            preparedCommitSequences[index]);
+            walGeneration,
+            lastCommitSequence);
       }
       if (status.isOk()) {
         lastCommitSequence = preparedCommitSequences[index];
@@ -929,6 +1299,143 @@ public final class IndexedTableStore {
     }
     clearPreparedInsertGroup();
     return StatusCode.OK;
+  }
+
+  /** Commits a compact atomic mix of inserts, updates, and tombstone deletes. */
+  StatusCode commitMutationBatch(
+      long transactionId,
+      long commitSequence,
+      PendingMutationBuffer mutations,
+      HeapInsertResult result) {
+    if (transactionId <= 0
+        || commitSequence <= lastCommitSequence
+        || mutations == null
+        || mutations.count() <= 0
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = admission();
+    if (!status.isOk()) {
+      return status;
+    }
+    if (phase.operationActive()
+        || phase.preparedInsertGroupActive()
+        || !pages.isPresent(HEAP_PAGE_ID)) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    status = validatePendingMutationBatch(mutations);
+    if (!status.isOk()) {
+      return status;
+    }
+    if (!kernel.canAppendRows(mutations)) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int operationBytes = pendingMutationOperationBytes(mutations);
+    status = wal.reserve(operationBytes, walReservation);
+    if (!status.isOk()) {
+      return status;
+    }
+    ByteBuffer recordPayload = walReservation.writablePayload();
+    int firstRowId = kernel.rowCount() + 1;
+    encodePendingMutationBatch(
+        mutations, recordPayload, firstRowId, operationBytes);
+    status = publishMutationBatch(transactionId, commitSequence, recordPayload);
+    if (!status.isOk()) {
+      return status;
+    }
+    lastCommitSequence = commitSequence;
+    result.setRowId(firstRowId + mutations.count() - 1);
+    return StatusCode.OK;
+  }
+
+  private StatusCode validatePendingMutationBatch(PendingMutationBuffer mutations) {
+    for (int index = 0; index < mutations.count(); index++) {
+      StatusCode status = validatePendingMutation(mutations, index);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode validatePendingMutation(
+      PendingMutationBuffer mutations,
+      int index) {
+    int operation = mutations.operationAt(index);
+    long key = mutations.keyAt(index);
+    int previousRowId = mutations.previousRowIdAt(index);
+    int rowBytes = mutations.rowLengthAt(index);
+    if (!validMutationOperation(operation)
+        || key == Long.MAX_VALUE
+        || rowBytes <= 0
+        || rowBytes > mutations.rowStride()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int previous = 0; previous < index; previous++) {
+      if (mutations.keyAt(previous) == key) {
+        return StatusCode.CONFLICT;
+      }
+    }
+    int leafPageId = kernel.findLeafPageId(key);
+    int earlierInLeaf = earlierPendingInsertsInLeaf(
+        mutations, operation, previousRowId, leafPageId, index);
+    return kernel.validateMutationTargetAt(
+        leafPageId, operation, key, previousRowId, earlierInLeaf);
+  }
+
+  private int earlierPendingInsertsInLeaf(
+      PendingMutationBuffer mutations,
+      int operation,
+      int previousRowId,
+      int leafPageId,
+      int index) {
+    if (operation != IndexedWalCodec.MUTATION_INSERT || previousRowId != 0) {
+      return 0;
+    }
+    int count = 0;
+    for (int previous = 0; previous < index; previous++) {
+      if (mutations.operationAt(previous) == IndexedWalCodec.MUTATION_INSERT
+          && mutations.previousRowIdAt(previous) == 0
+          && kernel.findLeafPageId(mutations.keyAt(previous)) == leafPageId) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private static int pendingMutationOperationBytes(PendingMutationBuffer mutations) {
+    int operationBytes = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
+    for (int index = 0; index < mutations.count(); index++) {
+      operationBytes += IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES
+          + mutations.rowLengthAt(index);
+    }
+    return operationBytes;
+  }
+
+  private void encodePendingMutationBatch(
+      PendingMutationBuffer mutations,
+      ByteBuffer payload,
+      int firstRowId,
+      int operationBytes) {
+    IndexedWalCodec.encodeMutationBatchHeader(payload, mutations.count());
+    int outputOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
+    for (int index = 0; index < mutations.count(); index++) {
+      int rowBytes = mutations.rowLengthAt(index);
+      IndexedWalCodec.encodeMutationBatchEntry(
+          payload,
+          outputOffset,
+          mutations.operationAt(index),
+          mutations.keyAt(index),
+          firstRowId + index,
+          mutations.previousRowIdAt(index),
+          rowBytes);
+      int rowOffset = outputOffset + IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES;
+      mutations.copyRowTo(index, payload, rowOffset);
+      walCopyBytes += rowBytes;
+      outputOffset = rowOffset + rowBytes;
+    }
+    payload.position(operationBytes);
   }
 
   /** Commits a compact atomic mix of inserts, updates, and tombstone deletes. */
@@ -967,94 +1474,40 @@ public final class IndexedTableStore {
     if (phase.operationActive() || phase.preparedInsertGroupActive() || !pages.isPresent(HEAP_PAGE_ID)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    int operationBytes = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
-    for (int index = 0; index < mutationCount; index++) {
-      int operation = operations[index];
-      long key = keys[index];
-      int previousRowId = expectedPreviousRowIds[index];
-      int rowBytes = rowLengths[index];
-      int rowOffset = index * rowStride;
-      if ((operation != IndexedWalCodec.MUTATION_INSERT
-              && operation != IndexedWalCodec.MUTATION_UPDATE
-              && operation != IndexedWalCodec.MUTATION_DELETE)
-          || key == Long.MAX_VALUE
-          || rowBytes <= 0
-          || rowBytes > rowStride
-          || rows.limit() - rowOffset < rowBytes) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int previous = 0; previous < index; previous++) {
-        if (keys[previous] == key) {
-          return StatusCode.CONFLICT;
-        }
-      }
-      int leafPageId = kernel.findLeafPageId(key);
-      int earlierInLeaf = 0;
-      if (operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0) {
-        for (int previous = 0; previous < index; previous++) {
-          if (operations[previous] == IndexedWalCodec.MUTATION_INSERT
-              && expectedPreviousRowIds[previous] == 0
-              && kernel.findLeafPageId(keys[previous]) == leafPageId) {
-            earlierInLeaf++;
-          }
-        }
-      }
-      status = kernel.validateMutationTargetAt(
-          leafPageId, operation, key, previousRowId, earlierInLeaf);
-      if (!status.isOk()) {
-        return status;
-      }
-      operationBytes += IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES + rowBytes;
+    status = validateRawMutationBatch(
+        operations,
+        keys,
+        expectedPreviousRowIds,
+        rows,
+        rowStride,
+        rowLengths,
+        mutationCount);
+    if (!status.isOk()) {
+      return status;
     }
     if (!canAppendRows(rowLengths, mutationCount)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    int operationBytes = rawMutationOperationBytes(rowLengths, mutationCount);
     status = wal.reserve(operationBytes, walReservation);
     if (!status.isOk()) {
       return status;
     }
     ByteBuffer recordPayload = walReservation.writablePayload();
-    IndexedWalCodec.encodeMutationBatchHeader(recordPayload, mutationCount);
-    int outputOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
     int firstRowId = kernel.rowCount() + 1;
-    for (int index = 0; index < mutationCount; index++) {
-      int rowBytes = rowLengths[index];
-      IndexedWalCodec.encodeMutationBatchEntry(
-          recordPayload,
-          outputOffset,
-          operations[index],
-          keys[index],
-          firstRowId + index,
-          expectedPreviousRowIds[index],
-          rowBytes);
-      int sourceOffset = index * rowStride;
-      int rowOffset = outputOffset + IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES;
-      for (int byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
-        recordPayload.put(rowOffset + byteIndex, rows.get(sourceOffset + byteIndex));
-      }
-      walCopyBytes += rowBytes;
-      outputOffset = rowOffset + rowBytes;
-    }
-    recordPayload.position(operationBytes);
-    status = wal.publish(
-        walReservation,
-        transactionId,
-        commitSequence,
-        1,
-        WAL_FORMAT_ID,
-        WAL_FORMAT_VERSION,
-        walAppendResult);
-    if (!status.isOk()) {
-      failed = true;
-      return status;
-    }
-    status = kernel.applyMutationBatchOperation(
+    encodeRawMutationBatch(
         recordPayload,
-        walAppendResult.startOffset(),
-        walAppendResult.endOffset(),
-        commitSequence);
+        operations,
+        keys,
+        expectedPreviousRowIds,
+        rows,
+        rowStride,
+        rowLengths,
+        mutationCount,
+        firstRowId,
+        operationBytes);
+    status = publishMutationBatch(transactionId, commitSequence, recordPayload);
     if (!status.isOk()) {
-      failed = true;
       return status;
     }
     lastCommitSequence = commitSequence;
@@ -1062,136 +1515,215 @@ public final class IndexedTableStore {
     return StatusCode.OK;
   }
 
+  private StatusCode validateRawMutationBatch(
+      int[] operations,
+      long[] keys,
+      int[] previousRowIds,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int mutationCount) {
+    for (int index = 0; index < mutationCount; index++) {
+      StatusCode status = validateRawMutation(
+          operations,
+          keys,
+          previousRowIds,
+          rows,
+          rowStride,
+          rowLengths,
+          index);
+      if (!status.isOk()) {
+        return status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode validateRawMutation(
+      int[] operations,
+      long[] keys,
+      int[] previousRowIds,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int index) {
+    int operation = operations[index];
+    long key = keys[index];
+    int previousRowId = previousRowIds[index];
+    int rowBytes = rowLengths[index];
+    int rowOffset = index * rowStride;
+    if (!validMutationOperation(operation)
+        || key == Long.MAX_VALUE
+        || rowBytes <= 0
+        || rowBytes > rowStride
+        || rows.limit() - rowOffset < rowBytes) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int previous = 0; previous < index; previous++) {
+      if (keys[previous] == key) {
+        return StatusCode.CONFLICT;
+      }
+    }
+    int leafPageId = kernel.findLeafPageId(key);
+    int earlierInLeaf = earlierRawInsertsInLeaf(
+        operations, keys, previousRowIds, operation, previousRowId, leafPageId, index);
+    return kernel.validateMutationTargetAt(
+        leafPageId, operation, key, previousRowId, earlierInLeaf);
+  }
+
+  private static boolean validMutationOperation(int operation) {
+    return operation == IndexedWalCodec.MUTATION_INSERT
+        || operation == IndexedWalCodec.MUTATION_UPDATE
+        || operation == IndexedWalCodec.MUTATION_DELETE;
+  }
+
+  private int earlierRawInsertsInLeaf(
+      int[] operations,
+      long[] keys,
+      int[] previousRowIds,
+      int operation,
+      int previousRowId,
+      int leafPageId,
+      int index) {
+    if (operation != IndexedWalCodec.MUTATION_INSERT || previousRowId != 0) {
+      return 0;
+    }
+    int count = 0;
+    for (int previous = 0; previous < index; previous++) {
+      if (operations[previous] == IndexedWalCodec.MUTATION_INSERT
+          && previousRowIds[previous] == 0
+          && kernel.findLeafPageId(keys[previous]) == leafPageId) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  private static int rawMutationOperationBytes(int[] rowLengths, int mutationCount) {
+    int operationBytes = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
+    for (int index = 0; index < mutationCount; index++) {
+      operationBytes += IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES + rowLengths[index];
+    }
+    return operationBytes;
+  }
+
+  private void encodeRawMutationBatch(
+      ByteBuffer payload,
+      int[] operations,
+      long[] keys,
+      int[] previousRowIds,
+      ByteBuffer rows,
+      int rowStride,
+      int[] rowLengths,
+      int mutationCount,
+      int firstRowId,
+      int operationBytes) {
+    IndexedWalCodec.encodeMutationBatchHeader(payload, mutationCount);
+    int outputOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
+    for (int index = 0; index < mutationCount; index++) {
+      int rowBytes = rowLengths[index];
+      IndexedWalCodec.encodeMutationBatchEntry(
+          payload,
+          outputOffset,
+          operations[index],
+          keys[index],
+          firstRowId + index,
+          previousRowIds[index],
+          rowBytes);
+      int sourceOffset = index * rowStride;
+      int rowOffset = outputOffset + IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES;
+      copyRawMutationRow(rows, sourceOffset, payload, rowOffset, rowBytes);
+      outputOffset = rowOffset + rowBytes;
+    }
+    payload.position(operationBytes);
+  }
+
+  private void copyRawMutationRow(
+      ByteBuffer rows,
+      int sourceOffset,
+      ByteBuffer payload,
+      int rowOffset,
+      int rowBytes) {
+    for (int byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
+      payload.put(rowOffset + byteIndex, rows.get(sourceOffset + byteIndex));
+    }
+    walCopyBytes += rowBytes;
+  }
+
+  private StatusCode publishMutationBatch(
+      long transactionId,
+      long commitSequence,
+      ByteBuffer payload) {
+    StatusCode status = wal.publish(
+        walReservation,
+        transactionId,
+        commitSequence,
+        1,
+        WAL_FORMAT_ID,
+        WAL_FORMAT_VERSION,
+        walAppendResult);
+    if (status.isOk()) {
+      status = kernel.applyMutationBatchOperation(
+          payload,
+          walAppendResult.startOffset(),
+          walAppendResult.endOffset(),
+          commitSequence);
+    }
+    if (!status.isOk()) {
+      failed = true;
+    }
+    return status;
+  }
+
   /** Rewrites retained heads as one forced, multi-record WAL-atomic compaction batch. */
   StatusCode commitVacuum(
       long transactionId,
       long commitSequence,
       io.riverdb.engine.table.IndexedVacuumResult result) {
-    if (transactionId <= 0
-        || commitSequence <= lastCommitSequence
-        || result == null) {
+    if (!validVacuumRequest(transactionId, commitSequence, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     StatusCode status = admission();
-    if (!status.isOk()) {
-      return status;
-    }
-    if (phase.operationActive() || phase.preparedInsertGroupActive() || !pages.isPresent(HEAP_PAGE_ID)) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    status = vacuumPreflight();
-    if (!status.isOk()) {
-      return status;
-    }
-    int rowsBefore = kernel.rowCount();
-    int retainedRows = kernel.indexedEntryCount();
-    if (retainedRows < 0 || retainedRows > rowsBefore) {
-      return StatusCode.CORRUPTION;
-    }
-    if (retainedRows == rowsBefore) {
-      return StatusCode.CONFLICT;
-    }
-    int chunkCount = kernel.vacuumChunkCount();
-    if (chunkCount <= 0 || chunkCount >= LocalWal.MAX_PENDING_RECORDS) {
-      return chunkCount < 0 ? StatusCode.CORRUPTION : StatusCode.RESOURCE_EXHAUSTED;
-    }
-    int firstRow = 0;
-    boolean forced = false;
-    for (int chunk = 0; status.isOk() && chunk < chunkCount; chunk++) {
-      int chunkRows = vacuumChunkRowCount(firstRow);
-      int chunkBytes = vacuumChunkPayloadBytes(firstRow, chunkRows);
-      if (chunkRows <= 0 || chunkBytes <= IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES) {
-        status = StatusCode.CORRUPTION;
-        break;
-      }
-      status = wal.reserve(chunkBytes, walReservation);
-      if (status.isOk()) {
-        status = encodeVacuumChunk(
-            walReservation.writablePayload(),
-            retainedRows,
-            firstRow,
-            chunkRows,
-            chunk,
-            chunkCount,
-            chunkBytes);
-        if (!status.isOk()) {
-          wal.cancel(walReservation);
-        }
-      }
-      if (status.isOk()) {
-        status = wal.appendUnforced(
-            walReservation,
-            transactionId,
-            0,
-            0,
-            WAL_FORMAT_ID,
-            WAL_FORMAT_VERSION,
-            walAppendResult);
-      }
-      if (status.isOk()) {
-        vacuumRecordStarts[chunk] = walAppendResult.startOffset();
-        firstRow += chunkRows;
-      }
-    }
-    if (status.isOk() && firstRow != retainedRows) {
-      status = StatusCode.CORRUPTION;
+    if (status.isOk()) {
+      status = vacuumStatus();
     }
     if (status.isOk()) {
-      status = wal.reserve(VACUUM_COMMIT_PAYLOAD_BYTES, walReservation);
-    }
-    if (status.isOk()) {
-      ByteBuffer payload = walReservation.writablePayload();
-      IndexedWalCodec.encodeVacuumCommit(payload, retainedRows, chunkCount, rowsBefore);
-      payload.position(VACUUM_COMMIT_PAYLOAD_BYTES);
-      status = wal.appendUnforced(
-          walReservation,
+      status = vacuumWriter.commit(
           transactionId,
           commitSequence,
-          1,
-          WAL_FORMAT_ID,
-          WAL_FORMAT_VERSION,
-          walAppendResult);
-      if (status.isOk()) {
-        vacuumRecordStarts[chunkCount] = walAppendResult.startOffset();
-      }
+          lastCommitSequence,
+          walGeneration,
+          result);
+    }
+    if (!status.isOk() && vacuumWriter.failureFences()) {
+      failed = true;
     }
     if (status.isOk()) {
-      status = wal.forcePending(walForceResult);
-      forced = status.isOk();
+      lastCommitSequence = commitSequence;
     }
-    for (int record = 0; status.isOk() && record <= chunkCount; record++) {
-      status = wal.readForcedRecord(record, walReadResult);
-      if (status.isOk()) {
-        status = applyOperation(
-            vacuumRecordStarts[record],
-            walReadResult,
-            walReadResult.header().commitSequence());
-      }
-    }
-    if (forced) {
-      StatusCode release = wal.releaseForcedBatch();
-      if (status.isOk()) {
-        status = release;
-      }
-    }
-    clearVacuumRecordStarts();
-    if (!status.isOk()) {
-      failed = true;
-      return status;
-    }
-    lastCommitSequence = commitSequence;
-    result.set(rowsBefore, retainedRows, commitSequence);
-    return StatusCode.OK;
+    return status;
+  }
+
+  private boolean validVacuumRequest(
+      long transactionId,
+      long commitSequence,
+      IndexedVacuumResult result) {
+    return transactionId > 0
+        && commitSequence > lastCommitSequence
+        && result != null;
   }
 
   /** Checks whether the current quiescent compaction fits one bounded WAL append batch. */
   StatusCode vacuumPreflight() {
     StatusCode status = admission();
-    if (!status.isOk()) {
-      return status;
-    }
-    if (phase.operationActive() || phase.preparedInsertGroupActive() || !pages.isPresent(HEAP_PAGE_ID)) {
+    return status.isOk() ? vacuumStatus() : status;
+  }
+
+  private StatusCode vacuumStatus() {
+    if (phase.operationActive()
+        || phase.preparedInsertGroupActive()
+        || !pages.isPresent(IndexedTableKernel.HEAP_PAGE_ID)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     int retainedRows = kernel.indexedEntryCount();
@@ -1201,47 +1733,12 @@ public final class IndexedTableStore {
     if (retainedRows == kernel.rowCount()) {
       return StatusCode.CONFLICT;
     }
-    int chunkCount = vacuumChunkCount();
-    return chunkCount < 0
-        ? StatusCode.CORRUPTION
-        : chunkCount > 0 && chunkCount < LocalWal.MAX_PENDING_RECORDS
-            ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
-  }
-
-  private int vacuumChunkCount() {
-    return kernel.vacuumChunkCount();
-  }
-
-  private int vacuumChunkRowCount(int firstRow) {
-    return kernel.vacuumChunkRowCount(firstRow);
-  }
-
-  private int vacuumChunkPayloadBytes(int firstRow, int rowLimit) {
-    return kernel.vacuumChunkPayloadBytes(firstRow, rowLimit);
-  }
-
-  private StatusCode encodeVacuumChunk(
-      ByteBuffer payload,
-      int retainedRows,
-      int firstRow,
-      int rowLimit,
-      int chunk,
-      int chunkCount,
-      int payloadBytes) {
-    StatusCode status = kernel.encodeVacuumChunk(
-        payload, retainedRows, firstRow, rowLimit, chunk, chunkCount, payloadBytes);
-    if (status.isOk()) {
-      walCopyBytes += payloadBytes
-          - IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES
-          - rowLimit * IndexedWalCodec.VACUUM_ENTRY_BYTES;
+    int chunkCount = kernel.vacuumChunkCount();
+    if (chunkCount < 0) {
+      return StatusCode.CORRUPTION;
     }
-    return status;
-  }
-
-  private void clearVacuumRecordStarts() {
-    for (int index = 0; index < vacuumRecordStarts.length; index++) {
-      vacuumRecordStarts[index] = 0;
-    }
+    return chunkCount > 0 && chunkCount < LocalWal.MAX_PENDING_RECORDS
+        ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
   }
 
   StatusCode cancelOperation() {
@@ -1249,7 +1746,7 @@ public final class IndexedTableStore {
       return StatusCode.CONFLICT;
     }
     if (phase.vacuumOperationActive()) {
-      cancelVacuumOperation();
+      recovery.cancelVacuumOperation();
       return StatusCode.OK;
     }
     clearStagedFlags();
@@ -1267,20 +1764,9 @@ public final class IndexedTableStore {
     if (phase.preparedInsertGroupActive()) {
       return StatusCode.RETRY;
     }
-    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
-      if (!pages.isDirty(pageId)) {
-        continue;
-      }
-      status = encodeCurrentPage(
-          pageId, pages.recordStart(pageId), pages.recordEnd(pageId));
-      if (!status.isOk()) {
-        return status;
-      }
-      status = pages.writeCurrent(
-          file, pageId, (long) (pageId - 1) * PageCodec.PAGE_BYTES, ioResult);
-      if (!status.isOk() || ioResult.bytesTransferred() != PageCodec.PAGE_BYTES) {
-        return status.isOk() ? StatusCode.IO_FAILURE : status;
-      }
+    status = writeDirtyPages();
+    if (!status.isOk()) {
+      return status;
     }
     status = file.truncate((long) pages.highestPageId() * PageCodec.PAGE_BYTES);
     if (status.isOk()) {
@@ -1291,11 +1777,33 @@ public final class IndexedTableStore {
       status = directory.force(forceResult);
     }
     if (status.isOk()) {
-      for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
-        pages.markClean(pageId);
-      }
+      markAllPagesClean();
     }
     return status;
+  }
+
+  private StatusCode writeDirtyPages() {
+    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
+      if (!pages.isDirty(pageId)) {
+        continue;
+      }
+      StatusCode status = encodeCurrentPage(
+          pageId, pages.recordStart(pageId), pages.recordEnd(pageId));
+      if (status.isOk()) {
+        status = pages.writeCurrent(
+            file, pageId, (long) (pageId - 1) * PageCodec.PAGE_BYTES, ioResult);
+      }
+      if (!status.isOk() || ioResult.bytesTransferred() != PageCodec.PAGE_BYTES) {
+        return status.isOk() ? StatusCode.IO_FAILURE : status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
+  private void markAllPagesClean() {
+    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
+      pages.markClean(pageId);
+    }
   }
 
   /** Forces an immutable zero-suffix page base in the next WAL lineage. */
@@ -1311,55 +1819,7 @@ public final class IndexedTableStore {
         || nextGeneration.value() <= walGeneration.value()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    String checkpointFileName = checkpointFileName(nextGeneration);
-    DirectoryOperationResult operation = new DirectoryOperationResult();
-    status = directory.createFile(checkpointFileName, operation);
-    if (status == StatusCode.CONFLICT) {
-      status = directory.remove(checkpointFileName, operation);
-      if (status.isOk()) {
-        status = directory.force(operation);
-      }
-      if (status.isOk()) {
-        status = directory.createFile(checkpointFileName, operation);
-      }
-    }
-    if (!status.isOk()) {
-      return status;
-    }
-    DurableFile checkpointFile = operation.file();
-    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
-      if (!pages.isPresent(pageId)) {
-        checkpointFile.close();
-        return StatusCode.CORRUPTION;
-      }
-      status = pages.encodeCurrent(pageId, database, nextGeneration, 0, 0, checksum);
-      if (!status.isOk()) {
-        checkpointFile.close();
-        failed = true;
-        return status;
-      }
-      status = pages.writeCurrent(
-          checkpointFile,
-          pageId,
-          (long) (pageId - 1) * PageCodec.PAGE_BYTES,
-          ioResult);
-      if (!status.isOk() || ioResult.bytesTransferred() != PageCodec.PAGE_BYTES) {
-        checkpointFile.close();
-        failed = true;
-        return status.isOk() ? StatusCode.IO_FAILURE : status;
-      }
-    }
-    status = checkpointFile.truncate((long) pages.highestPageId() * PageCodec.PAGE_BYTES);
-    if (status.isOk()) {
-      status = checkpointFile.force(ForceMode.CONTENT_AND_METADATA);
-    }
-    StatusCode close = checkpointFile.close();
-    if (status.isOk()) {
-      status = close;
-    }
-    if (status.isOk()) {
-      status = directory.force(new DirectoryOperationResult());
-    }
+    status = checkpointWriter.write(nextGeneration);
     if (!status.isOk()) {
       failed = true;
       return status;
@@ -1413,7 +1873,7 @@ public final class IndexedTableStore {
   }
 
   long walCopyBytes() {
-    return walCopyBytes;
+    return walCopyBytes + vacuumWriter.copiedBytes();
   }
 
   int highestPageId() {
@@ -1455,404 +1915,22 @@ public final class IndexedTableStore {
     return file.close();
   }
 
-  private StatusCode recoverFromWal() {
-    long offset = WalFileHeaderCodec.HEADER_BYTES;
-    boolean found = false;
-    while (offset < wal.tailEnd()) {
-      StatusCode status = wal.read(offset, walReadResult);
-      if (!status.isOk()) {
-        return status;
-      }
-      if (walReadResult.header().formatId() == WAL_FORMAT_ID
-          && walReadResult.header().formatVersion() == WAL_FORMAT_VERSION) {
-        int decisionCode = walReadResult.header().decisionCode();
-        if (decisionCode != 0 && decisionCode != 1) {
-          return StatusCode.CORRUPTION;
-        }
-        if (decisionCode == 1
-            && walReadResult.header().commitSequence() <= lastCommitSequence) {
-          return StatusCode.CORRUPTION;
-        }
-        status = applyOperation(
-            offset, walReadResult, walReadResult.header().commitSequence());
-        if (!status.isOk()) {
-          return status;
-        }
-        if (decisionCode == 1) {
-          lastCommitSequence = walReadResult.header().commitSequence();
-          found = true;
-        }
-      }
-      offset = walReadResult.nextOffset();
+  StatusCode recoverFromWal() {
+    StatusCode status = recovery.recover(walGeneration, baseLoaded, lastCommitSequence);
+    if (status.isOk()) {
+      lastCommitSequence = recovery.recoveredCommitSequence();
     }
-    if (phase.vacuumOperationActive()) {
-      cancelVacuumOperation();
-    }
-    return found || baseLoaded ? StatusCode.OK : StatusCode.CORRUPTION;
+    return status;
   }
 
-  private StatusCode loadCheckpoint(CheckpointState checkpoint) {
-    if (checkpoint.pageCount() <= 0
-        || checkpoint.pageCount() > MAX_PAGES
-        || checkpoint.rowCount() < 0
-        || checkpoint.rowCount() > MAX_ROWS) {
-      return StatusCode.CORRUPTION;
-    }
-    DirectoryOperationResult operation = new DirectoryOperationResult();
-    StatusCode status = directory.reopen(
-        checkpointFileName(checkpoint.walGeneration()), operation);
-    if (status == StatusCode.CONFLICT) {
-      return StatusCode.CORRUPTION;
-    }
+  StatusCode loadCheckpoint(CheckpointState checkpoint) {
+    StatusCode status = checkpointLoader.load(checkpoint, walGeneration);
     if (!status.isOk()) {
       return status;
     }
-    DurableFile checkpointFile = operation.file();
-    status = checkpointFile.size(fileSizeResult);
-    long expectedBytes = (long) checkpoint.pageCount() * PageCodec.PAGE_BYTES;
-    long checkpointBytes = status.isOk() ? fileSizeResult.sizeBytes() : 0;
-    if (!status.isOk() || checkpointBytes > expectedBytes) {
-      checkpointFile.close();
-      return status.isOk() ? StatusCode.CORRUPTION : status;
-    }
-    boolean repaired = false;
-    for (int pageId = 1; pageId <= checkpoint.pageCount(); pageId++) {
-      ensurePageBuffers(pageId);
-      long pageOffset = (long) (pageId - 1) * PageCodec.PAGE_BYTES;
-      boolean loaded = false;
-      if (pageOffset + PageCodec.PAGE_BYTES <= checkpointBytes) {
-        status = pages.readCurrent(checkpointFile, pageId, pageOffset, ioResult);
-        if (!status.isOk()) {
-          checkpointFile.close();
-          return status;
-        }
-        if (ioResult.bytesTransferred() == PageCodec.PAGE_BYTES) {
-          loaded = validateCheckpointPage(pageId, walGeneration.value()).isOk();
-        }
-      }
-      if (!loaded) {
-        status = repairCheckpointPage(checkpointFile, pageId, pageOffset);
-        if (!status.isOk()) {
-          checkpointFile.close();
-          return status;
-        }
-        repaired = true;
-      }
-      pages.installPresent(pageId);
-    }
-    if (repaired) {
-      status = checkpointFile.truncate(expectedBytes);
-      if (status.isOk()) {
-        status = checkpointFile.force(ForceMode.CONTENT_AND_METADATA);
-      }
-      if (!status.isOk()) {
-        checkpointFile.close();
-        return status;
-      }
-    }
-    status = kernel.rebuildRowLocations();
-    if (!status.isOk() || kernel.rowCount() != checkpoint.rowCount()) {
-      checkpointFile.close();
-      return StatusCode.CORRUPTION;
-    }
-    status = checkpointFile.close();
-    if (!status.isOk()) {
-      return status;
-    }
-    kernel.loadCheckpointVersions(checkpoint);
     lastCommitSequence = checkpoint.commitSequence();
     baseLoaded = true;
     return StatusCode.OK;
-  }
-
-  private StatusCode repairCheckpointPage(
-      DurableFile checkpointFile,
-      int pageId,
-      long pageOffset) {
-    if (walGeneration.value() <= 1) {
-      return StatusCode.CORRUPTION;
-    }
-    StatusCode status = pages.readCurrent(file, pageId, pageOffset, ioResult);
-    if (!status.isOk() || ioResult.bytesTransferred() != PageCodec.PAGE_BYTES) {
-      return status.isOk() ? StatusCode.CORRUPTION : status;
-    }
-    status = validateCheckpointPage(pageId, 0);
-    if (!status.isOk()) {
-      return StatusCode.CORRUPTION;
-    }
-    status = pages.encodeCurrent(pageId, database, walGeneration, 0, 0, checksum);
-    if (!status.isOk()) {
-      return status;
-    }
-    status = pages.writeCurrent(checkpointFile, pageId, pageOffset, ioResult);
-    return status.isOk() && ioResult.bytesTransferred() != PageCodec.PAGE_BYTES
-        ? StatusCode.IO_FAILURE : status;
-  }
-
-  private StatusCode validateCheckpointPage(int pageId, long expectedWalGeneration) {
-    StatusCode status = pages.validateCurrent(pageId, pageHeader, checksum);
-    if (!status.isOk()
-        || pageHeader.databaseHigh() != database.high()
-        || pageHeader.databaseLow() != database.low()
-        || pageHeader.pageId() != pageId
-        || pageHeader.pageGeneration() != 1) {
-      return StatusCode.CORRUPTION;
-    }
-    if ((expectedWalGeneration == 0
-            && pageHeader.walGeneration() >= walGeneration.value())
-        || (expectedWalGeneration != 0
-            && pageHeader.walGeneration() != expectedWalGeneration)) {
-      return StatusCode.CORRUPTION;
-    }
-    if (expectedWalGeneration == walGeneration.value()
-        && (pageHeader.recordStart() != 0 || pageHeader.recordEnd() != 0)) {
-      return StatusCode.CORRUPTION;
-    }
-    return kernel.validateCurrentPage(pageId);
-  }
-
-  private StatusCode applyOperation(
-      long recordStart,
-      LocalWalReadResult record,
-      long commitSequence) {
-    ByteBuffer payload = record.payload();
-    if (record.header().payloadBytes() < IndexedWalCodec.PAGE_OPERATION_HEADER_BYTES
-        || !IndexedWalCodec.hasCommonHeader(payload)) {
-      return StatusCode.CORRUPTION;
-    }
-    int operationType = IndexedWalCodec.operationType(payload);
-    if (phase.vacuumOperationActive()
-        && operationType != IndexedWalCodec.OPERATION_TYPE_VACUUM_CHUNK
-        && operationType != IndexedWalCodec.OPERATION_TYPE_VACUUM_COMMIT) {
-      return StatusCode.CORRUPTION;
-    }
-    int decisionCode = record.header().decisionCode();
-    if (operationType == IndexedWalCodec.OPERATION_TYPE_VACUUM_CHUNK) {
-      return decisionCode == 0 && commitSequence == 0
-          ? applyVacuumChunk(
-              payload, recordStart, record.header().transactionId())
-          : StatusCode.CORRUPTION;
-    }
-    if (operationType == IndexedWalCodec.OPERATION_TYPE_VACUUM_COMMIT) {
-      return decisionCode == 1
-          ? applyVacuumCommit(
-              payload,
-              record.nextOffset(),
-              record.header().transactionId(),
-              commitSequence)
-          : StatusCode.CORRUPTION;
-    }
-    if (decisionCode != 1) {
-      return StatusCode.CORRUPTION;
-    }
-    if (operationType == IndexedWalCodec.OPERATION_TYPE_INSERT) {
-      return kernel.applyInsertOperation(
-          payload, recordStart, record.nextOffset(), commitSequence);
-    }
-    if (operationType == IndexedWalCodec.OPERATION_TYPE_INSERT_BATCH) {
-      return kernel.applyInsertBatchOperation(
-          payload, recordStart, record.nextOffset(), commitSequence);
-    }
-    if (operationType == IndexedWalCodec.OPERATION_TYPE_MUTATION_BATCH) {
-      return kernel.applyMutationBatchOperation(
-          payload, recordStart, record.nextOffset(), commitSequence);
-    }
-    if (operationType != IndexedWalCodec.OPERATION_TYPE_PAGE_IMAGES) {
-      return StatusCode.CORRUPTION;
-    }
-    return applyPageOperation(
-        payload,
-        recordStart,
-        record.nextOffset(),
-        record.header().payloadBytes(),
-        commitSequence);
-  }
-
-  private StatusCode applyPageOperation(
-      ByteBuffer payload,
-      long recordStart,
-      long recordEnd,
-      int payloadBytes,
-      long commitSequence) {
-    StatusCode structural = IndexedWalCodec.validatePageOperation(
-        payload, MAX_CHANGED_PAGES, MAX_OPERATION_ROWS);
-    if (!structural.isOk()) {
-      return structural;
-    }
-    int pageCount = IndexedWalCodec.pageOperationPageCount(payload);
-    int versionCount = IndexedWalCodec.pageOperationVersionCount(payload);
-    int previousRowCount = kernel.rowCount();
-    for (int index = 0; index < pageCount; index++) {
-      int pageOffset = IndexedWalCodec.pageOperationPageOffset(index);
-      StatusCode status = pages.validateRecord(payload, pageOffset, pageHeader, checksum);
-      int pageId = (int) pageHeader.pageId();
-      if (!status.isOk()
-          || pageId <= 0
-          || pageId > MAX_PAGES
-          || pageHeader.pageGeneration() != 1
-          || pageHeader.databaseHigh() != database.high()
-          || pageHeader.databaseLow() != database.low()
-          || pageHeader.walGeneration() != walGeneration.value()
-          || pageHeader.recordStart() != recordStart
-          || pageHeader.recordEnd() != recordEnd
-          || IndexedWalCodec.containsEarlierPageId(recoveryPageIds, index, pageId)) {
-        return status.isOk() ? StatusCode.CORRUPTION : status;
-      }
-      recoveryPageIds[index] = pageId;
-    }
-    for (int index = 0; index < pageCount; index++) {
-      int pageId = recoveryPageIds[index];
-      int pageOffset = IndexedWalCodec.pageOperationPageOffset(index);
-      ensurePageBuffers(pageId);
-      pages.installFromRecord(payload, pageOffset, pageId, recordStart, recordEnd);
-    }
-    StatusCode status = kernel.validateAppliedPages(recoveryPageIds, pageCount);
-    if (status.isOk()) {
-      status = kernel.rebuildRowLocations();
-    }
-    if (status.isOk() && kernel.rowCount() - previousRowCount != versionCount) {
-      status = StatusCode.CORRUPTION;
-    }
-    int versionOffset = IndexedWalCodec.pageOperationVersionsOffset(pageCount);
-    if (status.isOk()) {
-      status = kernel.applyRecoveredVersions(
-          payload, versionOffset, previousRowCount, versionCount, commitSequence);
-    }
-    return status;
-  }
-
-  private StatusCode applyVacuumChunk(
-      ByteBuffer payload,
-      long recordStart,
-      long transactionId) {
-    StatusCode structural = IndexedWalCodec.validateVacuumChunk(
-        payload, MAX_ROWS, LocalWal.MAX_PENDING_RECORDS - 1);
-    if (!structural.isOk()) {
-      return structural;
-    }
-    if (transactionId <= 0
-        || !pages.isPresent(HEAP_PAGE_ID)) {
-      return StatusCode.CORRUPTION;
-    }
-    int retainedRows = IndexedWalCodec.vacuumRetainedRows(payload);
-    int firstRow = IndexedWalCodec.vacuumFirstRow(payload);
-    int chunkRows = IndexedWalCodec.vacuumRowCount(payload);
-    int chunk = IndexedWalCodec.vacuumChunk(payload);
-    int chunkCount = IndexedWalCodec.vacuumChunkCount(payload);
-    StatusCode status;
-    if (chunk == 0) {
-      if (firstRow != 0
-          || phase.vacuumOperationActive()
-          || kernel.indexedEntryCount() != retainedRows) {
-        return StatusCode.CORRUPTION;
-      }
-      status = beginVacuumOperation(
-          retainedRows, chunkCount, transactionId, recordStart);
-    } else {
-      status = !phase.vacuumOperationActive()
-              || transactionId != vacuumTransactionId
-              || retainedRows != vacuumExpectedRows
-              || chunkCount != vacuumExpectedChunks
-              || chunk != vacuumAppliedChunks
-              || firstRow != vacuumAppliedRows
-          ? StatusCode.CORRUPTION : StatusCode.OK;
-    }
-    int entryOffset = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
-    for (int index = 0; status.isOk() && index < chunkRows; index++) {
-      int rowBytes = IndexedWalCodec.vacuumEntryRowBytes(payload, entryOffset);
-      int compactedRowId = vacuumAppliedRows + 1;
-      status = kernel.applyVacuumEntry(payload, entryOffset, compactedRowId);
-      if (status.isOk()) {
-        vacuumAppliedRows++;
-      }
-      entryOffset += IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
-    }
-    if (status.isOk() && entryOffset != payload.limit()) {
-      status = StatusCode.CORRUPTION;
-    }
-    if (!status.isOk()) {
-      cancelVacuumOperation();
-      return status;
-    }
-    vacuumAppliedChunks++;
-    return StatusCode.OK;
-  }
-
-  private StatusCode beginVacuumOperation(
-      int retainedRows,
-      int chunkCount,
-      long transactionId,
-      long recordStart) {
-    if (phase.operationActive() || phase.preparedInsertGroupActive()) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    pages.resetChanges();
-    if (!phase.beginVacuumApply()) {
-      return StatusCode.INVARIANT_BROKEN;
-    }
-    vacuumExpectedRows = retainedRows;
-    vacuumExpectedChunks = chunkCount;
-    vacuumTransactionId = transactionId;
-    vacuumRecordStart = recordStart;
-    StatusCode status = kernel.beginVacuumApply();
-    if (!status.isOk()) {
-      cancelVacuumOperation();
-    }
-    return status;
-  }
-
-  private StatusCode applyVacuumCommit(
-      ByteBuffer payload,
-      long recordEnd,
-      long transactionId,
-      long commitSequence) {
-    StatusCode structural = IndexedWalCodec.validateVacuumCommit(
-        payload, MAX_ROWS, LocalWal.MAX_PENDING_RECORDS - 1);
-    if (!structural.isOk()) {
-      cancelVacuumOperation();
-      return structural;
-    }
-    int retainedRows = IndexedWalCodec.vacuumRetainedRows(payload);
-    int chunkCount = IndexedWalCodec.vacuumCommitChunkCount(payload);
-    int rowsBefore = IndexedWalCodec.vacuumCommitRowsBefore(payload);
-    if (!phase.vacuumOperationActive()
-        || transactionId != vacuumTransactionId
-        || commitSequence <= lastCommitSequence
-        || retainedRows != vacuumExpectedRows
-        || chunkCount != vacuumExpectedChunks
-        || vacuumAppliedRows != retainedRows
-        || vacuumAppliedChunks != chunkCount
-        || rowsBefore != kernel.rowCount()) {
-      cancelVacuumOperation();
-      return StatusCode.CORRUPTION;
-    }
-    publishStagedPages(vacuumRecordStart, recordEnd);
-    StatusCode status = kernel.rebuildRowLocations();
-    if (!status.isOk() || kernel.rowCount() != retainedRows) {
-      cancelVacuumOperation();
-      return status.isOk() ? StatusCode.CORRUPTION : status;
-    }
-    kernel.publishVacuumVersions(retainedRows, commitSequence);
-    finishVacuumOperation();
-    return StatusCode.OK;
-  }
-
-  private void cancelVacuumOperation() {
-    clearStagedFlags();
-    kernel.cancelVacuumVersions(vacuumAppliedRows);
-    finishVacuumOperation();
-  }
-
-  private void finishVacuumOperation() {
-    phase.reset();
-    pages.resetChanges();
-    vacuumExpectedRows = 0;
-    vacuumAppliedRows = 0;
-    vacuumExpectedChunks = 0;
-    vacuumAppliedChunks = 0;
-    kernel.resetVacuumApply();
-    vacuumTransactionId = 0;
-    vacuumRecordStart = 0;
   }
 
   private boolean canAppendRows(int[] rowLengths, int count) {
@@ -1891,18 +1969,6 @@ public final class IndexedTableStore {
     pages.clearStagedFlags();
   }
 
-  private void copyPreparedRow(
-      ByteBuffer source,
-      int sourceOffset,
-      ByteBuffer target,
-      int targetOffset,
-      int rowBytes) {
-    for (int index = 0; index < rowBytes; index++) {
-      target.put(targetOffset + index, source.get(sourceOffset + index));
-    }
-    walCopyBytes += rowBytes;
-  }
-
   private void clearPreparedInsertGroup() {
     for (int index = 0; index < preparedKeyCount; index++) {
       preparedKeys[index] = 0;
@@ -1936,25 +2002,8 @@ public final class IndexedTableStore {
     return closed ? StatusCode.CLOSED : StatusCode.OK;
   }
 
-  private static boolean validInput(
-      DurableDirectory directory,
-      LocalWal wal,
-      DatabaseIncarnation database,
-      WalGeneration walGeneration,
-      IndexedTableStoreOpenResult result) {
-    return directory != null
-        && wal != null
-        && database != null
-        && database.isValid()
-        && walGeneration != null
-        && walGeneration.isValid()
-        && result != null
-        && database.equals(wal.databaseIncarnation())
-        && walGeneration.equals(wal.walGeneration());
-  }
-
-  private void ensurePageBuffers(int pageId) {
-    pages.ensureBuffers(pageId);
+  void closeOpenFile() {
+    file.close();
   }
 
 }

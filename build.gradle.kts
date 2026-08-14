@@ -1,6 +1,8 @@
 import io.riverdb.buildpolicy.BuildPolicy
+import io.riverdb.buildpolicy.ClassReferencePolicy
 import io.riverdb.buildpolicy.HotPathBytecodeFixtureMutator
 import io.riverdb.buildpolicy.HotPathBytecodePolicy
+import io.riverdb.buildpolicy.InvocationPolicy
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.tasks.compile.JavaCompile
@@ -22,7 +24,6 @@ val productionModules = listOf(
   "river-platform",
   "river-format",
   "river-tx-api",
-  "river-journal-api",
   "river-wal",
   "river-buffer",
   "river-storage",
@@ -52,28 +53,27 @@ val allowedDependencies = mapOf(
   "river-platform" to setOf("river-observability-api"),
   "river-format" to emptySet(),
   "river-tx-api" to emptySet(),
-  "river-journal-api" to setOf("river-format", "river-observability-api"),
   "river-wal" to setOf(
-    "river-journal-api", "river-platform", "river-format",
+    "river-platform", "river-format",
     "river-observability-api"
   ),
   "river-buffer" to setOf(
-    "river-journal-api", "river-platform", "river-format",
+    "river-platform", "river-format",
     "river-observability-api"
   ),
   "river-storage" to setOf(
-    "river-format", "river-journal-api", "river-buffer", "river-tx-api",
+    "river-format", "river-buffer", "river-tx-api",
     "river-observability-api"
   ),
   "river-tx" to setOf(
-    "river-tx-api", "river-journal-api", "river-observability-api"
+    "river-tx-api", "river-observability-api"
   ),
   "river-recovery" to setOf(
-    "river-journal-api", "river-wal", "river-buffer", "river-storage",
+    "river-wal", "river-buffer", "river-storage",
     "river-tx", "river-tx-api"
   ),
   "river-backup" to setOf(
-    "river-journal-api", "river-platform", "river-format", "river-wal",
+    "river-platform", "river-format", "river-wal",
     "river-buffer", "river-storage", "river-recovery"
   ),
   "river-catalog" to setOf(
@@ -87,21 +87,22 @@ val allowedDependencies = mapOf(
   ),
   "river-engine-api" to setOf("river-base"),
   "river-engine" to setOf(
-    "river-journal-api", "river-platform", "river-format", "river-wal",
+    "river-platform", "river-format", "river-wal",
     "river-buffer", "river-storage", "river-tx-api", "river-tx",
     "river-recovery", "river-backup", "river-catalog", "river-sql",
     "river-planner", "river-exec", "river-engine-api"
   ),
   "river-protocol" to setOf("river-engine-api"),
   "river-client" to setOf("river-protocol", "river-engine-api"),
-  "river-server" to setOf("river-protocol", "river-engine-api", "river-engine"),
+  "river-server" to setOf(
+    "river-platform", "river-protocol", "river-engine-api", "river-engine"
+  ),
   "river-jdbc" to setOf("river-client"),
   "river-cli" to setOf("river-client"),
   "river-admin" to setOf("river-client", "river-engine-api", "river-backup"),
   "river-inspect" to setOf("river-platform", "river-format", "river-wal"),
   "river-migration" to setOf("river-client"),
   "river-observability" to setOf("river-observability-api"),
-  "river-testkit" to productionModules.toSet(),
   "river-bench" to productionModules.toSet()
 ).mapValues { (module, dependencies) ->
   if (module == "river-base" || module == "river-observability-api") {
@@ -115,7 +116,6 @@ val declaredDependencies = mapOf(
   "river-platform" to setOf("river-base"),
   "river-format" to setOf("river-base"),
   "river-tx-api" to setOf("river-base"),
-  "river-journal-api" to setOf("river-base"),
   "river-wal" to setOf("river-base", "river-format", "river-platform"),
   "river-storage" to setOf("river-base"),
   "river-tx" to setOf("river-base", "river-tx-api"),
@@ -124,7 +124,9 @@ val declaredDependencies = mapOf(
   "river-engine-api" to setOf("river-base"),
   "river-protocol" to setOf("river-base", "river-engine-api"),
   "river-client" to setOf("river-base", "river-engine-api", "river-protocol"),
-  "river-server" to setOf("river-base", "river-engine-api", "river-protocol"),
+  "river-server" to setOf(
+    "river-base", "river-platform", "river-engine-api", "river-protocol"
+  ),
   "river-jdbc" to setOf("river-base", "river-client"),
   "river-cli" to setOf("river-base", "river-client"),
   "river-engine" to setOf(
@@ -132,9 +134,6 @@ val declaredDependencies = mapOf(
     "river-tx", "river-tx-api", "river-wal", "river-sql", "river-engine-api"
   ),
   "river-inspect" to setOf("river-base", "river-format", "river-platform"),
-  "river-testkit" to setOf(
-    "river-base", "river-platform", "river-tx-api", "river-journal-api"
-  ),
   "river-bench" to setOf("river-base")
 )
 
@@ -258,6 +257,8 @@ val lockTokenDescriptor = "Lio/riverdb/tx/api/lock/LockToken;"
 val indexedCommitResultDescriptor = "Lio/riverdb/engine/table/IndexedCommitResult;"
 val indexedMutationTargetDescriptor = "Lio/riverdb/engine/table/IndexedMutationTarget;"
 val indexedTableDescriptor = "Lio/riverdb/engine/table/IndexedTable;"
+val pendingMutationBufferDescriptor =
+  "Lio/riverdb/engine/table/PendingMutationBuffer;"
 val indexedScanCursorDescriptor = "Lio/riverdb/engine/table/IndexedScanCursor;"
 val indexedScanResultDescriptor = "Lio/riverdb/engine/table/IndexedScanResult;"
 val relationalScanCursorDescriptor = "Lio/riverdb/engine/relational/RelationalScanCursor;"
@@ -270,6 +271,10 @@ val sqlScanRowResultDescriptor = "Lio/riverdb/engine/sql/SqlScanRowResult;"
 val engineCommandResultDescriptor = "Lio/riverdb/engine/api/CommandResult;"
 val engineQueryOpenResultDescriptor = "Lio/riverdb/engine/api/QueryOpenResult;"
 val engineRowResultDescriptor = "Lio/riverdb/engine/api/RowResult;"
+val exactDecimalLongValueDescriptor =
+  "Lio/riverdb/base/type/ExactDecimal\$LongValue;"
+val exactDecimalWideScratchDescriptor =
+  "Lio/riverdb/base/type/ExactDecimal\$WideScratch;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val longArrayDescriptor = "[J"
@@ -418,15 +423,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "appendPreparedInsertBatch",
-    "(JJ$longArrayDescriptor$byteBufferDescriptor"
-        + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JJ$pendingMutationBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "appendPreparedMutationBatch",
-    "(JJ$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
-        + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
-        + "$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JJ$pendingMutationBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
@@ -1038,7 +1040,7 @@ val liveHotPathMethods = setOf(
     "($intArrayDescriptor" + "I)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableStore",
     "insert",
     "(JJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
@@ -1053,22 +1055,28 @@ val liveHotPathMethods = setOf(
     "($indexedScanResultDescriptor)V"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableStore",
     "commitInsert",
     "(JJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableStore",
     "commitInserts",
     "(J$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableStore",
     "commitMutations",
     "(J$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$indexedCommitResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableStore",
+    "commitMutations",
+    "(J$pendingMutationBufferDescriptor$indexedCommitResultDescriptor)"
+        + statusCodeDescriptor
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -1096,9 +1104,27 @@ val liveHotPathMethods = setOf(
     "()V"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableStore",
     "insertCommitted",
     "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "stageInsertBatch",
+    "($longArrayDescriptor$byteBufferDescriptor"
+        + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "stageMutationBatch",
+    "($intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+        + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
+        + "$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "stageInsert",
+    "(IJ$byteBufferDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -1111,12 +1137,12 @@ val liveHotPathMethods = setOf(
     "(J)I"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableValidator",
     "versionRowsInLeaf",
-    "($byteBufferDescriptor" + "I)I"
+    "($byteBufferDescriptor)I"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableStore",
     "fetchByKey",
     "(J$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
@@ -1219,6 +1245,47 @@ val liveHotPathMethods = setOf(
     "($isolationLevelDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
+    "io.riverdb.base.type.ExactDecimal",
+    "add",
+    "(JIJIZI$exactDecimalLongValueDescriptor"
+        + "$exactDecimalWideScratchDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.ExactDecimal",
+    "multiply",
+    "(JIJII$exactDecimalLongValueDescriptor"
+        + "$exactDecimalWideScratchDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.ExactDecimal",
+    "divide",
+    "(JIJII$exactDecimalLongValueDescriptor"
+        + "$exactDecimalWideScratchDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.ExactDecimal",
+    "remainder",
+    "(JIJII$exactDecimalLongValueDescriptor"
+        + "$exactDecimalWideScratchDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.ExactDecimal",
+    "quantize",
+    "(JIIZZ$exactDecimalLongValueDescriptor"
+        + "$exactDecimalWideScratchDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.ExactDecimal",
+    "compare",
+    "(JIJI)I"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.ExactDecimal",
+    "average",
+    "(JJJII$exactDecimalLongValueDescriptor"
+        + "$exactDecimalWideScratchDescriptor)Z"
+  ),
+  hotMethod(
     "io.riverdb.sql.SqlParser",
     "parse",
     "(Ljava/lang/String;$sqlCommandDescriptor)$statusCodeDescriptor"
@@ -1234,15 +1301,19 @@ val liveHotPathMethods = setOf(
     "(Ljava/lang/String;$sqlExecutionResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTable",
     "beginScan",
-    "($indexedTableDescriptor" + "JJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+    "(JJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "nextScan",
-    "($indexedTableDescriptor$indexedScanCursorDescriptor$indexedScanResultDescriptor)"
-        + statusCodeDescriptor
+    "($indexedScanCursorDescriptor$indexedScanResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTable",
+    "closeScan",
+    "($indexedScanCursorDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -1321,6 +1392,62 @@ val liveHotPathMethods = setOf(
     "(IJI$byteBufferDescriptor" + "IIZ)V"
   ),
   hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "append",
+    "(IJI$byteBufferDescriptor" + "II)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "appendDeletion",
+    "(IJI)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "copyRowTo",
+    "(I$byteBufferDescriptor" + "I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "insertRowInto",
+    "(I$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "setRowResult",
+    "(I$heapRowResultDescriptor)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "containsNonInsertMutation",
+    "()Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "findLatestIndex",
+    "(J)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "nextIndex",
+    "($indexedScanCursorDescriptor)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "truncate",
+    "(I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "compact",
+    "()V"
+  ),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "count", "()I"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "rowStride", "()I"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "operationAt", "(I)I"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "keyAt", "(I)J"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "previousRowIdAt", "(I)I"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "rowLengthAt", "(I)I"),
+  hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "fetchByKey",
     "(J$heapRowResultDescriptor)$statusCodeDescriptor"
@@ -1397,7 +1524,7 @@ dependencies.add(
 
 val verifySourcePolicy = tasks.register("verifySourcePolicy") {
   group = LifecycleBasePlugin.VERIFICATION_GROUP
-  description = "Checks tabs, two-space source indentation, and internal package boundaries."
+  description = "Checks source layout, package boundaries, and production/test separation."
 
   val sourceFiles = fileTree(rootDir) {
     exclude(".git/**", ".gradle/**", ".river-gradle/**", "**/build/**")
@@ -1447,12 +1574,11 @@ val verifyModuleGraph = tasks.register("verifyModuleGraph") {
 
   doLast {
     val actualGraph = linkedMapOf<String, Set<String>>()
-    subprojects.forEach { module ->
+    subprojects.filter { module -> module.name in allowedDependencies }.forEach { module ->
       actualGraph[module.name] = BuildPolicy.inheritedProjectDependencies(
         listOfNotNull(
           module.configurations.getByName("compileClasspath"),
-          module.configurations.getByName("runtimeClasspath"),
-          module.configurations.findByName("testFixturesImplementation")
+          module.configurations.getByName("runtimeClasspath")
         )
       ) - module.name
     }
@@ -1491,7 +1617,7 @@ val verifyModuleGraph = tasks.register("verifyModuleGraph") {
       }
     }
     val actualApiGraph = linkedMapOf<String, Set<String>>()
-    subprojects.forEach { module ->
+    subprojects.filter { module -> module.name in allowedDependencies }.forEach { module ->
       actualApiGraph[module.name] = BuildPolicy.inheritedProjectDependencies(
         listOf(module.configurations.getByName("api"))
       )
@@ -1676,6 +1802,41 @@ val verifyBuildPolicyFixtures = tasks.register("verifyBuildPolicyFixtures") {
         ),
         hotPackages = setOf("fixture.hot")
       )
+    )
+
+    val productionTestSupport = writeFixture(
+      "forbidden/ProductionTestSupport.java",
+      "package fixture.product;\n"
+          + "import io.riverdb.testkit.Fixture;\n"
+          + "final class ProductionTestSupport {\n"
+          + "  void resetForTest(Fixture fixture) {}\n"
+          + "}\n"
+    )
+    val productionTestSupportSource = BuildPolicy.JavaSource(
+      "product",
+      productionTestSupport,
+      Files.readString(productionTestSupport),
+      true
+    )
+    val productionTestViolations = sourceViolations(listOf(productionTestSupportSource))
+    requireViolation(
+      "production testkit reference",
+      productionTestViolations,
+      "production source references testkit code"
+    )
+    requireViolation(
+      "production test-support identifier",
+      productionTestViolations,
+      "production source declares or references a test-support identifier"
+    )
+    requireNoViolation(
+      "test-source test support",
+      sourceViolations(listOf(BuildPolicy.JavaSource(
+        "product",
+        productionTestSupport,
+        Files.readString(productionTestSupport),
+        false
+      )))
     )
 
     val unicodeBypass = writeFixture(
@@ -1990,6 +2151,249 @@ val verifyHotPathBytecode = tasks.register("verifyHotPathBytecode") {
     )
     if (violations.isNotEmpty()) {
       throw GradleException(violations.joinToString(separator = "\n"))
+    }
+  }
+}
+
+val indexedTableReferenceRules = linkedMapOf(
+  "io/riverdb/engine/table/IndexedTable" to setOf(
+    "io/riverdb/engine/table/IndexedTableKernel"
+  ),
+  "io/riverdb/engine/table/IndexedTableKernel" to setOf(
+    "io/riverdb/engine/table/IndexedTableStore",
+    "io/riverdb/engine/table/IndexedTable"
+  ),
+  "io/riverdb/engine/table/IndexedTableStore" to setOf(
+    "io/riverdb/engine/table/IndexedTable"
+  )
+)
+val verifyIndexedTableClassReferences = tasks.register(
+  "verifyIndexedTableClassReferences"
+) {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Enforces the compiled one-way IndexedTable -> Store -> Kernel graph."
+  dependsOn(project(":river-engine").tasks.named("compileJava"))
+  val engineClasses = project(":river-engine").layout.buildDirectory.dir("classes/java/main")
+  inputs.files(engineClasses)
+
+  doLast {
+    val violations = ClassReferencePolicy.violations(
+      rootDir.toPath(),
+      classFilesUnder(listOf(engineClasses.get().asFile)),
+      indexedTableReferenceRules
+    )
+    if (violations.isNotEmpty()) {
+      throw GradleException(violations.joinToString(separator = "\n"))
+    }
+  }
+}
+
+val classReferenceFixtureSources = fileTree(
+  rootDir.resolve("buildSrc/src/test/resources/class-reference-policy")
+) {
+  include("*.java")
+}
+val classReferenceFixtureClasses =
+  layout.buildDirectory.dir("class-reference-policy-fixtures/classes")
+val compileClassReferencePolicyFixtures = tasks.register(
+  "compileClassReferencePolicyFixtures"
+) {
+  inputs.files(classReferenceFixtureSources)
+  outputs.dir(classReferenceFixtureClasses)
+
+  doLast {
+    val output = classReferenceFixtureClasses.get().asFile
+    if (!output.deleteRecursively()) {
+      throw GradleException("could not clear scoped class-reference fixture output $output")
+    }
+    Files.createDirectories(output.toPath())
+    val compiler = javax.tools.ToolProvider.getSystemJavaCompiler()
+        ?: throw GradleException("a Java 25 JDK compiler is required for policy fixtures")
+    val arguments = mutableListOf(
+      "--release", "25",
+      "-Xlint:none",
+      "-d", output.absolutePath
+    )
+    arguments.addAll(classReferenceFixtureSources.files.map { it.absolutePath }.sorted())
+    val exitCode = compiler.run(null, null, null, *arguments.toTypedArray())
+    if (exitCode != 0) {
+      throw GradleException("class-reference policy fixtures failed to compile: exit $exitCode")
+    }
+  }
+}
+
+val verifyClassReferencePolicyFixtures = tasks.register(
+  "verifyClassReferencePolicyFixtures"
+) {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Proves every indexed-table forbidden reference edge with compiled fixtures."
+  dependsOn(compileClassReferencePolicyFixtures)
+  inputs.files(classReferenceFixtureClasses)
+
+  doLast {
+    val fixtureRules = linkedMapOf(
+      "fixture/reference/Table" to setOf("fixture/reference/Kernel"),
+      "fixture/reference/Kernel" to setOf(
+        "fixture/reference/Store",
+        "fixture/reference/Table"
+      ),
+      "fixture/reference/Store" to setOf("fixture/reference/Table")
+    )
+    val violations = ClassReferencePolicy.violations(
+      rootDir.toPath(),
+      classFilesUnder(listOf(classReferenceFixtureClasses.get().asFile)),
+      fixtureRules
+    )
+    val expectedEdges = setOf(
+      "fixture/reference/Table -> fixture/reference/Kernel",
+      "fixture/reference/Table\$Nested -> fixture/reference/Kernel",
+      "fixture/reference/Table\$DescriptorOnly -> fixture/reference/Kernel",
+      "fixture/reference/Table\$TypeOperations -> fixture/reference/Kernel",
+      "fixture/reference/Kernel -> fixture/reference/Store",
+      "fixture/reference/Kernel -> fixture/reference/Table",
+      "fixture/reference/Store -> fixture/reference/Table"
+    )
+    expectedEdges.forEach { edge ->
+      require(violations.any { edge in it }) {
+        "class-reference fixture did not prove forbidden edge $edge"
+      }
+    }
+    require(violations.size == expectedEdges.size) {
+      "class-reference fixtures produced unexpected violations: $violations"
+    }
+  }
+}
+
+val sqlRuntimeInvocationRules = linkedMapOf(
+  "io/riverdb/engine/sql/SqlNestedQueryExecution" to setOf(
+    InvocationPolicy.Invocation(
+      "io/riverdb/engine/relational/RelationalSession",
+      "resolveTable",
+      "(Ljava/lang/CharSequence;Lio/riverdb/engine/relational/TableDefinition;)"
+          + "Lio/riverdb/base/error/StatusCode;"
+    ),
+    InvocationPolicy.Invocation(
+      "io/riverdb/engine/relational/TableDefinition",
+      "findColumn",
+      "(Ljava/lang/CharSequence;)I"
+    )
+  ),
+  "io/riverdb/engine/sql/SqlQueryExecution" to setOf(
+    InvocationPolicy.Invocation(
+      "io/riverdb/engine/relational/TableDefinition",
+      "findColumn",
+      "(Ljava/lang/CharSequence;)I"
+    )
+  )
+)
+val verifySqlRuntimeInvocationPolicy = tasks.register(
+  "verifySqlRuntimeInvocationPolicy"
+) {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Forbids runtime table and column resolution in SQL execution."
+  dependsOn(project(":river-engine").tasks.named("compileJava"))
+  val engineClasses = project(":river-engine").layout.buildDirectory.dir("classes/java/main")
+  inputs.files(engineClasses)
+
+  doLast {
+    val violations = InvocationPolicy.violations(
+      rootDir.toPath(),
+      classFilesUnder(listOf(engineClasses.get().asFile)),
+      sqlRuntimeInvocationRules
+    )
+    if (violations.isNotEmpty()) {
+      throw GradleException(violations.joinToString(separator = "\n"))
+    }
+  }
+}
+
+val invocationPolicyFixtureSources = fileTree(
+  rootDir.resolve("buildSrc/src/test/resources/invocation-policy")
+) {
+  include("*.java")
+}
+val invocationPolicyFixtureClasses =
+  layout.buildDirectory.dir("invocation-policy-fixtures/classes")
+val compileInvocationPolicyFixtures = tasks.register(
+  "compileInvocationPolicyFixtures"
+) {
+  inputs.files(invocationPolicyFixtureSources)
+  outputs.dir(invocationPolicyFixtureClasses)
+
+  doLast {
+    val output = invocationPolicyFixtureClasses.get().asFile
+    if (!output.deleteRecursively()) {
+      throw GradleException("could not clear scoped invocation-policy fixture output $output")
+    }
+    Files.createDirectories(output.toPath())
+    val compiler = javax.tools.ToolProvider.getSystemJavaCompiler()
+        ?: throw GradleException("a Java 25 JDK compiler is required for policy fixtures")
+    val arguments = mutableListOf(
+      "--release", "25",
+      "-Xlint:none",
+      "-d", output.absolutePath
+    )
+    arguments.addAll(invocationPolicyFixtureSources.files.map { it.absolutePath }.sorted())
+    val exitCode = compiler.run(null, null, null, *arguments.toTypedArray())
+    if (exitCode != 0) {
+      throw GradleException("invocation policy fixtures failed to compile: exit $exitCode")
+    }
+  }
+}
+
+val verifyInvocationPolicyFixtures = tasks.register(
+  "verifyInvocationPolicyFixtures"
+) {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Proves exact forbidden invocation matching with compiled fixtures."
+  dependsOn(compileInvocationPolicyFixtures)
+  inputs.files(invocationPolicyFixtureClasses)
+
+  doLast {
+    val fixtureRules = linkedMapOf(
+      "fixture/invocation/NegativeInvocations" to setOf(
+        InvocationPolicy.Invocation(
+          "fixture/invocation/RelationalSession",
+          "resolveTable",
+          "(Ljava/lang/CharSequence;Lfixture/invocation/TableDefinition;)I"
+        ),
+        InvocationPolicy.Invocation(
+          "fixture/invocation/TableDefinition",
+          "findColumn",
+          "(Ljava/lang/CharSequence;)I"
+        )
+      ),
+      "fixture/invocation/QueryExecution" to setOf(
+        InvocationPolicy.Invocation(
+          "fixture/invocation/TableDefinition",
+          "findColumn",
+          "(Ljava/lang/CharSequence;)I"
+        )
+      )
+    )
+    val violations = InvocationPolicy.violations(
+      rootDir.toPath(),
+      classFilesUnder(listOf(invocationPolicyFixtureClasses.get().asFile)),
+      fixtureRules
+    )
+    val expectedInvocations = setOf(
+      "fixture/invocation/NegativeInvocations -> "
+          + "fixture/invocation/RelationalSession.resolveTable"
+          + "(Ljava/lang/CharSequence;Lfixture/invocation/TableDefinition;)I",
+      "fixture/invocation/NegativeInvocations\$Nested -> "
+          + "fixture/invocation/TableDefinition.findColumn(Ljava/lang/CharSequence;)I",
+      "fixture/invocation/QueryExecution -> "
+          + "fixture/invocation/TableDefinition.findColumn(Ljava/lang/CharSequence;)I",
+      "fixture/invocation/QueryExecution\$Nested -> "
+          + "fixture/invocation/TableDefinition.findColumn(Ljava/lang/CharSequence;)I"
+    )
+    expectedInvocations.forEach { invocation ->
+      require(violations.any { invocation in it }) {
+        "invocation fixture did not prove forbidden call $invocation"
+      }
+    }
+    require(violations.size == expectedInvocations.size) {
+      "invocation fixtures produced unexpected violations: $violations"
     }
   }
 }
@@ -2513,7 +2917,7 @@ val writeExpectedArchiveList = tasks.register("writeExpectedArchiveList") {
 
 tasks.register("assembleRiverArchives") {
   group = LifecycleBasePlugin.BUILD_GROUP
-  description = "Assembles every production, testkit, and benchmark JAR for comparison."
+  description = "Assembles every production and benchmark JAR for comparison."
   dependsOn(writeExpectedArchiveList)
   dependsOn(subprojects.flatMap { module ->
     listOf(module.tasks.named("jar"), module.tasks.named("sourcesJar"))
@@ -2716,6 +3120,10 @@ tasks.named("check") {
     verifyProjectDependencyVisibility,
     verifyHotPathBytecode,
     verifyHotPathBytecodeFixtures,
+    verifyIndexedTableClassReferences,
+    verifyClassReferencePolicyFixtures,
+    verifySqlRuntimeInvocationPolicy,
+    verifyInvocationPolicyFixtures,
     verifyDependencyLedger
   )
   dependsOn(subprojects.map { it.tasks.named("check") })

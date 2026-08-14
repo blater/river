@@ -10,6 +10,7 @@ import io.riverdb.engine.api.RowResult;
 import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
+import io.riverdb.protocol.ProtocolFrameHeader;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolResponse;
 import io.riverdb.protocol.auth.TokenProof;
@@ -20,7 +21,6 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.Arrays;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -39,6 +39,7 @@ public final class RiverClientConnection implements RiverDatabase {
 
   private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
   private final ProtocolFrame frame = new ProtocolFrame();
+  private final ProtocolFrameHeader responseHeader = new ProtocolFrameHeader();
   private final ProtocolResponse response = new ProtocolResponse();
   private final ByteBuffer request =
       ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
@@ -52,13 +53,14 @@ public final class RiverClientConnection implements RiverDatabase {
   private final Socket socket;
   private final InputStream input;
   private final OutputStream output;
-  private StatusCode lastStatus = StatusCode.OK;
+  private volatile StatusCode lastStatus = StatusCode.OK;
   private long nextRequestId = 1;
   private long completedRequests;
   private long bytesSent;
   private long bytesReceived;
   private boolean sessionActive;
-  private boolean closed;
+  private volatile boolean cancelled;
+  private volatile boolean closed;
 
   private RiverClientConnection(
       Socket connectedSocket,
@@ -228,6 +230,18 @@ public final class RiverClientConnection implements RiverDatabase {
     return bytesReceived;
   }
 
+  /** Closes the transport so a blocked ordered request unwinds on both peers. */
+  public StatusCode cancel() {
+    if (closed) {
+      return StatusCode.CLOSED;
+    }
+    cancelled = true;
+    lastStatus = StatusCode.CANCELLED;
+    StatusCode status = closeSocket();
+    lastStatus = StatusCode.CANCELLED;
+    return status;
+  }
+
   private synchronized StatusCode exchange(ProtocolMessageType type, String text) {
     return exchange(type, text, null, 0);
   }
@@ -280,12 +294,15 @@ public final class RiverClientConnection implements RiverDatabase {
       if (!readExact(input, responseBytes, 0, ProtocolFrameCodec.HEADER_BYTES)) {
         return fail(StatusCode.IO_FAILURE);
       }
-      int responsePayloadBytes = readInt(responseBytes, 24);
-      if (responsePayloadBytes < 0
-          || responsePayloadBytes > ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES
-              - ProtocolFrameCodec.HEADER_BYTES) {
+      responseBuffer.position(0);
+      responseBuffer.limit(ProtocolFrameCodec.HEADER_BYTES);
+      status = codec.inspectResponseHeader(responseBuffer, responseHeader);
+      if (!status.isOk()
+          || responseHeader.typeWireCode() != type.wireCode()
+          || responseHeader.requestId() != requestId) {
         return fail(StatusCode.CORRUPTION);
       }
+      int responsePayloadBytes = responseHeader.payloadBytes();
       if (!readExact(
           input,
           responseBytes,
@@ -307,7 +324,7 @@ public final class RiverClientConnection implements RiverDatabase {
       lastStatus = response.status();
       return StatusCode.OK;
     } catch (IOException failure) {
-      return fail(StatusCode.IO_FAILURE);
+      return fail(cancelled ? StatusCode.CANCELLED : StatusCode.IO_FAILURE);
     }
   }
 
@@ -570,13 +587,6 @@ public final class RiverClientConnection implements RiverDatabase {
       read += count;
     }
     return true;
-  }
-
-  private static int readInt(byte[] source, int offset) {
-    return (source[offset] & 0xff) << 24
-        | (source[offset + 1] & 0xff) << 16
-        | (source[offset + 2] & 0xff) << 8
-        | source[offset + 3] & 0xff;
   }
 
   private static void closeQuietly(Socket socket) {

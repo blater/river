@@ -89,6 +89,9 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     if (metadata.isBoolean(column)) {
       return Boolean.toString(value != 0);
     }
+    if (metadata.isDecimal(column)) {
+      return BigDecimal.valueOf(value, metadata.decimalScale(column)).toPlainString();
+    }
     if (!metadata.isVarchar(column)) {
       return Long.toString(value);
     }
@@ -149,7 +152,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   @Override
   public BigDecimal getBigDecimal(int column) throws SQLException {
     long value = numericValue(column);
-    return lastWasNull ? null : BigDecimal.valueOf(value);
+    return lastWasNull ? null : BigDecimal.valueOf(
+        value, metadata.isDecimal(column) ? metadata.decimalScale(column) : 0);
   }
 
   @Override
@@ -160,6 +164,9 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     }
     if (metadata.isVarchar(column)) {
       return getString(column);
+    }
+    if (metadata.isDecimal(column)) {
+      return BigDecimal.valueOf(value, metadata.decimalScale(column));
     }
     return metadata.isBoolean(column) ? Boolean.valueOf(value != 0) : Long.valueOf(value);
   }
@@ -190,9 +197,12 @@ final class RiverJdbcResultSet extends AbstractResultSet {
       }
       converted = Integer.valueOf((int) value);
     } else if (type == String.class) {
-      converted = Long.toString(value);
+      converted = metadata.isDecimal(column)
+          ? BigDecimal.valueOf(value, metadata.decimalScale(column)).toPlainString()
+          : Long.toString(value);
     } else if (type == BigDecimal.class) {
-      converted = BigDecimal.valueOf(value);
+      converted = BigDecimal.valueOf(
+          value, metadata.isDecimal(column) ? metadata.decimalScale(column) : 0);
     } else {
       throw JdbcExceptions.unsupported();
     }

@@ -7,8 +7,6 @@ import io.riverdb.platform.file.DirectoryEntryType;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
-import io.riverdb.platform.file.FileIoProvider;
-import io.riverdb.platform.file.OpenFileResult;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -26,7 +24,7 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 
 /** Java NIO implementation rooted at one resolved database directory. */
-public final class NioDurableDirectory implements DurableDirectory, FileIoProvider {
+public final class NioDurableDirectory implements DurableDirectory {
   private static final OpenOption[] CREATE_OPTIONS = {
     StandardOpenOption.CREATE_NEW,
     StandardOpenOption.READ,
@@ -43,7 +41,6 @@ public final class NioDurableDirectory implements DurableDirectory, FileIoProvid
   private final NioIoCounters counters;
   private final NioDurableFile[] handles;
   private final long[] slotEpochs;
-  private final DirectoryOperationResult providerOperationResult = new DirectoryOperationResult();
   private long generation = 1;
   private long nextSlotEpoch = 1;
   private boolean closed;
@@ -342,23 +339,6 @@ public final class NioDurableDirectory implements DurableDirectory, FileIoProvid
       return typeStatus;
     }
     return openHandle(path, REOPEN_OPTIONS, DirectoryDurability.NOT_APPLIED, result);
-  }
-
-  @Override
-  public synchronized StatusCode open(String fileName, OpenFileResult result) {
-    if (result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    providerOperationResult.reset();
-    StatusCode status = reopen(fileName, providerOperationResult);
-    if (status == StatusCode.CONFLICT) {
-      status = createFile(fileName, providerOperationResult);
-    }
-    if (status.isOk()) {
-      result.setFile(providerOperationResult.file());
-    }
-    return status;
   }
 
   synchronized StatusCode admit(

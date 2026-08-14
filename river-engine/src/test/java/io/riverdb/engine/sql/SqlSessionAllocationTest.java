@@ -97,6 +97,20 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
+            "CREATE TABLE exact_values "
+                + "(id BIGINT PRIMARY KEY, amount DECIMAL(8,2), enabled BOOLEAN)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO exact_values VALUES (1, 42.70, TRUE)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE INDEX exact_values_amount ON exact_values(amount)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
             "CREATE VIEW regional AS "
                 + "SELECT id, balance, region FROM t WHERE balance=10",
             result));
@@ -104,6 +118,7 @@ final class SqlSessionAllocationTest {
       exercise(session, result);
       exerciseCount(session, result);
       exerciseText(session, result);
+      exerciseExactPoint(session, result);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -111,6 +126,7 @@ final class SqlSessionAllocationTest {
       exercise(session, result);
       exerciseCount(session, result);
       exerciseText(session, result);
+      exerciseExactPoint(session, result);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL point select allocated bytes: " + allocated);
@@ -131,6 +147,7 @@ final class SqlSessionAllocationTest {
       exerciseDisjunction(session, cursor, scanRow, result);
       exerciseView(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
+      exerciseExactScan(session, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
@@ -147,6 +164,7 @@ final class SqlSessionAllocationTest {
       exerciseDisjunction(session, cursor, scanRow, result);
       exerciseView(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
+      exerciseExactScan(session, cursor, scanRow, result);
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL scan allocated bytes: " + allocated);
@@ -169,6 +187,31 @@ final class SqlSessionAllocationTest {
     allocationGuard += session.execute(
         "SELECT label FROM texts WHERE label='alpha'", result).ordinal();
     allocationGuard += result.value();
+  }
+
+  private static void exerciseExactPoint(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT amount FROM exact_values "
+            + "WHERE id=1 AND amount=42.700 AND enabled=TRUE",
+        result).ordinal();
+    allocationGuard += result.value();
+  }
+
+  private static void exerciseExactScan(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT amount FROM exact_values "
+            + "WHERE amount BETWEEN 40.0 AND 50.000",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
   }
 
   private static void exerciseScan(

@@ -3,6 +3,7 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.ExactDecimal;
 import java.nio.ByteBuffer;
 
 /** Caller-owned bounded schema carrying one canonical descriptor per column. */
@@ -80,7 +81,9 @@ public final class TableSchema {
     int typeId = SqlTypeDescriptor.typeId(descriptor);
     if (!SqlTypeDescriptor.isValid(descriptor)
         || typeId != SqlTypeDescriptor.TYPE_ID_BIGINT
-            && typeId != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+            && typeId != SqlTypeDescriptor.TYPE_ID_VARCHAR
+            && typeId != SqlTypeDescriptor.TYPE_ID_BOOLEAN
+            && typeId != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return addColumn(name, nullable, descriptor);
@@ -123,6 +126,9 @@ public final class TableSchema {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int column = columnCount - 1;
+    if (!validFixedValue(typeDescriptors[column], value)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     defaultMask |= 1L << column;
     defaultValues[column] = value;
     return StatusCode.OK;
@@ -164,7 +170,9 @@ public final class TableSchema {
   public StatusCode setLastCheck(int comparison, long value) {
     int column = columnCount - 1;
     if (column < 0
-        || typeDescriptors[column] != SqlTypeDescriptor.BIGINT
+        || SqlTypeDescriptor.typeId(typeDescriptors[column])
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR
+        || !validFixedValue(typeDescriptors[column], value)
         || (checkMask & 1L << column) != 0
         || !validCheckComparison(comparison)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -284,6 +292,16 @@ public final class TableSchema {
 
   static boolean validCheckComparison(int comparison) {
     return comparison >= CHECK_EQUAL && comparison <= CHECK_GREATER_OR_EQUAL;
+  }
+
+  static boolean validFixedValue(int descriptor, long value) {
+    return switch (SqlTypeDescriptor.typeId(descriptor)) {
+      case SqlTypeDescriptor.TYPE_ID_BIGINT -> true;
+      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> value == 0 || value == 1;
+      case SqlTypeDescriptor.TYPE_ID_DECIMAL ->
+          ExactDecimal.fits(value, SqlTypeDescriptor.parameterOne(descriptor));
+      default -> false;
+    };
   }
 
   static final class ColumnName implements CharSequence {

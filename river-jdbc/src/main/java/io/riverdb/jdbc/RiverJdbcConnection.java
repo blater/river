@@ -15,6 +15,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collections;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 /** One JDBC connection owns one ordered remote River session. */
 final class RiverJdbcConnection extends AbstractConnection {
@@ -32,7 +33,7 @@ final class RiverJdbcConnection extends AbstractConnection {
   private AbstractResultSet metadataResult;
   private boolean autoCommit = true;
   private boolean transactionActive;
-  private boolean closed;
+  private volatile boolean closed;
   private int isolation = Connection.TRANSACTION_REPEATABLE_READ;
   private int nextSavepointId = 1;
   private int savepointCount;
@@ -220,6 +221,20 @@ final class RiverJdbcConnection extends AbstractConnection {
   }
 
   @Override
+  public void abort(Executor executor) throws SQLException {
+    if (executor == null) {
+      throw JdbcExceptions.invalid("abort executor must not be null");
+    }
+    if (closed) {
+      return;
+    }
+    closed = true;
+    transactionActive = false;
+    completeSavepointsFrom(0);
+    executor.execute(client::cancel);
+  }
+
+  @Override
   public void setReadOnly(boolean readOnly) throws SQLException {
     requireOpen();
     if (readOnly) {
@@ -362,6 +377,19 @@ final class RiverJdbcConnection extends AbstractConnection {
   void statementClosed(RiverJdbcStatement closedStatement) {
     if (statement == closedStatement) {
       statement = null;
+    }
+  }
+
+  void cancelCurrentOperation() throws SQLException {
+    if (closed) {
+      return;
+    }
+    StatusCode status = client.cancel();
+    closed = true;
+    transactionActive = false;
+    completeSavepointsFrom(0);
+    if (!status.isOk() && status != StatusCode.CLOSED) {
+      throw JdbcExceptions.failure(status, "cancel statement");
     }
   }
 

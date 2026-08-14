@@ -40,10 +40,10 @@ final class IndexedTableStoreLifecycleTest {
     assertEquals(StatusCode.CONFLICT, store.close());
     assertEquals(StatusCode.OK, store.cancelOperation());
 
-    long[] keys = {41};
-    int[] rowLengths = {Long.BYTES};
     ByteBuffer rows = row(410);
     HeapInsertResult inserted = new HeapInsertResult();
+    PendingMutationBuffer mutations = new PendingMutationBuffer(1, Long.BYTES);
+    mutations.append(IndexedWalCodec.MUTATION_INSERT, 41, 0, rows, 0, Long.BYTES);
     assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, store.beginOperation());
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, store.beginPreparedInsertGroup());
@@ -51,22 +51,17 @@ final class IndexedTableStoreLifecycleTest {
     assertEquals(StatusCode.CONFLICT, store.close());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, store.forcePreparedInserts());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, store.publishForcedInserts());
-    assertEquals(
-        StatusCode.OK,
-        store.preflightPreparedInsertBatch(keys, rows, Long.BYTES, rowLengths, 1));
+    assertEquals(StatusCode.OK, store.preflightPreparedWrites(mutations));
     assertEquals(StatusCode.OK, store.finishPreparedInsertPreflight(1));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, store.forcePreparedInserts());
     assertEquals(StatusCode.OK, store.cancelPreparedInsertPreflight());
 
     assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
-    assertEquals(
-        StatusCode.OK,
-        store.preflightPreparedInsertBatch(keys, rows, Long.BYTES, rowLengths, 1));
+    assertEquals(StatusCode.OK, store.preflightPreparedWrites(mutations));
     assertEquals(StatusCode.OK, store.finishPreparedInsertPreflight(1));
     assertEquals(
         StatusCode.OK,
-        store.appendPreparedInsertBatch(
-            2, 2, keys, rows, Long.BYTES, rowLengths, 1, inserted));
+        store.appendPreparedWrites(2, 2, mutations, inserted));
     assertEquals(StatusCode.CONFLICT, store.cancelPreparedInsertPreflight());
     assertEquals(StatusCode.CONFLICT, store.close());
     assertEquals(StatusCode.RETRY, store.flush());
@@ -100,38 +95,28 @@ final class IndexedTableStoreLifecycleTest {
     IndexedTableStore store = createStore(directory, wal);
     createTable(store);
 
-    long[] preflightKeys = {51, 52};
-    long[] firstKey = {51};
-    long[] duplicateKey = {51};
-    int[] oneLength = {Long.BYTES};
     ByteBuffer firstRow = row(510);
     ByteBuffer duplicateRow = row(511);
     HeapInsertResult inserted = new HeapInsertResult();
+    PendingMutationBuffer first = new PendingMutationBuffer(1, Long.BYTES);
+    first.append(IndexedWalCodec.MUTATION_INSERT, 51, 0, firstRow, 0, Long.BYTES);
+    PendingMutationBuffer duplicate = new PendingMutationBuffer(1, Long.BYTES);
+    duplicate.append(IndexedWalCodec.MUTATION_INSERT, 51, 0, duplicateRow, 0, Long.BYTES);
 
     assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
-    ByteBuffer preflightRows = ByteBuffer.allocateDirect(2 * Long.BYTES);
-    preflightRows.putLong(0, 510);
-    preflightRows.putLong(Long.BYTES, 520);
-    preflightRows.position(0);
-    preflightRows.limit(preflightRows.capacity());
-    int[] preflightLengths = {Long.BYTES, Long.BYTES};
-    assertEquals(
-        StatusCode.OK,
-        store.preflightPreparedInsertBatch(
-            preflightKeys,
-            preflightRows,
-            Long.BYTES,
-            preflightLengths,
-            2));
+    assertEquals(StatusCode.OK, store.preflightPreparedWrites(first));
+    PendingMutationBuffer secondPreflight = new PendingMutationBuffer(1, Long.BYTES);
+    ByteBuffer secondRow = row(520);
+    secondPreflight.append(
+        IndexedWalCodec.MUTATION_INSERT, 52, 0, secondRow, 0, Long.BYTES);
+    assertEquals(StatusCode.OK, store.preflightPreparedWrites(secondPreflight));
     assertEquals(StatusCode.OK, store.finishPreparedInsertPreflight(2));
     assertEquals(
         StatusCode.OK,
-        store.appendPreparedInsertBatch(
-            2, 2, firstKey, firstRow, Long.BYTES, oneLength, 1, inserted));
+        store.appendPreparedWrites(2, 2, first, inserted));
     assertEquals(
         StatusCode.OK,
-        store.appendPreparedInsertBatch(
-            3, 3, duplicateKey, duplicateRow, Long.BYTES, oneLength, 1, inserted));
+        store.appendPreparedWrites(3, 3, duplicate, inserted));
     assertEquals(StatusCode.OK, store.forcePreparedInserts());
     assertEquals(StatusCode.CORRUPTION, store.publishForcedInserts());
 

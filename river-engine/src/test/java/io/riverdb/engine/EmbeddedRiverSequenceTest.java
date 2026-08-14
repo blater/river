@@ -175,6 +175,47 @@ final class EmbeddedRiverSequenceTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void blocksWarmedCacheDuringSchemaChangeAndResumesItAfterRollback(@TempDir Path root) {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    SessionOpenResult firstResult = new SessionOpenResult();
+    SessionOpenResult secondResult = new SessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(firstResult));
+    assertEquals(StatusCode.OK, database.createSession(secondResult));
+    RiverSession first = firstResult.session();
+    RiverSession second = secondResult.session();
+    CommandResult firstCommand = new CommandResult();
+    CommandResult secondCommand = new CommandResult();
+
+    assertEquals(
+        StatusCode.OK,
+        first.execute("CREATE SEQUENCE cached_ids START WITH 10", firstCommand));
+    assertValue(10, second, "SELECT NEXT VALUE FOR cached_ids", secondCommand);
+    assertEquals(StatusCode.OK, first.execute("BEGIN", firstCommand));
+    assertEquals(
+        StatusCode.OK,
+        first.execute("CREATE SEQUENCE pending_ids START WITH 50", firstCommand));
+
+    assertEquals(
+        StatusCode.RETRY,
+        second.execute("SELECT NEXT VALUE FOR cached_ids", secondCommand));
+    assertEquals(StatusCode.OK, first.execute("ROLLBACK", firstCommand));
+    assertValue(11, second, "SELECT NEXT VALUE FOR cached_ids", secondCommand);
+
+    assertEquals(StatusCode.OK, first.execute("BEGIN", firstCommand));
+    assertEquals(
+        StatusCode.OK,
+        first.execute("CREATE SEQUENCE committed_ids START WITH 90", firstCommand));
+    assertEquals(StatusCode.OK, first.execute("COMMIT", firstCommand));
+    assertValue(74, second, "SELECT NEXT VALUE FOR cached_ids", secondCommand);
+
+    assertEquals(StatusCode.OK, first.close());
+    assertEquals(StatusCode.OK, second.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static void allocate(
       RiverSession session,
       long[] destination,

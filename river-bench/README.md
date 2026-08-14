@@ -123,11 +123,12 @@ Until those exist, this module informs design discussion only and must not be
 used to mark P09, P05, or G0 complete.
 
 Run `:river-bench:benchmarkSmoke` for the local harness check. It writes a new
-create-once directory under `build/benchmark-smoke` by verifying a same-filesystem
-staging directory, exclusively claiming the run-id directory with a no-clobber
-directory creation, and atomically installing the verified tree as its
-`artifacts/` child. The run-id parent is only a claim and may remain incomplete
-after a process or machine crash. A reader accepts a run as complete only when
+create-once directory under `build/benchmark-smoke` by exclusively claiming the
+run-id directory with a no-clobber directory creation, staging and verifying a
+fixed `.pending/` direct child of that claim, and atomically installing the
+verified child as `artifacts/`. The run-id parent is only a claim and may remain
+incomplete after a process or machine crash. A reader accepts a run as complete
+only when
 `run-id/artifacts/` exists, `result.json` passes schema validation, and every
 digest referenced by that result verifies. `result.json` is written last inside
 staging and verified before the whole tree becomes visible. The no-clobber
@@ -146,10 +147,13 @@ or G0 claim.
 
 The atomic directory move makes a completed tree visible as one namespace
 operation; it is not a machine-crash durability claim because this harness does
-not force every file and parent directory. A crash after the run-ID claim but
-before the move may leave a marker-only claim. Recovery is deliberately manual:
-an operator first proves no writer for that run ID is alive, `artifacts/` is
-absent, the marker is a regular file with the exact run ID, and the claim
-contains only that marker, then removes the marker and empty claim before retry.
-The harness does not automatically recover claims because it cannot prove that
-a concurrent owner is dead.
+not force every file and parent directory. A crash after the no-clobber claim
+but before the move may leave an empty claim, a marker-only claim, or a marked
+claim with a partial `.pending/` child. Recovery is deliberately manual. An
+operator must first prove no writer for that run ID is alive and `artifacts/`
+is absent. The run path and `.pending/`, if present, must be direct
+non-symbolic-link directories; an ownership marker, if present, must be a
+regular file with the exact run ID. Only then may the operator inspect and
+remove the incomplete contents and claim before retry. The harness never
+automatically reaps an existing run path because it cannot prove that a
+concurrent owner is dead or that foreign content is safe to delete.

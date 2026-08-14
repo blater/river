@@ -10,20 +10,18 @@ final class SqlPointCommandExecutor {
   private final BoundSqlStatement bound;
   private final SqlBinder binder;
   private final SqlDmlExecutor dml;
-  private SqlQueryExecution queries;
+  private final SqlQueryExecution queries;
 
   SqlPointCommandExecutor(
       RelationalSession relationalSession,
       BoundSqlStatement boundStatement,
       SqlBinder statementBinder,
-      SqlDmlExecutor dmlExecutor) {
+      SqlDmlExecutor dmlExecutor,
+      SqlQueryExecution queryExecution) {
     session = relationalSession;
     bound = boundStatement;
     binder = statementBinder;
     dml = dmlExecutor;
-  }
-
-  void attachQueries(SqlQueryExecution queryExecution) {
     queries = queryExecution;
   }
 
@@ -36,11 +34,7 @@ final class SqlPointCommandExecutor {
       status = binder.bindDataCommand(
           bound.command,
           bound.query,
-          bound,
-          false,
-          false,
-          false,
-          false);
+          bound);
     }
     if (status.isOk()) {
       status = binder.captureExecutableQuery(bound);

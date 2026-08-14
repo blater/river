@@ -55,10 +55,12 @@ final class JdbcExceptions {
       case CANCELLED -> "57014";
       case CARDINALITY_VIOLATION -> "21000";
       case NUMERIC_VALUE_OUT_OF_RANGE -> SqlState.NUMERIC_VALUE_OUT_OF_RANGE;
+      case DIVISION_BY_ZERO -> SqlState.DIVISION_BY_ZERO;
       case CHECK_VIOLATION -> "23514";
       case UNIQUE_VIOLATION -> "23505";
       case FOREIGN_KEY_VIOLATION -> "23503";
       case DATATYPE_MISMATCH -> SqlState.DATATYPE_MISMATCH;
+      case ACCESS_DENIED -> "42501";
       case INVALID_EXTERNAL_INPUT -> SqlState.DATA_EXCEPTION;
       case OK -> SqlState.SUCCESS;
     };

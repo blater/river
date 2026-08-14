@@ -290,6 +290,16 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     return columnTypes[column - 1] == Types.BOOLEAN;
   }
 
+  boolean isDecimal(int column) throws SQLException {
+    requireColumn(column);
+    return columnTypes[column - 1] == Types.DECIMAL;
+  }
+
+  int decimalScale(int column) throws SQLException {
+    requireColumn(column);
+    return SqlTypeDescriptor.parameterTwo(typeDescriptors[column - 1]);
+  }
+
   static int jdbcType(int descriptor) {
     return switch (SqlTypeDescriptor.typeId(descriptor)) {
       case SqlTypeDescriptor.TYPE_ID_BIGINT -> Types.BIGINT;

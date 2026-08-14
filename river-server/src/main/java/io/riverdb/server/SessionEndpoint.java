@@ -28,6 +28,7 @@ public final class SessionEndpoint {
 
   private final RiverDatabase database;
   private final TokenAuthenticator authenticator;
+  private final RemoteSessionAuthorizer sessionAuthorizer;
   private final long challengeHigh;
   private final long challengeLow;
   private final byte[] channelBinding;
@@ -45,7 +46,7 @@ public final class SessionEndpoint {
   private int state;
 
   public SessionEndpoint(RiverDatabase engineDatabase) {
-    this(engineDatabase, null, 0, 0, null);
+    this(engineDatabase, null, 0, 0, null, null);
   }
 
   SessionEndpoint(
@@ -54,8 +55,24 @@ public final class SessionEndpoint {
       long nonceHigh,
       long nonceLow,
       byte[] binding) {
+    this(engineDatabase, tokenAuthenticator, nonceHigh, nonceLow, binding, null);
+  }
+
+  SessionEndpoint(
+      RiverDatabase engineDatabase,
+      TokenAuthenticator tokenAuthenticator,
+      long nonceHigh,
+      long nonceLow,
+      byte[] binding,
+      SecurityAuditLog audit) {
     database = engineDatabase;
     authenticator = tokenAuthenticator;
+    sessionAuthorizer = tokenAuthenticator == null
+        ? null
+        : new RemoteSessionAuthorizer(
+            tokenAuthenticator.principalId(),
+            tokenAuthenticator.permissions(),
+            audit);
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
     channelBinding = binding;
@@ -128,6 +145,10 @@ public final class SessionEndpoint {
     return authenticator == null || state >= READY && state < CLOSED;
   }
 
+  long authorizationFailures() {
+    return sessionAuthorizer == null ? 0 : sessionAuthorizer.denials();
+  }
+
   private StatusCode hello(ByteBuffer response) {
     StatusCode status = state == NEW ? StatusCode.OK : StatusCode.CONFLICT;
     if (status.isOk()) {
@@ -145,7 +166,12 @@ public final class SessionEndpoint {
     StatusCode status;
     if (state == AUTHENTICATING) {
       status = authenticator.verify(frame, challengeHigh, challengeLow, channelBinding);
-      if (status.isOk()) {
+      StatusCode audited = sessionAuthorizer.auditAuthentication(status.isOk());
+      if (!audited.isOk()) {
+        state = CLOSED;
+        status = audited;
+        clearChannelBinding();
+      } else if (status.isOk()) {
         state = READY;
         clearChannelBinding();
       } else {
@@ -172,7 +198,9 @@ public final class SessionEndpoint {
   private StatusCode openSession(ByteBuffer response) {
     openedSession.reset();
     StatusCode status = state == READY
-        ? database.createSession(openedSession)
+        ? sessionAuthorizer == null
+            ? database.createSession(openedSession)
+            : database.createSession(sessionAuthorizer, openedSession)
         : state == CLOSED ? StatusCode.CLOSED : StatusCode.CONFLICT;
     if (status.isOk()) {
       session = openedSession.session();

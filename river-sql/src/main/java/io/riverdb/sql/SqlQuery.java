@@ -71,7 +71,11 @@ public final class SqlQuery {
   }
 
   StatusCode compileDerived(SqlCommand destination) {
-    if (destination == null || blockCount < 2) {
+    if (destination == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.reset();
+    if (blockCount < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < blockCount; index++) {
@@ -96,7 +100,6 @@ public final class SqlQuery {
         }
       }
     }
-    destination.reset();
     SqlCommand root = blocks[0];
     SqlCommand base = blocks[blockCount - 1];
     destination.writableTableName().copyFrom(base.tableName());
@@ -166,27 +169,30 @@ public final class SqlQuery {
     }
     destination.setRowLimit(root.rowLimit());
     destination.setScan(0, 0, false);
-    return StatusCode.OK;
+    return destination.finish();
   }
 
   public StatusCode compileView(
       SqlCommand outer,
       SqlCommand view,
       SqlCommand destination) {
-    if (outer == null
-        || view == null
-        || destination == null
-        || destination == view) {
+    reset();
+    if (destination == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    reset();
+    if (outer == null || view == null || destination == view) {
+      destination.reset();
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     SqlCommand outerBlock = nextBlock();
     SqlCommand viewBlock = nextBlock();
     if (outerBlock == null || viewBlock == null) {
+      destination.reset();
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     outerBlock.copyQueryFrom(outer);
     viewBlock.copyQueryFrom(view);
+    destination.reset();
     if (outerBlock.isSelectAll()) {
       StatusCode expansion = outerBlock.expandSelectAllFrom(viewBlock);
       if (!expansion.isOk()) {
@@ -197,8 +203,11 @@ public final class SqlQuery {
   }
 
   StatusCode compileScalarPredicate(SqlCommand destination, int predicate) {
-    if (destination == null
-        || blockCount < 2) {
+    if (destination == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.reset();
+    if (blockCount < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     scalarPredicates[0] = predicate;
@@ -206,8 +215,11 @@ public final class SqlQuery {
   }
 
   StatusCode compileExistencePredicate(SqlCommand destination, boolean negated) {
-    if (destination == null
-        || blockCount < 2) {
+    if (destination == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.reset();
+    if (blockCount < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     existencePredicates[0] = negated ? -1 : 1;
@@ -218,8 +230,11 @@ public final class SqlQuery {
       SqlCommand destination,
       int predicate,
       boolean negated) {
-    if (destination == null
-        || blockCount < 2) {
+    if (destination == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    destination.reset();
+    if (blockCount < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     setMembershipPredicate(0, predicate, negated);
@@ -250,7 +265,7 @@ public final class SqlQuery {
       }
     }
     destination.copyQueryFrom(blocks[0]);
-    return StatusCode.OK;
+    return destination.finish();
   }
 
   private static StatusCode validateOuterBlock(

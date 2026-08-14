@@ -12,6 +12,7 @@ import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
+import io.riverdb.protocol.ProtocolFrameHeader;
 import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.protocol.ProtocolResponse;
 import java.io.IOException;
@@ -169,6 +170,38 @@ final class LoopbackRiverServerTest {
   }
 
   @Test
+  void rejectsTruncatedVersionAndWrongDirectionHeadersBeforePayloadRead(
+      @TempDir Path root) throws IOException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    byte[] header = new byte[ProtocolFrameCodec.HEADER_BYTES];
+    ByteBuffer bytes = ByteBuffer.wrap(header).order(ByteOrder.BIG_ENDIAN);
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 1));
+    sendRejectedHeader(server, header, ProtocolFrameCodec.HEADER_BYTES - 1, 1);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, server.lastStatus());
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 2));
+    bytes.putInt(4, ProtocolFrameCodec.VERSION + 1);
+    sendRejectedHeader(server, header, header.length, 2);
+    assertEquals(StatusCode.CONFLICT, server.lastStatus());
+
+    assertEquals(StatusCode.OK, codec.encodeRequest(bytes, ProtocolMessageType.HELLO, 3));
+    bytes.putInt(12, 1);
+    bytes.putInt(24, 64);
+    sendRejectedHeader(server, header, header.length, 3);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, server.lastStatus());
+
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void idleConnectionDoesNotBlockUsefulSql(@TempDir Path root) throws IOException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
@@ -271,6 +304,26 @@ final class LoopbackRiverServerTest {
     assertEquals(expected, server.rejectedConnections());
   }
 
+  private static void sendRejectedHeader(
+      LoopbackRiverServer server,
+      byte[] header,
+      int bytes,
+      long expectedRejectedFrames) throws IOException {
+    try (Socket socket = connect(server.port())) {
+      socket.setSoTimeout(2_000);
+      socket.getOutputStream().write(header, 0, bytes);
+      socket.getOutputStream().flush();
+      socket.shutdownOutput();
+      assertEquals(-1, socket.getInputStream().read());
+    }
+    long deadline = System.nanoTime() + 2_000_000_000L;
+    while (server.rejectedFrames() != expectedRejectedFrames
+        && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(expectedRejectedFrames, server.rejectedFrames());
+  }
+
   private static void assertStatus(StatusCode expected, ProtocolResponse response) {
     assertEquals(expected, response.status());
   }
@@ -298,6 +351,7 @@ final class LoopbackRiverServerTest {
   private static final class TestClient implements AutoCloseable {
     private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
     private final ProtocolFrame frame = new ProtocolFrame();
+    private final ProtocolFrameHeader responseHeader = new ProtocolFrameHeader();
     private final ProtocolResponse response = new ProtocolResponse();
     private final ByteBuffer request =
         ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
@@ -340,9 +394,12 @@ final class LoopbackRiverServerTest {
       output.write(request.array(), 0, request.remaining());
       output.flush();
       readExact(input, responseBytes, 0, ProtocolFrameCodec.HEADER_BYTES);
-      int payload = ByteBuffer.wrap(responseBytes)
-          .order(ByteOrder.BIG_ENDIAN)
-          .getInt(24);
+      responseBuffer.position(0);
+      responseBuffer.limit(ProtocolFrameCodec.HEADER_BYTES);
+      assertEquals(
+          StatusCode.OK,
+          codec.inspectResponseHeader(responseBuffer, responseHeader));
+      int payload = responseHeader.payloadBytes();
       readExact(input, responseBytes, ProtocolFrameCodec.HEADER_BYTES, payload);
       responseBuffer.position(0);
       responseBuffer.limit(ProtocolFrameCodec.HEADER_BYTES + payload);

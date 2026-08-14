@@ -17,9 +17,19 @@ import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
 import io.riverdb.engine.api.RowResult;
 import io.riverdb.engine.api.SessionOpenResult;
+import io.riverdb.protocol.ProtocolFrameCodec;
+import io.riverdb.protocol.ProtocolMessageType;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerOpenResult;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -233,6 +243,74 @@ final class RiverClientConnectionTest {
     assertEquals(StatusCode.OK, server.close());
     assertEquals(0, server.activeConnections());
     assertEquals(StatusCode.OK, engine.close());
+  }
+
+  @Test
+  void rejectsCorruptPeerHeadersBeforeReadingTheirPayload() throws Exception {
+    assertEquals(StatusCode.CORRUPTION, connectToCorruptResponse(1));
+    assertEquals(StatusCode.CORRUPTION, connectToCorruptResponse(2));
+    assertEquals(StatusCode.CORRUPTION, connectToCorruptResponse(3));
+    assertEquals(StatusCode.IO_FAILURE, connectToCorruptResponse(4));
+    assertEquals(StatusCode.CORRUPTION, connectToCorruptResponse(5));
+    assertEquals(StatusCode.CORRUPTION, connectToCorruptResponse(6));
+  }
+
+  private static StatusCode connectToCorruptResponse(int corruption) throws Exception {
+    AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+    try (ServerSocket server = new ServerSocket()) {
+      server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+      Thread responder = Thread.ofPlatform().start(() -> {
+        try (Socket connection = server.accept()) {
+          byte[] requestHeader = new byte[ProtocolFrameCodec.HEADER_BYTES];
+          if (!readExact(connection.getInputStream(), requestHeader, requestHeader.length)) {
+            throw new IOException("client request header was truncated");
+          }
+          ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+          ProtocolFrameCodec codec = new ProtocolFrameCodec();
+          if (corruption == 1) {
+            codec.encodeRequest(response, ProtocolMessageType.HELLO, 1);
+          } else {
+            codec.encodeHelloResponse(response, 1, StatusCode.OK, 0, 0);
+            if (corruption == 2) {
+              response.putInt(4, ProtocolFrameCodec.VERSION + 1);
+            } else if (corruption == 3) {
+              response.putInt(24, ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+            } else if (corruption == 5) {
+              response.putInt(8, ProtocolMessageType.FETCH.wireCode());
+            } else if (corruption == 6) {
+              response.putLong(16, 2);
+            }
+          }
+          int bytes = corruption == 4
+              ? ProtocolFrameCodec.HEADER_BYTES - 1 : ProtocolFrameCodec.HEADER_BYTES;
+          connection.getOutputStream().write(response.array(), 0, bytes);
+          connection.getOutputStream().flush();
+        } catch (Throwable failure) {
+          serverFailure.set(failure);
+        }
+      });
+      RiverClientOpenResult result = new RiverClientOpenResult();
+      StatusCode status = RiverClientConnection.connectLoopback(server.getLocalPort(), result);
+      responder.join(2_000);
+      assertFalse(responder.isAlive());
+      if (serverFailure.get() != null) {
+        throw new AssertionError(serverFailure.get());
+      }
+      return status;
+    }
+  }
+
+  private static boolean readExact(InputStream input, byte[] target, int length)
+      throws IOException {
+    int read = 0;
+    while (read < length) {
+      int count = input.read(target, read, length - read);
+      if (count < 0) {
+        return false;
+      }
+      read += count;
+    }
+    return true;
   }
 
   private static LoopbackRiverServer start(RiverDatabase database) {

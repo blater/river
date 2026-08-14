@@ -12,16 +12,16 @@ import java.util.zip.CRC32C;
 
 /** Owns the indexed table's bounded current and staged page frames. */
 final class IndexedPageSet {
-  private final ByteBuffer[] currentPages = new ByteBuffer[IndexedTableStore.MAX_PAGES + 1];
-  private final ByteBuffer[] currentPayloads = new ByteBuffer[IndexedTableStore.MAX_PAGES + 1];
-  private final ByteBuffer[] stagingPages = new ByteBuffer[IndexedTableStore.MAX_PAGES + 1];
-  private final ByteBuffer[] stagingPayloads = new ByteBuffer[IndexedTableStore.MAX_PAGES + 1];
-  private final boolean[] present = new boolean[IndexedTableStore.MAX_PAGES + 1];
-  private final boolean[] staged = new boolean[IndexedTableStore.MAX_PAGES + 1];
-  private final boolean[] dirty = new boolean[IndexedTableStore.MAX_PAGES + 1];
-  private final long[] recordStarts = new long[IndexedTableStore.MAX_PAGES + 1];
-  private final long[] recordEnds = new long[IndexedTableStore.MAX_PAGES + 1];
-  private final int[] changedPageIds = new int[IndexedTableStore.MAX_PAGES];
+  private final ByteBuffer[] currentPages = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
+  private final ByteBuffer[] currentPayloads = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
+  private final ByteBuffer[] stagingPages = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
+  private final ByteBuffer[] stagingPayloads = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
+  private final boolean[] present = new boolean[IndexedTableLimits.MAX_PAGES + 1];
+  private final boolean[] staged = new boolean[IndexedTableLimits.MAX_PAGES + 1];
+  private final boolean[] dirty = new boolean[IndexedTableLimits.MAX_PAGES + 1];
+  private final long[] recordStarts = new long[IndexedTableLimits.MAX_PAGES + 1];
+  private final long[] recordEnds = new long[IndexedTableLimits.MAX_PAGES + 1];
+  private final int[] changedPageIds = new int[IndexedTableLimits.MAX_PAGES];
   private int changedPageCount;
   private int highestPageId;
   private long stagedCopyBytes;
@@ -328,6 +328,6 @@ final class IndexedPageSet {
   }
 
   private static boolean validPageId(int pageId) {
-    return pageId > 0 && pageId <= IndexedTableStore.MAX_PAGES;
+    return pageId > 0 && pageId <= IndexedTableLimits.MAX_PAGES;
   }
 }

@@ -4,6 +4,9 @@ River is a relational database implemented in Java. Its target is a
 high-performance, crash-safe single-node database with SQL and JDBC access,
 followed by a replicated journal and operational failover.
 
+For the current embedded lifecycle, SQL client, and essential administration
+rules, see the [River database how-to](HOWTO.md).
+
 ### Current capabilities
 
  Storage and recovery:
@@ -48,4 +51,3 @@ JDK 25 is required. Run the complete initial-phase validation locally:
 The command uses the checksum-pinned Gradle wrapper and an isolated
 repository-local Gradle home, then runs a clean compile, static source policy,
 module dependency checks, and all tests. 
-

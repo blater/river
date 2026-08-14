@@ -28,7 +28,6 @@ public final class BoundedEventRing implements DiagnosticSink {
   private final int capacity;
   private final SaturationPolicy saturationPolicy;
   private final ConsumerAccess consumerAccess;
-  private final PublicationClaimObserver claimObserver;
   private final AtomicLong producerPosition = new AtomicLong();
   private final AtomicLong publishedCount = new AtomicLong();
   private final AtomicLong droppedCount = new AtomicLong();
@@ -48,8 +47,7 @@ public final class BoundedEventRing implements DiagnosticSink {
         requestedCapacity,
         initialThreshold,
         newSaturationPolicy,
-        ConsumerAccess.UNCHECKED,
-        PublicationClaimObserver.NO_OP);
+        ConsumerAccess.UNCHECKED);
   }
 
   BoundedEventRing(
@@ -57,20 +55,6 @@ public final class BoundedEventRing implements DiagnosticSink {
       Severity initialThreshold,
       SaturationPolicy newSaturationPolicy,
       ConsumerAccess newConsumerAccess) {
-    this(
-        requestedCapacity,
-        initialThreshold,
-        newSaturationPolicy,
-        newConsumerAccess,
-        PublicationClaimObserver.NO_OP);
-  }
-
-  BoundedEventRing(
-      int requestedCapacity,
-      Severity initialThreshold,
-      SaturationPolicy newSaturationPolicy,
-      ConsumerAccess newConsumerAccess,
-      PublicationClaimObserver newClaimObserver) {
     if (requestedCapacity < 2
         || requestedCapacity > MAX_CAPACITY
         || Integer.bitCount(requestedCapacity) != 1) {
@@ -82,7 +66,6 @@ public final class BoundedEventRing implements DiagnosticSink {
     threshold = initialThreshold;
     saturationPolicy = newSaturationPolicy;
     consumerAccess = newConsumerAccess;
-    claimObserver = newClaimObserver;
     slots = new DiagnosticEvent[capacity];
     slotSequences = new AtomicLongArray(capacity);
     for (int index = 0; index < capacity; index++) {
@@ -124,9 +107,6 @@ public final class BoundedEventRing implements DiagnosticSink {
         return onSaturation();
       }
       if (difference == 0 && producerPosition.compareAndSet(position, position + 1)) {
-        if (claimObserver != PublicationClaimObserver.NO_OP) {
-          claimObserver.afterClaim(position);
-        }
         slots[slotIndex].copyFrom(event);
         slotSequences.set(slotIndex, position + 1);
         publishedCount.incrementAndGet();

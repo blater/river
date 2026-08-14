@@ -20,6 +20,8 @@ final class SqlCommandDispatcher {
   private final CheckpointResult checkpoint = new CheckpointResult();
   private final SequenceValueResult sequenceValue = new SequenceValueResult();
   private final SqlExpressionEvaluator expressions = new SqlExpressionEvaluator();
+  private final SqlScalarExpressionEvaluator scalarExpressions =
+      new SqlScalarExpressionEvaluator();
   private final TableDefinition createdTable = new TableDefinition();
   private final TableDefinition referencedTable = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
@@ -54,6 +56,7 @@ final class SqlCommandDispatcher {
         || type == SqlCommandType.ALTER_TABLE_RENAME_COLUMN
         || type == SqlCommandType.ALTER_INDEX_RENAME
         || type == SqlCommandType.NEXT_SEQUENCE_VALUE
+        || type == SqlCommandType.SCALAR_EXPRESSION
         || type == SqlCommandType.CHECKPOINT;
   }
 
@@ -110,6 +113,9 @@ final class SqlCommandDispatcher {
         }
       }
       return status;
+    }
+    if (type == SqlCommandType.SCALAR_EXPRESSION) {
+      return scalarExpressions.evaluate(command.scalarExpression(), result);
     }
     if (type == SqlCommandType.CHECKPOINT) {
       if (transactions.isExplicit()) {

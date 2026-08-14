@@ -32,7 +32,7 @@ final class SqlViewDefinitionValidator {
     status = session.resolveTable(command.tableName(), bound.table);
     return status.isOk()
         ? binder.bindDataCommand(
-            command, query, bound, false, false, false, false)
+            command, query, bound)
         : status;
   }
 

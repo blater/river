@@ -14,7 +14,7 @@ class BoundedEventRingFactoryTest {
   @Test
   void diagnosticAndTestModesGuardTheSingleConsumerInvariant() {
     assertEquals(ConsumerAccess.GUARDED, ring(ObservabilityBuildMode.DIAGNOSTIC).consumerAccess());
-    assertEquals(ConsumerAccess.GUARDED, ring(ObservabilityBuildMode.TEST).consumerAccess());
+    assertEquals(ConsumerAccess.GUARDED, ring(ObservabilityBuildMode.DIAGNOSTIC).consumerAccess());
   }
 
   @Test

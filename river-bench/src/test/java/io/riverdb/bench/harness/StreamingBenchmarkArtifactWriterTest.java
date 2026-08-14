@@ -1,5 +1,6 @@
 package io.riverdb.bench.harness;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -8,15 +9,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 
 final class StreamingBenchmarkArtifactWriterTest {
   private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -76,7 +83,62 @@ final class StreamingBenchmarkArtifactWriterTest {
   }
 
   @Test
-  void rejectsDuplicateStreamingOutputNamesBeforeCreatingRun(@TempDir Path directory)
+  @ResourceLock(Resources.SYSTEM_PROPERTIES)
+  void fixedStreamingInputMatchesPreExtractionGoldenTree(@TempDir Path directory)
+      throws IOException {
+    byte[] payload = "key\tvalue\n1\t9\n".getBytes(StandardCharsets.UTF_8);
+    StreamingWorkloadArtifact artifact = new StreamingWorkloadArtifact(
+        "riverbank_equivalent",
+        2,
+        11,
+        1,
+        "riverbank.equivalent.v2",
+        "schema=riverbank_v2;table=equivalent;external_dataset=none",
+        (output, scratch) -> {
+          output.write(payload);
+          return new StreamingGenerationResult(
+              StreamingGenerationStatus.GENERATED, 1, payload.length);
+        });
+
+    withGoldenEnvironment(() -> {
+      ArtifactWriteResult result = new BenchmarkArtifactWriter().writeStreaming(
+          directory,
+          "golden-v2-run",
+          Instant.EPOCH,
+          "golden-commit",
+          List.of(artifact),
+          List.of(sample(artifact.name())),
+          1_000_000,
+          3);
+
+      assertEquals(ArtifactWriteStatus.WRITTEN, result.status());
+      assertGoldenTree(result.runDirectory(), payload);
+    });
+  }
+
+  @Test
+  void invokesEmitterExactlyTwiceWithBoundedNonEmptyScratch(@TempDir Path directory)
+      throws IOException {
+    AtomicInteger calls = new AtomicInteger();
+    List<Integer> scratchLengths = new ArrayList<>();
+    StreamingWorkloadArtifact artifact = fixedArtifact(
+        "riverbank_two_pass", calls, scratchLengths);
+
+    ArtifactWriteResult result = new BenchmarkArtifactWriter().writeStreaming(
+        directory, "local-two-pass-01", Instant.EPOCH, "commit",
+        List.of(artifact), List.of(sample(artifact.name())), 1_000_000, 3);
+
+    assertEquals(ArtifactWriteStatus.WRITTEN, result.status());
+    assertEquals(2, calls.get());
+    assertEquals(2, scratchLengths.size());
+    for (int scratchLength : scratchLengths) {
+      assertTrue(scratchLength > 0);
+      assertTrue(scratchLength <= 64 * 1024);
+    }
+  }
+
+  @Test
+  void duplicateStreamingOutputNamesCleanTheClaim(@TempDir Path directory)
       throws IOException {
     StreamingWorkloadArtifact artifact = new RiverBankStreamingGenerator()
         .plan(17, RiverBankScale.developerSmoke()).artifacts().get(0);
@@ -199,6 +261,30 @@ final class StreamingBenchmarkArtifactWriterTest {
         });
   }
 
+  private static StreamingWorkloadArtifact fixedArtifact(
+      String name,
+      AtomicInteger calls,
+      List<Integer> scratchLengths) {
+    String suffix = name.substring("riverbank_".length());
+    return new StreamingWorkloadArtifact(
+        name,
+        2,
+        1,
+        1,
+        "riverbank." + suffix + ".v2",
+        "schema=riverbank_v2;table=" + suffix + ";external_dataset=none",
+        (output, scratch) -> {
+          if (calls != null) {
+            calls.incrementAndGet();
+          }
+          if (scratchLengths != null) {
+            scratchLengths.add(scratch.length);
+          }
+          output.write(new byte[] {'h', '\n', 'a', '\n'});
+          return new StreamingGenerationResult(StreamingGenerationStatus.GENERATED, 1, 4);
+        });
+  }
+
   private static SampleArtifact sample(String workload) {
     return new SampleArtifact(
         workload,
@@ -209,9 +295,97 @@ final class StreamingBenchmarkArtifactWriterTest {
         new LatencySnapshot(2, 10, 20, 30, 40, 50, 60, 25.5));
   }
 
+  private static void assertGoldenTree(Path run, byte[] payload) throws IOException {
+    List<String> expectedNames = List.of(
+        ".river-bench-staging-v1",
+        "manifest.json",
+        "result.json",
+        "riverbank_equivalent-v2.tsv",
+        "samples.tsv");
+    try (Stream<Path> paths = Files.list(run)) {
+      assertEquals(
+          expectedNames,
+          paths.map(path -> path.getFileName().toString()).sorted().toList());
+    }
+    byte[] manifest = goldenResource("benchmark-artifact-v2-manifest.json")
+        .replace(
+            "__AVAILABLE_PROCESSORS__",
+            Integer.toString(Runtime.getRuntime().availableProcessors()))
+        .getBytes(StandardCharsets.UTF_8);
+    byte[] result = goldenResource("benchmark-artifact-v2-result.json")
+        .replace("__MANIFEST_SHA256__", sha256(manifest))
+        .getBytes(StandardCharsets.UTF_8);
+    String marker = "river-bench-staging-v1\nrun_id=golden-v2-run\n";
+    String samples = "schema_version\tworkload\tmode\tmetric\toperation_count\t"
+        + "expected_interval_ns\thistogram_count\tminimum_ns\tp50_ns\tp95_ns\t"
+        + "p99_ns\tp999_ns\tmaximum_ns\tmean_ns\n"
+        + "2\triverbank_equivalent\tclosed_loop\tservice\t2\t0\t2\t10\t20\t30\t"
+        + "40\t50\t60\t25.5\n";
+
+    assertArrayEquals(
+        marker.getBytes(StandardCharsets.UTF_8),
+        Files.readAllBytes(run.resolve(".river-bench-staging-v1")));
+    assertArrayEquals(manifest, Files.readAllBytes(run.resolve("manifest.json")));
+    assertArrayEquals(result, Files.readAllBytes(run.resolve("result.json")));
+    assertArrayEquals(
+        samples.getBytes(StandardCharsets.UTF_8),
+        Files.readAllBytes(run.resolve("samples.tsv")));
+    assertArrayEquals(
+        payload,
+        Files.readAllBytes(run.resolve("riverbank_equivalent-v2.tsv")));
+  }
+
+  private static String goldenResource(String name) throws IOException {
+    // Frozen from the accepted pre-extraction writer with pinned runtime properties.
+    String path = "/io/riverdb/bench/harness/golden/" + name;
+    try (InputStream input = StreamingBenchmarkArtifactWriterTest.class
+        .getResourceAsStream(path)) {
+      if (input == null) {
+        throw new IOException("missing golden resource " + path);
+      }
+      return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+    }
+  }
+
+  private static String sha256(byte[] bytes) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (java.security.NoSuchAlgorithmException exception) {
+      throw new AssertionError(exception);
+    }
+  }
+
+  private static void withGoldenEnvironment(ThrowingIoAction action) throws IOException {
+    String[] names = {
+        "os.name", "os.version", "os.arch", "java.runtime.version", "java.vm.name"
+    };
+    String[] values = {"GoldenOS", "1.0", "golden-arch", "25-golden", "GoldenVM"};
+    String[] previous = new String[names.length];
+    for (int index = 0; index < names.length; index++) {
+      previous[index] = System.getProperty(names[index]);
+      System.setProperty(names[index], values[index]);
+    }
+    try {
+      action.run();
+    } finally {
+      for (int index = 0; index < names.length; index++) {
+        if (previous[index] == null) {
+          System.clearProperty(names[index]);
+        } else {
+          System.setProperty(names[index], previous[index]);
+        }
+      }
+    }
+  }
+
+  @FunctionalInterface
+  private interface ThrowingIoAction {
+    void run() throws IOException;
+  }
+
   private static long pendingDirectoryCount(Path directory) throws IOException {
-    try (Stream<Path> paths = Files.list(directory)) {
-      return paths.filter(path -> path.getFileName().toString().startsWith(".pending-"))
+    try (Stream<Path> paths = Files.walk(directory, 2)) {
+      return paths.filter(path -> path.getFileName().toString().equals(".pending"))
           .count();
     }
   }

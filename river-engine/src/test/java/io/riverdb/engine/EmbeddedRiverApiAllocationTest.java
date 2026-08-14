@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class EmbeddedRiverApiAllocationTest {
+  private static final int WARMUP_ITERATIONS = 1_000;
+  private static final int MEASURED_ITERATIONS = 100;
   private static final String QUERY =
       "SELECT id, balance FROM accounts WHERE region=7";
   private static final String MEMBERSHIP_QUERY =
@@ -66,12 +68,12 @@ final class EmbeddedRiverApiAllocationTest {
     RiverQuery query = queryResult.query();
     assertEquals(StatusCode.OK, query.close(command));
 
-    for (int index = 0; index < 100; index++) {
+    for (int index = 0; index < WARMUP_ITERATIONS; index++) {
       exercise(session, queryResult, query, row, command);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
-    for (int index = 0; index < 100; index++) {
+    for (int index = 0; index < MEASURED_ITERATIONS; index++) {
       exercise(session, queryResult, query, row, command);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;

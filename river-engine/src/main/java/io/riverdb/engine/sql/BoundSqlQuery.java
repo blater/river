@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlComparison;
@@ -15,6 +16,15 @@ final class BoundSqlQuery {
   private final int[] existencePredicates = new int[MAXIMUM_BLOCKS];
   private final int[] membershipPredicates = new int[MAXIMUM_BLOCKS];
   private int blockCount;
+  private int sourcePlanDepth;
+  private long executableGeneration;
+  private long nextGeneration;
+  private boolean correlatedScalar;
+  private boolean correlatedExistence;
+  private boolean correlatedMembership;
+  private boolean correlatedNestedChain;
+  private boolean recursiveNestedChain;
+  private boolean recursiveRootCorrelated;
   private boolean explain;
   private boolean analyze;
 
@@ -27,15 +37,79 @@ final class BoundSqlQuery {
   }
 
   void reset() {
+    for (int index = 0; index < blockCount; index++) {
+      blocks[index].resetBinding();
+    }
     blockCount = 0;
+    sourcePlanDepth = 0;
+    executableGeneration = 0;
     explain = false;
     analyze = false;
+    correlatedScalar = false;
+    correlatedExistence = false;
+    correlatedMembership = false;
+    correlatedNestedChain = false;
+    recursiveNestedChain = false;
+    recursiveRootCorrelated = false;
     for (int index = 0; index < blocks.length; index++) {
       scalarPredicates[index] = -1;
       existencePredicates[index] = 0;
       membershipPredicates[index] = -1;
     }
   }
+
+  void beginBinding(TableDefinition rootTable) {
+    executableGeneration = 0;
+    correlatedScalar = false;
+    correlatedExistence = false;
+    correlatedMembership = false;
+    correlatedNestedChain = false;
+    recursiveNestedChain = false;
+    recursiveRootCorrelated = false;
+    for (int index = 0; index < blockCount; index++) {
+      blocks[index].resetBinding();
+    }
+    blocks[0].bindRootTable(rootTable);
+  }
+
+  void publishBinding() {
+    long generation = nextGeneration == Long.MAX_VALUE ? 1 : nextGeneration + 1;
+    nextGeneration = generation;
+    for (int index = 0; index < blockCount; index++) {
+      blocks[index].publishBinding(generation);
+    }
+    executableGeneration = generation;
+  }
+
+  boolean isExecutable() {
+    return executableGeneration != 0;
+  }
+
+  long executableGeneration() {
+    return executableGeneration;
+  }
+
+  void setCorrelationTopology(
+      boolean scalar,
+      boolean existence,
+      boolean membership,
+      boolean nestedChain,
+      boolean recursiveChain,
+      boolean rootCorrelated) {
+    correlatedScalar = scalar;
+    correlatedExistence = existence;
+    correlatedMembership = membership;
+    correlatedNestedChain = nestedChain;
+    recursiveNestedChain = recursiveChain;
+    recursiveRootCorrelated = rootCorrelated;
+  }
+
+  boolean correlatedScalar() { return correlatedScalar; }
+  boolean correlatedExistence() { return correlatedExistence; }
+  boolean correlatedMembership() { return correlatedMembership; }
+  boolean correlatedNestedChain() { return correlatedNestedChain; }
+  boolean recursiveNestedChain() { return recursiveNestedChain; }
+  boolean recursiveRootCorrelated() { return recursiveRootCorrelated; }
 
   StatusCode capture(SqlCommand root, SqlQuery query) {
     reset();
@@ -44,10 +118,21 @@ final class BoundSqlQuery {
     }
     explain = query.isExplain();
     analyze = query.isAnalyze();
-    blockCount = Math.max(1, query.blockCount());
+    int parserBlockCount = query.blockCount();
+    sourcePlanDepth = Math.max(1, parserBlockCount);
+    boolean nestedTopology = false;
+    for (int index = 0; !nestedTopology && index < parserBlockCount; index++) {
+      nestedTopology = query.hasScalarPredicate(index)
+          || query.hasExistencePredicate(index)
+          || query.hasMembershipPredicate(index);
+    }
+    blockCount = nestedTopology ? Math.max(1, parserBlockCount) : 1;
     StatusCode status = blocks[0].capture(root);
-    for (int index = 0; status.isOk() && index < query.blockCount(); index++) {
+    for (int index = 0;
+        nestedTopology && status.isOk() && index < parserBlockCount;
+        index++) {
       status = blocks[index].capture(query.block(index));
+      blocks[index].blockIndex = index;
       scalarPredicates[index] = query.scalarPredicate(index);
       existencePredicates[index] = query.hasExistencePredicate(index)
           ? query.existenceNegated(index) ? -1 : 1 : 0;
@@ -58,6 +143,9 @@ final class BoundSqlQuery {
     }
     // The compiled root can differ from query block zero after view/derived
     // expansion; it is the authoritative executable root.
+    if (status.isOk()) {
+      blocks[0].blockIndex = 0;
+    }
     return status.isOk() ? blocks[0].capture(root) : status;
   }
 
@@ -71,6 +159,10 @@ final class BoundSqlQuery {
 
   int blockCount() {
     return blockCount;
+  }
+
+  int sourcePlanDepth() {
+    return sourcePlanDepth;
   }
 
   boolean isExplain() {
@@ -170,6 +262,11 @@ final class BoundSqlQuery {
     private final boolean[] disjunctionPredicates = new boolean[SqlCommand.MAXIMUM_PREDICATES];
     private final int[] membershipCounts = new int[SqlCommand.MAXIMUM_PREDICATES];
     private final boolean[] membershipNulls = new boolean[SqlCommand.MAXIMUM_PREDICATES];
+    private final int[] resolvedPredicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
+    private final int[] resolvedPredicateValueColumns =
+        new int[SqlCommand.MAXIMUM_PREDICATES];
+    private final int[] resolvedPredicateValueScopes =
+        new int[SqlCommand.MAXIMUM_PREDICATES];
     private final long[] membershipValues = new long[
         SqlCommand.MAXIMUM_PREDICATES * SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES];
     private final byte[] textBytes = new byte[SqlCommand.MAXIMUM_TEXT_BYTES];
@@ -192,7 +289,15 @@ final class BoundSqlQuery {
     private boolean groupHaving;
     private SqlComparison groupHavingComparison;
     private long groupHavingValue;
+    private int groupHavingTypeDescriptor;
     private boolean membershipNegated;
+    private TableDefinition table;
+    private boolean ownsTable;
+    private int projection = -1;
+    private int projectionType;
+    private long boundGeneration;
+    private int blockIndex;
+    private boolean correlated;
 
     Block() {
       for (int index = 0; index < SqlCommand.MAXIMUM_COLUMNS; index++) {
@@ -253,6 +358,7 @@ final class BoundSqlQuery {
       groupHaving = source.hasGroupHaving();
       groupHavingComparison = source.groupHavingComparison();
       groupHavingValue = source.groupHavingValue();
+      groupHavingTypeDescriptor = source.groupHavingTypeDescriptor();
       for (int index = 0; index < columnCount; index++) {
         columnNames[index].copyFrom(source.columnName(index));
         columnTables[index].copyFrom(source.columnTableName(index));
@@ -305,6 +411,61 @@ final class BoundSqlQuery {
       }
       return StatusCode.OK;
     }
+
+    void resetBinding() {
+      if (ownsTable && table != null) {
+        table.reset();
+      }
+      if (!ownsTable) {
+        table = null;
+      }
+      projection = -1;
+      projectionType = 0;
+      boundGeneration = 0;
+      correlated = false;
+      for (int index = 0; index < resolvedPredicateColumns.length; index++) {
+        resolvedPredicateColumns[index] = -1;
+        resolvedPredicateValueColumns[index] = -1;
+        resolvedPredicateValueScopes[index] = -1;
+      }
+    }
+
+    void bindRootTable(TableDefinition rootTable) {
+      table = rootTable;
+      ownsTable = false;
+    }
+
+    TableDefinition writableTable() {
+      if (table == null || !ownsTable) {
+        table = new TableDefinition();
+        ownsTable = true;
+      }
+      table.reset();
+      return table;
+    }
+
+    void setProjection(int column, int descriptor) {
+      projection = column;
+      projectionType = descriptor;
+    }
+
+    void setPredicate(int index, int column, int valueColumn, int valueScope) {
+      resolvedPredicateColumns[index] = column;
+      resolvedPredicateValueColumns[index] = valueColumn;
+      resolvedPredicateValueScopes[index] = valueScope;
+      correlated |= valueScope >= 0 && valueScope < blockIndex;
+    }
+
+    void publishBinding(long generation) { boundGeneration = generation; }
+    boolean isBound(long generation) { return generation != 0 && boundGeneration == generation; }
+    TableDefinition table() { return table; }
+    int projection() { return projection; }
+    int projectionType() { return projectionType; }
+    int resolvedPredicateColumn(int index) { return resolvedPredicateColumns[index]; }
+    int resolvedPredicateValueColumn(int index) { return resolvedPredicateValueColumns[index]; }
+    int resolvedPredicateValueScope(int index) { return resolvedPredicateValueScopes[index]; }
+    int blockIndex() { return blockIndex; }
+    boolean isCorrelated() { return correlated; }
 
     private void copyText(SqlCommand source, long handle) {
       int length = source.textByteLength(handle);
@@ -374,6 +535,7 @@ final class BoundSqlQuery {
     boolean hasGroupHaving() { return groupHaving; }
     SqlComparison groupHavingComparison() { return groupHavingComparison; }
     long groupHavingValue() { return groupHavingValue; }
+    int groupHavingTypeDescriptor() { return groupHavingTypeDescriptor; }
     long rowLimit() { return rowLimit; }
     int textByteLength(long handle) {
       int offset = (int) (handle >>> 32);

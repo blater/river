@@ -109,11 +109,15 @@ public final class SqlExecutionResult {
   }
 
   void setScalar(long scalar, long committedAt) {
+    setTypedScalar(scalar, SqlTypeDescriptor.BIGINT, committedAt);
+  }
+
+  void setTypedScalar(long scalar, int descriptor, long committedAt) {
     values[0] = scalar;
     value = scalar;
     key = 0;
     nullMask = 0;
-    typeDescriptors[0] = SqlTypeDescriptor.BIGINT;
+    typeDescriptors[0] = descriptor;
     affectedRows = 1;
     columnCount = 1;
     hasValue = true;

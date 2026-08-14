@@ -45,13 +45,16 @@ final class OfflineDatabaseBackupTest {
         StatusCode.OK,
         session.execute(
             "CREATE TABLE accounts "
-                + "(id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT)",
+                + "(id BIGINT PRIMARY KEY, balance BIGINT, region BIGINT, "
+                + "label VARCHAR(32))",
             command));
     assertEquals(
         StatusCode.OK,
         session.execute(
             "INSERT INTO accounts VALUES "
-                + "(1, 100, 7), (2, 250, 7), (3, 300, 8)",
+                + "(1, 100, 7, '東京支店'), "
+                + "(2, 250, 7, '河川データ庫'), "
+                + "(3, 300, 8, 'north')",
             command));
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
@@ -87,9 +90,13 @@ final class OfflineDatabaseBackupTest {
     session = sessionResult.session();
     assertEquals(
         StatusCode.OK,
-        session.execute("SELECT balance FROM accounts WHERE id=2", command));
+        session.execute("SELECT balance, label FROM accounts WHERE id=2", command));
     assertTrue(command.hasValue());
-    assertEquals(250, command.value());
+    assertEquals(250, command.valueAt(0));
+    char[] restoredLabel = new char[32];
+    int restoredLabelLength = command.copyTextAt(1, restoredLabel, 0);
+    assertEquals(6, restoredLabelLength);
+    assertEquals("河川データ庫", new String(restoredLabel, 0, restoredLabelLength));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
 

@@ -15,6 +15,78 @@ import org.junit.jupiter.api.Test;
 
 final class SqlParserTest {
   private static volatile long allocationGuard;
+
+  @Test
+  void parsesBoundedExactScalarExpressions() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT CAST(1.25 AS DECIMAL(4,1))", command));
+    assertEquals(SqlCommandType.SCALAR_EXPRESSION, command.type());
+    SqlScalarExpression expression = command.scalarExpression();
+    assertTrue(expression.isAvailable());
+    assertEquals(2, expression.nodeCount());
+    assertEquals(SqlScalarExpression.LITERAL, expression.operator(0));
+    assertEquals(125, expression.operand(0));
+    assertEquals(SqlTypeDescriptor.decimal(3, 2), expression.typeDescriptor(0));
+    assertEquals(SqlScalarExpression.CAST, expression.operator(1));
+    assertEquals(SqlTypeDescriptor.decimal(4, 1), expression.typeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.decimal(4, 1), expression.resultTypeDescriptor());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT 1.20+2.345*2.0", command));
+    assertEquals(5, command.scalarExpression().nodeCount());
+    assertEquals(
+        SqlTypeDescriptor.decimal(7, 4),
+        command.scalarExpression().resultTypeDescriptor());
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse("SELECT TRUE+1", command));
+    assertFalse(command.isAvailable());
+  }
+
+  @Test
+  void parsesBooleanAndDecimalDescriptorsAndTypedLiterals() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE invoices (id BIGINT PRIMARY KEY, paid BOOLEAN "
+                + "DEFAULT FALSE, amount DECIMAL(8,2) DEFAULT 12.30)",
+            command));
+    assertEquals(SqlTypeDescriptor.BOOLEAN, command.columnTypeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.decimal(8, 2), command.columnTypeDescriptor(2));
+    assertEquals(0, command.columnDefaultValue(1));
+    assertEquals(1_230, command.columnDefaultValue(2));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("INSERT INTO invoices VALUES (1, TRUE, -42.75)", command));
+    assertEquals(SqlTypeDescriptor.BOOLEAN, command.insertTypeDescriptor(0, 1));
+    assertEquals(1, command.insertValue(0, 1));
+    assertEquals(SqlTypeDescriptor.decimal(4, 2), command.insertTypeDescriptor(0, 2));
+    assertEquals(-4_275, command.insertValue(0, 2));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM invoices WHERE paid=TRUE AND amount BETWEEN 10.00 AND 20.00",
+            command));
+    assertEquals(SqlTypeDescriptor.BOOLEAN, command.predicateTypeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.decimal(4, 2), command.predicateTypeDescriptor(1));
+    assertEquals(1_000, command.predicateLowerInclusive(1));
+    assertEquals(2_001, command.predicateUpperExclusive(1));
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE invalid (id BIGINT PRIMARY KEY, amount DECIMAL(19,2))",
+            command));
+  }
+
   @Test
   void parsesExecutablePointStatementSubset() {
     SqlParser parser = new SqlParser();
@@ -740,8 +812,10 @@ final class SqlParserTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("UPDATE accounts SET balance=balance WHERE key=7", command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("UPDATE accounts SET balance=balance*2 WHERE key=7", command));
+    assertEquals(SqlCommand.UPDATE_MULTIPLY, command.updateOperator(0));
+    assertEquals(SqlTypeDescriptor.BIGINT, command.updateTypeDescriptor(0));
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
     assertEquals(true, command.isEqualityPredicate());
@@ -879,6 +953,59 @@ final class SqlParserTest {
         StatusCode.RESOURCE_EXHAUSTED,
         parser.parse(tooManyRows.toString(), command));
     assertFalse(command.isAvailable());
+  }
+
+  @Test
+  void acceptsExactCapacitiesAndPreservesCapacityBeforeTrailingInput() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    String maximumName = "a".repeat(SqlIdentifier.MAXIMUM_LENGTH);
+
+    assertEquals(StatusCode.OK, parser.parse("DROP TABLE " + maximumName, command));
+    assertTrue(command.isAvailable());
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse("DROP TABLE " + maximumName + "a trailing", command));
+    assertFalse(command.isAvailable());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("DROP TABLE " + maximumName + " trailing", command));
+    assertFalse(command.isAvailable());
+
+    StringBuilder columns = new StringBuilder(
+        "CREATE TABLE exact_columns (c0 BIGINT PRIMARY KEY");
+    for (int index = 1; index < SqlCommand.MAXIMUM_COLUMNS; index++) {
+      columns.append(", c").append(index).append(" BIGINT");
+    }
+    columns.append(')');
+    assertEquals(StatusCode.OK, parser.parse(columns, command));
+    assertEquals(SqlCommand.MAXIMUM_COLUMNS, command.columnCount());
+    assertTrue(command.isAvailable());
+    columns.insert(columns.length() - 1, ", overflow BIGINT");
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(columns, command));
+    assertFalse(command.isAvailable());
+
+    StringBuilder predicates = new StringBuilder("SELECT key FROM x WHERE ");
+    for (int index = 0; index < SqlCommand.MAXIMUM_PREDICATES; index++) {
+      if (index > 0) {
+        predicates.append(" AND ");
+      }
+      predicates.append('c').append(index).append('=').append(index);
+    }
+    assertEquals(StatusCode.OK, parser.parse(predicates, command));
+    assertEquals(SqlCommand.MAXIMUM_PREDICATES, command.predicateCount());
+    assertTrue(command.isAvailable());
+
+    StringBuilder rows = new StringBuilder("INSERT INTO x VALUES ");
+    for (int index = 0; index < SqlCommand.MAXIMUM_INSERT_ROWS; index++) {
+      if (index > 0) {
+        rows.append(',');
+      }
+      rows.append('(').append(index).append(',').append(index).append(')');
+    }
+    assertEquals(StatusCode.OK, parser.parse(rows, command));
+    assertEquals(SqlCommand.MAXIMUM_INSERT_ROWS, command.insertRowCount());
+    assertTrue(command.isAvailable());
   }
 
   @Test
@@ -1406,6 +1533,7 @@ final class SqlParserTest {
     SqlCommand command = new SqlCommand();
     SqlQuery query = new SqlQuery();
     for (int index = 0; index < 1_000; index++) {
+      allocationGuard += parser.parse("SELECT 1.00/8.0", command).ordinal();
       allocationGuard += parser.parseQuery(
           "SELECT d.key FROM "
               + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
@@ -1476,6 +1604,7 @@ final class SqlParserTest {
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 1_000; index++) {
+      allocationGuard += parser.parse("SELECT 1.00/8.0", command).ordinal();
       allocationGuard += parser.parseQuery(
           "SELECT d.key FROM "
               + "(SELECT key, region FROM accounts WHERE accounts.region=3) d "
