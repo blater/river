@@ -7,6 +7,8 @@ import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import java.lang.management.ManagementFactory;
@@ -111,14 +113,199 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
+            "CREATE TABLE temporal_values ("
+                + "id BIGINT PRIMARY KEY, day DATE, alarm TIME(3), "
+                + "observed TIMESTAMP(6), captured TIMESTAMP(6) WITH TIME ZONE)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO temporal_values VALUES ("
+                + "1, DATE '1969-12-31', TIME '01:02:03.456', "
+                + "TIMESTAMP '1969-12-31 23:59:59.123456', "
+                + "TIMESTAMP WITH TIME ZONE '1970-01-01 01:30:00+01:30')",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE checked_values (id BIGINT PRIMARY KEY, day DATE "
+                + "CHECK (EXTRACT(DAY FROM day)>=1))",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO checked_values VALUES (1,DATE '2024-02-10')", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
             "CREATE VIEW regional AS "
                 + "SELECT id, balance, region FROM t WHERE balance=10",
             result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE VIEW temporal_derived AS SELECT id,next_day FROM "
+                + "(SELECT id,day+1 AS next_day FROM temporal_values) q",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT next_day FROM temporal_derived WHERE id=1 "
+                + "AND next_day=DATE '1970-01-01'",
+            result));
+    assertEquals(0, result.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT day, alarm, observed, captured FROM temporal_values "
+                + "WHERE id=1 AND day=DATE '1969-12-31' "
+                + "AND captured=TIMESTAMP WITH TIME ZONE "
+                + "'1970-01-01 00:00:00+00:00'",
+            result));
+    assertEquals(-1, result.valueAt(0));
+    assertEquals(3_723_456_000L, result.valueAt(1));
+    assertEquals(-876_544, result.valueAt(2));
+    assertEquals(0, result.valueAt(3));
+    assertEquals(SqlTypeDescriptor.DATE, result.typeDescriptorAt(0));
+    assertEquals(SqlTypeDescriptor.time(3), result.typeDescriptorAt(1));
+    assertEquals(SqlTypeDescriptor.timestamp(6), result.typeDescriptorAt(2));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6), result.typeDescriptorAt(3));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT EXTRACT(DAY FROM DATE '2024-02-28'+1)", result));
+    assertEquals(29, result.value());
+    assertEquals(SqlTypeDescriptor.BIGINT, result.typeDescriptorAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT day FROM temporal_values WHERE id=1 "
+                + "AND day+0 IN (DATE '1969-12-31',NULL)",
+            result));
+    assertEquals(-1, result.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT COUNT(EXTRACT(SECOND FROM observed)) FROM temporal_values",
+            result));
+    assertEquals(1, result.valueAt(0));
+    assertEquals(SqlTypeDescriptor.BIGINT, result.typeDescriptorAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT COUNT(EXTRACT(SECOND FROM observed)) FROM temporal_values "
+                + "WHERE CAST(alarm AS TIME(6)) BETWEEN "
+                + "TIME '01:02:03.4' AND TIME '01:02:03.500000'",
+            result));
+    assertEquals(1, result.valueAt(0));
+    assertEquals(SqlTypeDescriptor.BIGINT, result.typeDescriptorAt(0));
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult scanRow = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id FROM temporal_values WHERE EXTRACT(DAY FROM day)=31",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(1, scanRow.valueAt(0));
+    assertEquals(SqlTypeDescriptor.BIGINT, scanRow.typeDescriptorAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, day+1 AS key_day FROM temporal_values ORDER BY key_day",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(1, scanRow.valueAt(0));
+    assertEquals(0, scanRow.valueAt(1));
+    assertEquals(SqlTypeDescriptor.DATE, scanRow.typeDescriptorAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT alarm, observed, captured FROM temporal_values "
+                + "WHERE alarm BETWEEN TIME '01:02:03.4' AND TIME '01:02:03.500000' "
+                + "AND observed IN (TIMESTAMP '1969-12-31 23:59:59.123', "
+                + "TIMESTAMP '1969-12-31 23:59:59.123456') "
+                + "AND captured BETWEEN TIMESTAMP WITH TIME ZONE "
+                + "'1969-12-31 23:59:59.999999+00:00' AND "
+                + "TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00.000001+00:00'",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(3_723_456_000L, scanRow.valueAt(0));
+    assertEquals(-876_544, scanRow.valueAt(1));
+    assertEquals(0, scanRow.valueAt(2));
+    assertEquals(SqlTypeDescriptor.time(3), scanRow.typeDescriptorAt(0));
+    assertEquals(SqlTypeDescriptor.timestamp(6), scanRow.typeDescriptorAt(1));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6), scanRow.typeDescriptorAt(2));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT day, COUNT(*) FROM temporal_values "
+                + "WHERE EXTRACT(DAY FROM day)=31 GROUP BY day",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(-1, scanRow.valueAt(0));
+    assertEquals(1, scanRow.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT DISTINCT day FROM temporal_values "
+                + "WHERE EXTRACT(DAY FROM day)=31",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(-1, scanRow.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id, COUNT(EXTRACT(DAY FROM observed)) FROM temporal_values "
+                + "GROUP BY id",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(1, scanRow.valueAt(0));
+    assertEquals(1, scanRow.valueAt(1));
+    assertEquals(SqlTypeDescriptor.BIGINT, scanRow.typeDescriptorAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    ParameterSet pointParameters = new ParameterSet(2, 0);
+    assertEquals(
+        StatusCode.OK,
+        pointParameters.appendFixed(SqlTypeDescriptor.BIGINT, 1));
+    assertEquals(
+        StatusCode.OK,
+        pointParameters.appendFixed(SqlTypeDescriptor.BIGINT, 7));
+    ParameterSet scanParameters = new ParameterSet(1, 0);
+    assertEquals(
+        StatusCode.OK,
+        scanParameters.appendFixed(SqlTypeDescriptor.BIGINT, 7));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
       exerciseCount(session, result);
       exerciseText(session, result);
       exerciseExactPoint(session, result);
+      exerciseTemporalPoint(session, result);
+      exerciseTemporalScalar(session, result);
+      exerciseTemporalProjection(session, result);
+      exerciseTemporalViewPoint(session, result);
+      exerciseTemporalPredicatePoint(session, result);
+      exerciseTemporalAggregateExpression(session, result);
+      exerciseCheckUpdate(session, result);
+      exerciseMutationExpressions(session, result);
+      exerciseTypedPoint(session, pointParameters, result);
     }
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
@@ -127,12 +314,19 @@ final class SqlSessionAllocationTest {
       exerciseCount(session, result);
       exerciseText(session, result);
       exerciseExactPoint(session, result);
+      exerciseTemporalPoint(session, result);
+      exerciseTemporalScalar(session, result);
+      exerciseTemporalProjection(session, result);
+      exerciseTemporalViewPoint(session, result);
+      exerciseTemporalPredicatePoint(session, result);
+      exerciseTemporalAggregateExpression(session, result);
+      exerciseCheckUpdate(session, result);
+      exerciseMutationExpressions(session, result);
+      exerciseTypedPoint(session, pointParameters, result);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL point select allocated bytes: " + allocated);
 
-    SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult scanRow = new SqlScanRowResult();
     for (int index = 0; index < 100; index++) {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
@@ -141,6 +335,7 @@ final class SqlSessionAllocationTest {
       exerciseCorrelatedMembership(session, cursor, scanRow, result);
       exerciseRecursiveExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
+      exerciseTextAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
@@ -148,6 +343,15 @@ final class SqlSessionAllocationTest {
       exerciseView(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
       exerciseExactScan(session, cursor, scanRow, result);
+      exerciseTemporalScan(session, cursor, scanRow, result);
+      exerciseTemporalProjectionScan(session, cursor, scanRow, result);
+      exerciseTemporalComputedKey(session, cursor, scanRow, result);
+      exerciseTemporalViewScan(session, cursor, scanRow, result);
+      exerciseTemporalPredicateScan(session, cursor, scanRow, result);
+      exerciseTemporalPredicateGroup(session, cursor, scanRow, result);
+      exerciseTemporalPredicateDistinct(session, cursor, scanRow, result);
+      exerciseTemporalGroupedAggregateExpression(session, cursor, scanRow, result);
+      exerciseTypedScan(session, scanParameters, cursor, scanRow, result);
     }
     before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
@@ -158,6 +362,7 @@ final class SqlSessionAllocationTest {
       exerciseCorrelatedMembership(session, cursor, scanRow, result);
       exerciseRecursiveExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
+      exerciseTextAggregate(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
@@ -165,6 +370,15 @@ final class SqlSessionAllocationTest {
       exerciseView(session, cursor, scanRow, result);
       exerciseExplain(session, cursor, scanRow, result);
       exerciseExactScan(session, cursor, scanRow, result);
+      exerciseTemporalScan(session, cursor, scanRow, result);
+      exerciseTemporalProjectionScan(session, cursor, scanRow, result);
+      exerciseTemporalComputedKey(session, cursor, scanRow, result);
+      exerciseTemporalViewScan(session, cursor, scanRow, result);
+      exerciseTemporalPredicateScan(session, cursor, scanRow, result);
+      exerciseTemporalPredicateGroup(session, cursor, scanRow, result);
+      exerciseTemporalPredicateDistinct(session, cursor, scanRow, result);
+      exerciseTemporalGroupedAggregateExpression(session, cursor, scanRow, result);
+      exerciseTypedScan(session, scanParameters, cursor, scanRow, result);
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL scan allocated bytes: " + allocated);
@@ -198,6 +412,112 @@ final class SqlSessionAllocationTest {
     allocationGuard += result.value();
   }
 
+  private static void exerciseTemporalPoint(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT day, alarm, observed, captured FROM temporal_values "
+            + "WHERE id=1 AND day=DATE '1969-12-31' "
+            + "AND captured=TIMESTAMP WITH TIME ZONE "
+            + "'1970-01-01 00:00:00+00:00'",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+    allocationGuard += result.valueAt(1);
+    allocationGuard += result.valueAt(2);
+    allocationGuard += result.valueAt(3);
+  }
+
+  private static void exerciseTemporalScalar(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT EXTRACT(DAY FROM DATE '2024-02-28'+1)", result).ordinal();
+    allocationGuard += result.value();
+  }
+
+  private static void exerciseTemporalProjection(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT EXTRACT(DAY FROM observed), CAST(observed AS VARCHAR(26)) "
+            + "FROM temporal_values WHERE id=1",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+    allocationGuard += result.textLengthAt(1);
+  }
+
+  private static void exerciseTemporalViewPoint(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT next_day FROM temporal_derived WHERE id=1 "
+            + "AND next_day=DATE '1970-01-01'",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void exerciseTemporalPredicatePoint(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT day FROM temporal_values WHERE id=1 "
+            + "AND day+0 IN (DATE '1969-12-31',NULL)",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void exerciseTemporalAggregateExpression(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT COUNT(EXTRACT(SECOND FROM observed)) FROM temporal_values "
+            + "WHERE CAST(alarm AS TIME(6)) BETWEEN "
+            + "TIME '01:02:03.4' AND TIME '01:02:03.500000'",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void exerciseCheckUpdate(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "UPDATE checked_values SET day=DATE '2024-02-10' WHERE id=1",
+        result).ordinal();
+    allocationGuard += result.affectedRows();
+  }
+
+  private static void exerciseMutationExpressions(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "UPDATE exact_values SET amount=amount+0.00,"
+            + "enabled=CAST(enabled AS BOOLEAN) WHERE id+0=1",
+        result).ordinal();
+    allocationGuard += result.affectedRows();
+    allocationGuard += session.execute(
+        "INSERT INTO exact_values VALUES(1+1,20.00+0.00,FALSE)", result).ordinal();
+    allocationGuard += result.affectedRows();
+    allocationGuard += session.execute(
+        "DELETE FROM exact_values WHERE id+0=2", result).ordinal();
+    allocationGuard += result.affectedRows();
+  }
+
+  private static void exerciseTypedPoint(
+      SqlSession session,
+      ParameterSet parameters,
+      SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT region FROM t WHERE id=? AND region=?", parameters, result).ordinal();
+    allocationGuard += result.value();
+  }
+
+  private static void exerciseTypedScan(
+      SqlSession session,
+      ParameterSet parameters,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id FROM t WHERE region=?", parameters, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
   private static void exerciseExactScan(
       SqlSession session,
       SqlScanCursor cursor,
@@ -210,6 +530,144 @@ final class SqlSessionAllocationTest {
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalScan(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT alarm, observed, captured FROM temporal_values "
+            + "WHERE alarm BETWEEN TIME '01:02:03.4' AND TIME '01:02:03.500000' "
+            + "AND observed IN (TIMESTAMP '1969-12-31 23:59:59.123', "
+            + "TIMESTAMP '1969-12-31 23:59:59.123456') "
+            + "AND captured BETWEEN TIMESTAMP WITH TIME ZONE "
+            + "'1969-12-31 23:59:59.999999+00:00' AND "
+            + "TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00.000001+00:00'",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
+    allocationGuard += row.valueAt(2);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalProjectionScan(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT EXTRACT(DAY FROM observed), CAST(observed AS VARCHAR(26)) "
+            + "FROM temporal_values ORDER BY id DESC",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.textLengthAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalComputedKey(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id, day+1 AS key_day FROM temporal_values ORDER BY key_day",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalViewScan(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT next_day FROM temporal_derived WHERE "
+            + "next_day>=DATE '0001-01-01' ORDER BY next_day",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalPredicateScan(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id FROM temporal_values WHERE EXTRACT(DAY FROM day)=31",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalPredicateGroup(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT day, COUNT(*) FROM temporal_values "
+            + "WHERE EXTRACT(DAY FROM day)=31 GROUP BY day",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalPredicateDistinct(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT DISTINCT day FROM temporal_values "
+            + "WHERE EXTRACT(DAY FROM day)=31",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTemporalGroupedAggregateExpression(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT day, MAX(CAST(observed AS TIMESTAMP(6))) FROM temporal_values "
+            + "GROUP BY day HAVING "
+            + "EXTRACT(YEAR FROM MAX(CAST(observed AS TIMESTAMP(6)))) >= 1970",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }
@@ -254,11 +712,28 @@ final class SqlSessionAllocationTest {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
         "SELECT region, SUM(balance) FROM t WHERE balance=10 AND region=7 "
-            + "GROUP BY region HAVING SUM(balance) >= 10 ORDER BY region",
+            + "GROUP BY region HAVING ABS(SUM(balance))+1 >= 11 "
+            + "AND MIN(balance)=10 ORDER BY region",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
     allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTextAggregate(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT MIN(label) FROM texts "
+            + "HAVING MIN(label)='alpha' AND MAX(label)='alpha'",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.textLengthAt(0);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

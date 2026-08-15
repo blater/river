@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.sql.SqlCommand;
@@ -17,6 +18,100 @@ import org.junit.jupiter.api.io.TempDir;
 final class SqlSessionTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(757, 761);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void executesScalarTemporalExtractAndDateArithmetic(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertScalar(
+        session,
+        result,
+        "SELECT EXTRACT(YEAR FROM DATE '2024-02-29')",
+        SqlTypeDescriptor.BIGINT,
+        2024);
+    assertScalar(
+        session,
+        result,
+        "SELECT EXTRACT(SECOND FROM TIME '12:34:56.123')",
+        SqlTypeDescriptor.decimal(5, 3),
+        56_123);
+    assertScalar(
+        session,
+        result,
+        "SELECT EXTRACT(SECOND FROM TIME '12:34:56')",
+        SqlTypeDescriptor.decimal(2, 0),
+        56);
+    assertScalar(
+        session,
+        result,
+        "SELECT EXTRACT(SECOND FROM "
+            + "TIMESTAMP '1969-12-31 23:59:59.999999')",
+        SqlTypeDescriptor.decimal(8, 6),
+        59_999_999);
+    assertScalar(
+        session,
+        result,
+        "SELECT EXTRACT(HOUR FROM TIMESTAMP WITH TIME ZONE "
+            + "'2024-01-01 01:02:03.004+01:00')",
+        SqlTypeDescriptor.BIGINT,
+        0);
+    assertScalar(
+        session,
+        result,
+        "SELECT EXTRACT(TIMEZONE_HOUR FROM TIMESTAMP WITH TIME ZONE "
+            + "'2024-01-01 01:02:03.004+01:00')",
+        SqlTypeDescriptor.BIGINT,
+        0);
+    assertScalar(
+        session,
+        result,
+        "SELECT DATE '2024-02-29'+1",
+        SqlTypeDescriptor.DATE,
+        19_783);
+    assertScalar(
+        session,
+        result,
+        "SELECT DATE '2024-03-01'-DATE '2024-02-29'",
+        SqlTypeDescriptor.BIGINT,
+        1);
+    assertScalar(
+        session,
+        result,
+        "SELECT EXTRACT(DAY FROM DATE '2024-02-28'+1)",
+        SqlTypeDescriptor.BIGINT,
+        29);
+    assertScalar(
+        session, result, "SELECT 1+2", SqlTypeDescriptor.BIGINT, 3);
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT EXTRACT(SECOND FROM CURRENT_TIMESTAMP)", result));
+    assertEquals(SqlTypeDescriptor.decimal(8, 6), result.typeDescriptorAt(0));
+    assertEquals(true, result.valueAt(0) >= 0 && result.valueAt(0) < 60_000_000);
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT EXTRACT(YEAR FROM CURRENT_DATE)", result));
+    assertEquals(true, result.valueAt(0) >= 1 && result.valueAt(0) <= 9_999);
+
+    assertEquals(
+        StatusCode.DATETIME_FIELD_OVERFLOW,
+        session.execute("SELECT DATE '9999-12-31'+1", result));
+    assertEquals(
+        StatusCode.DATETIME_FIELD_OVERFLOW,
+        session.execute("SELECT DATE '0001-01-01'-1", result));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        session.execute("SELECT EXTRACT(YEAR FROM TIME '12:34:56')", result));
+    assertEquals(StatusCode.OK, database.close());
+  }
 
   @Test
   void executesDurableSqlPointStatements(@TempDir Path root) {
@@ -253,13 +348,14 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
 
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute(
             "INSERT INTO measurements VALUES (4, 140737488355327)",
             execution));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.OK,
         session.execute("SELECT value FROM measurements WHERE key=4", execution));
+    assertEquals(140737488355327L, execution.value());
     assertEquals(StatusCode.OK, database.close());
   }
 
@@ -2173,6 +2269,17 @@ final class SqlSessionTest {
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertScalar(
+      SqlSession session,
+      SqlExecutionResult result,
+      String sql,
+      int descriptor,
+      long expected) {
+    assertEquals(StatusCode.OK, session.execute(sql, result));
+    assertEquals(descriptor, result.typeDescriptorAt(0));
+    assertEquals(expected, result.valueAt(0));
   }
 
   private static void assertDuplicateIndexRows(

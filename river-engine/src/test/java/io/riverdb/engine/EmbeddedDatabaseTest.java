@@ -39,7 +39,7 @@ final class EmbeddedDatabaseTest {
     IndexedTransactionSession session = sessionResult.session();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(41, row(410)));
+    assertEquals(StatusCode.OK, session.insert(0, 41, row(410)));
     assertEquals(StatusCode.CONFLICT, database.close());
     assertEquals(StatusCode.OK, session.commit(outcome));
     long committedAt = outcome.commitSequence();
@@ -55,9 +55,9 @@ final class EmbeddedDatabaseTest {
     session = sessionResult.session();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, session.fetchByKey(41, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 41, fetched));
     assertEquals(410, value(fetched));
-    assertEquals(StatusCode.OK, session.update(41, row(411)));
+    assertEquals(StatusCode.OK, session.update(0, 41, row(411)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
   }
@@ -121,12 +121,12 @@ final class EmbeddedDatabaseTest {
     TransactionOutcome outcome = new TransactionOutcome();
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(41, row(410)));
-    assertEquals(StatusCode.OK, session.insert(43, row(430)));
+    assertEquals(StatusCode.OK, session.insert(0, 41, row(410)));
+    assertEquals(StatusCode.OK, session.insert(0, 43, row(430)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.update(41, row(411)));
-    assertEquals(StatusCode.OK, session.delete(43));
+    assertEquals(StatusCode.OK, session.update(0, 41, row(411)));
+    assertEquals(StatusCode.OK, session.delete(0, 43));
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     CheckpointResult checkpoint = new CheckpointResult();
@@ -158,11 +158,11 @@ final class EmbeddedDatabaseTest {
     session = sessionResult.session();
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.fetchByKey(41, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 41, fetched));
     assertEquals(411, value(fetched));
-    assertEquals(StatusCode.CONFLICT, session.fetchByKey(43, fetched));
-    assertEquals(StatusCode.OK, session.update(41, row(412)));
-    assertEquals(StatusCode.OK, session.insert(47, row(470)));
+    assertEquals(StatusCode.CONFLICT, session.fetchByKey(0, 43, fetched));
+    assertEquals(StatusCode.OK, session.update(0, 41, row(412)));
+    assertEquals(StatusCode.OK, session.insert(0, 47, row(470)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
 
@@ -173,9 +173,9 @@ final class EmbeddedDatabaseTest {
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.fetchByKey(41, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 41, fetched));
     assertEquals(412, value(fetched));
-    assertEquals(StatusCode.OK, session.fetchByKey(47, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 47, fetched));
     assertEquals(470, value(fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
@@ -232,7 +232,7 @@ final class EmbeddedDatabaseTest {
     IndexedTransactionSession session = sessionResult.session();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(61, row(610)));
+    assertEquals(StatusCode.OK, session.insert(0, 61, row(610)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
     assertEquals(StatusCode.OK, database.close());
@@ -250,7 +250,7 @@ final class EmbeddedDatabaseTest {
     session = sessionResult.session();
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.fetchByKey(61, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 61, fetched));
     assertEquals(610, value(fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
@@ -275,11 +275,11 @@ final class EmbeddedDatabaseTest {
     IndexedTransactionSession session = sessionResult.session();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(67, row(670)));
+    assertEquals(StatusCode.OK, session.insert(0, 67, row(670)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.update(67, row(671)));
+    assertEquals(StatusCode.OK, session.update(0, 67, row(671)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
 
@@ -305,14 +305,14 @@ final class EmbeddedDatabaseTest {
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     for (int key = 0; key < 64; key++) {
       prepareWideRow(wideRow, key * 10L);
-      assertEquals(StatusCode.OK, session.insert(key, wideRow));
+      assertEquals(StatusCode.OK, session.insert(0, key, wideRow));
     }
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     for (int key = 0; key < 32; key++) {
       prepareWideRow(wideRow, key * 10L + 1);
-      assertEquals(StatusCode.OK, session.update(key, wideRow));
+      assertEquals(StatusCode.OK, session.update(0, key, wideRow));
     }
     assertEquals(StatusCode.OK, session.commit(outcome));
     CheckpointResult checkpoint = new CheckpointResult();
@@ -330,11 +330,11 @@ final class EmbeddedDatabaseTest {
     session = sessionResult.session();
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 0, fetched));
     assertEquals(1, value(fetched));
-    assertEquals(StatusCode.OK, session.fetchByKey(31, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 31, fetched));
     assertEquals(311, value(fetched));
-    assertEquals(StatusCode.OK, session.fetchByKey(63, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 63, fetched));
     assertEquals(630, value(fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
@@ -356,7 +356,7 @@ final class EmbeddedDatabaseTest {
       for (int index = 0; index < 64; index++) {
         int key = batch * 64 + index;
         prepareWideRow(wideRow, key + 10_000L);
-        assertEquals(StatusCode.OK, session.insert(key, wideRow));
+        assertEquals(StatusCode.OK, session.insert(0, key, wideRow));
       }
       assertEquals(StatusCode.OK, session.commit(outcome));
     }
@@ -375,11 +375,11 @@ final class EmbeddedDatabaseTest {
     session = sessionResult.session();
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 0, fetched));
     assertEquals(10_000, value(fetched));
-    assertEquals(StatusCode.OK, session.fetchByKey(2048, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 2048, fetched));
     assertEquals(12_048, value(fetched));
-    assertEquals(StatusCode.OK, session.fetchByKey(rows - 1L, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, rows - 1L, fetched));
     assertEquals(10_000L + rows - 1L, value(fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
@@ -400,14 +400,14 @@ final class EmbeddedDatabaseTest {
       for (int index = 0; index < 64; index++) {
         int key = batch * 64 + index;
         prepareWideRow(wideRow, key * 10L);
-        assertEquals(StatusCode.OK, session.insert(key, wideRow));
+        assertEquals(StatusCode.OK, session.insert(0, key, wideRow));
       }
       assertEquals(StatusCode.OK, session.commit(outcome));
     }
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     for (int key = 0; key < 8; key++) {
       prepareWideRow(wideRow, key * 10L + 1);
-      assertEquals(StatusCode.OK, session.update(key, wideRow));
+      assertEquals(StatusCode.OK, session.update(0, key, wideRow));
     }
     assertEquals(StatusCode.OK, session.commit(outcome));
 
@@ -426,11 +426,11 @@ final class EmbeddedDatabaseTest {
     session = sessionResult.session();
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 0, fetched));
     assertEquals(1, value(fetched));
-    assertEquals(StatusCode.OK, session.fetchByKey(7, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 7, fetched));
     assertEquals(71, value(fetched));
-    assertEquals(StatusCode.OK, session.fetchByKey(191, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 191, fetched));
     assertEquals(1910, value(fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
@@ -446,7 +446,7 @@ final class EmbeddedDatabaseTest {
     IndexedTransactionSession session = sessionResult.session();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(53, row(530)));
+    assertEquals(StatusCode.OK, session.insert(0, 53, row(530)));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.close());
 
@@ -472,7 +472,7 @@ final class EmbeddedDatabaseTest {
     session = sessionResult.session();
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.fetchByKey(53, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey(0, 53, fetched));
     assertEquals(530, value(fetched));
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));

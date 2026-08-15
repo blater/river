@@ -57,7 +57,7 @@ final class SqlDataChangeParser {
         && result.insertRowCount() >= SqlCommand.MAXIMUM_INSERT_ROWS) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = row(sql, rowResult);
+    StatusCode status = row(sql, result, rowResult);
     if (status.isOk()
         && subsequent
         && rowResult.count != result.insertColumnCount()) {
@@ -111,14 +111,15 @@ final class SqlDataChangeParser {
     }
     return status.isOk() ? predicates(sql, result, false) : status;
   }
-  private StatusCode row(CharSequence sql, LongRow result) {
+  private StatusCode row(
+      CharSequence sql, SqlCommand command, LongRow result) {
     resetRow(result);
     StatusCode status = requireCharacter(sql, '(');
     while (status.isOk()) {
       if (result.count >= SqlCommand.MAXIMUM_COLUMNS) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      status = appendRowValue(sql, result);
+      status = appendRowValue(sql, command, result);
       if (!status.isOk() || consumeCharacter(sql, ')')) {
         break;
       }
@@ -139,17 +140,19 @@ final class SqlDataChangeParser {
     }
   }
 
-  private StatusCode appendRowValue(CharSequence sql, LongRow result) {
-    boolean nullValue = consumeKeyword(sql, "NULL");
-    boolean defaultValue = !nullValue && consumeKeyword(sql, "DEFAULT");
-    StatusCode status = parseRowLiteral(sql, nullValue, defaultValue);
+  private StatusCode appendRowValue(
+      CharSequence sql, SqlCommand command, LongRow result) {
+    boolean defaultValue = consumeKeyword(sql, "DEFAULT");
+    StatusCode status = parseRowValue(sql, command, defaultValue);
     if (!status.isOk()) {
       return status;
     }
+    boolean nullValue = !defaultValue && numberResult.nullValue;
     int index = result.count++;
     result.values[index] = nullValue ? 0 : numberResult.value;
     if (nullValue) {
       result.nullMask |= 1L << index;
+      result.typeDescriptors[index] = numberResult.typeDescriptor;
     } else if (defaultValue) {
       result.defaultMask |= 1L << index;
     } else {
@@ -158,14 +161,14 @@ final class SqlDataChangeParser {
     return StatusCode.OK;
   }
 
-  private StatusCode parseRowLiteral(
+  private StatusCode parseRowValue(
       CharSequence sql,
-      boolean nullValue,
+      SqlCommand command,
       boolean defaultValue) {
-    if (nullValue || defaultValue) {
+    if (defaultValue) {
       return StatusCode.OK;
     }
-    return literal(sql, numberResult);
+    return updateValues.parseInsert(sql, command, numberResult);
   }
 
 
@@ -180,10 +183,6 @@ final class SqlDataChangeParser {
 
   private StatusCode identifier(CharSequence sql, SqlIdentifier result) {
     return input.identifier(sql, result);
-  }
-
-  private StatusCode literal(CharSequence sql, SqlParser.LongResult result) {
-    return input.literal(sql, result);
   }
 
   private StatusCode requireKeyword(CharSequence sql, String keyword) {

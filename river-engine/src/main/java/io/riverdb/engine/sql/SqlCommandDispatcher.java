@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlDefaultKind;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
@@ -17,11 +18,13 @@ final class SqlCommandDispatcher {
   private final RelationalDatabase database;
   private final RelationalSession session;
   private final SqlTransactionState transactions;
+  private final SqlTemporalContext temporal;
   private final CheckpointResult checkpoint = new CheckpointResult();
   private final SequenceValueResult sequenceValue = new SequenceValueResult();
   private final SqlExpressionEvaluator expressions = new SqlExpressionEvaluator();
   private final SqlScalarExpressionEvaluator scalarExpressions =
       new SqlScalarExpressionEvaluator();
+  private final SqlCheckExpressionBinder checks = new SqlCheckExpressionBinder();
   private final TableDefinition createdTable = new TableDefinition();
   private final TableDefinition referencedTable = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
@@ -30,10 +33,12 @@ final class SqlCommandDispatcher {
   SqlCommandDispatcher(
       RelationalDatabase relational,
       RelationalSession relationalSession,
-      SqlTransactionState transactionState) {
+      SqlTransactionState transactionState,
+      SqlTemporalContext temporalContext) {
     database = relational;
     session = relationalSession;
     transactions = transactionState;
+    temporal = temporalContext;
   }
 
   boolean handles(SqlCommandType type) {
@@ -41,6 +46,7 @@ final class SqlCommandDispatcher {
         || type == SqlCommandType.SAVEPOINT
         || type == SqlCommandType.ROLLBACK_TO_SAVEPOINT
         || type == SqlCommandType.RELEASE_SAVEPOINT
+        || type == SqlCommandType.SET_TIME_ZONE
         || type == SqlCommandType.COMMIT
         || type == SqlCommandType.ROLLBACK
         || type == SqlCommandType.CREATE_VIEW
@@ -66,6 +72,14 @@ final class SqlCommandDispatcher {
       SqlAtomicStatementLifecycle atomic,
       SqlExecutionResult result) {
     SqlCommandType type = command.type();
+    if (type == SqlCommandType.SET_TIME_ZONE) {
+      StatusCode status = temporal.setTimeZone(command);
+      if (status.isOk()) {
+        result.setUpdate(0, 0);
+        result.setTransaction(transactions.isExplicit(), session.visibleCommitSequence());
+      }
+      return status;
+    }
     if (type == SqlCommandType.BEGIN) {
       IsolationLevel isolation = command.isReadCommittedTransaction()
           ? IsolationLevel.READ_COMMITTED
@@ -219,7 +233,9 @@ final class SqlCommandDispatcher {
           command.columnTypeDescriptor(index),
           !command.columnIsNotNull(index));
       if (status.isOk() && command.columnHasDefault(index)) {
-        if (command.columnIsVarchar(index)) {
+        if (SqlDefaultKind.isCurrent(command.columnDefaultKind(index))) {
+          status = createSchema.setLastCurrentDefault(command.columnDefaultKind(index));
+        } else if (command.columnIsVarchar(index)) {
           row.clear();
           int bytes = command.copyText(command.columnDefaultValue(index), row);
           if (bytes >= 0) {
@@ -232,10 +248,14 @@ final class SqlCommandDispatcher {
           status = createSchema.setLastDefault(command.columnDefaultValue(index));
         }
       }
-      if (status.isOk() && command.columnHasCheck(index)) {
-        status = createSchema.setLastCheck(
-            expressions.checkComparisonCode(command.columnCheckComparison(index)),
-            command.columnCheckValue(index));
+    }
+    for (int index = 0; status.isOk() && index < command.columnCount(); index++) {
+      if (command.columnHasCheck(index)) {
+        status = checks.bind(
+            command,
+            createSchema,
+            index,
+            expressions.checkComparisonCode(command.columnCheckComparison(index)));
       }
     }
     if (status.isOk() && command.hasPrimaryKeyIdentity()) {

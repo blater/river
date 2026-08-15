@@ -31,7 +31,8 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
       }
       typeDescriptors[index] = descriptor;
       columnTypes[index] = jdbcType(descriptor);
-      nullability[index] = columnNoNulls;
+      nullability[index] = query.columnIsNullable(index)
+          ? columnNullable : columnNoNulls;
       displaySizes[index] = displaySize(descriptor);
       CharSequence name = query.columnName(index);
       if (name == null || name.length() <= 0) {
@@ -176,9 +177,15 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   public int getScale(int column) throws SQLException {
     requireColumn(column);
     int descriptor = typeDescriptors[column - 1];
-    return SqlTypeDescriptor.isValid(descriptor)
-        && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
+    if (!SqlTypeDescriptor.isValid(descriptor)) return 0;
+    int type = SqlTypeDescriptor.typeId(descriptor);
+    if (type == SqlTypeDescriptor.TYPE_ID_DECIMAL) {
+      return SqlTypeDescriptor.parameterTwo(descriptor);
+    }
+    return type == SqlTypeDescriptor.TYPE_ID_TIME
+            || type == SqlTypeDescriptor.TYPE_ID_TIMESTAMP
+            || type == SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE
+        ? SqlTypeDescriptor.parameterOne(descriptor) : 0;
   }
 
   @Override
@@ -298,6 +305,11 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   int decimalScale(int column) throws SQLException {
     requireColumn(column);
     return SqlTypeDescriptor.parameterTwo(typeDescriptors[column - 1]);
+  }
+
+  int typeDescriptor(int column) throws SQLException {
+    requireColumn(column);
+    return typeDescriptors[column - 1];
   }
 
   static int jdbcType(int descriptor) {

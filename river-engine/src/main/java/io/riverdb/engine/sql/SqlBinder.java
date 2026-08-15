@@ -14,6 +14,11 @@ final class SqlBinder {
   private final SqlMutationBinder mutations = new SqlMutationBinder();
   private final SqlProjectionBinder projections =
       new SqlProjectionBinder(predicates);
+  private final SqlRowProjectionBinder aggregateRows = new SqlRowProjectionBinder();
+  private final SqlAggregateSetBinder aggregateSets =
+      new SqlAggregateSetBinder(aggregateRows);
+  private final SqlPostAggregateProgramBinder having =
+      new SqlPostAggregateProgramBinder();
 
   StatusCode captureExecutableQuery(BoundSqlStatement bound) {
     return bound.executableQuery.capture(bound.command, bound.query);
@@ -31,14 +36,23 @@ final class SqlBinder {
       SqlCommand command,
       SqlQuery query,
       BoundSqlStatement bound) {
+    if (command.hasComputedPredicate()
+        && command.type() != SqlCommandType.SELECT
+        && command.type() != SqlCommandType.SCAN
+        && command.type() != SqlCommandType.UPDATE
+        && command.type() != SqlCommandType.DELETE
+        && !isScalarAggregate(command.type())) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     bound.updatedColumnCount = 0;
     bound.predicateColumn = -1;
     bound.predicateCount = 0;
     bound.accessPredicate = -1;
     bound.projectedColumnCount = 0;
     return switch (command.type()) {
-      case COUNT, DELETE -> predicates.bind(command, query, bound);
-      case COUNT_VALUE, SUM, AVG, MIN, MAX -> bindValueAggregate(command, query, bound);
+      case DELETE -> predicates.bind(command, query, bound);
+      case COUNT, COUNT_VALUE, SUM, AVG, MIN, MAX ->
+          bindValueAggregate(command, query, bound);
       case INSERT -> mutations.bindInsert(command, bound);
       case SELECT, SCAN -> bindProjectedCommand(command, query, bound);
       case UPDATE -> bindUpdate(command, query, bound);
@@ -48,29 +62,19 @@ final class SqlBinder {
 
   private StatusCode bindValueAggregate(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
-    StatusCode status = bindProjections(command, bound);
-    if (!status.isOk()) {
-      return status;
-    }
-    if ((command.type() == SqlCommandType.SUM
-            || command.type() == SqlCommandType.AVG)
-        && SqlTypeDescriptor.comparisonFamily(
-            bound.table.typeDescriptor(bound.projectedColumns[0]))
-            != SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    if ((command.type() == SqlCommandType.MIN
-            || command.type() == SqlCommandType.MAX)
-        && SqlTypeDescriptor.comparisonFamily(
-            bound.table.typeDescriptor(bound.projectedColumns[0]))
-            == SqlTypeDescriptor.COMPARISON_BOOLEAN) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    return predicates.bind(command, query, bound);
+    StatusCode status = aggregateSets.bind(command, bound, false);
+    if (status.isOk()) status = having.bind(command, bound);
+    return status.isOk() ? predicates.bind(command, query, bound) : status;
   }
 
   private StatusCode bindProjectedCommand(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
+    if (command.hasComputedPredicate()
+        && (bound.executableQuery.blockCount() > 1
+            || command.type() != SqlCommandType.SELECT
+                && command.type() != SqlCommandType.SCAN)) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     StatusCode status = bindProjections(command, bound);
     return status.isOk() ? predicates.bind(command, query, bound) : status;
   }
@@ -78,7 +82,8 @@ final class SqlBinder {
   private StatusCode bindUpdate(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
     StatusCode status = predicates.bind(command, query, bound);
-    if (!status.isOk() || command.updateColumnCount() <= 0
+    if (!status.isOk()) return status;
+    if (command.updateColumnCount() <= 0
         || command.updateColumnCount() != command.columnCount()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -104,6 +109,10 @@ final class SqlBinder {
   }
 
   StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
+    if (SqlRowProjectionBinder.hasComputed(command)
+        || command.hasComputedPredicate()) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     if (SqlBindingNames.matchesTable(command, command.joinTableName())
         || command.joinTableAlias().length() > 0
             && SqlBindingNames.matchesTable(command, command.joinTableAlias())) {

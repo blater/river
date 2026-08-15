@@ -2,6 +2,8 @@ import io.riverdb.buildpolicy.BuildPolicy
 import io.riverdb.buildpolicy.ClassReferencePolicy
 import io.riverdb.buildpolicy.HotPathBytecodeFixtureMutator
 import io.riverdb.buildpolicy.HotPathBytecodePolicy
+import io.riverdb.buildpolicy.LegacyEvidencePolicy
+import io.riverdb.buildpolicy.ProvenancePolicy
 import io.riverdb.buildpolicy.InvocationPolicy
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
@@ -421,24 +423,24 @@ val liveHotPathMethods = setOf(
         + "JJJJI$byteBufferDescriptor$crc32cDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableStore",
-    "appendPreparedInsertBatch",
+    "io.riverdb.engine.table.IndexedPreparedWriteEncoder",
+    "appendInserts",
     "(JJ$pendingMutationBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableStore",
-    "appendPreparedMutationBatch",
+    "io.riverdb.engine.table.IndexedPreparedWriteEncoder",
+    "appendMutations",
     "(JJ$pendingMutationBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableStore",
-    "forcePreparedInserts",
+    "io.riverdb.engine.table.IndexedPreparedCommitGroup",
+    "force",
     "()$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableStore",
-    "publishForcedInserts",
-    "()$statusCodeDescriptor"
+    "io.riverdb.engine.table.IndexedPreparedCommitGroup",
+    "publish",
+    "(${walGenerationDescriptor}J)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedGroupCommitCoordinator",
@@ -560,49 +562,52 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "lookupLeaf",
-    "($byteBufferDescriptor" + "J$btreeLookupResultDescriptor)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IJ$btreeLookupResultDescriptor)$statusCodeDescriptor"
   ),
+  hotMethod("io.riverdb.base.key.OrderedKey", "compare", "(IJIJ)I"),
+  hotMethod("io.riverdb.base.key.OrderedKey", "lessThan", "(IJIJ)Z"),
+  hotMethod("io.riverdb.base.key.OrderedKey", "equal", "(IJIJ)Z"),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "childForKey",
-    "($byteBufferDescriptor" + "J)I"
+    "($byteBufferDescriptor" + "IJ)I"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "insertLeaf",
-    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "updateLeaf",
-    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "splitLeaf",
     "($byteBufferDescriptor$byteBufferDescriptor"
-        + "IJI$btreeSplitResultDescriptor)$statusCodeDescriptor"
+        + "IIJI$btreeSplitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "insertInternal",
-    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableStore",
+    "io.riverdb.engine.table.IndexedLogicalCommitter",
     "commitInsert",
-    "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JJIJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableStore",
+    "io.riverdb.engine.table.IndexedLogicalCommitter",
     "commitInsertBatch",
-    "(JJ$longArrayDescriptor$byteBufferDescriptor"
+    "(JJ$intArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableStore",
-    "commitMutationBatch",
-    "(JJ$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+    "io.riverdb.engine.table.IndexedLogicalCommitter",
+    "commitMutations",
+    "(JJ$intArrayDescriptor$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
@@ -614,37 +619,37 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateNewIndexEntry",
-    "(JI)$statusCodeDescriptor"
-  ),
-  hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
-    "validateNewIndexEntryAt",
     "(IJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
+    "validateNewIndexEntryAt",
+    "(IIJI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
     "validateNewIndexEntryIn",
-    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateMutationTarget",
-    "(IJII)$statusCodeDescriptor"
-  ),
-  hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
-    "validateMutationTargetAt",
     "(IIJII)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
+    "validateMutationTargetAt",
+    "(IIIJII)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
     "validateMutationTargetIn",
-    "($byteBufferDescriptor" + "IJII)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IIJII)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateVacuumHead",
-    "(JI)$statusCodeDescriptor"
+    "(IJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -659,7 +664,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "containsEarlierInsertKey",
-    "($byteBufferDescriptor" + "IJ)Z"
+    "($byteBufferDescriptor" + "IIJ)Z"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -674,7 +679,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "containsEarlierMutationKey",
-    "($byteBufferDescriptor" + "IJ)Z"
+    "($byteBufferDescriptor" + "IIJ)Z"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -812,7 +817,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeInsertHeader",
-    "($byteBufferDescriptor" + "JII)V"
+    "($byteBufferDescriptor" + "IJII)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -822,7 +827,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeInsertBatchEntry",
-    "($byteBufferDescriptor" + "IJII)V"
+    "($byteBufferDescriptor" + "IIJII)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -832,7 +837,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeMutationBatchEntry",
-    "($byteBufferDescriptor" + "IIJIII)V"
+    "($byteBufferDescriptor" + "IIIJIII)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -842,7 +847,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeVacuumEntry",
-    "($byteBufferDescriptor" + "IJIIZ)V"
+    "($byteBufferDescriptor" + "IIJIIZ)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -949,14 +954,17 @@ val liveHotPathMethods = setOf(
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationPageOffset", "(I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationVersionsOffset", "(I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertKey", "($byteBufferDescriptor)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertSpace", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertRowId", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertRowBytes", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "batchEntryCount", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchKey", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchSpace", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchRowId", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchRowBytes", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationOperation", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationKey", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationSpace", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationRowId", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationPreviousRowId", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationRowBytes", "($byteBufferDescriptor" + "I)I"),
@@ -969,6 +977,7 @@ val liveHotPathMethods = setOf(
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumChunk", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumChunkCount", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryKey", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntrySpace", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryRowId", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryRowBytes", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryDeleted", "($byteBufferDescriptor" + "I)Z"),
@@ -1042,7 +1051,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "insert",
-    "(JJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JIJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.heap.HeapRowResult",
@@ -1057,18 +1066,18 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "commitInsert",
-    "(JJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
+    "(JIJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "commitInserts",
-    "(J$longArrayDescriptor$byteBufferDescriptor"
+    "(J$intArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "commitMutations",
-    "(J$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+    "(J$intArrayDescriptor$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
@@ -1081,12 +1090,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "prepareMutation",
-    "(JJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
+    "(JIJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "prepareInsert",
-    "(JJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
+    "(JIJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedMutationTarget",
@@ -1106,35 +1115,35 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "insertCommitted",
-    "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JJIJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "stageInsertBatch",
-    "($longArrayDescriptor$byteBufferDescriptor"
+    "($intArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "stageMutationBatch",
-    "($intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+    "($intArrayDescriptor$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "stageInsert",
-    "(IJ$byteBufferDescriptor)$statusCodeDescriptor"
+    "(IIJ$byteBufferDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "splitAndInsert",
-    "(I$byteBufferDescriptor" + "JI)$statusCodeDescriptor"
+    "(I$byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "findOperationLeafPageId",
-    "(J)I"
+    "(IJ)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableValidator",
@@ -1144,12 +1153,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "fetchByKey",
-    "(J$heapRowResultDescriptor)$statusCodeDescriptor"
+    "(IJ$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "fetchByKeyAt",
-    "(JJ$heapRowResultDescriptor)$statusCodeDescriptor"
+    "(JIJ$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
@@ -1186,7 +1195,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.tx.LockManager",
     "tryAcquire",
-    "(J$lockScopeDescriptor" + "JJ$lockModeDescriptor"
+    "(J$lockScopeDescriptor" + "IJIJ$lockModeDescriptor"
         + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
@@ -1212,7 +1221,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.tx.TransactionManager",
     "tryAcquireKey",
-    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
+    "($transactionDescriptor" + "IJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
@@ -1222,12 +1231,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.tx.TransactionManager",
     "tryAcquireSharedKey",
-    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
+    "($transactionDescriptor" + "IJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
     "tryAcquireSharedRange",
-    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
+    "($transactionDescriptor" + "IJIJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
@@ -1303,7 +1312,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTable",
     "beginScan",
-    "(JJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+    "(JIJIJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -1318,12 +1327,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "beginScan",
-    "(JJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+    "(IJIJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "acquireSharedRange",
-    "(JJ)$statusCodeDescriptor"
+    "(IJIJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -1374,32 +1383,32 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "insert",
-    "(J$byteBufferDescriptor)$statusCodeDescriptor"
+    "(IJ$byteBufferDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "update",
-    "(J$byteBufferDescriptor)$statusCodeDescriptor"
+    "(IJ$byteBufferDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "delete",
-    "(J)$statusCodeDescriptor"
+    "(IJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "appendPending",
-    "(IJI$byteBufferDescriptor" + "IIZ)V"
+    "(IIJI$byteBufferDescriptor" + "IIZ)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
     "append",
-    "(IJI$byteBufferDescriptor" + "II)V"
+    "(IIJI$byteBufferDescriptor" + "II)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
     "appendDeletion",
-    "(IJI)V"
+    "(IIJI)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
@@ -1424,7 +1433,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
     "findLatestIndex",
-    "(J)I"
+    "(IJ)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
@@ -1445,12 +1454,13 @@ val liveHotPathMethods = setOf(
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "rowStride", "()I"),
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "operationAt", "(I)I"),
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "keyAt", "(I)J"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "spaceAt", "(I)I"),
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "previousRowIdAt", "(I)I"),
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "rowLengthAt", "(I)I"),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "fetchByKey",
-    "(J$heapRowResultDescriptor)$statusCodeDescriptor"
+    "(IJ$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -1470,12 +1480,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "findHeldLock",
-    "(J)I"
+    "(IJ)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "acquireExclusiveKey",
-    "(J)$statusCodeDescriptor"
+    "(IJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -2993,83 +3003,17 @@ val externalDependencyReports = subprojects.associateWith { module ->
 
 val verifyDependencyLedger = tasks.register("verifyDependencyLedger") {
   group = LifecycleBasePlugin.VERIFICATION_GROUP
-  description = "Verifies every resolved external JAR against the provenance ledger."
+  description = "Verifies the full ledger and every resolved external artifact identity."
   dependsOn(externalDependencyReports.values)
 
   doLast {
     val ledgerPath = rootDir.toPath().resolve("docs/governance/provenance-ledger.csv")
-    val ledgerLines = Files.readAllLines(ledgerPath)
-    require(ledgerLines.isNotEmpty()) { "provenance ledger is empty" }
-    require(
-      ledgerLines.first()
-          == "artifact_id,artifact_type,name,upstream,version,sha256,license,use,vendoring,approval"
-    ) { "provenance ledger header does not match the v1 schema" }
-
-    val artifactRows = linkedMapOf<String, List<String>>()
-    val dependencyRows = linkedMapOf<String, List<String>>()
-    ledgerLines.drop(1).forEachIndexed { index, line ->
-      val fields = line.split(',')
-      require(fields.size == 10) {
-        "provenance ledger line ${index + 2} has ${fields.size} fields, expected 10"
-      }
-      require(artifactRows.put(fields[0], fields) == null) {
-        "duplicate provenance artifact ID ${fields[0]}"
-      }
-      require(fields[1] in setOf("source", "reference", "dependency", "tool")) {
-        "unknown provenance artifact type ${fields[1]} at line ${index + 2}"
-      }
-      require(fields[9].startsWith("approved ")) {
-        "provenance approval must fail closed at line ${index + 2}"
-      }
-      if (fields[1] == "dependency" || fields[1] == "tool") {
-        require(
-          fields[0].isNotBlank()
-              && fields[2].isNotBlank()
-              && fields[3].isNotBlank()
-              && fields[4].isNotBlank()
-              && fields[5].matches(Regex("[0-9a-f]{64}"))
-              && fields[6].isNotBlank()
-              && fields[7].isNotBlank()
-              && fields[8].isNotBlank()
-              && fields[9].isNotBlank()
-        ) { "provenance ${fields[1]} row is incomplete at line ${index + 2}" }
-      }
-      if (fields[1] == "source") {
-        require(
-          fields[0].isNotBlank()
-              && fields[2].isNotBlank()
-              && fields[4].isNotBlank()
-              && fields[6].isNotBlank()
-              && fields[7].isNotBlank()
-              && fields[8].isNotBlank()
-        ) { "provenance source row is incomplete at line ${index + 2}" }
-      }
-      if (fields[1] == "reference") {
-        require(
-          fields[0].isNotBlank()
-              && fields[2].isNotBlank()
-              && fields[3].isNotBlank()
-              && fields[4].isNotBlank()
-              && fields[5].matches(Regex("[0-9a-f]{64}"))
-              && fields[6].isNotBlank()
-              && fields[7].isNotBlank()
-              && fields[8].isNotBlank()
-        ) { "provenance reference row is incomplete at line ${index + 2}" }
-      }
-      if (fields[1] == "dependency") {
-        require(fields[2].count { it == ':' } == 1) {
-          "provenance dependency coordinate must be group:name at line ${index + 2}"
-        }
-        val key = "${fields[2]}:${fields[4]}"
-        require(dependencyRows.put(key, fields) == null) {
-          "duplicate provenance dependency $key"
-        }
-      }
-    }
+    val artifactRows = ProvenancePolicy.read(ledgerPath)
+    ProvenancePolicy.verifyRepositoryNotices(rootDir.toPath(), artifactRows.values)
 
     val wrapperJarRow = artifactRows.getValue("gradle-wrapper-jar")
     val wrapperJarChecksum = sha256(rootDir.resolve("gradle/wrapper/gradle-wrapper.jar"))
-    require(wrapperJarRow[5] == wrapperJarChecksum) {
+    require(wrapperJarRow.sha256() == wrapperJarChecksum) {
       "Gradle wrapper JAR checksum does not match the provenance ledger"
     }
     val wrapperProperties = java.util.Properties()
@@ -3077,7 +3021,9 @@ val verifyDependencyLedger = tasks.register("verifyDependencyLedger") {
       wrapperProperties.load(it)
     }
     val distributionRow = artifactRows.getValue("gradle-distribution")
-    require(distributionRow[5] == wrapperProperties.getProperty("distributionSha256Sum")) {
+    require(
+      distributionRow.sha256() == wrapperProperties.getProperty("distributionSha256Sum")
+    ) {
       "Gradle distribution checksum does not match wrapper properties"
     }
 
@@ -3094,20 +3040,189 @@ val verifyDependencyLedger = tasks.register("verifyDependencyLedger") {
       }
     }
 
-    val missingRows = resolved.keys - dependencyRows.keys
-    val staleRows = dependencyRows.keys - resolved.keys
-    require(missingRows.isEmpty()) {
-      "resolved dependencies missing from provenance ledger: ${missingRows.sorted()}"
+    ProvenancePolicy.verifyResolvedDependencies(artifactRows.values, resolved)
+    ProvenancePolicy.verifyGradleMetadata(
+      rootDir.toPath().resolve("gradle/verification-metadata.xml"),
+      resolved
+    )
+  }
+}
+
+val verifyReferenceSnapshots = tasks.register("verifyReferenceSnapshots") {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Explicitly verifies approved external workspace reference snapshots."
+
+  doLast {
+    val configuredRoot = providers.gradleProperty("riverReferenceWorkspaceRoot").orNull
+        ?: throw GradleException(
+          "verifyReferenceSnapshots requires -PriverReferenceWorkspaceRoot="
+              + "/absolute/path/to/workspace"
+        )
+    val workspaceRoot = java.nio.file.Path.of(configuredRoot)
+    require(workspaceRoot.isAbsolute) {
+      "riverReferenceWorkspaceRoot must be absolute"
     }
-    require(staleRows.isEmpty()) {
-      "provenance dependency rows are not resolved by the build: ${staleRows.sorted()}"
+    val rows = ProvenancePolicy.read(
+      rootDir.toPath().resolve("docs/governance/provenance-ledger.csv")
+    )
+    val identities = ProvenancePolicy.verifyExternalReferences(
+      workspaceRoot,
+      rows.values
+    )
+    identities.toSortedMap().forEach { (artifactId, identity) ->
+      logger.lifecycle(
+        "$artifactId ${identity.sha256()} ${identity.fileCount()} regular files"
+      )
+    }
+    val selected = LegacyEvidencePolicy.verify(
+      rootDir.toPath().resolve("docs/compatibility/legacy-support-matrix.csv"),
+      workspaceRoot,
+      rows
+    )
+    logger.lifecycle("legacy-support-matrix $selected selected files")
+  }
+}
+
+val verifyProvenancePolicyFixtures = tasks.register("verifyProvenancePolicyFixtures") {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Runs fail-closed provenance and snapshot negative fixtures."
+
+  doLast {
+    val canonical = Files.readAllLines(
+      rootDir.toPath().resolve("docs/governance/provenance-ledger.csv")
+    )
+
+    fun expectFailure(label: String, expected: String, action: () -> Unit) {
+      val failure = runCatching(action).exceptionOrNull()
+          ?: throw GradleException("$label fixture unexpectedly passed")
+      require(expected in (failure.message ?: "")) {
+        "$label fixture failed for the wrong reason: $failure"
+      }
     }
 
-    resolved.forEach { (key, actual) ->
-      val expected = dependencyRows.getValue(key)[5]
-      require(actual == expected) {
-        "provenance checksum mismatch for $key: expected $expected, got $actual"
+    val malformedReference = canonical.map { line ->
+      if (line.startsWith("legacy-ingres-source,")) {
+        line.replace(
+          "http://code.ingres.com/ingres/main,svn-r3970",
+          "../ingres,svn-r3970"
+        )
+      } else {
+        line
       }
+    }
+    expectFailure("malformed-reference", "upstream must be an absolute HTTP(S) source URL") {
+      ProvenancePolicy.parse(malformedReference)
+    }
+
+    val pendingApproval = canonical.map { line ->
+      if (line.startsWith("legacy-ingres-source,")) {
+        line.substringBeforeLast(',') + ",pending project review"
+      } else {
+        line
+      }
+    }
+    expectFailure("pending-approval", "approval is unresolved") {
+      ProvenancePolicy.parse(pendingApproval)
+    }
+
+    val missingNotice = canonical.map { line ->
+      if (line.startsWith("legacy-ingres-source,")) {
+        line.replace(",external-file:README.txt,", ",,")
+      } else {
+        line
+      }
+    }
+    expectFailure("missing-notice", "notice outcome is malformed") {
+      ProvenancePolicy.parse(missingNotice)
+    }
+
+    val rows = ProvenancePolicy.parse(canonical)
+    expectFailure("dependency-drift", "not resolved by the build") {
+      ProvenancePolicy.verifyResolvedDependencies(rows.values, emptyMap())
+    }
+
+    val workspace = temporaryDir.toPath().resolve("workspace")
+    val tree = workspace.resolve("fixture")
+    Files.createDirectories(tree)
+    Files.writeString(tree.resolve("README.txt"), "notice evidence\n")
+    Files.writeString(tree.resolve("payload.bin"), "fixture payload\n")
+    val identity = ProvenancePolicy.treeIdentity(tree)
+    Files.writeString(tree.resolve(".DS_Store"), "ignored Finder metadata\n")
+    require(ProvenancePolicy.treeIdentity(tree) == identity) {
+      "regular .DS_Store changed the reference tree identity"
+    }
+    Files.writeString(tree.resolve("payload.DS_Store"), "retained near name\n")
+    require(ProvenancePolicy.treeIdentity(tree) != identity) {
+      "near-name metadata fixture was incorrectly excluded"
+    }
+    Files.delete(tree.resolve("payload.DS_Store"))
+    Files.delete(tree.resolve(".DS_Store"))
+    Files.createDirectory(tree.resolve(".DS_Store"))
+    Files.writeString(tree.resolve(".DS_Store/retained.bin"), "retained directory\n")
+    require(ProvenancePolicy.treeIdentity(tree) != identity) {
+      "directory named .DS_Store was incorrectly excluded"
+    }
+    Files.delete(tree.resolve(".DS_Store/retained.bin"))
+    Files.delete(tree.resolve(".DS_Store"))
+    val metadataOnlyTree = workspace.resolve("metadata-only")
+    Files.createDirectories(metadataOnlyTree)
+    Files.writeString(metadataOnlyTree.resolve(".DS_Store"), "ignored Finder metadata\n")
+    expectFailure("metadata-only-tree", "snapshot tree has no regular files") {
+      ProvenancePolicy.treeIdentity(metadataOnlyTree)
+    }
+    val staleLedger = listOf(
+      ProvenancePolicy.HEADER,
+      listOf(
+        "fixture-reference",
+        "reference",
+        "Fixture reference tree",
+        "https://example.invalid/reference",
+        "snapshot-1",
+        "external-workspace:fixture",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        ProvenancePolicy.TREE_DIGEST,
+        "LicenseRef-Fixture",
+        "external-file:README.txt",
+        "negative fixture",
+        "external workspace reference",
+        "approved:2026-08-09:project-owner-decision"
+      ).joinToString(",")
+    )
+    val staleRows = ProvenancePolicy.parse(staleLedger)
+    expectFailure("stale-digest", "reference snapshot digest is stale") {
+      ProvenancePolicy.verifyExternalReferences(workspace, staleRows.values)
+    }
+
+    val matrix = temporaryDir.toPath().resolve("legacy-support-matrix.csv")
+    fun selectedMatrix(path: String): List<String> =
+      listOf(
+        LegacyEvidencePolicy.HEADER,
+        listOf(
+          "fixture-reference",
+          "snapshot-1",
+          path,
+          "0000000000000000000000000000000000000000000000000000000000000000",
+          "fixture-reference",
+          "negative digest fixture",
+          "adapt",
+          "U05",
+          "selected file identity",
+          "00000",
+          "build-policy",
+          "independent fixture"
+        ).joinToString(",")
+      )
+    Files.write(matrix, selectedMatrix("payload.bin"))
+    expectFailure("selected-file-digest", "selected source digest mismatch") {
+      LegacyEvidencePolicy.verify(matrix, workspace, staleRows)
+    }
+    Files.write(matrix, selectedMatrix("sub/../payload.bin"))
+    expectFailure("selected-file-path", "source path is not canonical") {
+      LegacyEvidencePolicy.verify(matrix, workspace, staleRows)
+    }
+    Files.write(matrix, selectedMatrix(".DS_Store"))
+    expectFailure("selected-file-exclusion", "excluded from the reference identity") {
+      LegacyEvidencePolicy.verify(matrix, workspace, staleRows)
     }
   }
 }
@@ -3124,7 +3239,8 @@ tasks.named("check") {
     verifyClassReferencePolicyFixtures,
     verifySqlRuntimeInvocationPolicy,
     verifyInvocationPolicyFixtures,
-    verifyDependencyLedger
+    verifyDependencyLedger,
+    verifyProvenancePolicyFixtures
   )
   dependsOn(subprojects.map { it.tasks.named("check") })
 }

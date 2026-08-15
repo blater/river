@@ -18,15 +18,19 @@ public final class LockManager implements LockService {
 
   private final long ownerLow = PROVIDER_IDENTITIES.getAndIncrement();
   private final long[] transactionIds;
-  private final long[] resourceHighs;
-  private final long[] resourceLows;
+  private final int[] lowerSpaces;
+  private final long[] lowerKeys;
+  private final int[] upperSpaces;
+  private final long[] upperKeys;
   private final long[] capabilityTokens;
   private final byte[] scopes;
   private final byte[] modes;
   private final boolean[] occupied;
   private final long[] waitingTransactionIds;
-  private final long[] waitingResourceHighs;
-  private final long[] waitingResourceLows;
+  private final int[] waitingLowerSpaces;
+  private final long[] waitingLowerKeys;
+  private final int[] waitingUpperSpaces;
+  private final long[] waitingUpperKeys;
   private final long[] waitingOrders;
   private final long[] waitingDeadlines;
   private final byte[] waitingScopes;
@@ -42,15 +46,19 @@ public final class LockManager implements LockService {
 
   public LockManager(int maximumLocks) {
     transactionIds = new long[maximumLocks];
-    resourceHighs = new long[maximumLocks];
-    resourceLows = new long[maximumLocks];
+    lowerSpaces = new int[maximumLocks];
+    lowerKeys = new long[maximumLocks];
+    upperSpaces = new int[maximumLocks];
+    upperKeys = new long[maximumLocks];
     capabilityTokens = new long[maximumLocks];
     scopes = new byte[maximumLocks];
     modes = new byte[maximumLocks];
     occupied = new boolean[maximumLocks];
     waitingTransactionIds = new long[maximumLocks];
-    waitingResourceHighs = new long[maximumLocks];
-    waitingResourceLows = new long[maximumLocks];
+    waitingLowerSpaces = new int[maximumLocks];
+    waitingLowerKeys = new long[maximumLocks];
+    waitingUpperSpaces = new int[maximumLocks];
+    waitingUpperKeys = new long[maximumLocks];
     waitingOrders = new long[maximumLocks];
     waitingDeadlines = new long[maximumLocks];
     waitingScopes = new byte[maximumLocks];
@@ -91,8 +99,10 @@ public final class LockManager implements LockService {
     StatusCode status = tryAcquire(
         context.transactionId(),
         request.scope(),
-        request.resourceHigh(),
-        request.resourceLow(),
+        request.lowerSpace(),
+        request.lowerKey(),
+        request.upperSpace(),
+        request.upperKey(),
         request.mode(),
         request.deadlineNanos(),
         nowNanos,
@@ -104,16 +114,20 @@ public final class LockManager implements LockService {
   public synchronized StatusCode tryAcquire(
       long transactionId,
       LockScope scope,
-      long resourceHigh,
-      long resourceLow,
+      int lowerSpace,
+      long lowerKey,
+      int upperSpace,
+      long upperKey,
       LockMode mode,
       long deadlineNanos,
       long nowNanos,
       LockToken token) {
-    if (transactionId <= 0 || scope == null || mode == null || token == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (scope == LockScope.RANGE && resourceHigh >= resourceLow) {
+    if (transactionId <= 0
+        || scope == null
+        || mode == null
+        || token == null
+        || !LockResourceOverlap.isValid(
+            scope, lowerSpace, lowerKey, upperSpace, upperKey)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (isDeadlockVictim(transactionId)) {
@@ -132,23 +146,31 @@ public final class LockManager implements LockService {
         }
         continue;
       }
-      if (!resourcesOverlap(
+      if (!LockResourceOverlap.overlaps(
           (byte) scope.ordinal(),
-          resourceHigh,
-          resourceLow,
+          lowerSpace,
+          lowerKey,
+          upperSpace,
+          upperKey,
           scopes[slot],
-          resourceHighs[slot],
-          resourceLows[slot])) {
+          lowerSpaces[slot],
+          lowerKeys[slot],
+          upperSpaces[slot],
+          upperKeys[slot])) {
         continue;
       }
       if (transactionIds[slot] == transactionId) {
-        if (sameResource(
+        if (LockResourceOverlap.same(
             (byte) scope.ordinal(),
-            resourceHigh,
-            resourceLow,
+            lowerSpace,
+            lowerKey,
+            upperSpace,
+            upperKey,
             scopes[slot],
-            resourceHighs[slot],
-            resourceLows[slot])) {
+            lowerSpaces[slot],
+            lowerKeys[slot],
+            upperSpaces[slot],
+            upperKeys[slot])) {
           return StatusCode.CONFLICT;
         }
         continue;
@@ -161,7 +183,7 @@ public final class LockManager implements LockService {
     }
     if (!blocked) {
       blocked = hasEarlierWaiter(
-          transactionId, scope, resourceHigh, resourceLow);
+          transactionId, scope, lowerSpace, lowerKey, upperSpace, upperKey);
     }
     if (blocked) {
       if (deadlineNanos > 0 && nowNanos >= deadlineNanos) {
@@ -171,8 +193,10 @@ public final class LockManager implements LockService {
       StatusCode status = registerWait(
           transactionId,
           scope,
-          resourceHigh,
-          resourceLow,
+          lowerSpace,
+          lowerKey,
+          upperSpace,
+          upperKey,
           mode,
           deadlineNanos);
       if (!status.isOk()) {
@@ -200,8 +224,10 @@ public final class LockManager implements LockService {
     }
     occupied[freeSlot] = true;
     transactionIds[freeSlot] = transactionId;
-    resourceHighs[freeSlot] = resourceHigh;
-    resourceLows[freeSlot] = resourceLow;
+    lowerSpaces[freeSlot] = lowerSpace;
+    lowerKeys[freeSlot] = lowerKey;
+    upperSpaces[freeSlot] = upperSpace;
+    upperKeys[freeSlot] = upperKey;
     capabilityTokens[freeSlot] = capabilityToken;
     scopes[freeSlot] = (byte) scope.ordinal();
     modes[freeSlot] = (byte) mode.ordinal();
@@ -232,8 +258,10 @@ public final class LockManager implements LockService {
     }
     occupied[slot] = false;
     transactionIds[slot] = 0;
-    resourceHighs[slot] = 0;
-    resourceLows[slot] = 0;
+    lowerSpaces[slot] = 0;
+    lowerKeys[slot] = 0;
+    upperSpaces[slot] = 0;
+    upperKeys[slot] = 0;
     capabilityTokens[slot] = 0;
     scopes[slot] = 0;
     modes[slot] = 0;
@@ -268,13 +296,17 @@ public final class LockManager implements LockService {
       if (other == slot
           || !occupied[other]
           || transactionIds[other] == token.transactionId()
-          || !resourcesOverlap(
+          || !LockResourceOverlap.overlaps(
               scopes[slot],
-              resourceHighs[slot],
-              resourceLows[slot],
+              lowerSpaces[slot],
+              lowerKeys[slot],
+              upperSpaces[slot],
+              upperKeys[slot],
               scopes[other],
-              resourceHighs[other],
-              resourceLows[other])) {
+              lowerSpaces[other],
+              lowerKeys[other],
+              upperSpaces[other],
+              upperKeys[other])) {
         continue;
       }
       if (conflicts(requested, modes[other]) || conflicts(modes[other], requested)) {
@@ -284,7 +316,12 @@ public final class LockManager implements LockService {
     LockScope scope = LOCK_SCOPES[scopes[slot]];
     if (!blocked) {
       blocked = hasEarlierWaiter(
-          token.transactionId(), scope, resourceHighs[slot], resourceLows[slot]);
+          token.transactionId(),
+          scope,
+          lowerSpaces[slot],
+          lowerKeys[slot],
+          upperSpaces[slot],
+          upperKeys[slot]);
     }
     if (blocked) {
       if (deadlineNanos > 0 && nowNanos >= deadlineNanos) {
@@ -294,8 +331,10 @@ public final class LockManager implements LockService {
       StatusCode status = registerWait(
           token.transactionId(),
           scope,
-          resourceHighs[slot],
-          resourceLows[slot],
+          lowerSpaces[slot],
+          lowerKeys[slot],
+          upperSpaces[slot],
+          upperKeys[slot],
           requestedMode,
           deadlineNanos);
       if (!status.isOk()) {
@@ -346,8 +385,10 @@ public final class LockManager implements LockService {
   private StatusCode registerWait(
       long transactionId,
       LockScope scope,
-      long resourceHigh,
-      long resourceLow,
+      int lowerSpace,
+      long lowerKey,
+      int upperSpace,
+      long upperKey,
       LockMode mode,
       long deadlineNanos) {
     int freeSlot = -1;
@@ -362,8 +403,10 @@ public final class LockManager implements LockService {
         continue;
       }
       if (waitingScopes[slot] != (byte) scope.ordinal()
-          || waitingResourceHighs[slot] != resourceHigh
-          || waitingResourceLows[slot] != resourceLow) {
+          || waitingLowerSpaces[slot] != lowerSpace
+          || waitingLowerKeys[slot] != lowerKey
+          || waitingUpperSpaces[slot] != upperSpace
+          || waitingUpperKeys[slot] != upperKey) {
         return StatusCode.CONFLICT;
       }
       waitingModes[slot] = (byte) mode.ordinal();
@@ -375,8 +418,10 @@ public final class LockManager implements LockService {
     }
     waiting[freeSlot] = true;
     waitingTransactionIds[freeSlot] = transactionId;
-    waitingResourceHighs[freeSlot] = resourceHigh;
-    waitingResourceLows[freeSlot] = resourceLow;
+    waitingLowerSpaces[freeSlot] = lowerSpace;
+    waitingLowerKeys[freeSlot] = lowerKey;
+    waitingUpperSpaces[freeSlot] = upperSpace;
+    waitingUpperKeys[freeSlot] = upperKey;
     waitingOrders[freeSlot] = nextWaitOrder++;
     waitingDeadlines[freeSlot] = deadlineNanos;
     waitingScopes[freeSlot] = (byte) scope.ordinal();
@@ -388,20 +433,26 @@ public final class LockManager implements LockService {
   private boolean hasEarlierWaiter(
       long transactionId,
       LockScope scope,
-      long resourceHigh,
-      long resourceLow) {
+      int lowerSpace,
+      long lowerKey,
+      int upperSpace,
+      long upperKey) {
     int ownSlot = findWait(transactionId);
     long ownOrder = ownSlot < 0 ? Long.MAX_VALUE : waitingOrders[ownSlot];
     for (int slot = 0; slot < waiting.length; slot++) {
       if (waiting[slot]
           && waitingTransactionIds[slot] != transactionId
-          && resourcesOverlap(
+          && LockResourceOverlap.overlaps(
               (byte) scope.ordinal(),
-              resourceHigh,
-              resourceLow,
+              lowerSpace,
+              lowerKey,
+              upperSpace,
+              upperKey,
               waitingScopes[slot],
-              waitingResourceHighs[slot],
-              waitingResourceLows[slot])
+              waitingLowerSpaces[slot],
+              waitingLowerKeys[slot],
+              waitingUpperSpaces[slot],
+              waitingUpperKeys[slot])
           && waitingOrders[slot] < ownOrder) {
         return true;
       }
@@ -425,8 +476,10 @@ public final class LockManager implements LockService {
     }
     waiting[slot] = false;
     waitingTransactionIds[slot] = 0;
-    waitingResourceHighs[slot] = 0;
-    waitingResourceLows[slot] = 0;
+    waitingLowerSpaces[slot] = 0;
+    waitingLowerKeys[slot] = 0;
+    waitingUpperSpaces[slot] = 0;
+    waitingUpperKeys[slot] = 0;
     waitingOrders[slot] = 0;
     waitingDeadlines[slot] = 0;
     waitingScopes[slot] = 0;
@@ -457,7 +510,12 @@ public final class LockManager implements LockService {
       if (!occupied[slot]
           || transactionIds[slot] == transactionId
           || !overlapsWait(
-              waitSlot, scopes[slot], resourceHighs[slot], resourceLows[slot])
+              waitSlot,
+              scopes[slot],
+              lowerSpaces[slot],
+              lowerKeys[slot],
+              upperSpaces[slot],
+              upperKeys[slot])
           || !conflictingModes(waitingModes[waitSlot], modes[slot])) {
         continue;
       }
@@ -473,8 +531,10 @@ public final class LockManager implements LockService {
           || !overlapsWait(
               waitSlot,
               waitingScopes[slot],
-              waitingResourceHighs[slot],
-              waitingResourceLows[slot])) {
+              waitingLowerSpaces[slot],
+              waitingLowerKeys[slot],
+              waitingUpperSpaces[slot],
+              waitingUpperKeys[slot])) {
         continue;
       }
       victim = Math.max(
@@ -503,47 +563,21 @@ public final class LockManager implements LockService {
   private boolean overlapsWait(
       int waitSlot,
       byte scope,
-      long resourceHigh,
-      long resourceLow) {
-    return resourcesOverlap(
+      int lowerSpace,
+      long lowerKey,
+      int upperSpace,
+      long upperKey) {
+    return LockResourceOverlap.overlaps(
         waitingScopes[waitSlot],
-        waitingResourceHighs[waitSlot],
-        waitingResourceLows[waitSlot],
+        waitingLowerSpaces[waitSlot],
+        waitingLowerKeys[waitSlot],
+        waitingUpperSpaces[waitSlot],
+        waitingUpperKeys[waitSlot],
         scope,
-        resourceHigh,
-        resourceLow);
-  }
-
-  private static boolean sameResource(
-      byte leftScope,
-      long leftHigh,
-      long leftLow,
-      byte rightScope,
-      long rightHigh,
-      long rightLow) {
-    return leftScope == rightScope && leftHigh == rightHigh && leftLow == rightLow;
-  }
-
-  private static boolean resourcesOverlap(
-      byte leftScope,
-      long leftHigh,
-      long leftLow,
-      byte rightScope,
-      long rightHigh,
-      long rightLow) {
-    int range = LockScope.RANGE.ordinal();
-    int key = LockScope.KEY.ordinal();
-    if (leftScope == range && rightScope == range) {
-      return leftHigh < rightLow && rightHigh < leftLow;
-    }
-    if (leftScope == range && rightScope == key) {
-      return rightLow >= leftHigh && rightLow < leftLow;
-    }
-    if (leftScope == key && rightScope == range) {
-      return leftLow >= rightHigh && leftLow < rightLow;
-    }
-    return sameResource(
-        leftScope, leftHigh, leftLow, rightScope, rightHigh, rightLow);
+        lowerSpace,
+        lowerKey,
+        upperSpace,
+        upperKey);
   }
 
   private static boolean conflictingModes(byte left, byte right) {

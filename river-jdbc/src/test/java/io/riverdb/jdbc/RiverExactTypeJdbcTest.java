@@ -2,6 +2,7 @@ package io.riverdb.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -25,6 +26,7 @@ import java.sql.Statement;
 import java.sql.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.api.function.Executable;
 
 final class RiverExactTypeJdbcTest {
   private static final DatabaseIncarnation DATABASE =
@@ -55,6 +57,9 @@ final class RiverExactTypeJdbcTest {
         assertEquals(1, insert.executeUpdate());
         insert.setLong(1, 2);
         insert.setBoolean(2, false);
+        insert.setBigDecimal(3, null);
+        assertEquals(1, insert.executeUpdate());
+        insert.setLong(1, 3);
         insert.setBigDecimal(3, new BigDecimal("42.701"));
         SQLException lossy = assertThrows(SQLException.class, insert::executeUpdate);
         assertEquals("42804", lossy.getSQLState());
@@ -71,12 +76,43 @@ final class RiverExactTypeJdbcTest {
           assertEquals(2, metadata.getScale(2));
           assertTrue(rows.next());
           assertTrue(rows.getBoolean(1));
+          assertTrue(rows.getBoolean("paid"));
+          assertEquals((byte) 1, rows.getByte("paid"));
+          assertEquals((short) 1, rows.getShort("paid"));
+          assertEquals(1, rows.getInt("paid"));
+          assertEquals(1L, rows.getLong("paid"));
+          assertEquals(1.0F, rows.getFloat("paid"));
+          assertEquals(1.0D, rows.getDouble("paid"));
+          assertEquals(BigDecimal.ONE, rows.getBigDecimal("paid"));
           assertEquals(Boolean.TRUE, rows.getObject(1));
+          assertEquals("true", rows.getObject(1, String.class));
           assertEquals(new BigDecimal("42.70"), rows.getBigDecimal(2));
           assertEquals(new BigDecimal("42.70"), rows.getObject(2));
+          assertEquals(new BigDecimal("42.70"), rows.getObject(2, BigDecimal.class));
           assertEquals("42.70", rows.getString(2));
+          assertEquals("42.70", rows.getObject(2, String.class));
+          assertUnsupported(() -> rows.getBoolean(2));
+          assertUnsupported(() -> rows.getByte(2));
+          assertUnsupported(() -> rows.getShort(2));
+          assertUnsupported(() -> rows.getInt(2));
+          assertUnsupported(() -> rows.getLong(2));
+          assertUnsupported(() -> rows.getFloat(2));
+          assertUnsupported(() -> rows.getDouble(2));
+          assertUnsupported(() -> rows.getObject(2, Long.class));
+          assertUnsupported(() -> rows.getObject(2, Integer.class));
+          assertUnsupported(() -> rows.getLong("amount"));
           assertFalse(rows.next());
         }
+      }
+      try (Statement select = connection.createStatement();
+          ResultSet rows = select.executeQuery(
+              "SELECT amount FROM invoices WHERE id=2")) {
+        assertTrue(rows.next());
+        assertUnsupported(() -> rows.getLong(1));
+        assertUnsupported(() -> rows.getObject(1, Long.class));
+        assertNull(rows.getBigDecimal(1));
+        assertTrue(rows.wasNull());
+        assertFalse(rows.next());
       }
       try (Statement expression = connection.createStatement();
           ResultSet value = expression.executeQuery("SELECT 1.00/8.0")) {
@@ -98,8 +134,21 @@ final class RiverExactTypeJdbcTest {
                 "SELECT 900000000000000000+900000000000000000.0"));
         assertEquals("22003", overflow.getSQLState());
       }
+      try (Statement expression = connection.createStatement();
+          ResultSet value = expression.executeQuery("SELECT 2147483648")) {
+        assertTrue(value.next());
+        SQLException overflow = assertThrows(
+            SQLException.class, () -> value.getInt(1));
+        assertEquals("22003", overflow.getSQLState());
+        assertFalse(value.next());
+      }
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertUnsupported(Executable operation) {
+    SQLException failure = assertThrows(SQLException.class, operation);
+    assertEquals("0A000", failure.getSQLState());
   }
 }

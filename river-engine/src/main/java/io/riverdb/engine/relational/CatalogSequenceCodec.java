@@ -125,7 +125,6 @@ final class CatalogSequenceCodec {
         || scratch.getInt(8) != VERSION
         || scratch.getInt(12) != expectedTableId
         || scratch.getLong(16) < 1
-        || scratch.getLong(16) > RelationalKey.MAXIMUM_USER_KEY
         || (exhausted != 0 && exhausted != 1)) {
       return StatusCode.CORRUPTION;
     }

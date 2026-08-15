@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.btree.BTreeLookupResult;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeRootPage;
@@ -40,6 +41,7 @@ final class IndexedTableKernel {
   private int operationRowCount;
   private int operationLastHeapPageId = HEAP_PAGE_ID;
   private int vacuumHeapPageId;
+  private int vacuumLastSpace;
   private long vacuumLastKey;
 
   int operationVersionCount() {
@@ -423,6 +425,7 @@ final class IndexedTableKernel {
       IndexedWalCodec.encodeVacuumEntry(
           payload,
           vacuumOutputOffset,
+          BTreePage.spaceAt(leaf, entry),
           BTreePage.keyAt(leaf, entry),
           rowId,
           rowBytes,
@@ -438,6 +441,7 @@ final class IndexedTableKernel {
 
   StatusCode beginVacuumApply() {
     vacuumHeapPageId = HEAP_PAGE_ID;
+    vacuumLastSpace = 0;
     vacuumLastKey = 0;
     StatusCode status = StatusCode.OK;
     for (int pageId = 1; status.isOk() && pageId <= pages.highestPageId(); pageId++) {
@@ -456,16 +460,18 @@ final class IndexedTableKernel {
       return StatusCode.CORRUPTION;
     }
     long key = IndexedWalCodec.vacuumEntryKey(payload, entryOffset);
+    int space = IndexedWalCodec.vacuumEntrySpace(payload, entryOffset);
     int oldRowId = IndexedWalCodec.vacuumEntryRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.vacuumEntryRowBytes(payload, entryOffset);
     boolean deleted = IndexedWalCodec.vacuumEntryDeleted(payload, entryOffset);
-    if (key == Long.MAX_VALUE
-        || (compactedRowId > 1 && key <= vacuumLastKey)
+    if (!OrderedKey.isFiniteSpace(space)
+        || (compactedRowId > 1
+            && !OrderedKey.lessThan(vacuumLastSpace, vacuumLastKey, space, key))
         || rowLength(oldRowId) != rowBytes
         || isDeletedRow(oldRowId) != deleted) {
       return StatusCode.CORRUPTION;
     }
-    StatusCode status = validateVacuumHead(key, oldRowId);
+    StatusCode status = validateVacuumHead(space, key, oldRowId);
     if (!status.isOk()) {
       return status;
     }
@@ -489,10 +495,11 @@ final class IndexedTableKernel {
         rowBytes,
         heapInsert);
     if (status.isOk()) {
-      status = BTreePage.updateLeaf(leaf, key, compactedRowId);
+      status = BTreePage.updateLeaf(leaf, space, key, compactedRowId);
     }
     if (status.isOk()) {
       versions.recordVacuumDeleted(compactedRowId, deleted);
+      vacuumLastSpace = space;
       vacuumLastKey = key;
     }
     return status;
@@ -500,6 +507,7 @@ final class IndexedTableKernel {
 
   void resetVacuumApply() {
     vacuumHeapPageId = 0;
+    vacuumLastSpace = 0;
     vacuumLastKey = 0;
   }
 
@@ -604,7 +612,7 @@ final class IndexedTableKernel {
       status = BTreeRootPage.initialize(metadata, INITIAL_LEAF_PAGE_ID, 4);
     }
     if (status.isOk()) {
-      status = BTreePage.initializeLeaf(leaf, 0, Long.MAX_VALUE);
+      status = BTreePage.initializeLeaf(leaf, 0);
     }
     return status;
   }
@@ -614,18 +622,21 @@ final class IndexedTableKernel {
   }
 
   StatusCode stageInsertBatch(
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
       int[] rowLengths,
       int insertCount,
       HeapInsertResult result) {
-    if (keys == null
+    if (spaces == null
+        || keys == null
         || rows == null
         || rowStride <= 0
         || rowLengths == null
         || insertCount <= 0
         || insertCount > keys.length
+        || insertCount > spaces.length
         || insertCount > rowLengths.length
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -634,7 +645,8 @@ final class IndexedTableKernel {
     StatusCode status = StatusCode.OK;
     for (int index = 0; index < insertCount; index++) {
       status = stageInsertEntry(
-          keys[index], rows, index * rowStride, rowLengths[index], rowStride);
+          spaces[index], keys[index],
+          rows, index * rowStride, rowLengths[index], rowStride);
       if (!status.isOk()) return status;
     }
     result.setRowId(heapInsert.rowId());
@@ -642,29 +654,31 @@ final class IndexedTableKernel {
   }
 
   private StatusCode stageInsertEntry(
-      long key, ByteBuffer rows, int rowOffset, int rowBytes, int rowStride) {
-    if (key == Long.MAX_VALUE
+      int space, long key, ByteBuffer rows,
+      int rowOffset, int rowBytes, int rowStride) {
+    if (!OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0
         || rowBytes > rowStride
         || rows.limit() - rowOffset < rowBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = findOperationLeafPageId(key);
+    int leafPageId = findOperationLeafPageId(space, key);
     if (leafPageId <= 0) return StatusCode.CORRUPTION;
     ByteBuffer leaf = pages.stageExisting(
         leafPageId, IndexedTableLimits.MAX_CHANGED_PAGES);
     if (leaf == null) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = validateNewIndexEntryIn(leaf, key, 0);
+    StatusCode status = validateNewIndexEntryIn(leaf, space, key, 0);
     if (!status.isOk() && status != StatusCode.RESOURCE_EXHAUSTED) return status;
     status = stageVersionRow(rows, rowOffset, rowBytes, 0, false, heapInsert);
     if (!status.isOk()) return status;
-    status = BTreePage.insertLeaf(leaf, key, heapInsert.rowId());
+    status = BTreePage.insertLeaf(leaf, space, key, heapInsert.rowId());
     return status == StatusCode.RESOURCE_EXHAUSTED
-        ? splitAndInsert(leafPageId, leaf, key, heapInsert.rowId()) : status;
+        ? splitAndInsert(leafPageId, leaf, space, key, heapInsert.rowId()) : status;
   }
 
   StatusCode stageMutationBatch(
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -680,6 +694,7 @@ final class IndexedTableKernel {
     for (int index = 0; index < mutationCount; index++) {
       status = stageMutationEntry(
           operations[index],
+          spaces[index],
           keys[index],
           previousRowIds[index],
           rows,
@@ -694,6 +709,7 @@ final class IndexedTableKernel {
 
   private StatusCode stageMutationEntry(
       int operation,
+      int space,
       long key,
       int previousRowId,
       ByteBuffer rows,
@@ -701,13 +717,13 @@ final class IndexedTableKernel {
       int rowBytes,
       int rowStride) {
     if (!validMutation(operation)
-        || key == Long.MAX_VALUE
+        || !OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0
         || rowBytes > rowStride
         || rows.limit() - rowOffset < rowBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = findOperationLeafPageId(key);
+    int leafPageId = findOperationLeafPageId(space, key);
     if (leafPageId <= 0) return StatusCode.CORRUPTION;
     ByteBuffer leaf = pages.stageExisting(
         leafPageId, IndexedTableLimits.MAX_CHANGED_PAGES);
@@ -715,7 +731,7 @@ final class IndexedTableKernel {
     boolean newIndexEntry = operation == IndexedWalCodec.MUTATION_INSERT
         && previousRowId == 0;
     StatusCode status = validateMutationTargetIn(
-        leaf, operation, key, previousRowId, 0);
+        leaf, operation, space, key, previousRowId, 0);
     if (!status.isOk() && (!newIndexEntry || status != StatusCode.RESOURCE_EXHAUSTED)) {
       return status;
     }
@@ -728,7 +744,7 @@ final class IndexedTableKernel {
         heapInsert);
     return status.isOk()
         ? applyStagedIndexEntry(
-            leafPageId, leaf, key, newIndexEntry, heapInsert.rowId()) : status;
+            leafPageId, leaf, space, key, newIndexEntry, heapInsert.rowId()) : status;
   }
 
   StatusCode stageMutationBatch(
@@ -751,16 +767,17 @@ final class IndexedTableKernel {
   private StatusCode stagePendingMutation(
       PendingMutationBuffer mutations, int index) {
     int operation = mutations.operationAt(index);
+    int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
     int previousRowId = mutations.previousRowIdAt(index);
     int rowBytes = mutations.rowLengthAt(index);
     if (!validMutation(operation)
-        || key == Long.MAX_VALUE
+        || !OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0
         || rowBytes > mutations.rowStride()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = findOperationLeafPageId(key);
+    int leafPageId = findOperationLeafPageId(space, key);
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
@@ -772,7 +789,7 @@ final class IndexedTableKernel {
     boolean newIndexEntry = operation == IndexedWalCodec.MUTATION_INSERT
         && previousRowId == 0;
     StatusCode status = validateMutationTargetIn(
-        leaf, operation, key, previousRowId, 0);
+        leaf, operation, space, key, previousRowId, 0);
     if (!status.isOk()
         && (!newIndexEntry || status != StatusCode.RESOURCE_EXHAUSTED)) {
       return status;
@@ -785,7 +802,7 @@ final class IndexedTableKernel {
         heapInsert);
     return status.isOk()
         ? applyStagedIndexEntry(
-            leafPageId, leaf, key, newIndexEntry, heapInsert.rowId())
+            leafPageId, leaf, space, key, newIndexEntry, heapInsert.rowId())
         : status;
   }
 
@@ -808,14 +825,15 @@ final class IndexedTableKernel {
 
   private StatusCode stagePendingInsert(
       PendingMutationBuffer mutations, int index) {
+    int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
     int rowBytes = mutations.rowLengthAt(index);
-    if (key == Long.MAX_VALUE
+    if (!OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0
         || rowBytes > mutations.rowStride()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = findOperationLeafPageId(key);
+    int leafPageId = findOperationLeafPageId(space, key);
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
@@ -824,27 +842,29 @@ final class IndexedTableKernel {
     if (leaf == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = validateNewIndexEntryIn(leaf, key, 0);
+    StatusCode status = validateNewIndexEntryIn(leaf, space, key, 0);
     if (!status.isOk() && status != StatusCode.RESOURCE_EXHAUSTED) {
       return status;
     }
     status = stageVersionRow(mutations, index, 0, false, heapInsert);
     return status.isOk()
-        ? applyStagedIndexEntry(leafPageId, leaf, key, true, heapInsert.rowId())
+        ? applyStagedIndexEntry(
+            leafPageId, leaf, space, key, true, heapInsert.rowId())
         : status;
   }
 
   private StatusCode applyStagedIndexEntry(
       int leafPageId,
       ByteBuffer leaf,
+      int space,
       long key,
       boolean newIndexEntry,
       int rowId) {
     StatusCode status = newIndexEntry
-        ? BTreePage.insertLeaf(leaf, key, rowId)
-        : BTreePage.updateLeaf(leaf, key, rowId);
+        ? BTreePage.insertLeaf(leaf, space, key, rowId)
+        : BTreePage.updateLeaf(leaf, space, key, rowId);
     return newIndexEntry && status == StatusCode.RESOURCE_EXHAUSTED
-        ? splitAndInsert(leafPageId, leaf, key, rowId) : status;
+        ? splitAndInsert(leafPageId, leaf, space, key, rowId) : status;
   }
 
   boolean canAppendRows(PendingMutationBuffer mutations) {
@@ -921,13 +941,14 @@ final class IndexedTableKernel {
 
   StatusCode stageInsert(
       int leafPageId,
+      int space,
       long key,
       ByteBuffer row) {
-    if (leafPageId <= 0 || key == Long.MAX_VALUE || row == null) {
+    if (leafPageId <= 0 || !OrderedKey.isFiniteSpace(space) || row == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     heapInsert.reset();
-    int operationLeafPageId = findOperationLeafPageId(key);
+    int operationLeafPageId = findOperationLeafPageId(space, key);
     if (operationLeafPageId != leafPageId) {
       return StatusCode.CORRUPTION;
     }
@@ -940,21 +961,22 @@ final class IndexedTableKernel {
     if (!status.isOk()) {
       return status;
     }
-    status = BTreePage.insertLeaf(leaf, key, heapInsert.rowId());
+    status = BTreePage.insertLeaf(leaf, space, key, heapInsert.rowId());
     if (status == StatusCode.RESOURCE_EXHAUSTED) {
-      status = splitAndInsert(leafPageId, leaf, key, heapInsert.rowId());
+      status = splitAndInsert(leafPageId, leaf, space, key, heapInsert.rowId());
     }
     return status;
   }
 
   StatusCode fetchByKeyAt(
       long visibleCommitSequence,
+      int space,
       long key,
       HeapRowResult result) {
-    if (key == Long.MAX_VALUE || result == null) {
+    if (!OrderedKey.isFiniteSpace(space) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = lookupRowId(key);
+    StatusCode status = lookupRowId(space, key);
     if (!status.isOk()) {
       return status;
     }
@@ -998,8 +1020,11 @@ final class IndexedTableKernel {
       int entry = cursor.entryIndex();
       cursor.advanceEntry();
       long key = BTreePage.keyAt(leaf, entry);
-      if (key < cursor.lowerKey()) continue;
-      if (key >= cursor.upperKey()) {
+      int space = BTreePage.spaceAt(leaf, entry);
+      if (OrderedKey.compare(
+          space, key, cursor.lowerSpace(), cursor.lowerKey()) < 0) continue;
+      if (!OrderedKey.lessThan(
+          space, key, cursor.upperSpace(), cursor.upperKey())) {
         cursor.advanceLeaf(0);
         return StatusCode.CONFLICT;
       }
@@ -1008,7 +1033,7 @@ final class IndexedTableKernel {
       if (rowId <= 0 || isDeletedRow(rowId)) continue;
       StatusCode status = fetchRow(rowId, result.row());
       if (!status.isOk()) return status;
-      result.set(key);
+      result.set(space, key);
       return StatusCode.OK;
     }
     return StatusCode.CONFLICT;
@@ -1020,13 +1045,15 @@ final class IndexedTableKernel {
 
   StatusCode prepareMutation(
       long visibleCommitSequence,
+      int space,
       long key,
       IndexedMutationTarget result) {
-    if (visibleCommitSequence < 0 || key == Long.MAX_VALUE || result == null) {
+    if (visibleCommitSequence < 0
+        || !OrderedKey.isFiniteSpace(space) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode status = lookupRowId(key);
+    StatusCode status = lookupRowId(space, key);
     if (!status.isOk()) {
       return status;
     }
@@ -1044,13 +1071,15 @@ final class IndexedTableKernel {
 
   StatusCode prepareInsert(
       long visibleCommitSequence,
+      int space,
       long key,
       IndexedMutationTarget result) {
-    if (visibleCommitSequence < 0 || key == Long.MAX_VALUE || result == null) {
+    if (visibleCommitSequence < 0
+        || !OrderedKey.isFiniteSpace(space) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode status = lookupRowId(key);
+    StatusCode status = lookupRowId(space, key);
     if (status == StatusCode.CONFLICT) {
       return StatusCode.OK;
     }
@@ -1112,39 +1141,49 @@ final class IndexedTableKernel {
     return mutationValidator.leafPageId();
   }
 
-  StatusCode validateNewIndexEntry(long key, int earlierEntriesInLeaf) {
-    return validateNewIndexEntryAt(findLeafPageId(key), key, earlierEntriesInLeaf);
+  StatusCode validateNewIndexEntry(
+      int space, long key, int earlierEntriesInLeaf) {
+    return validateNewIndexEntryAt(
+        findLeafPageId(space, key), space, key, earlierEntriesInLeaf);
   }
 
-  StatusCode validateNewIndexEntryAt(int leafPageId, long key, int earlierEntriesInLeaf) {
-    return mutationValidator.validateNewAt(leafPageId, key, earlierEntriesInLeaf);
+  StatusCode validateNewIndexEntryAt(
+      int leafPageId, int space, long key, int earlierEntriesInLeaf) {
+    return mutationValidator.validateNewAt(
+        leafPageId, space, key, earlierEntriesInLeaf);
   }
 
   StatusCode validateNewIndexEntryIn(
       ByteBuffer leaf,
+      int space,
       long key,
       int earlierEntriesInLeaf) {
-    return mutationValidator.validateNewIn(leaf, key, earlierEntriesInLeaf);
+    return mutationValidator.validateNewIn(
+        leaf, space, key, earlierEntriesInLeaf);
   }
 
   StatusCode validateMutationTarget(
       int operation,
+      int space,
       long key,
       int previousRowId,
       int earlierNewEntriesInLeaf) {
     return validateMutationTargetAt(
-        findLeafPageId(key), operation, key, previousRowId, earlierNewEntriesInLeaf);
+        findLeafPageId(space, key), operation, space, key,
+        previousRowId, earlierNewEntriesInLeaf);
   }
 
   StatusCode validateMutationTargetAt(
       int leafPageId,
       int operation,
+      int space,
       long key,
       int previousRowId,
       int earlierNewEntriesInLeaf) {
     return mutationValidator.validateMutationAt(
         leafPageId,
         operation,
+        space,
         key,
         previousRowId,
         earlierNewEntriesInLeaf,
@@ -1154,20 +1193,23 @@ final class IndexedTableKernel {
   StatusCode validateMutationTargetIn(
       ByteBuffer leaf,
       int operation,
+      int space,
       long key,
       int previousRowId,
       int earlierNewEntriesInLeaf) {
     return mutationValidator.validateMutationIn(
         leaf,
         operation,
+        space,
         key,
         previousRowId,
         earlierNewEntriesInLeaf,
         isDeletedRow(previousRowId));
   }
 
-  StatusCode validateVacuumHead(long key, int rowId) {
-    return mutationValidator.validateVacuumAt(findLeafPageId(key), key, rowId);
+  StatusCode validateVacuumHead(int space, long key, int rowId) {
+    return mutationValidator.validateVacuumAt(
+        findLeafPageId(space, key), space, key, rowId);
   }
 
   StatusCode applyInsertOperation(
@@ -1180,12 +1222,13 @@ final class IndexedTableKernel {
       return structural;
     }
     long key = IndexedWalCodec.insertKey(payload);
+    int space = IndexedWalCodec.insertSpace(payload);
     int rowId = IndexedWalCodec.insertRowId(payload);
     int rowBytes = IndexedWalCodec.insertRowBytes(payload);
-    if (key == Long.MAX_VALUE || !pages.isPresent(HEAP_PAGE_ID)) {
+    if (!OrderedKey.isFiniteSpace(space) || !pages.isPresent(HEAP_PAGE_ID)) {
       return StatusCode.CORRUPTION;
     }
-    StatusCode target = validateNewIndexEntry(key, 0);
+    StatusCode target = validateNewIndexEntry(space, key, 0);
     int leafPageId = mutationValidator.leafPageId();
     ByteBuffer leaf = pages.currentPayload(leafPageId);
     if (!target.isOk()
@@ -1205,7 +1248,7 @@ final class IndexedTableKernel {
         0,
         false);
     if (status.isOk()) {
-      status = BTreePage.insertLeaf(leaf, key, rowId);
+      status = BTreePage.insertLeaf(leaf, space, key, rowId);
     }
     if (!status.isOk()) {
       return StatusCode.INVARIANT_BROKEN;
@@ -1265,15 +1308,16 @@ final class IndexedTableKernel {
       return StatusCode.CORRUPTION;
     }
     long key = IndexedWalCodec.insertBatchKey(payload, entryOffset);
-    if (key == Long.MAX_VALUE
+    int space = IndexedWalCodec.insertBatchSpace(payload, entryOffset);
+    if (!OrderedKey.isFiniteSpace(space)
         || IndexedWalCodec.insertBatchRowId(payload, entryOffset) != expectedRowId
-        || containsEarlierInsertKey(payload, entryOffset, key)) {
+        || containsEarlierInsertKey(payload, entryOffset, space, key)) {
       return StatusCode.CORRUPTION;
     }
-    int leafPageId = findLeafPageId(key);
+    int leafPageId = findLeafPageId(space, key);
     int earlierInLeaf = countEarlierInsertEntriesInLeaf(
         payload, entryOffset, leafPageId);
-    return validateNewIndexEntryAt(leafPageId, key, earlierInLeaf).isOk()
+    return validateNewIndexEntryAt(leafPageId, space, key, earlierInLeaf).isOk()
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 
@@ -1284,15 +1328,16 @@ final class IndexedTableKernel {
       long recordEnd,
       long commitSequence) {
     long key = IndexedWalCodec.insertBatchKey(payload, entryOffset);
+    int space = IndexedWalCodec.insertBatchSpace(payload, entryOffset);
     int rowId = IndexedWalCodec.insertBatchRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.insertBatchRowBytes(payload, entryOffset);
     int rowOffset = entryOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
-    int leafPageId = findLeafPageId(key);
+    int leafPageId = findLeafPageId(space, key);
     ByteBuffer leaf = pages.currentPayload(leafPageId);
     StatusCode status = appendCurrentRow(
         payload, rowOffset, rowBytes, rowId, recordStart, recordEnd,
         commitSequence, 0, false);
-    if (status.isOk()) status = BTreePage.insertLeaf(leaf, key, rowId);
+    if (status.isOk()) status = BTreePage.insertLeaf(leaf, space, key, rowId);
     if (!status.isOk()) return StatusCode.INVARIANT_BROKEN;
     pages.markCurrentChanged(leafPageId, recordStart, recordEnd);
     return StatusCode.OK;
@@ -1349,18 +1394,19 @@ final class IndexedTableKernel {
       return StatusCode.CORRUPTION;
     }
     int operation = IndexedWalCodec.mutationOperation(payload, entryOffset);
+    int space = IndexedWalCodec.mutationSpace(payload, entryOffset);
     long key = IndexedWalCodec.mutationKey(payload, entryOffset);
     int previousRowId = IndexedWalCodec.mutationPreviousRowId(payload, entryOffset);
-    if (key == Long.MAX_VALUE
+    if (!OrderedKey.isFiniteSpace(space)
         || IndexedWalCodec.mutationRowId(payload, entryOffset) != expectedRowId
-        || containsEarlierMutationKey(payload, entryOffset, key)) {
+        || containsEarlierMutationKey(payload, entryOffset, space, key)) {
       return StatusCode.CORRUPTION;
     }
-    int leafPageId = findLeafPageId(key);
+    int leafPageId = findLeafPageId(space, key);
     int earlierInLeaf = countEarlierMutationInsertsInLeaf(
         payload, entryOffset, leafPageId);
     return validateMutationTargetAt(
-        leafPageId, operation, key, previousRowId, earlierInLeaf).isOk()
+        leafPageId, operation, space, key, previousRowId, earlierInLeaf).isOk()
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 
@@ -1371,20 +1417,21 @@ final class IndexedTableKernel {
       long recordEnd,
       long commitSequence) {
     int operation = IndexedWalCodec.mutationOperation(payload, entryOffset);
+    int space = IndexedWalCodec.mutationSpace(payload, entryOffset);
     long key = IndexedWalCodec.mutationKey(payload, entryOffset);
     int rowId = IndexedWalCodec.mutationRowId(payload, entryOffset);
     int previousRowId = IndexedWalCodec.mutationPreviousRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.mutationRowBytes(payload, entryOffset);
     int rowOffset = entryOffset + IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES;
-    int leafPageId = findLeafPageId(key);
+    int leafPageId = findLeafPageId(space, key);
     ByteBuffer leaf = pages.currentPayload(leafPageId);
     StatusCode status = appendCurrentRow(
         payload, rowOffset, rowBytes, rowId, recordStart, recordEnd,
         commitSequence, previousRowId, operation == IndexedWalCodec.MUTATION_DELETE);
     if (status.isOk()) {
       status = operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0
-          ? BTreePage.insertLeaf(leaf, key, rowId)
-          : BTreePage.updateLeaf(leaf, key, rowId);
+          ? BTreePage.insertLeaf(leaf, space, key, rowId)
+          : BTreePage.updateLeaf(leaf, space, key, rowId);
     }
     if (!status.isOk()) return StatusCode.INVARIANT_BROKEN;
     pages.markCurrentChanged(leafPageId, recordStart, recordEnd);
@@ -1394,10 +1441,12 @@ final class IndexedTableKernel {
   private boolean containsEarlierInsertKey(
       ByteBuffer payload,
       int targetEntryOffset,
+      int space,
       long key) {
     int entryOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
     while (entryOffset < targetEntryOffset) {
-      if (IndexedWalCodec.insertBatchKey(payload, entryOffset) == key) {
+      if (IndexedWalCodec.insertBatchSpace(payload, entryOffset) == space
+          && IndexedWalCodec.insertBatchKey(payload, entryOffset) == key) {
         return true;
       }
       entryOffset += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES
@@ -1409,10 +1458,12 @@ final class IndexedTableKernel {
   private boolean containsEarlierMutationKey(
       ByteBuffer payload,
       int targetEntryOffset,
+      int space,
       long key) {
     int entryOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
     while (entryOffset < targetEntryOffset) {
-      if (IndexedWalCodec.mutationKey(payload, entryOffset) == key) {
+      if (IndexedWalCodec.mutationSpace(payload, entryOffset) == space
+          && IndexedWalCodec.mutationKey(payload, entryOffset) == key) {
         return true;
       }
       entryOffset += IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES
@@ -1428,7 +1479,9 @@ final class IndexedTableKernel {
     int count = 0;
     int entryOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
     while (entryOffset < targetEntryOffset) {
-      if (findLeafPageId(IndexedWalCodec.insertBatchKey(payload, entryOffset)) == leafPageId) {
+      if (findLeafPageId(
+          IndexedWalCodec.insertBatchSpace(payload, entryOffset),
+          IndexedWalCodec.insertBatchKey(payload, entryOffset)) == leafPageId) {
         count++;
       }
       entryOffset += IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES
@@ -1446,7 +1499,9 @@ final class IndexedTableKernel {
     while (entryOffset < targetEntryOffset) {
       if (IndexedWalCodec.mutationOperation(payload, entryOffset) == IndexedWalCodec.MUTATION_INSERT
           && IndexedWalCodec.mutationPreviousRowId(payload, entryOffset) == 0
-          && findLeafPageId(IndexedWalCodec.mutationKey(payload, entryOffset))
+          && findLeafPageId(
+              IndexedWalCodec.mutationSpace(payload, entryOffset),
+              IndexedWalCodec.mutationKey(payload, entryOffset))
               == leafPageId) {
         count++;
       }
@@ -1459,6 +1514,7 @@ final class IndexedTableKernel {
   private StatusCode splitAndInsert(
       int leftPageId,
       ByteBuffer left,
+      int space,
       long key,
       int rowId) {
     ByteBuffer metadata = pages.stageExisting(ROOT_META_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES);
@@ -1471,21 +1527,23 @@ final class IndexedTableKernel {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = BTreePage.splitLeaf(
-        left, right, rightPageId, key, rowId, splitResult);
+        left, right, rightPageId, space, key, rowId, splitResult);
     if (!status.isOk()) {
       return status;
     }
     long separator = splitResult.separatorKey();
+    int separatorSpace = splitResult.separatorSpace();
     int promotedLeftPageId = leftPageId;
     int promotedRightPageId = rightPageId;
     for (int level = splitPathDepth - 1; level >= 0; level--) {
       int parentPageId = splitPathPageIds[level];
       status = promoteIntoParent(
-          metadata, parentPageId, separator, promotedRightPageId);
+          metadata, parentPageId, separatorSpace, separator, promotedRightPageId);
       if (!status.isOk()) return status;
       if (!splitParentPromoted) return StatusCode.OK;
       int internalRightPageId = splitPromotedRightPageId;
       separator = splitResult.separatorKey();
+      separatorSpace = splitResult.separatorSpace();
       promotedLeftPageId = parentPageId;
       promotedRightPageId = internalRightPageId;
     }
@@ -1496,7 +1554,8 @@ final class IndexedTableKernel {
     }
     status = BTreePage.initializeInternal(root, promotedLeftPageId);
     if (status.isOk()) {
-      status = BTreePage.insertInternal(root, separator, promotedRightPageId);
+      status = BTreePage.insertInternal(
+          root, separatorSpace, separator, promotedRightPageId);
     }
     if (status.isOk()) {
       BTreeRootPage.publishRoot(metadata, newRootPageId);
@@ -1507,20 +1566,23 @@ final class IndexedTableKernel {
   private StatusCode promoteIntoParent(
       ByteBuffer metadata,
       int parentPageId,
+      int separatorSpace,
       long separator,
       int promotedRightPageId) {
     splitParentPromoted = false;
     ByteBuffer parent = pages.stageExisting(
         parentPageId, IndexedTableLimits.MAX_CHANGED_PAGES);
     if (parent == null) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = BTreePage.insertInternal(parent, separator, promotedRightPageId);
+    StatusCode status = BTreePage.insertInternal(
+        parent, separatorSpace, separator, promotedRightPageId);
     if (status != StatusCode.RESOURCE_EXHAUSTED) return status;
     int internalRightPageId = BTreeRootPage.allocatePage(metadata);
     ByteBuffer internalRight = pages.stageNew(
         internalRightPageId, IndexedTableLimits.MAX_CHANGED_PAGES);
     if (internalRight == null) return StatusCode.RESOURCE_EXHAUSTED;
     status = BTreePage.splitInternal(
-        parent, internalRight, separator, promotedRightPageId, splitResult);
+        parent, internalRight, separatorSpace, separator,
+        promotedRightPageId, splitResult);
     if (status.isOk()) {
       splitPromotedRightPageId = internalRightPageId;
       splitParentPromoted = true;
@@ -1528,23 +1590,25 @@ final class IndexedTableKernel {
     return status;
   }
 
-  private StatusCode lookupRowId(long key) {
-    int leafPageId = findLeafPageId(key);
+  private StatusCode lookupRowId(int space, long key) {
+    int leafPageId = findLeafPageId(space, key);
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
-    return BTreePage.lookupLeaf(pages.currentPayload(leafPageId), key, indexLookup);
+    return BTreePage.lookupLeaf(
+        pages.currentPayload(leafPageId), space, key, indexLookup);
   }
 
-  int findLeafPageId(long key) {
-    return findLeafPageId(key, false, false);
+  int findLeafPageId(int space, long key) {
+    return findLeafPageId(space, key, false, false);
   }
 
-  private int findOperationLeafPageId(long key) {
-    return findLeafPageId(key, true, true);
+  private int findOperationLeafPageId(int space, long key) {
+    return findLeafPageId(space, key, true, true);
   }
 
-  private int findLeafPageId(long key, boolean operation, boolean capturePath) {
+  private int findLeafPageId(
+      int space, long key, boolean operation, boolean capturePath) {
     splitPathDepth = 0;
     ByteBuffer metadata = operation
         ? pages.operationPayload(ROOT_META_PAGE_ID)
@@ -1568,7 +1632,7 @@ final class IndexedTableKernel {
       if (capturePath) {
         splitPathPageIds[splitPathDepth++] = pageId;
       }
-      pageId = BTreePage.childForKey(page, key);
+      pageId = BTreePage.childForKey(page, space, key);
     }
     return 0;
   }

@@ -34,6 +34,14 @@ final class SqlTypeDescriptorTest {
     assertEquals(
         SqlTypeDescriptor.PRECISION_UNIT_DECIMAL_DIGIT,
         SqlTypeDescriptor.precisionUnit(decimal));
+
+    assertTrue(SqlTypeDescriptor.isValid(SqlTypeDescriptor.DATE));
+    assertTrue(SqlTypeDescriptor.isValid(SqlTypeDescriptor.time(0)));
+    assertTrue(SqlTypeDescriptor.isValid(SqlTypeDescriptor.time(6)));
+    assertTrue(SqlTypeDescriptor.isValid(SqlTypeDescriptor.timestamp(3)));
+    assertEquals(
+        SqlTypeDescriptor.PRECISION_UNIT_FRACTIONAL_SECOND_DIGIT,
+        SqlTypeDescriptor.precisionUnit(SqlTypeDescriptor.timestamp(3)));
   }
 
   @Test

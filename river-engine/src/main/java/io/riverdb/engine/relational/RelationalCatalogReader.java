@@ -10,7 +10,7 @@ import java.nio.ByteBuffer;
 final class RelationalCatalogReader {
   private final RelationalSchemaGate schemaGate;
   private final IndexedTransactionSession transaction;
-  private final RelationalKey.LongKeyResult key = new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult key = new RelationalKey.KeyResult();
   private final HeapRowResult row = new HeapRowResult();
   private final IndexedScanResult scanRow = new IndexedScanResult();
   private final ByteBuffer scratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
@@ -34,7 +34,7 @@ final class RelationalCatalogReader {
     result.reset();
     StatusCode status = RelationalKey.catalogTableKey(name, key);
     if (status.isOk()) {
-      status = transaction.fetchByKey(key.key(), row);
+      status = transaction.fetchByKey(key.space(), key.key(), row);
     }
     if (status.isOk() && CatalogRecord.isDroppingTable(row, scratch)) {
       return StatusCode.CONFLICT;
@@ -50,7 +50,7 @@ final class RelationalCatalogReader {
     result.reset();
     StatusCode status = RelationalKey.catalogTableKey(name, key);
     if (status.isOk()) {
-      status = transaction.fetchByKey(key.key(), row);
+      status = transaction.fetchByKey(key.space(), key.key(), row);
     }
     return status.isOk()
         ? CatalogViewCodec.decode(row, scratch, name, result) : status;
@@ -63,7 +63,12 @@ final class RelationalCatalogReader {
     }
     StatusCode status = cursor.reset();
     if (status.isOk()) {
-      status = transaction.beginScan(Long.MIN_VALUE, 0, cursor.indexed());
+      status = transaction.beginScan(
+          RelationalKey.CATALOG_OBJECT_SPACE,
+          Long.MIN_VALUE,
+          RelationalKey.CATALOG_SEQUENCE_SPACE,
+          Long.MIN_VALUE,
+          cursor.indexed());
     }
     return status.isOk() ? cursor.claim(owner) : status;
   }
@@ -118,7 +123,12 @@ final class RelationalCatalogReader {
       status = cursor.reset();
     }
     if (status.isOk()) {
-      status = transaction.beginScan(Long.MIN_VALUE, 0, cursor.indexed());
+      status = transaction.beginScan(
+          RelationalKey.CATALOG_OBJECT_SPACE,
+          Long.MIN_VALUE,
+          RelationalKey.CATALOG_SEQUENCE_SPACE,
+          Long.MIN_VALUE,
+          cursor.indexed());
     }
     return status.isOk()
         ? cursor.claim(

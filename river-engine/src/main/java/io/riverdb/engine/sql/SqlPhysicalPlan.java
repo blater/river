@@ -19,11 +19,13 @@ final class SqlPhysicalPlan {
   private int stepCount;
   private int accessColumn = -1;
   private int resultColumnCount;
+  private long resultNullableMask;
   private long rowLimit = Long.MAX_VALUE;
   private SqlCommandType commandType;
   private int aggregateColumn = -1;
   private int filterCount;
   private int nestedDepth;
+  private int havingCount;
   private boolean descending;
   private boolean aggregate;
   private boolean groupAggregate;
@@ -52,11 +54,13 @@ final class SqlPhysicalPlan {
     stepCount = 0;
     accessColumn = -1;
     resultColumnCount = 0;
+    resultNullableMask = 0;
     rowLimit = Long.MAX_VALUE;
     commandType = null;
     aggregateColumn = -1;
     filterCount = 0;
     nestedDepth = 0;
+    havingCount = 0;
     descending = false;
     aggregate = false;
     groupAggregate = false;
@@ -139,6 +143,9 @@ final class SqlPhysicalPlan {
     return nestedDepth;
   }
 
+  void setHavingCount(int predicates) { havingCount = predicates; }
+  int havingCount() { return havingCount; }
+
   boolean descending() {
     return descending;
   }
@@ -169,6 +176,10 @@ final class SqlPhysicalPlan {
 
   boolean catalogIndexScan() {
     return commandType == SqlCommandType.SHOW_INDEXES;
+  }
+
+  boolean catalogColumnScan() {
+    return commandType == SqlCommandType.SHOW_COLUMNS;
   }
 
   void setGroupAggregate(int column, int aggregateColumn) {
@@ -240,6 +251,7 @@ final class SqlPhysicalPlan {
     explainResult = true;
     explainAnalyzed = analyzed;
     resultColumnCount = 0;
+    resultNullableMask = 0;
   }
 
   boolean explainResult() {
@@ -271,6 +283,15 @@ final class SqlPhysicalPlan {
     }
   }
 
+  void setBlockResult(SqlBlockSchema schema) {
+    resultColumnCount = 0;
+    resultNullableMask = 0;
+    for (int column = 0; column < schema.count(); column++) {
+      setResultColumn(column, column, schema.descriptor(column), schema.name(column));
+      setResultNullable(column, schema.nullable(column));
+    }
+  }
+
   int resultColumnCount() {
     return resultColumnCount;
   }
@@ -293,6 +314,20 @@ final class SqlPhysicalPlan {
   int resultNameLength(int index) {
     return index >= 0 && index < resultColumnCount
         ? resultNames[index].length() : 0;
+  }
+
+  void setResultNullable(int index, boolean nullable) {
+    if (nullable) resultNullableMask |= 1L << index;
+    else resultNullableMask &= ~(1L << index);
+  }
+
+  boolean resultNullable(int index) {
+    return index >= 0 && index < resultColumnCount
+        && (resultNullableMask & 1L << index) != 0;
+  }
+
+  long resultNullableMask() {
+    return resultNullableMask;
   }
 
   StatusCode claimCapability(

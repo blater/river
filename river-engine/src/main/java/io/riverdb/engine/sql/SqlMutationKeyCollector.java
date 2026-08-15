@@ -11,7 +11,7 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Collects a bounded stable key set for scan-based UPDATE and DELETE. */
 final class SqlMutationKeyCollector {
   private final RelationalSession session;
-  private final SqlExpressionEvaluator expressions;
+  private final SqlBoundPredicateEvaluator predicates;
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult scanRow = new RelationalScanResult();
   private final ValueIndexLookupResult indexRow = new ValueIndexLookupResult();
@@ -21,9 +21,9 @@ final class SqlMutationKeyCollector {
   private boolean indexedScan;
 
   SqlMutationKeyCollector(
-      RelationalSession relationalSession, SqlExpressionEvaluator evaluator) {
+      RelationalSession relationalSession, SqlBoundPredicateEvaluator evaluator) {
     session = relationalSession;
-    expressions = evaluator;
+    predicates = evaluator;
   }
 
   StatusCode collect(SqlCommand command, BoundSqlStatement bound) {
@@ -70,17 +70,18 @@ final class SqlMutationKeyCollector {
     indexedScan = bounded && bound.predicateColumn > 0
         && bound.table.hasIndexOn(bound.predicateColumn);
     boolean primaryRange = bounded && bound.predicateColumn == 0;
-    if ((indexedScan || primaryRange) && equality
-        && accessValue(command, bound) == Long.MAX_VALUE) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     if (!indexedScan && !primaryRange) {
       return session.beginScan(bound.table, cursor);
     }
     long lower = equality
         ? accessValue(command, bound) : accessLower(command, bound);
-    long upper = equality
-        ? accessValue(command, bound) + 1 : accessUpper(command, bound);
+    if (equality) {
+      return indexedScan
+          ? session.beginExactValueScan(
+              bound.table, bound.predicateColumn, lower, cursor)
+          : session.beginExactScan(bound.table, lower, cursor);
+    }
+    long upper = accessUpper(command, bound);
     return indexedScan
         ? session.beginValueScan(
             bound.table, bound.predicateColumn, lower, upper, cursor)
@@ -97,7 +98,8 @@ final class SqlMutationKeyCollector {
     HeapRowResult row = indexedScan ? indexRow.row() : scanRow.row();
     long key = indexedScan ? indexRow.key() : scanRow.key();
     status = validateRow(row, bound);
-    if (!status.isOk() || !matchesPredicates(command, bound, key, row)) {
+    if (status.isOk()) status = predicates.evaluate(key, row);
+    if (!status.isOk() || !predicates.matched()) {
       return status;
     }
     if (count >= keys.length) {
@@ -105,49 +107,6 @@ final class SqlMutationKeyCollector {
     }
     keys[count++] = key;
     return StatusCode.OK;
-  }
-
-  private boolean matchesPredicates(
-      SqlCommand command,
-      BoundSqlStatement bound,
-      long primaryKey,
-      HeapRowResult row) {
-    boolean conjunction = true;
-    for (int index = 0; index < bound.predicateCount; index++) {
-      if (command.predicateStartsDisjunction(index)) {
-        if (conjunction) {
-          return true;
-        }
-        conjunction = true;
-      }
-      if (conjunction) {
-        conjunction = matchesPredicate(command, bound, primaryKey, row, index);
-      }
-    }
-    return conjunction;
-  }
-
-  private boolean matchesPredicate(
-      SqlCommand command,
-      BoundSqlStatement bound,
-      long primaryKey,
-      HeapRowResult row,
-      int index) {
-    int column = bound.predicateColumns[index];
-    boolean nullValue = expressions.isNull(row, bound.table, column);
-    if (command.isNullPredicate(index)) {
-      return nullValue != command.isNullPredicateNegated(index);
-    }
-    if (nullValue) {
-      return false;
-    }
-    if (bound.table.isVarchar(column)) {
-      return expressions.matchesTextComparison(
-          row, bound.table, column, command, index);
-    }
-    long value = expressions.readColumn(primaryKey, row, column);
-    return expressions.matchesComparison(
-        value, bound.table.typeDescriptor(column), command, index);
   }
 
   private StatusCode closeAfter(StatusCode body) {

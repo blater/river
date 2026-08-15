@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.SessionAuthorizer;
+import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.sql.SqlCommandType;
@@ -13,9 +14,14 @@ final class SqlSessionExecutionCoordinator {
   private final RelationalSession session;
   private final SessionAuthorizer authorizer;
   private final SqlParser parser = new SqlParser();
+  private final SqlParameterSetSource parameterSource = new SqlParameterSetSource();
   private final BoundSqlStatement bound = new BoundSqlStatement();
   private final SqlBinder binder = new SqlBinder();
+  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder();
   private final SqlExpressionEvaluator expressions = new SqlExpressionEvaluator();
+  private final SqlTemporalContext temporal = new SqlTemporalContext();
+  private final SqlRowProjectionEvaluator rowExpressions =
+      new SqlRowProjectionEvaluator(expressions, temporal);
   private final SqlViewExpander viewExpander = new SqlViewExpander();
   private final SqlViewDefinitionValidator viewValidator =
       new SqlViewDefinitionValidator();
@@ -40,19 +46,55 @@ final class SqlSessionExecutionCoordinator {
     this.session = session;
     authorizer = sessionAuthorizer;
     transactions = new SqlTransactionState(session);
-    dispatcher = new SqlCommandDispatcher(database, session, transactions);
-    dml = new SqlDmlExecutor(database, session, expressions);
+    dispatcher = new SqlCommandDispatcher(database, session, transactions, temporal);
     queries = new SqlQueryExecution(
         session,
         bound,
-        expressions);
+        expressions,
+        temporal,
+        rowExpressions,
+        blockBinder);
+    dml = new SqlDmlExecutor(
+        database,
+        session,
+        temporal,
+        rowExpressions,
+        queries.predicateEvaluator());
     pointCommands = new SqlPointCommandExecutor(
-        session, bound, binder, dml, queries);
+        session,
+        bound,
+        binder,
+        viewExpander,
+        dml,
+        queries,
+        blockBinder,
+        rowExpressions);
     streaming = new SqlStreamingStatementLifecycle(session, transactions);
     atomic = new SqlAtomicStatementLifecycle(session, transactions);
   }
 
   StatusCode execute(String sql, SqlExecutionResult result) {
+    return execute(sql, null, result, false);
+  }
+
+  StatusCode execute(
+      String sql, ParameterSet parameters, SqlExecutionResult result) {
+    if (parameters == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    parameterSource.set(parameters);
+    try {
+      return execute(sql, parameterSource, result, true);
+    } finally {
+      parameterSource.reset();
+    }
+  }
+
+  private StatusCode execute(
+      String sql,
+      io.riverdb.sql.SqlParameterSource parameters,
+      SqlExecutionResult result,
+      boolean typed) {
     if (result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -71,7 +113,14 @@ final class SqlSessionExecutionCoordinator {
       result.setTransaction(true, session.visibleCommitSequence());
     }
     bound.reset();
-    StatusCode status = parser.parse(sql, bound.command);
+    StatusCode status = beginsSelect(sql)
+        ? typed
+            ? parser.parseQuery(
+                sql, parameters, bound.query, bound.command)
+            : parser.parseQuery(sql, bound.query, bound.command)
+        : typed
+            ? parser.parse(sql, parameters, bound.command)
+            : parser.parse(sql, bound.command);
     if (status.isOk()) {
       status = authorize(bound.command.type());
     }
@@ -82,15 +131,39 @@ final class SqlSessionExecutionCoordinator {
       return status;
     }
     if (dispatcher.handles(bound.command.type())) {
+      if (bound.command.type() == SqlCommandType.SCALAR_EXPRESSION) {
+        return executeScalar(result);
+      }
       return dispatcher.execute(bound.command, viewValidator, atomic, result);
     }
     return executePoint(result);
   }
 
   StatusCode beginScan(String sql, SqlScanCursor cursor) {
+    return beginScan(sql, null, cursor, false);
+  }
+
+  StatusCode beginScan(
+      String sql, ParameterSet parameters, SqlScanCursor cursor) {
+    if (parameters == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    parameterSource.set(parameters);
+    try {
+      return beginScan(sql, parameterSource, cursor, true);
+    } finally {
+      parameterSource.reset();
+    }
+  }
+
+  private StatusCode beginScan(
+      String sql,
+      io.riverdb.sql.SqlParameterSource parameters,
+      SqlScanCursor cursor,
+      boolean typed) {
     StatusCode status = admitScan(cursor);
     if (status.isOk()) {
-      status = parseScan(sql);
+      status = parseScan(sql, parameters, typed);
     }
     if (!status.isOk()) {
       return status;
@@ -128,9 +201,14 @@ final class SqlSessionExecutionCoordinator {
         ? StatusCode.CONFLICT : StatusCode.OK;
   }
 
-  private StatusCode parseScan(String sql) {
+  private StatusCode parseScan(
+      String sql,
+      io.riverdb.sql.SqlParameterSource parameters,
+      boolean typed) {
     bound.reset();
-    StatusCode status = parser.parseQuery(sql, bound.query, bound.command);
+    StatusCode status = typed
+        ? parser.parseQuery(sql, parameters, bound.query, bound.command)
+        : parser.parseQuery(sql, bound.query, bound.command);
     if (status.isOk()) {
       status = authorize(bound.command.type());
     }
@@ -155,10 +233,12 @@ final class SqlSessionExecutionCoordinator {
   private StatusCode preexecuteScan() {
     queries.aggregateExecution().reset();
     SqlCommandType type = bound.command.type();
-    if (type == SqlCommandType.NEXT_SEQUENCE_VALUE
-        || type == SqlCommandType.SCALAR_EXPRESSION) {
+    if (type == SqlCommandType.NEXT_SEQUENCE_VALUE) {
       return dispatcher.execute(
           bound.command, viewValidator, atomic, queries.aggregateExecution());
+    }
+    if (type == SqlCommandType.SCALAR_EXPRESSION) {
+      return executeScalar(queries.aggregateExecution());
     }
     return executePoint(queries.aggregateExecution());
   }
@@ -182,7 +262,10 @@ final class SqlSessionExecutionCoordinator {
     if (!status.isOk()) {
       return status;
     }
-    status = prepareStreamingQuery();
+    status = temporal.beginStatement();
+    if (status.isOk()) {
+      status = prepareStreamingQuery();
+    }
     if (status.isOk()) {
       adoptStreamingQuery();
     }
@@ -196,16 +279,16 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private void adoptStreamingQuery() {
-    SqlCommandType type = bound.command.type();
-    if (type != SqlCommandType.SHOW_TABLES && type != SqlCommandType.SHOW_INDEXES) {
-      queries.adoptPreparedQuery();
-    }
+    queries.adoptPreparedQuery();
   }
 
   private StatusCode explainScalarScan(SqlScanCursor cursor) {
     queries.aggregateExecution().reset();
     queries.configureScalarAggregateExplain();
     StatusCode status = streaming.finish(StatusCode.OK, queries.aggregateExecution());
+    if (!streaming.isActive()) {
+      temporal.finishStatement();
+    }
     return status.isOk()
         ? queries.claimExplainResult(cursor, queries.aggregateExecution(), false)
         : status;
@@ -257,6 +340,10 @@ final class SqlSessionExecutionCoordinator {
     return queries.scanColumnTypeDescriptor(cursor, index);
   }
 
+  boolean scanColumnIsNullable(SqlScanCursor cursor, int index) {
+    return !closed && queries.scanColumnIsNullable(cursor, index);
+  }
+
   StatusCode closeScan(SqlScanCursor cursor, SqlExecutionResult result) {
     if (closed) {
       return StatusCode.CLOSED;
@@ -273,6 +360,7 @@ final class SqlSessionExecutionCoordinator {
     status = streaming.finish(status, physicalCleanupComplete, result);
     if (physicalCleanupComplete && !streaming.isActive()) {
       queries.completeScan(cursor);
+      temporal.finishStatement();
     }
     return status;
   }
@@ -301,12 +389,16 @@ final class SqlSessionExecutionCoordinator {
     boolean began = status.isOk();
     boolean implicit = began && atomic.implicit();
     if (status.isOk()) {
+      status = temporal.beginStatement();
+    }
+    if (status.isOk()) {
       status = pointCommands.execute(result);
     }
     boolean select = pointCommands.isPointQuery();
     if (began) {
       status = atomic.finish(status);
     }
+    finishAtomicTemporalIfIdle();
     if (status.isOk()) {
       long commitSequence = implicit
           ? transactions.commitSequence() : session.visibleCommitSequence();
@@ -327,12 +419,14 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk() && atomic.isActive()) {
       status = atomic.retry();
     }
+    finishAtomicTemporalIfIdle();
     if (status.isOk() && streaming.isActive() && !queries.hasActiveScan()) {
       status = queries.retryFailedStartCleanup();
       boolean complete = status.isOk();
       status = streaming.failStart(status, complete);
       if (complete && !streaming.isActive()) {
         queries.completeFailedStart();
+        temporal.finishStatement();
       }
     }
     return status;
@@ -341,9 +435,14 @@ final class SqlSessionExecutionCoordinator {
   private StatusCode prepareStreamingQuery() {
     SqlCommandType type = bound.command.type();
     if (type == SqlCommandType.SHOW_TABLES
-        || type == SqlCommandType.SHOW_INDEXES) {
-      return StatusCode.OK;
+        || type == SqlCommandType.SHOW_INDEXES
+        || type == SqlCommandType.SHOW_COLUMNS) {
+      return binder.captureExecutableQuery(bound);
     }
+    StatusCode expansion = viewExpander.resolve(session, bound, binder);
+    if (expansion.isOk()) expansion = binder.captureExecutableQuery(bound);
+    if (!expansion.isOk()) return expansion;
+    if (bound.query.isBlockPipeline()) return prepareBlockPipeline();
     if (type == SqlCommandType.JOIN_SCAN) {
       return prepareJoinQuery();
     }
@@ -356,11 +455,19 @@ final class SqlSessionExecutionCoordinator {
     return prepareDataQuery(type);
   }
 
-  private StatusCode prepareJoinQuery() {
-    StatusCode status = session.resolveTable(bound.command.tableName(), bound.table);
-    if (status.isOk()) {
-      status = session.resolveTable(bound.command.joinTableName(), bound.joinTable);
+  private StatusCode prepareBlockPipeline() {
+    StatusCode status = bound.query.isBlockPipeline()
+        ? StatusCode.OK : StatusCode.CORRUPTION;
+    if (status.isOk() && !bound.query.isBlockPipeline()) {
+      return StatusCode.CORRUPTION;
     }
+    if (status.isOk()) status = blockBinder.bind(session, bound, rowExpressions);
+    if (status.isOk()) status = queries.prepareBlockPipeline();
+    return publishPreparedQuery(status);
+  }
+
+  private StatusCode prepareJoinQuery() {
+    StatusCode status = session.resolveTable(bound.command.joinTableName(), bound.joinTable);
     if (status.isOk()) {
       status = binder.bindQueryBlocks(session, bound);
     }
@@ -375,6 +482,9 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       status = binder.bindGroupAggregate(bound.command, bound.query, bound);
     }
+    if (status.isOk()) {
+      status = queries.prepareProjectionPrograms();
+    }
     return publishPreparedQuery(status);
   }
 
@@ -383,20 +493,18 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       status = binder.bindDistinct(bound.command, bound.query, bound);
     }
+    if (status.isOk()) {
+      status = queries.prepareProjectionPrograms();
+    }
     return publishPreparedQuery(status);
   }
 
   private StatusCode resolveRootTableAndBlocks() {
-    StatusCode status = session.resolveTable(bound.command.tableName(), bound.table);
-    if (status.isOk()) {
-      status = binder.bindQueryBlocks(session, bound);
-    }
-    return status;
+    return binder.bindQueryBlocks(session, bound);
   }
 
   private StatusCode prepareDataQuery(SqlCommandType type) {
-    boolean explainScalar = queries.explainOnly() && SqlBinder.isScalarAggregate(type);
-    StatusCode status = explainScalar ? resolveRootTableAndBlocks() : expandAndBindBlocks();
+    StatusCode status = resolveRootTableAndBlocks();
     if (status.isOk()) {
       status = binder.bindDataCommand(bound.command, bound.query, bound);
     }
@@ -406,18 +514,10 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk() && bound.command.isOrdered()) {
       status = binder.bindOrder(bound.command, bound);
     }
+    if (status.isOk()) {
+      status = queries.prepareProjectionPrograms();
+    }
     return publishPreparedQuery(status);
-  }
-
-  private StatusCode expandAndBindBlocks() {
-    StatusCode status = viewExpander.resolve(session, bound);
-    if (status.isOk()) {
-      status = binder.captureExecutableQuery(bound);
-    }
-    if (status.isOk()) {
-      status = binder.bindQueryBlocks(session, bound);
-    }
-    return status;
   }
 
   private StatusCode publishPreparedQuery(StatusCode status) {
@@ -430,6 +530,7 @@ final class SqlSessionExecutionCoordinator {
   private static boolean isQueryCommand(SqlCommandType type) {
     return type == SqlCommandType.SHOW_TABLES
         || type == SqlCommandType.SHOW_INDEXES
+        || type == SqlCommandType.SHOW_COLUMNS
         || type == SqlCommandType.SCAN
         || type == SqlCommandType.SELECT
         || type == SqlCommandType.DISTINCT_SCAN
@@ -438,6 +539,24 @@ final class SqlSessionExecutionCoordinator {
         || type == SqlCommandType.SCALAR_EXPRESSION
         || SqlBinder.isScalarAggregate(type)
         || SqlBinder.isGroupAggregate(type);
+  }
+
+  private static boolean beginsSelect(String sql) {
+    if (sql == null) return false;
+    int index = 0;
+    while (index < sql.length() && Character.isWhitespace(sql.charAt(index))) {
+      index++;
+    }
+    String keyword = "SELECT";
+    if (sql.length() - index < keyword.length()) return false;
+    for (int offset = 0; offset < keyword.length(); offset++) {
+      if (Character.toUpperCase(sql.charAt(index + offset)) != keyword.charAt(offset)) {
+        return false;
+      }
+    }
+    int end = index + keyword.length();
+    return end == sql.length()
+        || !Character.isLetterOrDigit(sql.charAt(end)) && sql.charAt(end) != '_';
   }
 
   private StatusCode failStreamingStart(StatusCode status) {
@@ -449,6 +568,7 @@ final class SqlSessionExecutionCoordinator {
     status = streaming.failStart(status, complete);
     if (complete && !streaming.isActive()) {
       queries.completeFailedStart();
+      temporal.finishStatement();
     }
     return status;
   }
@@ -461,6 +581,7 @@ final class SqlSessionExecutionCoordinator {
         cleanup, physicalCleanupComplete, queries.aggregateExecution());
     if (physicalCleanupComplete && !streaming.isActive()) {
       queries.completeScan(cursor);
+      temporal.finishStatement();
     }
     if (status.isOk() && !executionStatus.isOk()) {
       status = executionStatus;
@@ -468,6 +589,31 @@ final class SqlSessionExecutionCoordinator {
     return status.isOk()
         ? queries.claimExplainResult(cursor, queries.aggregateExecution(), analyzed)
         : status;
+  }
+
+  private StatusCode executeScalar(SqlExecutionResult result) {
+    StatusCode status = atomic.begin(IsolationLevel.READ_COMMITTED);
+    boolean began = status.isOk();
+    if (status.isOk()) {
+      status = temporal.beginStatement();
+    }
+    if (status.isOk()) {
+      status = temporal.resolveScalar(bound.command);
+    }
+    if (status.isOk()) {
+      status = dispatcher.execute(bound.command, viewValidator, atomic, result);
+    }
+    if (began) {
+      status = atomic.finish(status);
+    }
+    finishAtomicTemporalIfIdle();
+    return status;
+  }
+
+  private void finishAtomicTemporalIfIdle() {
+    if (!atomic.isActive() && !streaming.isActive() && temporal.statementActive()) {
+      temporal.finishStatement();
+    }
   }
 
 }

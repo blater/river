@@ -39,7 +39,7 @@ final class IndexedTableTest {
     rows.putLong(0, 770);
     HeapInsertResult inserted = new HeapInsertResult();
     PendingMutationBuffer mutations = new PendingMutationBuffer(1, Long.BYTES);
-    mutations.append(IndexedWalCodec.MUTATION_INSERT, 77, 0, rows, 0, Long.BYTES);
+    mutations.append(IndexedWalCodec.MUTATION_INSERT, 0, 77, 0, rows, 0, Long.BYTES);
 
     assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
     assertEquals(StatusCode.OK, store.preflightPreparedWrites(mutations));
@@ -50,12 +50,12 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, store.forcePreparedInserts());
     assertEquals(2, wal.currentCommitSequence());
     assertEquals(1, store.currentCommitSequence());
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(77, new HeapRowResult()));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,77, new HeapRowResult()));
 
     assertEquals(StatusCode.OK, store.publishForcedInserts());
     assertEquals(2, store.currentCommitSequence());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(77, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,77, fetched));
     assertEquals(770, rowValue(fetched));
     close(table, wal, directory);
   }
@@ -72,12 +72,12 @@ final class IndexedTableTest {
       row.putLong(0, index * 10L);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, index * 10L, row, inserted));
+      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index * 10L, row, inserted));
     }
     assertEquals(entries, table.rowCount());
     assertEquals(5, table.pageCount());
     assertEquals(5, table.rootPageId());
-    assertEquals(StatusCode.CONFLICT, table.insert(900, 100, row, inserted));
+    assertEquals(StatusCode.CONFLICT, table.insert(900, 0, 100, row, inserted));
     assertEquals(entries, table.rowCount());
     assertAllRows(table, entries);
 
@@ -101,10 +101,54 @@ final class IndexedTableTest {
     row.putLong(0, 99_999);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, table.insert(999, 99_999, row, inserted));
+    assertEquals(StatusCode.OK, table.insert(999, 0, 99_999, row, inserted));
     HeapRowResult reopenedInsert = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(99_999, reopenedInsert));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,99_999, reopenedInsert));
     assertEquals(99_999, rowValue(reopenedInsert));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void persistsAndScansFullSignedPairsAcrossSpaces(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    HeapInsertResult inserted = new HeapInsertResult();
+    ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
+    int[] spaces = {3, 2, 3, 2};
+    long[] keys = {Long.MIN_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, Long.MIN_VALUE};
+    for (int index = 0; index < keys.length; index++) {
+      row.putLong(0, index + 1);
+      row.position(0);
+      row.limit(Long.BYTES);
+      assertEquals(
+          StatusCode.OK,
+          table.insert(index + 2L, spaces[index], keys[index], row, inserted));
+    }
+    assertEquals(StatusCode.OK, table.flush());
+    assertEquals(StatusCode.OK, table.close());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    table = openTable(openStore(directory, wal));
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult result = new IndexedScanResult();
+    assertEquals(
+        StatusCode.OK,
+        table.beginScan(
+            table.visibleCommitSequence(),
+            2, Long.MIN_VALUE, 4, Long.MIN_VALUE, cursor));
+    int[] expectedSpaces = {2, 2, 3, 3};
+    long[] expectedKeys = {Long.MIN_VALUE, Long.MAX_VALUE, Long.MIN_VALUE, Long.MAX_VALUE};
+    for (int index = 0; index < expectedKeys.length; index++) {
+      assertEquals(StatusCode.OK, table.nextScan(cursor, result));
+      assertEquals(expectedSpaces[index], result.keySpace());
+      assertEquals(expectedKeys[index], result.key());
+    }
+    assertEquals(StatusCode.CONFLICT, table.nextScan(cursor, result));
+    assertEquals(StatusCode.OK, table.closeScan(cursor));
     close(table, wal, directory);
   }
 
@@ -119,14 +163,14 @@ final class IndexedTableTest {
       row.putLong(0, index);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, index, row, inserted));
+      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index, row, inserted));
     }
     assertEquals(StatusCode.OK, table.flush());
 
     row.putLong(0, 10_000);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, table.insert(10_002, 10_000, row, inserted));
+    assertEquals(StatusCode.OK, table.insert(10_002, 0, 10_000, row, inserted));
     assertEquals(5, table.rootPageId());
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
@@ -135,7 +179,7 @@ final class IndexedTableTest {
     wal = openWal(directory);
     table = openTable(openStore(directory, wal));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(10_000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,10_000, fetched));
     assertEquals(10_000, rowValue(fetched));
     assertEquals(5, table.rootPageId());
     assertEquals(BTreePage.MAX_ENTRIES + 1, table.rowCount());
@@ -153,7 +197,7 @@ final class IndexedTableTest {
     row.limit(Long.BYTES);
     assertEquals(
         StatusCode.OK,
-        table.insert(2, 77, row, new HeapInsertResult()));
+        table.insert(2, 0, 77, row, new HeapInsertResult()));
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
 
@@ -161,7 +205,7 @@ final class IndexedTableTest {
     wal = openWal(directory);
     table = openTable(openStore(directory, wal));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(77, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,77, fetched));
     assertEquals(77_031, rowValue(fetched));
     close(table, wal, directory);
   }
@@ -179,17 +223,17 @@ final class IndexedTableTest {
       row.putLong(0, index * 10L);
       row.position(0);
       row.limit(row.capacity());
-      assertEquals(StatusCode.OK, table.insert(index + 2L, index, row, inserted));
+      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index, row, inserted));
       assertEquals(index + 1, inserted.rowId());
     }
     assertEquals(rows, table.rowCount());
     assertEquals(true, table.pageCount() >= 5);
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,0, fetched));
     assertEquals(0, rowValue(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(64, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,64, fetched));
     assertEquals(640, rowValue(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(129, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,129, fetched));
     assertEquals(1_290, rowValue(fetched));
 
     assertEquals(StatusCode.OK, directory.advanceGeneration());
@@ -198,11 +242,11 @@ final class IndexedTableTest {
     wal = openWal(directory);
     table = openTable(openStore(directory, wal));
     assertEquals(rows, table.rowCount());
-    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,0, fetched));
     assertEquals(0, rowValue(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(64, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,64, fetched));
     assertEquals(640, rowValue(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(129, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,129, fetched));
     assertEquals(1_290, rowValue(fetched));
     close(table, wal, directory);
   }
@@ -220,10 +264,10 @@ final class IndexedTableTest {
     row.limit(Long.BYTES);
     assertEquals(
         StatusCode.OK,
-        table.insertCommitted(17, commitSequence, 99, row, new HeapInsertResult()));
+        table.insertCommitted(17, commitSequence, 0, 99, row, new HeapInsertResult()));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(beforeInsert, 99, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(commitSequence, 99, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(beforeInsert, 0, 99, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(commitSequence, 0, 99, fetched));
     assertEquals(991, rowValue(fetched));
     assertEquals(StatusCode.OK, table.flush());
     close(table, wal, directory);
@@ -242,7 +286,7 @@ final class IndexedTableTest {
       row.putLong(0, index);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, index, row, inserted));
+      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index, row, inserted));
     }
     assertEquals(0, table.stagedCopyBytes() - stagedBefore);
     assertEquals(
@@ -254,7 +298,7 @@ final class IndexedTableTest {
     row.putLong(0, 20_000);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, table.insert(20_002, 20_000, row, inserted));
+    assertEquals(StatusCode.OK, table.insert(20_002, 0, 20_000, row, inserted));
     assertEquals(3L * PageCodec.PAGE_BYTES, table.stagedCopyBytes() - stagedBefore);
     assertEquals(5L * PageCodec.PAGE_BYTES, table.walCopyBytes() - walBefore);
     assertEquals(StatusCode.OK, table.flush());
@@ -274,7 +318,7 @@ final class IndexedTableTest {
       row.putLong(0, key);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, key, row, inserted));
+      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, key, row, inserted));
     }
     assertEquals(entries, table.rowCount());
     assertEquals(StatusCode.OK, table.flush());
@@ -288,7 +332,7 @@ final class IndexedTableTest {
     HeapRowResult fetched = new HeapRowResult();
     for (int index = 0; index < entries; index++) {
       long key = index * 641L % 809;
-      assertEquals(StatusCode.OK, table.fetchByKey(key, fetched));
+      assertEquals(StatusCode.OK, table.fetchByKey( 0,key, fetched));
       assertEquals(key, rowValue(fetched));
     }
     close(table, wal, directory);
@@ -320,7 +364,7 @@ final class IndexedTableTest {
       assertEquals(
           StatusCode.OK,
           table.commitInserts(
-              transactionId++,
+              transactionId++, new int[keys.length],
               keys,
               rows,
               Long.BYTES,
@@ -346,7 +390,7 @@ final class IndexedTableTest {
     assertEquals(
         StatusCode.OK,
         table.commitInserts(
-            transactionId,
+            transactionId, new int[keys.length],
             keys,
             rows,
             Long.BYTES,
@@ -370,14 +414,14 @@ final class IndexedTableTest {
     HeapRowResult fetched = new HeapRowResult();
     int[] samples = {0, 127, 128, 255, 256, entries / 2, entries - 1};
     for (int sample : samples) {
-      assertEquals(StatusCode.OK, table.fetchByKey(sample, fetched));
+      assertEquals(StatusCode.OK, table.fetchByKey( 0,sample, fetched));
       assertEquals(sample * 10L, rowValue(fetched));
     }
     IndexedScanCursor cursor = new IndexedScanCursor();
     IndexedScanResult row = new IndexedScanResult();
     assertEquals(
         StatusCode.OK,
-        table.beginScan(table.visibleCommitSequence(), 0, entries, cursor));
+        table.beginScan(table.visibleCommitSequence(), 0, 0, 0, entries, cursor));
     for (int expected = 0; expected < entries; expected++) {
       assertEquals(StatusCode.OK, table.nextScan(cursor, row));
       assertEquals(expected, row.key());
@@ -389,10 +433,10 @@ final class IndexedTableTest {
   private static void assertAllRows(IndexedTable table, int entries) {
     HeapRowResult fetched = new HeapRowResult();
     for (int index = 0; index < entries; index++) {
-      assertEquals(StatusCode.OK, table.fetchByKey(index * 10L, fetched));
+      assertEquals(StatusCode.OK, table.fetchByKey( 0,index * 10L, fetched));
       assertEquals(index * 10L, rowValue(fetched));
     }
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(-99, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,-99, fetched));
   }
 
   private static long rowValue(HeapRowResult row) {

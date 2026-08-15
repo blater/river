@@ -1,7 +1,6 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
@@ -11,44 +10,48 @@ import java.nio.ByteBuffer;
 
 /** Owns reusable row images for INSERT and UPDATE. */
 final class SqlMutationRowEncoder {
-  private final SqlExpressionEvaluator expressions;
-  private final ByteBuffer insertRow =
-      ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
+  private final SqlRowProjectionEvaluator rowExpressions;
   private final ByteBuffer sourceRow =
       ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
   private final ByteBuffer updatedRow =
       ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
-  private final ExactDecimal.LongValue decimal = new ExactDecimal.LongValue();
-  private final ExactDecimal.WideScratch decimalWide = new ExactDecimal.WideScratch();
+  private final SqlMutationFixedValues fixedValues;
+  private final SqlInsertRowEncoder inserts;
 
   private int payloadOffset;
   private long nullMask;
+  private long mutationValue;
+  private int mutationDescriptor;
+  private boolean mutationNull;
 
-  SqlMutationRowEncoder(SqlExpressionEvaluator evaluator) {
-    expressions = evaluator;
+  SqlMutationRowEncoder(
+      SqlTemporalContext temporalContext,
+      SqlRowProjectionEvaluator mutationExpressions) {
+    fixedValues = new SqlMutationFixedValues(temporalContext);
+    rowExpressions = mutationExpressions;
+    inserts = new SqlInsertRowEncoder(mutationExpressions, fixedValues);
   }
 
   ByteBuffer insertRow() {
-    return insertRow;
+    return inserts.row();
   }
 
   ByteBuffer updatedRow() {
     return updatedRow;
   }
 
+  long insertKey() {
+    return inserts.key();
+  }
+
+  StatusCode resolveInsertKey(
+      SqlCommand command, BoundSqlStatement bound, int row) {
+    return inserts.resolveKey(command, bound, row);
+  }
+
   StatusCode encodeInsert(
       SqlCommand command, BoundSqlStatement bound, int row) {
-    TableDefinition table = bound.table;
-    insertRow.clear();
-    payloadOffset = table.fixedRowBytes();
-    nullMask = 0;
-    for (int column = 1; column < table.columnCount(); column++) {
-      StatusCode status = encodeInsertColumn(command, bound, row, column);
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    return finishRow(insertRow, table);
+    return inserts.encode(command, bound, row);
   }
 
   StatusCode encodeUpdate(
@@ -80,50 +83,6 @@ final class SqlMutationRowEncoder {
         ? StatusCode.CORRUPTION : StatusCode.OK;
   }
 
-  private StatusCode encodeInsertColumn(
-      SqlCommand command,
-      BoundSqlStatement bound,
-      int row,
-      int column) {
-    TableDefinition table = bound.table;
-    int source = bound.insertSourceByColumn[column];
-    boolean omitted = source < 0;
-    boolean useDefault = omitted
-        ? table.hasDefault(column) : command.insertIsDefault(row, source);
-    boolean nullValue = omitted
-        ? !table.hasDefault(column) : command.insertIsNull(row, source);
-    setNull(column, nullValue);
-    int slot = (column - 1) * Long.BYTES;
-    if (!table.isVarchar(column)) {
-      long value = useDefault
-          ? table.defaultValue(column) : command.insertValue(row, source);
-      if (!useDefault
-          && SqlTypeDescriptor.typeId(table.typeDescriptor(column))
-              == SqlTypeDescriptor.TYPE_ID_DECIMAL
-          && command.insertTypeDescriptor(row, source) != table.typeDescriptor(column)) {
-        if (!ExactDecimal.widenScale(
-            value,
-            command.insertTypeDescriptor(row, source),
-            table.typeDescriptor(column),
-            decimal)) {
-          return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-        }
-        value = decimal.value;
-      }
-      insertRow.putLong(slot, value);
-      return StatusCode.OK;
-    }
-    if (nullValue) {
-      insertRow.putLong(slot, 0);
-      return StatusCode.OK;
-    }
-    insertRow.position(payloadOffset);
-    int bytes = useDefault
-        ? table.copyDefaultText(column, insertRow)
-        : command.copyText(command.insertValue(row, source), insertRow);
-    return storeTextHandle(insertRow, slot, bytes);
-  }
-
   private StatusCode encodeUpdatedColumn(
       SqlCommand command,
       BoundSqlStatement bound,
@@ -133,9 +92,11 @@ final class SqlMutationRowEncoder {
     int update = updateIndex(bound, column);
     boolean nullValue = update >= 0
         ? command.updateIsNull(update) : (nullMask & 1L << column) != 0;
-    if (update >= 0 && command.isRelativeUpdate(update)) {
-      nullValue = expressions.isNull(
-          source, bound.table, bound.updateSourceColumns[update]);
+    if (update >= 0 && command.updateHasExpression(update)) {
+      StatusCode status = evaluateMutation(
+          command.updateExpression(update), primaryKey, source, bound);
+      if (!status.isOk()) return status;
+      nullValue = mutationNull;
       if (nullValue && !bound.table.isNullable(column)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -179,132 +140,72 @@ final class SqlMutationRowEncoder {
       int column,
       boolean nullValue) {
     int slot = (column - 1) * Long.BYTES;
-    long value = nullValue ? 0 : update < 0
-        ? sourceRow.getLong(slot)
-        : command.updateIsDefault(update)
-            ? bound.table.defaultValue(column) : command.updateValue(update);
-    if (update >= 0 && command.isRelativeUpdate(update) && !nullValue) {
-      long sourceValue = expressions.readColumn(
-          primaryKey, source, bound.updateSourceColumns[update]);
-      StatusCode status = evaluateUpdateExpression(
-          command, bound, update, sourceValue);
-      if (!status.isOk()) {
-        return status;
-      }
-      value = decimal.value;
+    StatusCode status = resolveUpdatedLong(
+        command, bound.table, update, column, slot, nullValue);
+    if (!status.isOk()) {
+      return status;
+    }
+    long value = fixedValues.value();
+    if (update >= 0 && command.updateHasExpression(update) && !nullValue) {
+      value = mutationValue;
     }
     if (update >= 0 && !nullValue && !command.updateIsDefault(update)) {
-      int sourceDescriptor = command.isRelativeUpdate(update)
-          ? bound.updateResultTypeDescriptors[update]
+      int sourceDescriptor = command.updateHasExpression(update)
+          ? mutationDescriptor
           : command.updateTypeDescriptor(update);
       int targetDescriptor = bound.table.typeDescriptor(column);
       if (sourceDescriptor != targetDescriptor) {
-        StatusCode status = ExactDecimal.quantize(
-            value,
-            sourceDescriptor,
-            targetDescriptor,
-            false,
-            true,
-            decimal,
-            decimalWide);
+        status = coerceMutation(value, sourceDescriptor, targetDescriptor);
         if (!status.isOk()) {
           return status;
         }
-        value = decimal.value;
+        value = fixedValues.value();
       }
     }
     updatedRow.putLong(slot, value);
     return StatusCode.OK;
   }
 
-  private StatusCode evaluateUpdateExpression(
+  private StatusCode resolveUpdatedLong(
       SqlCommand command,
-      BoundSqlStatement bound,
+      TableDefinition table,
       int update,
-      long sourceValue) {
-    int sourceDescriptor = bound.table.typeDescriptor(
-        bound.updateSourceColumns[update]);
-    int targetDescriptor = bound.updateResultTypeDescriptors[update];
-    long operand = command.updateValue(update);
-    int operandDescriptor = command.updateTypeDescriptor(update);
-    return switch (command.updateOperator(update)) {
-      case SqlCommand.UPDATE_ADD -> ExactDecimal.add(
-          sourceValue,
-          sourceDescriptor,
-          operand,
-          operandDescriptor,
-          false,
-          targetDescriptor,
-          decimal,
-          decimalWide);
-      case SqlCommand.UPDATE_SUBTRACT -> ExactDecimal.add(
-          sourceValue,
-          sourceDescriptor,
-          operand,
-          operandDescriptor,
-          true,
-          targetDescriptor,
-          decimal,
-          decimalWide);
-      case SqlCommand.UPDATE_MULTIPLY -> ExactDecimal.multiply(
-          sourceValue,
-          sourceDescriptor,
-          operand,
-          operandDescriptor,
-          targetDescriptor,
-          decimal,
-          decimalWide);
-      case SqlCommand.UPDATE_DIVIDE -> ExactDecimal.divide(
-          sourceValue,
-          sourceDescriptor,
-          operand,
-          operandDescriptor,
-          targetDescriptor,
-          decimal,
-          decimalWide);
-      case SqlCommand.UPDATE_REMAINDER -> ExactDecimal.remainder(
-          sourceValue,
-          sourceDescriptor,
-          operand,
-          operandDescriptor,
-          targetDescriptor,
-          decimal,
-          decimalWide);
-      case SqlCommand.UPDATE_NEGATE ->
-          ExactDecimal.negate(sourceValue, sourceDescriptor, decimal);
-      case SqlCommand.UPDATE_ABSOLUTE ->
-          ExactDecimal.absolute(sourceValue, sourceDescriptor, decimal);
-      case SqlCommand.UPDATE_CEILING ->
-          ExactDecimal.integral(sourceValue, sourceDescriptor, true, decimal);
-      case SqlCommand.UPDATE_FLOOR ->
-          ExactDecimal.integral(sourceValue, sourceDescriptor, false, decimal);
-      case SqlCommand.UPDATE_ROUND -> ExactDecimal.quantize(
-          sourceValue,
-          sourceDescriptor,
-          targetDescriptor,
-          true,
-          false,
-          decimal,
-          decimalWide);
-      case SqlCommand.UPDATE_TRUNCATE -> ExactDecimal.quantize(
-          sourceValue,
-          sourceDescriptor,
-          targetDescriptor,
-          false,
-          false,
-          decimal,
-          decimalWide);
-      case SqlCommand.UPDATE_CAST -> ExactDecimal.quantize(
-          sourceValue,
-          sourceDescriptor,
-          targetDescriptor,
-          true,
-          SqlTypeDescriptor.typeId(targetDescriptor)
-              == SqlTypeDescriptor.TYPE_ID_BIGINT,
-          decimal,
-          decimalWide);
-      default -> StatusCode.INVALID_EXTERNAL_INPUT;
-    };
+      int column,
+      int slot,
+      boolean nullValue) {
+    if (nullValue) {
+      fixedValues.set(0);
+      return StatusCode.OK;
+    }
+    if (update < 0) {
+      fixedValues.set(sourceRow.getLong(slot));
+      return StatusCode.OK;
+    }
+    if (command.updateIsDefault(update)) {
+      return fixedValues.defaultValue(table, column);
+    }
+    fixedValues.set(command.updateValue(update));
+    return StatusCode.OK;
+  }
+
+  private StatusCode coerceMutation(
+      long value, int sourceDescriptor, int targetDescriptor) {
+    return fixedValues.coerce(value, sourceDescriptor, targetDescriptor);
+  }
+
+  private StatusCode evaluateMutation(
+      int expression,
+      long primaryKey,
+      HeapRowResult source,
+      BoundSqlStatement bound) {
+    StatusCode status = rowExpressions.evaluateMutation(
+        expression, primaryKey, source);
+    if (status.isOk()) {
+      mutationNull = rowExpressions.resultNull();
+      mutationValue = rowExpressions.resultValue();
+      mutationDescriptor = rowExpressions.resultDescriptor();
+    }
+    return status;
   }
 
   private int copySourceText(int slot) {

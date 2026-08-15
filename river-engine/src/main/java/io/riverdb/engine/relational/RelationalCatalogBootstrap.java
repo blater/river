@@ -24,7 +24,7 @@ final class RelationalCatalogBootstrap {
     if (status.isOk()) {
       CatalogSequenceCodec.encodeAllocation(output, 1);
       status = session.indexedSession().insert(
-          RelationalKey.CATALOG_SEQUENCE_KEY, output);
+          RelationalKey.CATALOG_SEQUENCE_SPACE, 0, output);
     }
     if (status.isOk()) {
       status = session.commit(outcome);
@@ -42,7 +42,7 @@ final class RelationalCatalogBootstrap {
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
       status = session.indexedSession().fetchByKey(
-          RelationalKey.CATALOG_SEQUENCE_KEY, row);
+          RelationalKey.CATALOG_SEQUENCE_SPACE, 0, row);
     }
     if (status.isOk()) {
       status = CatalogSequenceCodec.decodeAllocation(row, scratch, nextTableId);

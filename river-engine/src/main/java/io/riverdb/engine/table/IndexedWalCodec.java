@@ -1,13 +1,14 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Byte-exact indexed-table WAL layout without WAL publication or table-state semantics. */
 final class IndexedWalCodec {
   static final int FORMAT_ID = 1002;
-  static final int FORMAT_VERSION = 3;
+  static final int FORMAT_VERSION = 4;
 
   static final long OPERATION_MAGIC = 0x5249564552494458L; // RIVERIDX
   static final int OPERATION_TYPE_PAGE_IMAGES = 1;
@@ -25,9 +26,9 @@ final class IndexedWalCodec {
   static final int PAGE_OPERATION_VERSION_BYTES = 8;
   static final int INSERT_OPERATION_HEADER_BYTES = 40;
   static final int INSERT_BATCH_HEADER_BYTES = 24;
-  static final int INSERT_BATCH_ENTRY_BYTES = 16;
+  static final int INSERT_BATCH_ENTRY_BYTES = 20;
   static final int MUTATION_BATCH_HEADER_BYTES = 24;
-  static final int MUTATION_BATCH_ENTRY_BYTES = 24;
+  static final int MUTATION_BATCH_ENTRY_BYTES = 28;
   static final int VACUUM_CHUNK_HEADER_BYTES = 40;
   static final int VACUUM_ENTRY_BYTES = 24;
   static final int VACUUM_COMMIT_PAYLOAD_BYTES = 32;
@@ -96,6 +97,7 @@ final class IndexedWalCodec {
 
   static void encodeInsertHeader(
       ByteBuffer target,
+      int space,
       long key,
       int rowId,
       int rowBytes) {
@@ -103,7 +105,8 @@ final class IndexedWalCodec {
     putLong(target, 16, key);
     putInt(target, 24, rowId);
     putInt(target, 28, rowBytes);
-    putLong(target, 32, 0);
+    putInt(target, 32, space);
+    putInt(target, 36, 0);
   }
 
   static void encodeInsertBatchHeader(ByteBuffer target, int entryCount) {
@@ -115,12 +118,14 @@ final class IndexedWalCodec {
   static void encodeInsertBatchEntry(
       ByteBuffer target,
       int offset,
+      int space,
       long key,
       int rowId,
       int rowBytes) {
     putLong(target, offset, key);
     putInt(target, offset + 8, rowId);
     putInt(target, offset + 12, rowBytes);
+    putInt(target, offset + 16, space);
   }
 
   static void encodeMutationBatchHeader(ByteBuffer target, int entryCount) {
@@ -133,6 +138,7 @@ final class IndexedWalCodec {
       ByteBuffer target,
       int offset,
       int operation,
+      int space,
       long key,
       int rowId,
       int previousRowId,
@@ -142,6 +148,7 @@ final class IndexedWalCodec {
     putInt(target, offset + 12, rowId);
     putInt(target, offset + 16, previousRowId);
     putInt(target, offset + 20, rowBytes);
+    putInt(target, offset + 24, space);
   }
 
   static void encodeVacuumChunkHeader(
@@ -163,6 +170,7 @@ final class IndexedWalCodec {
   static void encodeVacuumEntry(
       ByteBuffer target,
       int offset,
+      int space,
       long key,
       int rowId,
       int rowBytes,
@@ -171,7 +179,7 @@ final class IndexedWalCodec {
     putInt(target, offset + 8, rowId);
     putInt(target, offset + 12, rowBytes);
     putInt(target, offset + 16, deleted ? 1 : 0);
-    putInt(target, offset + 20, 0);
+    putInt(target, offset + 20, space);
   }
 
   static void encodeVacuumCommit(
@@ -210,7 +218,8 @@ final class IndexedWalCodec {
         || payload.limit() < INSERT_OPERATION_HEADER_BYTES
         || getInt(payload, 24) <= 0
         || getInt(payload, 28) <= 0
-        || getLong(payload, 32) != 0
+        || !OrderedKey.isFiniteSpace(getInt(payload, 32))
+        || getInt(payload, 36) != 0
         || payload.limit() != insertOperationBytes(getInt(payload, 28))) {
       return StatusCode.CORRUPTION;
     }
@@ -277,6 +286,7 @@ final class IndexedWalCodec {
     int rowBytes = getInt(payload, offset + 12);
     int entryBytes = insertBatchEntryBytes(rowBytes);
     return getInt(payload, offset + 8) > 0
+        && OrderedKey.isFiniteSpace(getInt(payload, offset + 16))
         && entryBytes > 0
         && payload.limit() - offset >= entryBytes;
   }
@@ -290,6 +300,7 @@ final class IndexedWalCodec {
     return isMutation(getInt(payload, offset))
         && getInt(payload, offset + 12) > 0
         && getInt(payload, offset + 16) >= 0
+        && OrderedKey.isFiniteSpace(getInt(payload, offset + 24))
         && entryBytes > 0
         && payload.limit() - offset >= entryBytes;
   }
@@ -303,7 +314,7 @@ final class IndexedWalCodec {
     int entryBytes = vacuumEntryBytes(rowBytes);
     return getInt(payload, offset + 8) > 0
         && (deleted == 0 || deleted == 1)
-        && getInt(payload, offset + 20) == 0
+        && OrderedKey.isFiniteSpace(getInt(payload, offset + 20))
         && entryBytes > 0
         && payload.limit() - offset >= entryBytes;
   }
@@ -338,6 +349,10 @@ final class IndexedWalCodec {
     return getLong(payload, 16);
   }
 
+  static int insertSpace(ByteBuffer payload) {
+    return getInt(payload, 32);
+  }
+
   static int insertRowId(ByteBuffer payload) {
     return getInt(payload, 24);
   }
@@ -354,6 +369,10 @@ final class IndexedWalCodec {
     return getLong(payload, offset);
   }
 
+  static int insertBatchSpace(ByteBuffer payload, int offset) {
+    return getInt(payload, offset + 16);
+  }
+
   static int insertBatchRowId(ByteBuffer payload, int offset) {
     return getInt(payload, offset + 8);
   }
@@ -368,6 +387,10 @@ final class IndexedWalCodec {
 
   static long mutationKey(ByteBuffer payload, int offset) {
     return getLong(payload, offset + 4);
+  }
+
+  static int mutationSpace(ByteBuffer payload, int offset) {
+    return getInt(payload, offset + 24);
   }
 
   static int mutationRowId(ByteBuffer payload, int offset) {
@@ -416,6 +439,10 @@ final class IndexedWalCodec {
 
   static long vacuumEntryKey(ByteBuffer payload, int offset) {
     return getLong(payload, offset);
+  }
+
+  static int vacuumEntrySpace(ByteBuffer payload, int offset) {
+    return getInt(payload, offset + 20);
   }
 
   static int vacuumEntryRowId(ByteBuffer payload, int offset) {

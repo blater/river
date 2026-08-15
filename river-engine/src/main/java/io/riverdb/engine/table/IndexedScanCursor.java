@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 
 /** Caller-owned position for one ordered snapshot scan. */
 public final class IndexedScanCursor {
@@ -10,9 +11,12 @@ public final class IndexedScanCursor {
   private long visibleCommitSequence;
   private long lowerKey;
   private long upperKey;
+  private int lowerSpace;
+  private int upperSpace;
   private int leafPageId;
   private int entryIndex;
   private long lastReturnedKey;
+  private int lastReturnedSpace;
   private boolean hasCommittedLookahead;
   private boolean committedExhausted;
   private boolean hasLastReturnedKey;
@@ -27,9 +31,12 @@ public final class IndexedScanCursor {
     visibleCommitSequence = 0;
     lowerKey = 0;
     upperKey = 0;
+    lowerSpace = 0;
+    upperSpace = 0;
     leafPageId = 0;
     entryIndex = 0;
     lastReturnedKey = 0;
+    lastReturnedSpace = 0;
     hasCommittedLookahead = false;
     committedExhausted = false;
     hasLastReturnedKey = false;
@@ -40,7 +47,9 @@ public final class IndexedScanCursor {
   StatusCode claim(
       IndexedTable table,
       long visible,
+      int scanLowerSpace,
       long lower,
+      int scanUpperSpace,
       long upper,
       int firstLeafPageId) {
     if (active) {
@@ -48,8 +57,10 @@ public final class IndexedScanCursor {
     }
     owner = table;
     visibleCommitSequence = visible;
+    lowerSpace = scanLowerSpace;
     lowerKey = lower;
     upperKey = upper;
+    upperSpace = scanUpperSpace;
     leafPageId = firstLeafPageId;
     entryIndex = 0;
     active = true;
@@ -82,6 +93,19 @@ public final class IndexedScanCursor {
 
   long upperKey() {
     return upperKey;
+  }
+
+  int lowerSpace() {
+    return lowerSpace;
+  }
+
+  int upperSpace() {
+    return upperSpace;
+  }
+
+  boolean contains(int space, long key) {
+    return OrderedKey.compare(space, key, lowerSpace, lowerKey) >= 0
+        && OrderedKey.lessThan(space, key, upperSpace, upperKey);
   }
 
   int leafPageId() {
@@ -125,11 +149,13 @@ public final class IndexedScanCursor {
     committedExhausted = true;
   }
 
-  boolean afterLastReturned(long key) {
-    return !hasLastReturnedKey || key > lastReturnedKey;
+  boolean afterLastReturned(int space, long key) {
+    return !hasLastReturnedKey
+        || OrderedKey.lessThan(lastReturnedSpace, lastReturnedKey, space, key);
   }
 
-  void returned(long key) {
+  void returned(int space, long key) {
+    lastReturnedSpace = space;
     lastReturnedKey = key;
     hasLastReturnedKey = true;
   }

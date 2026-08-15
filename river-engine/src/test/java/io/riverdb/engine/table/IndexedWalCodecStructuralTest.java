@@ -13,8 +13,12 @@ final class IndexedWalCodecStructuralTest {
   @Test
   void commonHeaderAndFixedFieldsRejectStructuralCorruption() {
     ByteBuffer insert = ByteBuffer.allocate(IndexedWalCodec.insertOperationBytes(1));
-    IndexedWalCodec.encodeInsertHeader(insert, 7, 1, 1);
+    IndexedWalCodec.encodeInsertHeader(insert, 3, 7, 1, 1);
     assertEquals(StatusCode.OK, IndexedWalCodec.validateInsert(insert));
+    assertEquals(3, IndexedWalCodec.insertSpace(insert));
+    IndexedWalCodec.putInt(insert, 32, -1);
+    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validateInsert(insert));
+    IndexedWalCodec.putInt(insert, 32, 3);
 
     IndexedWalCodec.putLong(insert, 0, 0);
     assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validateInsert(insert));
@@ -28,7 +32,7 @@ final class IndexedWalCodecStructuralTest {
     IndexedWalCodec.putInt(insert, 28, 2);
     assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validateInsert(insert));
     IndexedWalCodec.putInt(insert, 28, 1);
-    IndexedWalCodec.putLong(insert, 32, 1);
+    IndexedWalCodec.putInt(insert, 36, 1);
     assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validateInsert(insert));
 
     int pageBytes = IndexedWalCodec.pageOperationBytes(1, 1);
@@ -61,11 +65,16 @@ final class IndexedWalCodecStructuralTest {
     IndexedWalCodec.encodeInsertBatchHeader(inserts, 2);
     int firstInsert = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
     int secondInsert = firstInsert + IndexedWalCodec.insertBatchEntryBytes(1);
-    IndexedWalCodec.encodeInsertBatchEntry(inserts, firstInsert, 11, 1, 1);
-    IndexedWalCodec.encodeInsertBatchEntry(inserts, secondInsert, 12, 2, 1);
+    IndexedWalCodec.encodeInsertBatchEntry(inserts, firstInsert, 3, 11, 1, 1);
+    IndexedWalCodec.encodeInsertBatchEntry(inserts, secondInsert, 4, 12, 2, 1);
     assertEquals(StatusCode.OK, IndexedWalCodec.validateInsertBatch(inserts, 2));
     assertTrue(IndexedWalCodec.validInsertBatchEntry(inserts, firstInsert));
     assertTrue(IndexedWalCodec.validInsertBatchEntry(inserts, secondInsert));
+    assertEquals(3, IndexedWalCodec.insertBatchSpace(inserts, firstInsert));
+    assertEquals(4, IndexedWalCodec.insertBatchSpace(inserts, secondInsert));
+    IndexedWalCodec.putInt(inserts, firstInsert + 16, -1);
+    assertFalse(IndexedWalCodec.validInsertBatchEntry(inserts, firstInsert));
+    IndexedWalCodec.putInt(inserts, firstInsert + 16, 3);
 
     IndexedWalCodec.putInt(inserts, 16, 1);
     assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validateInsertBatch(inserts, 2));
@@ -89,9 +98,13 @@ final class IndexedWalCodecStructuralTest {
     IndexedWalCodec.encodeMutationBatchHeader(mutations, 1);
     int mutation = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
     IndexedWalCodec.encodeMutationBatchEntry(
-        mutations, mutation, IndexedWalCodec.MUTATION_UPDATE, 11, 2, 1, 1);
+        mutations, mutation, IndexedWalCodec.MUTATION_UPDATE, 3, 11, 2, 1, 1);
     assertEquals(StatusCode.OK, IndexedWalCodec.validateMutationBatch(mutations, 1));
     assertTrue(IndexedWalCodec.validMutationBatchEntry(mutations, mutation));
+    assertEquals(3, IndexedWalCodec.mutationSpace(mutations, mutation));
+    IndexedWalCodec.putInt(mutations, mutation + 24, -1);
+    assertFalse(IndexedWalCodec.validMutationBatchEntry(mutations, mutation));
+    IndexedWalCodec.putInt(mutations, mutation + 24, 3);
 
     IndexedWalCodec.putInt(mutations, 16, 0);
     assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validateMutationBatch(mutations, 1));
@@ -116,9 +129,10 @@ final class IndexedWalCodecStructuralTest {
         IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES + IndexedWalCodec.vacuumEntryBytes(1));
     IndexedWalCodec.encodeVacuumChunkHeader(chunk, 1, 0, 1, 0, 1);
     int entry = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
-    IndexedWalCodec.encodeVacuumEntry(chunk, entry, 17, 1, 1, false);
+    IndexedWalCodec.encodeVacuumEntry(chunk, entry, 3, 17, 1, 1, false);
     assertEquals(StatusCode.OK, IndexedWalCodec.validateVacuumChunk(chunk, 1, 1));
     assertTrue(IndexedWalCodec.validVacuumEntry(chunk, entry));
+    assertEquals(3, IndexedWalCodec.vacuumEntrySpace(chunk, entry));
 
     IndexedWalCodec.putInt(chunk, 24, 2);
     assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validateVacuumChunk(chunk, 1, 1));
@@ -132,9 +146,9 @@ final class IndexedWalCodecStructuralTest {
     IndexedWalCodec.putInt(chunk, entry + 16, 2);
     assertFalse(IndexedWalCodec.validVacuumEntry(chunk, entry));
     IndexedWalCodec.putInt(chunk, entry + 16, 0);
-    IndexedWalCodec.putInt(chunk, entry + 20, 1);
+    IndexedWalCodec.putInt(chunk, entry + 20, -1);
     assertFalse(IndexedWalCodec.validVacuumEntry(chunk, entry));
-    IndexedWalCodec.putInt(chunk, entry + 20, 0);
+    IndexedWalCodec.putInt(chunk, entry + 20, 3);
     IndexedWalCodec.putInt(chunk, entry + 12, chunk.limit());
     assertFalse(IndexedWalCodec.validVacuumEntry(chunk, entry));
     assertFalse(IndexedWalCodec.validVacuumEntry(chunk, chunk.limit()));

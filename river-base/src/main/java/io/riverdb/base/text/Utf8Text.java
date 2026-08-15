@@ -10,6 +10,31 @@ public final class Utf8Text {
   private Utf8Text() {
   }
 
+  /** Returns the encoded byte count, or {@code -1} for invalid UTF-16. */
+  public static int encodedLength(CharSequence value) {
+    if (value == null) {
+      return -1;
+    }
+    int bytes = 0;
+    for (int index = 0; index < value.length(); index++) {
+      char first = value.charAt(index);
+      int scalar;
+      if (Character.isHighSurrogate(first)) {
+        if (++index >= value.length()
+            || !Character.isLowSurrogate(value.charAt(index))) {
+          return -1;
+        }
+        scalar = Character.toCodePoint(first, value.charAt(index));
+      } else if (Character.isLowSurrogate(first)) {
+        return -1;
+      } else {
+        scalar = first;
+      }
+      bytes += encodedBytes(scalar);
+    }
+    return bytes;
+  }
+
   /** Returns the encoded byte count, or {@code -1} for invalid UTF-16 or excess scalars. */
   public static int encodedLength(CharSequence value, int maximumScalars) {
     if (value == null || !validMaximum(maximumScalars)) {
@@ -40,6 +65,27 @@ public final class Utf8Text {
       bytes += encodedBytes(scalar);
     }
     return bytes;
+  }
+
+  /** Returns the Unicode scalar count, or {@code -1} for invalid UTF-16. */
+  public static int scalarCount(CharSequence value) {
+    if (value == null) {
+      return -1;
+    }
+    int scalars = 0;
+    for (int index = 0; index < value.length(); index++) {
+      char first = value.charAt(index);
+      if (Character.isHighSurrogate(first)) {
+        if (++index >= value.length()
+            || !Character.isLowSurrogate(value.charAt(index))) {
+          return -1;
+        }
+      } else if (Character.isLowSurrogate(first)) {
+        return -1;
+      }
+      scalars++;
+    }
+    return scalars;
   }
 
   /** Returns the encoded byte count for a caller-owned UTF-16 range. */
@@ -126,6 +172,22 @@ public final class Utf8Text {
     return target.position() - start;
   }
 
+  /** Encodes all valid UTF-16 at the target's current position. */
+  public static int encode(CharSequence value, ByteBuffer target) {
+    int bytes = encodedLength(value);
+    if (bytes < 0 || target == null || target.remaining() < bytes) {
+      return -1;
+    }
+    int start = target.position();
+    for (int index = 0; index < value.length(); index++) {
+      char first = value.charAt(index);
+      int scalar = Character.isHighSurrogate(first)
+          ? Character.toCodePoint(first, value.charAt(++index)) : first;
+      putScalar(target, scalar);
+    }
+    return target.position() - start;
+  }
+
   /** Encodes a caller-owned UTF-16 range directly into a caller-owned byte array. */
   public static int encode(
       char[] value,
@@ -184,14 +246,27 @@ public final class Utf8Text {
         || !validMaximum(maximumScalars)) {
       return -1;
     }
+    int scalars = validate(source, offset, length);
+    return scalars >= 0 && scalars <= maximumScalars ? scalars : -1;
+  }
+
+  /** Returns the Unicode scalar count, or {@code -1} for non-canonical UTF-8. */
+  public static int validate(ByteBuffer source, int offset, int length) {
+    if (source == null
+        || offset < 0
+        || length < 0
+        || offset > source.limit() - length) {
+      return -1;
+    }
     int end = offset + length;
     int scalars = 0;
     int index = offset;
     while (index < end) {
       int decoded = decodeScalar(source, index, end);
-      if (decoded < 0 || ++scalars > maximumScalars) {
+      if (decoded < 0) {
         return -1;
       }
+      scalars++;
       index += decoded >>> 24;
     }
     return scalars;

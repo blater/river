@@ -52,16 +52,18 @@ public final class TransactionManager {
 
   public synchronized StatusCode tryAcquireKey(
       Transaction transaction,
-      long tableId,
+      int space,
       long key,
       LockToken token) {
-    if (!validActive(transaction) || key == Long.MAX_VALUE) {
+    if (!validActive(transaction)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return locks.tryAcquire(
         transaction.transactionId(),
         LockScope.KEY,
-        tableId,
+        space,
+        key,
+        space,
         key,
         LockMode.EXCLUSIVE,
         0,
@@ -71,16 +73,18 @@ public final class TransactionManager {
 
   public synchronized StatusCode tryAcquireSharedKey(
       Transaction transaction,
-      long tableId,
+      int space,
       long key,
       LockToken token) {
-    if (!validActive(transaction) || key == Long.MAX_VALUE) {
+    if (!validActive(transaction)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return locks.tryAcquire(
         transaction.transactionId(),
         LockScope.KEY,
-        tableId,
+        space,
+        key,
+        space,
         key,
         LockMode.SHARED,
         0,
@@ -90,17 +94,21 @@ public final class TransactionManager {
 
   public synchronized StatusCode tryAcquireSharedRange(
       Transaction transaction,
-      long lowerInclusive,
-      long upperExclusive,
+      int lowerSpace,
+      long lowerKey,
+      int upperSpace,
+      long upperKey,
       LockToken token) {
-    if (!validActive(transaction) || lowerInclusive >= upperExclusive) {
+    if (!validActive(transaction)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return locks.tryAcquire(
         transaction.transactionId(),
         LockScope.RANGE,
-        lowerInclusive,
-        upperExclusive,
+        lowerSpace,
+        lowerKey,
+        upperSpace,
+        upperKey,
         LockMode.SHARED,
         0,
         0,

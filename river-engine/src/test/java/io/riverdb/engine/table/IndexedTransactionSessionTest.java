@@ -48,17 +48,17 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, repeatable.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, readCommitted.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(71, row(7101)));
+    assertEquals(StatusCode.OK, writer.insert( 0,71, row(7101)));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, writer.fetchByKey(71, fetched));
+    assertEquals(StatusCode.OK, writer.fetchByKey( 0,71, fetched));
     assertEquals(7101, value(fetched));
-    assertEquals(StatusCode.CONFLICT, repeatable.fetchByKey(71, fetched));
+    assertEquals(StatusCode.CONFLICT, repeatable.fetchByKey( 0,71, fetched));
 
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(TransactionState.COMMITTED, outcome.state());
-    assertEquals(StatusCode.CONFLICT, repeatable.fetchByKey(71, fetched));
-    assertEquals(StatusCode.OK, readCommitted.fetchByKey(71, fetched));
+    assertEquals(StatusCode.CONFLICT, repeatable.fetchByKey( 0,71, fetched));
+    assertEquals(StatusCode.OK, readCommitted.fetchByKey( 0,71, fetched));
     assertEquals(7101, value(fetched));
     assertEquals(StatusCode.OK, repeatable.abort(outcome));
     assertEquals(StatusCode.OK, readCommitted.abort(outcome));
@@ -79,16 +79,16 @@ final class IndexedTransactionSessionTest {
 
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, reader.beginStatement());
-    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(72, fetched));
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey( 0,72, fetched));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(72, row(7201)));
+    assertEquals(StatusCode.OK, writer.insert( 0,72, row(7201)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(72, fetched));
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey( 0,72, fetched));
     assertEquals(StatusCode.CONFLICT, reader.commit(outcome));
     assertEquals(StatusCode.OK, reader.completeStatement());
 
     assertEquals(StatusCode.OK, reader.beginStatement());
-    assertEquals(StatusCode.OK, reader.fetchByKey(72, fetched));
+    assertEquals(StatusCode.OK, reader.fetchByKey( 0,72, fetched));
     assertEquals(7201, value(fetched));
     assertEquals(StatusCode.OK, reader.completeStatement());
     assertEquals(StatusCode.OK, reader.commit(outcome));
@@ -106,19 +106,19 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession second = session(manager, table);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, first.insert(9, row(91)));
-    assertEquals(StatusCode.RETRY, second.insert(9, row(92)));
+    assertEquals(StatusCode.OK, first.insert( 0,9, row(91)));
+    assertEquals(StatusCode.RETRY, second.insert( 0,9, row(92)));
     assertEquals(1, manager.activeLockCount());
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, first.commit(outcome));
     assertEquals(0, manager.activeLockCount());
-    assertEquals(StatusCode.CONFLICT, second.insert(9, row(92)));
+    assertEquals(StatusCode.CONFLICT, second.insert( 0,9, row(92)));
     assertEquals(StatusCode.OK, second.abort(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
     assertEquals(0, manager.activeTransactionCount());
     assertEquals(0, manager.activeLockCount());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(9, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,9, fetched));
     assertEquals(91, value(fetched));
     close(table, wal, directory);
   }
@@ -134,22 +134,22 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession second = session(manager, table);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, first.insert(1, row(101)));
-    assertEquals(StatusCode.OK, second.insert(2, row(202)));
-    assertEquals(StatusCode.RETRY, first.insert(2, row(102)));
-    assertEquals(StatusCode.CONFLICT, second.insert(1, row(201)));
+    assertEquals(StatusCode.OK, first.insert( 0,1, row(101)));
+    assertEquals(StatusCode.OK, second.insert( 0,2, row(202)));
+    assertEquals(StatusCode.RETRY, first.insert( 0,2, row(102)));
+    assertEquals(StatusCode.CONFLICT, second.insert( 0,1, row(201)));
     assertEquals(1, manager.deadlockVictimSelections());
 
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.CONFLICT, second.commit(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
-    assertEquals(StatusCode.OK, first.insert(2, row(102)));
+    assertEquals(StatusCode.OK, first.insert( 0,2, row(102)));
     assertEquals(StatusCode.OK, first.commit(outcome));
     assertEquals(TransactionState.COMMITTED, outcome.state());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(1, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1, fetched));
     assertEquals(101, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(2, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,2, fetched));
     assertEquals(102, value(fetched));
     assertEquals(0, manager.activeTransactionCount());
     assertEquals(0, manager.activeLockCount());
@@ -169,16 +169,16 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(88, fetched));
-    assertEquals(StatusCode.RETRY, writer.insert(88, row(880)));
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey( 0,88, fetched));
+    assertEquals(StatusCode.RETRY, writer.insert( 0,88, row(880)));
     assertEquals(1, manager.activeLockCount());
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, reader.commit(outcome));
     assertEquals(TransactionState.COMMITTED, outcome.state());
     assertEquals(0, manager.activeLockCount());
-    assertEquals(StatusCode.OK, writer.insert(88, row(880)));
+    assertEquals(StatusCode.OK, writer.insert( 0,88, row(880)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.OK, table.fetchByKey(88, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,88, fetched));
     assertEquals(880, value(fetched));
     close(table, wal, directory);
   }
@@ -194,11 +194,11 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.CONFLICT, session.fetchByKey(99, fetched));
-    assertEquals(StatusCode.OK, session.insert(99, row(990)));
+    assertEquals(StatusCode.CONFLICT, session.fetchByKey( 0,99, fetched));
+    assertEquals(StatusCode.OK, session.insert( 0,99, row(990)));
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.commit(outcome));
-    assertEquals(StatusCode.OK, table.fetchByKey(99, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,99, fetched));
     assertEquals(990, value(fetched));
     assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
@@ -218,32 +218,32 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
 
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
-    assertEquals(StatusCode.OK, reader.beginScan(0, 100, cursor));
+    assertEquals(StatusCode.OK, reader.beginScan( 0,0, 0, 100, cursor));
     assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, scanned));
     assertEquals(StatusCode.OK, reader.closeScan(cursor));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.RETRY, writer.insert(50, row(500)));
+    assertEquals(StatusCode.RETRY, writer.insert( 0,50, row(500)));
     assertEquals(StatusCode.OK, writer.abort(outcome));
     assertEquals(StatusCode.OK, reader.commit(outcome));
     assertEquals(TransactionState.COMMITTED, outcome.state());
     assertEquals(0, manager.activeTransactionCount());
 
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(50, row(500)));
+    assertEquals(StatusCode.OK, writer.insert( 0,50, row(500)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
 
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
-    assertEquals(StatusCode.OK, reader.beginScan(0, 100, cursor));
+    assertEquals(StatusCode.OK, reader.beginScan( 0,0, 0, 100, cursor));
     assertEquals(StatusCode.OK, reader.nextScan(cursor, scanned));
     assertEquals(50, scanned.key());
     assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, scanned));
     assertEquals(StatusCode.OK, reader.closeScan(cursor));
-    assertEquals(StatusCode.OK, reader.insert(60, row(600)));
+    assertEquals(StatusCode.OK, reader.insert( 0,60, row(600)));
     assertEquals(StatusCode.OK, reader.commit(outcome));
     assertEquals(TransactionState.COMMITTED, outcome.state());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(60, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,60, fetched));
     assertEquals(600, value(fetched));
     assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
@@ -260,21 +260,21 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession writer = session(manager, table);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(10, row(100)));
-    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.insert( 0,10, row(100)));
+    assertEquals(StatusCode.OK, session.insert( 0,20, row(200)));
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     IndexedScanCursor outer = new IndexedScanCursor();
     IndexedScanCursor inner = new IndexedScanCursor();
     IndexedScanResult result = new IndexedScanResult();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.READ_COMMITTED));
-    assertEquals(StatusCode.OK, session.beginScan(0, 100, outer));
+    assertEquals(StatusCode.OK, session.beginScan( 0,0, 0, 100, outer));
     assertEquals(StatusCode.OK, session.nextScan(outer, result));
     assertEquals(10, result.key());
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(30, row(300)));
+    assertEquals(StatusCode.OK, writer.insert( 0,30, row(300)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.OK, session.beginScan(15, 100, inner));
+    assertEquals(StatusCode.OK, session.beginScan( 0,15, 0, 100, inner));
     assertEquals(StatusCode.OK, session.nextScan(inner, result));
     assertEquals(20, result.key());
     assertEquals(StatusCode.CONFLICT, session.nextScan(inner, result));
@@ -298,15 +298,15 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession second = session(manager, table);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, first.insert(17, row(171)));
-    assertEquals(StatusCode.RETRY, second.insert(17, row(172)));
+    assertEquals(StatusCode.OK, first.insert( 0,17, row(171)));
+    assertEquals(StatusCode.RETRY, second.insert( 0,17, row(172)));
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, first.abort(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
-    assertEquals(StatusCode.OK, second.insert(17, row(172)));
+    assertEquals(StatusCode.OK, second.insert( 0,17, row(172)));
     assertEquals(StatusCode.OK, second.commit(outcome));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(17, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,17, fetched));
     assertEquals(172, value(fetched));
     assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
@@ -322,35 +322,35 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession session = session(manager, table);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.insert( 0,20, row(200)));
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(10, row(100)));
-    assertEquals(StatusCode.OK, session.update(10, row(101)));
+    assertEquals(StatusCode.OK, session.insert( 0,10, row(100)));
+    assertEquals(StatusCode.OK, session.update( 0,10, row(101)));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, session.fetchByKey(10, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey( 0,10, fetched));
     assertEquals(101, value(fetched));
     IndexedSavepoint savepoint = new IndexedSavepoint();
     assertEquals(StatusCode.OK, session.createSavepoint(savepoint));
-    assertEquals(StatusCode.OK, session.update(10, row(102)));
-    assertEquals(StatusCode.OK, session.delete(10));
-    assertEquals(StatusCode.CONFLICT, session.fetchByKey(10, fetched));
+    assertEquals(StatusCode.OK, session.update( 0,10, row(102)));
+    assertEquals(StatusCode.OK, session.delete( 0,10));
+    assertEquals(StatusCode.CONFLICT, session.fetchByKey( 0,10, fetched));
     assertEquals(StatusCode.OK, session.rollbackToSavepoint(savepoint));
-    assertEquals(StatusCode.OK, session.fetchByKey(10, fetched));
+    assertEquals(StatusCode.OK, session.fetchByKey( 0,10, fetched));
     assertEquals(101, value(fetched));
     assertEquals(StatusCode.OK, session.releaseSavepoint(savepoint));
 
-    assertEquals(StatusCode.OK, session.update(20, row(201)));
-    assertEquals(StatusCode.OK, session.update(20, row(202)));
-    assertEquals(StatusCode.OK, session.delete(20));
-    assertEquals(StatusCode.OK, session.insert(20, row(203)));
-    assertEquals(StatusCode.OK, session.insert(30, row(300)));
-    assertEquals(StatusCode.OK, session.delete(30));
+    assertEquals(StatusCode.OK, session.update( 0,20, row(201)));
+    assertEquals(StatusCode.OK, session.update( 0,20, row(202)));
+    assertEquals(StatusCode.OK, session.delete( 0,20));
+    assertEquals(StatusCode.OK, session.insert( 0,20, row(203)));
+    assertEquals(StatusCode.OK, session.insert( 0,30, row(300)));
+    assertEquals(StatusCode.OK, session.delete( 0,30));
 
     IndexedScanCursor cursor = new IndexedScanCursor();
     IndexedScanResult scanned = new IndexedScanResult();
-    assertEquals(StatusCode.OK, session.beginScan(0, 40, cursor));
+    assertEquals(StatusCode.OK, session.beginScan( 0,0, 0, 40, cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, scanned));
     assertEquals(10, scanned.key());
     assertEquals(101, value(scanned.row()));
@@ -361,11 +361,11 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, session.closeScan(cursor));
     assertEquals(StatusCode.OK, session.commit(outcome));
 
-    assertEquals(StatusCode.OK, table.fetchByKey(10, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,10, fetched));
     assertEquals(101, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(20, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,20, fetched));
     assertEquals(203, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(30, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,30, fetched));
     close(table, wal, directory);
   }
 
@@ -380,22 +380,22 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession contender = session(manager, table);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(10, row(100)));
+    assertEquals(StatusCode.OK, session.insert( 0,10, row(100)));
     IndexedSavepoint savepoint = new IndexedSavepoint();
     assertEquals(StatusCode.OK, session.createSavepoint(savepoint));
-    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.insert( 0,20, row(200)));
     assertEquals(StatusCode.OK, session.rollbackToSavepoint(savepoint));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.CONFLICT, session.fetchByKey(20, fetched));
+    assertEquals(StatusCode.CONFLICT, session.fetchByKey( 0,20, fetched));
     assertEquals(StatusCode.OK, contender.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.RETRY, contender.insert(20, row(201)));
+    assertEquals(StatusCode.RETRY, contender.insert( 0,20, row(201)));
     assertEquals(StatusCode.OK, session.releaseSavepoint(savepoint));
     assertEquals(StatusCode.OK, session.commit(outcome));
-    assertEquals(StatusCode.OK, contender.insert(20, row(201)));
+    assertEquals(StatusCode.OK, contender.insert( 0,20, row(201)));
     assertEquals(StatusCode.OK, contender.commit(outcome));
-    assertEquals(StatusCode.OK, table.fetchByKey(10, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,10, fetched));
     assertEquals(100, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(20, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,20, fetched));
     assertEquals(201, value(fetched));
     assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
@@ -411,22 +411,22 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession session = session(manager, table);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.insert(10, row(100)));
+    assertEquals(StatusCode.OK, session.insert( 0,10, row(100)));
     IndexedSavepoint outer = new IndexedSavepoint();
     IndexedSavepoint inner = new IndexedSavepoint();
     assertEquals(StatusCode.OK, session.createSavepoint(outer));
-    assertEquals(StatusCode.OK, session.insert(20, row(200)));
+    assertEquals(StatusCode.OK, session.insert( 0,20, row(200)));
     assertEquals(StatusCode.OK, session.createSavepoint(inner));
-    assertEquals(StatusCode.OK, session.insert(30, row(300)));
+    assertEquals(StatusCode.OK, session.insert( 0,30, row(300)));
     assertEquals(StatusCode.OK, session.rollbackToSavepoint(outer));
     assertEquals(false, inner.isActive());
     assertEquals(StatusCode.NOT_OWNER, session.releaseSavepoint(inner));
     assertEquals(StatusCode.OK, session.releaseSavepoint(outer));
     assertEquals(StatusCode.OK, session.commit(outcome));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(10, fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(20, fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(30, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,10, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,20, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,30, fetched));
     close(table, wal, directory);
   }
 
@@ -441,22 +441,22 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession reader = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(31, row(311)));
-    assertEquals(StatusCode.OK, writer.insert(32, row(322)));
+    assertEquals(StatusCode.OK, writer.insert( 0,31, row(311)));
+    assertEquals(StatusCode.OK, writer.insert( 0,32, row(322)));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, writer.fetchByKey(31, fetched));
+    assertEquals(StatusCode.OK, writer.fetchByKey( 0,31, fetched));
     assertEquals(311, value(fetched));
-    assertEquals(StatusCode.OK, writer.fetchByKey(32, fetched));
+    assertEquals(StatusCode.OK, writer.fetchByKey( 0,32, fetched));
     assertEquals(322, value(fetched));
-    assertEquals(StatusCode.CONFLICT, reader.fetchByKey(31, fetched));
+    assertEquals(StatusCode.CONFLICT, reader.fetchByKey( 0,31, fetched));
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.commit(outcome));
     long committedAt = outcome.commitSequence();
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 31, fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 32, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 31, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 0, 31, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 0, 32, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, 31, fetched));
     assertEquals(311, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 32, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, 32, fetched));
     assertEquals(322, value(fetched));
     assertEquals(StatusCode.OK, reader.abort(outcome));
     assertEquals(0, manager.activeLockCount());
@@ -478,14 +478,14 @@ final class IndexedTransactionSessionTest {
       row.putLong(0, key * 10L);
       row.position(0);
       row.limit(row.capacity());
-      assertEquals(StatusCode.OK, writer.insert(key, row));
+      assertEquals(StatusCode.OK, writer.insert( 0,key, row));
     }
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(64, table.rowCount());
     assertEquals(true, table.pageCount() >= 4);
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(63, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,63, fetched));
     assertEquals(630, value(fetched));
 
     assertEquals(StatusCode.OK, directory.advanceGeneration());
@@ -500,9 +500,9 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
     assertEquals(64, table.rowCount());
-    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,0, fetched));
     assertEquals(0, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(63, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,63, fetched));
     assertEquals(630, value(fetched));
     close(table, wal, directory);
   }
@@ -517,18 +517,18 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession seed = session(manager, table);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(40, row(400)));
+    assertEquals(StatusCode.OK, seed.insert( 0,40, row(400)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(41, row(410)));
-    assertEquals(StatusCode.CONFLICT, writer.insert(40, row(401)));
+    assertEquals(StatusCode.OK, writer.insert( 0,41, row(410)));
+    assertEquals(StatusCode.CONFLICT, writer.insert( 0,40, row(401)));
     assertEquals(StatusCode.OK, writer.abort(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(41, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(40, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,41, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,40, fetched));
     assertEquals(400, value(fetched));
     assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
@@ -541,21 +541,21 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     HeapInsertResult inserted = new HeapInsertResult();
     for (int key = 0; key < 255; key++) {
-      assertEquals(StatusCode.OK, table.insert(key + 2L, key, row(key), inserted));
+      assertEquals(StatusCode.OK, table.insert(key + 2L, 0, key, row(key), inserted));
     }
     int oldRoot = table.rootPageId();
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(1000, row(10000)));
-    assertEquals(StatusCode.OK, writer.insert(1001, row(10010)));
+    assertEquals(StatusCode.OK, writer.insert( 0,1000, row(10000)));
+    assertEquals(StatusCode.OK, writer.insert( 0,1001, row(10010)));
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.commit(outcome));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(1000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1000, fetched));
     assertEquals(10000, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(1001, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1001, fetched));
     assertEquals(10010, value(fetched));
     assertNotEquals(oldRoot, table.rootPageId());
     assertEquals(0, manager.activeLockCount());
@@ -572,33 +572,33 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     IndexedTransactionSession seed = session(manager, table);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(60, row(600)));
-    assertEquals(StatusCode.OK, seed.insert(61, row(610)));
+    assertEquals(StatusCode.OK, seed.insert( 0,60, row(600)));
+    assertEquals(StatusCode.OK, seed.insert( 0,61, row(610)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
     IndexedTransactionSession oldReader = session(manager, table);
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, oldReader.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update(60, row(601)));
-    assertEquals(StatusCode.OK, writer.delete(61));
-    assertEquals(StatusCode.OK, writer.insert(62, row(620)));
+    assertEquals(StatusCode.OK, writer.update( 0,60, row(601)));
+    assertEquals(StatusCode.OK, writer.delete( 0,61));
+    assertEquals(StatusCode.OK, writer.insert( 0,62, row(620)));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, writer.fetchByKey(60, fetched));
+    assertEquals(StatusCode.OK, writer.fetchByKey( 0,60, fetched));
     assertEquals(601, value(fetched));
-    assertEquals(StatusCode.CONFLICT, writer.fetchByKey(61, fetched));
+    assertEquals(StatusCode.CONFLICT, writer.fetchByKey( 0,61, fetched));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     long mutatedAt = outcome.commitSequence();
 
-    assertEquals(StatusCode.OK, oldReader.fetchByKey(60, fetched));
+    assertEquals(StatusCode.OK, oldReader.fetchByKey( 0,60, fetched));
     assertEquals(600, value(fetched));
-    assertEquals(StatusCode.OK, oldReader.fetchByKey(61, fetched));
+    assertEquals(StatusCode.OK, oldReader.fetchByKey( 0,61, fetched));
     assertEquals(610, value(fetched));
-    assertEquals(StatusCode.CONFLICT, oldReader.fetchByKey(62, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(60, fetched));
+    assertEquals(StatusCode.CONFLICT, oldReader.fetchByKey( 0,62, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,60, fetched));
     assertEquals(601, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(61, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(62, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,61, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,62, fetched));
     assertEquals(620, value(fetched));
     assertEquals(StatusCode.OK, oldReader.abort(outcome));
 
@@ -613,14 +613,14 @@ final class IndexedTransactionSessionTest {
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt - 1, 60, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt - 1, 0, 60, fetched));
     assertEquals(600, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt - 1, 61, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt - 1, 0, 61, fetched));
     assertEquals(610, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt, 60, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt, 0, 60, fetched));
     assertEquals(601, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(mutatedAt, 61, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt, 62, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(mutatedAt, 0, 61, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(mutatedAt, 0, 62, fetched));
     assertEquals(620, value(fetched));
     close(table, wal, directory);
   }
@@ -632,7 +632,7 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     HeapInsertResult inserted = new HeapInsertResult();
     for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
-      assertEquals(StatusCode.OK, table.insert(index + 2L, index, row(index * 10L), inserted));
+      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index, row(index * 10L), inserted));
     }
     int leafRoot = table.rootPageId();
     TransactionManager manager = new TransactionManager(
@@ -642,24 +642,24 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, oldReader.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update(0, row(9_000)));
-    assertEquals(StatusCode.OK, writer.delete(1));
-    assertEquals(StatusCode.OK, writer.insert(1_000, row(10_000)));
+    assertEquals(StatusCode.OK, writer.update( 0,0, row(9_000)));
+    assertEquals(StatusCode.OK, writer.delete( 0,1));
+    assertEquals(StatusCode.OK, writer.insert( 0,1_000, row(10_000)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     long committedAt = outcome.commitSequence();
     assertNotEquals(leafRoot, table.rootPageId());
 
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, oldReader.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, oldReader.fetchByKey( 0,0, fetched));
     assertEquals(0, value(fetched));
-    assertEquals(StatusCode.OK, oldReader.fetchByKey(1, fetched));
+    assertEquals(StatusCode.OK, oldReader.fetchByKey( 0,1, fetched));
     assertEquals(10, value(fetched));
-    assertEquals(StatusCode.CONFLICT, oldReader.fetchByKey(1_000, fetched));
+    assertEquals(StatusCode.CONFLICT, oldReader.fetchByKey( 0,1_000, fetched));
     assertEquals(StatusCode.OK, oldReader.abort(outcome));
-    assertEquals(StatusCode.OK, table.fetchByKey(0, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,0, fetched));
     assertEquals(9_000, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(1, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(1_000, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,1, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1_000, fetched));
     assertEquals(10_000, value(fetched));
 
     assertEquals(StatusCode.OK, directory.advanceGeneration());
@@ -673,15 +673,15 @@ final class IndexedTransactionSessionTest {
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt - 1, 0, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt - 1, 0, 0, fetched));
     assertEquals(0, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt - 1, 1, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt - 1, 0, 1, fetched));
     assertEquals(10, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 1_000, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 0, 1_000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, 0, fetched));
     assertEquals(9_000, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt, 1, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 1_000, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt, 0, 1, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, 1_000, fetched));
     assertEquals(10_000, value(fetched));
     close(table, wal, directory);
   }
@@ -696,18 +696,18 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     IndexedTransactionSession seed = session(manager, table);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(75, row(750)));
+    assertEquals(StatusCode.OK, seed.insert( 0,75, row(750)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
     IndexedTransactionSession stale = session(manager, table);
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, stale.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update(75, row(751)));
+    assertEquals(StatusCode.OK, writer.update( 0,75, row(751)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.CONFLICT, stale.update(75, row(752)));
+    assertEquals(StatusCode.CONFLICT, stale.update( 0,75, row(752)));
     assertEquals(StatusCode.OK, stale.abort(outcome));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(75, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,75, fetched));
     assertEquals(751, value(fetched));
     assertEquals(0, manager.activeLockCount());
     close(table, wal, directory);
@@ -723,7 +723,7 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     IndexedTransactionSession seed = session(manager, table);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(85, row(850)));
+    assertEquals(StatusCode.OK, seed.insert( 0,85, row(850)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
     long insertedAt = outcome.commitSequence();
 
@@ -731,7 +731,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, beforeDelete.begin(IsolationLevel.REPEATABLE_READ));
     IndexedTransactionSession deleter = session(manager, table);
     assertEquals(StatusCode.OK, deleter.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, deleter.delete(85));
+    assertEquals(StatusCode.OK, deleter.delete( 0,85));
     assertEquals(StatusCode.OK, deleter.commit(outcome));
     long deletedAt = outcome.commitSequence();
 
@@ -739,20 +739,20 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, afterDelete.begin(IsolationLevel.REPEATABLE_READ));
     IndexedTransactionSession reinserter = session(manager, table);
     assertEquals(StatusCode.OK, reinserter.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, reinserter.insert(85, row(851)));
+    assertEquals(StatusCode.OK, reinserter.insert( 0,85, row(851)));
     assertEquals(StatusCode.OK, reinserter.commit(outcome));
     long reinsertedAt = outcome.commitSequence();
 
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, beforeDelete.fetchByKey(85, fetched));
+    assertEquals(StatusCode.OK, beforeDelete.fetchByKey( 0,85, fetched));
     assertEquals(850, value(fetched));
-    assertEquals(StatusCode.CONFLICT, afterDelete.fetchByKey(85, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(85, fetched));
+    assertEquals(StatusCode.CONFLICT, afterDelete.fetchByKey( 0,85, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,85, fetched));
     assertEquals(851, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(insertedAt, 85, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(insertedAt, 0, 85, fetched));
     assertEquals(850, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(deletedAt, 85, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(reinsertedAt, 85, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(deletedAt, 0, 85, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(reinsertedAt, 0, 85, fetched));
     assertEquals(851, value(fetched));
     assertEquals(StatusCode.OK, beforeDelete.abort(outcome));
     assertEquals(StatusCode.OK, afterDelete.abort(outcome));
@@ -770,20 +770,20 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     IndexedTransactionSession seed = session(manager, table);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(201, row(2010)));
-    assertEquals(StatusCode.OK, seed.insert(202, row(2020)));
-    assertEquals(StatusCode.OK, seed.insert(203, row(2030)));
+    assertEquals(StatusCode.OK, seed.insert( 0,201, row(2010)));
+    assertEquals(StatusCode.OK, seed.insert( 0,202, row(2020)));
+    assertEquals(StatusCode.OK, seed.insert( 0,203, row(2030)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update(201, row(2011)));
-    assertEquals(StatusCode.OK, writer.delete(202));
-    assertEquals(StatusCode.OK, writer.delete(203));
+    assertEquals(StatusCode.OK, writer.update( 0,201, row(2011)));
+    assertEquals(StatusCode.OK, writer.delete( 0,202));
+    assertEquals(StatusCode.OK, writer.delete( 0,203));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     IndexedTransactionSession reinserter = session(manager, table);
     assertEquals(StatusCode.OK, reinserter.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, reinserter.insert(202, row(2021)));
+    assertEquals(StatusCode.OK, reinserter.insert( 0,202, row(2021)));
     assertEquals(StatusCode.OK, reinserter.commit(outcome));
     assertEquals(7, table.rowCount());
     assertEquals(4, table.obsoleteVersionCount());
@@ -809,11 +809,11 @@ final class IndexedTransactionSessionTest {
         table.stagedCopyBytes() - stagedBefore);
     assertEquals(17, table.walCopyBytes() - walCopiedBefore);
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(201, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,201, fetched));
     assertEquals(2011, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(202, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,202, fetched));
     assertEquals(2021, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(203, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,203, fetched));
     assertEquals(StatusCode.CONFLICT, vacuum.run(outcome));
     assertEquals(TransactionState.ABORTED, outcome.state());
     assertEquals(3, table.rowCount());
@@ -831,11 +831,11 @@ final class IndexedTransactionSessionTest {
     table = tableResult.table();
     assertEquals(3, table.rowCount());
     assertEquals(0, table.obsoleteVersionCount());
-    assertEquals(StatusCode.OK, table.fetchByKey(201, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,201, fetched));
     assertEquals(2011, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(202, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,202, fetched));
     assertEquals(2021, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(203, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,203, fetched));
     close(table, wal, directory);
   }
 
@@ -856,7 +856,7 @@ final class IndexedTransactionSessionTest {
         largeRow.putLong(0, key);
         largeRow.position(0);
         largeRow.limit(largeRow.capacity());
-        assertEquals(StatusCode.OK, writer.insert(key, largeRow));
+        assertEquals(StatusCode.OK, writer.insert( 0,key, largeRow));
       }
       assertEquals(StatusCode.OK, writer.commit(outcome));
     }
@@ -867,7 +867,7 @@ final class IndexedTransactionSessionTest {
         largeRow.putLong(0, key + 10_000);
         largeRow.position(0);
         largeRow.limit(largeRow.capacity());
-        assertEquals(StatusCode.OK, writer.update(key, largeRow));
+        assertEquals(StatusCode.OK, writer.update( 0,key, largeRow));
       }
       assertEquals(StatusCode.OK, writer.commit(outcome));
     }
@@ -898,9 +898,9 @@ final class IndexedTransactionSessionTest {
     table = tableResult.table();
     assertEquals(300, table.rowCount());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(1000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1000, fetched));
     assertEquals(11_000, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(1299, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1299, fetched));
     assertEquals(11_299, value(fetched));
     close(table, wal, directory);
   }
@@ -915,10 +915,10 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession writer = session(manager, table);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(501, row(5010)));
+    assertEquals(StatusCode.OK, writer.insert( 0,501, row(5010)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update(501, row(5011)));
+    assertEquals(StatusCode.OK, writer.update( 0,501, row(5011)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     assertEquals(StatusCode.OK, vacuum.run(outcome));
@@ -944,7 +944,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(2, table.rowCount());
     assertEquals(1, table.obsoleteVersionCount());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(501, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,501, fetched));
     assertEquals(5011, value(fetched));
     close(table, wal, directory);
   }
@@ -959,7 +959,7 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     IndexedTransactionSession seed = session(manager, table);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(301, row(3010)));
+    assertEquals(StatusCode.OK, seed.insert( 0,301, row(3010)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
     IndexedTransactionSession snapshot = session(manager, table);
@@ -974,7 +974,7 @@ final class IndexedTransactionSessionTest {
         2);
     for (long value = 3011; value <= 3013; value++) {
       assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-      assertEquals(StatusCode.OK, writer.update(301, row(value)));
+      assertEquals(StatusCode.OK, writer.update( 0,301, row(value)));
       assertEquals(StatusCode.OK, writer.commit(outcome));
     }
     assertEquals(4, table.rowCount());
@@ -982,7 +982,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(1, vacuum.automaticDeferrals());
     assertEquals(0, vacuum.automaticRuns());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, snapshot.fetchByKey(301, fetched));
+    assertEquals(StatusCode.OK, snapshot.fetchByKey( 0,301, fetched));
     assertEquals(3010, value(fetched));
     assertEquals(StatusCode.OK, snapshot.abort(outcome));
 
@@ -991,7 +991,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(0, table.obsoleteVersionCount());
     assertEquals(1, vacuum.automaticRuns());
     assertEquals(3, vacuum.automaticRowsReclaimed());
-    assertEquals(StatusCode.OK, writer.update(301, row(3014)));
+    assertEquals(StatusCode.OK, writer.update( 0,301, row(3014)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(2, table.rowCount());
     assertEquals(1, table.obsoleteVersionCount());
@@ -1009,7 +1009,7 @@ final class IndexedTransactionSessionTest {
     table = tableResult.table();
     assertEquals(2, table.rowCount());
     assertEquals(1, table.obsoleteVersionCount());
-    assertEquals(StatusCode.OK, table.fetchByKey(301, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,301, fetched));
     assertEquals(3014, value(fetched));
     close(table, wal, directory);
   }
@@ -1024,7 +1024,7 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     IndexedTransactionSession seed = session(manager, table);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(401, row(4010)));
+    assertEquals(StatusCode.OK, seed.insert( 0,401, row(4010)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
     IndexedTransactionSession snapshot = session(manager, table);
@@ -1039,22 +1039,22 @@ final class IndexedTransactionSessionTest {
         100,
         IndexedTableStore.MAX_ROWS);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update(401, row(4011)));
+    assertEquals(StatusCode.OK, writer.update( 0,401, row(4011)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(StatusCode.RETRY, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(1, vacuum.automaticDeferrals());
     assertEquals(1, vacuum.automaticPressureRejections());
     assertEquals(2, table.rowCount());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, snapshot.fetchByKey(401, fetched));
+    assertEquals(StatusCode.OK, snapshot.fetchByKey( 0,401, fetched));
     assertEquals(4010, value(fetched));
 
     assertEquals(StatusCode.OK, snapshot.abort(outcome));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(1, table.rowCount());
-    assertEquals(StatusCode.OK, writer.update(401, row(4012)));
+    assertEquals(StatusCode.OK, writer.update( 0,401, row(4012)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.OK, table.fetchByKey(401, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,401, fetched));
     assertEquals(4012, value(fetched));
     close(table, wal, directory);
   }
@@ -1090,7 +1090,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(0, manager.activeTransactionCount());
     HeapRowResult fetched = new HeapRowResult();
     for (int key = 101; key <= 104; key++) {
-      assertEquals(StatusCode.OK, table.fetchByKey(key, fetched));
+      assertEquals(StatusCode.OK, table.fetchByKey( 0,key, fetched));
       assertEquals(key * 10L, value(fetched));
     }
     close(table, wal, directory);
@@ -1151,7 +1151,7 @@ final class IndexedTransactionSessionTest {
     table = tableResult.table();
     HeapRowResult fetched = new HeapRowResult();
     for (int key = 301; key <= 304; key++) {
-      assertEquals(StatusCode.OK, table.fetchByKey(key, fetched));
+      assertEquals(StatusCode.OK, table.fetchByKey( 0,key, fetched));
       assertEquals(key * 10L, value(fetched));
     }
     close(table, wal, directory);
@@ -1171,7 +1171,7 @@ final class IndexedTransactionSessionTest {
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     for (int key = 401; key <= 404; key++) {
-      assertEquals(StatusCode.OK, seed.insert(key, row(key * 10L)));
+      assertEquals(StatusCode.OK, seed.insert( 0,key, row(key * 10L)));
     }
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
@@ -1235,8 +1235,8 @@ final class IndexedTransactionSessionTest {
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.insert(501, row(5010)));
-    assertEquals(StatusCode.OK, writer.insert(502, row(5020)));
+    assertEquals(StatusCode.OK, writer.insert( 0,501, row(5010)));
+    assertEquals(StatusCode.OK, writer.insert( 0,502, row(5020)));
     long committedTransactionId = writer.transaction().transactionId();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.commit(outcome));
@@ -1254,11 +1254,11 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 501, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 501, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 0, 501, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, 501, fetched));
     assertEquals(5010, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 502, fetched));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 502, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(committedAt - 1, 0, 502, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(committedAt, 0, 502, fetched));
     assertEquals(5020, value(fetched));
     TransactionManager restartedManager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
@@ -1282,7 +1282,7 @@ final class IndexedTransactionSessionTest {
       assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
       int first = batch * 52;
       for (int key = first; key < first + 52; key++) {
-        assertEquals(StatusCode.OK, seed.insert(key, row(key * 10L)));
+        assertEquals(StatusCode.OK, seed.insert( 0,key, row(key * 10L)));
       }
       assertEquals(StatusCode.OK, seed.commit(outcome));
     }
@@ -1290,14 +1290,14 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
     IndexedTransactionSession writer = session(manager, table);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update(10, row(101)));
-    assertEquals(StatusCode.OK, writer.delete(20));
-    assertEquals(StatusCode.OK, writer.insert(1000, row(10_000)));
+    assertEquals(StatusCode.OK, writer.update( 0,10, row(101)));
+    assertEquals(StatusCode.OK, writer.delete( 0,20));
+    assertEquals(StatusCode.OK, writer.insert( 0,1000, row(10_000)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
 
     IndexedScanCursor cursor = new IndexedScanCursor();
     IndexedScanResult scanned = new IndexedScanResult();
-    assertEquals(StatusCode.OK, snapshot.beginScan(0, Long.MAX_VALUE, cursor));
+    assertEquals(StatusCode.OK, snapshot.beginScan( 0,0, 0, Long.MAX_VALUE, cursor));
     int count = 0;
     StatusCode scanStatus;
     while ((scanStatus = snapshot.nextScan(cursor, scanned)).isOk()) {
@@ -1313,7 +1313,7 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession current = session(manager, table);
     assertEquals(StatusCode.OK, current.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, cursor.reset());
-    assertEquals(StatusCode.OK, current.beginScan(0, Long.MAX_VALUE, cursor));
+    assertEquals(StatusCode.OK, current.beginScan( 0,0, 0, Long.MAX_VALUE, cursor));
     count = 0;
     long previous = -1;
     while ((scanStatus = current.nextScan(cursor, scanned)).isOk()) {
@@ -1342,7 +1342,7 @@ final class IndexedTransactionSessionTest {
     IndexedTransactionSession session = session(manager, table);
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
-      status = session.insert(key, row(key * 10L));
+      status = session.insert( 0,key, row(key * 10L));
     }
     ready.countDown();
     start.await();
@@ -1361,7 +1361,7 @@ final class IndexedTransactionSessionTest {
         new IndexedTransactionSession(manager, table, 128, coordinator);
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
-      status = delete ? session.delete(key) : session.update(key, row(key * 100L));
+      status = delete ? session.delete( 0,key) : session.update( 0,key, row(key * 100L));
     }
     ready.countDown();
     start.await();
@@ -1370,12 +1370,12 @@ final class IndexedTransactionSessionTest {
 
   private static void assertMutationResults(IndexedTable table) {
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(401, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,401, fetched));
     assertEquals(40_100, value(fetched));
-    assertEquals(StatusCode.OK, table.fetchByKey(402, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,402, fetched));
     assertEquals(40_200, value(fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(403, fetched));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(404, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,403, fetched));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,404, fetched));
   }
 
   private static StatusCode commitDistinct(
@@ -1389,7 +1389,7 @@ final class IndexedTransactionSessionTest {
         new IndexedTransactionSession(manager, table, 128, coordinator);
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
-      status = session.insert(key, row(key * 10L));
+      status = session.insert( 0,key, row(key * 10L));
     }
     ready.countDown();
     start.await();

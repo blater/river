@@ -9,42 +9,71 @@ final class SqlPointCommandExecutor {
   private final RelationalSession session;
   private final BoundSqlStatement bound;
   private final SqlBinder binder;
+  private final SqlViewExpander views;
   private final SqlDmlExecutor dml;
   private final SqlQueryExecution queries;
+  private final SqlBlockPlanBinder blockBinder;
+  private final SqlRowProjectionEvaluator rowExpressions;
+  private boolean blockPipeline;
 
   SqlPointCommandExecutor(
       RelationalSession relationalSession,
       BoundSqlStatement boundStatement,
       SqlBinder statementBinder,
+      SqlViewExpander viewExpander,
       SqlDmlExecutor dmlExecutor,
-      SqlQueryExecution queryExecution) {
+      SqlQueryExecution queryExecution,
+      SqlBlockPlanBinder pipelineBinder,
+      SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = boundStatement;
     binder = statementBinder;
+    views = viewExpander;
     dml = dmlExecutor;
     queries = queryExecution;
+    blockBinder = pipelineBinder;
+    rowExpressions = projectionEvaluator;
   }
 
   StatusCode execute(SqlExecutionResult result) {
-    StatusCode status = StatusCode.OK;
-    if (status.isOk()) {
-      status = session.resolveTable(bound.command.tableName(), bound.table);
+    blockPipeline = false;
+    StatusCode status = isPointQuery() ? prepareQuery() : prepareMutation();
+    if (status.isOk() && !blockPipeline) {
+      status = queries.prepareProjectionPrograms();
     }
     if (status.isOk()) {
-      status = binder.bindDataCommand(
-          bound.command,
-          bound.query,
-          bound);
-    }
-    if (status.isOk()) {
-      status = binder.captureExecutableQuery(bound);
-    }
-    if (status.isOk()) {
-      status = dml.handles(bound.command.type())
+      status = blockPipeline
+          ? queries.executeBlockPipeline(result)
+          : dml.handles(bound.command.type())
           ? dml.execute(bound.command, bound, result)
           : queries.executePointQuery(result);
     }
     return status;
+  }
+
+  private StatusCode prepareQuery() {
+    if (bound.query.hasNestedTopology()) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    StatusCode status = views.resolve(session, bound, binder);
+    if (status.isOk()) status = binder.captureExecutableQuery(bound);
+    blockPipeline = status.isOk() && bound.query.isBlockPipeline();
+    if (blockPipeline) {
+      status = blockBinder.bind(session, bound, rowExpressions);
+    } else if (status.isOk()) {
+      status = binder.bindQueryBlocks(session, bound);
+    }
+    if (blockPipeline) return status;
+    return status.isOk()
+        ? binder.bindDataCommand(bound.command, bound.query, bound) : status;
+  }
+
+  private StatusCode prepareMutation() {
+    StatusCode status = session.resolveTable(bound.command.tableName(), bound.table);
+    if (status.isOk()) {
+      status = binder.bindDataCommand(bound.command, bound.query, bound);
+    }
+    return status.isOk() ? binder.captureExecutableQuery(bound) : status;
   }
 
   boolean isPointQuery() {

@@ -28,11 +28,13 @@ final class SqlDmlExecutor {
   SqlDmlExecutor(
       RelationalDatabase relationalDatabase,
       RelationalSession relationalSession,
-      SqlExpressionEvaluator evaluator) {
+      SqlTemporalContext temporal,
+      SqlRowProjectionEvaluator rowExpressions,
+      SqlBoundPredicateEvaluator predicates) {
     database = relationalDatabase;
     session = relationalSession;
-    rows = new SqlMutationRowEncoder(evaluator);
-    matches = new SqlMutationKeyCollector(relationalSession, evaluator);
+    rows = new SqlMutationRowEncoder(temporal, rowExpressions);
+    matches = new SqlMutationKeyCollector(relationalSession, predicates);
   }
 
   boolean handles(SqlCommandType type) {
@@ -86,16 +88,16 @@ final class SqlDmlExecutor {
 
   private StatusCode insertRow(
       SqlCommand command, BoundSqlStatement bound, int index) {
-    StatusCode status = rows.encodeInsert(command, bound, index);
+    StatusCode status = bound.table.hasIdentity()
+        ? StatusCode.OK : rows.resolveInsertKey(command, bound, index);
+    if (status.isOk()) {
+      status = rows.encodeInsert(command, bound, index);
+    }
     if (!status.isOk()) {
       return status;
     }
     long key = bound.table.hasIdentity()
-        ? generatedInsertKeys[index]
-        : command.insertValue(index, bound.insertSourceByColumn[0]);
-    if (!bound.table.checksSatisfied(key, rows.insertRow())) {
-      return StatusCode.CHECK_VIOLATION;
-    }
+        ? generatedInsertKeys[index] : rows.insertKey();
     return session.insertRow(bound.table, key, rows.insertRow());
   }
 
@@ -173,16 +175,15 @@ final class SqlDmlExecutor {
       status = rows.encodeUpdate(command, bound, fetched, primaryKey);
     }
     if (status.isOk()) {
-      status = bound.table.checksSatisfied(primaryKey, rows.updatedRow())
-          ? session.updateRow(bound.table, primaryKey, rows.updatedRow())
-          : StatusCode.CHECK_VIOLATION;
+      status = session.updateRow(bound.table, primaryKey, rows.updatedRow());
     }
     return status;
   }
 
   private static boolean requiresScan(
       SqlCommand command, BoundSqlStatement bound) {
-    return bound.predicateCount != 1
+    return command.hasComputedPredicate()
+        || bound.predicateCount != 1
         || !accessEquality(command, bound)
         || bound.predicateColumn > 0
             && !bound.table.hasUniqueIndexOn(bound.predicateColumn);

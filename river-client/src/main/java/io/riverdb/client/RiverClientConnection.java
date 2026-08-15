@@ -2,6 +2,7 @@ package io.riverdb.client;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.api.RiverQuery;
@@ -243,19 +244,20 @@ public final class RiverClientConnection implements RiverDatabase {
   }
 
   private synchronized StatusCode exchange(ProtocolMessageType type, String text) {
-    return exchange(type, text, null, 0);
+    return exchange(type, text, null, null, 0);
   }
 
   private synchronized StatusCode exchangeBinary(
       ProtocolMessageType type,
       byte[] payload,
       int payloadBytes) {
-    return exchange(type, null, payload, payloadBytes);
+    return exchange(type, null, null, payload, payloadBytes);
   }
 
-  private StatusCode exchange(
+  private synchronized StatusCode exchange(
       ProtocolMessageType type,
       String text,
+      ParameterSet parameters,
       byte[] payload,
       int payloadBytes) {
     if (closed) {
@@ -269,7 +271,7 @@ public final class RiverClientConnection implements RiverDatabase {
     if (payload != null) {
       status = codec.encodeBinaryRequest(request, type, requestId, payload, payloadBytes);
     } else if (text != null) {
-      status = codec.encodeTextRequest(request, type, requestId, text);
+      status = codec.encodeSqlRequest(request, type, requestId, text, parameters);
     } else {
       status = codec.encodeRequest(request, type, requestId);
     }
@@ -282,11 +284,11 @@ public final class RiverClientConnection implements RiverDatabase {
         output.write(request.array(), 0, requestBytes);
         output.flush();
       } finally {
-        if (payload != null) {
+        if (type.requiresPayload()) {
           Arrays.fill(
               request.array(),
               ProtocolFrameCodec.HEADER_BYTES,
-              ProtocolFrameCodec.HEADER_BYTES + payloadBytes,
+              requestBytes,
               (byte) 0);
         }
       }
@@ -386,6 +388,20 @@ public final class RiverClientConnection implements RiverDatabase {
 
     @Override
     public StatusCode execute(String sql, CommandResult result) {
+      return executeRequest(sql, null, result, false);
+    }
+
+    @Override
+    public StatusCode execute(
+        String sql, ParameterSet parameters, CommandResult result) {
+      return executeRequest(sql, parameters, result, true);
+    }
+
+    private StatusCode executeRequest(
+        String sql,
+        ParameterSet parameters,
+        CommandResult result,
+        boolean typed) {
       if (result == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -396,7 +412,11 @@ public final class RiverClientConnection implements RiverDatabase {
       if (query.active) {
         return StatusCode.CONFLICT;
       }
-      StatusCode status = exchange(ProtocolMessageType.EXECUTE, sql);
+      if (typed && parameters == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      StatusCode status = exchange(
+          ProtocolMessageType.EXECUTE, sql, parameters, null, 0);
       if (status.isOk()) {
         status = response.status();
       }
@@ -405,6 +425,20 @@ public final class RiverClientConnection implements RiverDatabase {
 
     @Override
     public StatusCode beginQuery(String sql, QueryOpenResult result) {
+      return beginQueryRequest(sql, null, result, false);
+    }
+
+    @Override
+    public StatusCode beginQuery(
+        String sql, ParameterSet parameters, QueryOpenResult result) {
+      return beginQueryRequest(sql, parameters, result, true);
+    }
+
+    private StatusCode beginQueryRequest(
+        String sql,
+        ParameterSet parameters,
+        QueryOpenResult result,
+        boolean typed) {
       if (result == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -415,7 +449,11 @@ public final class RiverClientConnection implements RiverDatabase {
       if (query.active) {
         return StatusCode.CONFLICT;
       }
-      StatusCode status = exchange(ProtocolMessageType.BEGIN_QUERY, sql);
+      if (typed && parameters == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      StatusCode status = exchange(
+          ProtocolMessageType.BEGIN_QUERY, sql, parameters, null, 0);
       if (status.isOk()) {
         status = response.status();
       }
@@ -423,6 +461,7 @@ public final class RiverClientConnection implements RiverDatabase {
         query.active = true;
         query.rowsReturned = 0;
         query.columnCount = response.columnCount();
+        query.nullableMask = response.nullMask();
         for (int index = 0; index < query.columnCount; index++) {
           query.columnNames[index] = response.columnName(index);
           query.typeDescriptors[index] = response.typeDescriptorAt(index);
@@ -446,6 +485,7 @@ public final class RiverClientConnection implements RiverDatabase {
         query.active = false;
         query.clearColumnNames();
         query.columnCount = 0;
+        query.nullableMask = 0;
         query.clearTypeDescriptors();
         sessionClosed();
       }
@@ -458,6 +498,7 @@ public final class RiverClientConnection implements RiverDatabase {
       query.rowsReturned = 0;
       query.clearColumnNames();
       query.columnCount = 0;
+      query.nullableMask = 0;
       query.clearTypeDescriptors();
     }
 
@@ -465,6 +506,7 @@ public final class RiverClientConnection implements RiverDatabase {
       private final String[] columnNames = new String[CommandResult.MAXIMUM_COLUMNS];
       private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
       private long rowsReturned;
+      private long nullableMask;
       private int columnCount;
       private boolean active;
 
@@ -489,10 +531,13 @@ public final class RiverClientConnection implements RiverDatabase {
           return StatusCode.OK;
         }
         int columns = response.columnCount();
+        if (!matchesQueryShape(columns)) {
+          return RiverClientConnection.this.fail(StatusCode.CORRUPTION);
+        }
         for (int index = 0; index < columns; index++) {
           values[index] = response.valueAt(index);
           RiverClientConnection.this.typeDescriptors[index] =
-              response.typeDescriptorAt(index);
+              typeDescriptors[index];
         }
         StatusCode completed = result.complete(
             response.key(),
@@ -509,6 +554,16 @@ public final class RiverClientConnection implements RiverDatabase {
           }
         }
         return completed;
+      }
+
+      private boolean matchesQueryShape(int columns) {
+        if (columns != columnCount) return false;
+        for (int index = 0; index < columns; index++) {
+          if (response.typeDescriptorAt(index) != typeDescriptors[index]) {
+            return false;
+          }
+        }
+        return true;
       }
 
       @Override
@@ -529,6 +584,7 @@ public final class RiverClientConnection implements RiverDatabase {
           clearColumnNames();
           clearTypeDescriptors();
           columnCount = 0;
+          nullableMask = 0;
           status = copyCommand(result);
         }
         return status;
@@ -552,6 +608,12 @@ public final class RiverClientConnection implements RiverDatabase {
       @Override
       public int columnTypeDescriptor(int index) {
         return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
+      }
+
+      @Override
+      public boolean columnIsNullable(int index) {
+        return index >= 0 && index < columnCount
+            && (nullableMask & 1L << index) != 0;
       }
 
       @Override

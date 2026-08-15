@@ -1482,7 +1482,7 @@ final class RiverDriverTest {
   }
 
   @Test
-  void preparedStatementsRenderOnlyBoundedBigintParameters(@TempDir Path root)
+  void preparedStatementsSendBoundedTypedParameters(@TempDir Path root)
       throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
@@ -1501,7 +1501,7 @@ final class RiverDriverTest {
             "INSERT INTO prepared_values VALUES (?, ?)")) {
       insert.setLong(1, 1);
       SQLException unset = assertThrows(SQLException.class, insert::executeUpdate);
-      assertEquals("22000", unset.getSQLState());
+      assertEquals("07001", unset.getSQLState());
       insert.setLong(2, 100);
       assertEquals(1, insert.executeUpdate());
       insert.setObject(1, Integer.valueOf(2), Types.BIGINT);
@@ -1656,7 +1656,9 @@ final class RiverDriverTest {
           assertEquals("河川データ庫", rows.getObject("label"));
           assertEquals("河川データ庫", rows.getObject("label", String.class));
           assertEquals("新規", rows.getString("state"));
-          assertThrows(SQLException.class, () -> rows.getLong("label"));
+          SQLException numeric = assertThrows(
+              SQLException.class, () -> rows.getLong("label"));
+          assertEquals("0A000", numeric.getSQLState());
           assertFalse(rows.next());
         }
       }
@@ -1669,6 +1671,9 @@ final class RiverDriverTest {
         assertTrue(nullable.wasNull());
         assertNull(nullable.getObject(1));
         assertTrue(nullable.wasNull());
+        SQLException numeric = assertThrows(
+            SQLException.class, () -> nullable.getLong(1));
+        assertEquals("0A000", numeric.getSQLState());
       }
     }
     assertEquals(StatusCode.OK, server.close());
@@ -2227,11 +2232,11 @@ final class RiverDriverTest {
         assertEquals("COLUMN_NAME", fields.getColumnLabel(4));
         assertEquals(Types.INTEGER, fields.getColumnType(5));
         assertEquals(ResultSetMetaData.columnNoNulls, fields.isNullable(4));
-        assertColumnMetadata(columns, tableName, "id", Types.BIGINT, 1);
-        assertColumnMetadata(columns, tableName, "value", Types.BIGINT, 2);
-        assertColumnMetadata(columns, tableName, "label", Types.VARCHAR, 3);
-        assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1);
-        assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2);
+        assertColumnMetadata(columns, tableName, "id", Types.BIGINT, 1, false);
+        assertColumnMetadata(columns, tableName, "value", Types.BIGINT, 2, true);
+        assertColumnMetadata(columns, tableName, "label", Types.VARCHAR, 3, true);
+        assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1, true);
+        assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2, false);
         assertFalse(columns.next());
       }
       try (ResultSet columns = metadata.getColumns(
@@ -2239,7 +2244,7 @@ final class RiverDriverTest {
           null,
           "customer\\_account\\_transaction\\_history\\_view",
           "c_de")) {
-        assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1);
+        assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1, true);
         assertFalse(columns.next());
       }
       try (ResultSet columns = metadata.getColumns(
@@ -2413,8 +2418,8 @@ final class RiverDriverTest {
         null,
         "customer\\_account\\_transaction\\_history\\_view",
         "%")) {
-      assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1);
-      assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2);
+      assertColumnMetadata(columns, viewName, "code", Types.VARCHAR, 1, true);
+      assertColumnMetadata(columns, viewName, "id", Types.BIGINT, 2, false);
       assertFalse(columns.next());
     }
     try (ResultSet keys = connection.getMetaData().getPrimaryKeys(
@@ -2500,7 +2505,8 @@ final class RiverDriverTest {
       String table,
       String column,
       int type,
-      int ordinal) throws SQLException {
+      int ordinal,
+      boolean nullable) throws SQLException {
     assertTrue(columns.next());
     assertNull(columns.getString("TABLE_CAT"));
     assertTrue(columns.wasNull());
@@ -2510,9 +2516,11 @@ final class RiverDriverTest {
     assertEquals(type, columns.getInt("DATA_TYPE"));
     assertEquals(type == Types.VARCHAR ? "VARCHAR" : "BIGINT", columns.getString("TYPE_NAME"));
     assertEquals(type == Types.VARCHAR ? 7 : 19, columns.getInt("COLUMN_SIZE"));
-    assertEquals(ResultSetMetaData.columnNullableUnknown, columns.getInt("NULLABLE"));
+    assertEquals(
+        nullable ? ResultSetMetaData.columnNullable : ResultSetMetaData.columnNoNulls,
+        columns.getInt("NULLABLE"));
     assertEquals(ordinal, columns.getInt("ORDINAL_POSITION"));
-    assertEquals("", columns.getString("IS_NULLABLE"));
+    assertEquals(nullable ? "YES" : "NO", columns.getString("IS_NULLABLE"));
     assertEquals("", columns.getString("IS_AUTOINCREMENT"));
     assertEquals("NO", columns.getString("IS_GENERATEDCOLUMN"));
   }

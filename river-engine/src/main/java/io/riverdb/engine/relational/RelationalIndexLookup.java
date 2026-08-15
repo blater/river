@@ -9,7 +9,7 @@ import java.nio.ByteBuffer;
 final class RelationalIndexLookup {
   private final RelationalSchemaGate schemaGate;
   private final IndexedTransactionSession transaction;
-  private final RelationalKey.LongKeyResult physicalKey = new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult physicalKey = new RelationalKey.KeyResult();
   private final TableDefinition indexTable = new TableDefinition();
   private final HeapRowResult indexRow = new HeapRowResult();
   private final HeapRowResult entryRow = new HeapRowResult();
@@ -49,8 +49,7 @@ final class RelationalIndexLookup {
     }
     result.reset();
     prepare(table, slot);
-    StatusCode status = fetchRow(
-        indexTable, RelationalSecondaryIndexStore.normalizeIndexedValue(value), indexRow);
+    StatusCode status = fetchRow(indexTable, value, indexRow);
     if (status.isOk()) {
       status = RelationalSecondaryIndexStore.decodeLong(indexRow, valueScratch);
     }
@@ -80,16 +79,9 @@ final class RelationalIndexLookup {
       int column,
       RelationalScanCursor cursor) {
     int slot = table == null ? -1 : table.readyIndexSlotOn(column);
-    boolean unique = slot >= 0 && table.indexIsUnique(slot);
     return slot < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : beginScan(
-            owner, table, column,
-            unique ? RelationalSecondaryIndexStore.MINIMUM_INDEXED_VALUE
-                : RelationalSecondaryIndexStore.MINIMUM_NON_UNIQUE_VALUE,
-            unique ? RelationalSecondaryIndexStore.MAXIMUM_INDEXED_VALUE_EXCLUSIVE
-                : RelationalSecondaryIndexStore.MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE,
-            cursor);
+        : beginFullScan(owner, table, column, cursor, slot);
   }
 
   StatusCode beginScan(
@@ -100,27 +92,50 @@ final class RelationalIndexLookup {
       long upperExclusive,
       RelationalScanCursor cursor) {
     int slot = table == null ? -1 : table.readyIndexSlotOn(column);
-    boolean unique = slot >= 0 && table.indexIsUnique(slot);
     if (table == null || !table.isOwnedBy(schemaGate) || slot < 0
-        || (unique
-            ? !RelationalSecondaryIndexStore.validIndexedValue(lowerInclusive)
-            : !RelationalSecondaryIndexStore.validNonUniqueIndexedValue(lowerInclusive))
         || upperExclusive <= lowerInclusive
-        || upperExclusive > (unique
-            ? RelationalSecondaryIndexStore.MAXIMUM_INDEXED_VALUE_EXCLUSIVE
-            : RelationalSecondaryIndexStore.MAXIMUM_NON_UNIQUE_VALUE_EXCLUSIVE)
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     prepare(table, slot);
     StatusCode status = owner.beginScan(
-        indexTable,
-        unique ? RelationalSecondaryIndexStore.normalizeIndexedValue(lowerInclusive)
-            : RelationalSecondaryIndexStore.normalizeNonUniqueIndexedValue(lowerInclusive),
-        unique ? RelationalSecondaryIndexStore.normalizeIndexedValue(upperExclusive)
-            : RelationalSecondaryIndexStore.normalizeNonUniqueIndexedValue(upperExclusive),
-        cursor);
-    return status.isOk() ? cursor.setIndexedColumn(owner, column, unique) : status;
+        indexTable, lowerInclusive, upperExclusive, cursor);
+    return status.isOk()
+        ? cursor.setIndexedColumn(owner, column, table.indexIsUnique(slot)) : status;
+  }
+
+  StatusCode beginExactScan(
+      RelationalSession owner,
+      TableDefinition table,
+      int column,
+      long value,
+      RelationalScanCursor cursor) {
+    int slot = table == null ? -1 : table.readyIndexSlotOn(column);
+    if (table == null
+        || !table.isOwnedBy(schemaGate)
+        || slot < 0
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    prepare(table, slot);
+    StatusCode status = owner.beginExactScan(indexTable, value, cursor);
+    return status.isOk()
+        ? cursor.setIndexedColumn(owner, column, table.indexIsUnique(slot)) : status;
+  }
+
+  private StatusCode beginFullScan(
+      RelationalSession owner,
+      TableDefinition table,
+      int column,
+      RelationalScanCursor cursor,
+      int slot) {
+    if (table == null || !table.isOwnedBy(schemaGate) || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    prepare(table, slot);
+    StatusCode status = owner.beginScan(indexTable, cursor);
+    return status.isOk()
+        ? cursor.setIndexedColumn(owner, column, table.indexIsUnique(slot)) : status;
   }
 
   StatusCode next(
@@ -144,8 +159,7 @@ final class RelationalIndexLookup {
       status = RelationalSecondaryIndexStore.decodeLong(indexResult.row(), valueScratch);
     }
     long primaryKey = status.isOk() ? valueScratch.getLong(0) : 0;
-    long value = status.isOk()
-        ? RelationalSecondaryIndexStore.denormalizeIndexedValue(indexResult.key()) : 0;
+    long value = status.isOk() ? indexResult.key() : 0;
     return status.isOk()
         ? finishRow(table, primaryKey, value, slot, result) : status;
   }
@@ -159,15 +173,12 @@ final class RelationalIndexLookup {
     int slot = table == null ? -1 : table.readyIndexSlotOn(column);
     if (table == null || !table.isOwnedBy(schemaGate) || slot < 0
         || table.indexIsUnique(slot)
-        || !RelationalSecondaryIndexStore.validNonUniqueIndexedValue(value)
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     prepare(table, slot);
     StatusCode status = fetchRow(
-        indexTable,
-        RelationalSecondaryIndexStore.normalizeNonUniqueIndexedValue(value),
-        indexRow);
+        indexTable, value, indexRow);
     if (status.isOk()) {
       status = RelationalSecondaryIndexStore.decodeLong(indexRow, valueScratch);
     }
@@ -216,10 +227,7 @@ final class RelationalIndexLookup {
         status = StatusCode.CORRUPTION;
       }
       if (status.isOk()) {
-        cursor.startDuplicateChain(
-            RelationalSecondaryIndexStore.denormalizeNonUniqueIndexedValue(
-                indexResult.key()),
-            entryId);
+        cursor.startDuplicateChain(indexResult.key(), entryId);
       }
     }
     return status.isOk() ? nextEntry(table, cursor, result, slot) : status;
@@ -275,8 +283,7 @@ final class RelationalIndexLookup {
   }
 
   private StatusCode readEntry(long expectedValue, long entryId) {
-    StatusCode status = fetchRow(
-        indexTable, RelationalSecondaryIndexStore.nonUniqueEntryKey(entryId), entryRow);
+    StatusCode status = fetchAuxiliaryRow(indexTable, entryId, entryRow);
     if (status == StatusCode.CONFLICT) {
       return StatusCode.CORRUPTION;
     }
@@ -287,14 +294,21 @@ final class RelationalIndexLookup {
     return status.isOk()
             && entryScratch.getLong(0) == expectedValue
             && next >= 0
-            && next <= RelationalSecondaryIndexStore.NON_UNIQUE_ENTRY_FLAG - 2
+            && next < Long.MAX_VALUE
         ? StatusCode.OK : status.isOk() ? StatusCode.CORRUPTION : status;
   }
 
   private StatusCode fetchRow(
       TableDefinition table, long key, HeapRowResult result) {
     StatusCode status = RelationalKey.tableRowKey(table.tableId(), key, physicalKey);
-    return status.isOk() ? transaction.fetchByKey(physicalKey.key(), result) : status;
+    return status.isOk()
+        ? transaction.fetchByKey(physicalKey.space(), physicalKey.key(), result) : status;
+  }
+
+  private StatusCode fetchAuxiliaryRow(
+      TableDefinition table, long key, HeapRowResult result) {
+    return transaction.fetchByKey(
+        RelationalKey.auxiliarySpace(table.tableId()), key, result);
   }
 
   private StatusCode copyRow(TableDefinition table, HeapRowResult source) {

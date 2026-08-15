@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.sql.SqlExecutionResult;
@@ -56,6 +57,24 @@ final class OfflineDatabaseBackupTest {
                 + "(2, 250, 7, '河川データ庫'), "
                 + "(3, 300, 8, 'north')",
             command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE temporal_archive ("
+                + "id BIGINT PRIMARY KEY, day DATE, alarm TIME(3), "
+                + "observed TIMESTAMP(6) "
+                + "CHECK (EXTRACT(YEAR FROM observed)>=1969), "
+                + "captured TIMESTAMP(6) WITH TIME ZONE)",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO temporal_archive VALUES "
+                + "(1, DATE '1969-12-31', TIME '01:02:03.456', "
+                + "TIMESTAMP '1969-12-31 23:59:59.123456', "
+                + "TIMESTAMP WITH TIME ZONE '1970-01-01 01:30:00+01:30'), "
+                + "(2, NULL, NULL, NULL, NULL)",
+            command));
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
@@ -97,6 +116,38 @@ final class OfflineDatabaseBackupTest {
     int restoredLabelLength = command.copyTextAt(1, restoredLabel, 0);
     assertEquals(6, restoredLabelLength);
     assertEquals("河川データ庫", new String(restoredLabel, 0, restoredLabelLength));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT day, alarm, observed, captured FROM temporal_archive WHERE id=1",
+            command));
+    assertEquals(SqlTypeDescriptor.DATE, command.typeDescriptorAt(0));
+    assertEquals(-1, command.valueAt(0));
+    assertEquals(SqlTypeDescriptor.time(3), command.typeDescriptorAt(1));
+    assertEquals(3_723_456_000L, command.valueAt(1));
+    assertEquals(SqlTypeDescriptor.timestamp(6), command.typeDescriptorAt(2));
+    assertEquals(-876_544, command.valueAt(2));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6), command.typeDescriptorAt(3));
+    assertEquals(0, command.valueAt(3));
+    assertEquals(0, command.nullMask());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT day, alarm, observed, captured FROM temporal_archive WHERE id=2",
+            command));
+    assertEquals(SqlTypeDescriptor.DATE, command.typeDescriptorAt(0));
+    assertEquals(SqlTypeDescriptor.time(3), command.typeDescriptorAt(1));
+    assertEquals(SqlTypeDescriptor.timestamp(6), command.typeDescriptorAt(2));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6), command.typeDescriptorAt(3));
+    assertEquals(0b1111, command.nullMask());
+    assertEquals(
+        StatusCode.CHECK_VIOLATION,
+        session.execute(
+            "INSERT INTO temporal_archive VALUES (3, NULL, NULL, "
+                + "TIMESTAMP '1968-12-31 00:00:00', NULL)",
+            command));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
 

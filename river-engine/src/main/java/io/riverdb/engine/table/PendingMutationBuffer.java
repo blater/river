@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -16,6 +17,7 @@ final class PendingMutationBuffer {
   private final ByteBuffer rows;
   private final int[] operations;
   private final long[] keys;
+  private final int[] spaces;
   private final int[] previousRowIds;
   private final int[] rowLengths;
   private final boolean[] retained;
@@ -26,6 +28,7 @@ final class PendingMutationBuffer {
     rows = ByteBuffer.allocateDirect(capacity * maximumRowBytes);
     operations = new int[capacity];
     keys = new long[capacity];
+    spaces = new int[capacity];
     previousRowIds = new int[capacity];
     rowLengths = new int[capacity];
     retained = new boolean[capacity];
@@ -52,6 +55,10 @@ final class PendingMutationBuffer {
     return keys[index];
   }
 
+  int spaceAt(int index) {
+    return spaces[index];
+  }
+
   int previousRowIdAt(int index) {
     return previousRowIds[index];
   }
@@ -60,11 +67,12 @@ final class PendingMutationBuffer {
     return rowLengths[index];
   }
 
-  void appendDeletion(int operation, long key, int previousRowId) {
+  void appendDeletion(int operation, int space, long key, int previousRowId) {
     int destinationStart = count * rowStride;
     rows.limit(rows.capacity());
     rows.put(destinationStart, (byte) 0);
     operations[count] = operation;
+    spaces[count] = space;
     keys[count] = key;
     previousRowIds[count] = previousRowId;
     rowLengths[count] = 1;
@@ -73,6 +81,7 @@ final class PendingMutationBuffer {
 
   void append(
       int operation,
+      int space,
       long key,
       int previousRowId,
       ByteBuffer source,
@@ -84,6 +93,7 @@ final class PendingMutationBuffer {
       rows.put(destinationStart + index, source.get(sourceStart + index));
     }
     operations[count] = operation;
+    spaces[count] = space;
     keys[count] = key;
     previousRowIds[count] = previousRowId;
     rowLengths[count] = rowBytes;
@@ -118,9 +128,9 @@ final class PendingMutationBuffer {
     return false;
   }
 
-  int findLatestIndex(long key) {
+  int findLatestIndex(int space, long key) {
     for (int index = count - 1; index >= 0; index--) {
-      if (keys[index] == key) {
+      if (spaces[index] == space && keys[index] == key) {
         return index;
       }
     }
@@ -129,15 +139,18 @@ final class PendingMutationBuffer {
 
   int nextIndex(IndexedScanCursor cursor) {
     int selected = -1;
-    long selectedKey = Long.MAX_VALUE;
+    int selectedSpace = 0;
+    long selectedKey = 0;
     for (int index = 0; index < count; index++) {
       long key = keys[index];
-      if (findLatestIndex(key) == index
-          && key >= cursor.lowerKey()
-          && key < cursor.upperKey()
-          && cursor.afterLastReturned(key)
-          && key < selectedKey) {
+      int space = spaces[index];
+      if (findLatestIndex(space, key) == index
+          && cursor.contains(space, key)
+          && cursor.afterLastReturned(space, key)
+          && (selected < 0
+              || OrderedKey.lessThan(space, key, selectedSpace, selectedKey))) {
         selected = index;
+        selectedSpace = space;
         selectedKey = key;
       }
     }
@@ -147,6 +160,7 @@ final class PendingMutationBuffer {
   void truncate(int first) {
     for (int index = first; index < count; index++) {
       keys[index] = 0;
+      spaces[index] = 0;
       operations[index] = 0;
       previousRowIds[index] = 0;
       rowLengths[index] = 0;
@@ -159,7 +173,7 @@ final class PendingMutationBuffer {
     for (int index = 0; index < originalCount; index++) {
       boolean latest = true;
       for (int later = index + 1; later < originalCount; later++) {
-        if (keys[later] == keys[index]) {
+        if (spaces[later] == spaces[index] && keys[later] == keys[index]) {
           latest = false;
           break;
         }
@@ -179,6 +193,7 @@ final class PendingMutationBuffer {
           rows.put(targetOffset + byteIndex, rows.get(sourceOffset + byteIndex));
         }
         operations[output] = operations[index];
+        spaces[output] = spaces[index];
         keys[output] = keys[index];
         previousRowIds[output] = previousRowIds[index];
         rowLengths[output] = rowBytes;
@@ -190,6 +205,7 @@ final class PendingMutationBuffer {
       if (index >= output) {
         operations[index] = 0;
         keys[index] = 0;
+        spaces[index] = 0;
         previousRowIds[index] = 0;
         rowLengths[index] = 0;
       }

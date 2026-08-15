@@ -11,7 +11,7 @@ final class SqlCommandAuthorization {
     return switch (type) {
       case SELECT, COUNT, COUNT_VALUE, SUM, AVG, SCALAR_EXPRESSION, MIN, MAX,
           GROUP_COUNT, GROUP_COUNT_VALUE, GROUP_SUM, GROUP_AVG, GROUP_MIN, GROUP_MAX,
-          DISTINCT_SCAN, JOIN_SCAN, SCAN, SHOW_TABLES, SHOW_INDEXES ->
+          DISTINCT_SCAN, JOIN_SCAN, SCAN, SHOW_TABLES, SHOW_INDEXES, SHOW_COLUMNS ->
           SessionPermissions.READ;
       case INSERT, UPDATE, DELETE, NEXT_SEQUENCE_VALUE ->
           SessionPermissions.WRITE;
@@ -21,7 +21,7 @@ final class SqlCommandAuthorization {
           DROP_SEQUENCE -> SessionPermissions.SCHEMA;
       case CHECKPOINT -> SessionPermissions.ADMIN;
       case BEGIN, SAVEPOINT, COMMIT, ROLLBACK, ROLLBACK_TO_SAVEPOINT,
-          RELEASE_SAVEPOINT -> SessionPermissions.READ;
+          RELEASE_SAVEPOINT, SET_TIME_ZONE -> SessionPermissions.READ;
     };
   }
 }

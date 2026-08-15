@@ -378,15 +378,16 @@ final class LoopbackRiverServerTest {
     }
 
     private ProtocolResponse send(ProtocolMessageType type, String sql) throws IOException {
-      assertEquals(StatusCode.OK, codec.encodeTextRequest(request, type, requestId++, sql));
+      assertEquals(StatusCode.OK, codec.encodeSqlRequest(request, type, requestId++, sql, null));
       return exchange();
     }
 
     private ProtocolResponse sendBadUtf8() throws IOException {
       assertEquals(
           StatusCode.OK,
-          codec.encodeTextRequest(request, ProtocolMessageType.EXECUTE, requestId++, "A"));
-      request.put(ProtocolFrameCodec.HEADER_BYTES, (byte) 0xc0);
+          codec.encodeSqlRequest(
+              request, ProtocolMessageType.EXECUTE, requestId++, "A", null));
+      request.put(ProtocolFrameCodec.HEADER_BYTES + 8, (byte) 0xc0);
       return exchange();
     }
 

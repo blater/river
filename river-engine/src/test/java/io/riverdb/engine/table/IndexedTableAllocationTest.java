@@ -74,13 +74,13 @@ final class IndexedTableAllocationTest {
 
     for (int index = 0; index < 64; index++) {
       int rowId = 1 + index % 80;
-      allocationGuard += table.fetchByKey(10_000L + rowId - 1L, fetched).ordinal();
+      allocationGuard += table.fetchByKey( 0,10_000L + rowId - 1L, fetched).ordinal();
       allocationGuard += fetched.length();
     }
     before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 256; index++) {
       int rowId = 1 + index % 80;
-      allocationGuard += table.fetchByKey(10_000L + rowId - 1L, fetched).ordinal();
+      allocationGuard += table.fetchByKey( 0,10_000L + rowId - 1L, fetched).ordinal();
       allocationGuard += fetched.length();
     }
     long fetchAllocated = bean.getThreadAllocatedBytes(threadId) - before;
@@ -228,7 +228,7 @@ final class IndexedTableAllocationTest {
     row.position(0);
     row.limit(Long.BYTES);
     allocationGuard += session.begin(IsolationLevel.REPEATABLE_READ).ordinal();
-    allocationGuard += session.insert(value, row).ordinal();
+    allocationGuard += session.insert( 0,value, row).ordinal();
     allocationGuard += session.commit(outcome).ordinal();
     allocationGuard += outcome.commitSequence();
   }
@@ -242,11 +242,11 @@ final class IndexedTableAllocationTest {
     row.putLong(0, key);
     row.position(0);
     row.limit(Long.BYTES);
-    allocationGuard += session.insert(key, row).ordinal();
+    allocationGuard += session.insert( 0,key, row).ordinal();
     row.putLong(0, key + 1L);
     row.position(0);
     row.limit(Long.BYTES);
-    allocationGuard += session.insert(key + 1L, row).ordinal();
+    allocationGuard += session.insert( 0,key + 1L, row).ordinal();
     allocationGuard += session.commit(outcome).ordinal();
     allocationGuard += outcome.commitSequence();
   }
@@ -260,11 +260,11 @@ final class IndexedTableAllocationTest {
     row.putLong(0, value);
     row.position(0);
     row.limit(Long.BYTES);
-    allocationGuard += session.update(416, row).ordinal();
+    allocationGuard += session.update( 0,416, row).ordinal();
     row.putLong(0, value + 1L);
     row.position(0);
     row.limit(Long.BYTES);
-    allocationGuard += session.update(417, row).ordinal();
+    allocationGuard += session.update( 0,417, row).ordinal();
     allocationGuard += session.commit(outcome).ordinal();
     allocationGuard += outcome.commitSequence();
   }
@@ -277,7 +277,7 @@ final class IndexedTableAllocationTest {
     row.putLong(0, value);
     row.position(0);
     row.limit(Long.BYTES);
-    allocationGuard += table.insert(value + 2L, value, row, inserted).ordinal();
+    allocationGuard += table.insert(value + 2L, 0, value, row, inserted).ordinal();
     allocationGuard += inserted.rowId();
   }
 
@@ -289,7 +289,7 @@ final class IndexedTableAllocationTest {
     row.putLong(0, value);
     row.position(0);
     row.limit(row.capacity());
-    allocationGuard += table.insert(2L + value, 10_000L + value, row, inserted).ordinal();
+    allocationGuard += table.insert(2L + value, 0, 10_000L + value, row, inserted).ordinal();
     allocationGuard += inserted.rowId();
   }
 

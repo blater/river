@@ -6,7 +6,7 @@ import java.nio.ByteBuffer;
 /** Durable root/allocation metadata for the first B+tree. */
 public final class BTreeRootPage {
   public static final int BYTES = 32;
-  public static final int VERSION = 1;
+  public static final int VERSION = 2;
 
   private static final long MAGIC = 0x5249564552425452L; // RIVERBTR
 

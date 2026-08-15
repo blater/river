@@ -19,19 +19,22 @@ final class IndexedMutationValidator {
     return leafPageId;
   }
 
-  StatusCode validateNewAt(int candidateLeafPageId, long key, int earlierEntries) {
+  StatusCode validateNewAt(
+      int candidateLeafPageId, int space, long key, int earlierEntries) {
     leafPageId = candidateLeafPageId;
     if (!pages.isPresent(IndexedTableKernel.HEAP_PAGE_ID) || leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
-    return validateNewIn(pages.currentPayload(leafPageId), key, earlierEntries);
+    return validateNewIn(
+        pages.currentPayload(leafPageId), space, key, earlierEntries);
   }
 
-  StatusCode validateNewIn(ByteBuffer leaf, long key, int earlierEntries) {
+  StatusCode validateNewIn(
+      ByteBuffer leaf, int space, long key, int earlierEntries) {
     if (leaf == null) {
       return StatusCode.CORRUPTION;
     }
-    StatusCode status = BTreePage.lookupLeaf(leaf, key, lookup);
+    StatusCode status = BTreePage.lookupLeaf(leaf, space, key, lookup);
     if (status.isOk()) {
       return StatusCode.CONFLICT;
     }
@@ -45,12 +48,13 @@ final class IndexedMutationValidator {
   StatusCode validateMutationAt(
       int candidateLeafPageId,
       int operation,
+      int space,
       long key,
       int previousRowId,
       int earlierEntries,
       boolean previousDeleted) {
     if (operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0) {
-      return validateNewAt(candidateLeafPageId, key, earlierEntries);
+      return validateNewAt(candidateLeafPageId, space, key, earlierEntries);
     }
     leafPageId = candidateLeafPageId;
     if (!pages.isPresent(IndexedTableKernel.HEAP_PAGE_ID) || leafPageId <= 0) {
@@ -59,6 +63,7 @@ final class IndexedMutationValidator {
     return validateMutationIn(
         pages.currentPayload(leafPageId),
         operation,
+        space,
         key,
         previousRowId,
         earlierEntries,
@@ -68,17 +73,18 @@ final class IndexedMutationValidator {
   StatusCode validateMutationIn(
       ByteBuffer leaf,
       int operation,
+      int space,
       long key,
       int previousRowId,
       int earlierEntries,
       boolean previousDeleted) {
     if (operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0) {
-      return validateNewIn(leaf, key, earlierEntries);
+      return validateNewIn(leaf, space, key, earlierEntries);
     }
     if (leaf == null) {
       return StatusCode.CORRUPTION;
     }
-    StatusCode status = BTreePage.lookupLeaf(leaf, key, lookup);
+    StatusCode status = BTreePage.lookupLeaf(leaf, space, key, lookup);
     boolean validHead = status.isOk()
         && lookup.rowId() == previousRowId
         && previousRowId > 0;
@@ -87,13 +93,14 @@ final class IndexedMutationValidator {
     return validHead ? StatusCode.OK : StatusCode.CONFLICT;
   }
 
-  StatusCode validateVacuumAt(int candidateLeafPageId, long key, int rowId) {
+  StatusCode validateVacuumAt(
+      int candidateLeafPageId, int space, long key, int rowId) {
     leafPageId = candidateLeafPageId;
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
     StatusCode status = BTreePage.lookupLeaf(
-        pages.currentPayload(leafPageId), key, lookup);
+        pages.currentPayload(leafPageId), space, key, lookup);
     return status.isOk() && lookup.rowId() == rowId
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }

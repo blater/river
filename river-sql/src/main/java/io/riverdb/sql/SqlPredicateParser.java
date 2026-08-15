@@ -1,15 +1,16 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Parses bounded WHERE predicates and owns their literal normalization scratch. */
 final class SqlPredicateParser {
   private final SqlParserInput input;
   private final SqlComparisonParser comparisons;
+  private final SqlScalarExpressionParser expressions;
+  private final SqlPredicateLiteralNormalizer literals =
+      new SqlPredicateLiteralNormalizer();
   private final SqlParser.LongResult numberResult = new SqlParser.LongResult();
-  private final ExactDecimal.LongValue decimalResult = new ExactDecimal.LongValue();
   private final SqlIdentifier identifierScratch = new SqlIdentifier();
   private final PredicateResult predicateResult = new PredicateResult();
   private final long[] literalMembershipValues =
@@ -17,9 +18,11 @@ final class SqlPredicateParser {
   private int syntheticPredicateOffset = -1;
   private int syntheticPredicateIndex = -1;
 
-  SqlPredicateParser(SqlParserInput parserInput) {
+  SqlPredicateParser(
+      SqlParserInput parserInput, SqlScalarExpressionParser expressionParser) {
     input = parserInput;
     comparisons = new SqlComparisonParser(parserInput);
+    expressions = expressionParser;
   }
 
   void beginStandard() {
@@ -67,17 +70,85 @@ final class SqlPredicateParser {
     if (table == null || column == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    int start = input.position();
     StatusCode status = parsePredicateReference(sql, table, column, qualified);
-    if (status.isOk()) {
-      status = parsePredicateOperator(sql);
+    if (status.isOk()) status = parsePredicateOperator(sql);
+    boolean computed = !status.isOk();
+    if (computed) {
+      input.position(start);
+      table.reset();
+      column.reset();
+      status = expressions.parsePredicate(sql, result);
+      if (status.isOk()) status = adoptDirectExpression(result, table, column);
+      computed = status.isOk()
+          && result.writablePredicateExpression().isAvailable();
+      if (status.isOk()) status = parsePredicateOperator(sql);
+    }
+    if (status.isOk() && computed && unsupportedComputedOperator()) {
+      status = StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    if (status.isOk()
+        && disjunction
+        && (computed || result.hasComputedPredicate())) {
+      status = StatusCode.FEATURE_NOT_SUPPORTED;
     }
     if (status.isOk()) {
-      status = parsePredicateValue(sql, result, table, column);
+      status = computed
+          ? parseComputedPredicateValue(sql, result)
+          : parsePredicateValue(sql, result, table, column);
     }
     if (status.isOk()) {
       status = appendPredicate(result, disjunction);
     }
+    if (status.isOk() && computed) {
+      result.publishPredicateExpression(result.predicateCount() - 1);
+    }
     return status;
+  }
+
+  private StatusCode adoptDirectExpression(
+      SqlCommand result, SqlIdentifier table, SqlIdentifier column) {
+    SqlScalarExpression expression = result.writablePredicateExpression();
+    if (!expression.isDirectColumnReference()) return StatusCode.OK;
+    int symbol = (int) expression.operand(0);
+    SqlIdentifier symbolTable = result.predicateSymbolTable(symbol);
+    SqlIdentifier symbolName = result.predicateSymbolName(symbol);
+    if (symbolTable == null || symbolName == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    table.copyFrom(symbolTable);
+    column.copyFrom(symbolName);
+    result.writablePredicateExpression().reset();
+    return StatusCode.OK;
+  }
+
+  private boolean unsupportedComputedOperator() {
+    return predicateResult.unknownPredicate
+        || predicateResult.truthPredicate;
+  }
+
+  private StatusCode parseComputedPredicateValue(
+      CharSequence sql, SqlCommand result) {
+    if (predicateResult.nullPredicate) return StatusCode.OK;
+    if (predicateResult.between) {
+      return input.startsLiteral(sql)
+          ? parseBetweenPredicate(sql) : StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    if (predicateResult.comparison == SqlComparison.IN
+        || predicateResult.comparison == SqlComparison.NOT_IN) {
+      return parseComputedMembership(sql);
+    }
+    return parseComputedValue(sql, result);
+  }
+
+  private StatusCode parseComputedValue(CharSequence sql, SqlCommand result) {
+    int start = input.position();
+    if (start == syntheticPredicateOffset) {
+      syntheticPredicateIndex = result.predicateCount();
+    }
+    StatusCode status = parsePredicateLiteral(sql);
+    return !status.isOk() && input.position() == start
+        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
   }
 
   private StatusCode parsePredicateReference(
@@ -115,9 +186,15 @@ final class SqlPredicateParser {
 
   private StatusCode parseIsPredicate(CharSequence sql) {
     boolean negated = consumeKeyword(sql, "NOT");
-    if (consumeKeyword(sql, "NULL") || consumeKeyword(sql, "UNKNOWN")) {
+    if (consumeKeyword(sql, "NULL")) {
       predicateResult.nullPredicate = true;
       predicateResult.nullNegated = negated;
+      return StatusCode.OK;
+    }
+    if (consumeKeyword(sql, "UNKNOWN")) {
+      predicateResult.nullPredicate = true;
+      predicateResult.nullNegated = negated;
+      predicateResult.unknownPredicate = true;
       return StatusCode.OK;
     }
     if (negated) {
@@ -165,6 +242,9 @@ final class SqlPredicateParser {
     if (!status.isOk()) {
       return status;
     }
+    if (numberResult.nullValue) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     predicateResult.lower = numberResult.value;
     predicateResult.varchar = numberResult.varchar;
     predicateResult.typeDescriptor = numberResult.typeDescriptor;
@@ -175,15 +255,27 @@ final class SqlPredicateParser {
     if (!status.isOk()) {
       return status;
     }
+    if (numberResult.nullValue) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     predicateResult.upper = numberResult.value;
     predicateResult.textScalars = numberResult.textScalars;
     if (predicateResult.typeDescriptor != numberResult.typeDescriptor) {
-      int common = commonLiteralDescriptor(
-          predicateResult.typeDescriptor, numberResult.typeDescriptor);
-      if (common == 0
-          || !normalizePredicateRange(common, numberResult.typeDescriptor)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
+      status = literals.normalizeRange(
+          predicateResult.lower,
+          predicateResult.typeDescriptor,
+          predicateResult.upper,
+          numberResult.typeDescriptor);
+      if (!status.isOk()) {
+        return status;
       }
+      predicateResult.lower = literals.lower();
+      predicateResult.upper = literals.upper();
+      predicateResult.typeDescriptor = literals.descriptor();
+      numberResult.typeDescriptor = literals.descriptor();
+    }
+    if (predicateResult.varchar) {
+      return finishTextRange();
     }
     if (predicateResult.lower > predicateResult.upper) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -197,18 +289,40 @@ final class SqlPredicateParser {
     return StatusCode.OK;
   }
 
+  private StatusCode finishTextRange() {
+    int compared = input.compareText(
+        predicateResult.lower, predicateResult.upper);
+    if (compared == Integer.MIN_VALUE || compared > 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    predicateResult.upper = input.textSuccessor(predicateResult.upper);
+    return predicateResult.upper == SqlCommand.INVALID_TEXT_HANDLE
+        ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
+  }
+
+  private StatusCode parseComputedMembership(CharSequence sql) {
+    int start = input.position();
+    StatusCode status = requireCharacter(sql, '(');
+    if (!status.isOk()) {
+      input.position(start);
+      return status;
+    }
+    boolean supported = consumeKeyword(sql, "NULL") || input.startsLiteral(sql);
+    input.position(start);
+    return supported
+        ? parseMembershipPredicate(sql) : StatusCode.FEATURE_NOT_SUPPORTED;
+  }
+
   private StatusCode parseMembershipPredicate(CharSequence sql) {
     StatusCode status = requireCharacter(sql, '(');
     boolean complete = false;
-    boolean typeSet = false;
     while (status.isOk() && !complete) {
       if (consumeKeyword(sql, "NULL")) {
         predicateResult.membershipHasNull = true;
       } else if (predicateResult.membershipCount >= literalMembershipValues.length) {
         status = StatusCode.RESOURCE_EXHAUSTED;
       } else {
-        status = appendMembershipLiteral(sql, typeSet);
-        typeSet = status.isOk();
+        status = appendMembershipLiteral(sql);
       }
       if (status.isOk()) {
         complete = consumeCharacter(sql, ')');
@@ -220,94 +334,43 @@ final class SqlPredicateParser {
     return status;
   }
 
-  private StatusCode appendMembershipLiteral(CharSequence sql, boolean typeSet) {
+  private StatusCode appendMembershipLiteral(CharSequence sql) {
     StatusCode status = literal(sql, numberResult);
     if (!status.isOk()) return status;
-    if (typeSet && predicateResult.typeDescriptor != numberResult.typeDescriptor) {
-      int common = commonLiteralDescriptor(
-          predicateResult.typeDescriptor, numberResult.typeDescriptor);
-      if (common == 0 || !normalizeMembership(common, numberResult.typeDescriptor)) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (numberResult.nullValue) {
+      predicateResult.membershipHasNull = true;
+      if (numberResult.typeDescriptor != 0) {
+        status = literals.mergeMembershipDescriptor(
+            literalMembershipValues,
+            predicateResult.membershipCount,
+            predicateResult.typeDescriptor,
+            numberResult.typeDescriptor);
+        if (status.isOk()) {
+          predicateResult.typeDescriptor = literals.descriptor();
+        }
       }
+      return status;
+    }
+    if (predicateResult.typeDescriptor != 0
+        && predicateResult.typeDescriptor != numberResult.typeDescriptor) {
+      status = literals.normalizeMembership(
+          literalMembershipValues,
+          predicateResult.membershipCount,
+          predicateResult.typeDescriptor,
+          numberResult.value,
+          numberResult.typeDescriptor);
+      if (!status.isOk()) {
+        return status;
+      }
+      numberResult.value = literals.value();
+      predicateResult.typeDescriptor = literals.descriptor();
+      numberResult.typeDescriptor = literals.descriptor();
     }
     predicateResult.varchar = numberResult.varchar;
     predicateResult.textScalars = numberResult.textScalars;
     predicateResult.typeDescriptor = numberResult.typeDescriptor;
     literalMembershipValues[predicateResult.membershipCount++] = numberResult.value;
     return StatusCode.OK;
-  }
-
-  private boolean normalizePredicateRange(int target, int upperDescriptor) {
-    if (SqlTypeDescriptor.typeId(target) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      predicateResult.typeDescriptor = target;
-      numberResult.typeDescriptor = target;
-      return true;
-    }
-    if (!ExactDecimal.widenScale(
-        predicateResult.lower,
-        predicateResult.typeDescriptor,
-        target,
-        decimalResult)) {
-      return false;
-    }
-    predicateResult.lower = decimalResult.value;
-    if (!ExactDecimal.widenScale(
-        predicateResult.upper,
-        upperDescriptor,
-        target,
-        decimalResult)) {
-      return false;
-    }
-    predicateResult.upper = decimalResult.value;
-    predicateResult.typeDescriptor = target;
-    return true;
-  }
-
-  private boolean normalizeMembership(int target, int candidateDescriptor) {
-    if (SqlTypeDescriptor.typeId(target) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      predicateResult.typeDescriptor = target;
-      numberResult.typeDescriptor = target;
-      return true;
-    }
-    for (int index = 0; index < predicateResult.membershipCount; index++) {
-      if (!ExactDecimal.widenScale(
-          literalMembershipValues[index],
-          predicateResult.typeDescriptor,
-          target,
-          decimalResult)) {
-        return false;
-      }
-      literalMembershipValues[index] = decimalResult.value;
-    }
-    if (!ExactDecimal.widenScale(
-        numberResult.value,
-        candidateDescriptor,
-        target,
-        decimalResult)) {
-      return false;
-    }
-    numberResult.value = decimalResult.value;
-    numberResult.typeDescriptor = target;
-    predicateResult.typeDescriptor = target;
-    return true;
-  }
-
-  private static int commonLiteralDescriptor(int left, int right) {
-    if (SqlTypeDescriptor.typeId(left) == SqlTypeDescriptor.TYPE_ID_VARCHAR
-        && SqlTypeDescriptor.typeId(right) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      return SqlTypeDescriptor.varchar(Math.max(
-          SqlTypeDescriptor.parameterOne(left), SqlTypeDescriptor.parameterOne(right)));
-    }
-    if (SqlTypeDescriptor.typeId(left) != SqlTypeDescriptor.TYPE_ID_DECIMAL
-        || SqlTypeDescriptor.typeId(right) != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
-      return 0;
-    }
-    int scale = Math.max(
-        SqlTypeDescriptor.parameterTwo(left), SqlTypeDescriptor.parameterTwo(right));
-    int integerDigits = Math.max(
-        SqlTypeDescriptor.parameterOne(left) - SqlTypeDescriptor.parameterTwo(left),
-        SqlTypeDescriptor.parameterOne(right) - SqlTypeDescriptor.parameterTwo(right));
-    return SqlTypeDescriptor.decimal(integerDigits + scale, scale);
   }
 
   private StatusCode parseEqualityPredicate(CharSequence sql, SqlCommand result) {
@@ -364,6 +427,9 @@ final class SqlPredicateParser {
 
   private StatusCode parsePredicateLiteral(CharSequence sql) {
     StatusCode status = literal(sql, numberResult);
+    if (status.isOk() && numberResult.nullValue) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     if (status.isOk()) {
       predicateResult.value = numberResult.value;
       predicateResult.varchar = numberResult.varchar;
@@ -522,6 +588,7 @@ final class SqlPredicateParser {
     private boolean columnEquality;
     private boolean varchar;
     private boolean truthPredicate;
+    private boolean unknownPredicate;
 
     private void reset() {
       comparison = null;
@@ -539,6 +606,7 @@ final class SqlPredicateParser {
       columnEquality = false;
       varchar = false;
       truthPredicate = false;
+      unknownPredicate = false;
     }
   }
 }

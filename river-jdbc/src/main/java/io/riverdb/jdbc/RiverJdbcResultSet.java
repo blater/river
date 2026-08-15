@@ -1,13 +1,18 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
 import java.math.BigDecimal;
+import java.sql.Date;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Time;
+import java.sql.Timestamp;
 
 /** Streaming forward-only result set backed by one-row River fetch credit. */
 final class RiverJdbcResultSet extends AbstractResultSet {
@@ -92,6 +97,10 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     if (metadata.isDecimal(column)) {
       return BigDecimal.valueOf(value, metadata.decimalScale(column)).toPlainString();
     }
+    int descriptor = metadata.typeDescriptor(column);
+    if (RiverJdbcTemporalValues.isTemporal(descriptor)) {
+      return RiverJdbcTemporalValues.string(value, descriptor, textCharacters);
+    }
     if (!metadata.isVarchar(column)) {
       return Long.toString(value);
     }
@@ -104,49 +113,49 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public boolean getBoolean(int column) throws SQLException {
-    return numericValue(column) != 0;
+    return primitiveNumericValue(column) != 0;
   }
 
   @Override
   public byte getByte(int column) throws SQLException {
-    long value = numericValue(column);
+    long value = primitiveNumericValue(column);
     if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
-      throw JdbcExceptions.invalid("BIGINT value does not fit in byte");
+      throw numericOverflow();
     }
     return (byte) value;
   }
 
   @Override
   public short getShort(int column) throws SQLException {
-    long value = numericValue(column);
+    long value = primitiveNumericValue(column);
     if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
-      throw JdbcExceptions.invalid("BIGINT value does not fit in short");
+      throw numericOverflow();
     }
     return (short) value;
   }
 
   @Override
   public int getInt(int column) throws SQLException {
-    long value = numericValue(column);
+    long value = primitiveNumericValue(column);
     if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
-      throw JdbcExceptions.invalid("BIGINT value does not fit in int");
+      throw numericOverflow();
     }
     return (int) value;
   }
 
   @Override
   public long getLong(int column) throws SQLException {
-    return numericValue(column);
+    return primitiveNumericValue(column);
   }
 
   @Override
   public float getFloat(int column) throws SQLException {
-    return numericValue(column);
+    return primitiveNumericValue(column);
   }
 
   @Override
   public double getDouble(int column) throws SQLException {
-    return numericValue(column);
+    return primitiveNumericValue(column);
   }
 
   @Override
@@ -168,6 +177,10 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     if (metadata.isDecimal(column)) {
       return BigDecimal.valueOf(value, metadata.decimalScale(column));
     }
+    int descriptor = metadata.typeDescriptor(column);
+    if (RiverJdbcTemporalValues.isTemporal(descriptor)) {
+      return RiverJdbcTemporalValues.object(value, descriptor);
+    }
     return metadata.isBoolean(column) ? Boolean.valueOf(value != 0) : Long.valueOf(value);
   }
 
@@ -177,6 +190,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
       throw JdbcExceptions.invalid("target type must not be null");
     }
     long value = value(column);
+    requireObjectConversion(column, type);
     if (lastWasNull) {
       return null;
     }
@@ -186,6 +200,10 @@ final class RiverJdbcResultSet extends AbstractResultSet {
         throw JdbcExceptions.unsupported();
       }
       converted = getString(column);
+    } else if (RiverJdbcTemporalValues.isTemporal(
+        metadata.typeDescriptor(column))) {
+      converted = RiverJdbcTemporalValues.convert(
+          value, metadata.typeDescriptor(column), type, textCharacters);
     } else if (metadata.isBoolean(column)
         && (type == Boolean.class || type == Boolean.TYPE)) {
       converted = Boolean.valueOf(value != 0);
@@ -193,13 +211,15 @@ final class RiverJdbcResultSet extends AbstractResultSet {
       converted = Long.valueOf(value);
     } else if (type == Integer.class || type == Integer.TYPE) {
       if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
-        throw JdbcExceptions.invalid("BIGINT value does not fit in int");
+        throw numericOverflow();
       }
       converted = Integer.valueOf((int) value);
     } else if (type == String.class) {
-      converted = metadata.isDecimal(column)
-          ? BigDecimal.valueOf(value, metadata.decimalScale(column)).toPlainString()
-          : Long.toString(value);
+      if (metadata.isBoolean(column)) converted = Boolean.toString(value != 0);
+      else if (metadata.isDecimal(column)) {
+        converted = BigDecimal.valueOf(
+            value, metadata.decimalScale(column)).toPlainString();
+      } else converted = Long.toString(value);
     } else if (type == BigDecimal.class) {
       converted = BigDecimal.valueOf(
           value, metadata.isDecimal(column) ? metadata.decimalScale(column) : 0);
@@ -212,8 +232,53 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   }
 
   @Override
+  public Date getDate(int column) throws SQLException {
+    long value = value(column);
+    int descriptor = metadata.typeDescriptor(column);
+    if (!RiverJdbcTemporalValues.supportsObjectClass(descriptor, Date.class)) {
+      throw JdbcExceptions.unsupported();
+    }
+    return lastWasNull ? null : RiverJdbcTemporalValues.date(value, descriptor);
+  }
+
+  @Override
+  public Time getTime(int column) throws SQLException {
+    long value = value(column);
+    int descriptor = metadata.typeDescriptor(column);
+    if (!RiverJdbcTemporalValues.supportsObjectClass(descriptor, Time.class)) {
+      throw JdbcExceptions.unsupported();
+    }
+    return lastWasNull ? null : RiverJdbcTemporalValues.time(value, descriptor);
+  }
+
+  @Override
+  public Timestamp getTimestamp(int column) throws SQLException {
+    long value = value(column);
+    int descriptor = metadata.typeDescriptor(column);
+    if (!RiverJdbcTemporalValues.supportsObjectClass(
+        descriptor, Timestamp.class)) throw JdbcExceptions.unsupported();
+    return lastWasNull ? null : RiverJdbcTemporalValues.timestamp(
+        value, descriptor);
+  }
+
+  @Override
   public long getLong(String label) throws SQLException {
     return getLong(findColumn(label));
+  }
+
+  @Override
+  public boolean getBoolean(String label) throws SQLException {
+    return getBoolean(findColumn(label));
+  }
+
+  @Override
+  public byte getByte(String label) throws SQLException {
+    return getByte(findColumn(label));
+  }
+
+  @Override
+  public short getShort(String label) throws SQLException {
+    return getShort(findColumn(label));
   }
 
   @Override
@@ -222,8 +287,38 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   }
 
   @Override
+  public float getFloat(String label) throws SQLException {
+    return getFloat(findColumn(label));
+  }
+
+  @Override
+  public double getDouble(String label) throws SQLException {
+    return getDouble(findColumn(label));
+  }
+
+  @Override
+  public BigDecimal getBigDecimal(String label) throws SQLException {
+    return getBigDecimal(findColumn(label));
+  }
+
+  @Override
   public String getString(String label) throws SQLException {
     return getString(findColumn(label));
+  }
+
+  @Override
+  public Date getDate(String label) throws SQLException {
+    return getDate(findColumn(label));
+  }
+
+  @Override
+  public Time getTime(String label) throws SQLException {
+    return getTime(findColumn(label));
+  }
+
+  @Override
+  public Timestamp getTimestamp(String label) throws SQLException {
+    return getTimestamp(findColumn(label));
   }
 
   @Override
@@ -365,10 +460,41 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   private long numericValue(int column) throws SQLException {
     long result = value(column);
-    if (metadata.isVarchar(column) && !lastWasNull) {
-      throw JdbcExceptions.invalid("VARCHAR value is not numeric");
+    if (metadata.isVarchar(column)) throw JdbcExceptions.unsupported();
+    if (RiverJdbcTemporalValues.isTemporal(metadata.typeDescriptor(column))) {
+      throw JdbcExceptions.unsupported();
     }
     return result;
+  }
+
+  private long primitiveNumericValue(int column) throws SQLException {
+    long result = numericValue(column);
+    if (metadata.isDecimal(column)) throw JdbcExceptions.unsupported();
+    return result;
+  }
+
+  private void requireObjectConversion(int column, Class<?> type)
+      throws SQLException {
+    int descriptor = metadata.typeDescriptor(column);
+    boolean supported = switch (SqlTypeDescriptor.typeId(descriptor)) {
+      case SqlTypeDescriptor.TYPE_ID_BIGINT -> type == Long.class
+          || type == Long.TYPE || type == Integer.class || type == Integer.TYPE
+          || type == BigDecimal.class || type == String.class;
+      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> type == Boolean.class
+          || type == Boolean.TYPE || type == Long.class || type == Long.TYPE
+          || type == Integer.class || type == Integer.TYPE
+          || type == BigDecimal.class || type == String.class;
+      case SqlTypeDescriptor.TYPE_ID_DECIMAL ->
+          type == BigDecimal.class || type == String.class;
+      case SqlTypeDescriptor.TYPE_ID_VARCHAR -> type == String.class;
+      default -> RiverJdbcTemporalValues.supportsObjectClass(descriptor, type);
+    };
+    if (!supported) throw JdbcExceptions.unsupported();
+  }
+
+  private static SQLException numericOverflow() {
+    return JdbcExceptions.failure(
+        StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, "convert numeric result");
   }
 
   private void completeQuery() throws SQLException {

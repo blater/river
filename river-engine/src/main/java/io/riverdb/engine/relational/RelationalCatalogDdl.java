@@ -10,7 +10,7 @@ final class RelationalCatalogDdl {
   private final HeapRowResult catalogRow = new HeapRowResult();
   private final ByteBuffer scratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final ByteBuffer output = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
-  private final RelationalKey.LongKeyResult key = new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult key = new RelationalKey.KeyResult();
   private final CatalogSequenceCodec.IntResult nextTableId =
       new CatalogSequenceCodec.IntResult();
   private final CatalogSequenceCodec.SequenceResult sequence =
@@ -53,7 +53,7 @@ final class RelationalCatalogDdl {
     if (status.isOk()) {
       CatalogSequenceCodec.encodeAllocation(output, tableId + 1);
       status = session.indexedSession().update(
-          RelationalKey.CATALOG_SEQUENCE_KEY, output);
+          RelationalKey.CATALOG_SEQUENCE_SPACE, 0, output);
     }
     if (status.isOk()) {
       CatalogRecord.encodeTable(
@@ -64,12 +64,14 @@ final class RelationalCatalogDdl {
           -1,
           name,
           schema);
-      status = session.indexedSession().insert(key.key(), output);
+      status = session.indexedSession().insert(key.space(), key.key(), output);
     }
     if (status.isOk() && schema.hasIdentity()) {
       CatalogSequenceCodec.encodeIdentity(output, tableId, 1, false);
       status = session.indexedSession().insert(
-          RelationalKey.identitySequenceKey(tableId), output);
+          RelationalKey.CATALOG_SEQUENCE_SPACE,
+          RelationalKey.identitySequenceKey(tableId),
+          output);
     }
     if (status.isOk()) {
       result.set(
@@ -87,7 +89,7 @@ final class RelationalCatalogDdl {
     StatusCode status = availableName(session, name);
     if (status.isOk()) {
       CatalogSequenceCodec.encodeUser(output, name, start, increment, false);
-      status = session.indexedSession().insert(key.key(), output);
+      status = session.indexedSession().insert(key.space(), key.key(), output);
     }
     return status;
   }
@@ -99,8 +101,10 @@ final class RelationalCatalogDdl {
       int baseTableId) {
     StatusCode status = availableName(session, name);
     if (status.isOk()) {
-      CatalogViewCodec.encode(output, name, query, baseTableId);
-      status = session.indexedSession().insert(key.key(), output);
+      status = CatalogViewCodec.encode(output, name, query, baseTableId);
+    }
+    if (status.isOk()) {
+      status = session.indexedSession().insert(key.space(), key.key(), output);
     }
     return status;
   }
@@ -111,7 +115,7 @@ final class RelationalCatalogDdl {
       status = CatalogViewCodec.decode(catalogRow, scratch, name, view);
     }
     return status.isOk()
-        ? session.indexedSession().delete(key.key()) : status;
+        ? session.indexedSession().delete(key.space(), key.key()) : status;
   }
 
   StatusCode dropSequence(RelationalSession session, CharSequence name) {
@@ -120,7 +124,7 @@ final class RelationalCatalogDdl {
       status = CatalogSequenceCodec.decodeUser(catalogRow, scratch, name, sequence);
     }
     return status.isOk()
-        ? session.indexedSession().delete(key.key()) : status;
+        ? session.indexedSession().delete(key.space(), key.key()) : status;
   }
 
   private StatusCode availableName(
@@ -129,7 +133,7 @@ final class RelationalCatalogDdl {
     if (!status.isOk()) {
       return status;
     }
-    status = session.indexedSession().fetchByKey(key.key(), catalogRow);
+    status = session.indexedSession().fetchByKey(key.space(), key.key(), catalogRow);
     return status.isOk()
         ? StatusCode.CONFLICT
         : status == StatusCode.CONFLICT ? StatusCode.OK : status;
@@ -139,12 +143,12 @@ final class RelationalCatalogDdl {
       RelationalSession session, CharSequence name) {
     StatusCode status = RelationalKey.catalogTableKey(name, key);
     return status.isOk()
-        ? session.indexedSession().fetchByKey(key.key(), catalogRow) : status;
+        ? session.indexedSession().fetchByKey(key.space(), key.key(), catalogRow) : status;
   }
 
   private StatusCode readNextTableId(RelationalSession session) {
     StatusCode status = session.indexedSession().fetchByKey(
-        RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
+        RelationalKey.CATALOG_SEQUENCE_SPACE, 0, catalogRow);
     return status.isOk()
         ? CatalogSequenceCodec.decodeAllocation(catalogRow, scratch, nextTableId)
         : status;

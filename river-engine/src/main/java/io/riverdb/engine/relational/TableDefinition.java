@@ -21,10 +21,20 @@ public final class TableDefinition {
   private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
   private final boolean[] constraintIndexes = new boolean[MAXIMUM_INDEXES];
   private final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final byte[] defaultKinds = new byte[TableSchema.MAXIMUM_COLUMNS];
   private final byte[] defaultTextBytes = new byte[TableSchema.MAXIMUM_ROW_BYTES];
   private final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[TableSchema.MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final int[] checkTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final byte[] checkNodeCounts = new byte[TableSchema.MAXIMUM_COLUMNS];
+  private final byte[] checkNodeOffsets = new byte[TableSchema.MAXIMUM_COLUMNS];
+  private final byte[] checkOperators = new byte[TableSchema.MAXIMUM_CHECK_NODES];
+  private final long[] checkOperands = new long[TableSchema.MAXIMUM_CHECK_NODES];
+  private final int[] checkNodeDescriptors =
+      new int[TableSchema.MAXIMUM_CHECK_NODES];
+  private final int[] checkValidationStack =
+      new int[TableSchema.MAXIMUM_CHECK_NODES];
   private final int[] referenceTableIds = new int[TableSchema.MAXIMUM_COLUMNS];
   private final ColumnName keyColumnName = new ColumnName();
   private final ColumnName valueColumnName = new ColumnName();
@@ -41,6 +51,7 @@ public final class TableDefinition {
   private boolean available;
   private boolean identity;
   private int defaultTextBytesUsed;
+  private int checkNodeCount;
 
   public TableDefinition() {
     for (int index = 0; index < additionalColumns.length; index++) {
@@ -66,12 +77,17 @@ public final class TableDefinition {
     }
     for (int index = 0; index < columnCount; index++) {
       typeDescriptors[index] = 0;
+      defaultKinds[index] = 0;
+      checkTypeDescriptors[index] = 0;
+      checkNodeCounts[index] = 0;
+      checkNodeOffsets[index] = 0;
     }
     columnCount = 0;
     notNullMask = 0;
     defaultMask = 0;
     defaultTextBytesUsed = 0;
     checkMask = 0;
+    checkNodeCount = 0;
     referenceMask = 0;
     schemaVersion = 0;
     schemaAdmission = 0;
@@ -103,6 +119,7 @@ public final class TableDefinition {
     typeDescriptors[0] = SqlTypeDescriptor.BIGINT;
     typeDescriptors[1] = SqlTypeDescriptor.BIGINT;
     checkMask = 0;
+    checkNodeCount = 0;
     referenceMask = 0;
     uniqueIndexCount = 0;
     identity = false;
@@ -176,14 +193,25 @@ public final class TableDefinition {
     notNullMask = schema.notNullMask();
     defaultMask = schema.defaultMask();
     checkMask = schema.checkMask();
+    checkNodeCount = 0;
     referenceMask = schema.referenceMask();
     identity = schema.hasIdentity();
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = schema.defaultValue(index);
+      defaultKinds[index] = (byte) schema.defaultKind(index);
       typeDescriptors[index] = schema.typeDescriptor(index);
       checkComparisons[index] = schema.checkComparison(index);
       checkValues[index] = schema.checkValue(index);
+      checkTypeDescriptors[index] = schema.checkTypeDescriptor(index);
+      checkNodeOffsets[index] = (byte) checkNodeCount;
+      checkNodeCounts[index] = (byte) schema.checkNodeCount(index);
+      checkNodeCount += schema.checkNodeCount(index);
       referenceTableIds[index] = schema.referenceTableId(index);
+    }
+    for (int node = 0; node < checkNodeCount; node++) {
+      checkOperators[node] = (byte) schema.checkOperator(node);
+      checkOperands[node] = schema.checkOperand(node);
+      checkNodeDescriptors[node] = schema.checkNodeDescriptor(node);
     }
     defaultTextBytesUsed = schema.defaultTextBytes();
     for (int index = 0; index < defaultTextBytesUsed; index++) {
@@ -218,9 +246,13 @@ public final class TableDefinition {
       long requiredCheckMask,
       int checksOffset,
       int checkValuesOffset,
+      int checkTypeDescriptorsOffset,
+      int checkNodeCountsOffset,
+      int checkProgramOffset,
       long requiredReferenceMask,
       int referenceTableIdsOffset,
       int defaultsOffset,
+      int defaultKindsOffset,
       int defaultTextOffset,
       int defaultTextLength) {
     owner = schemaGate;
@@ -230,15 +262,29 @@ public final class TableDefinition {
     defaultMask = requiredDefaultMask;
     identity = requiredIdentity;
     checkMask = requiredCheckMask;
+    checkNodeCount = 0;
     referenceMask = requiredReferenceMask;
     for (int index = 0; index < columns; index++) {
       defaultValues[index] = source.getLong(defaultsOffset + index * Long.BYTES);
+      defaultKinds[index] = source.get(defaultKindsOffset + index);
       typeDescriptors[index] = source.getInt(
           typeDescriptorsOffset + index * Integer.BYTES);
       checkComparisons[index] = source.getInt(checksOffset + index * Integer.BYTES);
       checkValues[index] = source.getLong(checkValuesOffset + index * Long.BYTES);
+      checkTypeDescriptors[index] = source.getInt(
+          checkTypeDescriptorsOffset + index * Integer.BYTES);
+      checkNodeOffsets[index] = (byte) checkNodeCount;
+      checkNodeCounts[index] = source.get(checkNodeCountsOffset + index);
+      checkNodeCount += Byte.toUnsignedInt(checkNodeCounts[index]);
       referenceTableIds[index] = source.getInt(
           referenceTableIdsOffset + index * Integer.BYTES);
+    }
+    int programOffset = checkProgramOffset;
+    for (int node = 0; node < checkNodeCount; node++) {
+      checkOperators[node] = source.get(programOffset);
+      checkNodeDescriptors[node] = source.getInt(programOffset + 1);
+      checkOperands[node] = source.getLong(programOffset + 5);
+      programOffset += 13;
     }
     defaultTextBytesUsed = defaultTextLength;
     for (int index = 0; index < defaultTextLength; index++) {
@@ -333,37 +379,20 @@ public final class TableDefinition {
     return column >= 0 && column < columnCount ? typeDescriptors[column] : 0;
   }
 
+  boolean supportsSecondaryIndex(int column) {
+    return column > 0 && column < columnCount;
+  }
+
   public boolean hasIdentity() {
     return identity;
   }
 
-  public boolean checksSatisfied(long primaryKey, ByteBuffer row) {
-    for (int column = 0; column < columnCount; column++) {
-      if ((checkMask & 1L << column) == 0
-          || column > 0 && isNull(row, column)) {
-        continue;
-      }
-      long actual = column == 0
-          ? primaryKey : row.getLong(row.position() + (column - 1) * Long.BYTES);
-      long required = checkValues[column];
-      boolean satisfied = switch (checkComparisons[column]) {
-        case TableSchema.CHECK_EQUAL -> actual == required;
-        case TableSchema.CHECK_NOT_EQUAL -> actual != required;
-        case TableSchema.CHECK_LESS_THAN -> actual < required;
-        case TableSchema.CHECK_LESS_OR_EQUAL -> actual <= required;
-        case TableSchema.CHECK_GREATER_THAN -> actual > required;
-        case TableSchema.CHECK_GREATER_OR_EQUAL -> actual >= required;
-        default -> false;
-      };
-      if (!satisfied) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   public long defaultValue(int column) {
     return hasDefault(column) ? defaultValues[column] : 0;
+  }
+
+  public int defaultKind(int column) {
+    return hasDefault(column) ? Byte.toUnsignedInt(defaultKinds[column]) : 0;
   }
 
   public int defaultTextLength(int column) {
@@ -725,6 +754,7 @@ public final class TableDefinition {
     defaultMask = source.defaultMask;
     for (int index = 0; index < columnCount; index++) {
       defaultValues[index] = source.defaultValues[index];
+      defaultKinds[index] = source.defaultKinds[index];
     }
     defaultTextBytesUsed = source.defaultTextBytesUsed;
     System.arraycopy(
@@ -743,9 +773,18 @@ public final class TableDefinition {
 
   private void copyChecks(TableDefinition source) {
     checkMask = source.checkMask;
+    checkNodeCount = source.checkNodeCount;
     for (int index = 0; index < columnCount; index++) {
       checkComparisons[index] = source.checkComparisons[index];
       checkValues[index] = source.checkValues[index];
+      checkTypeDescriptors[index] = source.checkTypeDescriptors[index];
+      checkNodeCounts[index] = source.checkNodeCounts[index];
+      checkNodeOffsets[index] = source.checkNodeOffsets[index];
+    }
+    for (int node = 0; node < checkNodeCount; node++) {
+      checkOperators[node] = source.checkOperators[node];
+      checkOperands[node] = source.checkOperands[node];
+      checkNodeDescriptors[node] = source.checkNodeDescriptors[node];
     }
   }
 
@@ -753,12 +792,69 @@ public final class TableDefinition {
     return checkMask;
   }
 
-  int checkComparison(int column) {
+  public boolean hasChecks() {
+    return checkMask != 0;
+  }
+
+  public boolean hasCheck(int column) {
+    return column >= 0 && column < columnCount && (checkMask & 1L << column) != 0;
+  }
+
+  public int checkComparison(int column) {
     return column >= 0 && column < columnCount ? checkComparisons[column] : 0;
   }
 
-  long checkValue(int column) {
+  public long checkValue(int column) {
     return column >= 0 && column < columnCount ? checkValues[column] : 0;
+  }
+
+  public int checkTypeDescriptor(int column) {
+    return hasCheck(column) ? checkTypeDescriptors[column] : 0;
+  }
+
+  public int checkNodeCount(int column) {
+    return hasCheck(column) ? Byte.toUnsignedInt(checkNodeCounts[column]) : 0;
+  }
+
+  int checkNodeCount() {
+    return checkNodeCount;
+  }
+
+  public int checkOperator(int column, int node) {
+    int offset = checkNodeOffset(column, node);
+    return offset < 0 ? 0 : Byte.toUnsignedInt(checkOperators[offset]);
+  }
+
+  public long checkOperand(int column, int node) {
+    int offset = checkNodeOffset(column, node);
+    return offset < 0 ? 0 : checkOperands[offset];
+  }
+
+  public int checkNodeDescriptor(int column, int node) {
+    int offset = checkNodeOffset(column, node);
+    return offset < 0 ? 0 : checkNodeDescriptors[offset];
+  }
+
+  int checkOperatorAt(int node) {
+    return node >= 0 && node < checkNodeCount
+        ? Byte.toUnsignedInt(checkOperators[node]) : 0;
+  }
+
+  long checkOperandAt(int node) {
+    return node >= 0 && node < checkNodeCount ? checkOperands[node] : 0;
+  }
+
+  int checkNodeDescriptorAt(int node) {
+    return node >= 0 && node < checkNodeCount ? checkNodeDescriptors[node] : 0;
+  }
+
+  int[] checkValidationStack() {
+    return checkValidationStack;
+  }
+
+  private int checkNodeOffset(int column, int node) {
+    return hasCheck(column) && node >= 0 && node < checkNodeCount(column)
+        ? Byte.toUnsignedInt(checkNodeOffsets[column]) + node : -1;
   }
 
   boolean hasReferences() {

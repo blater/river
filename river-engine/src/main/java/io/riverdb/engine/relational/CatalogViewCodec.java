@@ -1,38 +1,55 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
 /** Durable encoding for one bounded catalog view definition. */
 final class CatalogViewCodec {
   private static final long MAGIC = 0x5249564552564945L; // RIVERVIE
-  private static final int VERSION = 1;
+  private static final int VERSION = 2;
   private static final int HEADER_BYTES = 24;
 
   private CatalogViewCodec() {
   }
 
-  static void encode(
+  static StatusCode encode(
       ByteBuffer target,
       CharSequence name,
       CharSequence query,
       int baseTableId) {
+    int queryBytes = Utf8Text.encodedLength(query);
+    if (target == null
+        || name == null
+        || name.length() <= 0
+        || name.length() > TableSchema.MAXIMUM_NAME_LENGTH
+        || query == null
+        || query.length() <= 0
+        || query.length() > ViewDefinition.MAXIMUM_QUERY_LENGTH
+        || queryBytes <= 0
+        || HEADER_BYTES + name.length() > target.capacity() - queryBytes) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     clear(target);
     target.putLong(0, MAGIC);
     target.putInt(8, VERSION);
     target.putInt(12, name.length());
-    target.putInt(16, query.length());
+    target.putInt(16, queryBytes);
     target.putInt(20, baseTableId);
     int offset = HEADER_BYTES;
     for (int index = 0; index < name.length(); index++) {
       target.put(offset++, (byte) name.charAt(index));
     }
-    for (int index = 0; index < query.length(); index++) {
-      target.put(offset++, (byte) query.charAt(index));
+    target.position(offset);
+    if (Utf8Text.encode(query, target) != queryBytes) {
+      clear(target);
+      return StatusCode.INVARIANT_BROKEN;
     }
+    offset = target.position();
     target.position(0);
     target.limit(offset);
+    return StatusCode.OK;
   }
 
   static StatusCode decode(
@@ -63,10 +80,8 @@ final class CatalogViewCodec {
         return StatusCode.CONFLICT;
       }
     }
-    for (int index = 0; index < queryBytes; index++) {
-      result.append((char) Byte.toUnsignedInt(
-          scratch.get(HEADER_BYTES + nameBytes + index)));
-    }
+    status = result.setUtf8(scratch, HEADER_BYTES + nameBytes, queryBytes);
+    if (!status.isOk()) return status;
     result.setBaseTableId(scratch.getInt(20));
     return StatusCode.OK;
   }
@@ -116,7 +131,7 @@ final class CatalogViewCodec {
         && nameBytes > 0
         && nameBytes <= TableSchema.MAXIMUM_NAME_LENGTH
         && queryBytes > 0
-        && queryBytes <= ViewDefinition.MAXIMUM_QUERY_LENGTH
+        && queryBytes <= ViewDefinition.MAXIMUM_QUERY_LENGTH * 4
         && source.length() == HEADER_BYTES + nameBytes + queryBytes;
   }
 
@@ -125,11 +140,9 @@ final class CatalogViewCodec {
       int nameBytes,
       int queryBytes,
       ViewDefinition result) {
-    result.reset();
-    for (int index = 0; index < queryBytes; index++) {
-      result.append((char) Byte.toUnsignedInt(
-          source.get(HEADER_BYTES + nameBytes + index)));
-    }
+    StatusCode status = result.setUtf8(
+        source, HEADER_BYTES + nameBytes, queryBytes);
+    if (!status.isOk()) return status;
     result.setBaseTableId(source.getInt(20));
     return StatusCode.OK;
   }

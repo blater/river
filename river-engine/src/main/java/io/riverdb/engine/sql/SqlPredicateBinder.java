@@ -12,10 +12,13 @@ import io.riverdb.sql.SqlQuery;
 final class SqlPredicateBinder {
   private final ExactDecimal.LongValue decimal = new ExactDecimal.LongValue();
   private final ExactDecimal.WideScratch wide = new ExactDecimal.WideScratch();
+  private final SqlRowProjectionProgramBinder rowPrograms =
+      new SqlRowProjectionProgramBinder();
 
   StatusCode bind(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
     reset(command, bound);
+    bound.projectionPrograms.beginPredicate();
     int accessScore = -1;
     for (int index = 0; index < bound.predicateCount; index++) {
       StatusCode status = resolve(command, query, bound, index);
@@ -64,11 +67,14 @@ final class SqlPredicateBinder {
     bound.predicateColumn = -1;
   }
 
-  private static StatusCode resolve(
+  private StatusCode resolve(
       SqlCommand command,
       SqlQuery query,
       BoundSqlStatement bound,
       int index) {
+    if (command.predicateExpression(index) != null) {
+      return resolveComputed(command, query, bound, index);
+    }
     CharSequence qualifier = command.predicateTableName(index);
     if (qualifier.length() > 0
         && !SqlBindingNames.matchesTable(command, qualifier)) {
@@ -89,6 +95,30 @@ final class SqlPredicateBinder {
       return StatusCode.DATATYPE_MISMATCH;
     }
     bound.predicateColumns[index] = column;
+    return StatusCode.OK;
+  }
+
+  private StatusCode resolveComputed(
+      SqlCommand command, SqlQuery query, BoundSqlStatement bound, int index) {
+    StatusCode status = rowPrograms.bindPredicate(
+        command, bound, command.predicateExpression(index));
+    if (!status.isOk()) return status;
+    int descriptor = bound.projectionPrograms.resultDescriptor(
+        SqlBoundProjectionPrograms.PREDICATE_LANE);
+    if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
+        && (command.isRangePredicate(index)
+            || command.isLiteralMembership(index))) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    if (requiresLiteralTypeCheck(command, query, index)
+        && !SqlTypeDescriptor.canCompare(
+            descriptor, command.predicateTypeDescriptor(index))) {
+      return StatusCode.DATATYPE_MISMATCH;
+    }
+    if (!validComparison(descriptor, command.comparison(index))) {
+      return StatusCode.DATATYPE_MISMATCH;
+    }
+    bound.predicateColumns[index] = SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
     return StatusCode.OK;
   }
 
@@ -133,7 +163,8 @@ final class SqlPredicateBinder {
       return false;
     }
     if (command.isLiteralMembership(index)
-        && command.literalMembershipCount(index) == 0) {
+        && command.literalMembershipCount(index) == 0
+        && command.predicateTypeDescriptor(index) == 0) {
       return false;
     }
     return query == null
@@ -157,7 +188,8 @@ final class SqlPredicateBinder {
       SqlQuery query,
       BoundSqlStatement bound,
       int index) {
-    if (command.hasDisjunction()
+    if (command.predicateExpression(index) != null
+        || command.hasDisjunction()
         || query.hasMembershipPredicate() && query.membershipPredicate() == index
         || query.hasScalarPredicate() && query.scalarPredicate() == index) {
       return -1;

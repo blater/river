@@ -19,10 +19,15 @@ final class SqlPointAggregateExecution {
   private final BoundSqlQuery query;
   private final SqlExpressionEvaluator expressions;
   private final SqlBoundPredicateEvaluator predicates;
+  private final SqlRowProjectionEvaluator projections;
+  private final SqlProjectedRow projected = new SqlProjectedRow();
+  private final SqlAggregateAccumulatorSet accumulators =
+      new SqlAggregateAccumulatorSet();
+  private final SqlHavingEvaluator having;
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult row = new RelationalScanResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
-  private final ByteBuffer text = ByteBuffer.allocateDirect(Utf8Text.MAXIMUM_BYTES);
+  private ByteBuffer text;
   private final long[] projectedValues = new long[1];
   private final State state = new State();
   private final ExactDecimal.LongValue decimal = new ExactDecimal.LongValue();
@@ -32,12 +37,15 @@ final class SqlPointAggregateExecution {
       RelationalSession relationalSession,
       BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
-      SqlBoundPredicateEvaluator predicateEvaluator) {
+      SqlBoundPredicateEvaluator predicateEvaluator,
+      SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = statement;
     query = statement.executableQuery;
     expressions = evaluator;
     predicates = predicateEvaluator;
+    projections = projectionEvaluator;
+    having = new SqlHavingEvaluator(evaluator, projectionEvaluator);
   }
 
   boolean accepts(SqlCommandType type) {
@@ -67,21 +75,26 @@ final class SqlPointAggregateExecution {
       }
     }
     status = close(status, active);
-    if (status.isOk() && state.sumOverflow()) {
-      status = StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
+    if (status.isOk()) status = accumulators.finish(bound.aggregates);
+    if (status.isOk()) {
+      status = having.evaluate(
+          bound.command,
+          bound.havingPrograms,
+          accumulators,
+          0,
+          true,
+          null,
+          0);
     }
-    if (status.isOk() && state.average) {
-      status = finishAverage();
+    if (!status.isOk() || !having.matched()) {
+      accumulators.clear(bound.aggregates);
+      eraseText();
+      return status;
     }
-    int descriptor = aggregateDescriptor();
-    if (status.isOk()
-        && state.sum
-        && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        && !ExactDecimal.fits(
-            state.aggregate, SqlTypeDescriptor.parameterOne(descriptor))) {
-      status = StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-    }
-    return status.isOk() ? publish(result) : status;
+    status = publish(result);
+    accumulators.clear(bound.aggregates);
+    eraseText();
+    return status;
   }
 
   private StatusCode prepare() {
@@ -93,13 +106,12 @@ final class SqlPointAggregateExecution {
         bound.accessPredicate >= 0,
         accessEquality(command));
     configureAccess();
-    if ((state.indexed || state.primaryKeyRange)
-        && state.equality
-        && accessValue(command) == Long.MAX_VALUE) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     configureRange(command);
-    state.text = state.value && bound.table.isVarchar(state.column);
+    state.computed = bound.projectedColumnCount > 0
+        && bound.projectedColumns[0]
+            == SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+    state.text = state.value && !state.computed && bound.table.isVarchar(state.column);
+    accumulators.reset(bound.aggregates);
     return StatusCode.OK;
   }
 
@@ -123,7 +135,7 @@ final class SqlPointAggregateExecution {
     }
     if (state.equality) {
       state.lower = accessValue(command);
-      state.upper = state.lower + 1;
+      state.upper = 0;
       return;
     }
     state.lower = command.predicateLowerInclusive(bound.accessPredicate);
@@ -132,15 +144,20 @@ final class SqlPointAggregateExecution {
 
   private StatusCode beginScan() {
     if (state.indexed) {
-      return session.beginValueScan(
-          bound.table,
-          bound.predicateColumn,
-          state.lower,
-          state.upper,
-          cursor);
+      return state.equality
+          ? session.beginExactValueScan(
+              bound.table, bound.predicateColumn, state.lower, cursor)
+          : session.beginValueScan(
+              bound.table,
+              bound.predicateColumn,
+              state.lower,
+              state.upper,
+              cursor);
     }
     return state.primaryKeyRange
-        ? session.beginScan(bound.table, state.lower, state.upper, cursor)
+        ? state.equality
+            ? session.beginExactScan(bound.table, state.lower, cursor)
+            : session.beginScan(bound.table, state.lower, state.upper, cursor)
         : session.beginScan(bound.table, cursor);
   }
 
@@ -161,14 +178,31 @@ final class SqlPointAggregateExecution {
   private StatusCode accumulateInput() {
     HeapRowResult source = state.source;
     StatusCode status = StatusCode.OK;
-    if (state.filtered || state.value || state.countValue) {
+    if (state.filtered || state.value || state.countValue
+        || bound.projectionPrograms.count() > 0) {
       status = validateRow(source);
     }
-    if (!status.isOk()
-        || state.filtered && !predicates.matches(state.primaryKey, source)) {
+    if (!status.isOk()) {
       return status;
     }
-    return state.value ? accumulateValue(source) : accumulateCount(source);
+    status = predicates.evaluate(state.primaryKey, source);
+    if (!status.isOk() || !predicates.matched()) return status;
+    status = projections.project(state.primaryKey, source, projected);
+    return status.isOk()
+        ? accumulators.accumulate(
+            bound.aggregates,
+            bound.projectionPrograms,
+            projected,
+            source,
+            bound.table)
+        : status;
+  }
+
+  private StatusCode accumulateComputed(HeapRowResult source) {
+    StatusCode status = projections.project(state.primaryKey, source, projected);
+    if (!status.isOk() || (projected.nullMask() & 1) != 0) return status;
+    return state.countValue
+        ? incrementCount() : accumulatePrimitive(projected.value(0));
   }
 
   private StatusCode accumulateValue(HeapRowResult source) {
@@ -179,7 +213,14 @@ final class SqlPointAggregateExecution {
     long value = expressions.readColumn(state.primaryKey, source, column);
     if (state.text) {
       accumulateText(source, column);
-    } else if (state.sum || state.average) {
+      state.present = true;
+      return StatusCode.OK;
+    }
+    return accumulatePrimitive(value);
+  }
+
+  private StatusCode accumulatePrimitive(long value) {
+    if (state.sum || state.average) {
       long previous = state.aggregate;
       state.aggregate += value;
       state.high += (value < 0 ? -1 : 0)
@@ -217,6 +258,10 @@ final class SqlPointAggregateExecution {
         && expressions.isNull(source, bound.table, state.column)) {
       return StatusCode.OK;
     }
+    return incrementCount();
+  }
+
+  private StatusCode incrementCount() {
     if (state.aggregate == Long.MAX_VALUE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -236,19 +281,43 @@ final class SqlPointAggregateExecution {
     return bodyStatus.isOk() ? close : bodyStatus;
   }
 
+  boolean hasResources() {
+    return cursor.isActive();
+  }
+
+  StatusCode closeResources() {
+    if (!cursor.isActive()) return StatusCode.OK;
+    StatusCode status = session.closeScan(cursor);
+    if (status.isOk()) cursor.reset();
+    return status;
+  }
+
   private StatusCode publish(SqlExecutionResult result) {
-    projectedValues[0] = state.aggregate;
-    bound.projectedTypeDescriptors[0] = aggregateDescriptor();
+    int invocation = bound.command.aggregateOutputInvocation(0);
+    projectedValues[0] = accumulators.value(invocation);
+    bound.projectedTypeDescriptors[0] = bound.aggregates.resultDescriptor(invocation);
     result.setProjection(
         0,
         projectedValues,
-        state.value && !state.present ? 1 : 0,
+        accumulators.nullValue(invocation) ? 1 : 0,
         bound.projectedTypeDescriptors,
         1,
         0);
-    return state.text && state.present
-        ? result.setUtf8At(0, text, 0, state.textLength)
-        : StatusCode.OK;
+    int length = accumulators.textLength(invocation);
+    if (SqlTypeDescriptor.typeId(bound.aggregates.resultDescriptor(invocation))
+        != SqlTypeDescriptor.TYPE_ID_VARCHAR
+        || accumulators.nullValue(invocation)) return StatusCode.OK;
+    if (text == null) text = ByteBuffer.allocateDirect(Utf8Text.MAXIMUM_BYTES);
+    text.clear();
+    text.put(
+        accumulators.text(), accumulators.textOffset(invocation), length);
+    return result.setUtf8At(0, text, 0, length);
+  }
+
+  private void eraseText() {
+    if (text == null) return;
+    for (int index = 0; index < text.capacity(); index++) text.put(index, (byte) 0);
+    text.clear();
   }
 
   private boolean accessEquality(BoundSqlQuery.Block command) {
@@ -268,7 +337,7 @@ final class SqlPointAggregateExecution {
 
   private int aggregateDescriptor() {
     int inputDescriptor = bound.projectedColumnCount > 0
-        ? bound.table.typeDescriptor(bound.projectedColumns[0])
+        ? bound.projectedTypeDescriptors[0]
         : SqlTypeDescriptor.BIGINT;
     return SqlProjectionBinder.aggregateResultDescriptor(
         query.root().type(), inputDescriptor);
@@ -278,7 +347,7 @@ final class SqlPointAggregateExecution {
     if (!state.present) {
       return StatusCode.OK;
     }
-    int inputDescriptor = bound.table.typeDescriptor(state.column);
+    int inputDescriptor = bound.projectedTypeDescriptors[0];
     int inputScale = SqlTypeDescriptor.typeId(inputDescriptor)
             == SqlTypeDescriptor.TYPE_ID_DECIMAL
         ? SqlTypeDescriptor.parameterTwo(inputDescriptor) : 0;
@@ -304,6 +373,7 @@ final class SqlPointAggregateExecution {
     private boolean bounded;
     private boolean average;
     private boolean countValue;
+    private boolean computed;
     private boolean equality;
     private boolean filtered;
     private boolean indexed;
@@ -332,6 +402,7 @@ final class SqlPointAggregateExecution {
       average = type == SqlCommandType.AVG;
       bounded = hasBounds;
       countValue = type == SqlCommandType.COUNT_VALUE;
+      computed = false;
       equality = accessIsEquality;
       filtered = hasFilters;
       indexed = false;

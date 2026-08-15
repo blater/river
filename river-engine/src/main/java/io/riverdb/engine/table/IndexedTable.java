@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.CommitSequenceSource;
@@ -48,22 +49,25 @@ public final class IndexedTable
 
   public synchronized StatusCode insert(
       long transactionId,
+      int space,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
-    return store.insert(transactionId, key, row, result);
+    return store.insert(transactionId, space, key, row, result);
   }
 
   public synchronized StatusCode commitInsert(
       long transactionId,
+      int space,
       long key,
       ByteBuffer row,
       IndexedCommitResult result) {
-    return store.commitInsert(transactionId, key, row, result);
+    return store.commitInsert(transactionId, space, key, row, result);
   }
 
   public synchronized StatusCode commitInserts(
       long transactionId,
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
@@ -71,12 +75,13 @@ public final class IndexedTable
       int insertCount,
       IndexedCommitResult result) {
     return store.commitInserts(
-        transactionId, keys, rows, rowStride, rowLengths, insertCount, result);
+        transactionId, spaces, keys, rows, rowStride, rowLengths, insertCount, result);
   }
 
   public synchronized StatusCode commitMutations(
       long transactionId,
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -87,6 +92,7 @@ public final class IndexedTable
     return store.commitMutations(
         transactionId,
         operations,
+        spaces,
         keys,
         previousRowIds,
         rows,
@@ -152,10 +158,12 @@ public final class IndexedTable
   public synchronized StatusCode insertCommitted(
       long transactionId,
       long commitSequence,
+      int space,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
-    return store.insertCommitted(transactionId, commitSequence, key, row, result);
+    return store.insertCommitted(
+        transactionId, commitSequence, space, key, row, result);
   }
 
   synchronized StatusCode commitMutations(
@@ -165,33 +173,40 @@ public final class IndexedTable
     return store.commitMutations(transactionId, mutations, result);
   }
 
-  public synchronized StatusCode fetchByKey(long key, HeapRowResult result) {
-    return store.fetchByKey(key, result);
+  public synchronized StatusCode fetchByKey(
+      int space, long key, HeapRowResult result) {
+    return store.fetchByKey(space, key, result);
   }
 
   public synchronized StatusCode fetchByKeyAt(
       long visibleCommitSequence,
+      int space,
       long key,
       HeapRowResult result) {
-    return store.fetchByKeyAt(visibleCommitSequence, key, result);
+    return store.fetchByKeyAt(visibleCommitSequence, space, key, result);
   }
 
   public synchronized StatusCode beginScan(
       long visibleCommitSequence,
+      int lowerSpace,
       long lowerKey,
+      int upperSpace,
       long upperKey,
       IndexedScanCursor cursor) {
     if (visibleCommitSequence < 0
-        || lowerKey >= upperKey
-        || upperKey == Long.MIN_VALUE
+        || !OrderedKey.isFiniteSpace(lowerSpace)
+        || !OrderedKey.isFiniteSpace(upperSpace)
+        || !OrderedKey.lessThan(lowerSpace, lowerKey, upperSpace, upperKey)
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = store.firstLeafPageId(lowerKey);
+    int leafPageId = store.firstLeafPageId(lowerSpace, lowerKey);
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
-    return cursor.claim(this, visibleCommitSequence, lowerKey, upperKey, leafPageId);
+    return cursor.claim(
+        this, visibleCommitSequence,
+        lowerSpace, lowerKey, upperSpace, upperKey, leafPageId);
   }
 
   public synchronized StatusCode nextScan(
@@ -213,16 +228,18 @@ public final class IndexedTable
 
   public synchronized StatusCode prepareMutation(
       long visibleCommitSequence,
+      int space,
       long key,
       IndexedMutationTarget result) {
-    return store.prepareMutation(visibleCommitSequence, key, result);
+    return store.prepareMutation(visibleCommitSequence, space, key, result);
   }
 
   public synchronized StatusCode prepareInsert(
       long visibleCommitSequence,
+      int space,
       long key,
       IndexedMutationTarget result) {
-    return store.prepareInsert(visibleCommitSequence, key, result);
+    return store.prepareInsert(visibleCommitSequence, space, key, result);
   }
 
   public synchronized int rowCount() {

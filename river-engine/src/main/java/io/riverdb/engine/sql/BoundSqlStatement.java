@@ -13,13 +13,18 @@ final class BoundSqlStatement {
   final SqlCommand command = new SqlCommand();
   final SqlQuery query = new SqlQuery();
   final BoundSqlQuery executableQuery = new BoundSqlQuery();
+  final SqlBoundProjectionPrograms projectionPrograms =
+      new SqlBoundProjectionPrograms();
+  final SqlBoundAggregateSet aggregates = new SqlBoundAggregateSet();
+  final SqlBoundHavingPrograms havingPrograms = new SqlBoundHavingPrograms();
+  final SqlBoundBlockPlans blockPlans = new SqlBoundBlockPlans();
   final TableDefinition table = new TableDefinition();
   final TableDefinition joinTable = new TableDefinition();
   final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
-  final int[] updateSourceColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updateResultTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] predicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
+  final int[] blockPredicateRightColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
   final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] projectedTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
 
@@ -37,11 +42,16 @@ final class BoundSqlStatement {
   int joinOuterColumn;
   int joinInnerColumn;
   int orderColumn;
+  int sortKeyProjection;
 
   void reset() {
     command.reset();
     query.reset();
     executableQuery.reset();
+    projectionPrograms.reset();
+    aggregates.reset();
+    havingPrograms.reset();
+    blockPlans.reset();
     table.reset();
     joinTable.reset();
     predicateColumn = -1;
@@ -58,5 +68,6 @@ final class BoundSqlStatement {
     joinOuterColumn = -1;
     joinInnerColumn = -1;
     orderColumn = -1;
+    sortKeyProjection = -1;
   }
 }

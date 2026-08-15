@@ -6,20 +6,22 @@ import io.riverdb.base.text.Utf8Text;
 /** Allocation-free parser for River's first executable SQL point-statement subset. */
 public final class SqlParser {
   private final SqlIdentifier identifierScratch = new SqlIdentifier();
+  private final LongResult literalScratch = new LongResult();
   private final SqlQueryParser queryParser = new SqlQueryParser(this);
   private final SqlParserInput input = new SqlParserInput();
-  private final SqlPredicateParser predicateParser = new SqlPredicateParser(input);
   private final SqlScalarExpressionParser scalarExpressions =
       new SqlScalarExpressionParser(input);
+  private final SqlPredicateParser predicateParser =
+      new SqlPredicateParser(input, scalarExpressions);
   private final SqlSelectParser selects = new SqlSelectParser(this, input, scalarExpressions);
   private final SqlUpdateValueParser updateValues =
-      new SqlUpdateValueParser(input);
+      new SqlUpdateValueParser(input, scalarExpressions);
   private final SqlDataChangeParser dataChanges =
       new SqlDataChangeParser(this, input, updateValues);
   private final SqlCatalogCommandParser catalogCommands =
       new SqlCatalogCommandParser(input);
   private final SqlCreateTableParser creates =
-      new SqlCreateTableParser(this, input, catalogCommands);
+      new SqlCreateTableParser(this, input, catalogCommands, scalarExpressions);
 
   public StatusCode parse(String sql, SqlCommand result) {
     if (result == null) {
@@ -27,6 +29,24 @@ public final class SqlParser {
     }
     result.reset();
     return sql == null ? StatusCode.INVALID_EXTERNAL_INPUT : parseText(sql, result);
+  }
+
+  public StatusCode parse(
+      String sql, SqlParameterSource parameters, SqlCommand result) {
+    if (result == null || parameters == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    if (sql == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    try {
+      StatusCode status = SqlParameterAdmission.beginData(sql, parameters, input);
+      if (status.isOk()) status = parseText(sql, result);
+      return SqlParameterAdmission.finish(status, input);
+    } finally {
+      input.clearParameters();
+    }
   }
 
   public StatusCode parse(CharSequence sql, SqlCommand result) {
@@ -39,6 +59,42 @@ public final class SqlParser {
 
   public StatusCode parseQuery(
       String sql,
+      SqlQuery query,
+      SqlCommand result) {
+    return parseQuery((CharSequence) sql, query, result);
+  }
+
+  public StatusCode parseQueryAppend(
+      CharSequence sql, SqlQuery query, SqlCommand result) {
+    return queryParser.parseAppend(sql, query, result);
+  }
+
+  public StatusCode parseQuery(
+      String sql,
+      SqlParameterSource parameters,
+      SqlQuery query,
+      SqlCommand result) {
+    if (query != null) {
+      query.reset();
+    }
+    if (result != null) {
+      result.reset();
+    }
+    if (sql == null || parameters == null || query == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    try {
+      StatusCode status = SqlParameterAdmission.beginQuery(
+          sql, parameters, input, queryParser);
+      if (status.isOk()) status = queryParser.parse(sql, query, result);
+      return SqlParameterAdmission.finish(status, input);
+    } finally {
+      input.clearParameters();
+    }
+  }
+
+  public StatusCode parseQuery(
+      CharSequence sql,
       SqlQuery query,
       SqlCommand result) {
     if (query != null) {
@@ -90,6 +146,9 @@ public final class SqlParser {
   }
 
   private StatusCode parseTransactionStatement(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "SET")) {
+      return parseSetTimeZone(sql, result);
+    }
     if (consumeKeyword(sql, "BEGIN")) {
       return parseBegin(sql, result);
     }
@@ -108,6 +167,21 @@ public final class SqlParser {
       return StatusCode.OK;
     }
     return null;
+  }
+
+  private StatusCode parseSetTimeZone(CharSequence sql, SqlCommand result) {
+    StatusCode status = requireKeyword(sql, "TIME");
+    if (status.isOk()) {
+      status = requireKeyword(sql, "ZONE");
+    }
+    LongResult zone = literalScratch;
+    if (status.isOk()) {
+      status = input.packedText(sql, zone);
+    }
+    if (status.isOk()) {
+      result.set(SqlCommandType.SET_TIME_ZONE, 0, zone.value);
+    }
+    return status;
   }
 
   private StatusCode parseDataStatement(CharSequence sql, SqlCommand result) {
@@ -186,11 +260,16 @@ public final class SqlParser {
       result.set(SqlCommandType.SHOW_TABLES, 0, 0);
       return StatusCode.OK;
     }
-    result.set(SqlCommandType.SHOW_INDEXES, 0, 0);
-    StatusCode status = requireKeyword(sql, "INDEXES");
-    if (status.isOk()) {
-      status = requireKeyword(sql, "FROM");
+    SqlCommandType type;
+    if (consumeKeyword(sql, "INDEXES")) {
+      type = SqlCommandType.SHOW_INDEXES;
+    } else if (consumeKeyword(sql, "COLUMNS")) {
+      type = SqlCommandType.SHOW_COLUMNS;
+    } else {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    result.set(type, 0, 0);
+    StatusCode status = requireKeyword(sql, "FROM");
     return status.isOk()
         ? identifier(sql, result.writableTableName()) : status;
   }
@@ -229,6 +308,7 @@ public final class SqlParser {
         || nextKeyword(sql, "LEFT")
         || nextKeyword(sql, "JOIN")
         || nextKeyword(sql, "WHERE")
+        || nextKeyword(sql, "HAVING")
         || nextKeyword(sql, "GROUP")
         || nextKeyword(sql, "ORDER")
         || nextKeyword(sql, "LIMIT")) {
@@ -362,6 +442,7 @@ public final class SqlParser {
   static final class LongResult {
     long value;
     boolean varchar;
+    boolean nullValue;
     int textScalars;
     int typeDescriptor;
   }

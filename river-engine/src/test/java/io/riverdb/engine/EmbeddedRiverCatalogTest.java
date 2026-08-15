@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.QueryOpenResult;
@@ -59,6 +60,13 @@ final class EmbeddedRiverCatalogTest {
             command));
     assertCatalog(session, true, true, false);
     assertIndexes(session, false);
+    assertColumns(
+        session,
+        TABLE,
+        new String[] {"id", "value", "region", "pending"},
+        new String[] {"BIGINT", "BIGINT", "BIGINT", "BIGINT"},
+        new boolean[] {false, true, true, true});
+    assertUnavailableColumns(session, VIEW);
 
     assertEquals(StatusCode.OK, session.execute("BEGIN", command));
     assertEquals(
@@ -74,9 +82,16 @@ final class EmbeddedRiverCatalogTest {
             command));
     assertCatalog(session, true, true, true);
     assertIndexes(session, true);
+    assertColumns(
+        session,
+        "rolled_back_catalog_table",
+        new String[] {"id", "value"},
+        new String[] {"BIGINT", "BIGINT"},
+        new boolean[] {false, true});
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", command));
     assertCatalog(session, true, true, false);
     assertIndexes(session, false);
+    assertUnavailableColumns(session, "rolled_back_catalog_table");
 
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
@@ -90,6 +105,12 @@ final class EmbeddedRiverCatalogTest {
     session = sessionResult.session();
     assertCatalog(session, true, true, false);
     assertIndexes(session, false);
+    assertColumns(
+        session,
+        TABLE,
+        new String[] {"id", "value", "region", "pending"},
+        new String[] {"BIGINT", "BIGINT", "BIGINT", "BIGINT"},
+        new boolean[] {false, true, true, true});
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }
@@ -193,5 +214,65 @@ final class EmbeddedRiverCatalogTest {
     assertTrue(region);
     assertEquals(expectedRolledBack, rolledBack);
     assertEquals(StatusCode.OK, query.close(new CommandResult()));
+  }
+
+  private static void assertColumns(
+      RiverSession session,
+      String table,
+      String[] names,
+      String[] typeNames,
+      boolean[] nullable) {
+    QueryOpenResult opened = new QueryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery("SHOW COLUMNS FROM " + table, opened));
+    RiverQuery query = opened.query();
+    assertEquals(4, query.columnCount());
+    assertEquals("column_name", query.columnName(0).toString());
+    assertEquals("type", query.columnName(1).toString());
+    assertEquals("is_nullable", query.columnName(2).toString());
+    assertEquals("ordinal", query.columnName(3).toString());
+    assertTrue(query.columnIsVarchar(0));
+    assertTrue(query.columnIsVarchar(1));
+    assertFalse(query.columnIsVarchar(2));
+    assertFalse(query.columnIsVarchar(3));
+    assertEquals(SqlTypeDescriptor.varchar(64), query.columnTypeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.varchar(48), query.columnTypeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.BOOLEAN, query.columnTypeDescriptor(2));
+    assertEquals(SqlTypeDescriptor.BIGINT, query.columnTypeDescriptor(3));
+    for (int index = 0; index < query.columnCount(); index++) {
+      assertFalse(query.columnIsNullable(index));
+    }
+
+    RowResult row = new RowResult();
+    for (int index = 0; index < names.length; index++) {
+      assertEquals(StatusCode.OK, query.next(row));
+      assertTrue(row.isAvailable());
+      assertEquals(names[index], text(row, 0));
+      assertEquals(typeNames[index], text(row, 1));
+      assertEquals(nullable[index] ? 1 : 0, row.valueAt(2));
+      assertEquals(index + 1, row.valueAt(3));
+      for (int column = 0; column < row.columnCount(); column++) {
+        assertFalse(row.isNull(column));
+        assertEquals(query.columnTypeDescriptor(column), row.typeDescriptorAt(column));
+      }
+    }
+    assertEquals(StatusCode.OK, query.next(row));
+    assertFalse(row.isAvailable());
+    assertEquals(names.length, query.rowsReturned());
+    assertEquals(StatusCode.OK, query.close(new CommandResult()));
+  }
+
+  private static void assertUnavailableColumns(RiverSession session, String table) {
+    QueryOpenResult opened = new QueryOpenResult();
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.beginQuery("SHOW COLUMNS FROM " + table, opened));
+    assertColumns(
+        session,
+        TABLE,
+        new String[] {"id", "value", "region", "pending"},
+        new String[] {"BIGINT", "BIGINT", "BIGINT", "BIGINT"},
+        new boolean[] {false, true, true, true});
   }
 }

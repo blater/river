@@ -65,6 +65,7 @@ final class SqlScanPreparation {
   }
 
   private StatusCode beginScalar(BoundSqlQuery.Block command) {
+    plan.setHavingCount(bound.command.havingPredicateCount());
     plan.setAccessColumn(bound.accessPredicate >= 0
         ? bound.predicateColumn == 0 || bound.table.hasIndexOn(bound.predicateColumn)
             ? bound.predicateColumn : -1
@@ -75,23 +76,24 @@ final class SqlScanPreparation {
     plan.setResultColumn(
         0,
         bound.projectedColumnCount > 0 ? bound.projectedColumns[0] : -1,
-        aggregate.typeDescriptorAt(0),
+        isScalarAggregate(command.type())
+            ? bound.projectedTypeDescriptors[0]
+            : aggregate.typeDescriptorAt(0),
         aggregateColumnName(command));
-    return scan.claimAggregate(
-        aggregate.value(),
-        aggregate.isNull(0),
-        aggregate.transactionActive(),
-        aggregate.commitSequence());
+    plan.setResultNullable(0, scalarNullable(command));
+    return scan.claimAggregate(aggregate);
   }
 
   private StatusCode beginGrouped(
       BoundSqlQuery.Block command, boolean distinct, boolean explainOnly) {
+    plan.setHavingCount(distinct ? 0 : bound.command.havingPredicateCount());
     plan.setFilterCount(bound.predicateCount);
     int groupedColumn = distinct ? bound.distinctColumn : bound.groupColumn;
     int aggregateColumn = distinct ? -1 : bound.groupAggregateColumn;
     boolean ordered = groupedColumn == 0
         || groupedColumn > 0
             && bound.table.hasIndexOn(groupedColumn)
+            && !bound.table.isVarchar(groupedColumn)
             && !bound.table.isNullable(groupedColumn);
     plan.setSort(!ordered);
     plan.setAccessColumn(ordered ? groupedColumn : -1);
@@ -115,15 +117,27 @@ final class SqlScanPreparation {
     plan.setResultColumn(
         0,
         groupedColumn,
-        bound.table.typeDescriptor(groupedColumn),
-        command.columnOutputName(0));
+        SqlPrimitiveSortKey.descriptor(bound, groupedColumn),
+        SqlPrimitiveSortKey.outputName(command, groupedColumn));
+    plan.setResultNullable(
+        0,
+        groupedColumn == SqlBoundProjectionPrograms.COMPUTED_PROJECTION
+            ? SqlResultNullability.program(bound, 0)
+            : bound.table.isNullable(groupedColumn));
     if (!distinct) {
-      int inputDescriptor = aggregateColumn < 0
-          ? SqlTypeDescriptor.BIGINT : bound.table.typeDescriptor(aggregateColumn);
+      int inputDescriptor = aggregateColumn
+              == SqlBoundProjectionPrograms.COMPUTED_PROJECTION
+          ? bound.projectedTypeDescriptors[1]
+          : aggregateColumn < 0 ? SqlTypeDescriptor.BIGINT
+              : bound.table.typeDescriptor(aggregateColumn);
       int type = SqlProjectionBinder.aggregateResultDescriptor(
           command.type(), inputDescriptor);
       plan.setResultColumn(
           1, aggregateColumn, type, groupAggregateColumnName(command));
+      plan.setResultNullable(
+          1,
+          command.type() != SqlCommandType.GROUP_COUNT
+              && command.type() != SqlCommandType.GROUP_COUNT_VALUE);
     }
   }
 
@@ -142,7 +156,7 @@ final class SqlScanPreparation {
     bound.projectedColumns[0] = groupedColumn;
     bound.projectedColumnCount = distinct ? 1 : 2;
     if (!distinct) {
-      bound.projectedColumns[1] = aggregateColumn < 0
+      bound.projectedColumns[1] = aggregateColumn == -1
           ? NULL_PROJECTION : aggregateColumn;
     }
     return sorts.materialize(valueIndex, groupedColumn);
@@ -158,9 +172,6 @@ final class SqlScanPreparation {
       bound.predicateColumn = -1;
     }
     int orderColumn = command.isOrdered() ? plan.orderColumn() : -1;
-    if (command.isOrdered() && orderColumn < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     boolean materialized = requiresMaterializedSort(command, orderColumn);
     plan.setSort(materialized);
     int indexColumn = scanIndexColumn(command, orderColumn, materialized);
@@ -176,11 +187,6 @@ final class SqlScanPreparation {
   }
 
   private void configureRowResult(BoundSqlQuery.Block command) {
-    for (int index = 0; index < bound.projectedColumnCount; index++) {
-      int column = bound.projectedColumns[index];
-      bound.projectedTypeDescriptors[index] = column >= 0
-          ? bound.table.typeDescriptor(column) : SqlTypeDescriptor.BIGINT;
-    }
     plan.setResultShape(
         bound.projectedColumns,
         bound.projectedTypeDescriptors,
@@ -193,9 +199,19 @@ final class SqlScanPreparation {
             index,
             projection,
             plan.resultType(index),
-            projection == NULL_PROJECTION ? "null" : bound.table.columnName(projection));
+            projection == NULL_PROJECTION
+                ? "null"
+                : projection == SqlBoundProjectionPrograms.COMPUTED_PROJECTION
+                    ? "expression" : bound.table.columnName(projection));
       }
+      plan.setResultNullable(index, SqlResultNullability.projection(bound, index));
     }
+  }
+
+  private boolean scalarNullable(BoundSqlQuery.Block command) {
+    return command.type() == SqlCommandType.SCALAR_EXPRESSION
+        ? SqlResultNullability.projection(bound, 0)
+        : isValueAggregate(command.type());
   }
 
   private int scanIndexColumn(
@@ -210,7 +226,8 @@ final class SqlScanPreparation {
   private boolean requiresMaterializedSort(
       BoundSqlQuery.Block command, int orderColumn) {
     return command.isOrdered()
-        && (bound.table.isVarchar(orderColumn)
+        && (orderColumn == SqlBoundProjectionPrograms.COMPUTED_PROJECTION
+            || bound.table.isVarchar(orderColumn)
             || command.isDescendingOrder()
             || orderColumn > 0
                 && (!bound.table.hasIndexOn(orderColumn)
@@ -224,27 +241,23 @@ final class SqlScanPreparation {
       if (!bounded || bound.predicateColumn != indexColumn) {
         return session.beginValueScan(bound.table, indexColumn, scan.relational());
       }
-      if (equality && accessValue(command) == Long.MAX_VALUE) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      return session.beginValueScan(
-          bound.table,
-          indexColumn,
-          equality ? accessValue(command) : accessLower(command),
-          equality ? accessValue(command) + 1 : accessUpper(command),
-          scan.relational());
+      return equality
+          ? session.beginExactValueScan(
+              bound.table, indexColumn, accessValue(command), scan.relational())
+          : session.beginValueScan(
+              bound.table,
+              indexColumn,
+              accessLower(command),
+              accessUpper(command),
+              scan.relational());
     }
     if (!bounded || bound.predicateColumn != 0) {
       return session.beginScan(bound.table, scan.relational());
     }
-    if (equality && accessValue(command) == Long.MAX_VALUE) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return session.beginScan(
-        bound.table,
-        equality ? accessValue(command) : accessLower(command),
-        equality ? accessValue(command) + 1 : accessUpper(command),
-        scan.relational());
+    return equality
+        ? session.beginExactScan(bound.table, accessValue(command), scan.relational())
+        : session.beginScan(
+            bound.table, accessLower(command), accessUpper(command), scan.relational());
   }
 
   private StatusCode beginOrdered(
@@ -258,8 +271,12 @@ final class SqlScanPreparation {
     boolean equality = command.isEqualityPredicate(predicate);
     long lower = equality
         ? command.predicateValue(predicate) : command.predicateLowerInclusive(predicate);
-    if (equality && lower == Long.MAX_VALUE) return StatusCode.INVALID_EXTERNAL_INPUT;
-    long upper = equality ? lower + 1 : command.predicateUpperExclusive(predicate);
+    if (equality) {
+      return valueIndex
+          ? session.beginExactValueScan(bound.table, column, lower, scan.relational())
+          : session.beginExactScan(bound.table, lower, scan.relational());
+    }
+    long upper = command.predicateUpperExclusive(predicate);
     return valueIndex
         ? session.beginValueScan(bound.table, column, lower, upper, scan.relational())
         : session.beginScan(bound.table, lower, upper, scan.relational());
@@ -303,7 +320,7 @@ final class SqlScanPreparation {
 
   private static CharSequence groupAggregateColumnName(BoundSqlQuery.Block command) {
     CharSequence alias = command.columnAlias(1);
-    if (command.type() != SqlCommandType.GROUP_COUNT && alias.length() > 0) return alias;
+    if (alias.length() > 0) return alias;
     return command.type() == SqlCommandType.GROUP_SUM ? "sum"
         : command.type() == SqlCommandType.GROUP_AVG ? "avg"
         : command.type() == SqlCommandType.GROUP_MIN ? "min"

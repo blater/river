@@ -5,94 +5,34 @@ import io.riverdb.base.error.StatusCode;
 /** Parses aggregate projections, sources, and bounded HAVING comparisons. */
 final class SqlSelectAggregateParser {
   private final SqlParser parser;
-  private final SqlSelectParser selects;
   private final SqlParserInput input;
-  private final SqlParser.LongResult numberResult = new SqlParser.LongResult();
+  private final SqlAggregateExpressionParser expressions;
+  private final SqlAggregateInvocationParser invocations;
+  private final SqlHavingParser having;
 
   SqlSelectAggregateParser(
-      SqlParser parent, SqlSelectParser selectParser, SqlParserInput parserInput) {
+      SqlParser parent,
+      SqlSelectParser selectParser,
+      SqlParserInput parserInput,
+      SqlScalarExpressionParser expressions) {
     parser = parent;
-    selects = selectParser;
     input = parserInput;
+    this.expressions = new SqlAggregateExpressionParser(expressions);
+    invocations = new SqlAggregateInvocationParser(
+        parserInput, selectParser, this.expressions);
+    having = new SqlHavingParser(parent, parserInput, this.expressions);
   }
 
-  StatusCode valueAggregate(CharSequence sql, SqlCommand result) {
-    StatusCode status = requireCharacter(sql, '(');
-    if (status.isOk()) {
-      status = aggregateColumn(sql, result);
-    }
+  StatusCode scalarList(
+      CharSequence sql, SqlCommand result, int firstKind) {
+    StatusCode status = invocations.parse(sql, result, firstKind, false);
     return status.isOk() ? aggregateSource(sql, result) : status;
   }
 
-  StatusCode aggregateColumn(CharSequence sql, SqlCommand result) {
-    StatusCode status = selectColumnIdentifier(sql, result);
-    if (status.isOk()
-        && (result.isNullProjection(0)
-            || result.columnAlias(0).length() > 0)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk()) {
-      status = requireCharacter(sql, ')');
-    }
-    return status.isOk() ? optionalColumnAlias(sql, result, 0) : status;
-  }
-
-  StatusCode groupAggregateColumn(CharSequence sql, SqlCommand result) {
-    int columnIndex = result.columnCount();
-    StatusCode status = selectColumnIdentifier(sql, result);
-    if (status.isOk()
-        && (result.isNullProjection(columnIndex)
-            || result.columnAlias(columnIndex).length() > 0)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk()) {
-      status = requireCharacter(sql, ')');
-    }
-    return status.isOk()
-        ? optionalColumnAlias(sql, result, columnIndex) : status;
-  }
-
-  StatusCode groupHaving(
-      CharSequence sql,
-      SqlCommand result,
-      SqlCommandType type) {
-    String function = type == SqlCommandType.GROUP_SUM
-        ? "SUM" : type == SqlCommandType.GROUP_AVG
-            ? "AVG" : type == SqlCommandType.GROUP_MIN
-            ? "MIN" : type == SqlCommandType.GROUP_MAX ? "MAX" : "COUNT";
-    StatusCode status = requireKeyword(sql, function);
-    if (status.isOk()) {
-      status = requireCharacter(sql, '(');
-    }
-    if (status.isOk()) status = groupHavingOperand(sql, result, type);
-    if (status.isOk()) {
-      status = requireCharacter(sql, ')');
-    }
-    return status.isOk() ? parseGroupHavingComparison(sql, result) : status;
-  }
-
-  private StatusCode parseGroupHavingComparison(
-      CharSequence sql, SqlCommand result) {
-    SqlComparison comparison = comparisonOperator(sql);
-    if (comparison == null
-        || comparison == SqlComparison.HALF_OPEN_RANGE
-        || comparison == SqlComparison.IN
-        || comparison == SqlComparison.NOT_IN) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = literal(sql, numberResult);
-    if (status.isOk()) {
-      result.setGroupHaving(
-          comparison, numberResult.value, numberResult.typeDescriptor);
-    }
+  StatusCode groupedList(
+      CharSequence sql, SqlCommand result, int firstKind) {
+    StatusCode status = invocations.parse(sql, result, firstKind, true);
     return status;
-  }
-
-  private StatusCode groupHavingOperand(
-      CharSequence sql, SqlCommand result, SqlCommandType type) {
-    return type == SqlCommandType.GROUP_COUNT
-        ? requireCharacter(sql, '*')
-        : matchingIdentifier(sql, result.secondColumnName());
   }
 
   StatusCode aggregateSource(CharSequence sql, SqlCommand result) {
@@ -106,6 +46,9 @@ final class SqlSelectAggregateParser {
     if (status.isOk() && consumeKeyword(sql, "WHERE")) {
       status = predicates(sql, result, false);
     }
+    if (status.isOk() && consumeKeyword(sql, "HAVING")) {
+      status = having.parse(sql, result, false);
+    }
     return status;
   }
 
@@ -117,16 +60,17 @@ final class SqlSelectAggregateParser {
         status = requireKeyword(sql, "BY");
       }
       if (status.isOk()) {
-        status = matchingIdentifier(sql, result.firstColumnName());
+        status = matchingGroupKey(sql, result);
       }
       if (status.isOk() && consumeKeyword(sql, "HAVING")) {
-        status = groupHaving(sql, result, type);
+        status = having.parse(sql, result, true);
       }
       return status;
     }
     if (type == SqlCommandType.SCAN
         && result.hasPredicate()
-        && result.isEqualityPredicate()) {
+        && result.isEqualityPredicate()
+        && result.predicateExpression(0) == null) {
       result.set(SqlCommandType.SELECT, 0, 0);
     }
     return StatusCode.OK;
@@ -141,22 +85,16 @@ final class SqlSelectAggregateParser {
         || type == SqlCommandType.GROUP_MAX;
   }
 
-  private StatusCode selectColumnIdentifier(CharSequence sql, SqlCommand result) {
-    return selects.selectColumnIdentifier(sql, result);
-  }
-
-  private StatusCode optionalColumnAlias(
-      CharSequence sql, SqlCommand result, int columnIndex) {
-    return selects.optionalColumnAlias(sql, result, columnIndex);
+  private StatusCode matchingGroupKey(CharSequence sql, SqlCommand result) {
+    if (result.directProjectionSymbol(0) >= 0) {
+      return matchingIdentifier(sql, result.firstColumnName());
+    }
+    return expressions.match(sql, result, 0);
   }
 
   private StatusCode predicates(
       CharSequence sql, SqlCommand result, boolean qualified) {
     return parser.predicates(sql, result, qualified);
-  }
-
-  private SqlComparison comparisonOperator(CharSequence sql) {
-    return parser.comparisonOperator(sql);
   }
 
   private StatusCode matchingIdentifier(CharSequence sql, CharSequence expected) {
@@ -171,10 +109,6 @@ final class SqlSelectAggregateParser {
     return input.identifier(sql, result);
   }
 
-  private StatusCode literal(CharSequence sql, SqlParser.LongResult result) {
-    return input.literal(sql, result);
-  }
-
   private StatusCode requireKeyword(CharSequence sql, String keyword) {
     return input.requireKeyword(sql, keyword);
   }
@@ -183,7 +117,4 @@ final class SqlSelectAggregateParser {
     return input.consumeKeyword(sql, keyword);
   }
 
-  private StatusCode requireCharacter(CharSequence sql, char expected) {
-    return input.requireCharacter(sql, expected);
-  }
 }

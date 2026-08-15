@@ -27,7 +27,8 @@ final class LockManagerAllocationTest {
     LockToken waiter = new LockToken();
     assertEquals(
         StatusCode.OK,
-        locks.tryAcquire(1, LockScope.KEY, 7, 9, LockMode.EXCLUSIVE, 0, 0, owner));
+        locks.tryAcquire(
+            1, LockScope.KEY, 7, 9, 7, 9, LockMode.EXCLUSIVE, 0, 0, owner));
     for (int index = 0; index < 1_000; index++) {
       exercise(locks, waiter);
     }
@@ -44,7 +45,7 @@ final class LockManagerAllocationTest {
 
   private static void exercise(LockManager locks, LockToken waiter) {
     allocationGuard += locks.tryAcquire(
-        2, LockScope.KEY, 7, 9, LockMode.EXCLUSIVE, 0, 0, waiter).ordinal();
+        2, LockScope.KEY, 7, 9, 7, 9, LockMode.EXCLUSIVE, 0, 0, waiter).ordinal();
     locks.cancelWait(2);
   }
 }

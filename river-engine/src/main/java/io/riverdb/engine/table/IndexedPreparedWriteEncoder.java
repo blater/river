@@ -77,7 +77,8 @@ final class IndexedPreparedWriteEncoder {
   private void encodeSingleInsert(
       ByteBuffer payload, PendingMutationBuffer mutations, int firstRowId) {
     int rowBytes = mutations.rowLengthAt(0);
-    IndexedWalCodec.encodeInsertHeader(payload, mutations.keyAt(0), firstRowId, rowBytes);
+    IndexedWalCodec.encodeInsertHeader(
+        payload, mutations.spaceAt(0), mutations.keyAt(0), firstRowId, rowBytes);
     mutations.copyRowTo(0, payload, IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES);
     walCopyBytes += rowBytes;
   }
@@ -89,7 +90,8 @@ final class IndexedPreparedWriteEncoder {
     for (int index = 0; index < mutations.count(); index++) {
       int rowBytes = mutations.rowLengthAt(index);
       IndexedWalCodec.encodeInsertBatchEntry(
-          payload, outputOffset, mutations.keyAt(index), firstRowId + index, rowBytes);
+          payload, outputOffset, mutations.spaceAt(index), mutations.keyAt(index),
+          firstRowId + index, rowBytes);
       int rowOffset = outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
       mutations.copyRowTo(index, payload, rowOffset);
       walCopyBytes += rowBytes;
@@ -122,6 +124,7 @@ final class IndexedPreparedWriteEncoder {
           payload,
           outputOffset,
           mutations.operationAt(index),
+          mutations.spaceAt(index),
           mutations.keyAt(index),
           firstRowId + index,
           mutations.previousRowIdAt(index),

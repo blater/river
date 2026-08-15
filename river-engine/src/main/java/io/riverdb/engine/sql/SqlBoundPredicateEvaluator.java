@@ -1,5 +1,7 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -10,35 +12,91 @@ final class SqlBoundPredicateEvaluator {
   private final BoundSqlQuery query;
   private final SqlExpressionEvaluator expressions;
   private final SqlNestedQueryExecution nested;
+  private final SqlRowProjectionEvaluator rowExpressions;
+  private boolean matched;
 
   SqlBoundPredicateEvaluator(
       BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
-      SqlNestedQueryExecution nestedExecution) {
+      SqlNestedQueryExecution nestedExecution,
+      SqlRowProjectionEvaluator rowExpressionEvaluator) {
     bound = statement;
     query = statement.executableQuery;
     expressions = evaluator;
     nested = nestedExecution;
+    rowExpressions = rowExpressionEvaluator;
   }
 
-  boolean matches(long primaryKey, HeapRowResult source) {
-    if (nested.rejectsOuterRow()) {
-      return false;
-    }
+  StatusCode evaluate(long primaryKey, HeapRowResult source) {
+    matched = false;
+    if (nested.rejectsOuterRow()) return StatusCode.OK;
     BoundSqlQuery.Block command = query.root();
     boolean conjunction = true;
     for (int index = 0; index < bound.predicateCount; index++) {
       if (command.predicateStartsDisjunction(index)) {
         if (conjunction) {
-          return true;
+          matched = true;
+          return StatusCode.OK;
         }
         conjunction = true;
       }
-      if (conjunction && !matches(primaryKey, source, command, index)) {
-        conjunction = false;
+      if (!conjunction) continue;
+      if (bound.predicateColumns[index]
+          != SqlBoundProjectionPrograms.COMPUTED_PROJECTION) {
+        conjunction = matches(primaryKey, source, command, index);
+        continue;
       }
+      StatusCode status = rowExpressions.evaluatePredicate(primaryKey, source);
+      if (!status.isOk()) return status;
+      conjunction = matchesComputed(command, index);
     }
-    return conjunction;
+    matched = conjunction;
+    return StatusCode.OK;
+  }
+
+  boolean matched() { return matched; }
+
+  private boolean matchesComputed(BoundSqlQuery.Block command, int index) {
+    boolean nullValue = rowExpressions.predicateNull();
+    if (command.isNullPredicate(index)) {
+      return nullValue != command.isNullPredicateNegated(index);
+    }
+    if (nullValue) return false;
+    return SqlTypeDescriptor.typeId(rowExpressions.predicateDescriptor())
+            == SqlTypeDescriptor.TYPE_ID_VARCHAR
+        ? matchesGeneratedText(command, index)
+        : matches(
+            rowExpressions.predicateValue(),
+            rowExpressions.predicateDescriptor(),
+            command,
+            index);
+  }
+
+  private boolean matchesGeneratedText(BoundSqlQuery.Block command, int predicate) {
+    int compared = compareGeneratedText(command, command.predicateValue(predicate));
+    return switch (command.comparison(predicate)) {
+      case EQUAL -> compared == 0;
+      case NOT_EQUAL -> compared != 0;
+      case LESS_THAN -> compared < 0;
+      case LESS_OR_EQUAL -> compared <= 0;
+      case GREATER_THAN -> compared > 0;
+      case GREATER_OR_EQUAL -> compared >= 0;
+      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
+    };
+  }
+
+  private int compareGeneratedText(BoundSqlQuery.Block command, long handle) {
+    int actualLength = rowExpressions.predicateTextLength();
+    int expectedLength = command.textByteLength(handle);
+    if (expectedLength < 0) return Integer.MIN_VALUE;
+    int common = Math.min(actualLength, expectedLength);
+    for (int index = 0; index < common; index++) {
+      int comparison = Integer.compare(
+          rowExpressions.predicateTextCharacter(index),
+          Byte.toUnsignedInt(command.textByteAt(handle, index)));
+      if (comparison != 0) return comparison;
+    }
+    return Integer.compare(actualLength, expectedLength);
   }
 
   boolean matchesJoin(long primaryKey, HeapRowResult source, boolean outer) {

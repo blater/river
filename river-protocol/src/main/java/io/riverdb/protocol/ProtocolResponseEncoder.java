@@ -54,6 +54,7 @@ final class ProtocolResponseEncoder {
       return ProtocolFrameWire.invalidTarget(target);
     }
     int payloadBytes = FIXED_BYTES + metadataBytes;
+    long nullableMask = nullableMask(query, columns);
     StatusCode encoded = ProtocolFrameWire.begin(
         target,
         ProtocolMessageType.BEGIN_QUERY,
@@ -75,7 +76,7 @@ final class ProtocolResponseEncoder {
         0,
         0,
         0,
-        0);
+        nullableMask);
     writeMetadata(target, query, columns);
     target.position(0);
     target.limit(ProtocolFrameCodec.HEADER_BYTES + payloadBytes);
@@ -196,6 +197,14 @@ final class ProtocolResponseEncoder {
       bytes += Integer.BYTES + 1 + name.length();
     }
     return bytes;
+  }
+
+  private static long nullableMask(RiverQuery query, int columns) {
+    long mask = 0;
+    for (int index = 0; index < columns; index++) {
+      if (query.columnIsNullable(index)) mask |= 1L << index;
+    }
+    return mask;
   }
 
   private static void writeMetadata(

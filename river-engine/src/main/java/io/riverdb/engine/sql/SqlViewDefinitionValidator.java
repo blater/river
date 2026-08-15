@@ -2,38 +2,37 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalSession;
-import io.riverdb.sql.SqlCommand;
-import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlParser;
-import io.riverdb.sql.SqlQuery;
 
 /** Owns bounded syntax and binding scratch for CREATE VIEW validation. */
 final class SqlViewDefinitionValidator {
   private final SqlParser parser = new SqlParser();
-  private final SqlCommand command = new SqlCommand();
-  private final SqlQuery query = new SqlQuery();
   private final BoundSqlStatement bound = new BoundSqlStatement();
   private final SqlBinder binder = new SqlBinder();
+  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder();
+  private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
 
   StatusCode validate(RelationalSession session, CharSequence viewSql) {
-    query.reset();
-    StatusCode status = parser.parse(viewSql, command);
-    if (!status.isOk()
-        || command.type() != SqlCommandType.SCAN
-            && command.type() != SqlCommandType.SELECT
-        || command.isSelectAll()
-        || command.columnCount() <= 0
-        || command.isOrdered()
-        || command.rowLimit() != Long.MAX_VALUE
-        || command.hasDisjunction()) {
-      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
-    }
     bound.reset();
-    status = session.resolveTable(command.tableName(), bound.table);
-    return status.isOk()
-        ? binder.bindDataCommand(
-            command, query, bound)
-        : status;
+    StatusCode status = parser.parseQuery(viewSql, bound.query, bound.command);
+    if (status.isOk()) {
+      status = SqlStoredViewPolicy.validate(bound.command, bound.query);
+    }
+    if (status.isOk()) {
+      status = SqlStoredViewPolicy.validateZones(bound.command, bound.query, zones);
+    }
+    if (status.isOk()) {
+      status = session.resolveTable(bound.command.tableName(), bound.table);
+    }
+    if (!status.isOk()) return status;
+    if (bound.query.isBlockPipeline()) return blockBinder.bind(session, bound, null);
+    if (SqlBinder.isGroupAggregate(bound.command.type())) {
+      return binder.bindGroupAggregate(bound.command, bound.query, bound);
+    }
+    if (bound.command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN) {
+      return binder.bindDistinct(bound.command, bound.query, bound);
+    }
+    return binder.bindDataCommand(bound.command, bound.query, bound);
   }
 
   int tableId() {

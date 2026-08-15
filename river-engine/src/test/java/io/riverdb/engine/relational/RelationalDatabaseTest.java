@@ -23,6 +23,46 @@ final class RelationalDatabaseTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void typedRowMutationOwnsExpressionCheckEnforcement(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    RelationalDatabase database = opened.database();
+    RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RelationalSession session = sessionResult.session();
+    TableSchema schema = new TableSchema();
+    assertEquals(StatusCode.OK, schema.addBigint("id", false));
+    assertEquals(StatusCode.OK, schema.addColumn("day", SqlTypeDescriptor.DATE, true));
+    byte[] operators = {
+        (byte) TableSchema.CHECK_COLUMN, (byte) TableSchema.CHECK_EXTRACT};
+    long[] operands = {1, io.riverdb.base.type.LocalTemporal.EXTRACT_DAY};
+    int[] descriptors = {SqlTypeDescriptor.DATE, SqlTypeDescriptor.BIGINT};
+    assertEquals(
+        StatusCode.OK,
+        schema.setCheck(
+            1,
+            TableSchema.CHECK_GREATER_OR_EQUAL,
+            SqlTypeDescriptor.BIGINT,
+            10,
+            2,
+            operators,
+            operands,
+            descriptors));
+    TableDefinition table = new TableDefinition();
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.createTable("checked_rows", schema, table));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.insertRow(table, 1, row(19_763)));
+    assertEquals(StatusCode.CHECK_VIOLATION, session.insertRow(table, 2, row(19_754)));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void persistsCanonicalColumnDescriptorsAndRejectsCorruptTypes(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
@@ -250,7 +290,8 @@ final class RelationalDatabaseTest {
   }
 
   @Test
-  void rejectsInvalidNamesKeysAndForeignDefinitions(@TempDir Path firstRoot, @TempDir Path secondRoot) {
+  void rejectsInvalidNamesAndForeignDefinitionsAndAdmitsSignedKeys(
+      @TempDir Path firstRoot, @TempDir Path secondRoot) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -276,9 +317,8 @@ final class RelationalDatabaseTest {
     RelationalSession session = sessions.session();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.insert(table, 1, row(1)));
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session.insert(local, RelationalKey.MAXIMUM_USER_KEY + 1, row(1)));
+    assertEquals(StatusCode.OK, session.insert(local, Long.MIN_VALUE, row(1)));
+    assertEquals(StatusCode.OK, session.insert(local, Long.MAX_VALUE, row(1)));
     assertEquals(StatusCode.OK, session.abort(new TransactionOutcome()));
     assertEquals(StatusCode.OK, second.close());
     assertEquals(StatusCode.OK, first.close());

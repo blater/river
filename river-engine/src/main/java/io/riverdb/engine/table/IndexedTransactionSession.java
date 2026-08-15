@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.Transaction;
@@ -14,7 +15,6 @@ import java.nio.ByteBuffer;
 
 /** One reusable transaction/session write set over the first indexed table. */
 public final class IndexedTransactionSession implements TransactionCommitParticipant {
-  private static final long TABLE_LOCK_ID = 1;
   private static final int MUTATION_NONE = 0;
   private static final int MAXIMUM_PENDING_INSERTS = 384;
   private static final int MAXIMUM_HELD_LOCKS = 384;
@@ -33,6 +33,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final LockToken[] heldLocks = new LockToken[MAXIMUM_HELD_LOCKS];
   private final long[] lockedKeys = new long[MAXIMUM_HELD_LOCKS];
   private final long[] lockedUpperKeys = new long[MAXIMUM_HELD_LOCKS];
+  private final int[] lockedSpaces = new int[MAXIMUM_HELD_LOCKS];
+  private final int[] lockedUpperSpaces = new int[MAXIMUM_HELD_LOCKS];
   private final boolean[] exclusiveLocks = new boolean[MAXIMUM_HELD_LOCKS];
   private final boolean[] rangeLocks = new boolean[MAXIMUM_HELD_LOCKS];
   private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
@@ -212,9 +214,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return status;
   }
 
-  public StatusCode insert(long key, ByteBuffer row) {
+  public StatusCode insert(int space, long key, ByteBuffer row) {
     if (transaction.state() != TransactionState.ACTIVE
-        || key == Long.MAX_VALUE
+        || !OrderedKey.isFiniteSpace(space)
         || row == null
         || !row.hasRemaining()
         || row.remaining() > pendingMutations.rowStride()) {
@@ -223,11 +225,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (pendingMutations.count() >= pendingMutations.capacity()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = acquireExclusiveKey(key);
+    StatusCode status = acquireExclusiveKey(space, key);
     if (!status.isOk()) {
       return status;
     }
-    int pendingIndex = findLatestPendingIndex(key);
+    int pendingIndex = findLatestPendingIndex(space, key);
     if (pendingIndex >= 0) {
       int pendingOperation = pendingMutations.operationAt(pendingIndex);
       if (pendingOperation != IndexedWalCodec.MUTATION_DELETE
@@ -237,6 +239,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       appendPending(
           pendingOperation == IndexedWalCodec.MUTATION_DELETE
               ? IndexedWalCodec.MUTATION_UPDATE : IndexedWalCodec.MUTATION_INSERT,
+          space,
           key,
           pendingMutations.previousRowIdAt(pendingIndex),
           row,
@@ -248,13 +251,14 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     status = refreshForWrite();
     if (status.isOk()) {
       status = table.prepareInsert(
-          transaction.snapshot().visibleCommitSequence(), key, mutationTarget);
+          transaction.snapshot().visibleCommitSequence(), space, key, mutationTarget);
     }
     if (!status.isOk()) {
       return status;
     }
     appendPending(
         IndexedWalCodec.MUTATION_INSERT,
+        space,
         key,
         mutationTarget.rowId(),
         row,
@@ -264,9 +268,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return StatusCode.OK;
   }
 
-  public StatusCode update(long key, ByteBuffer row) {
+  public StatusCode update(int space, long key, ByteBuffer row) {
     if (transaction.state() != TransactionState.ACTIVE
-        || key == Long.MAX_VALUE
+        || !OrderedKey.isFiniteSpace(space)
         || row == null
         || !row.hasRemaining()
         || row.remaining() > pendingMutations.rowStride()) {
@@ -275,11 +279,11 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (pendingMutations.count() >= pendingMutations.capacity()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = acquireExclusiveKey(key);
+    StatusCode status = acquireExclusiveKey(space, key);
     if (!status.isOk()) {
       return status;
     }
-    int pendingIndex = findLatestPendingIndex(key);
+    int pendingIndex = findLatestPendingIndex(space, key);
     if (pendingIndex >= 0) {
       int pendingOperation = pendingMutations.operationAt(pendingIndex);
       if (pendingOperation != IndexedWalCodec.MUTATION_INSERT
@@ -288,6 +292,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
       appendPending(
           pendingOperation,
+          space,
           key,
           pendingMutations.previousRowIdAt(pendingIndex),
           row,
@@ -299,13 +304,14 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     status = refreshForWrite();
     if (status.isOk()) {
       status = table.prepareMutation(
-          transaction.snapshot().visibleCommitSequence(), key, mutationTarget);
+          transaction.snapshot().visibleCommitSequence(), space, key, mutationTarget);
     }
     if (!status.isOk()) {
       return status;
     }
     appendPending(
         IndexedWalCodec.MUTATION_UPDATE,
+        space,
         key,
         mutationTarget.rowId(),
         row,
@@ -315,18 +321,19 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return StatusCode.OK;
   }
 
-  public StatusCode delete(long key) {
-    if (transaction.state() != TransactionState.ACTIVE || key == Long.MAX_VALUE) {
+  public StatusCode delete(int space, long key) {
+    if (transaction.state() != TransactionState.ACTIVE
+        || !OrderedKey.isFiniteSpace(space)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (pendingMutations.count() >= pendingMutations.capacity()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = acquireExclusiveKey(key);
+    StatusCode status = acquireExclusiveKey(space, key);
     if (!status.isOk()) {
       return status;
     }
-    int pendingIndex = findLatestPendingIndex(key);
+    int pendingIndex = findLatestPendingIndex(space, key);
     if (pendingIndex >= 0) {
       int pendingOperation = pendingMutations.operationAt(pendingIndex);
       if (pendingOperation != IndexedWalCodec.MUTATION_INSERT
@@ -336,6 +343,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       appendPendingDeletion(
           pendingOperation == IndexedWalCodec.MUTATION_INSERT
               ? MUTATION_NONE : IndexedWalCodec.MUTATION_DELETE,
+          space,
           key,
           pendingMutations.previousRowIdAt(pendingIndex));
       return StatusCode.OK;
@@ -343,40 +351,44 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     status = refreshForWrite();
     if (status.isOk()) {
       status = table.prepareMutation(
-          transaction.snapshot().visibleCommitSequence(), key, mutationTarget);
+          transaction.snapshot().visibleCommitSequence(), space, key, mutationTarget);
     }
     if (!status.isOk()) {
       return status;
     }
     appendPendingDeletion(
-        IndexedWalCodec.MUTATION_DELETE, key, mutationTarget.rowId());
+        IndexedWalCodec.MUTATION_DELETE, space, key, mutationTarget.rowId());
     return StatusCode.OK;
   }
 
-  private void appendPendingDeletion(int operation, long key, int previousRowId) {
-    pendingMutations.appendDeletion(operation, key, previousRowId);
+  private void appendPendingDeletion(
+      int operation, int space, long key, int previousRowId) {
+    pendingMutations.appendDeletion(operation, space, key, previousRowId);
   }
 
   private void appendPending(
       int operation,
+      int space,
       long key,
       int previousRowId,
       ByteBuffer source,
       int sourceStart,
       int rowBytes,
       boolean countCopy) {
-    pendingMutations.append(operation, key, previousRowId, source, sourceStart, rowBytes);
+    pendingMutations.append(
+        operation, space, key, previousRowId, source, sourceStart, rowBytes);
     if (countCopy) {
       copiedWriteSetBytes += rowBytes;
     }
   }
 
-  public StatusCode fetchByKey(long key, HeapRowResult result) {
+  public StatusCode fetchByKey(int space, long key, HeapRowResult result) {
     if (transaction.state() != TransactionState.ACTIVE || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = pendingMutations.count() - 1; index >= 0; index--) {
-      if (pendingMutations.keyAt(index) == key) {
+      if (pendingMutations.spaceAt(index) == space
+          && pendingMutations.keyAt(index) == key) {
         if (pendingMutations.operationAt(index) == IndexedWalCodec.MUTATION_DELETE
             || pendingMutations.operationAt(index) == MUTATION_NONE) {
           result.reset();
@@ -387,7 +399,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
     }
     if (transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
-      StatusCode status = protectKey(key);
+      StatusCode status = protectKey(space, key);
       if (!status.isOk()) {
         return status;
       }
@@ -401,24 +413,26 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
     }
     return table.fetchByKeyAt(
-        transaction.snapshot().visibleCommitSequence(), key, result);
+        transaction.snapshot().visibleCommitSequence(), space, key, result);
   }
 
   /** Holds a shared key lock through transaction completion for integrity checks. */
-  public StatusCode protectKey(long key) {
-    if (transaction.state() != TransactionState.ACTIVE || key == Long.MAX_VALUE) {
+  public StatusCode protectKey(int space, long key) {
+    if (transaction.state() != TransactionState.ACTIVE
+        || !OrderedKey.isFiniteSpace(space)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (findHeldLock(key) >= 0) {
+    if (findHeldLock(space, key) >= 0) {
       return StatusCode.OK;
     }
     if (heldLockCount >= MAXIMUM_HELD_LOCKS) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = manager.tryAcquireSharedKey(
-        transaction, TABLE_LOCK_ID, key, heldLocks[heldLockCount]);
+        transaction, space, key, heldLocks[heldLockCount]);
     if (status.isOk()) {
       lockedKeys[heldLockCount] = key;
+      lockedSpaces[heldLockCount] = space;
       lockedUpperKeys[heldLockCount] = 0;
       exclusiveLocks[heldLockCount] = false;
       rangeLocks[heldLockCount] = false;
@@ -428,7 +442,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode beginScan(
+      int lowerSpace,
       long lowerKey,
+      int upperSpace,
       long upperKey,
       IndexedScanCursor cursor) {
     if (cursor == null) {
@@ -449,12 +465,13 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
     }
     StatusCode status = table.beginScan(
-        transaction.snapshot().visibleCommitSequence(), lowerKey, upperKey, cursor);
+        transaction.snapshot().visibleCommitSequence(),
+        lowerSpace, lowerKey, upperSpace, upperKey, cursor);
     if (status.isOk()) {
       status = cursor.attach(this);
     }
     if (status.isOk() && transaction.isolationLevel() == IsolationLevel.SERIALIZABLE) {
-      status = acquireSharedRange(lowerKey, upperKey);
+      status = acquireSharedRange(lowerSpace, lowerKey, upperSpace, upperKey);
     }
     if (!status.isOk() && cursor.isSessionOwnedBy(this)) {
       StatusCode close = table.closeScan(cursor);
@@ -492,29 +509,38 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
         }
       }
       int pendingIndex = nextPendingIndex(cursor);
-      long pendingKey = pendingIndex >= 0
-          ? pendingMutations.keyAt(pendingIndex) : Long.MAX_VALUE;
-      long committedKey = cursor.hasCommittedLookahead()
-          ? cursor.committedLookahead().key() : Long.MAX_VALUE;
       if (pendingIndex < 0 && !cursor.hasCommittedLookahead()) {
         return StatusCode.CONFLICT;
       }
-      if (pendingKey <= committedKey) {
-        if (pendingKey == committedKey) {
+      boolean returnPending = pendingIndex >= 0
+          && (!cursor.hasCommittedLookahead()
+              || OrderedKey.compare(
+                  pendingMutations.spaceAt(pendingIndex),
+                  pendingMutations.keyAt(pendingIndex),
+                  cursor.committedLookahead().keySpace(),
+                  cursor.committedLookahead().key()) <= 0);
+      if (returnPending) {
+        int pendingSpace = pendingMutations.spaceAt(pendingIndex);
+        long pendingKey = pendingMutations.keyAt(pendingIndex);
+        if (cursor.hasCommittedLookahead()
+            && OrderedKey.equal(
+                pendingSpace, pendingKey,
+                cursor.committedLookahead().keySpace(),
+                cursor.committedLookahead().key())) {
           cursor.setCommittedLookahead(false);
         }
-        cursor.returned(pendingKey);
+        cursor.returned(pendingSpace, pendingKey);
         if (pendingMutations.operationAt(pendingIndex) == IndexedWalCodec.MUTATION_DELETE
             || pendingMutations.operationAt(pendingIndex) == MUTATION_NONE) {
           continue;
         }
         pendingMutations.setRowResult(pendingIndex, result.row());
-        result.set(pendingKey);
+        result.set(pendingSpace, pendingKey);
         return StatusCode.OK;
       }
       result.copyFrom(cursor.committedLookahead());
       cursor.setCommittedLookahead(false);
-      cursor.returned(committedKey);
+      cursor.returned(result.keySpace(), result.key());
       return StatusCode.OK;
     }
   }
@@ -709,6 +735,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       }
       lockedKeys[index] = 0;
       lockedUpperKeys[index] = 0;
+      lockedSpaces[index] = 0;
+      lockedUpperSpaces[index] = 0;
       exclusiveLocks[index] = false;
       rangeLocks[index] = false;
     }
@@ -743,17 +771,19 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     savepointCount = first;
   }
 
-  private int findHeldLock(long key) {
+  private int findHeldLock(int space, long key) {
     for (int index = 0; index < heldLockCount; index++) {
-      if (!rangeLocks[index] && lockedKeys[index] == key) {
+      if (!rangeLocks[index]
+          && lockedSpaces[index] == space
+          && lockedKeys[index] == key) {
         return index;
       }
     }
     return -1;
   }
 
-  private StatusCode acquireExclusiveKey(long key) {
-    int lockIndex = findHeldLock(key);
+  private StatusCode acquireExclusiveKey(int space, long key) {
+    int lockIndex = findHeldLock(space, key);
     if (lockIndex >= 0) {
       if (exclusiveLocks[lockIndex]) {
         return StatusCode.OK;
@@ -768,9 +798,10 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = manager.tryAcquireKey(
-        transaction, TABLE_LOCK_ID, key, heldLocks[heldLockCount]);
+        transaction, space, key, heldLocks[heldLockCount]);
     if (status.isOk()) {
       lockedKeys[heldLockCount] = key;
+      lockedSpaces[heldLockCount] = space;
       lockedUpperKeys[heldLockCount] = 0;
       exclusiveLocks[heldLockCount] = true;
       rangeLocks[heldLockCount] = false;
@@ -779,11 +810,14 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return status;
   }
 
-  private StatusCode acquireSharedRange(long lowerKey, long upperKey) {
+  private StatusCode acquireSharedRange(
+      int lowerSpace, long lowerKey, int upperSpace, long upperKey) {
     for (int index = 0; index < heldLockCount; index++) {
       if (rangeLocks[index]
-          && lockedKeys[index] <= lowerKey
-          && lockedUpperKeys[index] >= upperKey) {
+          && OrderedKey.compare(
+              lockedSpaces[index], lockedKeys[index], lowerSpace, lowerKey) <= 0
+          && OrderedKey.compare(
+              lockedUpperSpaces[index], lockedUpperKeys[index], upperSpace, upperKey) >= 0) {
         return StatusCode.OK;
       }
     }
@@ -791,10 +825,13 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = manager.tryAcquireSharedRange(
-        transaction, lowerKey, upperKey, heldLocks[heldLockCount]);
+        transaction, lowerSpace, lowerKey, upperSpace, upperKey,
+        heldLocks[heldLockCount]);
     if (status.isOk()) {
       lockedKeys[heldLockCount] = lowerKey;
       lockedUpperKeys[heldLockCount] = upperKey;
+      lockedSpaces[heldLockCount] = lowerSpace;
+      lockedUpperSpaces[heldLockCount] = upperSpace;
       exclusiveLocks[heldLockCount] = false;
       rangeLocks[heldLockCount] = true;
       heldLockCount++;
@@ -814,8 +851,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return pendingMutations.containsNonInsertMutation();
   }
 
-  private int findLatestPendingIndex(long key) {
-    return pendingMutations.findLatestIndex(key);
+  private int findLatestPendingIndex(int space, long key) {
+    return pendingMutations.findLatestIndex(space, key);
   }
 
   private void compactWriteSet() {

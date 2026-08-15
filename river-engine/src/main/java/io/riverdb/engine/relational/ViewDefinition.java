@@ -1,5 +1,9 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.text.Utf8Text;
+import java.nio.ByteBuffer;
+
 /** Caller-owned bounded SQL text for one durable logical view definition. */
 public final class ViewDefinition implements CharSequence {
   public static final int MAXIMUM_QUERY_LENGTH = 768;
@@ -23,6 +27,17 @@ public final class ViewDefinition implements CharSequence {
 
   void append(char character) {
     query[length++] = character;
+  }
+
+  StatusCode setUtf8(ByteBuffer source, int offset, int bytes) {
+    reset();
+    int decoded = Utf8Text.decode(source, offset, bytes, query, 0);
+    if (decoded <= 0 || decoded > query.length) {
+      reset();
+      return StatusCode.CORRUPTION;
+    }
+    length = decoded;
+    return StatusCode.OK;
   }
 
   @Override

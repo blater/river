@@ -10,7 +10,7 @@ final class RelationalSequenceCommands {
   private final RelationalSchemaLifecycle lifecycle;
   private final RelationalSchemaGate schemaGate;
   private final RelationalSequenceService sequences;
-  private final RelationalKey.LongKeyResult catalogKey = new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
 
   RelationalSequenceCommands(
       RelationalSchemaLifecycle schemaLifecycle,
@@ -86,36 +86,52 @@ final class RelationalSequenceCommands {
       CharSequence name, SequenceValueResult result) {
     StatusCode status = RelationalKey.catalogTableKey(name, catalogKey);
     return status.isOk()
-        ? allocate(catalogKey.key(), name, 0, Long.MIN_VALUE, Long.MAX_VALUE, result)
+        ? allocate(
+            catalogKey.space(),
+            catalogKey.key(),
+            name,
+            0,
+            Long.MIN_VALUE,
+            Long.MAX_VALUE,
+            result)
         : status;
   }
 
   private synchronized StatusCode nextIdentityAdmitted(
       TableDefinition table, SequenceValueResult result) {
     return allocate(
+        RelationalKey.CATALOG_SEQUENCE_SPACE,
         RelationalKey.identitySequenceKey(table.tableId()),
         null,
         table.tableId(),
         1,
-        RelationalKey.MAXIMUM_USER_KEY,
+        Long.MAX_VALUE,
         result);
   }
 
   private StatusCode allocate(
+      int sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId,
       long minimum,
       long maximum,
       SequenceValueResult result) {
-    if (sequences.consumeCached(sequenceKey, result)) {
+    if (sequences.consumeCached(sequenceSpace, sequenceKey, result)) {
       return StatusCode.OK;
     }
     RelationalSession session = lifecycle.newSession();
     return session == null
         ? StatusCode.RESOURCE_EXHAUSTED
         : sequences.reserve(
-            session, sequenceKey, name, identityTableId, minimum, maximum, result);
+            session,
+            sequenceSpace,
+            sequenceKey,
+            name,
+            identityTableId,
+            minimum,
+            maximum,
+            result);
   }
 
   private static StatusCode finish(

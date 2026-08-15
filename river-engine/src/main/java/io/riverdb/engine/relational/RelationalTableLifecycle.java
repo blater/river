@@ -17,8 +17,7 @@ final class RelationalTableLifecycle {
       ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final ByteBuffer catalogOutput =
       ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
-  private final RelationalKey.LongKeyResult catalogKey =
-      new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
   private final TableDefinition table = new TableDefinition();
   private final TableDefinition updatedTable = new TableDefinition();
   private boolean alreadyMarked;
@@ -52,13 +51,14 @@ final class RelationalTableLifecycle {
           -1,
           renamedName,
           table);
-      status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
+      status = session.indexedSession().insert(
+          catalogKey.space(), catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(currentName, catalogKey);
     }
     return status.isOk()
-        ? session.indexedSession().delete(catalogKey.key()) : status;
+        ? session.indexedSession().delete(catalogKey.space(), catalogKey.key()) : status;
   }
 
   StatusCode renameColumn(
@@ -92,7 +92,8 @@ final class RelationalTableLifecycle {
           -1,
           tableName,
           updatedTable);
-      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      status = session.indexedSession().update(
+          catalogKey.space(), catalogKey.key(), catalogOutput);
     }
     return status;
   }
@@ -135,7 +136,8 @@ final class RelationalTableLifecycle {
     alreadyMarked = false;
     StatusCode status = RelationalKey.catalogTableKey(name, catalogKey);
     if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+      status = session.indexedSession().fetchByKey(
+          catalogKey.space(), catalogKey.key(), catalogRow);
     }
     if (status.isOk()) {
       alreadyMarked = CatalogRecord.isDroppingTable(catalogRow, catalogScratch);
@@ -151,9 +153,11 @@ final class RelationalTableLifecycle {
     if (status.isOk() && !alreadyMarked) {
       CatalogRecord.encodeDroppingTable(
           catalogOutput, table.tableId(), name, table);
-      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      status = session.indexedSession().update(
+          catalogKey.space(), catalogKey.key(), catalogOutput);
       if (status.isOk() && table.hasIdentity()) {
         status = session.indexedSession().delete(
+            RelationalKey.CATALOG_SEQUENCE_SPACE,
             RelationalKey.identitySequenceKey(table.tableId()));
       }
     }
@@ -172,7 +176,8 @@ final class RelationalTableLifecycle {
   }
 
   private StatusCode ensureCatalogKeyAbsent(RelationalSession session) {
-    StatusCode status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    StatusCode status = session.indexedSession().fetchByKey(
+        catalogKey.space(), catalogKey.key(), catalogRow);
     if (status.isOk()) {
       return StatusCode.CONFLICT;
     }

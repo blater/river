@@ -20,6 +20,7 @@ final class RelationalSequenceService {
       CatalogRecord.MAXIMUM_BYTES);
   private final CatalogSequenceCodec.SequenceResult sequence =
       new CatalogSequenceCodec.SequenceResult();
+  private final int[] spaces = new int[CACHE_SLOTS];
   private final long[] keys = new long[CACHE_SLOTS];
   private final long[] nextValues = new long[CACHE_SLOTS];
   private final long[] increments = new long[CACHE_SLOTS];
@@ -32,9 +33,9 @@ final class RelationalSequenceService {
     schemaGate = gate;
   }
 
-  boolean consumeCached(long sequenceKey, SequenceValueResult result) {
+  boolean consumeCached(int sequenceSpace, long sequenceKey, SequenceValueResult result) {
     refreshSchemaVersion();
-    int slot = cacheSlot(sequenceKey);
+    int slot = cacheSlot(sequenceSpace, sequenceKey);
     if (slot < 0) {
       return false;
     }
@@ -49,6 +50,7 @@ final class RelationalSequenceService {
 
   StatusCode reserve(
       RelationalSession session,
+      int sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId,
@@ -57,7 +59,7 @@ final class RelationalSequenceService {
       SequenceValueResult result) {
     TransactionOutcome outcome = new TransactionOutcome();
     StatusCode status = readForUpdate(
-        session, sequenceKey, name, identityTableId);
+        session, sequenceSpace, sequenceKey, name, identityTableId);
     if (status.isOk() && sequence.isExhausted()) {
       status = StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -71,13 +73,26 @@ final class RelationalSequenceService {
         ? reservationEnd(value, increment, reserved, exhausted) : value;
     if (status.isOk()) {
       status = update(
-          session, sequenceKey, name, identityTableId, next, increment, exhausted);
+          session,
+          sequenceSpace,
+          sequenceKey,
+          name,
+          identityTableId,
+          next,
+          increment,
+          exhausted);
     }
     status = finish(session, outcome, status);
     if (status.isOk()) {
       result.set(value, outcome.commitSequence());
       if (reserved > 1) {
-        cache(sequenceKey, value, increment, outcome.commitSequence(), reserved);
+        cache(
+            sequenceSpace,
+            sequenceKey,
+            value,
+            increment,
+            outcome.commitSequence(),
+            reserved);
       }
     }
     return status;
@@ -85,12 +100,14 @@ final class RelationalSequenceService {
 
   private StatusCode readForUpdate(
       RelationalSession session,
+      int sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId) {
     StatusCode status = session.begin(IsolationLevel.SERIALIZABLE);
     if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(sequenceKey, catalogRow);
+      status = session.indexedSession().fetchByKey(
+          sequenceSpace, sequenceKey, catalogRow);
     }
     if (!status.isOk()) {
       return status;
@@ -104,6 +121,7 @@ final class RelationalSequenceService {
 
   private StatusCode update(
       RelationalSession session,
+      int sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId,
@@ -117,7 +135,8 @@ final class RelationalSequenceService {
       CatalogSequenceCodec.encodeUser(
           catalogOutput, name, next, increment, exhausted);
     }
-    return session.indexedSession().update(sequenceKey, catalogOutput);
+    return session.indexedSession().update(
+        sequenceSpace, sequenceKey, catalogOutput);
   }
 
   private StatusCode finish(
@@ -168,12 +187,14 @@ final class RelationalSequenceService {
   }
 
   private void cache(
+      int sequenceSpace,
       long sequenceKey,
       long value,
       long increment,
       long commitSequence,
       int reserved) {
-    int slot = writableSlot(sequenceKey);
+    int slot = writableSlot(sequenceSpace, sequenceKey);
+    spaces[slot] = sequenceSpace;
     keys[slot] = sequenceKey;
     nextValues[slot] = value + increment;
     increments[slot] = increment;
@@ -181,18 +202,21 @@ final class RelationalSequenceService {
     remaining[slot] = reserved - 1;
   }
 
-  private int cacheSlot(long sequenceKey) {
+  private int cacheSlot(int sequenceSpace, long sequenceKey) {
     for (int slot = 0; slot < CACHE_SLOTS; slot++) {
-      if (remaining[slot] > 0 && keys[slot] == sequenceKey) {
+      if (remaining[slot] > 0
+          && spaces[slot] == sequenceSpace
+          && keys[slot] == sequenceKey) {
         return slot;
       }
     }
     return -1;
   }
 
-  private int writableSlot(long sequenceKey) {
+  private int writableSlot(int sequenceSpace, long sequenceKey) {
     for (int slot = 0; slot < CACHE_SLOTS; slot++) {
-      if (keys[slot] == sequenceKey || remaining[slot] == 0) {
+      if (remaining[slot] == 0
+          || spaces[slot] == sequenceSpace && keys[slot] == sequenceKey) {
         return slot;
       }
     }

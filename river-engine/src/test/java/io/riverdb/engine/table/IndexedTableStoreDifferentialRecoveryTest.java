@@ -36,7 +36,8 @@ final class IndexedTableStoreDifferentialRecoveryTest {
         IndexedWalCodec.MUTATION_DELETE,
         IndexedWalCodec.MUTATION_INSERT
     };
-    long[] keys = {10, 20, 30};
+    int[] spaces = {4, 5, 5};
+    long[] keys = {10, 10, 30};
     int[] previousRowIds = {1, 2, 0};
     int[] rowLengths = {Long.BYTES, 1, Long.BYTES};
     ByteBuffer rows = mutationRows();
@@ -44,7 +45,7 @@ final class IndexedTableStoreDifferentialRecoveryTest {
         StatusCode.OK,
         compact.table.commitMutations(
             3,
-            operations,
+            operations, spaces,
             keys,
             previousRowIds,
             rows,
@@ -70,12 +71,12 @@ final class IndexedTableStoreDifferentialRecoveryTest {
       row.putLong(0, key * 10L);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, split.table.insert(2L + key, key, row, inserted));
+      assertEquals(StatusCode.OK, split.table.insert(2L + key, 0, key, row, inserted));
     }
     row.putLong(0, 2560L);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, split.table.insert(258, 256, row, inserted));
+    assertEquals(StatusCode.OK, split.table.insert(258, 0, 256, row, inserted));
     assertLastOperationType(split.wal, IndexedWalCodec.OPERATION_TYPE_PAGE_IMAGES);
     assertSplitState(split.table);
     split = crashAndReopen(split);
@@ -84,7 +85,8 @@ final class IndexedTableStoreDifferentialRecoveryTest {
   }
 
   private static void seed(IndexedTable table) {
-    long[] keys = {10, 20};
+    int[] spaces = {4, 5};
+    long[] keys = {10, 10};
     int[] rowLengths = {Long.BYTES, Long.BYTES};
     ByteBuffer rows = ByteBuffer.allocateDirect(2 * Long.BYTES);
     rows.putLong(0, 100);
@@ -94,7 +96,7 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     assertEquals(
         StatusCode.OK,
         table.commitInserts(
-            2,
+            2, spaces,
             keys,
             rows,
             ROW_STRIDE,
@@ -116,23 +118,24 @@ final class IndexedTableStoreDifferentialRecoveryTest {
   private static void assertCompactState(IndexedTable table) {
     assertEquals(5, table.rowCount());
     assertEquals(2, table.obsoleteVersionCount());
-    assertVisibleValue(table, 10, 101);
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(20, new HeapRowResult()));
-    assertVisibleValue(table, 30, 300);
+    assertVisibleValue(table, 4, 10, 101);
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey(5, 10, new HeapRowResult()));
+    assertVisibleValue(table, 5, 30, 300);
     assertCompactScan(table);
   }
 
   private static void assertSplitState(IndexedTable table) {
     assertEquals(257, table.rowCount());
-    assertVisibleValue(table, 0, 0);
-    assertVisibleValue(table, 127, 1270);
-    assertVisibleValue(table, 255, 2550);
-    assertVisibleValue(table, 256, 2560);
+    assertVisibleValue(table, 0, 0, 0);
+    assertVisibleValue(table, 0, 127, 1270);
+    assertVisibleValue(table, 0, 255, 2550);
+    assertVisibleValue(table, 0, 256, 2560);
   }
 
-  private static void assertVisibleValue(IndexedTable table, long key, long expected) {
+  private static void assertVisibleValue(
+      IndexedTable table, int space, long key, long expected) {
     HeapRowResult row = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(key, row));
+    assertEquals(StatusCode.OK, table.fetchByKey(space, key, row));
     ByteBuffer copied = ByteBuffer.allocate(row.length());
     assertEquals(StatusCode.OK, row.copyTo(copied));
     assertEquals(expected, copied.getLong(0));
@@ -143,10 +146,13 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     IndexedScanResult result = new IndexedScanResult();
     assertEquals(
         StatusCode.OK,
-        table.beginScan(table.currentCommitSequence(), Long.MIN_VALUE, Long.MAX_VALUE, cursor));
+        table.beginScan(
+            table.currentCommitSequence(), 4, Long.MIN_VALUE, 6, Long.MIN_VALUE, cursor));
     assertEquals(StatusCode.OK, table.nextScan(cursor, result));
+    assertEquals(4, result.keySpace());
     assertEquals(10, result.key());
     assertEquals(StatusCode.OK, table.nextScan(cursor, result));
+    assertEquals(5, result.keySpace());
     assertEquals(30, result.key());
     assertEquals(StatusCode.CONFLICT, table.nextScan(cursor, result));
     assertEquals(StatusCode.OK, table.closeScan(cursor));

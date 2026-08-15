@@ -76,6 +76,27 @@ public final class SqlScanRowResult {
     return StatusCode.OK;
   }
 
+  StatusCode setTextAt(int index, char[] source, int length) {
+    return setTextAt(index, source, 0, length);
+  }
+
+  StatusCode setTextAt(int index, char[] source, int offset, int length) {
+    if (!available
+        || index < 0
+        || index >= columnCount
+        || source == null
+        || offset < 0
+        || length < 0
+        || offset > source.length - length
+        || length > CommandResult.MAXIMUM_TEXT_CHARACTERS
+        || !isVarchar(index)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    System.arraycopy(source, offset, textValues[index], 0, length);
+    textLengths[index] = length;
+    return StatusCode.OK;
+  }
+
   StatusCode setPackedTextAt(int index, long packed) {
     if (!available || index < 0 || index >= columnCount || !isVarchar(index)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

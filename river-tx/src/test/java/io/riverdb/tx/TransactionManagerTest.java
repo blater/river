@@ -8,6 +8,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
+import io.riverdb.tx.api.lock.LockToken;
 import org.junit.jupiter.api.Test;
 
 final class TransactionManagerTest {
@@ -84,6 +85,59 @@ final class TransactionManagerTest {
     assertEquals(TransactionState.COMMITTED, outcome.state());
     assertEquals(3, outcome.transactionId());
     assertEquals(4, outcome.commitSequence());
+  }
+
+  @Test
+  void orderedKeyLocksAdmitExtremaAndKeepSpacesIndependent() {
+    TransactionManager manager = new TransactionManager(41, 43, 2, 4);
+    Transaction first = new Transaction(4);
+    Transaction second = new Transaction(4);
+    Transaction contender = new Transaction(4);
+    LockToken firstKey = new LockToken();
+    LockToken secondKey = new LockToken();
+    LockToken blockedKey = new LockToken();
+    assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, first));
+    assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, second));
+    assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, contender));
+    assertEquals(StatusCode.OK, manager.tryAcquireKey(first, 7, Long.MAX_VALUE, firstKey));
+    assertEquals(StatusCode.OK, manager.tryAcquireKey(second, 8, Long.MAX_VALUE, secondKey));
+    assertEquals(
+        StatusCode.RETRY,
+        manager.tryAcquireKey(contender, 7, Long.MAX_VALUE, blockedKey));
+    assertEquals(StatusCode.OK, manager.release(secondKey));
+    assertEquals(StatusCode.OK, manager.release(firstKey));
+    assertEquals(StatusCode.OK, manager.abort(first, new TransactionOutcome()));
+    assertEquals(StatusCode.OK, manager.abort(second, new TransactionOutcome()));
+    assertEquals(StatusCode.OK, manager.abort(contender, new TransactionOutcome()));
+  }
+
+  @Test
+  void fullSpaceRangeEndsAtNextSpaceMinimum() {
+    TransactionManager manager = new TransactionManager(47, 53, 2, 4);
+    Transaction reader = new Transaction(4);
+    Transaction inside = new Transaction(4);
+    Transaction adjacent = new Transaction(4);
+    LockToken range = new LockToken();
+    LockToken insideKey = new LockToken();
+    LockToken adjacentKey = new LockToken();
+    assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, reader));
+    assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, inside));
+    assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, adjacent));
+    assertEquals(
+        StatusCode.OK,
+        manager.tryAcquireSharedRange(
+            reader, 9, Long.MIN_VALUE, 10, Long.MIN_VALUE, range));
+    assertEquals(
+        StatusCode.RETRY,
+        manager.tryAcquireKey(inside, 9, Long.MAX_VALUE, insideKey));
+    assertEquals(
+        StatusCode.OK,
+        manager.tryAcquireKey(adjacent, 10, Long.MIN_VALUE, adjacentKey));
+    assertEquals(StatusCode.OK, manager.release(adjacentKey));
+    assertEquals(StatusCode.OK, manager.release(range));
+    assertEquals(StatusCode.OK, manager.abort(reader, new TransactionOutcome()));
+    assertEquals(StatusCode.OK, manager.abort(inside, new TransactionOutcome()));
+    assertEquals(StatusCode.OK, manager.abort(adjacent, new TransactionOutcome()));
   }
 
   private static final class FakeParticipant implements TransactionCommitParticipant {

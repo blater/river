@@ -11,7 +11,7 @@ import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
-import io.riverdb.protocol.ProtocolTextDecoder;
+import io.riverdb.protocol.ProtocolSqlRequestDecoder;
 import io.riverdb.protocol.auth.TokenAuthenticator;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -34,14 +34,13 @@ public final class SessionEndpoint {
   private final byte[] channelBinding;
   private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
   private final ProtocolFrame frame = new ProtocolFrame();
-  private final ProtocolTextDecoder text =
-      new ProtocolTextDecoder(ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES);
   private final SessionOpenResult openedSession = new SessionOpenResult();
   private final QueryOpenResult openedQuery = new QueryOpenResult();
   private final CommandResult command = new CommandResult();
   private final RowResult row = new RowResult();
   private RiverSession session;
   private RiverQuery query;
+  private ProtocolSqlRequestDecoder sqlRequest;
   private int authenticationAttempts;
   private int state;
 
@@ -83,23 +82,22 @@ public final class SessionEndpoint {
    * operation status is carried inside that response.
    */
   public StatusCode process(ByteBuffer request, ByteBuffer response) {
-    if (request == null || response == null || request == response || response.isReadOnly()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (response.capacity() < ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES) {
-      empty(response);
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    empty(response);
-    StatusCode decoded = codec.decode(request, frame);
+    StatusCode decoded = ProtocolRequestAdmission.validate(codec, request, response);
+    if (!decoded.isOk()) return decoded;
+    decoded = ProtocolRequestAdmission.decode(codec, request, frame);
     if (!decoded.isOk()) {
       return decoded;
     }
     if (frame.isResponse()) {
+      frame.erasePayload();
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     ProtocolMessageType type = frame.type();
     if (type.requiresPayload() != (frame.payloadBytes() > 0)) {
+      StatusCode erased = frame.erasePayload();
+      if (!erased.isOk()) {
+        return erased;
+      }
       return codec.encodeStatusResponse(
           response, type, frame.requestId(), StatusCode.INVALID_EXTERNAL_INPUT, state == QUERY);
     }
@@ -126,6 +124,8 @@ public final class SessionEndpoint {
     if (status.isOk() || status == StatusCode.CLOSED) {
       session = null;
       query = null;
+      releaseSqlRequest();
+      sqlRequest = null;
       state = CLOSED;
       clearChannelBinding();
       return StatusCode.OK;
@@ -204,6 +204,7 @@ public final class SessionEndpoint {
         : state == CLOSED ? StatusCode.CLOSED : StatusCode.CONFLICT;
     if (status.isOk()) {
       session = openedSession.session();
+      sqlRequest = new ProtocolSqlRequestDecoder();
       state = SESSION;
     }
     return codec.encodeStatusResponse(response, frame.type(), frame.requestId(), status, false);
@@ -211,19 +212,29 @@ public final class SessionEndpoint {
 
   private StatusCode execute(ByteBuffer response) {
     command.reset();
-    StatusCode status = requireTextInSession();
-    if (status.isOk()) {
-      status = session.execute(text.text(), command);
+    StatusCode status = requireSqlInSession();
+    try {
+      if (status.isOk()) {
+        status = session.execute(
+            sqlRequest.sql(), sqlRequest.parameters(), command);
+      }
+    } finally {
+      releaseSqlRequest();
     }
     return codec.encodeCommandResponse(
         response, frame.type(), frame.requestId(), status, command, false);
   }
 
   private StatusCode beginQuery(ByteBuffer response) {
-    StatusCode status = requireTextInSession();
-    if (status.isOk()) {
-      openedQuery.reset();
-      status = session.beginQuery(text.text(), openedQuery);
+    StatusCode status = requireSqlInSession();
+    try {
+      if (status.isOk()) {
+        openedQuery.reset();
+        status = session.beginQuery(
+            sqlRequest.sql(), sqlRequest.parameters(), openedQuery);
+      }
+    } finally {
+      releaseSqlRequest();
     }
     if (status.isOk()) {
       query = openedQuery.query();
@@ -274,25 +285,30 @@ public final class SessionEndpoint {
     if (status.isOk()) {
       session = null;
       query = null;
+      releaseSqlRequest();
+      sqlRequest = null;
       state = READY;
     }
     return codec.encodeStatusResponse(response, frame.type(), frame.requestId(), status, false);
   }
 
-  private StatusCode requireTextInSession() {
+  private StatusCode requireSqlInSession() {
     if (state == CLOSED) {
+      frame.erasePayload();
       return StatusCode.CLOSED;
     }
     if (state != SESSION) {
+      frame.erasePayload();
       return StatusCode.CONFLICT;
     }
-    return text.decode(frame);
+    return sqlRequest == null
+        ? StatusCode.INVARIANT_BROKEN : sqlRequest.decode(frame);
   }
 
-  private static void empty(ByteBuffer response) {
-    if (response != null) {
-      response.clear();
-      response.limit(0);
+  private void releaseSqlRequest() {
+    if (sqlRequest != null) {
+      sqlRequest.reset();
     }
   }
+
 }

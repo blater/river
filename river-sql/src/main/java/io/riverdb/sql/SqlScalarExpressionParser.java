@@ -7,14 +7,17 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 /** Parses a bounded constant exact-value expression into postfix form. */
 final class SqlScalarExpressionParser {
   private final SqlParserInput input;
-  private final SqlParser.LongResult literal = new SqlParser.LongResult();
   private final int[] descriptorStack = new int[SqlScalarExpression.MAXIMUM_NODES];
+  private final SqlExpressionPrimaryParser primaries;
   private SqlScalarExpression target;
+  private SqlCommand projectionCommand;
+  private boolean predicateExpression;
   private int stackSize;
   private int depth;
 
   SqlScalarExpressionParser(SqlParserInput parserInput) {
     input = parserInput;
+    primaries = new SqlExpressionPrimaryParser(this, parserInput);
   }
 
   boolean starts(CharSequence sql) {
@@ -22,9 +25,18 @@ final class SqlScalarExpressionParser {
     input.skipSpaces(sql);
     boolean starts = input.position() < sql.length()
         && (sql.charAt(input.position()) == '('
+            || input.consumeCharacter(sql, '?')
             || input.startsNumber(sql)
             || input.consumeKeyword(sql, "TRUE")
             || input.consumeKeyword(sql, "FALSE")
+            || input.consumeKeyword(sql, "DATE")
+            || input.consumeKeyword(sql, "TIME")
+            || input.consumeKeyword(sql, "TIMESTAMP")
+            || input.consumeKeyword(sql, "CURRENT_DATE")
+            || input.consumeKeyword(sql, "CURRENT_TIMESTAMP")
+            || input.consumeKeyword(sql, "LOCALTIME")
+            || input.consumeKeyword(sql, "LOCALTIMESTAMP")
+            || input.consumeKeyword(sql, "EXTRACT")
             || input.consumeKeyword(sql, "CAST")
             || input.consumeKeyword(sql, "ABS")
             || input.consumeKeyword(sql, "CEIL")
@@ -36,6 +48,66 @@ final class SqlScalarExpressionParser {
   }
 
   StatusCode parse(CharSequence sql, SqlScalarExpression expression) {
+    projectionCommand = null;
+    predicateExpression = false;
+    return parseProgram(sql, expression);
+  }
+
+  StatusCode parseProjection(
+      CharSequence sql, SqlCommand command, int projection) {
+    if (command == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    projectionCommand = command;
+    predicateExpression = false;
+    SqlScalarExpression expression = command.writableProjectionExpression(projection);
+    StatusCode status = parseProgram(sql, expression);
+    projectionCommand = null;
+    return status;
+  }
+
+  StatusCode parseProjectionScratch(
+      CharSequence sql, SqlCommand command, SqlScalarExpression expression) {
+    if (command == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    projectionCommand = command;
+    predicateExpression = false;
+    StatusCode status = parseProgram(sql, expression);
+    projectionCommand = null;
+    return status;
+  }
+
+  StatusCode parseMutation(
+      CharSequence sql, SqlCommand command, SqlScalarExpression expression) {
+    if (command == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    projectionCommand = command;
+    predicateExpression = false;
+    StatusCode status = parseProgram(sql, expression);
+    projectionCommand = null;
+    return status;
+  }
+
+  StatusCode parsePredicate(CharSequence sql, SqlCommand command) {
+    if (command == null || command.hasComputedPredicate()) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    projectionCommand = command;
+    predicateExpression = true;
+    StatusCode status = parseProgram(sql, command.writablePredicateExpression());
+    projectionCommand = null;
+    predicateExpression = false;
+    return status;
+  }
+
+  void installPostAggregate(SqlPostAggregatePrimary primary) {
+    primaries.installPostAggregate(primary);
+  }
+
+  private StatusCode parseProgram(
+      CharSequence sql, SqlScalarExpression expression) {
     if (expression == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -48,8 +120,36 @@ final class SqlScalarExpressionParser {
       expression.reset();
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    expression.finish(descriptorStack[0]);
+    if (projectionCommand == null && !executableAtTimeZoneShape(expression)) {
+      expression.reset();
+      return StatusCode.DATATYPE_MISMATCH;
+    }
+    if (descriptorStack[0] == 0) {
+      expression.finishUnresolved();
+    } else {
+      expression.finish(descriptorStack[0]);
+    }
     return StatusCode.OK;
+  }
+
+  private static boolean executableAtTimeZoneShape(
+      SqlScalarExpression expression) {
+    boolean containsAtTimeZone = false;
+    for (int index = 0; index < expression.nodeCount(); index++) {
+      containsAtTimeZone |= expression.operator(index)
+          == SqlScalarExpression.AT_TIME_ZONE;
+    }
+    if (!containsAtTimeZone) {
+      return true;
+    }
+    if (expression.nodeCount() != 2
+        || expression.operator(1) != SqlScalarExpression.AT_TIME_ZONE) {
+      return false;
+    }
+    int source = expression.operator(0);
+    return source == SqlScalarExpression.LITERAL
+        || source == SqlScalarExpression.CURRENT_TIMESTAMP
+        || source == SqlScalarExpression.LOCALTIMESTAMP;
   }
 
   private StatusCode additive(CharSequence sql) {
@@ -98,7 +198,9 @@ final class SqlScalarExpressionParser {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status;
-    if (input.consumeCharacter(sql, '+')) {
+    if (startsNegativeNumber(sql)) {
+      status = primaries.parse(sql);
+    } else if (input.consumeCharacter(sql, '+')) {
       status = unary(sql);
     } else if (input.consumeCharacter(sql, '-')) {
       status = unary(sql);
@@ -106,135 +208,35 @@ final class SqlScalarExpressionParser {
         status = unaryOperator(SqlScalarExpression.NEGATE);
       }
     } else {
-      status = primary(sql);
+      status = primaries.parse(sql);
     }
     depth--;
     return status;
   }
 
-  private StatusCode primary(CharSequence sql) {
-    if (input.consumeCharacter(sql, '(')) {
-      StatusCode status = additive(sql);
-      return status.isOk() ? input.requireCharacter(sql, ')') : status;
-    }
-    if (input.consumeKeyword(sql, "CAST")) {
-      return cast(sql);
-    }
-    if (input.consumeKeyword(sql, "ABS")) {
-      return unaryFunction(sql, SqlScalarExpression.ABSOLUTE);
-    }
-    if (input.consumeKeyword(sql, "CEIL")) {
-      return unaryFunction(sql, SqlScalarExpression.CEILING);
-    }
-    if (input.consumeKeyword(sql, "FLOOR")) {
-      return unaryFunction(sql, SqlScalarExpression.FLOOR);
-    }
-    if (input.consumeKeyword(sql, "ROUND")) {
-      return scaleFunction(sql, true);
-    }
-    if (input.consumeKeyword(sql, "TRUNCATE")) {
-      return scaleFunction(sql, false);
-    }
-    StatusCode status = input.literal(sql, literal);
-    if (!status.isOk()) {
-      return status;
-    }
-    int type = SqlTypeDescriptor.typeId(literal.typeDescriptor);
-    if (type != SqlTypeDescriptor.TYPE_ID_BIGINT
-        && type != SqlTypeDescriptor.TYPE_ID_DECIMAL
-        && type != SqlTypeDescriptor.TYPE_ID_BOOLEAN) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    return appendLiteral(literal.value, literal.typeDescriptor);
+  private boolean startsNegativeNumber(CharSequence sql) {
+    int start = input.position();
+    input.skipSpaces(sql);
+    int sign = input.position();
+    boolean negative = sign + 1 < sql.length()
+        && sql.charAt(sign) == '-'
+        && SqlParserInput.digit(sql.charAt(sign + 1));
+    input.position(start);
+    return negative;
   }
 
-  private StatusCode cast(CharSequence sql) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) {
-      status = additive(sql);
-    }
-    if (status.isOk()) {
-      status = input.requireKeyword(sql, "AS");
-    }
-    if (status.isOk()) {
-      status = input.typeDescriptor(sql, literal);
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ')');
-    }
-    if (!status.isOk() || stackSize < 1) {
-      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
-    }
-    int source = descriptorStack[stackSize - 1];
-    int targetDescriptor = literal.typeDescriptor;
-    int sourceType = SqlTypeDescriptor.typeId(source);
-    int targetType = SqlTypeDescriptor.typeId(targetDescriptor);
-    boolean numeric = (sourceType == SqlTypeDescriptor.TYPE_ID_BIGINT
-            || sourceType == SqlTypeDescriptor.TYPE_ID_DECIMAL)
-        && (targetType == SqlTypeDescriptor.TYPE_ID_BIGINT
-            || targetType == SqlTypeDescriptor.TYPE_ID_DECIMAL);
-    boolean bool = sourceType == SqlTypeDescriptor.TYPE_ID_BOOLEAN
-        && targetType == SqlTypeDescriptor.TYPE_ID_BOOLEAN;
-    if ((!numeric && !bool)
-        || !SqlTypeDescriptor.canExplicitlyCast(source, targetDescriptor)) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    if (!target.append(SqlScalarExpression.CAST, 0, targetDescriptor)) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    descriptorStack[stackSize - 1] = targetDescriptor;
-    return StatusCode.OK;
-  }
-
-  private StatusCode unaryFunction(CharSequence sql, int operator) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) {
-      status = additive(sql);
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ')');
-    }
-    return status.isOk() ? unaryOperator(operator) : status;
-  }
-
-  private StatusCode scaleFunction(CharSequence sql, boolean round) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) {
-      status = additive(sql);
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ',');
-    }
-    if (status.isOk()) {
-      status = input.number(sql, literal);
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ')');
-    }
-    if (!status.isOk() || literal.value < 0
-        || literal.value > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION
-        || stackSize < 1) {
-      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
-    }
-    int descriptor = ExactDecimal.quantizedDescriptor(
-        descriptorStack[stackSize - 1], (int) literal.value);
-    if (descriptor == 0) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    int operator = round ? SqlScalarExpression.ROUND : SqlScalarExpression.TRUNCATE;
-    if (!target.append(operator, literal.value, descriptor)) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    descriptorStack[stackSize - 1] = descriptor;
-    return StatusCode.OK;
-  }
-
-  private StatusCode unaryOperator(int operator) {
+  StatusCode unaryOperator(int operator) {
     if (stackSize < 1) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int source = descriptorStack[stackSize - 1];
     int sourceType = SqlTypeDescriptor.typeId(source);
+    if (source == 0 && projectionCommand != null) {
+      if (!target.append(operator, 0, 0)) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      return StatusCode.OK;
+    }
     if (sourceType != SqlTypeDescriptor.TYPE_ID_BIGINT
         && sourceType != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
       return StatusCode.DATATYPE_MISMATCH;
@@ -260,9 +262,9 @@ final class SqlScalarExpressionParser {
     }
     int right = descriptorStack[--stackSize];
     int left = descriptorStack[stackSize - 1];
-    int descriptor = switch (operator) {
+    int descriptor = left == 0 || right == 0 ? 0 : switch (operator) {
       case SqlScalarExpression.ADD, SqlScalarExpression.SUBTRACT ->
-          ExactDecimal.addResultDescriptor(left, right);
+          SqlTemporalExpressionTypes.additiveDescriptor(operator, left, right);
       case SqlScalarExpression.MULTIPLY ->
           ExactDecimal.multiplyResultDescriptor(left, right);
       case SqlScalarExpression.DIVIDE ->
@@ -271,7 +273,7 @@ final class SqlScalarExpressionParser {
           ExactDecimal.remainderResultDescriptor(left, right);
       default -> 0;
     };
-    if (descriptor == 0) {
+    if (descriptor == 0 && left != 0 && right != 0) {
       return StatusCode.DATATYPE_MISMATCH;
     }
     if (!target.append(operator, 0, descriptor)) {
@@ -281,12 +283,57 @@ final class SqlScalarExpressionParser {
     return StatusCode.OK;
   }
 
-  private StatusCode appendLiteral(long value, int descriptor) {
-    if (stackSize >= descriptorStack.length
-        || !target.append(SqlScalarExpression.LITERAL, value, descriptor)) {
-      return StatusCode.RESOURCE_EXHAUSTED;
+  StatusCode parseNestedAdditive(CharSequence sql) {
+    return additive(sql);
+  }
+
+  int topDescriptor() {
+    return stackSize > 0 ? descriptorStack[stackSize - 1] : 0;
+  }
+
+  void replaceTopDescriptor(int descriptor) {
+    if (stackSize > 0) {
+      descriptorStack[stackSize - 1] = descriptor;
     }
+  }
+
+  boolean pushDescriptor(int descriptor) {
+    if (stackSize >= descriptorStack.length) return false;
     descriptorStack[stackSize++] = descriptor;
-    return StatusCode.OK;
+    return true;
+  }
+
+  boolean hasStackCapacity() {
+    return stackSize < descriptorStack.length;
+  }
+
+  boolean allowsUnresolved() {
+    return projectionCommand != null;
+  }
+
+  boolean rowExpression() {
+    return projectionCommand != null;
+  }
+
+  boolean hasValue() {
+    return stackSize > 0;
+  }
+
+  SqlScalarExpression program() {
+    return target;
+  }
+
+  SqlCommand command() {
+    return projectionCommand;
+  }
+
+  int registerSymbol(CharSequence table, CharSequence name) {
+    return predicateExpression
+        ? projectionCommand.registerPredicateSymbol(table, name)
+        : projectionCommand.registerProjectionSymbol(table, name);
+  }
+
+  boolean appendNode(int operator, long operand, int descriptor) {
+    return target.append(operator, operand, descriptor);
   }
 }

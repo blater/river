@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapPage;
 
 /** Owns bounded key, leaf, and heap-capacity admission for a prepared commit group. */
@@ -8,6 +9,7 @@ final class IndexedPreparedPreflight {
   private final IndexedTableKernel kernel;
   private final IndexedStorePhase phase;
   private final long[] keys = new long[IndexedTableLimits.MAX_OPERATION_ROWS];
+  private final int[] spaces = new int[IndexedTableLimits.MAX_OPERATION_ROWS];
   private final int[] leafPageIds = new int[IndexedTableLimits.MAX_OPERATION_ROWS];
   private final boolean[] newIndexEntries = new boolean[IndexedTableLimits.MAX_OPERATION_ROWS];
   private int keyCount;
@@ -35,14 +37,16 @@ final class IndexedPreparedPreflight {
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < mutations.count(); index++) {
       long key = mutations.keyAt(index);
+      int space = mutations.spaceAt(index);
       int rowBytes = mutations.rowLengthAt(index);
-      status = validateInput(key, rowBytes, mutations.rowStride());
-      int leafPageId = status.isOk() ? kernel.findLeafPageId(key) : 0;
+      status = validateInput(space, key, rowBytes, mutations.rowStride());
+      int leafPageId = status.isOk() ? kernel.findLeafPageId(space, key) : 0;
       int entriesInLeaf = status.isOk() ? entriesInLeaf(leafPageId, false) : 0;
       status = status.isOk()
-          ? kernel.validateNewIndexEntryAt(leafPageId, key, entriesInLeaf) : status;
+          ? kernel.validateNewIndexEntryAt(
+              leafPageId, space, key, entriesInLeaf) : status;
       leafPageId = status.isOk() ? kernel.validatedLeafPageId() : leafPageId;
-      status = addValidated(status, key, leafPageId, true, rowBytes);
+      status = addValidated(status, space, key, leafPageId, true, rowBytes);
     }
     rollback(originalKeyCount, originalHeapBytes, status);
     return status;
@@ -64,25 +68,28 @@ final class IndexedPreparedPreflight {
 
   private StatusCode validateMutation(PendingMutationBuffer mutations, int index) {
     int operation = mutations.operationAt(index);
+    int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
     int previousRowId = mutations.previousRowIdAt(index);
     int rowBytes = mutations.rowLengthAt(index);
     StatusCode status = validMutation(operation)
-        ? validateInput(key, rowBytes, mutations.rowStride())
+        ? validateInput(space, key, rowBytes, mutations.rowStride())
         : StatusCode.INVALID_EXTERNAL_INPUT;
-    int leafPageId = status.isOk() ? kernel.findLeafPageId(key) : 0;
+    int leafPageId = status.isOk() ? kernel.findLeafPageId(space, key) : 0;
     boolean newIndexEntry = operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0;
     int entriesInLeaf = status.isOk() ? entriesInLeaf(leafPageId, true) : 0;
     if (status.isOk()) {
       status = kernel.validateMutationTargetAt(
-          leafPageId, operation, key, previousRowId, entriesInLeaf);
+          leafPageId, operation, space, key, previousRowId, entriesInLeaf);
       leafPageId = kernel.validatedLeafPageId();
     }
-    return addValidated(status, key, leafPageId, newIndexEntry, rowBytes);
+    return addValidated(
+        status, space, key, leafPageId, newIndexEntry, rowBytes);
   }
 
   private StatusCode addValidated(
       StatusCode status,
+      int space,
       long key,
       int leafPageId,
       boolean newIndexEntry,
@@ -92,6 +99,7 @@ final class IndexedPreparedPreflight {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (status.isOk()) {
+      spaces[keyCount] = space;
       keys[keyCount] = key;
       leafPageIds[keyCount] = leafPageId;
       newIndexEntries[keyCount] = newIndexEntry;
@@ -109,12 +117,13 @@ final class IndexedPreparedPreflight {
         && kernel.rowCount() + keyCount + mutations.count() <= IndexedTableStore.MAX_ROWS;
   }
 
-  private StatusCode validateInput(long key, int rowBytes, int rowStride) {
-    if (key == Long.MAX_VALUE || rowBytes <= 0 || rowBytes > rowStride) {
+  private StatusCode validateInput(
+      int space, long key, int rowBytes, int rowStride) {
+    if (!OrderedKey.isFiniteSpace(space) || rowBytes <= 0 || rowBytes > rowStride) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int previous = 0; previous < keyCount; previous++) {
-      if (keys[previous] == key) {
+      if (spaces[previous] == space && keys[previous] == key) {
         return StatusCode.CONFLICT;
       }
     }
@@ -156,6 +165,7 @@ final class IndexedPreparedPreflight {
   private void clearKeys(int first) {
     for (int index = first; index < keyCount; index++) {
       keys[index] = 0;
+      spaces[index] = 0;
       leafPageIds[index] = 0;
       newIndexEntries[index] = false;
     }

@@ -93,7 +93,12 @@ final class RelationalCatalogDependencies {
   }
 
   private StatusCode beginScan(RelationalSession session) {
-    return session.indexedSession().beginScan(Long.MIN_VALUE, 0, catalogCursor);
+    return session.indexedSession().beginScan(
+        RelationalKey.CATALOG_OBJECT_SPACE,
+        Long.MIN_VALUE,
+        RelationalKey.CATALOG_SEQUENCE_SPACE,
+        Long.MIN_VALUE,
+        catalogCursor);
   }
 
   private StatusCode next(RelationalSession session) {

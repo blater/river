@@ -12,9 +12,9 @@ final class RelationalPhysicalCleanup {
   private static final int BATCH_ROWS = 48;
 
   private final RelationalSchemaGate schemaGate;
-  private final TableDefinition storageTable = new TableDefinition();
-  private final RelationalScanCursor scanCursor = new RelationalScanCursor();
-  private final RelationalScanResult scanRow = new RelationalScanResult();
+  private final IndexedScanCursor scanCursor = new IndexedScanCursor();
+  private final IndexedScanResult scanRow = new IndexedScanResult();
+  private final int[] rowSpaces = new int[BATCH_ROWS];
   private final long[] rowKeys = new long[BATCH_ROWS];
   private final long[] indexCatalogKeys =
       new long[TableDefinition.MAXIMUM_INDEXES];
@@ -23,8 +23,7 @@ final class RelationalPhysicalCleanup {
   private final ByteBuffer catalogScratch =
       ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final CatalogIndexCodec.Result indexRecord = new CatalogIndexCodec.Result();
-  private final RelationalKey.LongKeyResult catalogKey =
-      new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
   private StatusCode collectStatus;
   private boolean scanExhausted;
   private boolean batchComplete;
@@ -86,11 +85,16 @@ final class RelationalPhysicalCleanup {
       RelationalSession session,
       int tableId,
       TransactionOutcome outcome) {
-    storageTable.set(schemaGate, tableId, 0, TableDefinition.INDEX_NONE);
     batchComplete = false;
     StatusCode status = session.begin(io.riverdb.tx.api.IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
-      status = session.beginScan(storageTable, scanCursor);
+      int dataSpace = RelationalKey.dataSpace(tableId);
+      status = session.indexedSession().beginScan(
+          dataSpace,
+          Long.MIN_VALUE,
+          RelationalKey.auxiliarySpace(tableId) + 1,
+          Long.MIN_VALUE,
+          scanCursor);
     }
     int count = 0;
     if (status.isOk()) {
@@ -98,14 +102,15 @@ final class RelationalPhysicalCleanup {
       status = collectStatus;
     }
     if (scanCursor.isActive()) {
-      StatusCode close = session.closeScan(scanCursor);
+      StatusCode close = session.indexedSession().closeScan(scanCursor);
       if (status.isOk()) {
         status = close;
       }
     }
     scanCursor.reset();
     for (int index = 0; status.isOk() && index < count; index++) {
-      status = session.delete(storageTable, rowKeys[index]);
+      status = session.indexedSession().delete(rowSpaces[index], rowKeys[index]);
+      rowSpaces[index] = 0;
       rowKeys[index] = 0;
     }
     if (status.isOk()) {
@@ -125,13 +130,14 @@ final class RelationalPhysicalCleanup {
     collectStatus = StatusCode.OK;
     scanExhausted = false;
     while (collectStatus.isOk() && count < rowKeys.length) {
-      collectStatus = session.nextScan(scanCursor, scanRow);
+      collectStatus = session.indexedSession().nextScan(scanCursor, scanRow);
       if (collectStatus == StatusCode.CONFLICT) {
         collectStatus = StatusCode.OK;
         scanExhausted = true;
         break;
       }
       if (collectStatus.isOk()) {
+        rowSpaces[count] = scanRow.keySpace();
         rowKeys[count++] = scanRow.key();
       }
     }
@@ -146,7 +152,12 @@ final class RelationalPhysicalCleanup {
     StatusCode status = session.begin(io.riverdb.tx.api.IsolationLevel.SERIALIZABLE);
     boolean scanActive = false;
     if (status.isOk()) {
-      status = session.indexedSession().beginScan(Long.MIN_VALUE, 0, catalogCursor);
+      status = session.indexedSession().beginScan(
+          RelationalKey.CATALOG_OBJECT_SPACE,
+          Long.MIN_VALUE,
+          RelationalKey.CATALOG_SEQUENCE_SPACE,
+          Long.MIN_VALUE,
+          catalogCursor);
       scanActive = status.isOk();
     }
     int count = status.isOk() ? collectIndexCatalogKeys(session, table) : 0;
@@ -161,14 +172,15 @@ final class RelationalPhysicalCleanup {
     }
     catalogCursor.reset();
     for (int index = 0; status.isOk() && index < count; index++) {
-      status = session.indexedSession().delete(indexCatalogKeys[index]);
+      status = session.indexedSession().delete(
+          RelationalKey.CATALOG_OBJECT_SPACE, indexCatalogKeys[index]);
       indexCatalogKeys[index] = 0;
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(tableName, catalogKey);
     }
     if (status.isOk()) {
-      status = session.indexedSession().delete(catalogKey.key());
+      status = session.indexedSession().delete(catalogKey.space(), catalogKey.key());
     }
     return finishTransaction(session, outcome, status);
   }

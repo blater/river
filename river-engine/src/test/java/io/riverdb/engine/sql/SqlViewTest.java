@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.text.PackedText;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
@@ -19,6 +20,45 @@ final class SqlViewTest {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x44555241424c4556L, 0x49455753454d414eL);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void preservesExplainAndDerivedDepthAcrossComputedViewExpansion(
+      @TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSession session = openSession(database);
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE moments (id BIGINT PRIMARY KEY, day DATE)", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO moments VALUES (1,DATE '2024-02-29'),(2,NULL)", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE VIEW day_parts AS SELECT id,d FROM "
+                + "(SELECT id,EXTRACT(DAY FROM day) AS d FROM moments) q",
+            execution));
+
+    assertComputedViewPlan(
+        session,
+        execution,
+        "EXPLAIN SELECT d FROM day_parts ORDER BY d",
+        3);
+    assertComputedViewPlan(
+        session,
+        execution,
+        "EXPLAIN ANALYZE SELECT d FROM day_parts ORDER BY d",
+        3);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
 
   @Test
   void persistsTransactionalViewsAndExecutesOuterPredicates(
@@ -164,6 +204,32 @@ final class SqlViewTest {
     SqlSessionOpenResult result = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, result));
     return result.session();
+  }
+
+  private static void assertComputedViewPlan(
+      SqlSession session,
+      SqlExecutionResult execution,
+      String sql,
+      int depth) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    assertPlanRow(session, cursor, row, "nested", depth);
+    assertPlanRow(session, cursor, row, "sort", 1);
+    assertPlanRow(session, cursor, row, "table", -1);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
+  }
+
+  private static void assertPlanRow(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      String operator,
+      long detail) {
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack(operator), row.valueAt(0));
+    assertEquals(detail, row.valueAt(1));
   }
 
   private static void assertRows(

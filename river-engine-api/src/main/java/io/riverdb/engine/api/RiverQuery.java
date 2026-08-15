@@ -24,5 +24,7 @@ public interface RiverQuery {
 
   int columnTypeDescriptor(int index);
 
+  boolean columnIsNullable(int index);
+
   long rowsReturned();
 }

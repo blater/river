@@ -112,6 +112,7 @@ final class RiverColumnsResultSet extends AbstractResultSet {
       new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final String[] currentColumnNames = new String[MAXIMUM_COLUMNS];
   private final int[] currentTypeDescriptors = new int[MAXIMUM_COLUMNS];
+  private final boolean[] currentNullable = new boolean[MAXIMUM_COLUMNS];
   private final String tablePattern;
   private final String columnPattern;
   private RiverQuery query;
@@ -426,6 +427,7 @@ final class RiverColumnsResultSet extends AbstractResultSet {
             "decode column type descriptor");
       }
       currentTypeDescriptors[index] = descriptor;
+      currentNullable[index] = query.columnIsNullable(index);
     }
     closeQuery("close column description");
     currentColumn = -1;
@@ -498,10 +500,12 @@ final class RiverColumnsResultSet extends AbstractResultSet {
               ? SqlTypeDescriptor.parameterTwo(descriptor) : null;
       case 10 -> SqlTypeDescriptor.comparisonFamily(descriptor)
           == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC ? 10 : null;
-      case 11 -> ResultSetMetaData.columnNullableUnknown;
+      case 11 -> currentNullable[currentColumn]
+          ? ResultSetMetaData.columnNullable : ResultSetMetaData.columnNoNulls;
       case 16 -> varchar ? SqlTypeDescriptor.parameterOne(descriptor) : null;
       case 17 -> currentColumn + 1;
-      case 18, 23 -> "";
+      case 18 -> currentNullable[currentColumn] ? "YES" : "NO";
+      case 23 -> "";
       case 24 -> "NO";
       default -> null;
     };

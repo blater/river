@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.heap.HeapPage;
@@ -52,7 +53,8 @@ final class IndexedTableValidator {
       return StatusCode.CORRUPTION;
     }
     resetTraversal();
-    status = validateSubtree(rootPageId, 0, false, Long.MAX_VALUE, 0);
+    status = validateSubtree(
+        rootPageId, 0, 0, false, OrderedKey.INFINITY_SPACE, 0, 0);
     if (!status.isOk() || versionRows != rowCount) {
       return status.isOk() ? StatusCode.CORRUPTION : status;
     }
@@ -106,8 +108,10 @@ final class IndexedTableValidator {
 
   private StatusCode validateSubtree(
       int pageId,
+      int lowerSpace,
       long lowerBound,
       boolean hasLowerBound,
+      int upperSpace,
       long upperBound,
       int depth) {
     if (pageId <= 0
@@ -123,23 +127,27 @@ final class IndexedTableValidator {
     visited[pageId] = true;
     int type = BTreePage.type(page);
     int entryCount = BTreePage.entryCount(page);
-    if (BTreePage.highKey(page) != upperBound) {
+    if (!OrderedKey.equal(
+        BTreePage.highSpace(page), BTreePage.highKey(page), upperSpace, upperBound)) {
       return StatusCode.CORRUPTION;
     }
     if (type == BTreePage.TYPE_LEAF) {
-      return validateLeaf(pageId, page, entryCount, lowerBound, hasLowerBound, depth);
+      return validateLeaf(
+          pageId, page, entryCount, lowerSpace, lowerBound, hasLowerBound, depth);
     }
     if (type != BTreePage.TYPE_INTERNAL || entryCount <= 0) {
       return StatusCode.CORRUPTION;
     }
     return validateInternal(
-        page, entryCount, lowerBound, hasLowerBound, upperBound, depth);
+        page, entryCount, lowerSpace, lowerBound,
+        hasLowerBound, upperSpace, upperBound, depth);
   }
 
   private StatusCode validateLeaf(
       int pageId,
       ByteBuffer page,
       int entryCount,
+      int lowerSpace,
       long lowerBound,
       boolean hasLowerBound,
       int depth) {
@@ -148,10 +156,12 @@ final class IndexedTableValidator {
           ? StatusCode.OK : StatusCode.CORRUPTION;
     }
     long firstKey = BTreePage.keyAt(page, 0);
-    if (hasLowerBound && firstKey != lowerBound) {
+    int firstSpace = BTreePage.spaceAt(page, 0);
+    if (hasLowerBound
+        && !OrderedKey.equal(firstSpace, firstKey, lowerSpace, lowerBound)) {
       return StatusCode.CORRUPTION;
     }
-    if (!validPreviousLeaf(pageId, firstKey)) {
+    if (!validPreviousLeaf(pageId, firstSpace, firstKey)) {
       return StatusCode.CORRUPTION;
     }
     int leafVersions = versionRowsInLeaf(page);
@@ -163,34 +173,43 @@ final class IndexedTableValidator {
     return StatusCode.OK;
   }
 
-  private boolean validPreviousLeaf(int pageId, long firstKey) {
+  private boolean validPreviousLeaf(int pageId, int firstSpace, long firstKey) {
     if (previousLeafPageId <= 0) {
       return true;
     }
     ByteBuffer previous = pages.currentPayload(previousLeafPageId);
     return BTreePage.rightSiblingPageId(previous) == pageId
-        && BTreePage.highKey(previous) == firstKey;
+        && OrderedKey.equal(
+            BTreePage.highSpace(previous), BTreePage.highKey(previous),
+            firstSpace, firstKey);
   }
 
   private StatusCode validateInternal(
       ByteBuffer page,
       int entryCount,
+      int lowerSpace,
       long lowerBound,
       boolean hasLowerBound,
+      int upperSpace,
       long upperBound,
       int depth) {
     int childPageId = BTreePage.firstChildPageId(page);
+    int childLowerSpace = lowerSpace;
     long childLower = lowerBound;
     boolean childHasLower = hasLowerBound;
     for (int childIndex = 0; childIndex <= entryCount; childIndex++) {
+      int childUpperSpace = childIndex < entryCount
+          ? BTreePage.spaceAt(page, childIndex) : upperSpace;
       long childUpper = childIndex < entryCount
           ? BTreePage.keyAt(page, childIndex) : upperBound;
       StatusCode status = validateSubtree(
-          childPageId, childLower, childHasLower, childUpper, depth + 1);
+          childPageId, childLowerSpace, childLower, childHasLower,
+          childUpperSpace, childUpper, depth + 1);
       if (!status.isOk()) {
         return status;
       }
       if (childIndex < entryCount) {
+        childLowerSpace = childUpperSpace;
         childLower = childUpper;
         childHasLower = true;
         childPageId = BTreePage.valueAt(page, childIndex);
@@ -242,7 +261,8 @@ final class IndexedTableValidator {
     }
     ByteBuffer lastLeaf = pages.currentPayload(previousLeafPageId);
     return BTreePage.rightSiblingPageId(lastLeaf) == 0
-            && BTreePage.highKey(lastLeaf) == Long.MAX_VALUE
+            && OrderedKey.isInfinity(
+                BTreePage.highSpace(lastLeaf), BTreePage.highKey(lastLeaf))
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 

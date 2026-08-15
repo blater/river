@@ -90,6 +90,21 @@ public final class SqlExecutionResult {
     return StatusCode.OK;
   }
 
+  StatusCode setTextAt(int index, char[] source, int length) {
+    if (index < 0
+        || index >= columnCount
+        || source == null
+        || length < 0
+        || length > source.length
+        || length > textValues[index].length
+        || !isVarchar(index)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    System.arraycopy(source, 0, textValues[index], 0, length);
+    textLengths[index] = length;
+    return StatusCode.OK;
+  }
+
   StatusCode setUtf8At(int index, ByteBuffer source, int offset, int length) {
     if (index < 0
         || index >= columnCount

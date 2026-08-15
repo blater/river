@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalAppendResult;
@@ -32,6 +33,7 @@ final class IndexedLogicalCommitter {
   StatusCode commitInsert(
       long transactionId,
       long commitSequence,
+      int space,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
@@ -39,7 +41,7 @@ final class IndexedLogicalCommitter {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     int rowBytes = row.remaining();
-    StatusCode status = kernel.validateNewIndexEntry(key, 0);
+    StatusCode status = kernel.validateNewIndexEntry(space, key, 0);
     if (!status.isOk()) {
       return status;
     }
@@ -53,7 +55,7 @@ final class IndexedLogicalCommitter {
       return status;
     }
     ByteBuffer payload = reservation.writablePayload();
-    IndexedWalCodec.encodeInsertHeader(payload, key, rowId, rowBytes);
+    IndexedWalCodec.encodeInsertHeader(payload, space, key, rowId, rowBytes);
     copyRow(row, row.position(), payload, IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES, rowBytes);
     payload.position(operationBytes);
     status = publishInsert(transactionId, commitSequence, payload, true);
@@ -105,21 +107,24 @@ final class IndexedLogicalCommitter {
 
   private StatusCode validatePendingInsert(PendingMutationBuffer mutations, int index) {
     int rowBytes = mutations.rowLengthAt(index);
+    int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
-    if (key == Long.MAX_VALUE || rowBytes <= 0 || rowBytes > mutations.rowStride()) {
+    if (!OrderedKey.isFiniteSpace(space)
+        || rowBytes <= 0 || rowBytes > mutations.rowStride()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = kernel.findLeafPageId(key);
+    int leafPageId = kernel.findLeafPageId(space, key);
     int earlierInLeaf = 0;
     for (int previous = 0; previous < index; previous++) {
-      if (mutations.keyAt(previous) == key) {
+      if (mutations.spaceAt(previous) == space && mutations.keyAt(previous) == key) {
         return StatusCode.CONFLICT;
       }
-      if (kernel.findLeafPageId(mutations.keyAt(previous)) == leafPageId) {
+      if (kernel.findLeafPageId(
+          mutations.spaceAt(previous), mutations.keyAt(previous)) == leafPageId) {
         earlierInLeaf++;
       }
     }
-    return kernel.validateNewIndexEntryAt(leafPageId, key, earlierInLeaf);
+    return kernel.validateNewIndexEntryAt(leafPageId, space, key, earlierInLeaf);
   }
 
   private static int pendingInsertBytes(PendingMutationBuffer mutations) {
@@ -140,7 +145,8 @@ final class IndexedLogicalCommitter {
       int firstRowId) {
     if (mutations.count() == 1) {
       IndexedWalCodec.encodeInsertHeader(
-          payload, mutations.keyAt(0), firstRowId, mutations.rowLengthAt(0));
+          payload, mutations.spaceAt(0), mutations.keyAt(0),
+          firstRowId, mutations.rowLengthAt(0));
       mutations.copyRowTo(0, payload, IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES);
       walCopyBytes += mutations.rowLengthAt(0);
     } else {
@@ -149,7 +155,8 @@ final class IndexedLogicalCommitter {
       for (int index = 0; index < mutations.count(); index++) {
         int rowBytes = mutations.rowLengthAt(index);
         IndexedWalCodec.encodeInsertBatchEntry(
-            payload, outputOffset, mutations.keyAt(index), firstRowId + index, rowBytes);
+            payload, outputOffset, mutations.spaceAt(index), mutations.keyAt(index),
+            firstRowId + index, rowBytes);
         int rowOffset = outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
         mutations.copyRowTo(index, payload, rowOffset);
         walCopyBytes += rowBytes;
@@ -162,6 +169,7 @@ final class IndexedLogicalCommitter {
   StatusCode commitInsertBatch(
       long transactionId,
       long commitSequence,
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
@@ -171,7 +179,8 @@ final class IndexedLogicalCommitter {
     if (operationBusy()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = validateRawInserts(keys, rows, rowStride, rowLengths, insertCount);
+    StatusCode status = validateRawInserts(
+        spaces, keys, rows, rowStride, rowLengths, insertCount);
     if (!status.isOk()) {
       return status;
     }
@@ -186,7 +195,8 @@ final class IndexedLogicalCommitter {
     ByteBuffer payload = reservation.writablePayload();
     int firstRowId = kernel.rowCount() + 1;
     encodeRawInserts(
-        payload, keys, rows, rowStride, rowLengths, insertCount, firstRowId, operationBytes);
+        payload, spaces, keys, rows, rowStride, rowLengths,
+        insertCount, firstRowId, operationBytes);
     status = publishInsert(transactionId, commitSequence, payload, false);
     if (status.isOk()) {
       result.setRowId(firstRowId + insertCount - 1);
@@ -195,13 +205,15 @@ final class IndexedLogicalCommitter {
   }
 
   private StatusCode validateRawInserts(
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
       int[] rowLengths,
       int insertCount) {
     for (int index = 0; index < insertCount; index++) {
-      StatusCode status = validateRawInsert(keys, rows, rowStride, rowLengths, index);
+      StatusCode status = validateRawInsert(
+          spaces, keys, rows, rowStride, rowLengths, index);
       if (!status.isOk()) {
         return status;
       }
@@ -210,29 +222,31 @@ final class IndexedLogicalCommitter {
   }
 
   private StatusCode validateRawInsert(
-      long[] keys, ByteBuffer rows, int rowStride, int[] rowLengths, int index) {
+      int[] spaces, long[] keys, ByteBuffer rows,
+      int rowStride, int[] rowLengths, int index) {
     int rowBytes = rowLengths[index];
     int rowOffset = index * rowStride;
     long key = keys[index];
-    if (key == Long.MAX_VALUE
+    if (!OrderedKey.isFiniteSpace(spaces[index])
         || rowBytes <= 0
         || rowBytes > rowStride
         || rows.limit() - rowOffset < rowBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int previous = 0; previous < index; previous++) {
-      if (keys[previous] == key) {
+      if (spaces[previous] == spaces[index] && keys[previous] == key) {
         return StatusCode.CONFLICT;
       }
     }
-    int leafPageId = kernel.findLeafPageId(key);
+    int leafPageId = kernel.findLeafPageId(spaces[index], key);
     int earlierInLeaf = 0;
     for (int previous = 0; previous < index; previous++) {
-      if (kernel.findLeafPageId(keys[previous]) == leafPageId) {
+      if (kernel.findLeafPageId(spaces[previous], keys[previous]) == leafPageId) {
         earlierInLeaf++;
       }
     }
-    return kernel.validateNewIndexEntryAt(leafPageId, key, earlierInLeaf);
+    return kernel.validateNewIndexEntryAt(
+        leafPageId, spaces[index], key, earlierInLeaf);
   }
 
   private static int rawInsertBytes(int[] rowLengths, int insertCount) {
@@ -245,6 +259,7 @@ final class IndexedLogicalCommitter {
 
   private void encodeRawInserts(
       ByteBuffer payload,
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
@@ -257,7 +272,7 @@ final class IndexedLogicalCommitter {
     for (int index = 0; index < insertCount; index++) {
       int rowBytes = rowLengths[index];
       IndexedWalCodec.encodeInsertBatchEntry(
-          payload, outputOffset, keys[index], firstRowId + index, rowBytes);
+          payload, outputOffset, spaces[index], keys[index], firstRowId + index, rowBytes);
       int rowOffset = outputOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
       copyRow(rows, index * rowStride, payload, rowOffset, rowBytes);
       outputOffset = rowOffset + rowBytes;
@@ -307,25 +322,26 @@ final class IndexedLogicalCommitter {
 
   private StatusCode validatePendingMutation(PendingMutationBuffer mutations, int index) {
     int operation = mutations.operationAt(index);
+    int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
     int previousRowId = mutations.previousRowIdAt(index);
     int rowBytes = mutations.rowLengthAt(index);
     if (!validMutation(operation)
-        || key == Long.MAX_VALUE
+        || !OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0
         || rowBytes > mutations.rowStride()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int previous = 0; previous < index; previous++) {
-      if (mutations.keyAt(previous) == key) {
+      if (mutations.spaceAt(previous) == space && mutations.keyAt(previous) == key) {
         return StatusCode.CONFLICT;
       }
     }
-    int leafPageId = kernel.findLeafPageId(key);
+    int leafPageId = kernel.findLeafPageId(space, key);
     int earlierInLeaf = earlierPendingInserts(
         mutations, operation, previousRowId, leafPageId, index);
     return kernel.validateMutationTargetAt(
-        leafPageId, operation, key, previousRowId, earlierInLeaf);
+        leafPageId, operation, space, key, previousRowId, earlierInLeaf);
   }
 
   private int earlierPendingInserts(
@@ -341,7 +357,8 @@ final class IndexedLogicalCommitter {
     for (int previous = 0; previous < index; previous++) {
       if (mutations.operationAt(previous) == IndexedWalCodec.MUTATION_INSERT
           && mutations.previousRowIdAt(previous) == 0
-          && kernel.findLeafPageId(mutations.keyAt(previous)) == leafPageId) {
+          && kernel.findLeafPageId(
+              mutations.spaceAt(previous), mutations.keyAt(previous)) == leafPageId) {
         count++;
       }
     }
@@ -369,6 +386,7 @@ final class IndexedLogicalCommitter {
           payload,
           outputOffset,
           mutations.operationAt(index),
+          mutations.spaceAt(index),
           mutations.keyAt(index),
           firstRowId + index,
           mutations.previousRowIdAt(index),
@@ -385,6 +403,7 @@ final class IndexedLogicalCommitter {
       long transactionId,
       long commitSequence,
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -396,7 +415,8 @@ final class IndexedLogicalCommitter {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = validateRawMutations(
-        operations, keys, previousRowIds, rows, rowStride, rowLengths, mutationCount);
+        operations, spaces, keys, previousRowIds,
+        rows, rowStride, rowLengths, mutationCount);
     if (!status.isOk()) {
       return status;
     }
@@ -413,6 +433,7 @@ final class IndexedLogicalCommitter {
     encodeRawMutations(
         payload,
         operations,
+        spaces,
         keys,
         previousRowIds,
         rows,
@@ -430,6 +451,7 @@ final class IndexedLogicalCommitter {
 
   private StatusCode validateRawMutations(
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -438,7 +460,8 @@ final class IndexedLogicalCommitter {
       int mutationCount) {
     for (int index = 0; index < mutationCount; index++) {
       StatusCode status = validateRawMutation(
-          operations, keys, previousRowIds, rows, rowStride, rowLengths, index);
+          operations, spaces, keys, previousRowIds,
+          rows, rowStride, rowLengths, index);
       if (!status.isOk()) {
         return status;
       }
@@ -448,6 +471,7 @@ final class IndexedLogicalCommitter {
 
   private StatusCode validateRawMutation(
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -460,26 +484,28 @@ final class IndexedLogicalCommitter {
     int rowBytes = rowLengths[index];
     int rowOffset = index * rowStride;
     if (!validMutation(operation)
-        || key == Long.MAX_VALUE
+        || !OrderedKey.isFiniteSpace(spaces[index])
         || rowBytes <= 0
         || rowBytes > rowStride
         || rows.limit() - rowOffset < rowBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int previous = 0; previous < index; previous++) {
-      if (keys[previous] == key) {
+      if (spaces[previous] == spaces[index] && keys[previous] == key) {
         return StatusCode.CONFLICT;
       }
     }
-    int leafPageId = kernel.findLeafPageId(key);
+    int leafPageId = kernel.findLeafPageId(spaces[index], key);
     int earlierInLeaf = earlierRawInserts(
-        operations, keys, previousRowIds, operation, previousRowId, leafPageId, index);
+        operations, spaces, keys, previousRowIds,
+        operation, previousRowId, leafPageId, index);
     return kernel.validateMutationTargetAt(
-        leafPageId, operation, key, previousRowId, earlierInLeaf);
+        leafPageId, operation, spaces[index], key, previousRowId, earlierInLeaf);
   }
 
   private int earlierRawInserts(
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       int operation,
@@ -493,7 +519,7 @@ final class IndexedLogicalCommitter {
     for (int previous = 0; previous < index; previous++) {
       if (operations[previous] == IndexedWalCodec.MUTATION_INSERT
           && previousRowIds[previous] == 0
-          && kernel.findLeafPageId(keys[previous]) == leafPageId) {
+          && kernel.findLeafPageId(spaces[previous], keys[previous]) == leafPageId) {
         count++;
       }
     }
@@ -517,6 +543,7 @@ final class IndexedLogicalCommitter {
   private void encodeRawMutations(
       ByteBuffer payload,
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -533,6 +560,7 @@ final class IndexedLogicalCommitter {
           payload,
           outputOffset,
           operations[index],
+          spaces[index],
           keys[index],
           firstRowId + index,
           previousRowIds[index],

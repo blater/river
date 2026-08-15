@@ -3,13 +3,14 @@ package io.riverdb.protocol;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
 import java.nio.ByteBuffer;
 
-/** Bounded v2 framing over caller-owned buffers. */
+/** Bounded v3 framing over caller-owned buffers. */
 public final class ProtocolFrameCodec {
-  public static final int VERSION = 2;
+  public static final int VERSION = 3;
   public static final int HEADER_BYTES = 32;
   public static final int MAXIMUM_PAYLOAD_BYTES = 16 * 1024;
   public static final int MAXIMUM_FRAME_BYTES = HEADER_BYTES + MAXIMUM_PAYLOAD_BYTES;
@@ -25,6 +26,8 @@ public final class ProtocolFrameCodec {
   private final ProtocolResponseEncoder responses = new ProtocolResponseEncoder();
   private final ProtocolResponseDecoder responseDecoder =
       new ProtocolResponseDecoder();
+  private final ProtocolSqlRequestEncoder sqlRequests =
+      new ProtocolSqlRequestEncoder();
 
   /** Inspects exactly the request metadata needed before reading its payload. */
   public StatusCode inspectRequestHeader(
@@ -45,6 +48,19 @@ public final class ProtocolFrameCodec {
         source, result, ProtocolFrameWire.ROLE_REQUEST);
   }
 
+  /** Best-effort erasure after a malformed request could not become a frame. */
+  public StatusCode eraseRequestPayload(ByteBuffer source) {
+    if (source == null || source.isReadOnly()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int start = source.position();
+    int payload = Math.min(source.limit(), start + HEADER_BYTES);
+    for (int index = payload; index < source.limit(); index++) {
+      source.put(index, (byte) 0);
+    }
+    return StatusCode.OK;
+  }
+
   public StatusCode encodeRequest(
       ByteBuffer target,
       ProtocolMessageType type,
@@ -55,42 +71,14 @@ public final class ProtocolFrameCodec {
     return ProtocolFrameWire.begin(target, type, requestId, 0, 0);
   }
 
-  public StatusCode encodeTextRequest(
-      ByteBuffer target,
-      ProtocolMessageType type,
-      long requestId,
-      String text) {
-    if (target == null || type == null || !type.hasTextPayload()
-        || requestId <= 0 || text == null || text.isEmpty()) {
-      return ProtocolFrameWire.invalidTarget(target);
-    }
-    int bytes = utf8Length(text);
-    if (bytes < 0) {
-      return ProtocolFrameWire.invalidTarget(target);
-    }
-    if (bytes > MAXIMUM_PAYLOAD_BYTES) {
-      ProtocolFrameWire.empty(target);
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    StatusCode status = ProtocolFrameWire.begin(
-        target, type, requestId, bytes, 0);
-    if (!status.isOk()) {
-      return status;
-    }
-    writeText(target, text);
-    target.position(0);
-    target.limit(HEADER_BYTES + bytes);
-    return StatusCode.OK;
-  }
-
   public StatusCode encodeBinaryRequest(
       ByteBuffer target,
       ProtocolMessageType type,
       long requestId,
       byte[] payload,
       int payloadBytes) {
-    if (target == null || type == null || !type.requiresPayload()
-        || type.hasTextPayload() || requestId <= 0 || payload == null
+    if (target == null || type != ProtocolMessageType.AUTHENTICATE
+        || requestId <= 0 || payload == null
         || payloadBytes <= 0 || payloadBytes > payload.length) {
       return ProtocolFrameWire.invalidTarget(target);
     }
@@ -109,6 +97,15 @@ public final class ProtocolFrameCodec {
     target.position(0);
     target.limit(HEADER_BYTES + payloadBytes);
     return StatusCode.OK;
+  }
+
+  public StatusCode encodeSqlRequest(
+      ByteBuffer target,
+      ProtocolMessageType type,
+      long requestId,
+      String sql,
+      ParameterSet parameters) {
+    return sqlRequests.encode(target, type, requestId, sql, parameters);
   }
 
   public StatusCode encodeStatusResponse(
@@ -168,53 +165,4 @@ public final class ProtocolFrameCodec {
     return responseDecoder.decode(source, frame, result);
   }
 
-  private static void writeText(ByteBuffer target, String text) {
-    int output = HEADER_BYTES;
-    for (int index = 0; index < text.length(); index++) {
-      char character = text.charAt(index);
-      if (character < 0x80) {
-        target.put(output++, (byte) character);
-      } else if (character < 0x800) {
-        target.put(output++, (byte) (0xc0 | character >>> 6));
-        target.put(output++, (byte) (0x80 | character & 0x3f));
-      } else if (Character.isHighSurrogate(character)) {
-        int scalar = Character.toCodePoint(character, text.charAt(++index));
-        target.put(output++, (byte) (0xf0 | scalar >>> 18));
-        target.put(output++, (byte) (0x80 | scalar >>> 12 & 0x3f));
-        target.put(output++, (byte) (0x80 | scalar >>> 6 & 0x3f));
-        target.put(output++, (byte) (0x80 | scalar & 0x3f));
-      } else {
-        target.put(output++, (byte) (0xe0 | character >>> 12));
-        target.put(output++, (byte) (0x80 | character >>> 6 & 0x3f));
-        target.put(output++, (byte) (0x80 | character & 0x3f));
-      }
-    }
-  }
-
-  private static int utf8Length(String text) {
-    int bytes = 0;
-    for (int index = 0; index < text.length(); index++) {
-      char character = text.charAt(index);
-      if (character < 0x80) {
-        bytes++;
-      } else if (character < 0x800) {
-        bytes += 2;
-      } else if (Character.isHighSurrogate(character)) {
-        if (index + 1 >= text.length()
-            || !Character.isLowSurrogate(text.charAt(index + 1))) {
-          return -1;
-        }
-        bytes += 4;
-        index++;
-      } else if (Character.isLowSurrogate(character)) {
-        return -1;
-      } else {
-        bytes += 3;
-      }
-      if (bytes > MAXIMUM_PAYLOAD_BYTES) {
-        return bytes;
-      }
-    }
-    return bytes;
-  }
 }

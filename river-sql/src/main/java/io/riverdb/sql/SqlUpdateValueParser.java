@@ -1,176 +1,70 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Parses one bounded UPDATE assignment value into the command-owned primitive carrier. */
 final class SqlUpdateValueParser {
   private final SqlParserInput input;
-  private final SqlParser.LongResult literal = new SqlParser.LongResult();
-  private int operator;
-  private int expressionDescriptor;
+  private final SqlScalarExpressionParser expressions;
+  private final SqlScalarExpression scratch = new SqlScalarExpression();
 
-  SqlUpdateValueParser(SqlParserInput parserInput) {
+  SqlUpdateValueParser(
+      SqlParserInput parserInput, SqlScalarExpressionParser expressionParser) {
     input = parserInput;
+    expressions = expressionParser;
   }
 
   StatusCode parse(CharSequence sql, SqlCommand command) {
-    boolean nullValue = input.consumeKeyword(sql, "NULL");
-    boolean defaultValue = !nullValue && input.consumeKeyword(sql, "DEFAULT");
-    operator = SqlCommand.UPDATE_LITERAL;
-    expressionDescriptor = 0;
-    StatusCode status = nullValue || defaultValue
-        ? StatusCode.OK : expression(sql, command);
-    if (!status.isOk()) {
-      return status;
+    boolean defaultValue = input.consumeKeyword(sql, "DEFAULT");
+    if (defaultValue) {
+      command.appendUpdate(
+          0, false, true, 0, SqlCommand.UPDATE_LITERAL);
+      return StatusCode.OK;
     }
-    long value = nullValue || defaultValue ? 0 : literal.value;
-    int descriptor = nullValue || defaultValue ? 0 : literal.typeDescriptor;
+    StatusCode status = parseValue(sql, command);
+    if (!status.isOk()) return status;
+    if (directValue(scratch)) {
+      boolean nullValue = scratch.operator(0) == SqlScalarExpression.NULL;
+      command.appendUpdate(
+          nullValue ? 0 : scratch.operand(0),
+          nullValue,
+          false,
+          scratch.typeDescriptor(0),
+          SqlCommand.UPDATE_LITERAL);
+      return StatusCode.OK;
+    }
+    int expression = command.appendMutationExpression(scratch);
+    if (expression < 0) return StatusCode.RESOURCE_EXHAUSTED;
     command.appendUpdate(
-        value,
-        nullValue,
-        defaultValue,
-        descriptor,
-        operator,
-        expressionDescriptor);
+        expression, false, false, 0, SqlCommand.UPDATE_EXPRESSION);
     return StatusCode.OK;
   }
 
-  private StatusCode expression(CharSequence sql, SqlCommand command) {
-    if (input.startsLiteral(sql)) {
-      return input.literal(sql, literal);
+  StatusCode parseInsert(
+      CharSequence sql, SqlCommand command, SqlParser.LongResult result) {
+    StatusCode status = parseValue(sql, command);
+    if (!status.isOk()) return status;
+    if (directValue(scratch)) {
+      result.nullValue = scratch.operator(0) == SqlScalarExpression.NULL;
+      result.value = result.nullValue ? 0 : scratch.operand(0);
+      result.typeDescriptor = scratch.typeDescriptor(0);
+      return StatusCode.OK;
     }
-    if (input.consumeKeyword(sql, "CAST")) {
-      return cast(sql, command);
-    }
-    int unary = unaryFunction(sql);
-    if (unary != 0) {
-      return unary(sql, command, unary);
-    }
-    int scaled = scaleFunction(sql);
-    if (scaled != 0) {
-      return scaled(sql, command, scaled);
-    }
-    if (input.consumeCharacter(sql, '-')) {
-      operator = SqlCommand.UPDATE_NEGATE;
-      clearLiteral();
-      return source(sql, command);
-    }
-    input.consumeCharacter(sql, '+');
-    StatusCode status = source(sql, command);
-    if (!status.isOk()) {
-      return status;
-    }
-    operator = binaryOperator(sql);
-    return operator == 0
-        ? StatusCode.INVALID_EXTERNAL_INPUT : input.literal(sql, literal);
+    int expression = command.appendMutationExpression(scratch);
+    if (expression < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    result.nullValue = false;
+    result.value = expression;
+    result.typeDescriptor = SqlCommand.mutationExpressionDescriptor();
+    return StatusCode.OK;
   }
 
-  private StatusCode cast(CharSequence sql, SqlCommand command) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) {
-      status = source(sql, command);
-    }
-    if (status.isOk()) {
-      status = input.requireKeyword(sql, "AS");
-    }
-    if (status.isOk()) {
-      status = input.typeDescriptor(sql, literal);
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ')');
-    }
-    if (status.isOk()) {
-      operator = SqlCommand.UPDATE_CAST;
-      expressionDescriptor = literal.typeDescriptor;
-      clearLiteral();
-    }
-    return status;
+  private static boolean directValue(SqlScalarExpression expression) {
+    return expression.nodeCount() == 1
+        && (expression.operator(0) == SqlScalarExpression.LITERAL
+            || expression.operator(0) == SqlScalarExpression.NULL);
   }
 
-  private StatusCode unary(
-      CharSequence sql, SqlCommand command, int unaryOperator) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) {
-      status = source(sql, command);
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ')');
-    }
-    if (status.isOk()) {
-      operator = unaryOperator;
-      clearLiteral();
-    }
-    return status;
-  }
-
-  private StatusCode scaled(
-      CharSequence sql, SqlCommand command, int scaledOperator) {
-    StatusCode status = input.requireCharacter(sql, '(');
-    if (status.isOk()) {
-      status = source(sql, command);
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ',');
-    }
-    if (status.isOk()) {
-      status = input.number(sql, literal);
-    }
-    if (status.isOk()
-        && (literal.value < 0
-            || literal.value > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk()) {
-      status = input.requireCharacter(sql, ')');
-    }
-    if (status.isOk()) {
-      operator = scaledOperator;
-    }
-    return status;
-  }
-
-  private StatusCode source(CharSequence sql, SqlCommand command) {
-    SqlIdentifier source = command.writableNextUpdateSourceColumnName();
-    return source == null
-        ? StatusCode.RESOURCE_EXHAUSTED : input.identifier(sql, source);
-  }
-
-  private int unaryFunction(CharSequence sql) {
-    if (input.consumeKeyword(sql, "ABS")) {
-      return SqlCommand.UPDATE_ABSOLUTE;
-    }
-    if (input.consumeKeyword(sql, "CEIL")) {
-      return SqlCommand.UPDATE_CEILING;
-    }
-    return input.consumeKeyword(sql, "FLOOR") ? SqlCommand.UPDATE_FLOOR : 0;
-  }
-
-  private int scaleFunction(CharSequence sql) {
-    if (input.consumeKeyword(sql, "ROUND")) {
-      return SqlCommand.UPDATE_ROUND;
-    }
-    return input.consumeKeyword(sql, "TRUNCATE") ? SqlCommand.UPDATE_TRUNCATE : 0;
-  }
-
-  private int binaryOperator(CharSequence sql) {
-    if (input.consumeCharacter(sql, '+')) {
-      return SqlCommand.UPDATE_ADD;
-    }
-    if (input.consumeCharacter(sql, '-')) {
-      return SqlCommand.UPDATE_SUBTRACT;
-    }
-    if (input.consumeCharacter(sql, '*')) {
-      return SqlCommand.UPDATE_MULTIPLY;
-    }
-    if (input.consumeCharacter(sql, '/')) {
-      return SqlCommand.UPDATE_DIVIDE;
-    }
-    return input.consumeCharacter(sql, '%') ? SqlCommand.UPDATE_REMAINDER : 0;
-  }
-
-  private void clearLiteral() {
-    literal.value = 0;
-    literal.typeDescriptor = 0;
+  private StatusCode parseValue(CharSequence sql, SqlCommand command) {
+    return expressions.parseMutation(sql, command, scratch);
   }
 }

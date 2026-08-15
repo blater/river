@@ -2,7 +2,13 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Status: proposed M5 contract
+Status: active M5 contract; U02a-U02e accepted on 2026-08-14; U02f
+ordered-scalar index format and direct-root expression checkpoint accepted on
+2026-08-15; deterministic column expression `CHECK` checkpoint accepted on
+2026-08-15; compile-time view/derived projection composition checkpoint
+accepted on 2026-08-15; bounded JDBC temporal-result mapping and remote-value
+validation checkpoint accepted on 2026-08-15; bounded engine/protocol typed-
+parameter checkpoint accepted on 2026-08-15
 
 This profile is the semantic authority for River's admitted pre-V1 SQL
 surface. Parser acceptance is not support. A feature is supported only when
@@ -11,9 +17,74 @@ and error behavior satisfy the applicable fixtures.
 
 ## Current and target type surface
 
-The current implementation supports `BIGINT` and a packed, printable-ASCII
-`VARCHAR(7)`. That text representation is a bootstrap implementation, not the
-M5 contract.
+The current implementation supports `BIGINT`, `BOOLEAN`, `DECIMAL(p,s)`,
+`VARCHAR(n)`, `DATE`, `TIME(p)`, local `TIMESTAMP(p)`, and
+`TIMESTAMP(p) WITH TIME ZONE`, including session zones and statement-stable
+current values. U02f has accepted raw temporal values through projection,
+joins, grouping, `HAVING`, distinct/order, sort spill, view/derived/nested
+queries, checkpoint-base/WAL replay, backup/restore, and warmed allocation
+paths. The direct-root expression checkpoint additionally supports bounded
+fixed-width exact-numeric and temporal projections and casts, one residual
+computed `WHERE` expression,
+including literal comparisons, `BETWEEN`, `IN`, and `NOT IN`; computed
+scalar-aggregate operands and filtering; and computed filtering before raw
+`GROUP BY`/grouped aggregates/`DISTINCT`. A raw direct-root grouping key may
+also feed one column-bearing primitive computed aggregate operand. Direct-root
+scalar and grouped aggregates may apply a bounded post-aggregate `HAVING`
+clause. Up to eight structurally deduplicated aggregate invocations feed at
+most eight flat predicates sharing 32 postfix nodes and 256 membership values;
+grouped execution reserves its first physical lane for the key and therefore
+admits seven operand-bearing invocations plus lane-free `COUNT(*)`. Predicates
+use SQL `AND`-before-`OR` three-valued logic and admit the six comparisons,
+`IS [NOT] NULL`, inclusive `BETWEEN`, and `IN`/`NOT IN`. Unique selected
+aliases, the raw group key or its alias, and exact repeated or hidden aggregate
+invocations are valid leaves. Direct raw `VARCHAR` group/aggregate leaves and
+generated fixed-width-to-text results compare by owned UTF-8 content; a raw
+text leaf embedded inside another postfix operation remains fail-closed. A selected
+direct-root, column-bearing exact-numeric or temporal
+fixed-width expression may also provide one `ORDER BY`, `DISTINCT`, or grouping
+key; computed Boolean and text keys remain deferred. Computed ordering names a
+unique selected alias, while computed grouping repeats the selected expression
+exactly; these keys are materialized and do not provide expression-index
+access. Compile-time projection composition now inlines bounded postfix
+programs through selected aliases in durable views and ad-hoc derived-table
+chains, including `NULL`, current values, temporal text casts, and `AT TIME
+ZONE`. The flattened command executes through the accepted direct-root row
+path, and a selected composed output may use its materialized `ORDER BY` path.
+Exactly one column-bearing computed `WHERE` residual may appear in the
+outermost query over such a projection-only chain, including a reference to a
+selected composed output; inner predicates remain raw and may still provide
+source access. Inner computed predicates, a second computed predicate,
+disjunction and column-valued right-hand sides, generated-text ranges,
+JOIN/correlated expression contexts, and block-scoped grouping or distinct
+remain explicit `FEATURE_NOT_SUPPORTED`. Parenthesized arbitrary Boolean
+trees, more than one `AT TIME ZONE` operation per `HAVING` predicate, and
+post-aggregate expressions in block, join, nested, or correlated contexts also
+remain U02f work. A column may declare one
+durable `CHECK` whose bounded expression references only that column. All
+column checks share a 32-node/table arena; exhausting it returns
+`RESOURCE_EXHAUSTED`. An admitted expression uses
+context-free fixed-width temporal operations: `EXTRACT`, date arithmetic,
+same-family temporal precision casts, or `DATE`/local-`TIMESTAMP` casts. The
+comparison RHS is one typed literal. NULL/unknown passes, false is `23514`,
+and expression overflow retains its exact status. Current values, `AT TIME
+ZONE`, session-dependent local/zoned casts, text, cross-column and table-level
+check expressions, membership/ranges, and subqueries remain deferred. Direct
+root mutations admit one shared 32-node fixed-width postfix arena: source-free
+`INSERT` values and primary keys, old-row `UPDATE` assignments with simultaneous
+assignment semantics, and one computed residual `WHERE` for `UPDATE` or
+`DELETE`. Exact numeric and temporal operations, typed parameters and NULLs,
+statement-stable current values, and explicit/session zone conversions use the
+same bound evaluator as row projections. `INSERT` column references, generated
+text results, a second computed predicate, joins, nested/derived mutation
+sources, and computed DML outside direct root remain `FEATURE_NOT_SUPPORTED`.
+NULL assignments still obey target nullability, and identity reservation keeps
+the existing gap-on-failure sequence policy while statement failure rolls back
+row, index, WAL, check, unique, and foreign-key effects. The final
+cross-boundary fault gate also remains before this M5 profile is accepted. The
+ordered-scalar format now carries a primitive namespace plus the
+complete signed 64-bit value, so `BIGINT`, `DECIMAL`, `DATE`, `TIME`, and both
+timestamp families support their full admitted domains without lossy packing.
 
 M5 admits the following scalar types:
 
@@ -51,9 +122,10 @@ are outside M5.
 
 - Decimal scale is part of the declared type. Values are converted to the
   target scale only by the admitted cast/assignment rules.
-- No implicit conversion loses a fractional part. The binder derives a stable
-  result precision and scale for each admitted expression; division and an
-  explicit scale-reducing cast use round-half-even.
+- No implicit assignment conversion loses a fractional part. The binder
+  derives a stable result precision and scale for each admitted expression;
+  division, precision-bound result derivation, and an explicit scale-reducing
+  cast use round-half-even.
 - V1 implements unary `+`/`-`, binary `+`, `-`, `*`, `/`, and `%`, and the
   functions `ABS`, `CEIL`, `FLOOR`, `ROUND`, and `TRUNCATE`.
 - V1 implements decimal `SUM`, `AVG`, `MIN`, and `MAX`. Accumulators use a
@@ -152,15 +224,18 @@ zoned timestamps. Parsing and formatting never depend on the process locale.
 
 - Every session has a time zone; the default is UTC.
 - Admitted session zones are UTC, a valid fixed numeric offset, or an IANA
-  region ID from the supported JDK tzdb.
+  area/location region ID such as `Europe/London` from the supported JDK
+  tzdb. Legacy abbreviations and link aliases without an area component are
+  not admitted.
 - `DATE`, `TIME`, and `TIMESTAMP` without time zone are local values. They do
   not inherit or carry the session zone.
 - `TIMESTAMP WITH TIME ZONE` is an instant. Equality, ordering, uniqueness, and
   indexes compare the instant, regardless of the offset used at input.
 - Converting a local timestamp to an instant uses an explicit zone when one is
   supplied, otherwise the session zone. A nonexistent DST-gap local time is an
-  error. An ambiguous overlap local time is an error unless an explicit offset
-  valid for that region and local time selects one occurrence.
+  error. An ambiguous local time in an IANA region is an error. A conversion
+  using an explicit fixed offset is unambiguous and selects that instant; River
+  does not invent a combined region-plus-offset SQL syntax.
 - Converting an instant to local fields uses the requested or session zone and
   is unambiguous.
 - Implicit assignment or comparison between zoned and unzoned timestamps is
@@ -201,6 +276,24 @@ zoned `TIMESTAMP` families require an explicit admitted cast. The engine never
 applies the session zone implicitly to make two unlike temporal values
 comparable.
 
+`EXTRACT(SECOND FROM value)` returns exact `DECIMAL(2+p,p)`, where `p` is the
+declared fractional-second precision of the source; the `p=0` result is
+`DECIMAL(2,0)`. Other admitted `EXTRACT` fields return `BIGINT`. Because a
+zoned timestamp retains only its instant, its ordinary field extraction uses
+UTC chronology and `TIMEZONE_HOUR`/`TIMEZONE_MINUTE` both return zero. To
+extract wall-clock fields for a region or fixed offset, first convert the
+instant explicitly with `AT TIME ZONE`.
+
+Temporal precision widening preserves the raw value. Explicit narrowing is
+lossless-only: a value not aligned to the target precision fails with `22008`.
+`DATE` casts to local `TIMESTAMP` at midnight; local `TIMESTAMP` casts to
+`DATE` only at exact midnight. Local `TIMESTAMP` and zoned `TIMESTAMP` convert
+through the session zone and retain their precision, with the gap/overlap
+rules above. Direct `DATE`/zoned-timestamp and `TIME` cross-family casts are
+not admitted. Canonical zoned-timestamp text is UTC with a `+00:00` suffix;
+the input offset is not recoverable and presentation never changes implicitly
+with session state.
+
 Month/year arithmetic and timestamp-duration arithmetic wait for the deferred
 `INTERVAL` profile; v1 does not invent end-of-month behavior in ad hoc date
 functions. SQL-standard `CURRENT_TIME` waits for `TIME WITH TIME ZONE`;
@@ -224,11 +317,32 @@ compatibility views. JDBC metadata reports the declared character length,
 decimal precision/scale, temporal precision, nullability, and the correct JDBC
 type code. The protocol transports versioned type tags and binary values; it
 does not use formatted text as River's internal typed-value representation.
+The current bounded U03a result checkpoint implements the Java-time and
+compatibility accessors, temporal precision metadata, canonical strings, and
+descriptor/domain validation for remote fixed-width values. Until query
+nullability is derived from the bound projection, query-open metadata carries
+it in the versioned response envelope, and JDBC reports exact nullable or
+non-null columns. The bounded
+typed-parameter checkpoint carries descriptor-tagged fixed values, strict UTF-8
+text, and typed or context-inferred `NULL` through the embedded API and protocol
+v3 without rendering SQL. Positional markers are admitted in direct outer data
+statements, including an outer statement over a stored projection-only view;
+stored definitions and explicit derived, nested, correlated, and subquery
+topologies containing markers remain `FEATURE_NOT_SUPPORTED`. Typed `NULL` is
+supported in direct mutation values, direct fixed-width mutation expressions,
+and membership lists; scalar comparison, range, and projection uses remain
+fail-closed until their explicit three-valued literal carrier exists. JDBC
+prepared bindings and bounded batch
+snapshots use the typed carrier without SQL rendering. Authenticated all-type
+JDBC and CLI fixtures exercise all eight admitted families through TLS and
+token authentication. The combined checkpoint/reopen, backup/restore, and
+injected-fault fixture remains U06-owned.
 
 ## Required SQLSTATEs
 
 | Condition | SQLSTATE |
 | --- | --- |
+| Parameter count mismatch | `07001` |
 | String data too long | `22001` |
 | Numeric value out of range | `22003` |
 | Division by zero | `22012` |

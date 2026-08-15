@@ -2,6 +2,7 @@ package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.SqlDefaultKind;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Parses CREATE TABLE schema columns and delegates other catalog CREATE families. */
@@ -9,15 +10,19 @@ final class SqlCreateTableParser {
   private final SqlParser parser;
   private final SqlParserInput input;
   private final SqlCatalogCommandParser catalogCommands;
+  private final SqlColumnCheckParser checks;
   private final SqlParser.LongResult numberResult = new SqlParser.LongResult();
   private final ExactDecimal.LongValue decimalResult = new ExactDecimal.LongValue();
-  private final SqlIdentifier identifierScratch = new SqlIdentifier();
 
   SqlCreateTableParser(
-      SqlParser parent, SqlParserInput parserInput, SqlCatalogCommandParser catalogParser) {
+      SqlParser parent,
+      SqlParserInput parserInput,
+      SqlCatalogCommandParser catalogParser,
+      SqlScalarExpressionParser expressionParser) {
     parser = parent;
     input = parserInput;
     catalogCommands = catalogParser;
+    checks = new SqlColumnCheckParser(parent, parserInput, expressionParser);
   }
 
   private StatusCode parseCreateTable(
@@ -161,12 +166,35 @@ final class SqlCreateTableParser {
   }
 
   private StatusCode parseColumnDefault(CharSequence sql, SqlCommand result) {
+    int kind = currentDefaultKind(sql);
+    if (kind != SqlDefaultKind.NONE) {
+      int descriptor = result.columnTypeDescriptor(result.columnCount() - 1);
+      if (!SqlDefaultKind.compatible(kind, descriptor)) {
+        return StatusCode.DATATYPE_MISMATCH;
+      }
+      result.markLastColumnCurrentDefault(kind);
+      return StatusCode.OK;
+    }
     StatusCode status = literal(sql, numberResult);
     if (status.isOk()) {
       status = coerceLiteral(result.columnTypeDescriptor(result.columnCount() - 1));
     }
     if (status.isOk()) result.markLastColumnDefault(numberResult.value);
     return status;
+  }
+
+  private int currentDefaultKind(CharSequence sql) {
+    if (consumeKeyword(sql, "CURRENT_DATE")) {
+      return SqlDefaultKind.CURRENT_DATE;
+    }
+    if (consumeKeyword(sql, "CURRENT_TIMESTAMP")) {
+      return SqlDefaultKind.CURRENT_TIMESTAMP;
+    }
+    if (consumeKeyword(sql, "LOCALTIME")) {
+      return SqlDefaultKind.LOCALTIME;
+    }
+    return consumeKeyword(sql, "LOCALTIMESTAMP")
+        ? SqlDefaultKind.LOCALTIMESTAMP : SqlDefaultKind.NONE;
   }
 
   private StatusCode coerceLiteral(int targetDescriptor) {
@@ -186,9 +214,23 @@ final class SqlCreateTableParser {
       numberResult.typeDescriptor = targetDescriptor;
       return StatusCode.OK;
     }
+    if (sameLocalTemporalType(numberResult.typeDescriptor, targetDescriptor)
+        && SqlTypeDescriptor.canImplicitlyCast(
+            numberResult.typeDescriptor, targetDescriptor)) {
+      numberResult.typeDescriptor = targetDescriptor;
+      return StatusCode.OK;
+    }
     return SqlTypeDescriptor.canImplicitlyCast(
         numberResult.typeDescriptor, targetDescriptor)
         ? StatusCode.NUMERIC_VALUE_OUT_OF_RANGE : StatusCode.DATATYPE_MISMATCH;
+  }
+
+  private static boolean sameLocalTemporalType(int source, int target) {
+    int sourceType = SqlTypeDescriptor.typeId(source);
+    return sourceType == SqlTypeDescriptor.typeId(target)
+        && (sourceType == SqlTypeDescriptor.TYPE_ID_TIME
+            || sourceType == SqlTypeDescriptor.TYPE_ID_TIMESTAMP
+            || sourceType == SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE);
   }
 
   private StatusCode parseColumnCheck(CharSequence sql, SqlCommand result) {
@@ -207,37 +249,7 @@ final class SqlCreateTableParser {
   }
 
   private StatusCode columnCheck(CharSequence sql, SqlCommand result) {
-    StatusCode status = requireCharacter(sql, '(');
-    if (!status.isOk()) {
-      return status;
-    }
-    identifierScratch.reset();
-    status = identifier(sql, identifierScratch);
-    if (!status.isOk()) {
-      return status;
-    }
-    int column = result.columnCount() - 1;
-    if (!sameIdentifier(identifierScratch, result.columnName(column))) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    SqlComparison comparison = parser.comparisonOperator(sql);
-    if (comparison == null
-        || comparison == SqlComparison.HALF_OPEN_RANGE
-        || comparison == SqlComparison.IN
-        || comparison == SqlComparison.NOT_IN) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    status = literal(sql, numberResult);
-    if (status.isOk()) {
-      status = coerceLiteral(result.columnTypeDescriptor(column));
-    }
-    if (status.isOk()) {
-      status = requireCharacter(sql, ')');
-    }
-    if (status.isOk()) {
-      result.markLastColumnCheck(comparison, numberResult.value);
-    }
-    return status;
+    return checks.parse(sql, result);
   }
 
   private StatusCode columnReference(CharSequence sql, SqlCommand result) {
@@ -289,15 +301,4 @@ final class SqlCreateTableParser {
     }
   }
 
-  private static boolean sameIdentifier(CharSequence left, CharSequence right) {
-    if (left.length() != right.length()) {
-      return false;
-    }
-    for (int index = 0; index < left.length(); index++) {
-      if (left.charAt(index) != right.charAt(index)) {
-        return false;
-      }
-    }
-    return true;
-  }
 }

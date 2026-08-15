@@ -25,13 +25,15 @@ final class RelationalReferentialIntegrity {
       RelationalSession session, TableDefinition table, long key) {
     if (session == null
         || table == null
-        || !table.isOwnedBy(schemaGate)
-        || key < 0
-        || key > RelationalKey.MAXIMUM_USER_KEY) {
+        || !table.isOwnedBy(schemaGate)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = session.indexedSession().beginScan(
-        Long.MIN_VALUE, 0, catalogCursor);
+        RelationalKey.CATALOG_OBJECT_SPACE,
+        Long.MIN_VALUE,
+        RelationalKey.CATALOG_SEQUENCE_SPACE,
+        Long.MIN_VALUE,
+        catalogCursor);
     boolean active = status.isOk();
     while (status.isOk()) {
       status = session.indexedSession().nextScan(catalogCursor, catalogRow);

@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapInsertResult;
 import java.nio.ByteBuffer;
 
@@ -11,12 +12,13 @@ final class IndexedLogicalRequestValidator {
       long transactionId,
       long commitSequence,
       long publishedCommitSequence,
+      int space,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
     return transactionId > 0
         && commitSequence > publishedCommitSequence
-        && key != Long.MAX_VALUE
+        && OrderedKey.isFiniteSpace(space)
         && row != null
         && row.hasRemaining()
         && result != null;
@@ -39,6 +41,7 @@ final class IndexedLogicalRequestValidator {
       long transactionId,
       long commitSequence,
       long publishedCommitSequence,
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
@@ -47,11 +50,13 @@ final class IndexedLogicalRequestValidator {
       HeapInsertResult result) {
     return transactionId > 0
         && commitSequence > publishedCommitSequence
+        && spaces != null
         && keys != null
         && rows != null
         && rowStride > 0
         && rowLengths != null
         && insertCount > 1
+        && insertCount <= spaces.length
         && insertCount <= keys.length
         && insertCount <= rowLengths.length
         && result != null;
@@ -62,6 +67,7 @@ final class IndexedLogicalRequestValidator {
       long commitSequence,
       long publishedCommitSequence,
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -72,6 +78,7 @@ final class IndexedLogicalRequestValidator {
     return transactionId > 0
         && commitSequence > publishedCommitSequence
         && operations != null
+        && spaces != null
         && keys != null
         && previousRowIds != null
         && rows != null
@@ -79,6 +86,7 @@ final class IndexedLogicalRequestValidator {
         && rowLengths != null
         && mutationCount > 0
         && mutationCount <= operations.length
+        && mutationCount <= spaces.length
         && mutationCount <= keys.length
         && mutationCount <= previousRowIds.length
         && mutationCount <= rowLengths.length

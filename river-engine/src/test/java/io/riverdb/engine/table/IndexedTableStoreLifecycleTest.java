@@ -43,7 +43,7 @@ final class IndexedTableStoreLifecycleTest {
     ByteBuffer rows = row(410);
     HeapInsertResult inserted = new HeapInsertResult();
     PendingMutationBuffer mutations = new PendingMutationBuffer(1, Long.BYTES);
-    mutations.append(IndexedWalCodec.MUTATION_INSERT, 41, 0, rows, 0, Long.BYTES);
+    mutations.append(IndexedWalCodec.MUTATION_INSERT, 0, 41, 0, rows, 0, Long.BYTES);
     assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, store.beginOperation());
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, store.beginPreparedInsertGroup());
@@ -99,16 +99,16 @@ final class IndexedTableStoreLifecycleTest {
     ByteBuffer duplicateRow = row(511);
     HeapInsertResult inserted = new HeapInsertResult();
     PendingMutationBuffer first = new PendingMutationBuffer(1, Long.BYTES);
-    first.append(IndexedWalCodec.MUTATION_INSERT, 51, 0, firstRow, 0, Long.BYTES);
+    first.append(IndexedWalCodec.MUTATION_INSERT, 0, 51, 0, firstRow, 0, Long.BYTES);
     PendingMutationBuffer duplicate = new PendingMutationBuffer(1, Long.BYTES);
-    duplicate.append(IndexedWalCodec.MUTATION_INSERT, 51, 0, duplicateRow, 0, Long.BYTES);
+    duplicate.append(IndexedWalCodec.MUTATION_INSERT, 0, 51, 0, duplicateRow, 0, Long.BYTES);
 
     assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
     assertEquals(StatusCode.OK, store.preflightPreparedWrites(first));
     PendingMutationBuffer secondPreflight = new PendingMutationBuffer(1, Long.BYTES);
     ByteBuffer secondRow = row(520);
     secondPreflight.append(
-        IndexedWalCodec.MUTATION_INSERT, 52, 0, secondRow, 0, Long.BYTES);
+        IndexedWalCodec.MUTATION_INSERT, 0, 52, 0, secondRow, 0, Long.BYTES);
     assertEquals(StatusCode.OK, store.preflightPreparedWrites(secondPreflight));
     assertEquals(StatusCode.OK, store.finishPreparedInsertPreflight(2));
     assertEquals(

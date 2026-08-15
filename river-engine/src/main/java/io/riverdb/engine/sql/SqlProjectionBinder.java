@@ -5,28 +5,66 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlQuery;
+import io.riverdb.sql.SqlScalarExpression;
 
 /** Resolves projection, grouping, distinct, and ordering columns. */
 final class SqlProjectionBinder {
-  private static final int INVALID_PROJECTION = Integer.MAX_VALUE;
+  private static final int AMBIGUOUS_ALIAS = -2;
   private final SqlPredicateBinder predicates;
+  private final SqlRowProjectionBinder rows = new SqlRowProjectionBinder();
+  private final SqlGroupedAggregateBinder groups;
 
   SqlProjectionBinder(SqlPredicateBinder predicateBinder) {
     predicates = predicateBinder;
+    groups = new SqlGroupedAggregateBinder(predicateBinder);
   }
 
   StatusCode bind(SqlCommand command, BoundSqlStatement bound) {
-    int count = command.isSelectAll()
-        ? bound.table.columnCount() : command.columnCount();
+    if (!command.isSelectAll()
+        && command.columnCount() > 0
+        && (command.projectionExpression(0) == null
+            || !command.projectionExpression(0).isAvailable())) {
+      return bindLegacy(command, bound);
+    }
+    if (SqlRowProjectionBinder.hasComputed(command)
+        && bound.executableQuery.blockCount() > 1) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    return rows.bind(command, bound);
+  }
+
+  private static StatusCode bindLegacy(
+      SqlCommand command, BoundSqlStatement bound) {
+    int count = command.columnCount();
     if (count <= 0 || count > bound.projectedColumns.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    bound.projectionPrograms.begin(count);
     for (int index = 0; index < count; index++) {
-      int column = resolve(command, bound, index);
-      if (column == INVALID_PROJECTION || isDuplicate(bound, index, column)) {
+      if (!hasValidQualifier(command, index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
+      int column = command.isNullProjection(index)
+          ? BoundSqlStatement.NULL_PROJECTION
+          : bound.table.findColumn(command.columnName(index));
+      if (column < 0 && column != BoundSqlStatement.NULL_PROJECTION) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (bound.projectedColumns[previous] == column) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      }
       bound.projectedColumns[index] = column;
+      bound.projectedTypeDescriptors[index] = column < 0
+          ? SqlTypeDescriptor.BIGINT : bound.table.typeDescriptor(column);
+      bound.projectionPrograms.append(
+          index,
+          column < 0 ? SqlScalarExpression.NULL : SqlScalarExpression.COLUMN,
+          column < 0 ? 0 : column,
+          bound.projectedTypeDescriptors[index]);
+      bound.projectionPrograms.finish(
+          index, bound.projectedTypeDescriptors[index], column < 0 ? -1 : column);
     }
     bound.projectedColumnCount = count;
     return StatusCode.OK;
@@ -34,98 +72,46 @@ final class SqlProjectionBinder {
 
   StatusCode bindOrder(SqlCommand command, BoundSqlStatement bound) {
     int column = bound.table.findColumn(command.orderColumnName());
-    if (column >= 0) {
-      bound.orderColumn = column;
-      return StatusCode.OK;
-    }
-    int aliasColumn = resolveOrderAlias(command, bound);
-    if (aliasColumn < 0) {
+    int aliasProjection = resolveOrderAlias(command);
+    if (aliasProjection == AMBIGUOUS_ALIAS
+        || aliasProjection >= 0
+            && column >= 0
+            && bound.projectionPrograms.rawColumn(aliasProjection) < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    bound.orderColumn = aliasColumn;
+    if (aliasProjection >= 0 && column < 0) {
+      return rows.bindOrderAlias(command, bound, aliasProjection);
+    }
+    if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    bound.orderColumn = column;
+    bound.sortKeyProjection = -1;
     return StatusCode.OK;
   }
 
   StatusCode bindGroup(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
-    StatusCode status = predicates.bind(command, query, bound);
-    if (!status.isOk()) {
-      return status;
-    }
-    if (!hasValidQualifier(command, 0)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int groupColumn = bound.table.findColumn(command.firstColumnName());
-    if (groupColumn < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int aggregateColumn = -1;
-    if (command.type() != SqlCommandType.GROUP_COUNT) {
-      aggregateColumn = resolveGroupAggregate(command, bound);
-      if (aggregateColumn == Integer.MIN_VALUE) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      int inputDescriptor = bound.table.typeDescriptor(aggregateColumn);
-      if ((command.type() == SqlCommandType.GROUP_SUM
-              || command.type() == SqlCommandType.GROUP_AVG)
-          && SqlTypeDescriptor.comparisonFamily(inputDescriptor)
-              != SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) {
-        return StatusCode.DATATYPE_MISMATCH;
-      }
-      if ((command.type() == SqlCommandType.GROUP_MIN
-              || command.type() == SqlCommandType.GROUP_MAX)
-          && SqlTypeDescriptor.comparisonFamily(inputDescriptor)
-              == SqlTypeDescriptor.COMPARISON_BOOLEAN) {
-        return StatusCode.DATATYPE_MISMATCH;
-      }
-      if (command.hasGroupHaving()
-          && !SqlTypeDescriptor.canCompare(
-              aggregateResultDescriptor(command.type(), inputDescriptor),
-              command.groupHavingTypeDescriptor())) {
-        return StatusCode.DATATYPE_MISMATCH;
-      }
-    }
-    if (command.isOrdered()
-        && SqlTypeDescriptor.comparisonFamily(bound.table.typeDescriptor(groupColumn))
-            == SqlTypeDescriptor.COMPARISON_BOOLEAN) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    bound.groupColumn = groupColumn;
-    bound.groupAggregateColumn = aggregateColumn;
-    return StatusCode.OK;
+    return groups.bind(command, query, bound);
   }
 
   StatusCode bindDistinct(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
-    StatusCode status = predicates.bind(command, query, bound);
+    boolean computed = SqlRowProjectionBinder.hasComputed(command);
+    if (computed && bound.query.blockCount() > 1) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    StatusCode status = rows.bind(command, bound);
     if (!status.isOk()) {
       return status;
     }
-    if (!hasValidQualifier(command, 0)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int column = bound.table.findColumn(command.firstColumnName());
+    int column = bound.projectionPrograms.rawColumn(0);
     if (column < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+      status = rows.validateComputedKey(command, bound, 0);
+      if (!status.isOk()) return status;
+      column = SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+      bound.sortKeyProjection = 0;
     }
     bound.distinctColumn = column;
-    return StatusCode.OK;
-  }
-
-  private static int resolve(
-      SqlCommand command, BoundSqlStatement bound, int index) {
-    if (command.isSelectAll()) {
-      return index;
-    }
-    if (!hasValidQualifier(command, index)) {
-      return INVALID_PROJECTION;
-    }
-    if (command.isNullProjection(index)) {
-      return command.isOrdered()
-          ? INVALID_PROJECTION : BoundSqlStatement.NULL_PROJECTION;
-    }
-    int column = bound.table.findColumn(command.columnName(index));
-    return column < 0 ? INVALID_PROJECTION : column;
+    return predicates.bind(command, query, bound);
   }
 
   private static boolean hasValidQualifier(SqlCommand command, int index) {
@@ -134,18 +120,7 @@ final class SqlProjectionBinder {
         || SqlBindingNames.matchesTable(command, qualifier);
   }
 
-  private static boolean isDuplicate(
-      BoundSqlStatement bound, int index, int column) {
-    for (int previous = 0; previous < index; previous++) {
-      if (bound.projectedColumns[previous] == column) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static int resolveOrderAlias(
-      SqlCommand command, BoundSqlStatement bound) {
+  private static int resolveOrderAlias(SqlCommand command) {
     int resolved = -1;
     for (int index = 0; index < command.columnCount(); index++) {
       if (!SqlBindingNames.same(
@@ -153,23 +128,20 @@ final class SqlProjectionBinder {
         continue;
       }
       if (resolved >= 0 || command.isNullProjection(index)) {
-        return -1;
+        return AMBIGUOUS_ALIAS;
       }
-      resolved = bound.table.findColumn(command.columnName(index));
+      resolved = index;
     }
     return resolved;
   }
 
-  private static int resolveGroupAggregate(
-      SqlCommand command, BoundSqlStatement bound) {
-    if (command.columnCount() != 2 || !hasValidQualifier(command, 1)) {
-      return Integer.MIN_VALUE;
-    }
-    int column = bound.table.findColumn(command.columnName(1));
-    return column < 0 ? Integer.MIN_VALUE : column;
-  }
-
   static int aggregateResultDescriptor(SqlCommandType type, int inputDescriptor) {
+    if (type == SqlCommandType.COUNT
+        || type == SqlCommandType.COUNT_VALUE
+        || type == SqlCommandType.GROUP_COUNT
+        || type == SqlCommandType.GROUP_COUNT_VALUE) {
+      return SqlTypeDescriptor.BIGINT;
+    }
     if (type == SqlCommandType.GROUP_MIN || type == SqlCommandType.GROUP_MAX
         || type == SqlCommandType.MIN || type == SqlCommandType.MAX) {
       return inputDescriptor;
@@ -192,5 +164,19 @@ final class SqlProjectionBinder {
             SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION,
             SqlTypeDescriptor.parameterTwo(inputDescriptor))
         : SqlTypeDescriptor.BIGINT;
+  }
+
+  static int aggregateResultDescriptor(int kind, int inputDescriptor) {
+    return switch (kind) {
+      case io.riverdb.sql.SqlAggregateKind.COUNT,
+          io.riverdb.sql.SqlAggregateKind.COUNT_VALUE -> SqlTypeDescriptor.BIGINT;
+      case io.riverdb.sql.SqlAggregateKind.MIN,
+          io.riverdb.sql.SqlAggregateKind.MAX -> inputDescriptor;
+      case io.riverdb.sql.SqlAggregateKind.AVG -> aggregateResultDescriptor(
+          SqlCommandType.AVG, inputDescriptor);
+      case io.riverdb.sql.SqlAggregateKind.SUM -> aggregateResultDescriptor(
+          SqlCommandType.SUM, inputDescriptor);
+      default -> 0;
+    };
   }
 }

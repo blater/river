@@ -2,8 +2,9 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
+import io.riverdb.base.type.SqlDefaultKind;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.SqlValueDomain;
 import java.nio.ByteBuffer;
 
 /** Caller-owned bounded schema carrying one canonical descriptor per column. */
@@ -16,13 +17,27 @@ public final class TableSchema {
   public static final int CHECK_LESS_OR_EQUAL = 4;
   public static final int CHECK_GREATER_THAN = 5;
   public static final int CHECK_GREATER_OR_EQUAL = 6;
+  public static final int CHECK_LITERAL = 1;
+  public static final int CHECK_COLUMN = 2;
+  public static final int CHECK_ADD = 3;
+  public static final int CHECK_SUBTRACT = 4;
+  public static final int CHECK_CAST = 5;
+  public static final int CHECK_EXTRACT = 6;
+  public static final int MAXIMUM_CHECK_NODES = 32;
   static final int MAXIMUM_NAME_LENGTH = 64;
 
   private final ColumnName[] columns = new ColumnName[MAXIMUM_COLUMNS];
   private final long[] defaultValues = new long[MAXIMUM_COLUMNS];
+  private final byte[] defaultKinds = new byte[MAXIMUM_COLUMNS];
   private final int[] typeDescriptors = new int[MAXIMUM_COLUMNS];
   private final long[] checkValues = new long[MAXIMUM_COLUMNS];
   private final int[] checkComparisons = new int[MAXIMUM_COLUMNS];
+  private final int[] checkTypeDescriptors = new int[MAXIMUM_COLUMNS];
+  private final byte[] checkNodeCounts = new byte[MAXIMUM_COLUMNS];
+  private final byte[] checkOperators = new byte[MAXIMUM_CHECK_NODES];
+  private final long[] checkOperands = new long[MAXIMUM_CHECK_NODES];
+  private final int[] checkNodeDescriptors = new int[MAXIMUM_CHECK_NODES];
+  private final int[] checkValidationStack = new int[MAXIMUM_CHECK_NODES];
   private final int[] referenceTableIds = new int[MAXIMUM_COLUMNS];
   private final byte[] defaultTextBytes = new byte[MAXIMUM_ROW_BYTES];
   private int columnCount;
@@ -32,6 +47,8 @@ public final class TableSchema {
   private long referenceMask;
   private boolean identity;
   private int defaultTextBytesUsed;
+  private int checkNodeCount;
+  private int lastCheckColumn = -1;
 
   public TableSchema() {
     for (int index = 0; index < columns.length; index++) {
@@ -43,11 +60,16 @@ public final class TableSchema {
     for (int index = 0; index < columnCount; index++) {
       columns[index].reset();
       typeDescriptors[index] = 0;
+      defaultKinds[index] = SqlDefaultKind.NONE;
+      checkNodeCounts[index] = 0;
+      checkTypeDescriptors[index] = 0;
     }
     columnCount = 0;
     notNullMask = 0;
     defaultMask = 0;
     checkMask = 0;
+    checkNodeCount = 0;
+    lastCheckColumn = -1;
     referenceMask = 0;
     identity = false;
     defaultTextBytesUsed = 0;
@@ -83,7 +105,11 @@ public final class TableSchema {
         || typeId != SqlTypeDescriptor.TYPE_ID_BIGINT
             && typeId != SqlTypeDescriptor.TYPE_ID_VARCHAR
             && typeId != SqlTypeDescriptor.TYPE_ID_BOOLEAN
-            && typeId != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
+            && typeId != SqlTypeDescriptor.TYPE_ID_DECIMAL
+            && typeId != SqlTypeDescriptor.TYPE_ID_DATE
+            && typeId != SqlTypeDescriptor.TYPE_ID_TIME
+            && typeId != SqlTypeDescriptor.TYPE_ID_TIMESTAMP
+            && typeId != SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return addColumn(name, nullable, descriptor);
@@ -131,6 +157,21 @@ public final class TableSchema {
     }
     defaultMask |= 1L << column;
     defaultValues[column] = value;
+    defaultKinds[column] = SqlDefaultKind.LITERAL;
+    return StatusCode.OK;
+  }
+
+  public StatusCode setLastCurrentDefault(int kind) {
+    if (columnCount <= 1) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int column = columnCount - 1;
+    if (!SqlDefaultKind.compatible(kind, typeDescriptors[column])) {
+      return StatusCode.DATATYPE_MISMATCH;
+    }
+    defaultMask |= 1L << column;
+    defaultValues[column] = 0;
+    defaultKinds[column] = (byte) kind;
     return StatusCode.OK;
   }
 
@@ -154,6 +195,7 @@ public final class TableSchema {
     }
     defaultMask |= 1L << column;
     defaultValues[column] = (long) start << 32 | Integer.toUnsignedLong(length);
+    defaultKinds[column] = SqlDefaultKind.LITERAL;
     return StatusCode.OK;
   }
 
@@ -174,12 +216,68 @@ public final class TableSchema {
             == SqlTypeDescriptor.TYPE_ID_VARCHAR
         || !validFixedValue(typeDescriptors[column], value)
         || (checkMask & 1L << column) != 0
+        || column <= lastCheckColumn
         || !validCheckComparison(comparison)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    byte[] operators = {(byte) CHECK_COLUMN};
+    long[] operands = {column};
+    int[] descriptors = {typeDescriptors[column]};
+    return setCheck(
+        column,
+        comparison,
+        typeDescriptors[column],
+        value,
+        1,
+        operators,
+        operands,
+        descriptors);
+  }
+
+  public StatusCode setCheck(
+      int column,
+      int comparison,
+      int valueDescriptor,
+      long value,
+      int nodes,
+      byte[] operators,
+      long[] operands,
+      int[] descriptors) {
+    if (column < 0 || column >= columnCount
+        || (checkMask & 1L << column) != 0
+        || column <= lastCheckColumn
+        || !validCheckComparison(comparison)
+        || SqlTypeDescriptor.typeId(valueDescriptor)
+                == SqlTypeDescriptor.TYPE_ID_BOOLEAN
+            && comparison != CHECK_EQUAL
+            && comparison != CHECK_NOT_EQUAL
+        || valueDescriptor == 0
+        || !validFixedValue(valueDescriptor, value)
+        || nodes <= 0
+        || nodes > MAXIMUM_CHECK_NODES - checkNodeCount
+        || !TableCheckProgram.valid(
+            column,
+            typeDescriptors[column],
+            valueDescriptor,
+            nodes,
+            operators,
+            operands,
+            descriptors,
+            checkValidationStack)) {
+      return nodes > MAXIMUM_CHECK_NODES - checkNodeCount
+          ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int offset = checkNodeCount;
+    System.arraycopy(operators, 0, checkOperators, offset, nodes);
+    System.arraycopy(operands, 0, checkOperands, offset, nodes);
+    System.arraycopy(descriptors, 0, checkNodeDescriptors, offset, nodes);
+    checkNodeCount += nodes;
+    lastCheckColumn = column;
     checkMask |= 1L << column;
     checkComparisons[column] = comparison;
     checkValues[column] = value;
+    checkTypeDescriptors[column] = valueDescriptor;
+    checkNodeCounts[column] = (byte) nodes;
     return StatusCode.OK;
   }
 
@@ -236,6 +334,10 @@ public final class TableSchema {
         ? defaultValues[column] : 0;
   }
 
+  int defaultKind(int column) {
+    return column >= 0 && column < columnCount ? defaultKinds[column] : 0;
+  }
+
   int defaultTextBytes() {
     return defaultTextBytesUsed;
   }
@@ -282,6 +384,32 @@ public final class TableSchema {
     return column >= 0 && column < columnCount ? checkValues[column] : 0;
   }
 
+  int checkTypeDescriptor(int column) {
+    return column >= 0 && column < columnCount ? checkTypeDescriptors[column] : 0;
+  }
+
+  int checkNodeCount(int column) {
+    return column >= 0 && column < columnCount
+        ? Byte.toUnsignedInt(checkNodeCounts[column]) : 0;
+  }
+
+  int checkNodeCount() {
+    return checkNodeCount;
+  }
+
+  int checkOperator(int node) {
+    return node >= 0 && node < checkNodeCount
+        ? Byte.toUnsignedInt(checkOperators[node]) : 0;
+  }
+
+  long checkOperand(int node) {
+    return node >= 0 && node < checkNodeCount ? checkOperands[node] : 0;
+  }
+
+  int checkNodeDescriptor(int node) {
+    return node >= 0 && node < checkNodeCount ? checkNodeDescriptors[node] : 0;
+  }
+
   long referenceMask() {
     return referenceMask;
   }
@@ -294,14 +422,8 @@ public final class TableSchema {
     return comparison >= CHECK_EQUAL && comparison <= CHECK_GREATER_OR_EQUAL;
   }
 
-  static boolean validFixedValue(int descriptor, long value) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> true;
-      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> value == 0 || value == 1;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL ->
-          ExactDecimal.fits(value, SqlTypeDescriptor.parameterOne(descriptor));
-      default -> false;
-    };
+  public static boolean validFixedValue(int descriptor, long value) {
+    return SqlValueDomain.validFixed(descriptor, value);
   }
 
   static final class ColumnName implements CharSequence {

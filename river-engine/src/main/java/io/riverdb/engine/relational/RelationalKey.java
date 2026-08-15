@@ -2,17 +2,16 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Disjoint catalog and logical-table key encoding for the first physical keyspace. */
+/** Primitive physical key-space assignment for catalog and relational table ownership. */
 final class RelationalKey {
-  static final long CATALOG_SEQUENCE_KEY = Long.MIN_VALUE;
-  static final long USER_KEY_MASK = (1L << 48) - 1;
-  static final long MAXIMUM_USER_KEY = (1L << 48) - 2;
+  static final int CATALOG_OBJECT_SPACE = 0;
+  static final int CATALOG_SEQUENCE_SPACE = 1;
   static final int MAXIMUM_TABLE_ID = 0x7fff;
 
   private RelationalKey() {
   }
 
-  static StatusCode catalogTableKey(CharSequence name, LongKeyResult result) {
+  static StatusCode catalogTableKey(CharSequence name, KeyResult result) {
     if (!validName(name) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -21,29 +20,30 @@ final class RelationalKey {
       hash ^= name.charAt(index);
       hash *= 0x100000001b3L;
     }
-    long key = hash | Long.MIN_VALUE;
-    if (key >= CATALOG_SEQUENCE_KEY
-        && key <= CATALOG_SEQUENCE_KEY + MAXIMUM_TABLE_ID) {
-      key ^= 1L << 48;
-    }
-    result.set(key);
+    result.set(CATALOG_OBJECT_SPACE, hash);
     return StatusCode.OK;
   }
 
   static long identitySequenceKey(int tableId) {
-    return CATALOG_SEQUENCE_KEY + tableId;
+    return tableId;
   }
 
-  static StatusCode tableRowKey(int tableId, long userKey, LongKeyResult result) {
+  static StatusCode tableRowKey(int tableId, long userKey, KeyResult result) {
     if (tableId <= 0
         || tableId > MAXIMUM_TABLE_ID
-        || userKey < 0
-        || userKey > MAXIMUM_USER_KEY
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    result.set((long) tableId << 48 | userKey);
+    result.set(dataSpace(tableId), userKey);
     return StatusCode.OK;
+  }
+
+  static int dataSpace(int tableId) {
+    return tableId << 1;
+  }
+
+  static int auxiliarySpace(int tableId) {
+    return (tableId << 1) + 1;
   }
 
   static boolean validName(CharSequence name) {
@@ -70,11 +70,17 @@ final class RelationalKey {
         || character >= 'a' && character <= 'z';
   }
 
-  static final class LongKeyResult {
+  static final class KeyResult {
+    private int space;
     private long key;
 
-    void set(long value) {
+    void set(int valueSpace, long value) {
+      space = valueSpace;
       key = value;
+    }
+
+    int space() {
+      return space;
     }
 
     long key() {

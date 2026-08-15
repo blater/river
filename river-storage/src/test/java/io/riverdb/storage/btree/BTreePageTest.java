@@ -12,18 +12,18 @@ final class BTreePageTest {
   @Test
   void insertsAndFindsOrderedLeafKeys() {
     ByteBuffer leaf = ByteBuffer.allocate(PAGE_BYTES);
-    assertEquals(StatusCode.OK, BTreePage.initializeLeaf(leaf, 0, Long.MAX_VALUE));
-    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 40, 4));
-    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 10, 1));
-    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 30, 3));
-    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 20, 2));
-    assertEquals(StatusCode.CONFLICT, BTreePage.insertLeaf(leaf, 20, 9));
+    assertEquals(StatusCode.OK, BTreePage.initializeLeaf(leaf, 0));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 3, 40, 4));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 3, 10, 1));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 3, 30, 3));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 3, 20, 2));
+    assertEquals(StatusCode.CONFLICT, BTreePage.insertLeaf(leaf, 3, 20, 9));
     assertEquals(StatusCode.OK, BTreePage.validate(leaf));
 
     BTreeLookupResult lookup = new BTreeLookupResult();
-    assertEquals(StatusCode.OK, BTreePage.lookupLeaf(leaf, 30, lookup));
+    assertEquals(StatusCode.OK, BTreePage.lookupLeaf(leaf, 3, 30, lookup));
     assertEquals(3, lookup.rowId());
-    assertEquals(StatusCode.CONFLICT, BTreePage.lookupLeaf(leaf, 31, lookup));
+    assertEquals(StatusCode.CONFLICT, BTreePage.lookupLeaf(leaf, 3, 31, lookup));
   }
 
   @Test
@@ -31,25 +31,27 @@ final class BTreePageTest {
     ByteBuffer left = ByteBuffer.allocate(PAGE_BYTES);
     ByteBuffer right = ByteBuffer.allocate(PAGE_BYTES);
     ByteBuffer root = ByteBuffer.allocate(PAGE_BYTES);
-    assertEquals(StatusCode.OK, BTreePage.initializeLeaf(left, 0, Long.MAX_VALUE));
+    assertEquals(StatusCode.OK, BTreePage.initializeLeaf(left, 0));
     for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
-      assertEquals(StatusCode.OK, BTreePage.insertLeaf(left, index * 2L, index + 1));
+      assertEquals(StatusCode.OK, BTreePage.insertLeaf(left, 7, index * 2L, index + 1));
     }
     BTreeSplitResult split = new BTreeSplitResult();
-    assertEquals(StatusCode.OK, BTreePage.splitLeaf(left, right, 4, 257, 258, split));
+    assertEquals(
+        StatusCode.OK, BTreePage.splitLeaf(left, right, 4, 7, 257, 258, split));
     assertEquals(4, BTreePage.rightSiblingPageId(left));
     assertEquals(split.separatorKey(), BTreePage.highKey(left));
     assertEquals(StatusCode.OK, BTreePage.validate(left));
     assertEquals(StatusCode.OK, BTreePage.validate(right));
 
     assertEquals(StatusCode.OK, BTreePage.initializeInternal(root, 3));
-    assertEquals(StatusCode.OK, BTreePage.insertInternal(root, split.separatorKey(), 4));
-    assertEquals(3, BTreePage.childForKey(root, split.separatorKey() - 1));
-    assertEquals(4, BTreePage.childForKey(root, split.separatorKey()));
+    assertEquals(StatusCode.OK, BTreePage.insertInternal(
+        root, split.separatorSpace(), split.separatorKey(), 4));
+    assertEquals(3, BTreePage.childForKey(root, 7, split.separatorKey() - 1));
+    assertEquals(4, BTreePage.childForKey(root, 7, split.separatorKey()));
     assertEquals(StatusCode.OK, BTreePage.validate(root));
 
     BTreeLookupResult lookup = new BTreeLookupResult();
-    assertEquals(StatusCode.OK, BTreePage.lookupLeaf(right, 257, lookup));
+    assertEquals(StatusCode.OK, BTreePage.lookupLeaf(right, 7, 257, lookup));
     assertEquals(258, lookup.rowId());
   }
 
@@ -73,20 +75,69 @@ final class BTreePageTest {
     for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
       assertEquals(
           StatusCode.OK,
-          BTreePage.insertInternal(left, index * 2L + 2, 1001 + index));
+          BTreePage.insertInternal(left, 5, index * 2L + 2, 1001 + index));
     }
     BTreeSplitResult split = new BTreeSplitResult();
     assertEquals(
         StatusCode.OK,
-        BTreePage.splitInternal(left, right, 257, 2000, split));
+        BTreePage.splitInternal(left, right, 5, 257, 2000, split));
     assertEquals(257, split.separatorKey());
     assertEquals(128, BTreePage.entryCount(left));
     assertEquals(128, BTreePage.entryCount(right));
-    assertEquals(1000, BTreePage.childForKey(left, 1));
-    assertEquals(2000, BTreePage.childForKey(right, 257));
+    assertEquals(1000, BTreePage.childForKey(left, 5, 1));
+    assertEquals(2000, BTreePage.childForKey(right, 5, 257));
     assertEquals(2000, BTreePage.firstChildPageId(right));
     assertEquals(257, BTreePage.highKey(left));
-    assertEquals(Long.MAX_VALUE, BTreePage.highKey(right));
+    assertEquals(Integer.MAX_VALUE, BTreePage.highSpace(right));
+    assertEquals(0, BTreePage.highKey(right));
+    assertEquals(StatusCode.OK, BTreePage.validate(left));
+    assertEquals(StatusCode.OK, BTreePage.validate(right));
+  }
+
+  @Test
+  void ordersFullSignedKeysAcrossSpacesAndRejectsNonCanonicalInfinity() {
+    ByteBuffer leaf = ByteBuffer.allocate(PAGE_BYTES);
+    assertEquals(StatusCode.OK, BTreePage.initializeLeaf(leaf, 0));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 2, Long.MAX_VALUE, 3));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 2, Long.MIN_VALUE, 1));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 3, Long.MIN_VALUE, 4));
+    assertEquals(StatusCode.OK, BTreePage.insertLeaf(leaf, 2, 0, 2));
+    assertEquals(Long.MIN_VALUE, BTreePage.keyAt(leaf, 0));
+    assertEquals(2, BTreePage.spaceAt(leaf, 0));
+    assertEquals(Long.MAX_VALUE, BTreePage.keyAt(leaf, 2));
+    assertEquals(3, BTreePage.spaceAt(leaf, 3));
+    assertEquals(StatusCode.OK, BTreePage.validate(leaf));
+    leaf.put(24, (byte) 1);
+    assertEquals(StatusCode.CORRUPTION, BTreePage.validate(leaf));
+  }
+
+  @Test
+  void splitPropagatesCrossSpaceSeparatorPair() {
+    ByteBuffer left = ByteBuffer.allocate(PAGE_BYTES);
+    ByteBuffer right = ByteBuffer.allocate(PAGE_BYTES);
+    assertEquals(StatusCode.OK, BTreePage.initializeLeaf(left, 0));
+    for (int index = 0; index < BTreePage.MAX_ENTRIES / 2; index++) {
+      assertEquals(
+          StatusCode.OK,
+          BTreePage.insertLeaf(left, 2, Long.MIN_VALUE + index, index + 1));
+      assertEquals(
+          StatusCode.OK,
+          BTreePage.insertLeaf(
+              left, 3, Long.MIN_VALUE + index,
+              BTreePage.MAX_ENTRIES / 2 + index + 1));
+    }
+    BTreeSplitResult split = new BTreeSplitResult();
+    assertEquals(
+        StatusCode.OK,
+        BTreePage.splitLeaf(left, right, 4, 3, Long.MAX_VALUE, 300, split));
+    assertEquals(3, split.separatorSpace());
+    assertEquals(Long.MIN_VALUE, split.separatorKey());
+    assertEquals(split.separatorSpace(), BTreePage.highSpace(left));
+    assertEquals(split.separatorKey(), BTreePage.highKey(left));
+    assertEquals(BTreePage.spaceAt(right, 0), BTreePage.highSpace(left));
+    assertEquals(BTreePage.keyAt(right, 0), BTreePage.highKey(left));
+    assertEquals(Integer.MAX_VALUE, BTreePage.highSpace(right));
+    assertEquals(0, BTreePage.highKey(right));
     assertEquals(StatusCode.OK, BTreePage.validate(left));
     assertEquals(StatusCode.OK, BTreePage.validate(right));
   }

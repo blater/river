@@ -12,8 +12,10 @@ public final class SqlState {
   public static final String DIVISION_BY_ZERO = "22012";
   public static final String INVALID_CHARACTER_VALUE_FOR_CAST = "22018";
   public static final String INVALID_PARAMETER_VALUE = "22023";
+  public static final String PARAMETER_COUNT_MISMATCH = "07001";
   public static final String DATATYPE_MISMATCH = "42804";
   public static final String CANNOT_COERCE = "42846";
+  public static final String FEATURE_NOT_SUPPORTED = "0A000";
 
   private SqlState() {
   }

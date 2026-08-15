@@ -10,7 +10,7 @@ final class RelationalRowMutation {
   private final RelationalSchemaGate schemaGate;
   private final IndexedTransactionSession session;
   private final RelationalSecondaryIndexStore secondaryIndexes;
-  private final RelationalKey.LongKeyResult physicalKey = new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult physicalKey = new RelationalKey.KeyResult();
   private final TableDefinition valueIndexTable = new TableDefinition();
   private final TableDefinition referenceTable = new TableDefinition();
   private final HeapRowResult indexedKeyRow = new HeapRowResult();
@@ -19,6 +19,7 @@ final class RelationalRowMutation {
   private final long[] previousIndexedValues = new long[TableDefinition.MAXIMUM_INDEXES];
   private final boolean[] previousIndexedNulls =
       new boolean[TableDefinition.MAXIMUM_INDEXES];
+  private final TableCheckEvaluator checks = new TableCheckEvaluator();
 
   RelationalRowMutation(
       RelationalSchemaGate gate,
@@ -31,29 +32,30 @@ final class RelationalRowMutation {
 
   StatusCode insert(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = resolveWriteKey(table, key);
-    return status.isOk() ? session.insert(physicalKey.key(), row) : status;
+    return status.isOk()
+        ? session.insert(physicalKey.space(), physicalKey.key(), row) : status;
   }
 
   StatusCode update(TableDefinition table, long key, ByteBuffer row) {
     StatusCode status = resolveWriteKey(table, key);
-    return status.isOk() ? session.update(physicalKey.key(), row) : status;
+    return status.isOk()
+        ? session.update(physicalKey.space(), physicalKey.key(), row) : status;
   }
 
   StatusCode delete(TableDefinition table, long key) {
     StatusCode status = resolveWriteKey(table, key);
-    return status.isOk() ? session.delete(physicalKey.key()) : status;
+    return status.isOk()
+        ? session.delete(physicalKey.space(), physicalKey.key()) : status;
   }
 
   StatusCode fetch(TableDefinition table, long key, HeapRowResult result) {
     StatusCode status = resolveKey(table, key);
-    return status.isOk() ? session.fetchByKey(physicalKey.key(), result) : status;
+    return status.isOk()
+        ? session.fetchByKey(physicalKey.space(), physicalKey.key(), result) : status;
   }
 
   StatusCode insertRow(TableDefinition table, long key, ByteBuffer row) {
-    if (!validRow(table, row)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = validateReferences(table, row);
+    StatusCode status = validateCandidate(table, key, row);
     if (status.isOk()) {
       status = insert(table, key, row);
     }
@@ -64,10 +66,7 @@ final class RelationalRowMutation {
   }
 
   StatusCode updateRow(TableDefinition table, long key, ByteBuffer row) {
-    if (!validRow(table, row)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = validateReferences(table, row);
+    StatusCode status = validateCandidate(table, key, row);
     if (status.isOk() && table.hasUniqueValueIndex()) {
       status = capturePreviousIndexedValues(table, key);
     }
@@ -78,6 +77,13 @@ final class RelationalRowMutation {
       status = updateIndexedValue(table, key, row, slot);
     }
     return status;
+  }
+
+  private StatusCode validateCandidate(
+      TableDefinition table, long key, ByteBuffer row) {
+    if (!validRow(table, row)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = checks.evaluate(table, key, row);
+    return status.isOk() ? validateReferences(table, row) : status;
   }
 
   StatusCode deleteRow(TableDefinition table, long key) {
@@ -209,10 +215,11 @@ final class RelationalRowMutation {
           TableDefinition.INDEX_NONE);
       StatusCode status = resolveKey(referenceTable, referencedKey);
       if (status.isOk()) {
-        status = session.protectKey(physicalKey.key());
+        status = session.protectKey(physicalKey.space(), physicalKey.key());
       }
       if (status.isOk()) {
-        status = session.fetchByKey(physicalKey.key(), referencedRow);
+        status = session.fetchByKey(
+            physicalKey.space(), physicalKey.key(), referencedRow);
       }
       if (status == StatusCode.CONFLICT || status == StatusCode.INVALID_EXTERNAL_INPUT) {
         return StatusCode.FOREIGN_KEY_VIOLATION;

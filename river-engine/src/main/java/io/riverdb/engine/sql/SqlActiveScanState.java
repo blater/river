@@ -23,12 +23,18 @@ final class SqlActiveScanState {
   private boolean distinctValueNull;
   private boolean aggregateTransactionActive;
   private boolean aggregateNull;
+  private boolean aggregateAvailable;
+  private char[] aggregateText;
+  private int aggregateTextLength;
   private long aggregateValue;
   private long aggregateCommitSequence;
   private long explainCommitSequence;
   private long groupLookaheadValue;
   private long groupLookaheadAggregateValue;
   private boolean groupLookaheadAggregateNull;
+  private final long[] groupLookaheadValues =
+      new long[TableSchema.MAXIMUM_COLUMNS];
+  private long groupLookaheadNullMask;
   private long distinctValue;
   private long joinOuterKey;
   private long joinMatchValue;
@@ -37,6 +43,7 @@ final class SqlActiveScanState {
   private int sortedRowIndex;
   private int planStepIndex;
   private boolean active;
+  private StatusCode terminalStatus;
 
   public StatusCode reset() {
     if (active) {
@@ -51,12 +58,23 @@ final class SqlActiveScanState {
     distinctValueNull = false;
     aggregateTransactionActive = false;
     aggregateNull = false;
+    aggregateAvailable = false;
+    if (aggregateText != null) {
+      for (int index = 0; index < aggregateTextLength; index++) {
+        aggregateText[index] = 0;
+      }
+    }
+    aggregateTextLength = 0;
     aggregateValue = 0;
     aggregateCommitSequence = 0;
     explainCommitSequence = 0;
     groupLookaheadValue = 0;
     groupLookaheadAggregateValue = 0;
     groupLookaheadAggregateNull = false;
+    groupLookaheadNullMask = 0;
+    for (int index = 0; index < groupLookaheadValues.length; index++) {
+      groupLookaheadValues[index] = 0;
+    }
     distinctValue = 0;
     joinOuterKey = 0;
     joinMatchValue = 0;
@@ -64,6 +82,7 @@ final class SqlActiveScanState {
     sortedRowCount = 0;
     sortedRowIndex = 0;
     planStepIndex = 0;
+    terminalStatus = null;
     StatusCode status = relational.reset();
     StatusCode inner = joinInnerRelational.reset();
     StatusCode catalog = catalogObjects.reset();
@@ -106,18 +125,22 @@ final class SqlActiveScanState {
     return StatusCode.OK;
   }
 
-  StatusCode claimAggregate(
-      long value,
-      boolean nullValue,
-      boolean transactionActive,
-      long commitSequence) {
-    if (active || commitSequence < 0) {
+  StatusCode claimAggregate(SqlExecutionResult result) {
+    if (active || result == null || result.commitSequence() < 0) {
       return StatusCode.CONFLICT;
     }
-    aggregateValue = value;
-    aggregateNull = nullValue;
-    aggregateTransactionActive = transactionActive;
-    aggregateCommitSequence = commitSequence;
+    aggregateAvailable = result.hasValue();
+    aggregateValue = result.value();
+    aggregateNull = result.isNull(0);
+    aggregateTransactionActive = result.transactionActive();
+    aggregateCommitSequence = result.commitSequence();
+    int length = result.textLengthAt(0);
+    if (length >= 0) {
+      if (aggregateText == null) {
+        aggregateText = new char[io.riverdb.engine.api.CommandResult.MAXIMUM_TEXT_CHARACTERS];
+      }
+      aggregateTextLength = result.copyTextAt(0, aggregateText, 0);
+    }
     active = true;
     return StatusCode.OK;
   }
@@ -258,6 +281,19 @@ final class SqlActiveScanState {
     groupLookahead = true;
   }
 
+  void setGroupLookahead(long[] values, int count, long nullMask) {
+    System.arraycopy(values, 0, groupLookaheadValues, 0, count);
+    groupLookaheadNullMask = nullMask;
+    groupLookahead = true;
+  }
+
+  void takeGroupLookahead(long[] values, int count) {
+    System.arraycopy(groupLookaheadValues, 0, values, 0, count);
+    groupLookahead = false;
+  }
+
+  long groupLookaheadNullMask() { return groupLookaheadNullMask; }
+
   boolean hasDistinctValue() {
     return distinctValueAvailable;
   }
@@ -284,6 +320,10 @@ final class SqlActiveScanState {
     return aggregateNull;
   }
 
+  boolean aggregateAvailable() { return aggregateAvailable; }
+  int aggregateTextLength() { return aggregateTextLength; }
+  char[] aggregateText() { return aggregateText; }
+
   boolean aggregateTransactionActive() {
     return aggregateTransactionActive;
   }
@@ -294,6 +334,16 @@ final class SqlActiveScanState {
 
   void complete() {
     active = false;
+  }
+
+  void fail(StatusCode status) {
+    if (terminalStatus == null && status != null && !status.isOk()) {
+      terminalStatus = status;
+    }
+  }
+
+  StatusCode terminalStatus() {
+    return terminalStatus;
   }
 
   public boolean isActive() {

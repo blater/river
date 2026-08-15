@@ -16,7 +16,7 @@ final class SqlQueryParser {
     statements = statementParser;
   }
 
-  StatusCode parse(String sql, SqlQuery query, SqlCommand result) {
+  StatusCode parse(CharSequence sql, SqlQuery query, SqlCommand result) {
     query.reset();
     result.reset();
     int start = skipExplainPrefix(sql, query);
@@ -43,7 +43,50 @@ final class SqlQueryParser {
         : parseScalarPredicate(sql, start, scalar, query, result);
   }
 
-  private static int skipExplainPrefix(String sql, SqlQuery query) {
+  StatusCode parseAppend(CharSequence sql, SqlQuery query, SqlCommand result) {
+    if (sql == null || query == null || result == null
+        || skipExplainPrefix(sql) != skipSpaces(sql, 0)
+        || findExistenceSource(sql, 0, sql.length()) >= 0
+        || findMembershipSource(sql, 0, sql.length()) >= 0
+        || findScalarSource(sql, 0, sql.length()) >= 0) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    result.reset();
+    int start = query.blockCount();
+    int derived = findDerivedSource(sql, 0, sql.length());
+    if (derived >= 0) {
+      StatusCode status = parseDerivedBlocks(sql, 0, sql.length(), query);
+      return status.isOk() ? result.copyBlockFrom(query.block(start)) : status;
+    }
+    source.set(sql, 0, sql.length(), sql.length(), sql.length());
+    StatusCode status = statements.parseQueryBlock(source, result);
+    if (!status.isOk()) return status;
+    SqlCommand block = query.nextBlock();
+    return block == null ? StatusCode.QUERY_TOO_COMPLEX : block.copyBlockFrom(result);
+  }
+
+  boolean hasNestedTopology(CharSequence sql) {
+    int start = skipExplainPrefix(sql);
+    return start < 0
+        || findDerivedSource(sql, start, sql.length()) >= 0
+        || findExistenceSource(sql, start, sql.length()) >= 0
+        || findMembershipSource(sql, start, sql.length()) >= 0
+        || findScalarSource(sql, start, sql.length()) >= 0;
+  }
+
+  private static int skipExplainPrefix(CharSequence sql) {
+    int start = skipSpaces(sql, 0);
+    if (!matchesKeyword(sql, start, sql.length(), "EXPLAIN")) {
+      return start;
+    }
+    start = skipSpaces(sql, start + 7);
+    if (matchesKeyword(sql, start, sql.length(), "ANALYZE")) {
+      start = skipSpaces(sql, start + 7);
+    }
+    return start < sql.length() ? start : -1;
+  }
+
+  private static int skipExplainPrefix(CharSequence sql, SqlQuery query) {
     int start = skipSpaces(sql, 0);
     if (!matchesKeyword(sql, start, sql.length(), "EXPLAIN")) {
       return start;
@@ -61,7 +104,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseExistencePredicate(
-      String sql, int start, int open, SqlQuery query, SqlCommand result) {
+      CharSequence sql, int start, int open, SqlQuery query, SqlCommand result) {
     StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : parseExistenceBlocks(sql, start, sql.length(), query);
@@ -70,7 +113,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseExistenceBlocks(
-      String sql, int start, int end, SqlQuery query) {
+      CharSequence sql, int start, int end, SqlQuery query) {
     int open = findExistenceSource(sql, start, end);
     int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
     int whereStart = existenceWhereStart;
@@ -93,7 +136,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseScalarPredicate(
-      String sql, int start, int open, SqlQuery query, SqlCommand result) {
+      CharSequence sql, int start, int open, SqlQuery query, SqlCommand result) {
     StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : parseScalarBlocks(sql, start, sql.length(), query);
@@ -102,7 +145,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseScalarBlocks(
-      String sql, int start, int end, SqlQuery query) {
+      CharSequence sql, int start, int end, SqlQuery query) {
     int open = findScalarSource(sql, start, end);
     int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
     if (open < 0 || close < 0) {
@@ -128,7 +171,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseMembershipPredicate(
-      String sql, int start, int open, SqlQuery query, SqlCommand result) {
+      CharSequence sql, int start, int open, SqlQuery query, SqlCommand result) {
     StatusCode status = matchingCloseParenthesis(sql, open, sql.length()) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : parseMembershipBlocks(sql, start, sql.length(), query);
@@ -139,7 +182,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseMembershipBlocks(
-      String sql, int start, int end, SqlQuery query) {
+      CharSequence sql, int start, int end, SqlQuery query) {
     int open = findMembershipSource(sql, start, end);
     int close = open < 0 ? -1 : matchingCloseParenthesis(sql, open, end);
     int operatorStart = membershipOperatorStart;
@@ -167,7 +210,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseNestedBlocks(
-      String sql, int start, int end, SqlQuery query) {
+      CharSequence sql, int start, int end, SqlQuery query) {
     if (findExistenceSource(sql, start, end) >= 0) {
       return parseExistenceBlocks(sql, start, end, query);
     }
@@ -186,7 +229,7 @@ final class SqlQueryParser {
   }
 
   private StatusCode parseDerivedBlocks(
-      String sql, int start, int end, SqlQuery query) {
+      CharSequence sql, int start, int end, SqlQuery query) {
     SqlCommand block = query.nextBlock();
     if (block == null) {
       return StatusCode.QUERY_TOO_COMPLEX;
@@ -206,14 +249,14 @@ final class SqlQueryParser {
         ? parseDerivedBlocks(sql, open + 1, close, query) : status;
   }
 
-  private static int findDerivedSource(String sql, int start, int end) {
+  private static int findDerivedSource(CharSequence sql, int start, int end) {
     int from = findTopLevelKeyword(sql, start, end, "FROM");
     int sourceStart = from < 0 ? -1 : skipSpaces(sql, from + 4);
     return sourceStart >= 0 && sourceStart < end && sql.charAt(sourceStart) == '('
         ? sourceStart : -1;
   }
 
-  private static int matchingCloseParenthesis(String sql, int open, int end) {
+  private static int matchingCloseParenthesis(CharSequence sql, int open, int end) {
     int depth = 0;
     for (int index = open; index < end; index++) {
       char character = sql.charAt(index);
@@ -226,7 +269,7 @@ final class SqlQueryParser {
     return -1;
   }
 
-  private static int findScalarSource(String sql, int start, int end) {
+  private static int findScalarSource(CharSequence sql, int start, int end) {
     int depth = 0;
     for (int index = start; index < end; index++) {
       char character = sql.charAt(index);
@@ -243,7 +286,7 @@ final class SqlQueryParser {
     return -1;
   }
 
-  private int findMembershipSource(String sql, int start, int end) {
+  private int findMembershipSource(CharSequence sql, int start, int end) {
     membershipOperatorStart = -1;
     membershipNegated = false;
     int search = start;
@@ -259,7 +302,7 @@ final class SqlQueryParser {
     return -1;
   }
 
-  private int findExistenceSource(String sql, int start, int end) {
+  private int findExistenceSource(CharSequence sql, int start, int end) {
     existenceWhereStart = -1;
     existenceNegated = false;
     int where = findTopLevelKeyword(sql, start, end, "WHERE");
@@ -277,7 +320,7 @@ final class SqlQueryParser {
   }
 
   private static int findTopLevelKeyword(
-      String sql, int start, int end, String keyword) {
+      CharSequence sql, int start, int end, String keyword) {
     int depth = 0;
     for (int index = start; index < end; index++) {
       char character = sql.charAt(index);
@@ -292,13 +335,13 @@ final class SqlQueryParser {
     return -1;
   }
 
-  private static boolean isSelectOpening(String sql, int open, int end) {
+  private static boolean isSelectOpening(CharSequence sql, int open, int end) {
     return open < end
         && sql.charAt(open) == '('
         && matchesKeyword(sql, skipSpaces(sql, open + 1), end, "SELECT");
   }
 
-  private int recordMembership(String sql, int start, int in, int open) {
+  private int recordMembership(CharSequence sql, int start, int in, int open) {
     int priorEnd = in;
     while (priorEnd > start && Character.isWhitespace(sql.charAt(priorEnd - 1))) {
       priorEnd--;
@@ -311,7 +354,7 @@ final class SqlQueryParser {
   }
 
   private static boolean matchesKeyword(
-      String sql, int start, int end, String keyword) {
+      CharSequence sql, int start, int end, String keyword) {
     if (start > 0 && identifierPart(sql.charAt(start - 1))
         || end - start < keyword.length()) {
       return false;
@@ -325,7 +368,7 @@ final class SqlQueryParser {
     return keywordEnd >= end || !identifierPart(sql.charAt(keywordEnd));
   }
 
-  private static int skipSpaces(String sql, int start) {
+  private static int skipSpaces(CharSequence sql, int start) {
     int index = start;
     while (index < sql.length() && Character.isWhitespace(sql.charAt(index))) {
       index++;
@@ -346,13 +389,13 @@ final class SqlQueryParser {
   }
 
   private static class SourceView implements CharSequence {
-    private String source;
+    private CharSequence source;
     private int firstStart;
     private int firstLength;
     private int secondStart;
     private int secondLength;
 
-    void set(String text, int firstFrom, int firstTo, int secondFrom, int secondTo) {
+    void set(CharSequence text, int firstFrom, int firstTo, int secondFrom, int secondTo) {
       source = text;
       firstStart = firstFrom;
       firstLength = firstTo - firstFrom;
@@ -380,7 +423,7 @@ final class SqlQueryParser {
   }
 
   private static final class ScalarSourceView implements CharSequence {
-    private String source;
+    private CharSequence source;
     private int firstStart;
     private int firstLength;
     private int secondStart;
@@ -388,7 +431,7 @@ final class SqlQueryParser {
     private boolean equality;
 
     void set(
-        String text,
+        CharSequence text,
         int firstFrom,
         int firstTo,
         int secondFrom,

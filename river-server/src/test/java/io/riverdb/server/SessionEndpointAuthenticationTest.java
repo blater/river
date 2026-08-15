@@ -44,6 +44,16 @@ final class SessionEndpointAuthenticationTest {
     assertEquals(11, decoded.challengeHigh());
     assertEquals(12, decoded.challengeLow());
 
+    assertSqlStatus(
+        codec,
+        endpoint,
+        request,
+        response,
+        frame,
+        decoded,
+        20,
+        StatusCode.CONFLICT);
+
     assertStatus(
         codec,
         endpoint,
@@ -72,7 +82,78 @@ final class SessionEndpointAuthenticationTest {
         4,
         StatusCode.FENCED);
     assertEquals(3, endpoint.authenticationFailures());
+    assertSqlStatus(
+        codec,
+        endpoint,
+        request,
+        response,
+        frame,
+        decoded,
+        21,
+        StatusCode.CLOSED);
     assertEquals(StatusCode.CLOSED, endpoint.close());
+  }
+
+  @Test
+  void rejectsReadOnlyRequestsBeforeAdmission() {
+    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeRequest(request, ProtocolMessageType.HELLO, 1));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        endpoint.process(request.asReadOnlyBuffer(), response));
+  }
+
+  @Test
+  void erasesSqlPayloadBeforeSessionStateResponses() {
+    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    ProtocolFrame frame = new ProtocolFrame();
+    ProtocolResponse decoded = new ProtocolResponse();
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertSqlStatus(
+        codec,
+        endpoint,
+        request,
+        response,
+        frame,
+        decoded,
+        1,
+        StatusCode.CONFLICT);
+    assertEquals(StatusCode.OK, endpoint.close());
+    assertSqlStatus(
+        codec,
+        endpoint,
+        request,
+        response,
+        frame,
+        decoded,
+        2,
+        StatusCode.CLOSED);
+  }
+
+  @Test
+  void erasesSqlPayloadWhenOuterFrameLengthIsMalformed() {
+    SessionEndpoint endpoint = new SessionEndpoint(new UnusedDatabase());
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeSqlRequest(
+            request, ProtocolMessageType.EXECUTE, 1, "SELECT secret", null));
+    int originalLimit = request.limit();
+    request.limit(originalLimit + 1);
+    request.put(originalLimit, (byte) 0x7f);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, endpoint.process(request, response));
+    for (int index = ProtocolFrameCodec.HEADER_BYTES; index < request.limit(); index++) {
+      assertEquals(0, request.get(index));
+    }
   }
 
   private static void assertStatus(
@@ -98,6 +179,28 @@ final class SessionEndpointAuthenticationTest {
     assertEquals(expected, decoded.status());
     for (int index = 0; index < wrongProof.length; index++) {
       assertEquals(0, request.get(ProtocolFrameCodec.HEADER_BYTES + index));
+    }
+  }
+
+  private static void assertSqlStatus(
+      ProtocolFrameCodec codec,
+      SessionEndpoint endpoint,
+      ByteBuffer request,
+      ByteBuffer response,
+      ProtocolFrame frame,
+      ProtocolResponse decoded,
+      long requestId,
+      StatusCode expected) {
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeSqlRequest(
+            request, ProtocolMessageType.EXECUTE, requestId, "SELECT 1", null));
+    int limit = request.limit();
+    assertEquals(StatusCode.OK, endpoint.process(request, response));
+    assertEquals(StatusCode.OK, codec.decodeResponse(response, frame, decoded));
+    assertEquals(expected, decoded.status());
+    for (int index = ProtocolFrameCodec.HEADER_BYTES; index < limit; index++) {
+      assertEquals(0, request.get(index));
     }
   }
 

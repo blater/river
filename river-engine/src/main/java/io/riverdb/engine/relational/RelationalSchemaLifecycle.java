@@ -24,8 +24,7 @@ final class RelationalSchemaLifecycle {
       CatalogRecord.MAXIMUM_BYTES);
   private final ByteBuffer catalogOutput = ByteBuffer.allocateDirect(
       CatalogRecord.MAXIMUM_BYTES);
-  private final RelationalKey.LongKeyResult catalogKey =
-      new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
   private final CatalogIndexCodec.Result indexRecord = new CatalogIndexCodec.Result();
   private final TableDefinition indexedTable = new TableDefinition();
   private final TableDefinition indexStorageTable = new TableDefinition();
@@ -251,7 +250,7 @@ final class RelationalSchemaLifecycle {
       TransactionOutcome outcome,
       int maximumBuildBatches) {
     int batches = 0;
-    long lowerKey = 0;
+    long lowerKey = Long.MIN_VALUE;
     boolean complete = false;
     buildBatchStatus = StatusCode.OK;
     while (buildBatchStatus.isOk()
@@ -260,10 +259,10 @@ final class RelationalSchemaLifecycle {
       buildBatchStatus = buildUniqueValueIndexBatch(
           session, tableName, lowerKey, outcome);
       if (buildBatchStatus.isOk()) {
-        complete = !buildBatchFull
-            || buildLastKey == RelationalKey.MAXIMUM_USER_KEY;
-        lowerKey = buildLastKey == RelationalKey.MAXIMUM_USER_KEY
-            ? RelationalKey.USER_KEY_MASK : buildLastKey + 1;
+        complete = !buildBatchFull || buildLastKey == Long.MAX_VALUE;
+        if (!complete) {
+          lowerKey = buildLastKey + 1;
+        }
         batches++;
       }
     }
@@ -281,6 +280,9 @@ final class RelationalSchemaLifecycle {
     if (status.isOk() && indexColumn <= 0) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (status.isOk() && !indexedTable.supportsSecondaryIndex(indexColumn)) {
+      status = StatusCode.DATATYPE_MISMATCH;
+    }
     if (!status.isOk()) {
       return status;
     }
@@ -295,7 +297,8 @@ final class RelationalSchemaLifecycle {
     if (!status.isOk()) {
       return status;
     }
-    status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    status = session.indexedSession().fetchByKey(
+        catalogKey.space(), catalogKey.key(), catalogRow);
     if (status.isOk()) {
       status = resumeValueIndex(indexName, indexColumn, unique);
     } else if (status != StatusCode.CONFLICT) {
@@ -339,7 +342,7 @@ final class RelationalSchemaLifecycle {
       return StatusCode.CORRUPTION;
     }
     StatusCode status = session.indexedSession().fetchByKey(
-        RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
+        RelationalKey.CATALOG_SEQUENCE_SPACE, 0, catalogRow);
     if (status.isOk()) {
       status = CatalogSequenceCodec.decodeAllocation(
           catalogRow, catalogScratch, nextTableId);
@@ -351,7 +354,7 @@ final class RelationalSchemaLifecycle {
     if (status.isOk()) {
       CatalogSequenceCodec.encodeAllocation(catalogOutput, indexTableId + 1);
       status = session.indexedSession().update(
-          RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
+          RelationalKey.CATALOG_SEQUENCE_SPACE, 0, catalogOutput);
     }
     if (status.isOk()) {
       status = insertBuildingIndexCatalogs(
@@ -388,7 +391,8 @@ final class RelationalSchemaLifecycle {
           tableName,
           indexedTable,
           unique);
-      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      status = session.indexedSession().update(
+          catalogKey.space(), catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);
@@ -401,7 +405,8 @@ final class RelationalSchemaLifecycle {
           TableDefinition.INDEX_BUILDING,
           indexName,
           unique);
-      status = session.indexedSession().insert(catalogKey.key(), catalogOutput);
+      status = session.indexedSession().insert(
+          catalogKey.space(), catalogKey.key(), catalogOutput);
     }
     return status;
   }
@@ -438,11 +443,7 @@ final class RelationalSchemaLifecycle {
       return StatusCode.CORRUPTION;
     }
     return status.isOk()
-        ? session.beginScan(
-            indexedTable,
-            lowerKey,
-            RelationalKey.USER_KEY_MASK,
-            indexBuildCursor)
+        ? session.beginScanFrom(indexedTable, lowerKey, indexBuildCursor)
         : status;
   }
 
@@ -570,7 +571,8 @@ final class RelationalSchemaLifecycle {
           tableName,
           indexedTable,
           indexedTable.indexIsUnique(buildingSlot));
-      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      status = session.indexedSession().update(
+          catalogKey.space(), catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);
@@ -584,7 +586,8 @@ final class RelationalSchemaLifecycle {
           TableDefinition.INDEX_READY,
           indexName,
           indexedTable.indexIsUnique(buildingSlot));
-      status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+      status = session.indexedSession().update(
+          catalogKey.space(), catalogKey.key(), catalogOutput);
     }
     if (status.isOk()) {
       return session.commit(outcome);

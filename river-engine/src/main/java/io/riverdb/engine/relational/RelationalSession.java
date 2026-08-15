@@ -288,7 +288,7 @@ public final class RelationalSession {
     return status;
   }
 
-  public StatusCode insert(TableDefinition table, long key, ByteBuffer row) {
+  StatusCode insert(TableDefinition table, long key, ByteBuffer row) {
     return rowMutations.insert(table, key, row);
   }
 
@@ -468,11 +468,11 @@ public final class RelationalSession {
     return status;
   }
 
-  public StatusCode update(TableDefinition table, long key, ByteBuffer row) {
+  StatusCode update(TableDefinition table, long key, ByteBuffer row) {
     return rowMutations.update(table, key, row);
   }
 
-  public StatusCode delete(TableDefinition table, long key) {
+  StatusCode delete(TableDefinition table, long key) {
     return rowMutations.delete(table, key);
   }
 
@@ -541,6 +541,14 @@ public final class RelationalSession {
         this, table, column, lowerInclusive, upperExclusive, cursor);
   }
 
+  public StatusCode beginExactValueScan(
+      TableDefinition table,
+      int column,
+      long value,
+      RelationalScanCursor cursor) {
+    return indexLookup.beginExactScan(this, table, column, value, cursor);
+  }
+
   public StatusCode nextValueScan(
       TableDefinition table,
       RelationalScanCursor cursor,
@@ -567,7 +575,19 @@ public final class RelationalSession {
   }
 
   public StatusCode beginScan(TableDefinition table, RelationalScanCursor cursor) {
-    return beginScan(table, 0, RelationalKey.USER_KEY_MASK, cursor);
+    if (table == null
+        || !table.isOwnedBy(schemaGate)
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int dataSpace = RelationalKey.dataSpace(table.tableId());
+    StatusCode status = session.beginScan(
+        dataSpace,
+        Long.MIN_VALUE,
+        RelationalKey.auxiliarySpace(table.tableId()),
+        Long.MIN_VALUE,
+        cursor.indexed());
+    return status.isOk() ? cursor.claim(this) : status;
   }
 
   public StatusCode beginScan(
@@ -577,17 +597,49 @@ public final class RelationalSession {
       RelationalScanCursor cursor) {
     if (table == null
         || !table.isOwnedBy(schemaGate)
-        || lowerInclusive < 0
-        || lowerInclusive > RelationalKey.MAXIMUM_USER_KEY
         || upperExclusive <= lowerInclusive
-        || upperExclusive > RelationalKey.USER_KEY_MASK
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    long tableKey = (long) table.tableId() << 48;
-    long lowerKey = tableKey | lowerInclusive;
-    long upperKey = tableKey | upperExclusive;
-    StatusCode status = session.beginScan(lowerKey, upperKey, cursor.indexed());
+    int dataSpace = RelationalKey.dataSpace(table.tableId());
+    StatusCode status = session.beginScan(
+        dataSpace,
+        lowerInclusive,
+        dataSpace,
+        upperExclusive,
+        cursor.indexed());
+    return status.isOk() ? cursor.claim(this) : status;
+  }
+
+  public StatusCode beginExactScan(
+      TableDefinition table, long key, RelationalScanCursor cursor) {
+    if (table == null
+        || !table.isOwnedBy(schemaGate)
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int dataSpace = RelationalKey.dataSpace(table.tableId());
+    int upperSpace = key == Long.MAX_VALUE ? dataSpace + 1 : dataSpace;
+    long upperKey = key == Long.MAX_VALUE ? Long.MIN_VALUE : key + 1;
+    StatusCode status = session.beginScan(
+        dataSpace, key, upperSpace, upperKey, cursor.indexed());
+    return status.isOk() ? cursor.claim(this) : status;
+  }
+
+  public StatusCode beginScanFrom(
+      TableDefinition table, long lowerInclusive, RelationalScanCursor cursor) {
+    if (table == null
+        || !table.isOwnedBy(schemaGate)
+        || cursor == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int dataSpace = RelationalKey.dataSpace(table.tableId());
+    StatusCode status = session.beginScan(
+        dataSpace,
+        lowerInclusive,
+        dataSpace + 1,
+        Long.MIN_VALUE,
+        cursor.indexed());
     return status.isOk() ? cursor.claim(this) : status;
   }
 
@@ -600,7 +652,7 @@ public final class RelationalSession {
     result.reset();
     StatusCode status = session.nextScan(cursor.indexed(), result.indexed());
     if (status.isOk()) {
-      result.set(result.indexed().key() & RelationalKey.USER_KEY_MASK);
+      result.set(result.indexed().key());
     }
     return status;
   }

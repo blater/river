@@ -119,7 +119,7 @@ final class BoundSqlQuery {
     explain = query.isExplain();
     analyze = query.isAnalyze();
     int parserBlockCount = query.blockCount();
-    sourcePlanDepth = Math.max(1, parserBlockCount);
+    sourcePlanDepth = query.sourcePlanDepth();
     boolean nestedTopology = false;
     for (int index = 0; !nestedTopology && index < parserBlockCount; index++) {
       nestedTopology = query.hasScalarPredicate(index)
@@ -286,10 +286,6 @@ final class BoundSqlQuery {
     private boolean ordered;
     private boolean descending;
     private boolean leftJoin;
-    private boolean groupHaving;
-    private SqlComparison groupHavingComparison;
-    private long groupHavingValue;
-    private int groupHavingTypeDescriptor;
     private boolean membershipNegated;
     private TableDefinition table;
     private boolean ownsTable;
@@ -355,10 +351,6 @@ final class BoundSqlQuery {
       ordered = source.isOrdered();
       descending = source.isDescendingOrder();
       leftJoin = source.isLeftJoin();
-      groupHaving = source.hasGroupHaving();
-      groupHavingComparison = source.groupHavingComparison();
-      groupHavingValue = source.groupHavingValue();
-      groupHavingTypeDescriptor = source.groupHavingTypeDescriptor();
       for (int index = 0; index < columnCount; index++) {
         columnNames[index].copyFrom(source.columnName(index));
         columnTables[index].copyFrom(source.columnTableName(index));
@@ -532,10 +524,6 @@ final class BoundSqlQuery {
     boolean isOrdered() { return ordered; }
     boolean isDescendingOrder() { return descending; }
     boolean isLeftJoin() { return leftJoin; }
-    boolean hasGroupHaving() { return groupHaving; }
-    SqlComparison groupHavingComparison() { return groupHavingComparison; }
-    long groupHavingValue() { return groupHavingValue; }
-    int groupHavingTypeDescriptor() { return groupHavingTypeDescriptor; }
     long rowLimit() { return rowLimit; }
     int textByteLength(long handle) {
       int offset = (int) (handle >>> 32);

@@ -32,7 +32,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static final long OPERATION_MAGIC = 0x5249564552494458L;
 
   @Test
-  void compactLogicalWalPayloadsRetainExactVersionThreeLayout(@TempDir Path root) {
+  void compactLogicalWalPayloadsRetainExactVersionFourLayout(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTableStore store = createStore(directory, wal);
@@ -41,8 +41,9 @@ final class IndexedTableStoreFormatCompatibilityTest {
     ByteBuffer singleRow = row(0x0102030405060708L);
     assertEquals(
         StatusCode.OK,
-        table.insert(2, 17, singleRow, new HeapInsertResult()));
+        table.insert(2, 5, 17, singleRow, new HeapInsertResult()));
 
+    int[] batchSpaces = {6, 7};
     long[] batchKeys = {18, 19};
     int[] batchLengths = {Long.BYTES, Long.BYTES};
     ByteBuffer batchRows = ByteBuffer.allocateDirect(2 * Long.BYTES);
@@ -53,7 +54,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
     assertEquals(
         StatusCode.OK,
         table.commitInserts(
-            3,
+            3, batchSpaces,
             batchKeys,
             batchRows,
             Long.BYTES,
@@ -62,6 +63,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
             new IndexedCommitResult()));
 
     int[] mutations = {IndexedWalCodec.MUTATION_UPDATE, IndexedWalCodec.MUTATION_DELETE};
+    int[] mutationSpaces = {5, 6};
     long[] mutationKeys = {17, 18};
     int[] previousRowIds = {1, 2};
     int[] mutationLengths = {Long.BYTES, 1};
@@ -74,7 +76,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
         StatusCode.OK,
         table.commitMutations(
             4,
-            mutations,
+            mutations, mutationSpaces,
             mutationKeys,
             previousRowIds,
             mutationRows,
@@ -169,12 +171,13 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static byte[] expectedSingleInsert() {
     byte[] expected = new byte[48];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 3);
+    putInt(expected, 8, 4);
     putInt(expected, 12, 2);
     putLong(expected, 16, 17);
     putInt(expected, 24, 1);
     putInt(expected, 28, Long.BYTES);
-    putLong(expected, 32, 0);
+    putInt(expected, 32, 5);
+    putInt(expected, 36, 0);
     putBigEndianLong(expected, 40, 0x0102030405060708L);
     return expected;
   }
@@ -182,7 +185,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static byte[] expectedPageImageHeader() {
     byte[] expected = new byte[24];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 3);
+    putInt(expected, 8, 4);
     putInt(expected, 12, 1);
     putInt(expected, 16, 3);
     putInt(expected, 20, 0);
@@ -190,27 +193,29 @@ final class IndexedTableStoreFormatCompatibilityTest {
   }
 
   private static byte[] expectedInsertBatch() {
-    byte[] expected = new byte[72];
+    byte[] expected = new byte[80];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 3);
+    putInt(expected, 8, 4);
     putInt(expected, 12, 3);
     putInt(expected, 16, 2);
     putInt(expected, 20, 0);
     putLong(expected, 24, 18);
     putInt(expected, 32, 2);
     putInt(expected, 36, Long.BYTES);
-    putBigEndianLong(expected, 40, 0x1112131415161718L);
-    putLong(expected, 48, 19);
-    putInt(expected, 56, 3);
-    putInt(expected, 60, Long.BYTES);
-    putBigEndianLong(expected, 64, 0x2122232425262728L);
+    putInt(expected, 40, 6);
+    putBigEndianLong(expected, 44, 0x1112131415161718L);
+    putLong(expected, 52, 19);
+    putInt(expected, 60, 3);
+    putInt(expected, 64, Long.BYTES);
+    putInt(expected, 68, 7);
+    putBigEndianLong(expected, 72, 0x2122232425262728L);
     return expected;
   }
 
   private static byte[] expectedMutationBatch() {
-    byte[] expected = new byte[81];
+    byte[] expected = new byte[89];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 3);
+    putInt(expected, 8, 4);
     putInt(expected, 12, 4);
     putInt(expected, 16, 2);
     putInt(expected, 20, 0);
@@ -219,13 +224,15 @@ final class IndexedTableStoreFormatCompatibilityTest {
     putInt(expected, 36, 4);
     putInt(expected, 40, 1);
     putInt(expected, 44, Long.BYTES);
-    putBigEndianLong(expected, 48, 0x3132333435363738L);
-    putInt(expected, 56, IndexedWalCodec.MUTATION_DELETE);
-    putLong(expected, 60, 18);
-    putInt(expected, 68, 5);
-    putInt(expected, 72, 2);
-    putInt(expected, 76, 1);
-    expected[80] = 0x41;
+    putInt(expected, 48, 5);
+    putBigEndianLong(expected, 52, 0x3132333435363738L);
+    putInt(expected, 60, IndexedWalCodec.MUTATION_DELETE);
+    putLong(expected, 64, 18);
+    putInt(expected, 72, 5);
+    putInt(expected, 76, 2);
+    putInt(expected, 80, 1);
+    putInt(expected, 84, 6);
+    expected[88] = 0x41;
     return expected;
   }
 
@@ -237,7 +244,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
     assertEquals(commitSequence, record.header().commitSequence());
     assertEquals(1, record.header().decisionCode());
     assertEquals(1002, record.header().formatId());
-    assertEquals(3, record.header().formatVersion());
+    assertEquals(4, record.header().formatVersion());
   }
 
   private static void assertCheckpointHeaders(byte[] encoded, int pageCount) {

@@ -71,9 +71,9 @@ final class IndexedGroupCommitFaultTest {
     TransactionOutcome firstOutcome = new TransactionOutcome();
     TransactionOutcome secondOutcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, first.insert(41, row(410)));
+    assertEquals(StatusCode.OK, first.insert( 0,41, row(410)));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, second.insert(42, row(420)));
+    assertEquals(StatusCode.OK, second.insert( 0,42, row(420)));
 
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch start = new CountDownLatch(1);
@@ -92,8 +92,8 @@ final class IndexedGroupCommitFaultTest {
     }
 
     assertEquals(publishedBefore, table.currentCommitSequence());
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(41, new HeapRowResult()));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey(42, new HeapRowResult()));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,41, new HeapRowResult()));
+    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,42, new HeapRowResult()));
     assertEquals(TransactionState.INDETERMINATE, first.transaction().state());
     assertEquals(TransactionState.INDETERMINATE, second.transaction().state());
     assertEquals(TransactionState.INDETERMINATE, firstOutcome.state());
@@ -101,7 +101,7 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(0, manager.activeTransactionCount());
     assertEquals(
         StatusCode.FENCED,
-        table.insert(99, 99, row(990), new HeapInsertResult()));
+        table.insert(99, 0, 99, row(990), new HeapInsertResult()));
   }
 
   private static Stream<Arguments> groupFaults() {

@@ -18,6 +18,7 @@ final class SqlSortSpill {
   private static final int FIXED_HEADER_LONGS = 3;
   private static final int MAXIMUM_DATA_BYTES =
       (TableSchema.MAXIMUM_COLUMNS + FIXED_HEADER_LONGS) * Long.BYTES
+          + SqlSortGeneratedTextSpill.MAXIMUM_RECORD_BYTES
           + Integer.BYTES + TableSchema.MAXIMUM_ROW_BYTES;
   private static final int MAXIMUM_RECORD_BYTES =
       Integer.BYTES + MAXIMUM_DATA_BYTES + Integer.BYTES;
@@ -34,10 +35,10 @@ final class SqlSortSpill {
       new long[MAXIMUM_RUNS * TableSchema.MAXIMUM_COLUMNS];
   private final int[] mergeRowLengths = new int[MAXIMUM_RUNS];
   private final boolean[] runActive = new boolean[MAXIMUM_RUNS];
-  private final ByteBuffer mergeRows = ByteBuffer.allocateDirect(
-      MAXIMUM_RUNS * TableSchema.MAXIMUM_ROW_BYTES);
-  private final ByteBuffer outputRow = ByteBuffer.allocateDirect(
-      TableSchema.MAXIMUM_ROW_BYTES);
+  private final SqlSortGeneratedTextSpill generatedText =
+      new SqlSortGeneratedTextSpill();
+  private ByteBuffer mergeRows;
+  private ByteBuffer outputRow;
   private final HeapRowResult outputRowView = new HeapRowResult();
   private final ByteBuffer record = ByteBuffer.allocateDirect(MAXIMUM_RECORD_BYTES);
   private final CRC32C checksum = new CRC32C();
@@ -46,7 +47,7 @@ final class SqlSortSpill {
   private TableDefinition table;
   private boolean descending;
   private boolean containsText;
-  private int orderColumn;
+  private boolean textKey;
   private int projectedColumnCount;
   private int runCount;
   private int outputRowLength;
@@ -58,7 +59,8 @@ final class SqlSortSpill {
       TableDefinition definition,
       boolean descendingOrder,
       boolean textRows,
-      int orderedColumn,
+      boolean generatedTextRows,
+      boolean textualKey,
       int projectionCount) {
     StatusCode status = close();
     if (!status.isOk()) {
@@ -67,7 +69,9 @@ final class SqlSortSpill {
     table = definition;
     descending = descendingOrder;
     containsText = textRows;
-    orderColumn = orderedColumn;
+    textKey = textualKey;
+    ensureTextStorage();
+    generatedText.begin(generatedTextRows, projectionCount);
     projectedColumnCount = projectionCount;
     runCount = 0;
     writeOffset = 0;
@@ -84,6 +88,8 @@ final class SqlSortSpill {
       int[] rowSlots,
       int[] rowLengths,
       ByteBuffer rows,
+      byte[] textLengths,
+      char[] text,
       int rowCount) {
     if (runCount >= MAXIMUM_RUNS) {
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -98,7 +104,7 @@ final class SqlSortSpill {
     for (int row = 0; row < rowCount; row++) {
       status = writeRow(
           keys, keyNulls, primaryKeys, nullMasks, values,
-          rowSlots, rowLengths, rows, row);
+          rowSlots, rowLengths, rows, textLengths, text, row);
       if (!status.isOk()) {
         return status;
       }
@@ -134,6 +140,7 @@ final class SqlSortSpill {
     if (containsText) {
       captureOutputRow(selected);
     }
+    generatedText.capture(selected);
     return readRunRow(selected);
   }
 
@@ -148,6 +155,14 @@ final class SqlSortSpill {
   HeapRowResult outputRow() {
     outputRowView.set(outputRow, 0, 0, outputRowLength);
     return outputRowView;
+  }
+
+  int outputTextLength(int projection) {
+    return generatedText.outputLength(projection);
+  }
+
+  char[] outputText(int projection) {
+    return generatedText.output(projection);
   }
 
   boolean hasResources() {
@@ -191,9 +206,11 @@ final class SqlSortSpill {
       int[] rowSlots,
       int[] rowLengths,
       ByteBuffer rows,
+      byte[] textLengths,
+      char[] text,
       int row) {
     int rowLength = containsText ? rowLengths[row] : 0;
-    int fixedBytes = (projectedColumnCount + FIXED_HEADER_LONGS) * Long.BYTES;
+    int fixedBytes = fixedBytes();
     int dataBytes = fixedBytes + (containsText ? Integer.BYTES + rowLength : 0);
     record.clear();
     record.limit(Integer.BYTES + dataBytes + Integer.BYTES);
@@ -205,6 +222,7 @@ final class SqlSortSpill {
     for (int index = 0; index < projectedColumnCount; index++) {
       record.putLong(values[valueStart + index]);
     }
+    generatedText.write(record, row, textLengths, text);
     if (containsText) {
       record.putInt(rowLength);
       int source = rowSlots[row] * TableSchema.MAXIMUM_ROW_BYTES;
@@ -262,7 +280,7 @@ final class SqlSortSpill {
     int comparison;
     if (mergeKeyNulls[left] != mergeKeyNulls[right]) {
       comparison = mergeKeyNulls[left] ? -1 : 1;
-    } else if (containsText && table.isVarchar(orderColumn)) {
+    } else if (textKey) {
       comparison = compareText(left, right);
     } else {
       comparison = Long.compare(mergeKeys[left], mergeKeys[right]);
@@ -303,7 +321,7 @@ final class SqlSortSpill {
       return status;
     }
     int dataBytes = record.getInt(0);
-    int fixedBytes = (projectedColumnCount + FIXED_HEADER_LONGS) * Long.BYTES;
+    int fixedBytes = fixedBytes();
     int minimum = fixedBytes + (containsText ? Integer.BYTES : 0);
     int maximum = minimum + (containsText ? TableSchema.MAXIMUM_ROW_BYTES : 0);
     if (dataBytes < minimum || dataBytes > maximum || (!containsText && dataBytes != fixedBytes)) {
@@ -328,6 +346,8 @@ final class SqlSortSpill {
     for (int index = 0; index < projectedColumnCount; index++) {
       mergeValues[valueStart + index] = record.getLong();
     }
+    StatusCode textStatus = generatedText.read(record, run);
+    if (!textStatus.isOk()) return textStatus;
     if (containsText) {
       status = readRowBytes(run, dataBytes, fixedBytes);
       if (!status.isOk()) {
@@ -393,6 +413,18 @@ final class SqlSortSpill {
     for (int index = 0; index < outputRowLength; index++) {
       outputRow.put(index, mergeRows.get(source + index));
     }
+  }
+
+  private int fixedBytes() {
+    return (projectedColumnCount + FIXED_HEADER_LONGS) * Long.BYTES
+        + generatedText.recordBytes();
+  }
+
+  private void ensureTextStorage() {
+    if (!containsText || mergeRows != null) return;
+    mergeRows = ByteBuffer.allocateDirect(
+        MAXIMUM_RUNS * TableSchema.MAXIMUM_ROW_BYTES);
+    outputRow = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
   }
 
   private int checksum(int offset, int length) {

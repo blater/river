@@ -98,11 +98,11 @@ final class IndexedTableStoreInterruptedVacuumTest {
     assertEquals(8, store.rowCommitSequence(301));
     assertEquals(1, store.previousRowId(301));
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(1000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1000, fetched));
     assertEquals(11_000, fetched.getLong(0));
-    assertEquals(StatusCode.OK, table.fetchByKey(1299, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey( 0,1299, fetched));
     assertEquals(11_299, fetched.getLong(0));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(7, 1000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKeyAt(7, 0, 1000, fetched));
     assertEquals(1000, fetched.getLong(0));
     close(table, wal, directory);
   }
@@ -120,7 +120,7 @@ final class IndexedTableStoreInterruptedVacuumTest {
         row.putLong(0, key);
         row.position(0);
         row.limit(row.capacity());
-        assertEquals(StatusCode.OK, writer.insert(key, row));
+        assertEquals(StatusCode.OK, writer.insert( 0,key, row));
       }
       assertEquals(StatusCode.OK, writer.commit(outcome));
     }
@@ -131,7 +131,7 @@ final class IndexedTableStoreInterruptedVacuumTest {
         row.putLong(0, key + 10_000);
         row.position(0);
         row.limit(row.capacity());
-        assertEquals(StatusCode.OK, writer.update(key, row));
+        assertEquals(StatusCode.OK, writer.update( 0,key, row));
       }
       assertEquals(StatusCode.OK, writer.commit(outcome));
     }

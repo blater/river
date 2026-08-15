@@ -16,17 +16,19 @@ final class ProtocolFrameFuzzTest {
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ProtocolFrame frame = new ProtocolFrame();
     ProtocolResponse response = new ProtocolResponse();
+    ProtocolSqlRequestDecoder sqlRequest = new ProtocolSqlRequestDecoder();
     ByteBuffer seed = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     ByteBuffer candidate = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     byte[] seedBytes = seed.array();
     byte[] candidateBytes = candidate.array();
     SplittableRandom random = new SplittableRandom(0x524956455246555aL);
 
-    assertEquals(StatusCode.OK, codec.encodeTextRequest(
+    assertEquals(StatusCode.OK, codec.encodeSqlRequest(
         seed,
         ProtocolMessageType.EXECUTE,
         1,
-        "SELECT id FROM rows WHERE id=1"));
+        "SELECT id FROM rows WHERE id=1",
+        null));
     int requestBytes = seed.remaining();
     for (int iteration = 0; iteration < MUTATIONS; iteration++) {
       System.arraycopy(seedBytes, 0, candidateBytes, 0, requestBytes);
@@ -35,6 +37,9 @@ final class ProtocolFrameFuzzTest {
       candidate.limit(random.nextInt(requestBytes + 1));
       StatusCode status = codec.decode(candidate, frame);
       assertNotNull(status);
+      if (status.isOk()) {
+        assertNotNull(sqlRequest.decode(frame));
+      }
     }
 
     ByteBuffer responseSeed = ByteBuffer.allocate(

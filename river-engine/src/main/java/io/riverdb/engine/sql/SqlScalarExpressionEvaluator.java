@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.LocalTemporal;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlScalarExpression;
 
@@ -11,6 +12,7 @@ final class SqlScalarExpressionEvaluator {
   private final int[] descriptors = new int[SqlScalarExpression.MAXIMUM_NODES];
   private final ExactDecimal.LongValue numeric = new ExactDecimal.LongValue();
   private final ExactDecimal.WideScratch wide = new ExactDecimal.WideScratch();
+  private final LocalTemporal.Value temporal = new LocalTemporal.Value();
   private int size;
 
   StatusCode evaluate(SqlScalarExpression expression, SqlExecutionResult result) {
@@ -30,6 +32,7 @@ final class SqlScalarExpressionEvaluator {
               || operator == SqlScalarExpression.ROUND
               || operator == SqlScalarExpression.TRUNCATE
               || operator == SqlScalarExpression.CAST
+              || operator == SqlScalarExpression.EXTRACT
                   ? unary(expression, index) : binary(expression, index);
     }
     if (!status.isOk() || size != 1) {
@@ -69,6 +72,7 @@ final class SqlScalarExpressionEvaluator {
       case SqlScalarExpression.TRUNCATE -> ExactDecimal.quantize(
           value, source, target, false, false, numeric, wide);
       case SqlScalarExpression.CAST -> cast(value, source, target);
+      case SqlScalarExpression.EXTRACT -> extract(value, source, expression.operand(node));
       default -> StatusCode.INVALID_EXTERNAL_INPUT;
     };
     if (status.isOk()) {
@@ -94,6 +98,16 @@ final class SqlScalarExpressionEvaluator {
         value, source, target, true, exact, numeric, wide);
   }
 
+  private StatusCode extract(long value, int source, long field) {
+    StatusCode status = field < Integer.MIN_VALUE || field > Integer.MAX_VALUE
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : LocalTemporal.extract(value, source, (int) field, temporal);
+    if (status.isOk()) {
+      numeric.value = temporal.value;
+    }
+    return status;
+  }
+
   private StatusCode binary(SqlScalarExpression expression, int node) {
     if (size < 2) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -105,7 +119,11 @@ final class SqlScalarExpressionEvaluator {
     int leftDescriptor = descriptors[leftSlot];
     int rightDescriptor = descriptors[rightSlot];
     int target = expression.typeDescriptor(node);
-    StatusCode status = switch (expression.operator(node)) {
+    int operator = expression.operator(node);
+    StatusCode status = SqlTypeDescriptor.typeId(leftDescriptor)
+            == SqlTypeDescriptor.TYPE_ID_DATE
+        ? dateArithmetic(operator, left, right, rightDescriptor)
+        : switch (operator) {
       case SqlScalarExpression.ADD -> ExactDecimal.add(
           left, leftDescriptor, right, rightDescriptor, false, target, numeric, wide);
       case SqlScalarExpression.SUBTRACT -> ExactDecimal.add(
@@ -121,6 +139,31 @@ final class SqlScalarExpressionEvaluator {
     if (status.isOk()) {
       values[leftSlot] = numeric.value;
       descriptors[leftSlot] = target;
+    }
+    return status;
+  }
+
+  private StatusCode dateArithmetic(
+      int operator, long left, long right, int rightDescriptor) {
+    if (operator == SqlScalarExpression.ADD
+        && SqlTypeDescriptor.typeId(rightDescriptor) == SqlTypeDescriptor.TYPE_ID_BIGINT) {
+      return copyTemporal(LocalTemporal.addDateDays(left, right, temporal));
+    }
+    if (operator != SqlScalarExpression.SUBTRACT) {
+      return StatusCode.DATATYPE_MISMATCH;
+    }
+    StatusCode status = SqlTypeDescriptor.typeId(rightDescriptor)
+            == SqlTypeDescriptor.TYPE_ID_DATE
+        ? LocalTemporal.subtractDates(left, right, temporal)
+        : SqlTypeDescriptor.typeId(rightDescriptor) == SqlTypeDescriptor.TYPE_ID_BIGINT
+            ? LocalTemporal.subtractDateDays(left, right, temporal)
+            : StatusCode.DATATYPE_MISMATCH;
+    return copyTemporal(status);
+  }
+
+  private StatusCode copyTemporal(StatusCode status) {
+    if (status.isOk()) {
+      numeric.value = temporal.value;
     }
     return status;
   }

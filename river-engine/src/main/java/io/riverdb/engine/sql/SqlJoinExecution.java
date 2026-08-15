@@ -49,17 +49,12 @@ final class SqlJoinExecution {
     boolean primaryRange = predicate && bound.predicateColumn == 0;
     plan.setAccessColumn(
         indexedOuter ? bound.predicateColumn : primaryRange ? 0 : -1);
-    if (predicate && equality && (indexedOuter || primaryRange)
-        && bound.accessValue == Long.MAX_VALUE) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     long lower = !predicate ? 0
         : equality ? bound.accessValue
             : bound.accessLowerInclusive;
-    long upper = !predicate ? 0
-        : equality ? lower + 1
-            : bound.accessUpperExclusive;
-    StatusCode status = openOuter(indexedOuter, primaryRange, lower, upper);
+    long upper = !predicate || equality ? 0 : bound.accessUpperExclusive;
+    StatusCode status = openOuter(
+        indexedOuter, primaryRange, equality, lower, upper);
     if (status.isOk()) {
       configureResult(command);
     }
@@ -77,17 +72,26 @@ final class SqlJoinExecution {
   }
 
   private StatusCode openOuter(
-      boolean indexedOuter, boolean primaryRange, long lower, long upper) {
+      boolean indexedOuter,
+      boolean primaryRange,
+      boolean equality,
+      long lower,
+      long upper) {
     if (indexedOuter) {
-      return session.beginValueScan(
-          bound.table,
-          bound.predicateColumn,
-          lower,
-          upper,
-          scan.relational());
+      return equality
+          ? session.beginExactValueScan(
+              bound.table, bound.predicateColumn, lower, scan.relational())
+          : session.beginValueScan(
+              bound.table,
+              bound.predicateColumn,
+              lower,
+              upper,
+              scan.relational());
     }
     return primaryRange
-        ? session.beginScan(bound.table, lower, upper, scan.relational())
+        ? equality
+            ? session.beginExactScan(bound.table, lower, scan.relational())
+            : session.beginScan(bound.table, lower, upper, scan.relational())
         : session.beginScan(bound.table, scan.relational());
   }
 
@@ -115,6 +119,12 @@ final class SqlJoinExecution {
               ? bound.table.typeDescriptor(projection)
               : bound.joinTable.typeDescriptor(-projection - 1),
           command.columnOutputName(index));
+      plan.setResultNullable(
+          index,
+          projection >= 0
+              ? bound.table.isNullable(projection)
+              : command.isLeftJoin()
+                  || bound.joinTable.isNullable(-projection - 1));
     }
   }
 
@@ -294,9 +304,7 @@ final class SqlJoinExecution {
 
   private StatusCode beginInner(long outerKey, long joinValue) {
     StatusCode status = plan.joinInnerIndexed()
-        ? joinValue == Long.MAX_VALUE
-            ? StatusCode.INVALID_EXTERNAL_INPUT
-            : session.beginNonUniqueValueLookup(
+        ? session.beginNonUniqueValueLookup(
                 bound.joinTable,
                 plan.joinInnerColumn(),
                 joinValue,

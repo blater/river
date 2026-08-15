@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
@@ -11,7 +12,6 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Materializes and advances the bounded sort operator for one SQL session. */
 final class SqlSortExecution {
   private static final int NULL_PROJECTION = BoundSqlStatement.NULL_PROJECTION;
-
   private final RelationalSession session;
   private final BoundSqlStatement bound;
   private final SqlPhysicalPlan plan;
@@ -19,11 +19,14 @@ final class SqlSortExecution {
   private final SqlExpressionEvaluator expressions;
   private final SqlNestedQueryExecution nested;
   private final SqlBoundPredicateEvaluator predicates;
+  private final SqlRowProjectionEvaluator projections;
+  private final SqlProjectedRow projected = new SqlProjectedRow();
   private final SqlSortWorkspace workspace = new SqlSortWorkspace();
   private final RelationalScanResult row = new RelationalScanResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final long[] values = new long[TableSchema.MAXIMUM_COLUMNS];
   private long outputNullMask;
+  private HeapRowResult groupSource;
 
   SqlSortExecution(
       RelationalSession relationalSession,
@@ -32,7 +35,8 @@ final class SqlSortExecution {
       SqlActiveScanState activeScan,
       SqlExpressionEvaluator evaluator,
       SqlNestedQueryExecution nestedExecution,
-      SqlBoundPredicateEvaluator predicateEvaluator) {
+      SqlBoundPredicateEvaluator predicateEvaluator,
+      SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = statement;
     plan = physicalPlan;
@@ -40,16 +44,22 @@ final class SqlSortExecution {
     expressions = evaluator;
     nested = nestedExecution;
     predicates = predicateEvaluator;
+    projections = projectionEvaluator;
   }
 
   StatusCode materialize(boolean valueIndex, int orderColumn) {
     BoundSqlQuery.Block command = bound.executableQuery.root();
+    boolean textKey = bound.sortKeyProjection < 0
+        && bound.table.isVarchar(orderColumn);
+    int storedProjections = SqlBinder.isGroupAggregate(command.type())
+        ? bound.projectionPrograms.count() : bound.projectedColumnCount;
     StatusCode status = workspace.begin(
         bound.table,
         command.isDescendingOrder(),
-        orderColumn,
-        bound.projectedColumnCount,
-        containsText(orderColumn));
+        storedProjections,
+        containsText(textKey),
+        hasGeneratedText(),
+        textKey);
     while (status.isOk()) {
       status = nextInput(valueIndex);
       if (status == StatusCode.CONFLICT) {
@@ -98,6 +108,7 @@ final class SqlSortExecution {
           cursor,
           outputNullMask);
     }
+    if (status.isOk()) status = workspace.setGeneratedText(result, sortedRow);
     if (status.isOk()) {
       scan.advanceSortedRow();
       cursor.rowReturned();
@@ -105,25 +116,31 @@ final class SqlSortExecution {
     return status;
   }
 
-  StatusCode nextGroupValue(long[] destination) {
+  StatusCode nextGroupValue(long[] destination, SqlProjectedRow projected) {
     int sortedRow = scan.currentSortedRow();
     if (sortedRow < 0) {
       return StatusCode.CONFLICT;
     }
     StatusCode status;
+    int count = bound.projectionPrograms.count();
     if (workspace.isSpilled()) {
-      status = workspace.nextSpilled(2, destination);
+      status = workspace.nextSpilled(count, destination);
       outputNullMask = workspace.outputNullMask();
+      groupSource = workspace.spilledRow();
     } else {
-      workspace.copyValuesAt(sortedRow, 2, destination);
+      workspace.copyValuesAt(sortedRow, count, destination);
       outputNullMask = workspace.nullMaskAt(sortedRow);
+      groupSource = workspace.rowAt(sortedRow);
       status = StatusCode.OK;
     }
     if (status.isOk()) {
+      workspace.copyGeneratedText(projected, sortedRow);
       scan.advanceSortedRow();
     }
     return status;
   }
+
+  HeapRowResult groupSource() { return groupSource; }
 
   long outputNullMask() {
     return outputNullMask;
@@ -141,13 +158,23 @@ final class SqlSortExecution {
     return workspace.close();
   }
 
-  private boolean containsText(int orderColumn) {
-    if (bound.table.isVarchar(orderColumn)) {
-      return true;
-    }
-    for (int index = 0; index < bound.projectedColumnCount; index++) {
-      int projection = bound.projectedColumns[index];
+  private boolean containsText(boolean textKey) {
+    if (textKey) return true;
+    for (int index = 0; index < bound.projectionPrograms.count(); index++) {
+      int projection = bound.projectionPrograms.rawColumn(index);
       if (projection > 0 && bound.table.isVarchar(projection)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean hasGeneratedText() {
+    for (int index = 0; index < bound.projectionPrograms.count(); index++) {
+      if (bound.projectionPrograms.rawColumn(index) < 0
+          && SqlTypeDescriptor.typeId(
+              bound.projectionPrograms.resultDescriptor(index))
+              == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         return true;
       }
     }
@@ -170,7 +197,9 @@ final class SqlSortExecution {
     if (!status.isOk() || nested.rejectsOuterRow()) {
       return status;
     }
-    if (!predicates.matches(primaryKey, source)) {
+    status = predicates.evaluate(primaryKey, source);
+    if (!status.isOk()) return status;
+    if (!predicates.matched()) {
       return StatusCode.OK;
     }
     status = nested.evaluateAfterPredicates(primaryKey, source);
@@ -178,23 +207,47 @@ final class SqlSortExecution {
     if (!status.isOk() || nested.rejectsOuterRow()) {
       return status;
     }
-    long nullMask = 0;
+    if (bound.projectionPrograms.count() > 0) {
+      status = projections.project(primaryKey, source, projected);
+      if (!status.isOk()) return status;
+    } else {
+      projectRaw(primaryKey, source);
+    }
+    return workspace.append(
+        sortKey(primaryKey, source, orderColumn),
+        sortKeyNull(source, orderColumn),
+        primaryKey,
+        bound.projectionPrograms.count() > 0 ? projected.values() : values,
+        bound.projectionPrograms.count() > 0 ? projected.nullMask() : outputNullMask,
+        source,
+        projected);
+  }
+
+  private long sortKey(
+      long primaryKey, HeapRowResult source, int orderColumn) {
+    return bound.sortKeyProjection >= 0
+        ? projected.value(bound.sortKeyProjection)
+        : expressions.readColumn(primaryKey, source, orderColumn);
+  }
+
+  private boolean sortKeyNull(HeapRowResult source, int orderColumn) {
+    return bound.sortKeyProjection >= 0
+        ? (projected.nullMask() & 1L << bound.sortKeyProjection) != 0
+        : expressions.isNull(source, bound.table, orderColumn);
+  }
+
+  private void projectRaw(long primaryKey, HeapRowResult source) {
+    outputNullMask = 0;
+    projected.reset(bound.projectedColumnCount);
     for (int index = 0; index < bound.projectedColumnCount; index++) {
       int projection = bound.projectedColumns[index];
       values[index] = projection == NULL_PROJECTION
           ? 0 : expressions.readColumn(primaryKey, source, projection);
       if (projection == NULL_PROJECTION
           || expressions.isNull(source, bound.table, projection)) {
-        nullMask |= 1L << index;
+        outputNullMask |= 1L << index;
       }
     }
-    return workspace.append(
-        expressions.readColumn(primaryKey, source, orderColumn),
-        expressions.isNull(source, bound.table, orderColumn),
-        primaryKey,
-        values,
-        nullMask,
-        source);
   }
 
   private StatusCode finish(StatusCode status) {

@@ -9,7 +9,12 @@ import io.riverdb.base.error.StatusCode;
 public interface RiverSession {
   StatusCode execute(String sql, CommandResult result);
 
+  StatusCode execute(String sql, ParameterSet parameters, CommandResult result);
+
   StatusCode beginQuery(String sql, QueryOpenResult result);
+
+  StatusCode beginQuery(
+      String sql, ParameterSet parameters, QueryOpenResult result);
 
   StatusCode close();
 }

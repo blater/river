@@ -3,6 +3,7 @@ package io.riverdb.protocol;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlValueDomain;
 import io.riverdb.engine.api.CommandResult;
 import java.nio.ByteBuffer;
 
@@ -92,7 +93,7 @@ final class ProtocolResponseDecoder {
       return frame.type() == ProtocolMessageType.BEGIN_QUERY && status.isOk()
           && flags == (ProtocolFrameCodec.FLAG_QUERY_ACTIVE
               | ProtocolFrameCodec.FLAG_COLUMN_METADATA)
-          && columns > 0 && nullMask == 0;
+          && columns > 0;
     }
     boolean rowAvailable =
         (flags & ProtocolFrameCodec.FLAG_ROW_AVAILABLE) != 0;
@@ -149,7 +150,7 @@ final class ProtocolResponseDecoder {
     for (int index = 0; index < columns; index++) {
       int next = result.isVarchar(index)
           ? decodeText(bytes, offset, end, index, nullMask, result)
-          : decodeLong(bytes, offset, end, index, result);
+          : decodeLong(bytes, offset, end, index, nullMask, result);
       if (next < 0) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -187,11 +188,17 @@ final class ProtocolResponseDecoder {
       int offset,
       int end,
       int index,
+      long nullMask,
       ProtocolResponse result) {
     if (offset > end - Long.BYTES) {
       return -1;
     }
-    result.valueAt(index, bytes.getLong(offset));
+    long value = bytes.getLong(offset);
+    if ((nullMask & 1L << index) == 0
+        && !SqlValueDomain.validFixed(result.typeDescriptorAt(index), value)) {
+      return -1;
+    }
+    result.valueAt(index, value);
     return offset + Long.BYTES;
   }
 
@@ -234,6 +241,12 @@ final class ProtocolResponseDecoder {
       case 3006 -> StatusCode.DATATYPE_MISMATCH;
       case 3007 -> StatusCode.ACCESS_DENIED;
       case 3008 -> StatusCode.DIVISION_BY_ZERO;
+      case 3009 -> StatusCode.INVALID_DATETIME_FORMAT;
+      case 3010 -> StatusCode.DATETIME_FIELD_OVERFLOW;
+      case 3011 -> StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
+      case 3012 -> StatusCode.STRING_DATA_RIGHT_TRUNCATION;
+      case 3013 -> StatusCode.FEATURE_NOT_SUPPORTED;
+      case 3014 -> StatusCode.PARAMETER_COUNT_MISMATCH;
       case 4000 -> StatusCode.CONFLICT;
       case 4001 -> StatusCode.NOT_OWNER;
       case 5000 -> StatusCode.RESOURCE_EXHAUSTED;

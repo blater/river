@@ -2,10 +2,13 @@ package io.riverdb.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.LocalTemporal;
+import io.riverdb.base.type.SqlDefaultKind;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -15,6 +18,130 @@ import org.junit.jupiter.api.Test;
 
 final class SqlParserTest {
   private static volatile long allocationGuard;
+
+  @Test
+  void copiesTypedParametersAndPreservesNullSemantics() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    TestParameters parameters = new TestParameters(
+        new int[] {
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.varchar(8),
+            SqlTypeDescriptor.DATE
+        },
+        new long[] {7, 0, 0},
+        new boolean[] {false, false, true},
+        new String[] {null, "Aé😀", null});
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "INSERT INTO moments(id,note,day) VALUES(?,?,?)",
+            parameters,
+            command));
+    parameters.texts[1] = "changed";
+    assertEquals(7, command.insertValue(0, 0));
+    assertEquals(SqlTypeDescriptor.BIGINT, command.insertTypeDescriptor(0, 0));
+    assertText("Aé😀", command, command.insertValue(0, 1));
+    assertTrue(command.insertIsNull(0, 2));
+    assertEquals(SqlTypeDescriptor.DATE, command.insertTypeDescriptor(0, 2));
+
+    parameters = new TestParameters(
+        new int[] {SqlTypeDescriptor.DATE},
+        new long[] {0},
+        new boolean[] {true},
+        new String[] {null});
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM moments WHERE day IN (?)", parameters, command));
+    assertEquals(0, command.literalMembershipCount(0));
+    assertTrue(command.literalMembershipHasNull(0));
+    assertEquals(SqlTypeDescriptor.DATE, command.predicateTypeDescriptor(0));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "SELECT id FROM moments WHERE day=?", parameters, command));
+
+    parameters = new TestParameters(
+        new int[] {SqlTypeDescriptor.BIGINT},
+        new long[] {0},
+        new boolean[] {true},
+        new String[] {null});
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE moments SET amount=? WHERE id=1", parameters, command));
+    assertTrue(command.updateIsNull(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE moments SET amount=ABS(amount) WHERE id=1", command));
+    assertFalse(command.updateIsNull(0));
+    parameters = TestParameters.fixed(SqlTypeDescriptor.BIGINT, 9);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE moments SET amount=?+1 WHERE id=1", parameters, command));
+    assertMutationPostfix(
+        command,
+        command.updateExpression(0),
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
+    assertEquals(9, command.mutationExpressionOperand(command.updateExpression(0), 0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "INSERT INTO moments VALUES(?+1,2)", parameters, command));
+    assertTrue(command.insertHasExpression(0, 0));
+    parameters = new TestParameters(
+        new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT},
+        new long[] {9, 10},
+        new boolean[] {false, false},
+        new String[] {null, null});
+    assertEquals(
+        StatusCode.PARAMETER_COUNT_MISMATCH,
+        parser.parse(
+            "INSERT INTO moments VALUES(?+1,2)", parameters, command));
+  }
+
+  @Test
+  void rejectsParameterCountAndUnsupportedTopologyWithoutConsumingTextMarkers() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    SqlQuery query = new SqlQuery();
+    TestParameters none = TestParameters.empty();
+    TestParameters one = TestParameters.fixed(SqlTypeDescriptor.BIGINT, 1);
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("INSERT INTO notes(id,text) VALUES(1,'?')", none, command));
+    assertEquals(
+        StatusCode.PARAMETER_COUNT_MISMATCH,
+        parser.parse("INSERT INTO notes(id) VALUES(?)", none, command));
+    assertEquals(
+        StatusCode.PARAMETER_COUNT_MISMATCH,
+        parser.parse("INSERT INTO notes(id) VALUES(1)", one, command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "CREATE TABLE blocked(id BIGINT DEFAULT ?)", one, command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT d.id FROM (SELECT id FROM notes WHERE id=?) d",
+            one,
+            query,
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM notes WHERE id IN (SELECT id FROM notes WHERE id=?)",
+            one,
+            query,
+            command));
+  }
 
   @Test
   void parsesBoundedExactScalarExpressions() {
@@ -45,6 +172,900 @@ final class SqlParserTest {
         StatusCode.DATATYPE_MISMATCH,
         parser.parse("SELECT TRUE+1", command));
     assertFalse(command.isAvailable());
+  }
+
+  @Test
+  void parsesScalarTemporalExtractAndDateArithmetic() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT EXTRACT(YEAR FROM DATE '2024-02-29')", command));
+    SqlScalarExpression expression = command.scalarExpression();
+    assertEquals(2, expression.nodeCount());
+    assertEquals(SqlScalarExpression.EXTRACT, expression.operator(1));
+    assertEquals(LocalTemporal.EXTRACT_YEAR, expression.operand(1));
+    assertEquals(SqlTypeDescriptor.BIGINT, expression.resultTypeDescriptor());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT EXTRACT(SECOND FROM TIME '12:34:56.123')", command));
+    assertEquals(
+        SqlTypeDescriptor.decimal(5, 3),
+        command.scalarExpression().resultTypeDescriptor());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT EXTRACT(SECOND FROM CURRENT_TIMESTAMP)", command));
+    assertEquals(SqlScalarExpression.CURRENT_TIMESTAMP, expression.operator(0));
+    assertEquals(SqlTypeDescriptor.decimal(8, 6), expression.resultTypeDescriptor());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT EXTRACT(TIMEZONE_MINUTE FROM TIMESTAMP WITH TIME ZONE "
+                + "'2024-01-01 00:00:00+01:00')",
+            command));
+    assertEquals(SqlTypeDescriptor.BIGINT, expression.resultTypeDescriptor());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT EXTRACT(DAY FROM DATE '2024-02-28'+1)", command));
+    assertEquals(SqlScalarExpression.ADD, expression.operator(2));
+    assertEquals(SqlScalarExpression.EXTRACT, expression.operator(3));
+    assertEquals(SqlTypeDescriptor.BIGINT, expression.resultTypeDescriptor());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT DATE '2024-02-29'+1", command));
+    assertEquals(SqlScalarExpression.ADD, expression.operator(2));
+    assertEquals(SqlTypeDescriptor.DATE, expression.resultTypeDescriptor());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT DATE '2024-03-01'-1", command));
+    assertEquals(SqlTypeDescriptor.DATE, expression.resultTypeDescriptor());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT DATE '2024-03-01'-DATE '2024-02-29'", command));
+    assertEquals(SqlTypeDescriptor.BIGINT, expression.resultTypeDescriptor());
+
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse("SELECT EXTRACT(YEAR FROM TIME '12:34:56')", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT EXTRACT(WEEK FROM DATE '2024-02-29')", command));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse(
+            "SELECT EXTRACT(HOUR FROM TIMESTAMP '2024-01-01 00:00:00' "
+                + "AT TIME ZONE 'UTC')",
+            command));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse(
+            "SELECT CAST(TIMESTAMP '2024-01-01 00:00:00' "
+                + "AT TIME ZONE 'UTC' AS TIMESTAMP)",
+            command));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse("SELECT DATE '2024-02-29'+1.0", command));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse("SELECT 1+DATE '2024-02-29'", command));
+  }
+
+  @Test
+  void carriesMultipleUnboundRowProjectionProgramsAndAliases() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT m.id AS event_id, EXTRACT(YEAR FROM m.observed) AS seen_year, "
+                + "m.day+1 tomorrow, m.day-m.day AS age, "
+                + "CAST(m.observed AS VARCHAR(26)) AS rendered, NULL AS absent "
+                + "FROM moments m ORDER BY tomorrow",
+            command));
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertEquals(6, command.columnCount());
+    assertName("event_id", command.columnAlias(0));
+    assertName("seen_year", command.columnAlias(1));
+    assertName("tomorrow", command.columnAlias(2));
+    assertName("rendered", command.columnAlias(4));
+    assertName("tomorrow", command.orderColumnName());
+
+    SqlScalarExpression direct = command.projectionExpression(0);
+    assertTrue(direct.isDirectColumnReference());
+    assertEquals(SqlScalarExpression.COLUMN, direct.operator(0));
+    int id = command.directProjectionSymbol(0);
+    assertName("id", command.projectionSymbolName(id));
+    assertName("m", command.projectionSymbolTable(id));
+    assertName("id", command.columnName(0));
+
+    SqlScalarExpression extract = command.projectionExpression(1);
+    assertEquals(2, extract.nodeCount());
+    assertEquals(SqlScalarExpression.COLUMN, extract.operator(0));
+    assertEquals(SqlScalarExpression.EXTRACT, extract.operator(1));
+    assertEquals(LocalTemporal.EXTRACT_YEAR, extract.operand(1));
+    assertEquals(0, extract.resultTypeDescriptor());
+
+    SqlScalarExpression addition = command.projectionExpression(2);
+    assertEquals(3, addition.nodeCount());
+    assertEquals(SqlScalarExpression.COLUMN, addition.operator(0));
+    assertEquals(SqlScalarExpression.LITERAL, addition.operator(1));
+    assertEquals(SqlScalarExpression.ADD, addition.operator(2));
+    assertEquals(0, addition.resultTypeDescriptor());
+
+    SqlScalarExpression difference = command.projectionExpression(3);
+    assertEquals(difference.operand(0), difference.operand(1));
+    assertEquals(SqlScalarExpression.SUBTRACT, difference.operator(2));
+
+    SqlScalarExpression cast = command.projectionExpression(4);
+    assertEquals(SqlScalarExpression.CAST, cast.operator(1));
+    assertEquals(SqlTypeDescriptor.varchar(26), cast.typeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.varchar(26), cast.resultTypeDescriptor());
+    assertTrue(command.projectionExpression(5).isNullLiteral());
+    assertTrue(command.isNullProjection(5));
+  }
+
+  @Test
+  void carriesComposableRowAtTimeZonePostfixPrograms() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT observed AT TIME ZONE 'UTC' AS direct_zone, "
+                + "CURRENT_TIMESTAMP AT TIME ZONE 'UTC' AS current_zone, "
+                + "CAST(observed AS TIMESTAMP(3)) AT TIME ZONE 'UTC' AS cast_zone, "
+                + "(observed) AT TIME ZONE 'UTC' AS parenthesized_zone, "
+                + "EXTRACT(HOUR FROM observed AT TIME ZONE 'UTC') AS wall_hour "
+                + "FROM moments",
+            command));
+    assertEquals(5, command.columnCount());
+    assertPostfix(command.projectionExpression(0),
+        SqlScalarExpression.COLUMN, SqlScalarExpression.AT_TIME_ZONE);
+    assertPostfix(command.projectionExpression(1),
+        SqlScalarExpression.CURRENT_TIMESTAMP, SqlScalarExpression.AT_TIME_ZONE);
+    assertPostfix(command.projectionExpression(2),
+        SqlScalarExpression.COLUMN, SqlScalarExpression.CAST,
+        SqlScalarExpression.AT_TIME_ZONE);
+    assertPostfix(command.projectionExpression(3),
+        SqlScalarExpression.COLUMN, SqlScalarExpression.AT_TIME_ZONE);
+    assertPostfix(command.projectionExpression(4),
+        SqlScalarExpression.COLUMN, SqlScalarExpression.AT_TIME_ZONE,
+        SqlScalarExpression.EXTRACT);
+    assertEquals(0, command.projectionExpression(0).resultTypeDescriptor());
+    assertEquals(SqlTypeDescriptor.timestamp(6),
+        command.projectionExpression(1).resultTypeDescriptor());
+    assertEquals(SqlTypeDescriptor.timestampWithTimeZone(3),
+        command.projectionExpression(2).resultTypeDescriptor());
+    assertEquals(0, command.projectionExpression(4).resultTypeDescriptor());
+
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse("SELECT 1 AT TIME ZONE 'UTC' FROM moments", command));
+    assertFalse(command.isAvailable());
+  }
+
+  @Test
+  void carriesSelectedComputedSortDistinctAndExactGroupKeys() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id, day+1 AS tomorrow FROM moments ORDER BY tomorrow DESC",
+            command));
+    assertTrue(command.isDescendingOrder());
+    assertName("tomorrow", command.orderColumnName());
+    assertPostfix(
+        command.projectionExpression(1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT DISTINCT EXTRACT(DAY FROM observed) AS seen_day FROM moments "
+                + "ORDER BY seen_day",
+            command));
+    assertEquals(SqlCommandType.DISTINCT_SCAN, command.type());
+    assertName("seen_day", command.columnAlias(0));
+    assertPostfix(
+        command.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT DISTINCT EXTRACT(DAY FROM observed) FROM moments",
+            command));
+
+    String grouped = "SELECT observed AT TIME ZONE 'UTC' AS instant, "
+        + "MAX(CAST(day AS TIMESTAMP(3))) FROM moments GROUP BY "
+        + "observed AT TIME ZONE 'UTC' HAVING "
+        + "MAX(CAST(day AS TIMESTAMP(3)))>TIMESTAMP '2024-01-01 00:00:00' "
+        + "ORDER BY instant";
+    assertEquals(StatusCode.OK, parser.parse(grouped, command));
+    assertEquals(SqlCommandType.GROUP_MAX, command.type());
+    assertPostfix(
+        command.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.AT_TIME_ZONE);
+    assertPostfix(
+        command.projectionExpression(1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.CAST);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            grouped.replace(
+                "GROUP BY observed AT TIME ZONE 'UTC'", "GROUP BY instant"),
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            grouped.replace("GROUP BY observed AT TIME ZONE 'UTC'",
+                "GROUP BY observed AT TIME ZONE '+01:00'"),
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            grouped.replace("GROUP BY observed AT TIME ZONE 'UTC'",
+                "GROUP BY CAST(observed AS TIMESTAMP(6))"),
+            command));
+  }
+
+  @Test
+  void carriesBoundedAggregateSetAndGeneralHavingPredicates() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(observed) FROM moments GROUP BY category "
+                + "HAVING EXTRACT(YEAR FROM MAX(observed) AT TIME ZONE 'UTC')=2024",
+            command));
+    assertHavingPostfix(
+        command,
+        0,
+        SqlScalarExpression.AGGREGATE_VALUE,
+        SqlScalarExpression.AT_TIME_ZONE,
+        SqlScalarExpression.EXTRACT);
+    assertText(
+        "UTC", command, command.havingOperand(0, 1));
+    SqlCommand copied = new SqlCommand();
+    copied.copyQueryFrom(command);
+    assertHavingPostfix(
+        copied,
+        0,
+        SqlScalarExpression.AGGREGATE_VALUE,
+        SqlScalarExpression.AT_TIME_ZONE,
+        SqlScalarExpression.EXTRACT);
+    assertText(
+        "UTC", copied, copied.havingOperand(0, 1));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, SUM(balance) FROM accounts GROUP BY category "
+                + "HAVING ROUND(ABS(SUM(balance))*2/3,0)%5=0",
+            command));
+    assertHavingPostfix(
+        command,
+        0,
+        SqlScalarExpression.AGGREGATE_VALUE,
+        SqlScalarExpression.ABSOLUTE,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.MULTIPLY,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.DIVIDE,
+        SqlScalarExpression.ROUND,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.REMAINDER);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(day) FROM moments GROUP BY category "
+                + "HAVING MAX(day)+1>=DATE '2024-03-01'",
+            command));
+    assertHavingPostfix(
+        command,
+        0,
+        SqlScalarExpression.AGGREGATE_VALUE,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, COUNT(*) FROM moments GROUP BY category "
+                + "HAVING COUNT(*)+1>2",
+            command));
+    assertEquals(1, command.havingPredicateCount());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(day) FROM moments GROUP BY category "
+                + "HAVING MAX(day)>=DATE '2024-03-01'",
+            command));
+    assertEquals(1, command.havingPredicateCount());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(day) AS latest FROM moments GROUP BY category "
+                + "HAVING latest>=DATE '2024-03-01'",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, COUNT(*) FROM moments GROUP BY category "
+                + "HAVING category BETWEEN 1 AND 2",
+            command));
+    StatusCode groupAliasStatus = parser.parse(
+        "SELECT category AS c, COUNT(*) AS n FROM moments GROUP BY category "
+            + "HAVING c BETWEEN 1 AND 2",
+        command);
+    assertName("c", command.columnAlias(0));
+    assertEquals(1, command.havingPredicateCount());
+    assertEquals(StatusCode.OK, groupAliasStatus);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category AS c, COUNT(*) AS n FROM moments GROUP BY category "
+                + "HAVING n>=2",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category AS c, COUNT(*) AS n FROM moments GROUP BY category "
+                + "HAVING c BETWEEN 1 AND 2 AND n>=2",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(day) FROM moments GROUP BY category "
+                + "HAVING category>1",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(day) FROM moments GROUP BY category "
+                + "HAVING MAX(day)-MAX(day)>0",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(observed) FROM moments GROUP BY category "
+                + "HAVING EXTRACT(YEAR FROM MIN(observed))=2024",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT category, MAX(day) FROM moments GROUP BY category "
+                + "HAVING CAST(MAX(day) AS VARCHAR(10))='2024-03-01'",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT MAX(day) FROM moments HAVING MAX(day)>DATE '2024-01-01'",
+            command));
+    assertEquals(1, command.aggregateInvocationCount());
+    assertEquals(1, command.aggregateOutputCount());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT COUNT(*) FROM moments HAVING COUNT(*)=0 OR "
+                + "MIN(day) BETWEEN DATE '2024-01-01' AND NULL AND "
+                + "MAX(day) NOT IN (DATE '2023-01-01',NULL)",
+            command));
+    assertEquals(3, command.havingPredicateCount());
+    assertTrue(command.havingDisjunction(0));
+    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.havingComparison(1));
+    assertTrue(command.havingUpperNull(1));
+    assertEquals(SqlComparison.NOT_IN, command.havingComparison(2));
+    assertTrue(command.havingMembershipHasNull(2));
+  }
+
+  @Test
+  void boundsGeneralHavingAggregatePredicatesProgramsAndMembership() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    String eightInvocations =
+        "SELECT COUNT(*) FROM moments HAVING COUNT(*)=0 AND COUNT(day)=0 AND "
+            + "SUM(day)=0 AND AVG(day)=0 AND MIN(day)=0 AND MAX(day)=0 AND "
+            + "MIN(observed)=0 AND MAX(observed)=0";
+    assertEquals(StatusCode.OK, parser.parse(eightInvocations, command));
+    assertEquals(SqlAggregateSet.MAXIMUM_INVOCATIONS, command.aggregateInvocationCount());
+    assertEquals(SqlHavingPredicates.MAXIMUM_PREDICATES, command.havingPredicateCount());
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(eightInvocations + " AND SUM(observed)=0", command));
+
+    StringBuilder ninthPredicate = new StringBuilder(
+        "SELECT COUNT(*) FROM moments HAVING COUNT(*)=0");
+    for (int predicate = 1;
+        predicate < SqlHavingPredicates.MAXIMUM_PREDICATES;
+        predicate++) {
+      ninthPredicate.append(" AND COUNT(*)=").append(predicate);
+    }
+    assertEquals(StatusCode.OK, parser.parse(ninthPredicate, command));
+    assertEquals(SqlHavingPredicates.MAXIMUM_PREDICATES, command.havingPredicateCount());
+    ninthPredicate.append(" AND COUNT(*)=9");
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(ninthPredicate, command));
+
+    StringBuilder maximumNodes = new StringBuilder("SELECT COUNT(*) FROM moments HAVING ");
+    for (int node = 1; node < SqlHavingPredicates.MAXIMUM_NODES; node++) {
+      maximumNodes.append("ABS(");
+    }
+    maximumNodes.append("COUNT(*)");
+    for (int node = 1; node < SqlHavingPredicates.MAXIMUM_NODES; node++) {
+      maximumNodes.append(')');
+    }
+    maximumNodes.append(">=0");
+    assertEquals(StatusCode.OK, parser.parse(maximumNodes, command));
+    assertEquals(SqlHavingPredicates.MAXIMUM_NODES, command.havingNodeCount(0));
+    maximumNodes.insert(
+        "SELECT COUNT(*) FROM moments HAVING ".length(), "ABS(");
+    maximumNodes.insert(maximumNodes.length() - 3, ')');
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(maximumNodes, command));
+
+    StringBuilder maximumMembers = new StringBuilder(
+        "SELECT COUNT(*) FROM moments HAVING COUNT(*) IN (");
+    for (int member = 0; member < SqlHavingPredicates.MAXIMUM_MEMBERS; member++) {
+      if (member > 0) maximumMembers.append(',');
+      maximumMembers.append(member);
+    }
+    maximumMembers.append(')');
+    assertEquals(StatusCode.OK, parser.parse(maximumMembers, command));
+    assertEquals(
+        SqlHavingPredicates.MAXIMUM_MEMBERS,
+        command.havingMemberCount(0));
+    maximumMembers.insert(maximumMembers.length() - 1, ",256");
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(maximumMembers, command));
+  }
+
+  @Test
+  void carriesOneComputedPredicateAndRejectsBroaderBooleanShapes() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM moments WHERE id=7 AND "
+                + "EXTRACT(DAY FROM observed AT TIME ZONE 'UTC')>=29",
+            command));
+    assertEquals(SqlCommandType.SELECT, command.type());
+    assertEquals(2, command.predicateCount());
+    assertNull(command.predicateExpression(0));
+    SqlScalarExpression expression = command.predicateExpression(1);
+    assertPostfix(
+        expression,
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.AT_TIME_ZONE,
+        SqlScalarExpression.EXTRACT);
+    assertTrue(expression.hasColumnReference());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(1));
+    assertEquals(SqlTypeDescriptor.BIGINT, command.predicateTypeDescriptor(1));
+
+    SqlCommand copied = new SqlCommand();
+    copied.copyQueryFrom(command);
+    assertPostfix(
+        copied.predicateExpression(1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.AT_TIME_ZONE,
+        SqlScalarExpression.EXTRACT);
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT observed, COUNT(*) FROM moments "
+                + "WHERE EXTRACT(DAY FROM observed)>=29 GROUP BY observed",
+            command));
+    assertEquals(SqlCommandType.GROUP_COUNT, command.type());
+    assertPostfix(
+        command.predicateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT DISTINCT observed FROM moments "
+                + "WHERE EXTRACT(DAY FROM observed)>=29",
+            command));
+    assertEquals(SqlCommandType.DISTINCT_SCAN, command.type());
+    assertPostfix(
+        command.predicateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT id FROM moments WHERE (id)=7", command));
+    assertNull(command.predicateExpression(0));
+    assertName("id", command.predicateColumnName(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM moments WHERE CAST(clock AS TIME(6)) BETWEEN "
+                + "TIME '01:02:03' AND TIME '01:02:03.123456'",
+            command));
+    assertPostfix(
+        command.predicateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.CAST);
+    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
+    assertEquals(SqlTypeDescriptor.time(6), command.predicateTypeDescriptor(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM moments WHERE CAST(observed AS TIMESTAMP(6)) IN ("
+                + "TIMESTAMP '2024-01-01 00:00:00',"
+                + "TIMESTAMP '2024-01-01 00:00:00.123456')",
+            command));
+    assertEquals(SqlComparison.IN, command.comparison(0));
+    assertEquals(SqlTypeDescriptor.timestamp(6), command.predicateTypeDescriptor(0));
+    assertEquals(2, command.literalMembershipCount(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM moments WHERE "
+                + "CAST(captured AS TIMESTAMP(6) WITH TIME ZONE) NOT IN ("
+                + "TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00+00:00',NULL,"
+                + "TIMESTAMP WITH TIME ZONE "
+                + "'2024-01-01 00:00:00.123456+00:00')",
+            command));
+    assertEquals(SqlComparison.NOT_IN, command.comparison(0));
+    assertTrue(command.literalMembershipHasNull(0));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6),
+        command.predicateTypeDescriptor(0));
+    copied.copyQueryFrom(command);
+    assertPostfix(
+        copied.predicateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.CAST);
+    assertEquals(SqlComparison.NOT_IN, copied.comparison(0));
+    assertEquals(2, copied.literalMembershipCount(0));
+    assertTrue(copied.literalMembershipHasNull(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT COUNT(*) FROM moments WHERE day+0 BETWEEN "
+                + "DATE '2024-01-01' AND DATE '2024-01-31'",
+            command));
+    assertEquals(SqlCommandType.COUNT, command.type());
+    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
+    assertPostfix(
+        command.predicateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IS UNKNOWN",
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed)=id",
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IN (day)",
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IN "
+                + "(SELECT day FROM other_moments)",
+            new SqlQuery(),
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed)=29 OR id=1",
+            command));
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(
+            "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed)=29 "
+                + "AND EXTRACT(YEAR FROM observed)=2024",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE moments SET id=2 WHERE EXTRACT(DAY FROM observed)=29",
+            command));
+    assertTrue(command.hasComputedPredicate());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE checked_day (id BIGINT PRIMARY KEY, day DATE "
+                + "CHECK (EXTRACT(DAY FROM day)>1))",
+            command));
+    assertPostfix(
+        command.projectionExpression(1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    assertEquals(SqlTypeDescriptor.BIGINT, command.columnCheckTypeDescriptor(1));
+    assertEquals(1, command.columnCheckValue(1));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "CREATE TABLE rejected_current (id BIGINT PRIMARY KEY, day DATE "
+                + "CHECK (EXTRACT(DAY FROM CURRENT_DATE)"
+                + "+EXTRACT(DAY FROM day)>1))",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "CREATE TABLE rejected_owner (id BIGINT PRIMARY KEY, day DATE "
+                + "CHECK (id>1))",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE deferred_numeric_check (id BIGINT "
+                + "CHECK (CAST(id AS BIGINT)>0) PRIMARY KEY, value BIGINT)",
+            command));
+    assertPostfix(
+        command.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.CAST);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT observed, COUNT(*) FROM moments GROUP BY observed "
+                + "HAVING EXTRACT(DAY FROM observed)>1",
+            command));
+    assertEquals(1, command.havingPredicateCount());
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM (SELECT id FROM moments "
+                + "WHERE EXTRACT(DAY FROM observed)=29) m",
+            new SqlQuery(),
+            command));
+  }
+
+  @Test
+  void composesComputedProjectionProgramsAcrossViewAndDerivedEdges() {
+    SqlParser parser = new SqlParser();
+    SqlCommand source = new SqlCommand();
+    SqlCommand copied = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT EXTRACT(DAY FROM happened) AS happened_day, id "
+                + "FROM events",
+            source));
+    copied.copyQueryFrom(source);
+    assertEquals(2, copied.projectionExpression(0).nodeCount());
+    assertEquals(
+        SqlScalarExpression.EXTRACT,
+        copied.projectionExpression(0).operator(1));
+    int copiedId = copied.directProjectionSymbol(1);
+    assertName("id", copied.projectionSymbolName(copiedId));
+
+    SqlCommand outer = new SqlCommand();
+    SqlCommand view = new SqlCommand();
+    SqlCommand compiled = new SqlCommand();
+    SqlQuery query = new SqlQuery();
+    assertEquals(StatusCode.OK, parser.parse("SELECT d FROM day_view", outer));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT day AS d FROM moments", view));
+    assertEquals(StatusCode.OK, query.compileView(outer, view, compiled));
+    int day = compiled.directProjectionSymbol(0);
+    assertTrue(compiled.projectionExpression(0).isDirectColumnReference());
+    assertName("day", compiled.projectionSymbolName(day));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT EXTRACT(DAY FROM observed) AS d FROM moments", view));
+    assertEquals(StatusCode.OK, query.compileView(outer, view, compiled));
+    assertPostfix(
+        compiled.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    int observed = (int) compiled.projectionExpression(0).operand(0);
+    assertName("observed", compiled.projectionSymbolName(observed));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT EXTRACT(DAY FROM shifted) AS result FROM "
+                + "(SELECT day+1 AS shifted FROM moments) q",
+            query,
+            compiled));
+    assertPostfix(
+        compiled.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD,
+        SqlScalarExpression.EXTRACT);
+    assertName("result", compiled.columnOutputName(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT CAST(captured AS VARCHAR(32)) AS rendered FROM "
+                + "(SELECT observed AT TIME ZONE 'Europe/London' AS captured "
+                + "FROM moments) q",
+            query,
+            compiled));
+    assertPostfix(
+        compiled.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.AT_TIME_ZONE,
+        SqlScalarExpression.CAST);
+    assertText("Europe/London", compiled,
+        compiled.projectionExpression(0).operand(1));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT EXTRACT(DAY FROM final_day) AS answer FROM "
+                + "(SELECT shifted+1 AS final_day FROM "
+                + "(SELECT day+1 AS shifted FROM moments) first) second",
+            query,
+            compiled));
+    assertPostfix(
+        compiled.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD,
+        SqlScalarExpression.EXTRACT);
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d FROM (SELECT EXTRACT(DAY FROM day) AS d FROM moments) q "
+                + "WHERE d=29",
+            query,
+            compiled));
+    assertPostfix(
+        compiled.predicateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    assertEquals(29, compiled.predicateValue(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d FROM "
+                + "(SELECT EXTRACT(YEAR FROM observed) AS d,id FROM moments) q "
+                + "WHERE d=2024 AND id=1",
+            query,
+            compiled));
+    assertEquals(2, compiled.predicateCount());
+    assertPostfix(
+        compiled.predicateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    assertNull(compiled.predicateExpression(1));
+    assertName("id", compiled.predicateColumnName(1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d FROM (SELECT day+1 AS d,id FROM moments "
+                + "WHERE id=1) q WHERE EXTRACT(DAY FROM d)=29",
+            query,
+            compiled));
+    assertEquals(2, compiled.predicateCount());
+    assertNull(compiled.predicateExpression(0));
+    assertPostfix(
+        compiled.predicateExpression(1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD,
+        SqlScalarExpression.EXTRACT);
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parseQuery(
+            "SELECT d FROM (SELECT day+1 AS d FROM moments) q "
+                + "WHERE EXTRACT(DAY FROM d)=1 AND d=DATE '2024-03-01'",
+            query,
+            compiled));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT d,id FROM (SELECT day+1 AS d,id FROM moments) q "
+                + "WHERE d=DATE '2024-03-01' OR id=1",
+            query,
+            compiled));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT d,other FROM (SELECT day+1 AS d,day AS other FROM moments) q "
+                + "WHERE d=other",
+            query,
+            compiled));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT DISTINCT d FROM (SELECT day+1 AS d FROM moments) q",
+            query,
+            compiled));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT d,COUNT(*) FROM (SELECT day+1 AS d FROM moments) q GROUP BY d",
+            query,
+            compiled));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d FROM (SELECT EXTRACT(DAY FROM day) AS d FROM moments) q "
+                + "ORDER BY d",
+            query,
+            compiled));
+    assertName("d", compiled.orderColumnName());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM (SELECT id,label FROM labels "
+                + "WHERE label BETWEEN 'a' AND 'z' "
+                + "AND label IN ('a','z',NULL)) q WHERE label='a'",
+            query,
+            compiled));
+    assertEquals(3, compiled.predicateCount());
+    assertText("a", compiled, compiled.predicateLowerInclusive(0));
+    assertText("z\0", compiled, compiled.predicateUpperExclusive(0));
+    assertText("a", compiled, compiled.literalMembershipValue(1, 0));
+    assertText("z", compiled, compiled.literalMembershipValue(1, 1));
+    assertEquals(true, compiled.literalMembershipHasNull(1));
+    assertText("a", compiled, compiled.predicateValue(2));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM (SELECT id FROM moments "
+                + "WHERE id=-9223372036854775808 "
+                + "AND id IN (-9223372036854775808,0)) q",
+            query,
+            compiled));
+    assertEquals(Long.MIN_VALUE, compiled.predicateValue(0));
+    assertEquals(Long.MIN_VALUE, compiled.literalMembershipValue(1, 0));
+
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM (SELECT id,EXTRACT(DAY FROM id) AS bad "
+                + "FROM moments) q",
+            query,
+            compiled));
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parseQuery(
+            "SELECT e+e AS f FROM (SELECT d+d AS e FROM "
+                + "(SELECT c+c AS d FROM (SELECT b+b AS c FROM "
+                + "(SELECT day+1 AS b FROM moments) one) two) three) four",
+            query,
+            compiled));
+
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM moments WHERE id=(SELECT EXTRACT(DAY FROM day) "
+                + "FROM moments WHERE id=1)",
+            query,
+            compiled));
   }
 
   @Test
@@ -85,6 +1106,205 @@ final class SqlParserTest {
         parser.parse(
             "CREATE TABLE invalid (id BIGINT PRIMARY KEY, amount DECIMAL(19,2))",
             command));
+  }
+
+  @Test
+  void parsesStrictLocalTemporalDescriptorsAndLiterals() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE moments (id BIGINT PRIMARY KEY, day DATE, "
+                + "clock TIME(3), observed TIMESTAMP)",
+            command));
+    assertEquals(SqlTypeDescriptor.DATE, command.columnTypeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.time(3), command.columnTypeDescriptor(2));
+    assertEquals(SqlTypeDescriptor.timestamp(6), command.columnTypeDescriptor(3));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "INSERT INTO moments VALUES (1, DATE '1970-01-01', "
+                + "TIME '12:34:56.123', "
+                + "TIMESTAMP '1969-12-31 23:59:59.999999')",
+            command));
+    assertEquals(SqlTypeDescriptor.DATE, command.insertTypeDescriptor(0, 1));
+    assertEquals(0, command.insertValue(0, 1));
+    assertEquals(SqlTypeDescriptor.time(3), command.insertTypeDescriptor(0, 2));
+    assertEquals(45_296_123_000L, command.insertValue(0, 2));
+    assertEquals(SqlTypeDescriptor.timestamp(6), command.insertTypeDescriptor(0, 3));
+    assertEquals(-1, command.insertValue(0, 3));
+
+    assertEquals(StatusCode.OK, parser.parse("SELECT DATE '0001-01-01'", command));
+    assertEquals(SqlCommandType.SCALAR_EXPRESSION, command.type());
+    assertEquals(
+        SqlTypeDescriptor.DATE,
+        command.scalarExpression().resultTypeDescriptor());
+    assertEquals(-719_162, command.scalarExpression().operand(0));
+
+    assertTemporalInputRejected(
+        parser, command, "DATE '0000-01-01'", StatusCode.DATETIME_FIELD_OVERFLOW);
+    assertTemporalInputRejected(
+        parser, command, "DATE '2023-02-29'", StatusCode.DATETIME_FIELD_OVERFLOW);
+    assertTemporalInputRejected(
+        parser, command, "TIME '24:00:00'", StatusCode.DATETIME_FIELD_OVERFLOW);
+    assertTemporalInputRejected(
+        parser, command, "TIME '23:59:60'", StatusCode.DATETIME_FIELD_OVERFLOW);
+    assertTemporalInputRejected(
+        parser, command, "TIME '12:00:00.1234567'", StatusCode.INVALID_DATETIME_FORMAT);
+    assertTemporalInputRejected(
+        parser, command, "TIMESTAMP '1970-01-01T00:00:00'",
+        StatusCode.INVALID_DATETIME_FORMAT);
+    assertTemporalInputRejected(
+        parser, command, "TIMESTAMP '1970-01-01 00:00:00 trailing'",
+        StatusCode.INVALID_DATETIME_FORMAT);
+  }
+
+  @Test
+  void normalizesMixedPrecisionTemporalPredicateLiterals() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM samples WHERE clock BETWEEN "
+                + "TIME '01:02:03' AND TIME '01:02:03.123456'",
+            command));
+    assertEquals(SqlTypeDescriptor.time(6), command.predicateTypeDescriptor(0));
+    assertEquals(3_723_000_000L, command.predicateLowerInclusive(0));
+    assertEquals(3_723_123_457L, command.predicateUpperExclusive(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM samples WHERE local_seen IN ("
+                + "TIMESTAMP '1970-01-01 00:00:00',"
+                + "TIMESTAMP '1970-01-01 00:00:00.123',"
+                + "TIMESTAMP '1970-01-01 00:00:00.123456')",
+            command));
+    assertEquals(SqlTypeDescriptor.timestamp(6), command.predicateTypeDescriptor(0));
+    assertEquals(3, command.literalMembershipCount(0));
+    assertEquals(0, command.literalMembershipValue(0, 0));
+    assertEquals(123_000, command.literalMembershipValue(0, 1));
+    assertEquals(123_456, command.literalMembershipValue(0, 2));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM samples WHERE captured NOT IN ("
+                + "TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00+00:00',"
+                + "NULL,TIMESTAMP WITH TIME ZONE "
+                + "'1970-01-01 00:00:00.123456+00:00')",
+            command));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6),
+        command.predicateTypeDescriptor(0));
+    assertEquals(2, command.literalMembershipCount(0));
+    assertTrue(command.literalMembershipHasNull(0));
+    assertEquals(0, command.literalMembershipValue(0, 0));
+    assertEquals(123_456, command.literalMembershipValue(0, 1));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT id FROM samples WHERE day BETWEEN "
+                + "DATE '2024-01-01' AND DATE '2024-01-02'",
+            command));
+    assertEquals(SqlTypeDescriptor.DATE, command.predicateTypeDescriptor(0));
+
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse(
+            "SELECT id FROM samples WHERE clock BETWEEN "
+                + "TIME '01:02:03' AND TIMESTAMP '1970-01-01 01:02:03'",
+            command));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse(
+            "SELECT id FROM samples WHERE day IN ("
+                + "DATE '1970-01-01',TIME '00:00:00')",
+            command));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        parser.parse(
+            "SELECT id FROM samples WHERE captured IN ("
+                + "TIMESTAMP '1970-01-01 00:00:00',"
+                + "TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00+00:00')",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse(
+            "SELECT id FROM samples WHERE clock IN (TIME '01:02:03',1)",
+            command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM samples WHERE amount BETWEEN 1 AND 2.0", command));
+  }
+
+  @Test
+  void parsesZonedTemporalSessionAndCurrentForms() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "CREATE TABLE events (id BIGINT PRIMARY KEY, "
+                + "recorded TIMESTAMP(3) WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, "
+                + "local_seen TIMESTAMP DEFAULT LOCALTIMESTAMP)",
+            command));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(3), command.columnTypeDescriptor(1));
+    assertEquals(SqlDefaultKind.CURRENT_TIMESTAMP, command.columnDefaultKind(1));
+    assertEquals(SqlDefaultKind.LOCALTIMESTAMP, command.columnDefaultKind(2));
+
+    assertEquals(StatusCode.OK, parser.parse("SET TIME ZONE 'Europe/London'", command));
+    assertEquals(SqlCommandType.SET_TIME_ZONE, command.type());
+    ByteBuffer zone = ByteBuffer.allocate(32);
+    assertEquals(13, command.copyText(command.value(), zone));
+    zone.flip();
+    assertEquals("Europe/London", StandardCharsets.US_ASCII.decode(zone).toString());
+
+    assertEquals(StatusCode.OK, parser.parse("SELECT CURRENT_TIMESTAMP", command));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6),
+        command.scalarExpression().resultTypeDescriptor());
+    assertEquals(StatusCode.OK, parser.parse("SELECT LOCALTIME", command));
+    assertEquals(SqlTypeDescriptor.time(6), command.scalarExpression().resultTypeDescriptor());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT TIMESTAMP '2024-01-01 00:00:00' AT TIME ZONE '+01:00'",
+            command));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(0),
+        command.scalarExpression().resultTypeDescriptor());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT CURRENT_TIMESTAMP AT TIME ZONE 'UTC'", command));
+    assertEquals(
+        SqlTypeDescriptor.timestamp(6),
+        command.scalarExpression().resultTypeDescriptor());
+
+    assertTemporalInputRejected(
+        parser,
+        command,
+        "TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00+14:01'",
+        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT);
+    assertTemporalInputRejected(
+        parser,
+        command,
+        "TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00Z'",
+        StatusCode.INVALID_DATETIME_FORMAT);
+  }
+
+  private static void assertTemporalInputRejected(
+      SqlParser parser, SqlCommand command, String literal, StatusCode expected) {
+    assertEquals(
+        expected,
+        parser.parse("SELECT " + literal, command));
+    assertFalse(command.isAvailable());
   }
 
   @Test
@@ -467,6 +1687,60 @@ final class SqlParserTest {
     assertName("balance", command.columnName(0));
     assertName("highest", command.columnAlias(0));
     assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT COUNT(EXTRACT(DAY FROM observed)) AS days FROM accounts",
+            command));
+    assertEquals(SqlCommandType.COUNT_VALUE, command.type());
+    assertPostfix(
+        command.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    assertTrue(command.projectionExpression(0).hasColumnReference());
+    assertName("days", command.columnAlias(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT MIN(CAST(observed AS TIMESTAMP(3))) FROM accounts",
+            command));
+    assertPostfix(
+        command.projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.CAST);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, MIN(EXTRACT(DAY FROM observed)) FROM accounts "
+                + "GROUP BY region",
+            command));
+    assertPostfix(
+        command.projectionExpression(1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, MAX(observed AT TIME ZONE 'UTC') FROM accounts "
+                + "GROUP BY region HAVING MAX(observed AT TIME ZONE 'UTC')>="
+                + "TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00+00:00'",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, MAX(day+(CAST('2024-01-01' AS DATE)-day)) FROM accounts "
+                + "GROUP BY region HAVING "
+                + "MAX(day+(CAST('2024-01-01' AS DATE)-day))>=DATE '2024-01-01'",
+            command));
+    assertEquals(1, command.havingPredicateCount());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT region, MAX(observed AT TIME ZONE 'UTC') FROM accounts "
+                + "GROUP BY region HAVING MAX(observed AT TIME ZONE '+01:00')>="
+                + "TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00+00:00'",
+            command));
+    assertEquals(2, command.aggregateInvocationCount());
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT SUM(*) FROM accounts", command));
     assertEquals(
@@ -482,8 +1756,9 @@ final class SqlParserTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT MAX(balance, region) FROM accounts", command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("SELECT COUNT(*) AS total FROM accounts", command));
+    assertName("total", command.columnAlias(0));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT COUNT(balance AS total) FROM accounts", command));
@@ -552,19 +1827,19 @@ final class SqlParserTest {
                 + "GROUP BY region HAVING SUM(balance) >= 100 "
                 + "ORDER BY region LIMIT 5",
             command));
-    assertEquals(true, command.hasGroupHaving());
-    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.groupHavingComparison());
-    assertEquals(100, command.groupHavingValue());
+    assertEquals(1, command.havingPredicateCount());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.havingComparison(0));
+    assertEquals(100, command.havingValue(0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT region, COUNT(*) FROM accounts "
                 + "GROUP BY region HAVING COUNT(*) <> 1",
             command));
-    assertEquals(SqlComparison.NOT_EQUAL, command.groupHavingComparison());
-    assertEquals(1, command.groupHavingValue());
+    assertEquals(SqlComparison.NOT_EQUAL, command.havingComparison(0));
+    assertEquals(1, command.havingValue(0));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "SELECT region, SUM(balance) FROM accounts "
                 + "GROUP BY region HAVING COUNT(*) > 1",
@@ -763,22 +2038,29 @@ final class SqlParserTest {
     assertName("region", command.columnName(1));
     assertEquals(12, command.updateValue(0));
     assertEquals(-3, command.updateValue(1));
-    assertEquals(false, command.isRelativeUpdate(0));
-    assertEquals(false, command.isRelativeUpdate(1));
+    assertFalse(command.updateHasExpression(0));
+    assertFalse(command.updateHasExpression(1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "UPDATE accounts SET balance=balance+25, region=id-2 WHERE key=7",
             command));
     assertEquals(2, command.updateColumnCount());
-    assertName("balance", command.updateSourceColumnName(0));
-    assertName("id", command.updateSourceColumnName(1));
-    assertEquals(25, command.updateValue(0));
-    assertEquals(2, command.updateValue(1));
-    assertEquals(true, command.isRelativeUpdate(0));
-    assertEquals(false, command.isSubtractUpdate(0));
-    assertEquals(true, command.isRelativeUpdate(1));
-    assertEquals(true, command.isSubtractUpdate(1));
+    assertTrue(command.updateHasExpression(0));
+    assertTrue(command.updateHasExpression(1));
+    assertEquals(2, command.mutationExpressionCount());
+    assertMutationPostfix(
+        command,
+        command.updateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
+    assertMutationPostfix(
+        command,
+        command.updateExpression(1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.SUBTRACT);
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -809,13 +2091,53 @@ final class SqlParserTest {
     assertEquals(100, command.scanLowerInclusive());
     assertEquals(500, command.scanUpperExclusive());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("UPDATE accounts SET balance=balance WHERE key=7", command));
+    assertTrue(command.updateHasExpression(0));
     assertEquals(
         StatusCode.OK,
         parser.parse("UPDATE accounts SET balance=balance*2 WHERE key=7", command));
-    assertEquals(SqlCommand.UPDATE_MULTIPLY, command.updateOperator(0));
-    assertEquals(SqlTypeDescriptor.BIGINT, command.updateTypeDescriptor(0));
+    assertMutationPostfix(
+        command,
+        command.updateExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.MULTIPLY);
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "INSERT INTO accounts VALUES (1+2,-9223372036854775808),"
+                + "(4,5)",
+            command));
+    assertTrue(command.insertHasExpression(0, 0));
+    assertMutationPostfix(
+        command,
+        command.insertExpression(0, 0),
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
+    assertEquals(Long.MIN_VALUE, command.insertValue(0, 1));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "UPDATE accounts SET balance=-9223372036854775808+1 WHERE key=7",
+            command));
+    assertMutationPostfix(
+        command,
+        command.updateExpression(0),
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
+    assertEquals(
+        Long.MIN_VALUE,
+        command.mutationExpressionOperand(command.updateExpression(0), 0));
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(
+            "INSERT INTO accounts VALUES"
+                + "(1+1,2+2,3+3,4+4,5+5,6+6,7+7,8+8),"
+                + "(9+9,10+10,11+11,12+12,13+13,14+14,15+15,16+16)",
+            command));
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
     assertEquals(true, command.isEqualityPredicate());
@@ -868,7 +2190,7 @@ final class SqlParserTest {
   }
 
   @Test
-  void parsesShowTablesAsAStreamingCatalogQuery() {
+  void parsesStreamingCatalogQueries() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
     SqlQuery query = new SqlQuery();
@@ -887,8 +2209,19 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.SHOW_INDEXES, command.type());
     assertName("accounts", command.tableName());
     assertEquals(
+        StatusCode.OK,
+        parser.parseQuery("SHOW COLUMNS FROM accounts", query, command));
+    assertEquals(SqlCommandType.SHOW_COLUMNS, command.type());
+    assertName("accounts", command.tableName());
+    assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parseQuery("SHOW INDEXES accounts", query, command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery("SHOW COLUMNS accounts", query, command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery("SHOW COLUMNS FROM accounts EXTRA", query, command));
   }
 
   @Test
@@ -1030,7 +2363,7 @@ final class SqlParserTest {
         parser.parse("SELECT id FROM metrics WHERE region=7 OR", command));
     SqlQuery query = new SqlQuery();
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.FEATURE_NOT_SUPPORTED,
         parser.parseQuery(
             "SELECT d.id FROM "
                 + "(SELECT id FROM metrics WHERE region=7 OR region=8) d",
@@ -1073,6 +2406,34 @@ final class SqlParserTest {
     assertName("kind", compiled.columnOutputName(1));
     assertName("amount", compiled.columnName(2));
     assertEquals(1, compiled.rowLimit());
+  }
+
+  @Test
+  void preservesTemporalPredicateDescriptorsWhenCompilingViews() {
+    SqlParser parser = new SqlParser();
+    SqlCommand outer = new SqlCommand();
+    SqlCommand view = new SqlCommand();
+    SqlCommand compiled = new SqlCommand();
+    SqlQuery query = new SqlQuery();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT captured FROM current_temporal WHERE day=DATE '2024-02-29'",
+            outer));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT day, captured FROM temporal_left "
+                + "WHERE captured>=TIMESTAMP WITH TIME ZONE "
+                + "'2024-01-01 00:00:00.123+00:00'",
+            view));
+    assertEquals(StatusCode.OK, query.compileView(outer, view, compiled));
+    assertEquals(2, compiled.predicateCount());
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(3),
+        compiled.predicateTypeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.DATE, compiled.predicateTypeDescriptor(1));
   }
 
   @Test
@@ -1712,6 +3073,32 @@ final class SqlParserTest {
     assertText(expected, actual);
   }
 
+  private static void assertPostfix(
+      SqlScalarExpression expression, int... operators) {
+    assertEquals(operators.length, expression.nodeCount());
+    for (int index = 0; index < operators.length; index++) {
+      assertEquals(operators[index], expression.operator(index));
+    }
+  }
+
+  private static void assertHavingPostfix(
+      SqlCommand command, int predicate, int... expected) {
+    assertEquals(expected.length, command.havingNodeCount(predicate));
+    for (int node = 0; node < expected.length; node++) {
+      assertEquals(expected[node], command.havingOperator(predicate, node));
+    }
+  }
+
+  private static void assertMutationPostfix(
+      SqlCommand command, int expression, int... operators) {
+    assertEquals(operators.length, command.mutationExpressionNodeCount(expression));
+    for (int index = 0; index < operators.length; index++) {
+      assertEquals(
+          operators[index],
+          command.mutationExpressionOperator(expression, index));
+    }
+  }
+
   private static void assertText(
       String expected, SqlCommand command, long handle) {
     ByteBuffer bytes = ByteBuffer.allocate(64);
@@ -1727,6 +3114,66 @@ final class SqlParserTest {
     assertEquals(expected.length(), actual.length());
     for (int index = 0; index < expected.length(); index++) {
       assertEquals(expected.charAt(index), actual.charAt(index));
+    }
+  }
+
+  private static final class TestParameters implements SqlParameterSource {
+    private final int[] descriptors;
+    private final long[] values;
+    private final boolean[] nulls;
+    private final String[] texts;
+
+    private TestParameters(
+        int[] valueDescriptors,
+        long[] fixedValues,
+        boolean[] nullValues,
+        String[] textValues) {
+      descriptors = valueDescriptors;
+      values = fixedValues;
+      nulls = nullValues;
+      texts = textValues;
+    }
+
+    private static TestParameters empty() {
+      return new TestParameters(new int[0], new long[0], new boolean[0], new String[0]);
+    }
+
+    private static TestParameters fixed(int descriptor, long value) {
+      return new TestParameters(
+          new int[] {descriptor},
+          new long[] {value},
+          new boolean[] {false},
+          new String[] {null});
+    }
+
+    @Override
+    public int count() {
+      return descriptors.length;
+    }
+
+    @Override
+    public boolean isNull(int index) {
+      return nulls[index];
+    }
+
+    @Override
+    public int typeDescriptorAt(int index) {
+      return descriptors[index];
+    }
+
+    @Override
+    public long valueAt(int index) {
+      return values[index];
+    }
+
+    @Override
+    public int copyTextAt(int index, char[] target, int offset) {
+      String value = texts[index];
+      if (value == null) {
+        return -1;
+      }
+      value.getChars(0, value.length(), target, offset);
+      return value.length();
     }
   }
 }

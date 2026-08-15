@@ -12,8 +12,7 @@ final class RelationalIndexBuilder {
       ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final ByteBuffer catalogOutput =
       ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
-  private final RelationalKey.LongKeyResult catalogKey =
-      new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
   private final CatalogSequenceCodec.IntResult nextTableId =
       new CatalogSequenceCodec.IntResult();
   private final TableDefinition sourceTable = new TableDefinition();
@@ -79,6 +78,9 @@ final class RelationalIndexBuilder {
     if (indexColumn <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (!sourceTable.supportsSecondaryIndex(indexColumn)) {
+      return StatusCode.DATATYPE_MISMATCH;
+    }
     if (sourceTable.hasIndexOn(indexColumn)) {
       return StatusCode.CONFLICT;
     }
@@ -95,7 +97,8 @@ final class RelationalIndexBuilder {
     if (!status.isOk()) {
       return status;
     }
-    status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    status = session.indexedSession().fetchByKey(
+        catalogKey.space(), catalogKey.key(), catalogRow);
     if (status.isOk()) {
       return StatusCode.CONFLICT;
     }
@@ -103,7 +106,7 @@ final class RelationalIndexBuilder {
       return status;
     }
     status = session.indexedSession().fetchByKey(
-        RelationalKey.CATALOG_SEQUENCE_KEY, catalogRow);
+        RelationalKey.CATALOG_SEQUENCE_SPACE, 0, catalogRow);
     return status.isOk()
         ? CatalogSequenceCodec.decodeAllocation(catalogRow, catalogScratch, nextTableId)
         : status;
@@ -203,7 +206,7 @@ final class RelationalIndexBuilder {
       boolean constraint) {
     CatalogSequenceCodec.encodeAllocation(catalogOutput, indexTableId + 1);
     StatusCode status = session.indexedSession().update(
-        RelationalKey.CATALOG_SEQUENCE_KEY, catalogOutput);
+        RelationalKey.CATALOG_SEQUENCE_SPACE, 0, catalogOutput);
     if (!status.isOk()) {
       return status;
     }
@@ -221,7 +224,8 @@ final class RelationalIndexBuilder {
         sourceTable,
         unique,
         constraint);
-    status = session.indexedSession().update(catalogKey.key(), catalogOutput);
+    status = session.indexedSession().update(
+        catalogKey.space(), catalogKey.key(), catalogOutput);
     if (!status.isOk()) {
       return status;
     }
@@ -237,7 +241,8 @@ final class RelationalIndexBuilder {
         indexName,
         unique,
         constraint);
-    return session.indexedSession().insert(catalogKey.key(), catalogOutput);
+    return session.indexedSession().insert(
+        catalogKey.space(), catalogKey.key(), catalogOutput);
   }
 
   private static StatusCode constraintStatus(

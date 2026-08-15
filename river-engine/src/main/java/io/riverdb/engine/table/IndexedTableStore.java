@@ -89,22 +89,25 @@ public final class IndexedTableStore {
 
   StatusCode insert(
       long transactionId,
+      int space,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
-    return commits.insert(transactionId, key, row, result);
+    return commits.insert(transactionId, space, key, row, result);
   }
 
   StatusCode commitInsert(
       long transactionId,
+      int space,
       long key,
       ByteBuffer row,
       IndexedCommitResult result) {
-    return commits.commitInsert(transactionId, key, row, result);
+    return commits.commitInsert(transactionId, space, key, row, result);
   }
 
   StatusCode commitInserts(
       long transactionId,
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
@@ -112,12 +115,13 @@ public final class IndexedTableStore {
       int insertCount,
       IndexedCommitResult result) {
     return commits.commitInserts(
-        transactionId, keys, rows, rowStride, rowLengths, insertCount, result);
+        transactionId, spaces, keys, rows, rowStride, rowLengths, insertCount, result);
   }
 
   StatusCode commitMutations(
       long transactionId,
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -128,6 +132,7 @@ public final class IndexedTableStore {
     return commits.commitMutations(
         transactionId,
         operations,
+        spaces,
         keys,
         previousRowIds,
         rows,
@@ -169,27 +174,31 @@ public final class IndexedTableStore {
   StatusCode insertCommitted(
       long transactionId,
       long commitSequence,
+      int space,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
-    return commits.insertCommitted(transactionId, commitSequence, key, row, result);
+    return commits.insertCommitted(
+        transactionId, commitSequence, space, key, row, result);
   }
 
 
 
-  StatusCode fetchByKey(long key, io.riverdb.storage.heap.HeapRowResult result) {
-    return kernel.fetchByKeyAt(lastCommitSequence, key, result);
+  StatusCode fetchByKey(
+      int space, long key, io.riverdb.storage.heap.HeapRowResult result) {
+    return kernel.fetchByKeyAt(lastCommitSequence, space, key, result);
   }
 
   StatusCode fetchByKeyAt(
       long visibleCommitSequence,
+      int space,
       long key,
       io.riverdb.storage.heap.HeapRowResult result) {
-    return kernel.fetchByKeyAt(visibleCommitSequence, key, result);
+    return kernel.fetchByKeyAt(visibleCommitSequence, space, key, result);
   }
 
-  int firstLeafPageId(long lowerKey) {
-    return kernel.findLeafPageId(lowerKey);
+  int firstLeafPageId(int space, long lowerKey) {
+    return kernel.findLeafPageId(space, lowerKey);
   }
 
   StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
@@ -198,16 +207,18 @@ public final class IndexedTableStore {
 
   StatusCode prepareMutation(
       long visibleCommitSequence,
+      int space,
       long key,
       IndexedMutationTarget result) {
-    return kernel.prepareMutation(visibleCommitSequence, key, result);
+    return kernel.prepareMutation(visibleCommitSequence, space, key, result);
   }
 
   StatusCode prepareInsert(
       long visibleCommitSequence,
+      int space,
       long key,
       IndexedMutationTarget result) {
-    return kernel.prepareInsert(visibleCommitSequence, key, result);
+    return kernel.prepareInsert(visibleCommitSequence, space, key, result);
   }
 
   int rootPageId() {
@@ -310,11 +321,13 @@ public final class IndexedTableStore {
   StatusCode commitInsert(
       long transactionId,
       long commitSequence,
+      int space,
       long key,
       ByteBuffer row,
       HeapInsertResult result) {
     if (!IndexedLogicalRequestValidator.validInsert(
-        transactionId, commitSequence, lastCommitSequence, key, row, result)) {
+        transactionId, commitSequence, lastCommitSequence,
+        space, key, row, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -323,7 +336,7 @@ public final class IndexedTableStore {
       return status;
     }
     status = logicalCommitter.commitInsert(
-        transactionId, commitSequence, key, row, result);
+        transactionId, commitSequence, space, key, row, result);
     if (status.isOk()) {
       lastCommitSequence = commitSequence;
     }
@@ -357,6 +370,7 @@ public final class IndexedTableStore {
   StatusCode commitInsertBatch(
       long transactionId,
       long commitSequence,
+      int[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
@@ -367,6 +381,7 @@ public final class IndexedTableStore {
         transactionId,
         commitSequence,
         lastCommitSequence,
+        spaces,
         keys,
         rows,
         rowStride,
@@ -383,6 +398,7 @@ public final class IndexedTableStore {
     status = logicalCommitter.commitInsertBatch(
         transactionId,
         commitSequence,
+        spaces,
         keys,
         rows,
         rowStride,
@@ -455,6 +471,7 @@ public final class IndexedTableStore {
       long transactionId,
       long commitSequence,
       int[] operations,
+      int[] spaces,
       long[] keys,
       int[] expectedPreviousRowIds,
       ByteBuffer rows,
@@ -467,6 +484,7 @@ public final class IndexedTableStore {
         commitSequence,
         lastCommitSequence,
         operations,
+        spaces,
         keys,
         expectedPreviousRowIds,
         rows,
@@ -485,6 +503,7 @@ public final class IndexedTableStore {
         transactionId,
         commitSequence,
         operations,
+        spaces,
         keys,
         expectedPreviousRowIds,
         rows,

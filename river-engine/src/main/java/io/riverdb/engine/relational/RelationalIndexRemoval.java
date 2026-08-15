@@ -1,6 +1,8 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.table.IndexedScanCursor;
+import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -15,14 +17,14 @@ final class RelationalIndexRemoval {
   private final HeapRowResult catalogRow = new HeapRowResult();
   private final ByteBuffer scratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   private final ByteBuffer output = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
-  private final RelationalKey.LongKeyResult catalogKey =
-      new RelationalKey.LongKeyResult();
+  private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
   private final CatalogIndexCodec.Result indexRecord = new CatalogIndexCodec.Result();
   private final TableDefinition table = new TableDefinition();
   private final TableDefinition indexTable = new TableDefinition();
   private final TableDefinition updatedTable = new TableDefinition();
-  private final RelationalScanCursor scanCursor = new RelationalScanCursor();
-  private final RelationalScanResult scanRow = new RelationalScanResult();
+  private final IndexedScanCursor scanCursor = new IndexedScanCursor();
+  private final IndexedScanResult scanRow = new IndexedScanResult();
+  private final int[] rowSpaces = new int[BATCH_ROWS];
   private final long[] rowKeys = new long[BATCH_ROWS];
   private boolean alreadyMarked;
   private boolean batchComplete;
@@ -37,7 +39,8 @@ final class RelationalIndexRemoval {
       CharSequence renamedName) {
     StatusCode status = RelationalKey.catalogTableKey(currentName, catalogKey);
     if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+      status = session.indexedSession().fetchByKey(
+          catalogKey.space(), catalogKey.key(), catalogRow);
     }
     if (status.isOk()) {
       status = CatalogIndexCodec.decode(catalogRow, scratch, currentName, indexRecord);
@@ -63,13 +66,13 @@ final class RelationalIndexRemoval {
           renamedName,
           indexRecord.isUnique(),
           indexRecord.isConstraint());
-      status = session.indexedSession().insert(catalogKey.key(), output);
+      status = session.indexedSession().insert(catalogKey.space(), catalogKey.key(), output);
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(currentName, catalogKey);
     }
     return status.isOk()
-        ? session.indexedSession().delete(catalogKey.key()) : status;
+        ? session.indexedSession().delete(catalogKey.space(), catalogKey.key()) : status;
   }
 
   StatusCode drop(
@@ -148,7 +151,8 @@ final class RelationalIndexRemoval {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);
     }
     if (status.isOk()) {
-      status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+      status = session.indexedSession().fetchByKey(
+          catalogKey.space(), catalogKey.key(), catalogRow);
     }
     return status.isOk()
         ? CatalogIndexCodec.decode(catalogRow, scratch, indexName, indexRecord)
@@ -194,7 +198,7 @@ final class RelationalIndexRemoval {
           tableName,
           table,
           table.indexIsUnique(slot));
-      status = session.indexedSession().update(catalogKey.key(), output);
+      status = session.indexedSession().update(catalogKey.space(), catalogKey.key(), output);
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);
@@ -207,7 +211,7 @@ final class RelationalIndexRemoval {
           TableDefinition.INDEX_DROPPING,
           indexName,
           table.indexIsUnique(slot));
-      status = session.indexedSession().update(catalogKey.key(), output);
+      status = session.indexedSession().update(catalogKey.space(), catalogKey.key(), output);
     }
     return status;
   }
@@ -263,29 +267,37 @@ final class RelationalIndexRemoval {
     batchComplete = false;
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
-      status = session.beginScan(indexTable, scanCursor);
+      int dataSpace = RelationalKey.dataSpace(indexTable.tableId());
+      status = session.indexedSession().beginScan(
+          dataSpace,
+          Long.MIN_VALUE,
+          RelationalKey.auxiliarySpace(indexTable.tableId()) + 1,
+          Long.MIN_VALUE,
+          scanCursor);
     }
     int count = 0;
     while (status.isOk() && count < rowKeys.length) {
-      status = session.nextScan(scanCursor, scanRow);
+      status = session.indexedSession().nextScan(scanCursor, scanRow);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         batchComplete = true;
         break;
       }
       if (status.isOk()) {
+        rowSpaces[count] = scanRow.keySpace();
         rowKeys[count++] = scanRow.key();
       }
     }
     if (scanCursor.isActive()) {
-      StatusCode close = session.closeScan(scanCursor);
+      StatusCode close = session.indexedSession().closeScan(scanCursor);
       if (status.isOk()) {
         status = close;
       }
     }
     scanCursor.reset();
     for (int index = 0; status.isOk() && index < count; index++) {
-      status = session.delete(indexTable, rowKeys[index]);
+      status = session.indexedSession().delete(rowSpaces[index], rowKeys[index]);
+      rowSpaces[index] = 0;
       rowKeys[index] = 0;
     }
     if (status.isOk()) {
@@ -328,13 +340,13 @@ final class RelationalIndexRemoval {
           -1,
           tableName,
           updatedTable);
-      status = session.indexedSession().update(catalogKey.key(), output);
+      status = session.indexedSession().update(catalogKey.space(), catalogKey.key(), output);
     }
     if (status.isOk()) {
       status = RelationalKey.catalogTableKey(indexName, catalogKey);
     }
     return status.isOk()
-        ? session.indexedSession().delete(catalogKey.key()) : status;
+        ? session.indexedSession().delete(catalogKey.space(), catalogKey.key()) : status;
   }
 
   private StatusCode publishDropping(RelationalSession owner) {
@@ -347,7 +359,8 @@ final class RelationalIndexRemoval {
   }
 
   private StatusCode requireAbsent(RelationalSession session) {
-    StatusCode status = session.indexedSession().fetchByKey(catalogKey.key(), catalogRow);
+    StatusCode status = session.indexedSession().fetchByKey(
+        catalogKey.space(), catalogKey.key(), catalogRow);
     if (status.isOk()) {
       return StatusCode.CONFLICT;
     }

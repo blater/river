@@ -65,6 +65,7 @@ final class CatalogTableEncoder {
         false);
     offset = encodeColumn(target, offset, keyColumnName);
     offset = encodeColumn(target, offset, valueColumnName);
+    offset = encodeCheckProgram(target, offset, null, null);
     finish(target, offset);
   }
 
@@ -91,6 +92,7 @@ final class CatalogTableEncoder {
         true,
         false);
     offset = encodeColumnsAndDefaults(target, offset, schema);
+    offset = encodeCheckProgram(target, offset, schema, null);
     finish(target, offset);
   }
 
@@ -165,6 +167,7 @@ final class CatalogTableEncoder {
     for (int index = 0; index < schema.defaultTextBytes(); index++) {
       target.put(offset++, schema.defaultTextByte(index));
     }
+    offset = encodeCheckProgram(target, offset, null, schema);
     finish(target, offset);
   }
 
@@ -221,6 +224,7 @@ final class CatalogTableEncoder {
     writeTableDefaults(target, definition, existing);
     writeTableReferences(target, definition, existing);
     writeTableTypes(target, columnCount, definition, existing);
+    writeTableDefaultKinds(target, definition, existing);
     writeTableIndexes(
         target,
         indexCount,
@@ -291,6 +295,10 @@ final class CatalogTableEncoder {
     for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
       writeTableCheck(target, definition, existing, checkMask, index);
     }
+    int total = definition != null
+        ? definition.checkNodeCount()
+        : existing != null ? existing.checkNodeCount() : 0;
+    target.putInt(CatalogRecord.TABLE_CHECK_NODE_TOTAL_OFFSET, total);
   }
 
   private static void writeTableCheck(
@@ -300,18 +308,69 @@ final class CatalogTableEncoder {
       long checkMask,
       int index) {
     boolean checked = (checkMask & 1L << index) != 0;
-    int comparison = definition != null
-        ? definition.checkComparison(index)
-        : existing != null ? existing.checkComparison(index) : 0;
-    long value = definition != null
-        ? definition.checkValue(index)
-        : existing != null ? existing.checkValue(index) : 0;
+    int comparison = checkComparison(definition, existing, index);
+    long value = checkValue(definition, existing, index);
+    int descriptor = checkTypeDescriptor(definition, existing, index);
+    int nodes = checkNodeCount(definition, existing, index);
     target.putInt(
         CatalogRecord.TABLE_CHECKS_OFFSET + index * Integer.BYTES,
         checked ? comparison : 0);
     target.putLong(
         CatalogRecord.TABLE_CHECK_VALUES_OFFSET + index * Long.BYTES,
         checked ? value : 0);
+    target.putInt(
+        CatalogRecord.TABLE_CHECK_TYPE_DESCRIPTORS_OFFSET + index * Integer.BYTES,
+        checked ? descriptor : 0);
+    target.put(
+        CatalogRecord.TABLE_CHECK_NODE_COUNTS_OFFSET + index,
+        checked ? (byte) nodes : 0);
+  }
+
+  private static int checkComparison(
+      TableSchema definition, TableDefinition existing, int column) {
+    if (definition != null) return definition.checkComparison(column);
+    return existing == null ? 0 : existing.checkComparison(column);
+  }
+
+  private static long checkValue(
+      TableSchema definition, TableDefinition existing, int column) {
+    if (definition != null) return definition.checkValue(column);
+    return existing == null ? 0 : existing.checkValue(column);
+  }
+
+  private static int checkTypeDescriptor(
+      TableSchema definition, TableDefinition existing, int column) {
+    if (definition != null) return definition.checkTypeDescriptor(column);
+    return existing == null ? 0 : existing.checkTypeDescriptor(column);
+  }
+
+  private static int checkNodeCount(
+      TableSchema definition, TableDefinition existing, int column) {
+    if (definition != null) return definition.checkNodeCount(column);
+    return existing == null ? 0 : existing.checkNodeCount(column);
+  }
+
+  private static int encodeCheckProgram(
+      ByteBuffer target,
+      int offset,
+      TableSchema definition,
+      TableDefinition existing) {
+    int nodes = definition != null
+        ? definition.checkNodeCount()
+        : existing != null ? existing.checkNodeCount() : 0;
+    for (int node = 0; node < nodes; node++) {
+      int operator = definition != null
+          ? definition.checkOperator(node) : existing.checkOperatorAt(node);
+      int descriptor = definition != null
+          ? definition.checkNodeDescriptor(node) : existing.checkNodeDescriptorAt(node);
+      long operand = definition != null
+          ? definition.checkOperand(node) : existing.checkOperandAt(node);
+      target.put(offset, (byte) operator);
+      target.putInt(offset + 1, descriptor);
+      target.putLong(offset + 5, operand);
+      offset += 13;
+    }
+    return offset;
   }
 
   private static void writeTableDefaults(
@@ -361,6 +420,18 @@ final class CatalogTableEncoder {
       target.putInt(
           CatalogRecord.TABLE_TYPE_DESCRIPTORS_OFFSET + index * Integer.BYTES,
           descriptor);
+    }
+  }
+
+  private static void writeTableDefaultKinds(
+      ByteBuffer target,
+      TableSchema definition,
+      TableDefinition existing) {
+    for (int index = 0; index < TableSchema.MAXIMUM_COLUMNS; index++) {
+      int kind = definition != null
+          ? definition.defaultKind(index)
+          : existing != null ? existing.defaultKind(index) : 0;
+      target.put(CatalogRecord.TABLE_DEFAULT_KINDS_OFFSET + index, (byte) kind);
     }
   }
 

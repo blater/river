@@ -1,37 +1,15 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.PackedText;
-import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalSession;
-import io.riverdb.engine.relational.RelationalSessionOpenResult;
-import io.riverdb.engine.relational.RelationalScanCursor;
-import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.sql.SqlCommandType;
-import io.riverdb.sql.SqlComparison;
-import io.riverdb.sql.SqlIdentifier;
 import io.riverdb.storage.heap.HeapRowResult;
-import java.nio.ByteBuffer;
 
 /** Opens, advances, and closes one prepared query using reusable physical state. */
 final class SqlQueryExecution {
-  private static final long PLAN_AGGREGATE = PackedText.pack("agg");
-  private static final long PLAN_DISTINCT = PackedText.pack("dedupe");
-  private static final long PLAN_FILTER = PackedText.pack("filter");
-  private static final long PLAN_GROUP = PackedText.pack("group");
-  private static final long PLAN_INDEX = PackedText.pack("index");
-  private static final long PLAN_JOIN = PackedText.pack("join");
-  private static final long PLAN_LEFT = PackedText.pack("left");
-  private static final long PLAN_LIMIT = PackedText.pack("limit");
-  private static final long PLAN_LOOKUP = PackedText.pack("lookup");
-  private static final long PLAN_NESTED = PackedText.pack("nested");
-  private static final long PLAN_PRIMARY = PackedText.pack("primary");
-  private static final long PLAN_SORT = PackedText.pack("sort");
-  private static final long PLAN_TABLE = PackedText.pack("table");
-  private static final int NULL_PROJECTION = BoundSqlStatement.NULL_PROJECTION;
   private static final int NESTED_SCALAR = 1;
   private static final int NESTED_EXISTENCE = 2;
   private static final int NESTED_MEMBERSHIP = 3;
@@ -46,44 +24,68 @@ final class SqlQueryExecution {
   private final SqlNestedQueryExecution nestedExecution;
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlPhysicalPlan plan = new SqlPhysicalPlan();
+  private final SqlPlanDescription planDescription = new SqlPlanDescription();
   private final long[] projectedValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final SqlProjectedRow projectedRow = new SqlProjectedRow();
+  private final SqlRowProjectionEvaluator rowProjections;
+  private final SqlProjectionResultWriter projectionResults =
+      new SqlProjectionResultWriter();
   private final SqlSortExecution sorts;
   private final SqlActiveScanState activeScan = new SqlActiveScanState();
   private final SqlExpressionEvaluator expressions;
-  private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final SqlJoinExecution joins;
   private final SqlCatalogScanExecution catalogs;
   private final SqlScanPreparation scanPreparation;
-  private final RelationalScanCursor aggregateCursor = new RelationalScanCursor();
-  private final RelationalScanResult aggregateRow = new RelationalScanResult();
   private final SqlGroupedExecution groups;
   private final SqlScanRowResult explainRow = new SqlScanRowResult();
-  private final SqlPointAggregateExecution pointAggregates;
+  private final SqlPointQueryExecution pointQueries;
+  private final SqlBlockPlanBinder blockBinder;
+  private SqlBlockPipelineExecution blockPipeline;
   private boolean explainOnly;
   private long scanGeneration;
 
   SqlQueryExecution(
       RelationalSession relationalSession,
       BoundSqlStatement boundStatement,
-      SqlExpressionEvaluator evaluator) {
+      SqlExpressionEvaluator evaluator,
+      SqlTemporalContext temporal,
+      SqlRowProjectionEvaluator projectionEvaluator,
+      SqlBlockPlanBinder pipelineBinder) {
     session = relationalSession;
     bound = boundStatement;
     expressions = evaluator;
+    rowProjections = projectionEvaluator;
+    blockBinder = pipelineBinder;
     query = bound.executableQuery;
     command = query.root();
     nestedExecution = new SqlNestedQueryExecution(
         session, bound, expressions);
-    predicates = new SqlBoundPredicateEvaluator(bound, expressions, nestedExecution);
-    pointAggregates = new SqlPointAggregateExecution(
-        session, bound, expressions, predicates);
+    predicates = new SqlBoundPredicateEvaluator(
+        bound, expressions, nestedExecution, rowProjections);
+    pointQueries = new SqlPointQueryExecution(
+        session, bound, expressions, predicates, rowProjections);
     joins = new SqlJoinExecution(
         session, bound, plan, activeScan, expressions, predicates);
     sorts = new SqlSortExecution(
-        session, bound, plan, activeScan, expressions, nestedExecution, predicates);
+        session,
+        bound,
+        plan,
+        activeScan,
+        expressions,
+        nestedExecution,
+        predicates,
+        rowProjections);
     groups = new SqlGroupedExecution(
-        session, bound, plan, activeScan, sorts, expressions, predicates);
-    catalogs = new SqlCatalogScanExecution(session, plan, activeScan);
+        session,
+        bound,
+        plan,
+        activeScan,
+        sorts,
+        expressions,
+        predicates,
+        rowProjections);
+    catalogs = new SqlCatalogScanExecution(session, plan, activeScan, bound.table);
     scanPreparation = new SqlScanPreparation(
         session, bound, plan, activeScan, sorts, joins, aggregateExecution);
   }
@@ -133,6 +135,7 @@ final class SqlQueryExecution {
     }
     command = query.root();
     plan.reset();
+    explainOnly = false;
     plan.setCommand(command);
     plan.setNestedDepth(query.sourcePlanDepth());
     if (command.type() == SqlCommandType.SHOW_TABLES) {
@@ -141,7 +144,8 @@ final class SqlQueryExecution {
       }
       return StatusCode.OK;
     }
-    if (command.type() == SqlCommandType.SHOW_INDEXES) {
+    if (command.type() == SqlCommandType.SHOW_INDEXES
+        || command.type() == SqlCommandType.SHOW_COLUMNS) {
       if (query.isExplain()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -169,6 +173,38 @@ final class SqlQueryExecution {
     plan.setCommand(command);
     plan.setNestedDepth(query.sourcePlanDepth());
     plan.setOrderColumn(bound.orderColumn);
+    if (bound.blockPlans.count() > 0) {
+      plan.setBlockResult(bound.blockPlans.schema(0));
+      if (blockPipeline != null && blockPipeline.active()) {
+        plan.setActualRows(blockPipeline.rowCount());
+      }
+    }
+  }
+
+  StatusCode prepareProjectionPrograms() {
+    return rowProjections.prepare(bound);
+  }
+
+  StatusCode prepareBlockPipeline() {
+    if (blockPipeline == null) {
+      blockPipeline = new SqlBlockPipelineExecution(
+          session, bound, blockBinder, expressions, rowProjections);
+    }
+    return explainOnly ? StatusCode.OK : blockPipeline.prepare();
+  }
+
+  StatusCode executeBlockPipeline(SqlExecutionResult result) {
+    StatusCode status = prepareBlockPipeline();
+    if (status.isOk()) {
+      status = blockPipeline.next(result, session.visibleCommitSequence());
+      if (status == StatusCode.CONFLICT) status = StatusCode.OK;
+    }
+    StatusCode closed = blockPipeline == null ? StatusCode.OK : blockPipeline.close();
+    return status.isOk() ? closed : status;
+  }
+
+  SqlBoundPredicateEvaluator predicateEvaluator() {
+    return predicates;
   }
 
   StatusCode beginScan(SqlScanCursor cursor) {
@@ -181,21 +217,14 @@ final class SqlQueryExecution {
     if (command.type() == SqlCommandType.SHOW_INDEXES) {
       return claimCursor(cursor, catalogs.beginIndexes(command.tableName()));
     }
+    if (command.type() == SqlCommandType.SHOW_COLUMNS) {
+      return claimCursor(cursor, catalogs.beginColumns(command.tableName()));
+    }
     return beginParsedScan(cursor);
   }
 
   void configureScalarAggregateExplain() {
-    plan.setFilterCount(bound.predicateCount);
-    plan.setAggregate(
-        command.type() == SqlCommandType.COUNT
-            ? -1 : bound.projectedColumns[0]);
-    plan.setAccessColumn(
-        bound.accessPredicate >= 0
-            ? bound.predicateColumn == 0
-                || bound.table.hasIndexOn(bound.predicateColumn)
-                ? bound.predicateColumn : -1
-            : -1);
-    describePlan(null);
+    planDescription.configureScalarAggregate(plan, bound, command);
   }
 
   StatusCode drainAnalyze(SqlScanCursor cursor) {
@@ -212,7 +241,7 @@ final class SqlQueryExecution {
   }
 
   void describeCurrentPlan(SqlScanCursor cursor) {
-    describePlan(cursor);
+    planDescription.describe(plan);
   }
 
   StatusCode claimExplainResult(
@@ -224,7 +253,7 @@ final class SqlQueryExecution {
       status = activeScan.reset();
     }
     if (status.isOk()) {
-      configureExplainResultShape(analyzed);
+      planDescription.configureExplainResult(plan, analyzed);
       status = activeScan.claimExplain(
           completed.transactionActive(),
           completed.commitSequence());
@@ -234,65 +263,12 @@ final class SqlQueryExecution {
   }
 
   private StatusCode beginParsedScan(SqlScanCursor cursor) {
+    if (bound.blockPlans.count() > 0) {
+      int rows = blockPipeline == null ? 0 : (int) blockPipeline.rowCount();
+      return claimCursor(cursor, activeScan.claimSorted(rows));
+    }
     return claimCursor(cursor, scanPreparation.begin(explainOnly));
   }
-  private void describePlan(SqlScanCursor cursor) {
-    plan.resetSteps();
-    if (plan.rowLimit() != Long.MAX_VALUE) {
-      addPlanStep(PLAN_LIMIT, plan.rowLimit());
-    }
-    describeLogicalPlanStep();
-    describePhysicalPlanSteps();
-  }
-
-  private void describeLogicalPlanStep() {
-    if (plan.aggregate()) {
-      addPlanStep(PLAN_AGGREGATE, plan.aggregateColumn());
-    } else if (plan.groupAggregate()) {
-      addPlanStep(PLAN_GROUP, plan.groupAggregateColumn());
-    } else if (plan.distinct()) {
-      addPlanStep(PLAN_DISTINCT, plan.groupColumn());
-    } else if (plan.join()) {
-      addPlanStep(
-          plan.leftJoin() ? PLAN_LEFT : PLAN_JOIN,
-          plan.joinOuterColumn());
-    }
-  }
-
-  private void describePhysicalPlanSteps() {
-    if (plan.nestedDepth() > 1) {
-      addPlanStep(PLAN_NESTED, plan.nestedDepth());
-    }
-    if (plan.sorts()) {
-      addPlanStep(PLAN_SORT, plan.descending() ? -1 : 1);
-    }
-    if (plan.filterCount() > 0) {
-      addPlanStep(PLAN_FILTER, plan.filterCount());
-    }
-    addPlanStep(
-        plan.accessColumn() > 0
-            ? PLAN_INDEX
-            : plan.accessColumn() == 0 ? PLAN_PRIMARY : PLAN_TABLE,
-        plan.accessColumn());
-    if (plan.join()) {
-      addPlanStep(
-          plan.joinInnerIndexed() ? PLAN_LOOKUP : PLAN_TABLE,
-          plan.joinInnerColumn());
-    }
-  }
-
-  private void addPlanStep(long operator, long detail) {
-    plan.addStep(operator, detail);
-  }
-
-  private void configureExplainResultShape(boolean analyzed) {
-    plan.setExplainResult(analyzed);
-    plan.setResultColumn(
-        0, 0, SqlTypeDescriptor.varchar(64), "operator");
-    plan.setResultColumn(1, 1, SqlTypeDescriptor.BIGINT, "detail");
-    plan.setResultColumn(2, 2, SqlTypeDescriptor.BIGINT, "rows");
-  }
-
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
     if (cursor == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -301,14 +277,35 @@ final class SqlQueryExecution {
       return StatusCode.CONFLICT;
     }
     result.reset();
+    if (activeScan.terminalStatus() != null) {
+      return activeScan.terminalStatus();
+    }
+    StatusCode status = nextActiveScan(cursor, result);
+    if (!status.isOk() && status != StatusCode.CONFLICT) {
+      activeScan.fail(status);
+    }
+    return status;
+  }
+
+  private StatusCode nextActiveScan(
+      SqlScanCursor cursor, SqlScanRowResult result) {
     if (plan.catalogObjectScan()) {
       return catalogs.nextObject(cursor, result);
     }
     if (plan.catalogIndexScan()) {
       return catalogs.nextIndex(cursor, result);
     }
+    if (plan.catalogColumnScan()) {
+      return catalogs.nextColumn(cursor, result);
+    }
     if (plan.explainResult()) {
       return nextExplainStep(cursor, result);
+    }
+    if (bound.blockPlans.count() > 0
+        && blockPipeline != null && blockPipeline.active()) {
+      StatusCode status = blockPipeline.next(result);
+      if (status.isOk()) cursor.rowReturned();
+      return status;
     }
     if (!plan.aggregate() && cursor.limitReached()) {
       return StatusCode.CONFLICT;
@@ -360,6 +357,7 @@ final class SqlQueryExecution {
     if (cursor.rowsReturned() > 0) {
       return StatusCode.CONFLICT;
     }
+    if (!activeScan.aggregateAvailable()) return StatusCode.CONFLICT;
     projectedValues[0] = activeScan.aggregateValue();
     result.set(
         0,
@@ -367,6 +365,18 @@ final class SqlQueryExecution {
         activeScan.aggregateNull() ? 1 : 0,
         scanProjectionTypeDescriptors(cursor),
         1);
+    if (activeScan.aggregateTextLength() >= 0
+        && plan.resultType(0) != 0
+        && io.riverdb.base.type.SqlTypeDescriptor.typeId(plan.resultType(0))
+            == io.riverdb.base.type.SqlTypeDescriptor.TYPE_ID_VARCHAR
+        && !activeScan.aggregateNull()) {
+      StatusCode textStatus = result.setTextAt(
+          0,
+          activeScan.aggregateText(),
+          0,
+          activeScan.aggregateTextLength());
+      if (!textStatus.isOk()) return textStatus;
+    }
     cursor.rowReturned();
     return StatusCode.OK;
   }
@@ -383,10 +393,12 @@ final class SqlQueryExecution {
       HeapRowResult source = plan.valueIndex()
           ? indexed.row() : result.relational().row();
       source = nestedExecution.evaluatedRow(source);
-      if (nestedExecution.rejectsOuterRow()
-          || !predicates.matches(primaryKey, source)) {
+      if (nestedExecution.rejectsOuterRow()) {
         continue;
       }
+      status = predicates.evaluate(primaryKey, source);
+      if (!status.isOk()) return status;
+      if (!predicates.matched()) continue;
       status = evaluateAfterPredicates(primaryKey, source);
       if (!status.isOk()) {
         return status;
@@ -436,16 +448,16 @@ final class SqlQueryExecution {
       HeapRowResult source,
       SqlScanCursor cursor,
       SqlScanRowResult result) {
-    long nullMask = projectScanRow(
-        primaryKey, source, cursor, projectedValues);
-    result.set(
+    StatusCode status = rowProjections.project(primaryKey, source, projectedRow);
+    if (!status.isOk()) return status;
+    status = projectionResults.writeScan(
+        result,
         primaryKey,
-        projectedValues,
-        nullMask,
+        source,
+        bound.table,
+        cursor,
         scanProjectionTypeDescriptors(cursor),
-        cursor.projectedColumnCount());
-    StatusCode status = setProjectedText(
-        result, source, bound.table, cursor, nullMask);
+        projectedRow);
     if (status.isOk()) {
       cursor.rowReturned();
     }
@@ -466,6 +478,12 @@ final class SqlQueryExecution {
     }
     return index >= 0 && index < plan.resultColumnCount()
         ? plan.resultType(index) : 0;
+  }
+
+  public boolean scanColumnIsNullable(SqlScanCursor cursor, int index) {
+    return cursor != null
+        && cursor.isOwnedBy(this, scanGeneration)
+        && plan.resultNullable(index);
   }
   boolean syntheticScan() {
     return plan.explainResult() || plan.aggregate();
@@ -529,200 +547,26 @@ final class SqlQueryExecution {
     if (status.isOk() && sorts.hasResources()) {
       status = sorts.close();
     }
+    if (status.isOk() && blockPipeline != null && blockPipeline.active()) {
+      status = blockPipeline.close();
+    }
     if (status.isOk()) {
       status = nestedExecution.close();
     }
+    groups.resetText();
     return status;
   }
 
   StatusCode executePointQuery(SqlExecutionResult result) {
-    if (pointAggregates.accepts(command.type())) {
-      return pointAggregates.execute(result);
-    }
-    return executeUniquePointSelect(result);
-  }
-
-  private StatusCode executeUniquePointSelect(SqlExecutionResult result) {
-    if (command.type() != SqlCommandType.SELECT) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (!accessEquality()
-        || bound.predicateColumn > 0
-            && !bound.table.hasUniqueIndexOn(bound.predicateColumn)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (bound.predicateColumn > 0
-        && bound.table.isVarchar(bound.predicateColumn)) {
-      return executeTextPointSelect(result);
-    }
-    StatusCode status;
-    long primaryKey;
-    HeapRowResult source;
-    if (bound.predicateColumn == 0) {
-      primaryKey = accessValue();
-      status = session.fetch(bound.table, primaryKey, fetched);
-      source = fetched;
-    } else {
-      status = session.fetchByUniqueValue(
-          bound.table, bound.predicateColumn, accessValue(), indexed);
-      primaryKey = indexed.key();
-      source = indexed.row();
-    }
-    if (status.isOk()) {
-      status = validateRow(source);
-    }
-    if (status.isOk() && !predicates.matches(primaryKey, source)) {
-      status = StatusCode.CONFLICT;
-    }
-    if (status.isOk()) {
-      status = projectRow(
-          primaryKey,
-          source,
-          bound.projectedColumns,
-          bound.projectedColumnCount,
-          projectedValues);
-    }
-    if (status.isOk()) {
-      result.setProjection(
-          primaryKey,
-          projectedValues,
-          projectionNullMask(
-              source,
-              bound.table,
-              bound.projectedColumns,
-              bound.projectedColumnCount),
-            projectionTypeDescriptors(
-                bound.projectedColumns, bound.projectedColumnCount),
-          bound.projectedColumnCount,
-          0);
-      status = setExecutionText(
-          result,
-          source,
-          bound.table,
-          bound.projectedColumns,
-          bound.projectedColumnCount,
-          projectionNullMask(
-              source,
-              bound.table,
-              bound.projectedColumns,
-              bound.projectedColumnCount));
-    }
-    return status;
-  }
-
-
-  private StatusCode executeTextPointSelect(SqlExecutionResult result) {
-    StatusCode status = session.beginScan(bound.table, aggregateCursor);
-    boolean active = status.isOk();
-    boolean found = false;
-    while (status.isOk()) {
-      status = session.nextScan(aggregateCursor, aggregateRow);
-      if (status == StatusCode.CONFLICT) {
-        status = StatusCode.OK;
-        break;
-      }
-      HeapRowResult source = aggregateRow.row();
-      status = status.isOk() ? validateRow(source) : status;
-      if (status.isOk() && predicates.matches(aggregateRow.key(), source)) {
-        status = setTextPointResult(result, source);
-        found = status.isOk();
-        break;
-      }
-    }
-    status = closePointScan(active, status);
-    return status.isOk() && !found ? StatusCode.CONFLICT : status;
-  }
-
-  private StatusCode closePointScan(boolean active, StatusCode bodyStatus) {
-    if (!active) {
-      return bodyStatus;
-    }
-    StatusCode close = session.closeScan(aggregateCursor);
-    if (close.isOk()) {
-      aggregateCursor.reset();
-    }
-    return bodyStatus.isOk() ? close : bodyStatus;
-  }
-
-  private StatusCode setTextPointResult(
-      SqlExecutionResult result, HeapRowResult source) {
-    long primaryKey = aggregateRow.key();
-    StatusCode status = projectRow(
-        primaryKey,
-        source,
-        bound.projectedColumns,
-        bound.projectedColumnCount,
-        projectedValues);
-    long nullMask = projectionNullMask(
-        source,
-        bound.table,
-        bound.projectedColumns,
-        bound.projectedColumnCount);
-    if (!status.isOk()) {
-      return status;
-    }
-    result.setProjection(
-        primaryKey,
-        projectedValues,
-        nullMask,
-        projectionTypeDescriptors(bound.projectedColumns, bound.projectedColumnCount),
-        bound.projectedColumnCount,
-        0);
-    return setExecutionText(
-        result,
-        source,
-        bound.table,
-        bound.projectedColumns,
-        bound.projectedColumnCount,
-        nullMask);
+    return pointQueries.execute(command.type(), result);
   }
 
   boolean hasPointResources() {
-    return aggregateCursor.isActive();
+    return pointQueries.hasResources();
   }
 
   StatusCode closePointResources() {
-    if (!aggregateCursor.isActive()) {
-      return StatusCode.OK;
-    }
-    StatusCode status = session.closeScan(aggregateCursor);
-    if (status.isOk()) {
-      aggregateCursor.reset();
-    }
-    return status;
-  }
-
-  private static StatusCode setExecutionText(
-      SqlExecutionResult result,
-      HeapRowResult source,
-      TableDefinition definition,
-      int[] columns,
-      int columnCount,
-      long nullMask) {
-    for (int index = 0; index < columnCount; index++) {
-      int column = columns[index];
-      if (column <= 0
-          || !definition.isVarchar(column)
-          || (nullMask & 1L << index) != 0) {
-        continue;
-      }
-      long handle = source.getLong((column - 1) * Long.BYTES);
-      StatusCode status = result.setUtf8At(
-          index, source, (int) (handle >>> 32), (int) handle);
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private int[] projectionTypeDescriptors(int[] projections, int count) {
-    for (int index = 0; index < count; index++) {
-      int column = projections[index];
-      bound.projectedTypeDescriptors[index] = column >= 0
-          ? bound.table.typeDescriptor(column) : SqlTypeDescriptor.BIGINT;
-    }
-    return bound.projectedTypeDescriptors;
+    return pointQueries.closeResources();
   }
 
   private int[] scanProjectionTypeDescriptors(SqlScanCursor cursor) {
@@ -743,117 +587,6 @@ final class SqlQueryExecution {
     return source.length() >= definition.fixedRowBytes()
             && source.length() <= definition.maximumRowBytes()
         ? StatusCode.OK : StatusCode.CORRUPTION;
-  }
-
-  private long readColumn(long primaryKey, HeapRowResult source, int column) {
-    return expressions.readColumn(primaryKey, source, column);
-  }
-
-  private boolean isNull(
-      HeapRowResult source,
-      TableDefinition definition,
-      int column) {
-    return expressions.isNull(source, definition, column);
-  }
-
-  private boolean accessEquality() {
-    return bound.accessPredicate >= 0
-        && command.isEqualityPredicate(bound.accessPredicate);
-  }
-
-  private boolean matchesComparison(
-      long actual,
-      SqlComparison comparison,
-      long expected) {
-    return expressions.matchesComparison(actual, comparison, expected);
-  }
-
-  private long accessValue() {
-    return bound.accessValue;
-  }
-
-  private long accessLowerInclusive() {
-    return bound.accessLowerInclusive;
-  }
-
-  private long accessUpperExclusive() {
-    return bound.accessUpperExclusive;
-  }
-
-  private StatusCode projectRow(
-      long primaryKey,
-      HeapRowResult source,
-      int[] columns,
-      int columnCount,
-      long[] destination) {
-    StatusCode status = validateRow(source);
-    if (status.isOk()) {
-      for (int index = 0; index < columnCount; index++) {
-        int column = columns[index];
-        destination[index] = column == NULL_PROJECTION
-            ? 0 : readColumn(primaryKey, source, column);
-      }
-    }
-    return status;
-  }
-
-  private long projectScanRow(
-      long primaryKey,
-      HeapRowResult source,
-      SqlScanCursor cursor,
-      long[] destination) {
-    long nullMask = 0;
-    for (int index = 0; index < cursor.projectedColumnCount(); index++) {
-      int column = cursor.projectedColumn(index);
-      if (column == NULL_PROJECTION) {
-        destination[index] = 0;
-        nullMask |= 1L << index;
-      } else {
-        destination[index] = readColumn(primaryKey, source, column);
-        if (isNull(source, bound.table, column)) {
-          nullMask |= 1L << index;
-        }
-      }
-    }
-    return nullMask;
-  }
-
-  private static StatusCode setProjectedText(
-      SqlScanRowResult result,
-      HeapRowResult source,
-      TableDefinition definition,
-      SqlScanCursor cursor,
-      long nullMask) {
-    for (int index = 0; index < cursor.projectedColumnCount(); index++) {
-      int column = cursor.projectedColumn(index);
-      if (column <= 0
-          || !definition.isVarchar(column)
-          || (nullMask & 1L << index) != 0) {
-        continue;
-      }
-      long handle = source.getLong((column - 1) * Long.BYTES);
-      StatusCode status = result.setUtf8At(
-          index, source, (int) (handle >>> 32), (int) handle);
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private long projectionNullMask(
-      HeapRowResult source,
-      TableDefinition definition,
-      int[] columns,
-      int columnCount) {
-    long nullMask = 0;
-    for (int index = 0; index < columnCount; index++) {
-      if (columns[index] == NULL_PROJECTION
-          || isNull(source, definition, columns[index])) {
-        nullMask |= 1L << index;
-      }
-    }
-    return nullMask;
   }
 
 }

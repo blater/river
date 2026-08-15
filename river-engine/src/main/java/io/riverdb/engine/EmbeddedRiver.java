@@ -5,6 +5,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
+import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.api.RiverQuery;
@@ -24,6 +25,11 @@ import java.nio.file.Path;
 /** Entry point for the dependency-clean embedded River API. */
 public final class EmbeddedRiver {
   private EmbeddedRiver() {
+  }
+
+  /** Returns the runtime tzdb version used by session zone conversion. */
+  public static String timeZoneDatabaseVersion() {
+    return SqlSession.timeZoneDatabaseVersion();
   }
 
   public static StatusCode create(
@@ -162,6 +168,20 @@ public final class EmbeddedRiver {
 
     @Override
     public StatusCode execute(String sql, CommandResult result) {
+      return execute(sql, null, result, false);
+    }
+
+    @Override
+    public StatusCode execute(
+        String sql, ParameterSet parameters, CommandResult result) {
+      return execute(sql, parameters, result, true);
+    }
+
+    private StatusCode execute(
+        String sql,
+        ParameterSet parameters,
+        CommandResult result,
+        boolean typed) {
       if (result == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -169,12 +189,31 @@ public final class EmbeddedRiver {
       if (closed) {
         return StatusCode.CLOSED;
       }
-      StatusCode status = session.execute(sql, execution);
+      if (typed && parameters == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      StatusCode status = typed
+          ? session.execute(sql, parameters, execution)
+          : session.execute(sql, execution);
       return status.isOk() ? copyExecution(result) : status;
     }
 
     @Override
     public StatusCode beginQuery(String sql, QueryOpenResult result) {
+      return beginQuery(sql, null, result, false);
+    }
+
+    @Override
+    public StatusCode beginQuery(
+        String sql, ParameterSet parameters, QueryOpenResult result) {
+      return beginQuery(sql, parameters, result, true);
+    }
+
+    private StatusCode beginQuery(
+        String sql,
+        ParameterSet parameters,
+        QueryOpenResult result,
+        boolean typed) {
       if (result == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -185,9 +224,14 @@ public final class EmbeddedRiver {
       if (query.active) {
         return StatusCode.CONFLICT;
       }
+      if (typed && parameters == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       StatusCode status = scan.reset();
       if (status.isOk()) {
-        status = session.beginScan(sql, scan);
+        status = typed
+            ? session.beginScan(sql, parameters, scan)
+            : session.beginScan(sql, scan);
       }
       if (status.isOk()) {
         query.active = true;
@@ -327,6 +371,11 @@ public final class EmbeddedRiver {
       @Override
       public int columnTypeDescriptor(int index) {
         return session.scanColumnTypeDescriptor(scan, index);
+      }
+
+      @Override
+      public boolean columnIsNullable(int index) {
+        return session.scanColumnIsNullable(scan, index);
       }
 
       @Override

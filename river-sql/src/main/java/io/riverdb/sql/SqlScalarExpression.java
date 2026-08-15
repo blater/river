@@ -1,5 +1,7 @@
 package io.riverdb.sql;
 
+import io.riverdb.base.type.SqlTypeDescriptor;
+
 /** Fixed-capacity postfix program for one scalar exact-value expression. */
 public final class SqlScalarExpression {
   public static final int MAXIMUM_NODES = 32;
@@ -17,6 +19,16 @@ public final class SqlScalarExpression {
   public static final int ROUND = 11;
   public static final int TRUNCATE = 12;
   public static final int CAST = 13;
+  public static final int CURRENT_DATE = 14;
+  public static final int CURRENT_TIMESTAMP = 15;
+  public static final int LOCALTIME = 16;
+  public static final int LOCALTIMESTAMP = 17;
+  public static final int AT_TIME_ZONE = 18;
+  public static final int EXTRACT = 19;
+  public static final int COLUMN = 20;
+  public static final int NULL = 21;
+  public static final int AGGREGATE_VALUE = 22;
+  public static final int GROUP_VALUE = 23;
 
   private final byte[] operators = new byte[MAXIMUM_NODES];
   private final long[] operands = new long[MAXIMUM_NODES];
@@ -50,6 +62,11 @@ public final class SqlScalarExpression {
   void finish(int descriptor) {
     resultTypeDescriptor = descriptor;
     available = nodeCount > 0 && descriptor != 0;
+  }
+
+  void finishUnresolved() {
+    resultTypeDescriptor = 0;
+    available = nodeCount > 0;
   }
 
   void copyFrom(SqlScalarExpression source) {
@@ -89,5 +106,38 @@ public final class SqlScalarExpression {
 
   public int resultTypeDescriptor() {
     return available ? resultTypeDescriptor : 0;
+  }
+
+  public boolean isDirectColumnReference() {
+    return available && nodeCount == 1
+        && Byte.toUnsignedInt(operators[0]) == COLUMN;
+  }
+
+  public boolean isNullLiteral() {
+    return available && nodeCount == 1
+        && Byte.toUnsignedInt(operators[0]) == NULL;
+  }
+
+  public boolean hasColumnReference() {
+    for (int index = 0; index < nodeCount; index++) {
+      if (Byte.toUnsignedInt(operators[index]) == COLUMN) return true;
+    }
+    return false;
+  }
+
+  public void replaceWithLiteral(long value, int descriptor) {
+    reset();
+    append(LITERAL, value, descriptor);
+    finish(descriptor);
+  }
+
+  public boolean replaceNodeWithLiteral(int index, long value, int descriptor) {
+    if (index < 0 || index >= nodeCount || !SqlTypeDescriptor.isValid(descriptor)) {
+      return false;
+    }
+    operators[index] = LITERAL;
+    operands[index] = value;
+    typeDescriptors[index] = descriptor;
+    return true;
   }
 }

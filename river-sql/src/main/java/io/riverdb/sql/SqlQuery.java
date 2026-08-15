@@ -11,9 +11,12 @@ public final class SqlQuery {
   private final int[] existencePredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private final int[] membershipPredicates = new int[MAXIMUM_QUERY_BLOCKS];
   private final SqlDerivedQueryCompiler derivedCompiler = new SqlDerivedQueryCompiler(this);
+  private final SqlViewCompiler viewCompiler = new SqlViewCompiler(this, derivedCompiler);
   private int blockCount;
+  private int sourcePlanDepth;
   private boolean explain;
   private boolean analyze;
+  private boolean blockPipeline;
 
   public SqlQuery() {
     for (int index = 0; index < blocks.length; index++) {
@@ -30,8 +33,10 @@ public final class SqlQuery {
       membershipPredicates[index] = 0;
     }
     blockCount = 0;
+    sourcePlanDepth = 0;
     explain = false;
     analyze = false;
+    blockPipeline = false;
   }
 
   void setExplain(boolean analyzeQuery) {
@@ -52,6 +57,7 @@ public final class SqlQuery {
       return null;
     }
     SqlCommand block = blocks[blockCount++];
+    sourcePlanDepth = Math.max(sourcePlanDepth, blockCount);
     block.reset();
     scalarPredicates[blockCount - 1] = -1;
     existencePredicates[blockCount - 1] = 0;
@@ -76,37 +82,95 @@ public final class SqlQuery {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     destination.reset();
+    if (hasCardinalityBlock()) {
+      StatusCode status = derivedCompiler.compilePipeline(destination);
+      blockPipeline = status.isOk();
+      return status;
+    }
     return derivedCompiler.compile(destination);
+  }
+
+  public boolean isBlockPipeline() { return blockPipeline; }
+
+  void markBlockPipeline() { blockPipeline = true; }
+
+  public StatusCode appendRootBlock(SqlCommand command) {
+    if (command == null || blockCount != 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    SqlCommand block = nextBlock();
+    return block == null ? StatusCode.QUERY_TOO_COMPLEX : block.copyBlockFrom(command);
+  }
+
+  public StatusCode compileBlockPipeline(SqlCommand destination) {
+    if (destination == null || blockCount < 2) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = derivedCompiler.compilePipeline(destination);
+    blockPipeline = status.isOk();
+    return status;
+  }
+
+  public StatusCode compileCombined(SqlCommand destination) {
+    return compileDerived(destination);
+  }
+
+  public StatusCode validateAppendedPipeline(int firstBlock) {
+    return derivedCompiler.validatePipeline(firstBlock);
+  }
+
+  private boolean hasCardinalityBlock() {
+    for (int index = 0; index < blockCount; index++) {
+      SqlCommandType type = blocks[index].type();
+      if (type == SqlCommandType.DISTINCT_SCAN
+          || type == SqlCommandType.COUNT
+          || type == SqlCommandType.COUNT_VALUE
+          || type == SqlCommandType.SUM
+          || type == SqlCommandType.AVG
+          || type == SqlCommandType.MIN
+          || type == SqlCommandType.MAX
+          || type == SqlCommandType.GROUP_COUNT
+          || type == SqlCommandType.GROUP_COUNT_VALUE
+          || type == SqlCommandType.GROUP_SUM
+          || type == SqlCommandType.GROUP_AVG
+          || type == SqlCommandType.GROUP_MIN
+          || type == SqlCommandType.GROUP_MAX) return true;
+    }
+    return false;
   }
 
   public StatusCode compileView(
       SqlCommand outer,
       SqlCommand view,
       SqlCommand destination) {
-    reset();
-    if (destination == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (outer == null || view == null || destination == view) {
-      destination.reset();
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    SqlCommand outerBlock = nextBlock();
-    SqlCommand viewBlock = nextBlock();
-    if (outerBlock == null || viewBlock == null) {
-      destination.reset();
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    outerBlock.copyQueryFrom(outer);
-    viewBlock.copyQueryFrom(view);
-    destination.reset();
-    if (outerBlock.isSelectAll()) {
-      StatusCode expansion = outerBlock.expandSelectAllFrom(viewBlock);
-      if (!expansion.isOk()) {
-        return expansion;
-      }
-    }
-    return compileDerived(destination);
+    return viewCompiler.compile(
+        outer,
+        view,
+        destination,
+        Math.max(1, sourcePlanDepth),
+        1,
+        explain,
+        analyze);
+  }
+
+  public StatusCode compileExpandedView(
+      SqlCommand outer,
+      SqlCommand view,
+      SqlCommand destination,
+      int outerSourceDepth,
+      int viewSourceDepth,
+      boolean retainedExplain,
+      boolean retainedAnalyze) {
+    return viewCompiler.compile(
+        outer,
+        view,
+        destination,
+        outerSourceDepth,
+        viewSourceDepth,
+        retainedExplain,
+        retainedAnalyze);
+  }
+
+  void setSourceMetadata(int depth, boolean explained, boolean analyzed) {
+    sourcePlanDepth = depth;
+    explain = explained;
+    analyze = analyzed;
   }
 
   StatusCode compileScalarPredicate(SqlCommand destination, int predicate) {
@@ -150,6 +214,10 @@ public final class SqlQuery {
 
   private StatusCode compileNestedPredicates(SqlCommand destination) {
     for (int index = 0; index < blockCount; index++) {
+      if (blocks[index].hasComputedPredicate()
+          || SqlDerivedProjectionCompiler.hasComputedProjection(blocks[index])) {
+        return StatusCode.FEATURE_NOT_SUPPORTED;
+      }
       if (!validNestedBlock(index)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -186,6 +254,21 @@ public final class SqlQuery {
 
   public int blockCount() {
     return blockCount;
+  }
+
+  public int sourcePlanDepth() {
+    return Math.max(1, sourcePlanDepth);
+  }
+
+  public boolean hasNestedTopology() {
+    for (int block = 0; block < blockCount; block++) {
+      if (hasScalarPredicate(block)
+          || hasExistencePredicate(block)
+          || hasMembershipPredicate(block)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public SqlCommand block(int index) {

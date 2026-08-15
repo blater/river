@@ -7,6 +7,7 @@ final class SqlSelectParser {
   private final SqlParser parser;
   private final SqlParserInput input;
   private final SqlScalarExpressionParser scalarExpressions;
+  private final SqlSelectProjectionParser projections;
   private final SqlSelectAggregateParser aggregates;
   private final SqlJoinParser joins;
   private final SqlSelectTailParser tail;
@@ -20,7 +21,10 @@ final class SqlSelectParser {
     parser = parent;
     input = parserInput;
     scalarExpressions = expressionParser;
-    aggregates = new SqlSelectAggregateParser(parent, this, parserInput);
+    aggregates = new SqlSelectAggregateParser(
+        parent, this, parserInput, expressionParser);
+    projections = new SqlSelectProjectionParser(
+        this, parserInput, expressionParser, aggregates);
     joins = new SqlJoinParser(parent, parserInput);
     tail = new SqlSelectTailParser(parent, parserInput);
   }
@@ -36,41 +40,26 @@ final class SqlSelectParser {
           ? identifier(sql, result.writableSequenceName()) : status;
     }
     if (consumeKeyword(sql, "COUNT")) {
-      return parseCount(sql, result);
+      return aggregates.scalarList(sql, result, SqlAggregateKind.COUNT);
     }
     if (consumeKeyword(sql, "SUM")) {
-      result.set(SqlCommandType.SUM, 0, 0);
-      return aggregates.valueAggregate(sql, result);
+      return aggregates.scalarList(sql, result, SqlAggregateKind.SUM);
     }
     if (consumeKeyword(sql, "AVG")) {
-      result.set(SqlCommandType.AVG, 0, 0);
-      return aggregates.valueAggregate(sql, result);
+      return aggregates.scalarList(sql, result, SqlAggregateKind.AVG);
     }
     if (consumeKeyword(sql, "MIN")) {
-      result.set(SqlCommandType.MIN, 0, 0);
-      return aggregates.valueAggregate(sql, result);
+      return aggregates.scalarList(sql, result, SqlAggregateKind.MIN);
     }
     if (consumeKeyword(sql, "MAX")) {
-      result.set(SqlCommandType.MAX, 0, 0);
-      return aggregates.valueAggregate(sql, result);
+      return aggregates.scalarList(sql, result, SqlAggregateKind.MAX);
     }
-    if (scalarExpressions.starts(sql)) {
+    if (!SqlSelectSourceDetector.hasRowSource(sql, input.position())
+        && scalarExpressions.starts(sql)) {
       result.set(SqlCommandType.SCALAR_EXPRESSION, 0, 0);
       return scalarExpressions.parse(sql, result.scalarExpression());
     }
     return parseRowSelect(sql, result);
-  }
-
-  private StatusCode parseCount(CharSequence sql, SqlCommand result) {
-    result.set(SqlCommandType.COUNT, 0, 0);
-    StatusCode status = requireCharacter(sql, '(');
-    if (status.isOk() && consumeCharacter(sql, '*')) {
-      status = requireCharacter(sql, ')');
-    } else if (status.isOk()) {
-      result.set(SqlCommandType.COUNT_VALUE, 0, 0);
-      status = aggregates.aggregateColumn(sql, result);
-    }
-    return status.isOk() ? aggregates.aggregateSource(sql, result) : status;
   }
 
   private StatusCode parseRowSelect(
@@ -80,7 +69,7 @@ final class SqlSelectParser {
         distinct ? SqlCommandType.DISTINCT_SCAN : SqlCommandType.SCAN,
         0,
         0);
-    StatusCode status = parseSelectProjection(sql, result, distinct);
+    StatusCode status = projections.parse(sql, result, distinct);
     if (!status.isOk()) {
       return status;
     }
@@ -115,64 +104,6 @@ final class SqlSelectParser {
     }
     return tail.parse(sql, result);
   }
-
-  private StatusCode parseSelectProjection(
-      CharSequence sql, SqlCommand result, boolean distinct) {
-    if (!distinct && consumeCharacter(sql, '*')) {
-      result.setSelectAll();
-      return StatusCode.OK;
-    }
-    StatusCode status = selectColumnIdentifier(sql, result);
-    if (distinct || !status.isOk() || !consumeCharacter(sql, ',')) {
-      return status;
-    }
-    if (consumeKeyword(sql, "COUNT")) {
-      return parseGroupedCount(sql, result);
-    }
-    if (consumeKeyword(sql, "SUM")) {
-      result.set(SqlCommandType.GROUP_SUM, 0, 0);
-      return parseGroupedValueAggregate(sql, result);
-    }
-    if (consumeKeyword(sql, "AVG")) {
-      result.set(SqlCommandType.GROUP_AVG, 0, 0);
-      return parseGroupedValueAggregate(sql, result);
-    }
-    if (consumeKeyword(sql, "MIN")) {
-      result.set(SqlCommandType.GROUP_MIN, 0, 0);
-      return parseGroupedValueAggregate(sql, result);
-    }
-    if (consumeKeyword(sql, "MAX")) {
-      result.set(SqlCommandType.GROUP_MAX, 0, 0);
-      return parseGroupedValueAggregate(sql, result);
-    }
-    status = selectColumnIdentifier(sql, result);
-    while (status.isOk() && consumeCharacter(sql, ',')) {
-      status = selectColumnIdentifier(sql, result);
-    }
-    return status;
-  }
-
-  private StatusCode parseGroupedCount(
-      CharSequence sql, SqlCommand result) {
-    result.set(SqlCommandType.GROUP_COUNT, 0, 0);
-    StatusCode status = requireCharacter(sql, '(');
-    if (status.isOk() && consumeCharacter(sql, '*')) {
-      return requireCharacter(sql, ')');
-    }
-    if (status.isOk()) {
-      result.set(SqlCommandType.GROUP_COUNT_VALUE, 0, 0);
-      status = aggregates.groupAggregateColumn(sql, result);
-    }
-    return status;
-  }
-
-  private StatusCode parseGroupedValueAggregate(
-      CharSequence sql, SqlCommand result) {
-    StatusCode status = requireCharacter(sql, '(');
-    return status.isOk() ? aggregates.groupAggregateColumn(sql, result) : status;
-  }
-
-
 
   StatusCode selectColumnIdentifier(CharSequence sql, SqlCommand result) {
     int columnIndex = result.columnCount();
