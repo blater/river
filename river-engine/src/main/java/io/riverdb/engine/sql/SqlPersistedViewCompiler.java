@@ -10,6 +10,7 @@ import io.riverdb.sql.SqlParser;
 final class SqlPersistedViewCompiler {
   private final SqlParser parser = new SqlParser();
   private final SqlCommand viewCommand = new SqlCommand();
+  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder();
   private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
   private final ViewDefinition definition = new ViewDefinition();
 
@@ -36,6 +37,14 @@ final class SqlPersistedViewCompiler {
 
   private StatusCode parseAndCompose(
       RelationalSession session, BoundSqlStatement bound) {
+    int storedDepth = parser.queryBlockDepth(definition);
+    int outerDepth = Math.max(1, bound.query.blockCount());
+    if (storedDepth < 1 || storedDepth >= io.riverdb.sql.SqlQuery.MAXIMUM_QUERY_BLOCKS) {
+      return StatusCode.CORRUPTION;
+    }
+    if (outerDepth + storedDepth > io.riverdb.sql.SqlQuery.MAXIMUM_QUERY_BLOCKS) {
+      return StatusCode.QUERY_TOO_COMPLEX;
+    }
     StatusCode status = bound.query.blockCount() == 0
         ? bound.query.appendRootBlock(bound.command) : StatusCode.OK;
     int firstStoredBlock = bound.query.blockCount();
@@ -57,6 +66,11 @@ final class SqlPersistedViewCompiler {
     if (!status.isOk() || bound.table.tableId() != definition.baseTableId()) {
       return StatusCode.CORRUPTION;
     }
+    if (!blockBinder.validateTail(bound, firstStoredBlock).isOk()) {
+      return StatusCode.CORRUPTION;
+    }
+    status = bound.query.expandRootSelectAllFrom(firstStoredBlock);
+    if (!status.isOk()) return status;
     return bound.query.compileCombined(bound.command);
   }
 }

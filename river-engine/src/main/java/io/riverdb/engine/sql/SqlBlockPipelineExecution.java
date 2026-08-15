@@ -123,6 +123,9 @@ final class SqlBlockPipelineExecution {
   boolean nullable(int column) { return finalSchema.nullable(column); }
   long rowCount() { return finalStore == null ? 0 : finalStore.rowCount(); }
   boolean active() { return finalStore != null; }
+  boolean hasResources() {
+    return physicalCursor.isActive() || first.hasResources() || second.hasResources();
+  }
 
   StatusCode close() {
     StatusCode status = StatusCode.OK;
@@ -131,7 +134,7 @@ final class SqlBlockPipelineExecution {
     StatusCode secondStatus = second.close();
     if (status.isOk()) status = firstStatus;
     if (status.isOk()) status = secondStatus;
-    accumulator.clear(bound.aggregates);
+    accumulator.clearAll();
     physical.reset();
     predicates.reset();
     sourceRow.reset(0);
@@ -193,7 +196,8 @@ final class SqlBlockPipelineExecution {
           sourceRow,
           bound,
           match);
-      if (!status.isOk() || !match.matched) continue;
+      if (!status.isOk()) break;
+      if (!match.matched) continue;
       status = projections.projectBlock(sourceRow, projectedRow);
       if (status.isOk()) status = output.append(projectedRow);
     }
@@ -226,7 +230,8 @@ final class SqlBlockPipelineExecution {
           sourceRow,
           bound,
           match);
-      if (!status.isOk() || !match.matched) continue;
+      if (!status.isOk()) break;
+      if (!match.matched) continue;
       status = projections.projectBlock(sourceRow, projectedRow);
       if (status.isOk()) status = accumulator.accumulateBlock(bound.aggregates, projectedRow);
     }

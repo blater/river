@@ -169,7 +169,7 @@ final class SqlSessionExecutionCoordinator {
       return status;
     }
     boolean scalar = SqlBinder.isScalarAggregate(bound.command.type());
-    boolean preexecuted = shouldPreexecuteScan(scalar);
+    boolean preexecuted = shouldPreexecuteScan();
     if (preexecuted) {
       status = preexecuteScan();
     }
@@ -221,12 +221,12 @@ final class SqlSessionExecutionCoordinator {
     return status;
   }
 
-  private boolean shouldPreexecuteScan(boolean scalar) {
+  private boolean shouldPreexecuteScan() {
     boolean explainOnly = bound.query.isExplain() && !bound.query.isAnalyze();
     SqlCommandType type = bound.command.type();
     boolean expression = type == SqlCommandType.SCALAR_EXPRESSION;
     boolean sequence = type == SqlCommandType.NEXT_SEQUENCE_VALUE;
-    return !explainOnly && (scalar || expression)
+    return !explainOnly && expression
         || !bound.query.isExplain() && sequence;
   }
 
@@ -269,10 +269,15 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       adoptStreamingQuery();
     }
+    if (status.isOk() && scalar && !queries.hasBlockPipelinePlan()
+        && !queries.explainOnly()) {
+      queries.aggregateExecution().reset();
+      status = queries.executePointQuery(queries.aggregateExecution());
+    }
     if (!status.isOk()) {
       return failStreamingStart(status);
     }
-    if (queries.explainOnly() && scalar) {
+    if (queries.explainOnly() && scalar && !queries.hasBlockPipelinePlan()) {
       return explainScalarScan(cursor);
     }
     return beginPreparedStreamingScan(cursor);

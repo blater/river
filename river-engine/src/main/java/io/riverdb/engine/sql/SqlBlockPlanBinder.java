@@ -33,6 +33,23 @@ final class SqlBlockPlanBinder {
     return status;
   }
 
+  StatusCode validateTail(
+      BoundSqlStatement bound, int firstBlock) {
+    StatusCode status = bound.blockPlans.capture(bound.query);
+    if (!status.isOk() || firstBlock < 0
+        || firstBlock >= bound.blockPlans.count()) {
+      return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    }
+    physicalSchema(bound);
+    SqlBlockSchema child = bound.blockPlans.baseSchema();
+    for (int block = bound.blockPlans.count() - 1;
+        status.isOk() && block >= firstBlock; block--) {
+      status = activate(bound, block, child);
+      child = bound.blockPlans.schema(block);
+    }
+    return status;
+  }
+
   StatusCode activate(BoundSqlStatement bound, int block, SqlBlockSchema child) {
     SqlCommand source = bound.blockPlans.command(block);
     StatusCode status = bound.command.copyBlockFrom(source);
@@ -98,6 +115,16 @@ final class SqlBlockPlanBinder {
             child,
             bound);
         if (!status.isOk()) return status;
+        int descriptor = bound.projectionPrograms.resultDescriptor(
+            SqlBoundProjectionPrograms.PREDICATE_LANE);
+        SqlComparison comparison = command.comparison(predicate);
+        if (SqlTypeDescriptor.typeId(descriptor)
+                == SqlTypeDescriptor.TYPE_ID_VARCHAR
+            && (comparison == SqlComparison.HALF_OPEN_RANGE
+                || comparison == SqlComparison.IN
+                || comparison == SqlComparison.NOT_IN)) {
+          return StatusCode.FEATURE_NOT_SUPPORTED;
+        }
         bound.predicateColumns[predicate] = SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
         bound.blockPredicateRightColumns[predicate] = -1;
         continue;

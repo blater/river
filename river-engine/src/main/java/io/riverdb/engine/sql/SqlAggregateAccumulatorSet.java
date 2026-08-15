@@ -38,6 +38,17 @@ final class SqlAggregateAccumulatorSet {
     reset(aggregates);
   }
 
+  void clearAll() {
+    eraseText();
+    for (int invocation = 0; invocation < MAXIMUM_INVOCATIONS; invocation++) {
+      values[invocation] = 0;
+      highs[invocation] = 0;
+      counts[invocation] = 0;
+      nulls[invocation] = false;
+      textLengths[invocation] = 0;
+    }
+  }
+
   void copyFrom(
       SqlAggregateAccumulatorSet source, SqlBoundAggregateSet aggregates) {
     reset(aggregates);

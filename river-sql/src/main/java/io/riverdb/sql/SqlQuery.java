@@ -115,6 +115,14 @@ public final class SqlQuery {
     return derivedCompiler.validatePipeline(firstBlock);
   }
 
+  public StatusCode expandRootSelectAllFrom(int sourceBlock) {
+    if (blockCount < 2 || sourceBlock <= 0 || sourceBlock >= blockCount) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return blocks[0].isSelectAll()
+        ? blocks[0].expandSelectAllFrom(blocks[sourceBlock]) : StatusCode.OK;
+  }
+
   private boolean hasCardinalityBlock() {
     for (int index = 0; index < blockCount; index++) {
       SqlCommandType type = blocks[index].type();

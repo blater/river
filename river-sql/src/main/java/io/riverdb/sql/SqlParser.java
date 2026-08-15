@@ -69,6 +69,10 @@ public final class SqlParser {
     return queryParser.parseAppend(sql, query, result);
   }
 
+  public int queryBlockDepth(CharSequence sql) {
+    return queryParser.blockDepth(sql);
+  }
+
   public StatusCode parseQuery(
       String sql,
       SqlParameterSource parameters,

@@ -80,10 +80,13 @@ final class SqlStoredViewPolicy {
       if (!status.isOk()) return status;
     }
     for (int predicate = 0; predicate < command.havingPredicateCount(); predicate++) {
+      int zoneNodes = 0;
       for (int node = 0; node < command.havingNodeCount(predicate); node++) {
-        if (command.havingOperator(predicate, node) == SqlScalarExpression.AT_TIME_ZONE
-            && zones.parse(command, command.havingOperand(predicate, node)) == null) {
-          return StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
+        if (command.havingOperator(predicate, node) == SqlScalarExpression.AT_TIME_ZONE) {
+          if (++zoneNodes > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
+          if (zones.parse(command, command.havingOperand(predicate, node)) == null) {
+            return StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
+          }
         }
       }
     }
@@ -97,12 +100,15 @@ final class SqlStoredViewPolicy {
     if (expression == null || !expression.isAvailable()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-      for (int node = 0; node < expression.nodeCount(); node++) {
-        if (expression.operator(node) == SqlScalarExpression.AT_TIME_ZONE
-            && zones.parse(command, expression.operand(node)) == null) {
+    int zoneNodes = 0;
+    for (int node = 0; node < expression.nodeCount(); node++) {
+      if (expression.operator(node) == SqlScalarExpression.AT_TIME_ZONE) {
+        if (++zoneNodes > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
+        if (zones.parse(command, expression.operand(node)) == null) {
           return StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
         }
       }
+    }
     return StatusCode.OK;
   }
 

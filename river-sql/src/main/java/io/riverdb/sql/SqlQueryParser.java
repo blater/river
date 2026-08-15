@@ -65,6 +65,27 @@ final class SqlQueryParser {
     return block == null ? StatusCode.QUERY_TOO_COMPLEX : block.copyBlockFrom(result);
   }
 
+  int blockDepth(CharSequence sql) {
+    if (sql == null || skipExplainPrefix(sql) != skipSpaces(sql, 0)
+        || findExistenceSource(sql, 0, sql.length()) >= 0
+        || findMembershipSource(sql, 0, sql.length()) >= 0
+        || findScalarSource(sql, 0, sql.length()) >= 0) {
+      return -1;
+    }
+    int start = 0;
+    int end = sql.length();
+    int depth = 1;
+    int open;
+    while ((open = findDerivedSource(sql, start, end)) >= 0) {
+      int close = matchingCloseParenthesis(sql, open, end);
+      if (close < 0) return -1;
+      depth++;
+      start = open + 1;
+      end = close;
+    }
+    return depth;
+  }
+
   boolean hasNestedTopology(CharSequence sql) {
     int start = skipExplainPrefix(sql);
     return start < 0

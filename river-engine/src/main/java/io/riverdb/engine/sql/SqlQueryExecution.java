@@ -195,12 +195,18 @@ final class SqlQueryExecution {
 
   StatusCode executeBlockPipeline(SqlExecutionResult result) {
     StatusCode status = prepareBlockPipeline();
-    if (status.isOk()) {
-      status = blockPipeline.next(result, session.visibleCommitSequence());
-      if (status == StatusCode.CONFLICT) status = StatusCode.OK;
+    if (status.isOk() && blockPipeline.rowCount() == 0) status = StatusCode.CONFLICT;
+    if (status.isOk() && blockPipeline.rowCount() > 1) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    if (status.isOk()) status = blockPipeline.next(
+        result, session.visibleCommitSequence());
     StatusCode closed = blockPipeline == null ? StatusCode.OK : blockPipeline.close();
     return status.isOk() ? closed : status;
+  }
+
+  boolean hasBlockPipelinePlan() {
+    return bound.blockPlans.count() > 0;
   }
 
   SqlBoundPredicateEvaluator predicateEvaluator() {
@@ -547,7 +553,7 @@ final class SqlQueryExecution {
     if (status.isOk() && sorts.hasResources()) {
       status = sorts.close();
     }
-    if (status.isOk() && blockPipeline != null && blockPipeline.active()) {
+    if (status.isOk() && blockPipeline != null && blockPipeline.hasResources()) {
       status = blockPipeline.close();
     }
     if (status.isOk()) {
@@ -562,11 +568,16 @@ final class SqlQueryExecution {
   }
 
   boolean hasPointResources() {
-    return pointQueries.hasResources();
+    return pointQueries.hasResources()
+        || blockPipeline != null && blockPipeline.hasResources();
   }
 
   StatusCode closePointResources() {
-    return pointQueries.closeResources();
+    StatusCode status = pointQueries.closeResources();
+    if (status.isOk() && blockPipeline != null && blockPipeline.hasResources()) {
+      status = blockPipeline.close();
+    }
+    return status;
   }
 
   private int[] scanProjectionTypeDescriptors(SqlScanCursor cursor) {
