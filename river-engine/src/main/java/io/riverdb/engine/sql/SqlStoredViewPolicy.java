@@ -98,7 +98,7 @@ final class SqlStoredViewPolicy {
       SqlScalarExpression expression,
       SqlTemporalZoneNames zones) {
     if (expression == null || !expression.isAvailable()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+      return StatusCode.OK;
     }
     int zoneNodes = 0;
     for (int node = 0; node < expression.nodeCount(); node++) {

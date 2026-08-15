@@ -21,7 +21,7 @@ final class SqlPlanDescription {
   private static final long SORT = PackedText.pack("sort");
   private static final long TABLE = PackedText.pack("table");
 
-  void configureScalarAggregate(
+  io.riverdb.base.error.StatusCode configureScalarAggregate(
       SqlPhysicalPlan plan,
       BoundSqlStatement bound,
       BoundSqlQuery.Block command) {
@@ -36,16 +36,17 @@ final class SqlPlanDescription {
                 || bound.table.hasIndexOn(bound.predicateColumn)
                 ? bound.predicateColumn : -1
             : -1);
-    describe(plan);
+    return describe(plan);
   }
 
-  void describe(SqlPhysicalPlan plan) {
+  io.riverdb.base.error.StatusCode describe(SqlPhysicalPlan plan) {
     plan.resetSteps();
+    io.riverdb.base.error.StatusCode status = io.riverdb.base.error.StatusCode.OK;
     if (plan.rowLimit() != Long.MAX_VALUE) {
-      plan.addStep(LIMIT, plan.rowLimit());
+      status = plan.addStep(LIMIT, plan.rowLimit());
     }
-    describeLogical(plan);
-    describePhysical(plan);
+    if (status.isOk()) status = describeLogical(plan);
+    return status.isOk() ? describePhysical(plan) : status;
   }
 
   void configureExplainResult(SqlPhysicalPlan plan, boolean analyzed) {
@@ -56,40 +57,44 @@ final class SqlPlanDescription {
     plan.setResultNullable(2, true);
   }
 
-  private static void describeLogical(SqlPhysicalPlan plan) {
+  private static io.riverdb.base.error.StatusCode describeLogical(SqlPhysicalPlan plan) {
+    io.riverdb.base.error.StatusCode status = io.riverdb.base.error.StatusCode.OK;
     if (plan.havingCount() > 0) {
-      plan.addStep(HAVING, plan.havingCount());
+      status = plan.addStep(HAVING, plan.havingCount());
     }
-    if (plan.aggregate()) {
-      plan.addStep(AGGREGATE, plan.aggregateColumn());
-    } else if (plan.groupAggregate()) {
-      plan.addStep(GROUP, plan.groupAggregateColumn());
-    } else if (plan.distinct()) {
-      plan.addStep(DISTINCT, plan.groupColumn());
-    } else if (plan.join()) {
-      plan.addStep(plan.leftJoin() ? LEFT : JOIN, plan.joinOuterColumn());
+    if (status.isOk() && plan.aggregate()) {
+      status = plan.addStep(AGGREGATE, plan.aggregateColumn());
+    } else if (status.isOk() && plan.groupAggregate()) {
+      status = plan.addStep(GROUP, plan.groupAggregateColumn());
+    } else if (status.isOk() && plan.distinct()) {
+      status = plan.addStep(DISTINCT, plan.groupColumn());
+    } else if (status.isOk() && plan.join()) {
+      status = plan.addStep(plan.leftJoin() ? LEFT : JOIN, plan.joinOuterColumn());
     }
+    return status;
   }
 
-  private static void describePhysical(SqlPhysicalPlan plan) {
+  private static io.riverdb.base.error.StatusCode describePhysical(SqlPhysicalPlan plan) {
+    io.riverdb.base.error.StatusCode status = io.riverdb.base.error.StatusCode.OK;
     if (plan.nestedDepth() > 1) {
-      plan.addStep(NESTED, plan.nestedDepth());
+      status = plan.addStep(NESTED, plan.nestedDepth());
     }
-    if (plan.sorts()) {
-      plan.addStep(SORT, plan.descending() ? -1 : 1);
+    if (status.isOk() && plan.sorts()) {
+      status = plan.addStep(SORT, plan.descending() ? -1 : 1);
     }
-    if (plan.filterCount() > 0) {
-      plan.addStep(FILTER, plan.filterCount());
+    if (status.isOk() && plan.filterCount() > 0) {
+      status = plan.addStep(FILTER, plan.filterCount());
     }
-    plan.addStep(
-        plan.accessColumn() > 0
-            ? INDEX
-            : plan.accessColumn() == 0 ? PRIMARY : TABLE,
-        plan.accessColumn());
-    if (plan.join()) {
-      plan.addStep(
+    if (status.isOk()) status = plan.addStep(
+      plan.accessColumn() > 0
+          ? INDEX
+          : plan.accessColumn() == 0 ? PRIMARY : TABLE,
+      plan.accessColumn());
+    if (status.isOk() && plan.join()) {
+      status = plan.addStep(
           plan.joinInnerIndexed() ? LOOKUP : TABLE,
           plan.joinInnerColumn());
     }
+    return status;
   }
 }

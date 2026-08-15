@@ -30,6 +30,7 @@ final class SqlBlockPipelineExecution {
   private final SqlAggregateAccumulatorSet accumulator =
       new SqlAggregateAccumulatorSet();
   private final SqlHavingEvaluator having;
+  private final SqlBlockStagePlan stagePlan = new SqlBlockStagePlan();
   private final long[] outputValues = new long[8];
   private final int[] outputTypes = new int[8];
   private final byte[] groupText = new byte[Utf8Text.MAXIMUM_BYTES];
@@ -55,6 +56,7 @@ final class SqlBlockPipelineExecution {
 
   StatusCode prepare() {
     StatusCode status = close();
+    if (status.isOk()) status = stagePlan.describe(bound.blockPlans);
     SqlBlockRowStore input = null;
     for (int block = bound.blockPlans.count() - 1;
         status.isOk() && block >= 0; block--) {
@@ -66,6 +68,7 @@ final class SqlBlockPipelineExecution {
       SqlBlockRowStore output = input == first ? second : first;
       status = execute(block, input, output);
       input = status.isOk() ? finalStore : input;
+      if (status.isOk()) stagePlan.setRows(block, finalStore.rowCount());
     }
     if (status.isOk()) {
       finalStore = input;
@@ -126,6 +129,8 @@ final class SqlBlockPipelineExecution {
   boolean hasResources() {
     return physicalCursor.isActive() || first.hasResources() || second.hasResources();
   }
+  StatusCode describe() { return stagePlan.describe(bound.blockPlans); }
+  SqlBlockStagePlan stagePlan() { return stagePlan; }
 
   StatusCode close() {
     StatusCode status = StatusCode.OK;

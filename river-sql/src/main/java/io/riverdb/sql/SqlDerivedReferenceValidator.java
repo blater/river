@@ -76,9 +76,26 @@ final class SqlDerivedReferenceValidator {
       SqlCommand block, SqlCommand inner) {
     for (int projection = 0; projection < block.columnCount(); projection++) {
       SqlScalarExpression expression = block.projectionExpression(projection);
+      if ((expression == null || !expression.isAvailable())
+          && countOutput(block, projection)) continue;
       if (!validExpressionReferences(block, inner, expression)) return false;
     }
+    for (int invocation = 0;
+        invocation < block.aggregateInvocationCount(); invocation++) {
+      int lane = block.aggregateOperandProjection(invocation);
+      if (lane < 0) continue;
+      if (!validExpressionReferences(
+          block, inner, block.aggregateOperandExpression(lane))) return false;
+    }
     return true;
+  }
+
+  private static boolean countOutput(SqlCommand block, int projection) {
+    int output = block.type() == SqlCommandType.GROUP_COUNT ? projection - 1 : projection;
+    if (output < 0 || output >= block.aggregateOutputCount()) return false;
+    int invocation = block.aggregateOutputInvocation(output);
+    return invocation >= 0
+        && block.aggregateKind(invocation) == SqlAggregateKind.COUNT;
   }
 
   private static boolean validPredicates(SqlCommand block, SqlCommand inner) {

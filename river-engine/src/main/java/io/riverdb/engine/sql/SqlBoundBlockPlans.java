@@ -21,8 +21,16 @@ final class SqlBoundBlockPlans {
   }
 
   StatusCode capture(SqlQuery query) {
+    return capture(query, true);
+  }
+
+  StatusCode captureForValidation(SqlQuery query) {
+    return capture(query, false);
+  }
+
+  private StatusCode capture(SqlQuery query, boolean requirePipeline) {
     reset();
-    if (query == null || !query.isBlockPipeline()
+    if (query == null || requirePipeline && !query.isBlockPipeline()
         || query.blockCount() < 2 || query.blockCount() > commands.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }

@@ -42,6 +42,7 @@ final class SqlQueryExecution {
   private final SqlPointQueryExecution pointQueries;
   private final SqlBlockPlanBinder blockBinder;
   private SqlBlockPipelineExecution blockPipeline;
+  private boolean pointBlockPipeline;
   private boolean explainOnly;
   private long scanGeneration;
 
@@ -175,6 +176,7 @@ final class SqlQueryExecution {
     plan.setOrderColumn(bound.orderColumn);
     if (bound.blockPlans.count() > 0) {
       plan.setBlockResult(bound.blockPlans.schema(0));
+      if (blockPipeline != null) plan.setBlockStages(blockPipeline.stagePlan());
       if (blockPipeline != null && blockPipeline.active()) {
         plan.setActualRows(blockPipeline.rowCount());
       }
@@ -186,15 +188,21 @@ final class SqlQueryExecution {
   }
 
   StatusCode prepareBlockPipeline() {
+    pointBlockPipeline = false;
+    return preparePipeline();
+  }
+
+  private StatusCode preparePipeline() {
     if (blockPipeline == null) {
       blockPipeline = new SqlBlockPipelineExecution(
           session, bound, blockBinder, expressions, rowProjections);
     }
-    return explainOnly ? StatusCode.OK : blockPipeline.prepare();
+    return explainOnly ? blockPipeline.describe() : blockPipeline.prepare();
   }
 
   StatusCode executeBlockPipeline(SqlExecutionResult result) {
-    StatusCode status = prepareBlockPipeline();
+    pointBlockPipeline = true;
+    StatusCode status = preparePipeline();
     if (status.isOk() && blockPipeline.rowCount() == 0) status = StatusCode.CONFLICT;
     if (status.isOk() && blockPipeline.rowCount() > 1) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -202,6 +210,7 @@ final class SqlQueryExecution {
     if (status.isOk()) status = blockPipeline.next(
         result, session.visibleCommitSequence());
     StatusCode closed = blockPipeline == null ? StatusCode.OK : blockPipeline.close();
+    if (closed.isOk()) pointBlockPipeline = false;
     return status.isOk() ? closed : status;
   }
 
@@ -229,8 +238,8 @@ final class SqlQueryExecution {
     return beginParsedScan(cursor);
   }
 
-  void configureScalarAggregateExplain() {
-    planDescription.configureScalarAggregate(plan, bound, command);
+  StatusCode configureScalarAggregateExplain() {
+    return planDescription.configureScalarAggregate(plan, bound, command);
   }
 
   StatusCode drainAnalyze(SqlScanCursor cursor) {
@@ -246,8 +255,9 @@ final class SqlQueryExecution {
     return status;
   }
 
-  void describeCurrentPlan(SqlScanCursor cursor) {
-    planDescription.describe(plan);
+  StatusCode describeCurrentPlan(SqlScanCursor cursor) {
+    return bound.blockPlans.count() > 0
+        ? StatusCode.OK : planDescription.describe(plan);
   }
 
   StatusCode claimExplainResult(
@@ -342,8 +352,9 @@ final class SqlQueryExecution {
     }
     projectedValues[0] = plan.operator(step);
     projectedValues[1] = plan.detail(step);
-    projectedValues[2] = plan.actualRows();
-    long nullMask = plan.explainAnalyzed() && step == 0 ? 0 : 1L << 2;
+    projectedValues[2] = plan.stepRows(step);
+    long nullMask = plan.explainAnalyzed() && plan.stepRows(step) >= 0
+        ? 0 : 1L << 2;
     result.set(
         step,
         projectedValues,
@@ -556,6 +567,7 @@ final class SqlQueryExecution {
     if (status.isOk() && blockPipeline != null && blockPipeline.hasResources()) {
       status = blockPipeline.close();
     }
+    if (status.isOk()) pointBlockPipeline = false;
     if (status.isOk()) {
       status = nestedExecution.close();
     }
@@ -569,14 +581,17 @@ final class SqlQueryExecution {
 
   boolean hasPointResources() {
     return pointQueries.hasResources()
-        || blockPipeline != null && blockPipeline.hasResources();
+        || pointBlockPipeline
+            && blockPipeline != null && blockPipeline.hasResources();
   }
 
   StatusCode closePointResources() {
     StatusCode status = pointQueries.closeResources();
-    if (status.isOk() && blockPipeline != null && blockPipeline.hasResources()) {
+    if (status.isOk() && pointBlockPipeline
+        && blockPipeline != null && blockPipeline.hasResources()) {
       status = blockPipeline.close();
     }
+    if (status.isOk()) pointBlockPipeline = false;
     return status;
   }
 

@@ -70,9 +70,10 @@ final class SqlBlockRowStore {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (rowCount >= MAXIMUM_ROWS) return StatusCode.RESOURCE_EXHAUSTED;
-    ensureIndexStorage(rowCount + 1);
+    StatusCode status = ensureIndexStorage(rowCount + 1);
+    if (!status.isOk()) return status;
     int priorKeyText = keyText == null ? 0 : keyText.position();
-    StatusCode status = encode(source, rowCount);
+    status = encode(source, rowCount);
     textView.clear();
     if (!status.isOk()) {
       eraseTail(keyText, priorKeyText);
@@ -415,12 +416,16 @@ final class SqlBlockRowStore {
     return (int) checksum.getValue();
   }
 
-  private void ensureIndexStorage(int required) {
+  private StatusCode ensureIndexStorage(int required) {
     if (offsets != null && offsets.length >= required
         && (sortKey < 0 || keys != null && keys.length >= required)
-        && (!textKey || keyTextOffsets != null && keyTextOffsets.length >= required)) return;
+        && (!textKey || keyTextOffsets != null && keyTextOffsets.length >= required)) {
+      return StatusCode.OK;
+    }
     int capacity = offsets == null ? MEMORY_ROWS : offsets.length;
     while (capacity < required) capacity = Math.min(MAXIMUM_ROWS, capacity * 2);
+    if (retainedWithoutIndexes() + prospectiveIndexBytes(capacity)
+        > MAXIMUM_BYTES) return StatusCode.RESOURCE_EXHAUSTED;
     offsets = grow(offsets, capacity);
     lengths = grow(lengths, capacity);
     order = grow(order, capacity);
@@ -432,6 +437,31 @@ final class SqlBlockRowStore {
       keyTextOffsets = grow(keyTextOffsets, capacity);
       keyTextLengths = grow(keyTextLengths, capacity);
     }
+    return StatusCode.OK;
+  }
+
+  private long retainedWithoutIndexes() {
+    return bytes
+        + (data == null ? 0 : data.capacity())
+        + (keyText == null ? 0 : keyText.capacity())
+        + (record == null ? 0 : record.capacity());
+  }
+
+  private long prospectiveIndexBytes(int capacity) {
+    long retained = (long) capacity * (Long.BYTES + Integer.BYTES + Integer.BYTES);
+    int keyCapacity = sortKey >= 0
+        ? capacity : keys == null ? 0 : keys.length;
+    int nullCapacity = sortKey >= 0
+        ? capacity : keyNulls == null ? 0 : keyNulls.length;
+    int textOffsetCapacity = textKey
+        ? capacity : keyTextOffsets == null ? 0 : keyTextOffsets.length;
+    int textLengthCapacity = textKey
+        ? capacity : keyTextLengths == null ? 0 : keyTextLengths.length;
+    return retained
+        + (long) keyCapacity * Long.BYTES
+        + nullCapacity
+        + (long) textOffsetCapacity * Integer.BYTES
+        + (long) textLengthCapacity * Short.BYTES;
   }
 
   private long retainedBytes(int appendedRecordBytes) {

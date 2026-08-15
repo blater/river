@@ -66,7 +66,9 @@ final class SqlPersistedViewCompiler {
     if (!status.isOk() || bound.table.tableId() != definition.baseTableId()) {
       return StatusCode.CORRUPTION;
     }
-    if (!blockBinder.validateTail(bound, firstStoredBlock).isOk()) {
+    StatusCode tailStatus = blockBinder.validateTail(bound, firstStoredBlock);
+    bound.blockPlans.reset();
+    if (!tailStatus.isOk()) {
       return StatusCode.CORRUPTION;
     }
     status = bound.query.expandRootSelectAllFrom(firstStoredBlock);

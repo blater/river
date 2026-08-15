@@ -248,8 +248,8 @@ final class SqlSessionExecutionCoordinator {
     if (!status.isOk() || !bound.query.isAnalyze()) {
       return status;
     }
-    queries.describeCurrentPlan(cursor);
-    status = queries.drainAnalyze(cursor);
+    status = queries.describeCurrentPlan(cursor);
+    if (status.isOk()) status = queries.drainAnalyze(cursor);
     if (status.isOk()) {
       queries.completeScan(cursor);
       return queries.claimExplainResult(cursor, queries.aggregateExecution(), true);
@@ -289,8 +289,8 @@ final class SqlSessionExecutionCoordinator {
 
   private StatusCode explainScalarScan(SqlScanCursor cursor) {
     queries.aggregateExecution().reset();
-    queries.configureScalarAggregateExplain();
-    StatusCode status = streaming.finish(StatusCode.OK, queries.aggregateExecution());
+    StatusCode status = queries.configureScalarAggregateExplain();
+    status = streaming.finish(status, queries.aggregateExecution());
     if (!streaming.isActive()) {
       temporal.finishStatement();
     }
@@ -305,12 +305,12 @@ final class SqlSessionExecutionCoordinator {
       return failStreamingStart(status);
     }
     if (queries.explainOnly()) {
-      queries.describeCurrentPlan(cursor);
-      return finishExplain(cursor, false, StatusCode.OK);
+      status = queries.describeCurrentPlan(cursor);
+      return finishExplain(cursor, false, status);
     }
     if (bound.query.isAnalyze()) {
-      queries.describeCurrentPlan(cursor);
-      status = queries.drainAnalyze(cursor);
+      status = queries.describeCurrentPlan(cursor);
+      if (status.isOk()) status = queries.drainAnalyze(cursor);
       return finishExplain(cursor, true, status);
     }
     return StatusCode.OK;

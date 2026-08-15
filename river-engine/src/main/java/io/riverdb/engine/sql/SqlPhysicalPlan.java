@@ -43,6 +43,7 @@ final class SqlPhysicalPlan {
   private int joinInnerColumn = -1;
   private boolean sort;
   private long actualRows;
+  private SqlBlockStagePlan blockStages;
 
   SqlPhysicalPlan() {
     for (int index = 0; index < resultNames.length; index++) {
@@ -78,9 +79,16 @@ final class SqlPhysicalPlan {
     joinInnerColumn = -1;
     sort = false;
     actualRows = 0;
+    blockStages = null;
   }
 
   void resetSteps() {
+    stepCount = 0;
+    blockStages = null;
+  }
+
+  void setBlockStages(SqlBlockStagePlan stages) {
+    blockStages = stages;
     stepCount = 0;
   }
 
@@ -342,24 +350,29 @@ final class SqlPhysicalPlan {
         rowLimit);
   }
 
-  void addStep(long operator, long detail) {
-    if (stepCount < operators.length) {
-      operators[stepCount] = operator;
-      details[stepCount] = detail;
-      stepCount++;
-    }
+  StatusCode addStep(long operator, long detail) {
+    if (stepCount >= operators.length) return StatusCode.RESOURCE_EXHAUSTED;
+    operators[stepCount] = operator;
+    details[stepCount] = detail;
+    stepCount++;
+    return StatusCode.OK;
   }
 
   int stepCount() {
-    return stepCount;
+    return blockStages == null ? stepCount : blockStages.count();
   }
 
   long operator(int index) {
-    return operators[index];
+    return blockStages == null ? operators[index] : blockStages.operator(index);
   }
 
   long detail(int index) {
-    return details[index];
+    return blockStages == null ? details[index] : blockStages.detail(index);
+  }
+
+  long stepRows(int index) {
+    return blockStages == null ? index == 0 ? actualRows : -1
+        : blockStages.rows(index);
   }
 
   private static final class ResultName implements CharSequence {

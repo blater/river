@@ -35,7 +35,7 @@ final class SqlBlockPlanBinder {
 
   StatusCode validateTail(
       BoundSqlStatement bound, int firstBlock) {
-    StatusCode status = bound.blockPlans.capture(bound.query);
+    StatusCode status = bound.blockPlans.captureForValidation(bound.query);
     if (!status.isOk() || firstBlock < 0
         || firstBlock >= bound.blockPlans.count()) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
