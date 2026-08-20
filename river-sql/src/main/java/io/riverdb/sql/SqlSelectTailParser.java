@@ -20,7 +20,11 @@ final class SqlSelectTailParser {
 
   private StatusCode parseOrder(CharSequence sql, SqlCommand result) {
     SqlCommandType type = result.type();
-    if (type == SqlCommandType.JOIN_SCAN || !input.consumeKeyword(sql, "ORDER")) {
+    if (type == SqlCommandType.JOIN_SCAN) {
+      return input.consumeKeyword(sql, "ORDER")
+          ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
+    }
+    if (!input.consumeKeyword(sql, "ORDER")) {
       return StatusCode.OK;
     }
     StatusCode status = input.requireKeyword(sql, "BY");

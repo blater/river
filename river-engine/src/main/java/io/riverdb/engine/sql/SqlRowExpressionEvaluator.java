@@ -81,6 +81,14 @@ final class SqlRowExpressionEvaluator {
         : unary(operator, operand, descriptor, zone);
   }
 
+  StatusCode predicateNullColumnNode(int descriptor) {
+    if (size >= values.length) return StatusCode.RESOURCE_EXHAUSTED;
+    values[size] = 0;
+    descriptors[size] = descriptor;
+    nulls[size++] = true;
+    return StatusCode.OK;
+  }
+
   StatusCode finishPredicateOperand(SqlPredicateOperand result) {
     if (size != 1) {
       reset();

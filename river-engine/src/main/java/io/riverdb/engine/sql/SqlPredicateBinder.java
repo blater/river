@@ -9,6 +9,7 @@ final class SqlPredicateBinder {
   private final SqlBooleanPredicateBinder booleans =
       new SqlBooleanPredicateBinder();
   private final SqlAccessEdgeSelector access = new SqlAccessEdgeSelector();
+  private final SqlJoinAccessSelector joinAccess = new SqlJoinAccessSelector();
 
   StatusCode bind(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
@@ -29,13 +30,20 @@ final class SqlPredicateBinder {
   }
 
   StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
-    bound.predicateCount = command.wherePredicates().leafCount();
+    bound.predicateCount = command.onPredicates().leafCount()
+        + command.wherePredicates().leafCount();
     bound.accessPredicate = -1;
     bound.predicateColumn = -1;
     bound.accessComparison = null;
-    StatusCode status = booleans.bindJoinWhere(command, bound);
+    bound.joinOuterColumn = -1;
+    bound.joinInnerColumn = -1;
+    StatusCode status = booleans.bindJoinOn(command, bound);
+    if (status.isOk()) status = booleans.bindJoinWhere(command, bound);
     if (status.isOk() && command.wherePredicates().isAvailable()) {
       access.select(command.wherePredicates(), bound.whereBoolean, bound);
+    }
+    if (status.isOk()) {
+      joinAccess.select(command.onPredicates(), bound.onBoolean(), bound);
     }
     return status;
   }

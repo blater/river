@@ -31,13 +31,18 @@ final class SqlBooleanPredicateBinder {
   }
 
   StatusCode bindJoinWhere(SqlCommand command, BoundSqlStatement statement) {
-    if (!rawJoinShape(command.wherePredicates())) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
-    }
     join = true;
     having = false;
     return bind(
         command, command.wherePredicates(), statement.whereBoolean,
+        statement, null);
+  }
+
+  StatusCode bindJoinOn(SqlCommand command, BoundSqlStatement statement) {
+    join = true;
+    having = false;
+    return bind(
+        command, command.onPredicates(), statement.onBoolean(),
         statement, null);
   }
 
@@ -74,33 +79,4 @@ final class SqlBooleanPredicateBinder {
     return StatusCode.OK;
   }
 
-  private static boolean rawJoinShape(SqlBooleanPredicateProgram source) {
-    if (!source.isAvailable()) return true;
-    for (int node = 0; node < source.booleanNodeCount(); node++) {
-      int operator = source.booleanOperator(node);
-      if (operator != SqlBooleanPredicateProgram.BOOLEAN_LEAF
-          && operator != SqlBooleanPredicateProgram.BOOLEAN_AND) return false;
-    }
-    for (int leaf = 0; leaf < source.leafCount(); leaf++) {
-      if (!rawColumn(source, leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT)) {
-        return false;
-      }
-      for (int program = SqlBooleanPredicateProgram.PROGRAM_RIGHT;
-          program <= SqlBooleanPredicateProgram.PROGRAM_UPPER; program++) {
-        int count = source.programNodeCount(leaf, program);
-        if (count > 1 || count == 1
-            && source.programOperator(leaf, program, 0)
-                != SqlScalarExpression.LITERAL
-            && source.programOperator(leaf, program, 0)
-                != SqlScalarExpression.NULL) return false;
-      }
-    }
-    return true;
-  }
-
-  private static boolean rawColumn(
-      SqlBooleanPredicateProgram source, int leaf, int program) {
-    return source.programNodeCount(leaf, program) == 1
-        && source.programOperator(leaf, program, 0) == SqlScalarExpression.COLUMN;
-  }
 }

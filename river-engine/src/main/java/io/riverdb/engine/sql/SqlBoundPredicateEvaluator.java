@@ -13,6 +13,7 @@ final class SqlBoundPredicateEvaluator {
   private final SqlNestedQueryExecution nested;
   private final SqlNestedPredicateEvaluator nestedPredicates;
   private final SqlBooleanPredicateEvaluator booleans;
+  private final SqlBooleanPredicateEvaluator joinOn;
   private final SqlBooleanPredicateEvaluator.Match booleanMatch =
       new SqlBooleanPredicateEvaluator.Match();
   private boolean matched;
@@ -28,15 +29,22 @@ final class SqlBoundPredicateEvaluator {
     expressions = evaluator;
     nested = nestedExecution;
     nestedPredicates = new SqlNestedPredicateEvaluator(evaluator);
-    booleans = new SqlBooleanPredicateEvaluator(evaluator, temporal);
+    SqlBooleanPredicateWorkspace workspace =
+        new SqlBooleanPredicateWorkspace(evaluator, temporal);
+    booleans = new SqlBooleanPredicateEvaluator(workspace, temporal);
+    joinOn = new SqlBooleanPredicateEvaluator(workspace, temporal);
   }
 
   StatusCode prepare() {
-    return booleans.prepare(bound.command, bound.whereBoolean);
+    StatusCode status = bound.hasOnBoolean()
+        ? joinOn.prepare(bound.command, bound.onBoolean()) : StatusCode.OK;
+    return status.isOk()
+        ? booleans.prepare(bound.command, bound.whereBoolean) : status;
   }
 
   void reset() {
     booleans.reset();
+    joinOn.reset();
     nestedPredicates.reset();
     matched = false;
     joinStatus = StatusCode.OK;
@@ -71,23 +79,37 @@ final class SqlBoundPredicateEvaluator {
 
   boolean matched() { return matched; }
 
-  boolean matchesJoin(long primaryKey, HeapRowResult source, boolean outer) {
-    TableDefinition definition = outer ? bound.table : bound.joinTable;
-    int scope = outer ? SqlBoundBooleanPredicateProgram.SCOPE_LOCAL
-        : SqlBoundBooleanPredicateProgram.SCOPE_OUTER;
-    joinStatus = booleans.matchesJoinScope(
-        bound.command, bound.whereBoolean, scope,
-        primaryKey, source, definition, booleanMatch);
+  boolean matchesJoinOn(
+      long outerKey,
+      HeapRowResult outerRow,
+      long innerKey,
+      HeapRowResult innerRow) {
+    joinStatus = joinOn.matchesJoin(
+        bound.command,
+        bound.onBoolean(),
+        outerKey,
+        outerRow,
+        bound.table,
+        innerKey,
+        innerRow,
+        bound.joinTable,
+        booleanMatch);
     return joinStatus.isOk() && booleanMatch.matched();
   }
 
-  boolean matchesNullExtendedJoin() {
-    joinStatus = booleans.matchesJoinScope(
+  boolean matchesJoinWhere(
+      long outerKey,
+      HeapRowResult outerRow,
+      long innerKey,
+      HeapRowResult innerRow) {
+    joinStatus = booleans.matchesJoin(
         bound.command,
         bound.whereBoolean,
-        SqlBoundBooleanPredicateProgram.SCOPE_OUTER,
-        0,
-        null,
+        outerKey,
+        outerRow,
+        bound.table,
+        innerKey,
+        innerRow,
         bound.joinTable,
         booleanMatch);
     return joinStatus.isOk() && booleanMatch.matched();

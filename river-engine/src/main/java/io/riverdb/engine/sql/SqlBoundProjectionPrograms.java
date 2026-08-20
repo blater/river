@@ -14,6 +14,8 @@ final class SqlBoundProjectionPrograms {
       new long[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
   private final int[][] descriptors =
       new int[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
+  private final byte[][] scopes =
+      new byte[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
   private final int[] nodeCounts = new int[MAXIMUM_PROGRAMS];
   private final int[] resultDescriptors = new int[MAXIMUM_PROGRAMS];
   private final int[] rawColumns = new int[MAXIMUM_PROGRAMS];
@@ -39,6 +41,7 @@ final class SqlBoundProjectionPrograms {
         operators[program][node] = 0;
         operands[program][node] = 0;
         descriptors[program][node] = 0;
+        scopes[program][node] = 0;
       }
       nodeCounts[program] = 0;
       resultDescriptors[program] = 0;
@@ -114,10 +117,22 @@ final class SqlBoundProjectionPrograms {
 
   void append(
       int projection, int operator, long operand, int descriptor) {
+    append(
+        projection, operator, operand, descriptor,
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
+  }
+
+  void append(
+      int projection,
+      int operator,
+      long operand,
+      int descriptor,
+      int scope) {
     int node = nodeCounts[projection]++;
     operators[projection][node] = (byte) operator;
     operands[projection][node] = operand;
     descriptors[projection][node] = descriptor;
+    scopes[projection][node] = (byte) scope;
   }
 
   void finish(int projection, int descriptor, int rawColumn) {
@@ -143,6 +158,18 @@ final class SqlBoundProjectionPrograms {
 
   int descriptor(int projection, int node) {
     return descriptors[projection][node];
+  }
+
+  int scope(int projection, int node) {
+    return Byte.toUnsignedInt(scopes[projection][node]);
+  }
+
+  boolean referencesScope(int projection, int scope) {
+    for (int node = 0; node < nodeCounts[projection]; node++) {
+      if (operators[projection][node] == SqlScalarExpression.COLUMN
+          && Byte.toUnsignedInt(scopes[projection][node]) == scope) return true;
+    }
+    return false;
   }
 
   int resultDescriptor(int projection) {

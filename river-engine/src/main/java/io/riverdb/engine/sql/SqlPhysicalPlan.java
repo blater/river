@@ -41,6 +41,7 @@ final class SqlPhysicalPlan {
   private int orderColumn = -1;
   private int joinOuterColumn = -1;
   private int joinInnerColumn = -1;
+  private int joinPredicateCount;
   private boolean sort;
   private long actualRows;
   private SqlBlockStagePlan blockStages;
@@ -77,6 +78,7 @@ final class SqlPhysicalPlan {
     orderColumn = -1;
     joinOuterColumn = -1;
     joinInnerColumn = -1;
+    joinPredicateCount = 0;
     sort = false;
     actualRows = 0;
     blockStages = null;
@@ -220,12 +222,14 @@ final class SqlPhysicalPlan {
   void setJoin(
       int outerColumn,
       int innerColumn,
+      int predicateCount,
       boolean preserveOuter,
       boolean indexedInner,
       boolean uniqueInner) {
     join = true;
     joinOuterColumn = outerColumn;
     joinInnerColumn = innerColumn;
+    joinPredicateCount = predicateCount;
     leftJoin = preserveOuter;
     joinInnerIndexed = indexedInner;
     joinInnerUnique = uniqueInner;
@@ -242,6 +246,8 @@ final class SqlPhysicalPlan {
   int joinInnerColumn() {
     return joinInnerColumn;
   }
+
+  int joinPredicateCount() { return joinPredicateCount; }
 
   boolean leftJoin() {
     return leftJoin;

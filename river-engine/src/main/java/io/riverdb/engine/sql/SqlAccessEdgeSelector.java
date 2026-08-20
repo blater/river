@@ -101,7 +101,7 @@ final class SqlAccessEdgeSelector {
     }
     if (column >= 0
         && programs.scope(leaf, literalProgram == right ? left : right, 0)
-            != SqlBoundBooleanPredicateProgram.SCOPE_LOCAL) return;
+            != SqlBoundBooleanPredicateProgram.SCOPE_LEFT) return;
     if (column < 0 || !literal(source, leaf, literalProgram)) return;
     columns[count] = column;
     leaves[count] = leaf;
@@ -121,7 +121,7 @@ final class SqlAccessEdgeSelector {
     int column = programs.rawColumn(leaf, left);
     if (source.leafNegated(leaf) || column < 0
         || programs.scope(leaf, left, 0)
-            != SqlBoundBooleanPredicateProgram.SCOPE_LOCAL
+            != SqlBoundBooleanPredicateProgram.SCOPE_LEFT
         || !literal(source, leaf, lower) || !literal(source, leaf, upper)) return;
     columns[count] = column;
     leaves[count] = leaf;

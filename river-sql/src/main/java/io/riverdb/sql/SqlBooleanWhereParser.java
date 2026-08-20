@@ -44,8 +44,19 @@ final class SqlBooleanWhereParser {
   }
 
   StatusCode parse(CharSequence sql, SqlCommand result) {
+    return parse(sql, result, result == null ? null : result.writableWherePredicates());
+  }
+
+  StatusCode parseOn(CharSequence sql, SqlCommand result) {
+    return parse(sql, result, result == null ? null : result.writableOnPredicates());
+  }
+
+  private StatusCode parse(
+      CharSequence sql,
+      SqlCommand result,
+      SqlBooleanPredicateProgram destination) {
     command = result;
-    target = result == null ? null : result.writableWherePredicates();
+    target = destination;
     if (target == null) {
       clearScratch();
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -373,6 +384,7 @@ final class SqlBooleanWhereParser {
     return character == ')' || character == ';'
         || startsKeyword(sql, position, "AND")
         || startsKeyword(sql, position, "OR")
+        || startsKeyword(sql, position, "WHERE")
         || startsKeyword(sql, position, "GROUP")
         || startsKeyword(sql, position, "HAVING")
         || startsKeyword(sql, position, "ORDER")

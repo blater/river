@@ -19,6 +19,7 @@ final class BoundSqlStatement {
   final SqlBoundAggregateSet aggregates = new SqlBoundAggregateSet();
   final SqlBoundBooleanPredicateProgram whereBoolean =
       new SqlBoundBooleanPredicateProgram();
+  private SqlBoundBooleanPredicateProgram onBoolean;
   final SqlBoundBooleanPredicateProgram havingBoolean =
       new SqlBoundBooleanPredicateProgram();
   private SqlBoundBlockPlans blockPlans;
@@ -55,6 +56,7 @@ final class BoundSqlStatement {
     projectionPrograms.reset();
     aggregates.reset();
     whereBoolean.reset();
+    if (onBoolean != null) onBoolean.reset();
     havingBoolean.reset();
     if (blockPlans != null) blockPlans.reset();
     table.reset();
@@ -82,6 +84,13 @@ final class BoundSqlStatement {
     if (blockPlans == null) blockPlans = new SqlBoundBlockPlans();
     return blockPlans;
   }
+
+  SqlBoundBooleanPredicateProgram onBoolean() {
+    if (onBoolean == null) onBoolean = new SqlBoundBooleanPredicateProgram();
+    return onBoolean;
+  }
+
+  boolean hasOnBoolean() { return onBoolean != null && onBoolean.available(); }
 
   boolean hasBlockPlans() {
     return blockPlans != null && blockPlans.count() > 0;

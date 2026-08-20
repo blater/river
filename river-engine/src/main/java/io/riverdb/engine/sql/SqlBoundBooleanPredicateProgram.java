@@ -5,8 +5,8 @@ import io.riverdb.sql.SqlComparison;
 
 /** Statement-owned resolved Boolean predicate with scope-aware column leaves. */
 final class SqlBoundBooleanPredicateProgram {
-  static final int SCOPE_LOCAL = 0;
-  static final int SCOPE_OUTER = 1;
+  static final int SCOPE_LEFT = 0;
+  static final int SCOPE_RIGHT = 1;
   private static final int PROGRAMS_PER_LEAF = 4;
   private static final int INITIAL_MEMBER_CAPACITY = 16;
 

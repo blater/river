@@ -69,7 +69,8 @@ final class SqlPlanDescription {
     } else if (status.isOk() && plan.distinct()) {
       status = plan.addStep(DISTINCT, plan.groupColumn());
     } else if (status.isOk() && plan.join()) {
-      status = plan.addStep(plan.leftJoin() ? LEFT : JOIN, plan.joinOuterColumn());
+      status = plan.addStep(
+          plan.leftJoin() ? LEFT : JOIN, plan.joinPredicateCount());
     }
     return status;
   }

@@ -15,6 +15,7 @@ final class SqlBinder {
   private final SqlProjectionBinder projections =
       new SqlProjectionBinder(predicates);
   private final SqlRowProjectionBinder aggregateRows = new SqlRowProjectionBinder();
+  private final SqlRowProjectionBinder joinRows = new SqlRowProjectionBinder();
   private final SqlAggregateSetBinder aggregateSets =
       new SqlAggregateSetBinder(aggregateRows);
   private final SqlPostAggregateProgramBinder having =
@@ -95,55 +96,13 @@ final class SqlBinder {
   }
 
   StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
-    if (SqlRowProjectionBinder.hasComputed(command)) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
-    }
     if (SqlBindingNames.matchesTable(command, command.joinTableName())
         || command.joinTableAlias().length() > 0
             && SqlBindingNames.matchesTable(command, command.joinTableAlias())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int outerJoinColumn = bound.table.findColumn(command.joinOuterColumnName());
-    int innerJoinColumn = bound.joinTable.findColumn(command.joinInnerColumnName());
-    if (outerJoinColumn < 0 || innerJoinColumn < 0 || command.columnCount() <= 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (!SqlTypeDescriptor.canCompare(
-        bound.table.typeDescriptor(outerJoinColumn),
-        bound.joinTable.typeDescriptor(innerJoinColumn))) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    for (int index = 0; index < command.columnCount(); index++) {
-      int descriptor = resolveJoinProjection(command, bound, index);
-      if (descriptor == Integer.MIN_VALUE) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      bound.projectedColumns[index] = descriptor;
-    }
-    bound.projectedColumnCount = command.columnCount();
-    StatusCode status = predicates.bindJoin(command, bound);
-    if (status.isOk()) {
-      bound.joinOuterColumn = outerJoinColumn;
-      bound.joinInnerColumn = innerJoinColumn;
-    }
-    return status;
-  }
-
-  private static int resolveJoinProjection(
-      SqlCommand command, BoundSqlStatement bound, int index) {
-    if (command.isNullProjection(index)) {
-      return Integer.MIN_VALUE;
-    }
-    if (SqlBindingNames.matchesTable(command, command.columnTableName(index))) {
-      int column = bound.table.findColumn(command.columnName(index));
-      return column < 0 ? Integer.MIN_VALUE : column;
-    }
-    if (SqlBindingNames.matchesJoinTable(
-        command, command.columnTableName(index))) {
-      int column = bound.joinTable.findColumn(command.columnName(index));
-      return column < 0 ? Integer.MIN_VALUE : -column - 1;
-    }
-    return Integer.MIN_VALUE;
+    StatusCode status = joinRows.bindJoin(command, bound);
+    return status.isOk() ? predicates.bindJoin(command, bound) : status;
   }
 
   static boolean isValueAggregate(SqlCommandType type) {

@@ -12,15 +12,27 @@ final class SqlRowProjectionProgramBinder {
       new boolean[SqlScalarExpression.MAXIMUM_NODES];
   private int size;
   private boolean generatedTemporalText;
+  private boolean join;
 
   StatusCode bind(SqlCommand command, BoundSqlStatement bound, int projection) {
+    join = false;
     SqlScalarExpression expression = command.projectionExpression(projection);
     StatusCode status = bindProgram(command, bound, expression, projection);
     return status.isOk() ? publishProjection(bound, expression, projection) : status;
   }
 
+  StatusCode bindJoin(
+      SqlCommand command, BoundSqlStatement bound, int projection) {
+    join = true;
+    SqlScalarExpression expression = command.projectionExpression(projection);
+    StatusCode status = bindProgram(command, bound, expression, projection);
+    join = false;
+    return status.isOk() ? publishProjection(bound, expression, projection) : status;
+  }
+
   StatusCode bindAggregateOperand(
       SqlCommand command, BoundSqlStatement bound, int projection) {
+    join = false;
     SqlScalarExpression expression = command.aggregateOperandExpression(projection);
     return bindProgram(command, bound, expression, projection);
   }
@@ -77,7 +89,12 @@ final class SqlRowProjectionProgramBinder {
       SqlScalarExpression expression,
       int projection,
       int node) {
-    int column = resolveSymbol(command, bound, (int) expression.operand(node));
+    int symbol = (int) expression.operand(node);
+    int scope = join ? joinScope(command, symbol)
+        : SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
+    int column = join
+        ? resolveJoinSymbol(command, bound, symbol, scope)
+        : resolveSymbol(command, bound, symbol);
     return column < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : push(
@@ -85,8 +102,10 @@ final class SqlRowProjectionProgramBinder {
             projection,
             SqlScalarExpression.COLUMN,
             column,
-            bound.table.typeDescriptor(column),
-            false);
+            (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
+                ? bound.table : bound.joinTable).typeDescriptor(column),
+            false,
+            scope);
   }
 
   private StatusCode bindUnary(
@@ -163,12 +182,25 @@ final class SqlRowProjectionProgramBinder {
       long operand,
       int descriptor,
       boolean untypedNull) {
+    return push(
+        bound, projection, operator, operand, descriptor, untypedNull,
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
+  }
+
+  private StatusCode push(
+      BoundSqlStatement bound,
+      int projection,
+      int operator,
+      long operand,
+      int descriptor,
+      boolean untypedNull,
+      int scope) {
     if (size >= descriptors.length) return StatusCode.RESOURCE_EXHAUSTED;
     descriptors[size] = descriptor;
     untypedNulls[size] = untypedNull;
     size++;
     bound.projectionPrograms.append(
-        projection, operator, operand, descriptor);
+        projection, operator, operand, descriptor, scope);
     return StatusCode.OK;
   }
 
@@ -190,9 +222,15 @@ final class SqlRowProjectionProgramBinder {
   private static StatusCode publishProjection(
       BoundSqlStatement bound, SqlScalarExpression expression, int projection) {
     int raw = bound.projectionPrograms.rawColumn(projection);
+    int scope = expression.isDirectColumnReference()
+        ? bound.projectionPrograms.scope(projection, 0)
+        : SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
     int column = expression.isNullLiteral()
         ? BoundSqlStatement.NULL_PROJECTION
-        : raw >= 0 ? raw : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+        : raw >= 0
+            ? scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
+                ? raw : -raw - 1
+            : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
     bound.projectedColumns[projection] = column;
     return duplicate(bound, projection, column)
         ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
@@ -208,6 +246,28 @@ final class SqlRowProjectionProgramBinder {
       return -1;
     }
     return bound.table.findColumn(name);
+  }
+
+  private static int joinScope(SqlCommand command, int symbol) {
+    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    if (qualifier == null) return -1;
+    if (SqlBindingNames.matchesTable(command, qualifier)) {
+      return SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
+    }
+    return SqlBindingNames.matchesJoinTable(command, qualifier)
+        ? SqlBoundBooleanPredicateProgram.SCOPE_RIGHT : -1;
+  }
+
+  private static int resolveJoinSymbol(
+      SqlCommand command,
+      BoundSqlStatement bound,
+      int symbol,
+      int scope) {
+    if (scope < 0) return -1;
+    CharSequence name = command.projectionSymbolName(symbol);
+    if (name == null) return -1;
+    return (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
+        ? bound.table : bound.joinTable).findColumn(name);
   }
 
   private static boolean duplicate(

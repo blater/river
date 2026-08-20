@@ -95,6 +95,15 @@ final class SqlSessionAllocationTest {
         session.execute("INSERT INTO texts VALUES (1, 'alpha')", result));
     assertEquals(
         StatusCode.OK,
+        session.execute(
+            "CREATE TABLE raw_texts "
+                + "(id BIGINT PRIMARY KEY, label VARCHAR(7) NOT NULL)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO raw_texts VALUES (2, 'alpha')", result));
+    assertEquals(
+        StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX texts_label ON texts(label)", result));
     assertEquals(
         StatusCode.OK,
@@ -340,6 +349,7 @@ final class SqlSessionAllocationTest {
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
+      exerciseComputedTextJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
       exerciseDisjunction(session, cursor, scanRow, result);
       exerciseView(session, cursor, scanRow, result);
@@ -369,6 +379,7 @@ final class SqlSessionAllocationTest {
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
+      exerciseComputedTextJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
       exerciseDisjunction(session, cursor, scanRow, result);
       exerciseView(session, cursor, scanRow, result);
@@ -916,6 +927,23 @@ final class SqlSessionAllocationTest {
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.nullMask();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseComputedTextJoin(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT texts.label,raw_texts.label FROM texts JOIN raw_texts "
+            + "ON texts.label=raw_texts.label OR texts.id+1=raw_texts.id",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.textLengthAt(0);
+    allocationGuard += row.textLengthAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

@@ -25,8 +25,6 @@ public final class SqlCommand {
   private final SqlIdentifier tableAlias = new SqlIdentifier();
   private final SqlIdentifier joinTableName = new SqlIdentifier();
   private final SqlIdentifier joinTableAlias = new SqlIdentifier();
-  private final SqlIdentifier joinOuterColumnName = new SqlIdentifier();
-  private final SqlIdentifier joinInnerColumnName = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
   private final SqlIdentifier renamedIndexName = new SqlIdentifier();
   private final SqlIdentifier sequenceName = new SqlIdentifier();
@@ -39,6 +37,7 @@ public final class SqlCommand {
   private final SqlAggregateSet aggregates = new SqlAggregateSet();
   private final SqlBooleanPredicateProgram wherePredicates =
       new SqlBooleanPredicateProgram();
+  private SqlBooleanPredicateProgram onPredicates;
   private final SqlBooleanPredicateProgram booleanHavingPredicates =
       new SqlBooleanPredicateProgram();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
@@ -111,8 +110,6 @@ public final class SqlCommand {
     tableAlias.reset();
     joinTableName.reset();
     joinTableAlias.reset();
-    joinOuterColumnName.reset();
-    joinInnerColumnName.reset();
     indexName.reset();
     renamedIndexName.reset();
     sequenceName.reset();
@@ -123,6 +120,7 @@ public final class SqlCommand {
     mutationExpressions.reset();
     aggregates.reset();
     wherePredicates.reset();
+    if (onPredicates != null) onPredicates.reset();
     booleanHavingPredicates.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
@@ -182,6 +180,13 @@ public final class SqlCommand {
       defaultUpdates[index] = false;
       updateTypeDescriptors[index] = 0;
       updateOperators[index] = UPDATE_LITERAL;
+    }
+  }
+
+  void discardOnPredicates() {
+    if (onPredicates != null) {
+      onPredicates.reset();
+      onPredicates = null;
     }
   }
 
@@ -245,11 +250,17 @@ public final class SqlCommand {
     projections.copyFrom(source.projections);
     aggregates.copyFrom(source.aggregates);
     wherePredicates.copyFrom(source.wherePredicates);
+    if (source.onPredicates != null && source.onPredicates.isAvailable()) {
+      writableOnPredicates().copyFrom(source.onPredicates);
+    }
     booleanHavingPredicates.copyFrom(source.booleanHavingPredicates);
     System.arraycopy(source.textBytes, 0, textBytes, 0, source.textBytesUsed);
     textBytesUsed = source.textBytesUsed;
     tableName.copyFrom(source.tableName);
     tableAlias.copyFrom(source.tableAlias);
+    joinTableName.copyFrom(source.joinTableName);
+    joinTableAlias.copyFrom(source.joinTableAlias);
+    leftJoin = source.leftJoin;
     for (int index = 0; index < source.columnCount; index++) {
       writableNextColumnName().copyFrom(source.columnNames[index]);
       writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
@@ -342,14 +353,6 @@ public final class SqlCommand {
     return joinTableAlias;
   }
 
-  SqlIdentifier writableJoinOuterColumnName() {
-    return joinOuterColumnName;
-  }
-
-  SqlIdentifier writableJoinInnerColumnName() {
-    return joinInnerColumnName;
-  }
-
   SqlIdentifier writableIndexName() {
     return indexName;
   }
@@ -397,6 +400,11 @@ public final class SqlCommand {
 
   SqlBooleanPredicateProgram writableWherePredicates() {
     return wherePredicates;
+  }
+
+  SqlBooleanPredicateProgram writableOnPredicates() {
+    if (onPredicates == null) onPredicates = new SqlBooleanPredicateProgram();
+    return onPredicates;
   }
 
   SqlBooleanPredicateProgram writableBooleanHavingPredicates() {
@@ -657,14 +665,6 @@ public final class SqlCommand {
     return joinTableAlias;
   }
 
-  public SqlIdentifier joinOuterColumnName() {
-    return joinOuterColumnName;
-  }
-
-  public SqlIdentifier joinInnerColumnName() {
-    return joinInnerColumnName;
-  }
-
   public boolean isLeftJoin() {
     return leftJoin;
   }
@@ -713,6 +713,10 @@ public final class SqlCommand {
 
   public SqlBooleanPredicateProgram wherePredicates() {
     return wherePredicates;
+  }
+
+  public SqlBooleanPredicateProgram onPredicates() {
+    return writableOnPredicates();
   }
 
   public SqlBooleanPredicateProgram booleanHavingPredicates() {

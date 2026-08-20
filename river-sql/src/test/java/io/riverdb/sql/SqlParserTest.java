@@ -20,6 +20,121 @@ final class SqlParserTest {
   private static volatile long allocationGuard;
 
   @Test
+  void ownsBoundedOnProgramsAcrossCopyResetAndMarkers() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    SqlCommand copied = new SqlCommand();
+    TestParameters parameters = new TestParameters(
+        new int[] {
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT
+        },
+        new long[] {7, 1, 10},
+        new boolean[] {false, false, false},
+        new String[] {null, null, null});
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT a.key,r.code FROM accounts a LEFT JOIN regions r "
+                + "ON ?=a.region AND r.id+?=a.key AND r.label='Aé😀' "
+                + "WHERE r.code>?",
+            parameters,
+            command));
+    assertTrue(command.isLeftJoin());
+    assertEquals(3, command.onPredicates().leafCount());
+    assertEquals(7, predicateProgramValue(
+        command.onPredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_LEFT));
+    assertEquals(1, command.onPredicates().programOperand(
+        1, SqlBooleanPredicateProgram.PROGRAM_LEFT, 1));
+    assertEquals(10, predicateValue(command, 0));
+    copied.copyQueryFrom(command);
+    assertTrue(copied.isLeftJoin());
+    assertName("accounts", copied.tableName());
+    assertName("regions", copied.joinTableName());
+    assertName("a", copied.tableAlias());
+    assertName("r", copied.joinTableAlias());
+    assertEquals(3, copied.onPredicates().leafCount());
+    long text = copied.onPredicates().programOperand(
+        2, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
+    assertText("Aé😀", copied, text);
+    command.reset();
+    assertEquals(0, command.onPredicates().leafCount());
+    assertEquals(StatusCode.OK, parser.parse("SELECT id FROM moments", command));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT a.key FROM accounts a JOIN regions r ON "
+                + "a.key=1 AND a.region=2 AND r.id=3 AND r.code=4 "
+                + "AND a.key=5 AND a.region=6 AND r.id=7 AND r.code=8",
+            command));
+    assertEquals(8, command.onPredicates().leafCount());
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(
+            "SELECT a.key FROM accounts a JOIN regions r ON "
+                + "a.key=1 AND a.region=2 AND r.id=3 AND r.code=4 "
+                + "AND a.key=5 AND a.region=6 AND r.id=7 AND r.code=8 "
+                + "AND a.key=9",
+            command));
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(
+            "SELECT a.key FROM accounts a JOIN regions r ON "
+                + "a.key+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1=r.id",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id",
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id "
+                + "ORDER BY a.key",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id",
+            command));
+  }
+
+  @Test
+  void discardsRejectedQueryBlockOnArenasButWarmsDirectRoot() throws Exception {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    StringBuilder members = new StringBuilder();
+    for (int value = 1; value <= 256; value++) {
+      if (value > 1) members.append(',');
+      members.append(value);
+    }
+    String join = "SELECT a.key FROM accounts a JOIN regions r ON r.id IN ("
+        + members + ")";
+    assertEquals(StatusCode.OK, parser.parse(join, command));
+    java.lang.reflect.Field on = SqlCommand.class.getDeclaredField("onPredicates");
+    on.setAccessible(true);
+    assertTrue(on.get(command) != null);
+    command.reset();
+    assertTrue(on.get(command) != null);
+
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT d.key FROM (" + join + ") d", query, command));
+    java.lang.reflect.Field blocks = SqlQuery.class.getDeclaredField("blocks");
+    blocks.setAccessible(true);
+    for (SqlCommand block : (SqlCommand[]) blocks.get(query)) {
+      assertNull(on.get(block));
+    }
+    query.reset();
+    assertEquals(StatusCode.OK, parser.parse("SELECT id FROM moments", command));
+  }
+
+  @Test
   void copiesTypedParametersAndPreservesNullSemantics() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
@@ -2060,8 +2175,16 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.JOIN_SCAN, command.type());
     assertName("accounts", command.tableName());
     assertName("regions", command.joinTableName());
-    assertName("region", command.joinOuterColumnName());
-    assertName("id", command.joinInnerColumnName());
+    assertEquals(1, command.onPredicates().leafCount());
+    assertEquals(SqlComparison.EQUAL, command.onPredicates().comparison(0));
+    int onLeft = (int) command.onPredicates().programOperand(
+        0, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
+    int onRight = (int) command.onPredicates().programOperand(
+        0, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
+    assertName("accounts", command.predicateSymbolTable(onLeft));
+    assertName("region", command.predicateSymbolName(onLeft));
+    assertName("regions", command.predicateSymbolTable(onRight));
+    assertName("id", command.predicateSymbolName(onRight));
     assertName("accounts", command.columnTableName(0));
     assertName("key", command.columnName(0));
     assertName("regions", command.columnTableName(1));
@@ -2089,6 +2212,18 @@ final class SqlParserTest {
     assertName("r", command.columnTableName(1));
     assertName("a", predicateTableName(command, 0));
     assertName("r", predicateTableName(command, 1));
+    assertEquals(1, command.onPredicates().leafCount());
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT a.key+1 AS next_key,r.code FROM accounts a "
+                + "LEFT JOIN regions r ON NOT (a.region+1<>r.id OR r.code<0) "
+                + "WHERE a.key+r.id>2",
+            command));
+    assertTrue(command.isLeftJoin());
+    assertEquals(2, command.onPredicates().leafCount());
+    assertEquals(1, command.wherePredicates().leafCount());
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT region, key, value FROM accounts WHERE key=7", command));

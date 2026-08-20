@@ -23,15 +23,12 @@ public final class SqlScanRowResult {
 
   public void reset() {
     relational.reset();
+    clearProjected();
     key = 0;
     value = 0;
     nullMask = 0;
     columnCount = 0;
     available = false;
-    for (int index = 0; index < textLengths.length; index++) {
-      textLengths[index] = 0;
-      typeDescriptors[index] = 0;
-    }
   }
 
   RelationalScanResult relational() {
@@ -54,6 +51,44 @@ public final class SqlScanRowResult {
     }
     value = projectedColumnCount == 0 ? 0 : values[projectedColumnCount - 1];
     available = true;
+  }
+
+  void beginProjected(
+      long rowKey, int[] projectedTypeDescriptors, int projectedColumnCount) {
+    clearProjected();
+    key = rowKey;
+    value = 0;
+    nullMask = 0;
+    columnCount = projectedColumnCount;
+    for (int index = 0; index < projectedColumnCount; index++) {
+      values[index] = 0;
+      typeDescriptors[index] = projectedTypeDescriptors[index];
+      textLengths[index] = 0;
+    }
+    available = true;
+  }
+
+  private void clearProjected() {
+    for (int index = 0; index < textLengths.length; index++) {
+      for (int character = 0; character < textLengths[index]; character++) {
+        textValues[index][character] = 0;
+      }
+      values[index] = 0;
+      textLengths[index] = 0;
+      typeDescriptors[index] = 0;
+    }
+  }
+
+  void setProjectedValue(int index, long projectedValue) {
+    values[index] = projectedValue;
+    nullMask &= ~(1L << index);
+    if (index == columnCount - 1) value = projectedValue;
+  }
+
+  void setProjectedNull(int index) {
+    values[index] = 0;
+    nullMask |= 1L << index;
+    if (index == columnCount - 1) value = 0;
   }
 
   StatusCode setTextAt(int index, CharSequence source) {
@@ -95,6 +130,19 @@ public final class SqlScanRowResult {
     System.arraycopy(source, offset, textValues[index], 0, length);
     textLengths[index] = length;
     return StatusCode.OK;
+  }
+
+  StatusCode beginTextAt(int index, int length) {
+    if (!available || index < 0 || index >= columnCount
+        || length < 0 || length > textValues[index].length || !isVarchar(index)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    textLengths[index] = length;
+    return StatusCode.OK;
+  }
+
+  void setTextCharacterAt(int index, int character, char value) {
+    textValues[index][character] = value;
   }
 
   StatusCode setPackedTextAt(int index, long packed) {

@@ -226,8 +226,6 @@ final class BoundSqlQuery {
     private final SqlBoundName tableAlias = new SqlBoundName();
     private final SqlBoundName joinTableName = new SqlBoundName();
     private final SqlBoundName joinTableAlias = new SqlBoundName();
-    private final SqlBoundName joinOuterColumnName = new SqlBoundName();
-    private final SqlBoundName joinInnerColumnName = new SqlBoundName();
     private final SqlBoundName orderColumnName = new SqlBoundName();
     private int columnCount;
     private long rowLimit;
@@ -270,8 +268,6 @@ final class BoundSqlQuery {
       tableAlias.copyFrom(source.tableAlias());
       joinTableName.copyFrom(source.joinTableName());
       joinTableAlias.copyFrom(source.joinTableAlias());
-      joinOuterColumnName.copyFrom(source.joinOuterColumnName());
-      joinInnerColumnName.copyFrom(source.joinInnerColumnName());
       orderColumnName.copyFrom(source.orderColumnName());
       columnCount = source.columnCount();
       rowLimit = source.rowLimit();
@@ -353,8 +349,6 @@ final class BoundSqlQuery {
     CharSequence tableAlias() { return tableAlias; }
     CharSequence joinTableName() { return joinTableName; }
     CharSequence joinTableAlias() { return joinTableAlias; }
-    CharSequence joinOuterColumnName() { return joinOuterColumnName; }
-    CharSequence joinInnerColumnName() { return joinInnerColumnName; }
     CharSequence orderColumnName() { return orderColumnName; }
     int columnCount() { return columnCount; }
     CharSequence firstColumnName() { return columnName(0); }

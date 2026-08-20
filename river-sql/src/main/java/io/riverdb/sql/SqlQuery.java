@@ -28,6 +28,7 @@ public final class SqlQuery {
   public void reset() {
     for (int index = 0; index < blockCount; index++) {
       blocks[index].reset();
+      blocks[index].discardOnPredicates();
       scalarPredicates[index] = -1;
       existencePredicates[index] = 0;
       membershipPredicates[index] = 0;
@@ -113,6 +114,12 @@ public final class SqlQuery {
 
   public StatusCode validateAppendedPipeline(int firstBlock) {
     return derivedCompiler.validatePipeline(firstBlock);
+  }
+
+  void discardOnPredicates() {
+    for (int index = 0; index < blockCount; index++) {
+      blocks[index].discardOnPredicates();
+    }
   }
 
   public StatusCode expandRootSelectAllFrom(int sourceBlock) {

@@ -140,13 +140,13 @@ final class SqlBooleanScalarBinder {
       long operand,
       boolean join) {
     int scope = join ? joinScope(command, (int) operand)
-        : SqlBoundBooleanPredicateProgram.SCOPE_LOCAL;
+        : SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
     int column = join
         ? resolveJoin(command, statement, (int) operand, scope)
         : resolve(command, statement, schema, (int) operand);
     if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     int descriptor = join
-        ? (scope == SqlBoundBooleanPredicateProgram.SCOPE_LOCAL
+        ? (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
             ? statement.table : statement.joinTable).typeDescriptor(column)
         : schema == null
             ? statement.table.typeDescriptor(column) : schema.descriptor(column);
@@ -172,7 +172,7 @@ final class SqlBooleanScalarBinder {
     if (operator == SqlScalarExpression.CAST) untyped[slot] = false;
     target.append(
         leaf, program, operator, operand, descriptor,
-        SqlBoundBooleanPredicateProgram.SCOPE_LOCAL);
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
     return StatusCode.OK;
   }
 
@@ -196,7 +196,7 @@ final class SqlBooleanScalarBinder {
     stack[size - 1] = descriptor;
     target.append(
         leaf, program, operator, operand, descriptor,
-        SqlBoundBooleanPredicateProgram.SCOPE_LOCAL);
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
     return StatusCode.OK;
   }
 
@@ -232,7 +232,7 @@ final class SqlBooleanScalarBinder {
       boolean untypedNull) {
     return push(
         target, leaf, program, operator, operand, descriptor, untypedNull,
-        SqlBoundBooleanPredicateProgram.SCOPE_LOCAL);
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
 
   private StatusCode push(
@@ -269,10 +269,10 @@ final class SqlBooleanScalarBinder {
     CharSequence qualifier = command.projectionSymbolTable(symbol);
     if (qualifier == null) return -1;
     if (SqlBindingNames.matchesTable(command, qualifier)) {
-      return SqlBoundBooleanPredicateProgram.SCOPE_LOCAL;
+      return SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
     }
     return SqlBindingNames.matchesJoinTable(command, qualifier)
-        ? SqlBoundBooleanPredicateProgram.SCOPE_OUTER : -1;
+        ? SqlBoundBooleanPredicateProgram.SCOPE_RIGHT : -1;
   }
 
   private static int resolveJoin(
@@ -283,7 +283,7 @@ final class SqlBooleanScalarBinder {
     if (scope < 0) return -1;
     CharSequence name = command.projectionSymbolName(symbol);
     if (name == null) return -1;
-    return (scope == SqlBoundBooleanPredicateProgram.SCOPE_LOCAL
+    return (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
         ? statement.table : statement.joinTable).findColumn(name);
   }
 }

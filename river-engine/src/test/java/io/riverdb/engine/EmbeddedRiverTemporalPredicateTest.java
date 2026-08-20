@@ -99,13 +99,12 @@ final class EmbeddedRiverTemporalPredicateTest {
         28,
         29,
         31);
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT events.id FROM events LEFT JOIN empty_times "
-                + "ON events.id=empty_times.id "
-                + "WHERE EXTRACT(DAY FROM events.day)=28",
-            new QueryOpenResult()));
+    assertRows(
+        session,
+        "SELECT events.id FROM events LEFT JOIN empty_times "
+            + "ON events.id=empty_times.id "
+            + "WHERE EXTRACT(DAY FROM events.day)=28",
+        1);
     assertEquals(
         StatusCode.OK,
         session.execute(

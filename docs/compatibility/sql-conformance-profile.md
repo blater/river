@@ -80,16 +80,23 @@ Durable view records use strict UTF-8 catalog format v2. V1, malformed,
 noncanonical, truncated, trailing, or unpaired UTF-16 input is rejected rather
 than adapted during this pre-V1 format replacement. Projection-only stored
 views retain their flattened point/index fast path; only a real cardinality
-barrier selects staged execution. Existing bounded raw JOIN and
-nested/correlated forms continue through their dedicated execution paths.
-JOIN predicates remain the admitted qualified raw conjunction shape, and
-nested/correlated column-to-column edges remain equality-only; auxiliary raw
-ranges, membership, NULL, and truth tests retain their prior admission.
-Computed JOIN expressions, generalized JOIN Boolean trees, and computed or
-generalized correlated/subquery predicates remain explicit
-`FEATURE_NOT_SUPPORTED` work for P4B and the correlation slice. More than one
-`AT TIME ZONE` operation in one scalar operand and aggregate stages inside a
-join, nested, or correlated context also remain U02f work. A column may declare one
+barrier selects staged execution. The P4B1 direct-JOIN checkpoint assigns
+separate bounded canonical Boolean programs to `ON` and post-join `WHERE`.
+Qualified operands may reference either JOIN row in comparisons, Boolean
+composition, range and membership tests, and selected scalar programs. `ON
+TRUE` establishes match state before `WHERE`; `LEFT JOIN` publishes a
+NULL-extended right row only when no candidate made `ON` true. A mandatory raw
+cross-scope equality on the top-level `AND` spine may drive the inner lookup
+but remains residual-checked; other admitted `ON` shapes use a bounded nested
+loop. Selected scalar expressions may reference either row, and generated/raw
+`VARCHAR` results are published from owned text. Direct JOIN `ORDER BY`,
+JOIN-backed P3 cardinality stages, and durable JOIN views with two-table
+dependency lineage remain explicit P4B2/P4B3 `FEATURE_NOT_SUPPORTED` work.
+Nested/correlated column-to-column edges remain equality-only; auxiliary raw
+ranges, membership, NULL, and truth tests retain their prior admission, while
+computed or generalized correlated/subquery predicates remain deferred. More
+than one `AT TIME ZONE` operation in one scalar operand and aggregate stages
+inside a join, nested, or correlated context also remain U02f work. A column may declare one
 durable `CHECK` whose bounded expression references only that column. All
 column checks share a 32-node/table arena; exhausting it returns
 `RESOURCE_EXHAUSTED`. An admitted expression uses

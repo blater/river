@@ -25,10 +25,10 @@ or gate has passed.
 | --- | --- |
 | Integration branch | `master` |
 | Current wave | M5 useful v1 SQL surface |
-| Current target | Complete the remaining U01/U02f computed JOIN and correlated expression contexts |
-| Next product slice | Computed JOIN expressions, correlated expressions, broader CHECK contexts, then U06 |
+| Current target | P4B2 JOIN-backed block stages |
+| Next product slice | P4B3 durable two-table JOIN-view lineage, then correlation and broader CHECK contexts |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | 2026-08-20 common bounded Boolean/3VL predicates through direct SQL, DML, generalized `HAVING`, every derived/view block stage, and retained raw JOIN/nested paths — full `river-base`, `river-sql`, and `river-engine` suites; prior checkpoints retained |
+| Latest green functional checkpoint | 2026-08-20 direct computed `INNER`/`LEFT JOIN` with separate bounded `ON`/`WHERE`, dual-row projections, SQL 3VL, owned UTF-8, truthful plans, and allocation/lifecycle evidence — full `river-sql` and `river-engine` suites; prior checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
@@ -77,7 +77,7 @@ SQL conformance profile.
 | U02c `BOOLEAN` and `DECIMAL(p,s)` | passed | Accepted exact representation/math/casts, predicate/aggregate/index/constraint, JDBC, recovery, and error evidence |
 | U02d local temporal types | passed | Accepted strict local temporal grammar/codec, catalog/row/default/check validation, DATE index, DML/predicates/update, corruption, and checkpoint/reopen evidence; TIME index admission was corrected in U02f after proving its full domain fits the existing key |
 | U02e time-zone semantics | passed | Accepted UTC instant storage, strict fixed/IANA area zones, DST gap/overlap behavior, session-state rollback semantics, tzdb reporting, statement-stable defaults, catalog v13, and checkpoint/reopen evidence |
-| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables and UTF-8-v2 durable views, and P4A's common bounded Boolean/3VL program at the direct root and every block/view stage, including scalar comparison RHS and generated-text range/membership. Existing raw JOIN/nested/correlated forms stay admitted, while computed JOIN/correlation and broader CHECK/expression contexts remain |
+| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables and UTF-8-v2 durable views, P4A's common bounded Boolean/3VL program at the direct root and every block/view stage, and P4B1's separate bounded computed `ON` and post-join `WHERE` programs plus scoped computed projection for direct `INNER`/`LEFT JOIN`. JOIN-backed P3 stages, durable two-base JOIN views, correlation, and broader CHECK/expression contexts remain separate work. |
 | U03a JDBC/protocol types | passed | Accepted protocol v3 binary values/parameters, authenticated all-type JDBC/CLI, Java-time/decimal mappings, exact metadata, conversion matrix, warnings, generated keys, bounded batches, failure states, and ownership/erasure evidence |
 | U06a type/temporal gate | active | Unified embedded/authenticated-JDBC/CLI/checkpoint/backup/fault fixture and independent relational-semantics review remain |
 

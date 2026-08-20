@@ -19,6 +19,7 @@ final class SqlRowProjectionEvaluator {
   private final boolean[] insertedNulls =
       new boolean[SqlScalarExpression.MAXIMUM_NODES];
   private final SqlRowExpressionEvaluator expressions;
+  private final SqlJoinProjectionEvaluator joinProjections;
   private final SqlTemporalContext temporal;
   private final SqlExpressionEvaluator columns;
   private final SqlTemporalContext.LongResult current = new SqlTemporalContext.LongResult();
@@ -27,6 +28,7 @@ final class SqlRowProjectionEvaluator {
   SqlRowProjectionEvaluator(
       SqlExpressionEvaluator columns, SqlTemporalContext temporal) {
     expressions = new SqlRowExpressionEvaluator(columns, temporal);
+    joinProjections = new SqlJoinProjectionEvaluator(expressions);
     this.temporal = temporal;
     this.columns = columns;
     for (int index = 0; index < zones.length; index++) zones[index] = new SqlTemporalZonePlan();
@@ -34,6 +36,7 @@ final class SqlRowProjectionEvaluator {
 
   StatusCode prepare(BoundSqlStatement statement) {
     bound = statement;
+    joinProjections.bind(statement, zones);
     SqlCommand command = statement.command;
     SqlBoundProjectionPrograms programs = statement.projectionPrograms;
     for (int projection = 0; projection < programs.count(); projection++) {
@@ -158,6 +161,16 @@ final class SqlRowProjectionEvaluator {
     return StatusCode.OK;
   }
 
+  StatusCode projectJoin(
+      long outerKey,
+      HeapRowResult outerRow,
+      long innerKey,
+      HeapRowResult innerRow,
+      SqlScanRowResult result) {
+    return joinProjections.project(
+        outerKey, outerRow, innerKey, innerRow, result);
+  }
+
   StatusCode evaluateProgram(
       int program, long primaryKey, HeapRowResult source) {
     if (bound == null
@@ -208,6 +221,7 @@ final class SqlRowProjectionEvaluator {
   }
 
   void reset() {
+    joinProjections.reset();
     expressions.reset();
     for (int index = 0; index < zones.length; index++) {
       if (zones[index] != null) zones[index].reset();

@@ -11,11 +11,6 @@ final class SqlActiveScanState {
   private final RelationalScanCursor relational = new RelationalScanCursor();
   private final CatalogObjectCursor catalogObjects = new CatalogObjectCursor();
   private final CatalogIndexCursor catalogIndexes = new CatalogIndexCursor();
-  private final RelationalScanCursor joinInnerRelational = new RelationalScanCursor();
-  private final long[] joinOuterProjectedValues =
-      new long[TableSchema.MAXIMUM_COLUMNS];
-  private boolean joinInnerScanActive;
-  private boolean joinMatched;
   private boolean groupLookahead;
   private boolean groupLookaheadNull;
   private boolean groupInputExhausted;
@@ -36,9 +31,6 @@ final class SqlActiveScanState {
       new long[TableSchema.MAXIMUM_COLUMNS];
   private long groupLookaheadNullMask;
   private long distinctValue;
-  private long joinOuterKey;
-  private long joinMatchValue;
-  private long joinOuterNullMask;
   private int sortedRowCount;
   private int sortedRowIndex;
   private int planStepIndex;
@@ -49,8 +41,6 @@ final class SqlActiveScanState {
     if (active) {
       return StatusCode.CONFLICT;
     }
-    joinInnerScanActive = false;
-    joinMatched = false;
     groupLookahead = false;
     groupLookaheadNull = false;
     groupInputExhausted = false;
@@ -76,19 +66,15 @@ final class SqlActiveScanState {
       groupLookaheadValues[index] = 0;
     }
     distinctValue = 0;
-    joinOuterKey = 0;
-    joinMatchValue = 0;
-    joinOuterNullMask = 0;
     sortedRowCount = 0;
     sortedRowIndex = 0;
     planStepIndex = 0;
     terminalStatus = null;
     StatusCode status = relational.reset();
-    StatusCode inner = joinInnerRelational.reset();
     StatusCode catalog = catalogObjects.reset();
     StatusCode indexes = catalogIndexes.reset();
     return !status.isOk()
-        ? status : !inner.isOk() ? inner : !catalog.isOk() ? catalog : indexes;
+        ? status : !catalog.isOk() ? catalog : indexes;
   }
 
   CatalogObjectCursor catalogObjects() {
@@ -101,10 +87,6 @@ final class SqlActiveScanState {
 
   RelationalScanCursor relational() {
     return relational;
-  }
-
-  RelationalScanCursor joinInnerRelational() {
-    return joinInnerRelational;
   }
 
   StatusCode claim() {
@@ -186,58 +168,6 @@ final class SqlActiveScanState {
 
   void advanceSortedRow() {
     sortedRowIndex++;
-  }
-
-  boolean joinMatched() {
-    return joinMatched;
-  }
-
-  void matchJoin() {
-    joinMatched = true;
-  }
-
-  boolean joinInnerScanActive() {
-    return joinInnerScanActive;
-  }
-
-  void beginJoinInnerScan(long outerKey, long matchValue) {
-    rememberJoinOuter(outerKey);
-    joinMatchValue = matchValue;
-    joinMatched = false;
-    joinInnerScanActive = true;
-  }
-
-  void rememberJoinOuter(long outerKey) {
-    joinOuterKey = outerKey;
-  }
-
-  void completeJoinInnerScan() {
-    joinInnerScanActive = false;
-  }
-
-  long joinOuterKey() {
-    return joinOuterKey;
-  }
-
-  long joinMatchValue() {
-    return joinMatchValue;
-  }
-
-  void setJoinOuterProjectedValue(int index, long value, boolean isNull) {
-    joinOuterProjectedValues[index] = value;
-    if (isNull) {
-      joinOuterNullMask |= 1L << index;
-    } else {
-      joinOuterNullMask &= ~(1L << index);
-    }
-  }
-
-  long joinOuterProjectedValue(int index) {
-    return joinOuterProjectedValues[index];
-  }
-
-  boolean joinOuterProjectedNull(int index) {
-    return (joinOuterNullMask & 1L << index) != 0;
   }
 
   boolean groupInputExhausted() {

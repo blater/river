@@ -69,7 +69,7 @@ final class SqlQueryExecution {
     pointQueries = new SqlPointQueryExecution(
         session, bound, expressions, predicates, rowProjections, temporal);
     joins = new SqlJoinExecution(
-        session, bound, plan, activeScan, expressions, predicates);
+        session, bound, plan, expressions, predicates, rowProjections);
     sorts = new SqlSortExecution(
         session,
         bound,
@@ -559,14 +559,9 @@ final class SqlQueryExecution {
   private StatusCode closePhysicalResources() {
     StatusCode status = StatusCode.OK;
     status = catalogs.close();
+    status = joins.closeAfter(status);
     if (status.isOk() && pointQueries.hasResources()) {
       status = pointQueries.closeResources();
-    }
-    if (status.isOk() && activeScan.joinInnerRelational().isActive()) {
-      status = session.closeScan(activeScan.joinInnerRelational());
-      if (status.isOk()) {
-        activeScan.completeJoinInnerScan();
-      }
     }
     if (status.isOk() && activeScan.relational().isActive()) {
       status = session.closeScan(activeScan.relational());

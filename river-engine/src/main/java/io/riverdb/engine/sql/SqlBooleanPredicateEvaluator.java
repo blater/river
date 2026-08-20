@@ -16,13 +16,14 @@ final class SqlBooleanPredicateEvaluator {
   static final int UNKNOWN = 2;
   private static final int PROGRAMS_PER_LEAF = 4;
 
+  private final SqlBooleanPredicateWorkspace workspace;
   private final SqlPredicateOperandEvaluator expressions;
   private final SqlExpressionEvaluator exact;
   private final SqlTemporalContext temporal;
-  private final SqlPredicateOperand left = new SqlPredicateOperand();
-  private final SqlPredicateOperand right = new SqlPredicateOperand();
-  private final SqlPredicateOperand lower = new SqlPredicateOperand();
-  private final SqlPredicateOperand upper = new SqlPredicateOperand();
+  private final SqlPredicateOperand left;
+  private final SqlPredicateOperand right;
+  private final SqlPredicateOperand lower;
+  private final SqlPredicateOperand upper;
   private final SqlTemporalContext.LongResult current =
       new SqlTemporalContext.LongResult();
   private final SqlTemporalZonePlan[] zones = new SqlTemporalZonePlan[
@@ -34,9 +35,10 @@ final class SqlBooleanPredicateEvaluator {
   private TableDefinition table;
   private SqlBlockRow blockRow;
   private boolean block;
-  private boolean scoped;
-  private boolean nullExtended;
-  private int requestedScope;
+  private boolean join;
+  private long joinInnerKey;
+  private HeapRowResult joinInnerRow;
+  private TableDefinition joinInnerTable;
   private SqlAggregateAccumulatorSet havingAggregates;
   private long havingGroupValue;
   private boolean havingGroupNull;
@@ -46,9 +48,20 @@ final class SqlBooleanPredicateEvaluator {
 
   SqlBooleanPredicateEvaluator(
       SqlExpressionEvaluator columnReader, SqlTemporalContext temporalContext) {
-    exact = columnReader;
+    this(new SqlBooleanPredicateWorkspace(columnReader, temporalContext), temporalContext);
+  }
+
+  SqlBooleanPredicateEvaluator(
+      SqlBooleanPredicateWorkspace shared,
+      SqlTemporalContext temporalContext) {
+    exact = shared.columns;
     temporal = temporalContext;
-    expressions = new SqlPredicateOperandEvaluator(columnReader, temporalContext);
+    workspace = shared;
+    expressions = shared.expressions;
+    left = shared.left;
+    right = shared.right;
+    lower = shared.lower;
+    upper = shared.upper;
   }
 
   StatusCode prepare(
@@ -138,13 +151,15 @@ final class SqlBooleanPredicateEvaluator {
     return status;
   }
 
-  StatusCode matchesJoinScope(
+  StatusCode matchesJoin(
       SqlCommand source,
       SqlBoundBooleanPredicateProgram bound,
-      int scope,
-      long key,
-      HeapRowResult row,
-      TableDefinition definition,
+      long outerKey,
+      HeapRowResult outerRow,
+      TableDefinition outerTable,
+      long innerKey,
+      HeapRowResult innerRow,
+      TableDefinition innerTable,
       Match result) {
     result.matched = false;
     if (!bound.available()) {
@@ -153,12 +168,13 @@ final class SqlBooleanPredicateEvaluator {
     }
     command = source;
     programs = bound;
-    requestedScope = scope;
-    scoped = true;
-    nullExtended = row == null;
-    primaryKey = key;
-    physicalRow = row;
-    table = definition;
+    join = true;
+    primaryKey = outerKey;
+    physicalRow = outerRow;
+    table = outerTable;
+    joinInnerKey = innerKey;
+    joinInnerRow = innerRow;
+    joinInnerTable = innerTable;
     blockRow = null;
     block = false;
     StatusCode status = evaluateNode(bound.root());
@@ -218,10 +234,6 @@ final class SqlBooleanPredicateEvaluator {
   }
 
   private StatusCode evaluateLeaf(int leaf) {
-    if (scoped && leafScope(leaf) != requestedScope) {
-      truth = TRUE;
-      return StatusCode.OK;
-    }
     StatusCode status = operand(
         leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, left);
     if (!status.isOk()) return status;
@@ -334,11 +346,22 @@ final class SqlBooleanPredicateEvaluator {
           havingGroupTextLength,
           result);
     }
-    if (nullExtended && program == SqlBooleanPredicateProgram.PROGRAM_LEFT) {
-      result.setNull(programs.resultDescriptor(leaf, program));
-      return StatusCode.OK;
-    }
     SqlTemporalZonePlan zone = zones[programSlot(leaf, program)];
+    if (join) {
+      return expressions.evaluateJoin(
+          command,
+          programs,
+          leaf,
+          program,
+          zone,
+          primaryKey,
+          physicalRow,
+          table,
+          joinInnerKey,
+          joinInnerRow,
+          joinInnerTable,
+          result);
+    }
     return expressions.evaluate(
         command,
         programs,
@@ -350,11 +373,6 @@ final class SqlBooleanPredicateEvaluator {
         block ? null : table,
         block ? blockRow : null,
         result);
-  }
-
-  private int leafScope(int leaf) {
-    return programs.scope(
-        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
   }
 
   private static boolean matches(int compared, SqlComparison comparison) {
@@ -399,9 +417,10 @@ final class SqlBooleanPredicateEvaluator {
     table = null;
     blockRow = null;
     block = false;
-    scoped = false;
-    nullExtended = false;
-    requestedScope = SqlBoundBooleanPredicateProgram.SCOPE_LOCAL;
+    join = false;
+    joinInnerKey = 0;
+    joinInnerRow = null;
+    joinInnerTable = null;
     havingAggregates = null;
     havingGroupValue = 0;
     havingGroupNull = false;
@@ -412,15 +431,12 @@ final class SqlBooleanPredicateEvaluator {
   }
 
   private void resetOperands() {
-    left.clear();
-    right.clear();
-    lower.clear();
-    upper.clear();
+    workspace.clearOperands();
   }
 
   void reset() {
     clearEvaluation();
-    expressions.reset();
+    workspace.reset();
     resetZones();
   }
 

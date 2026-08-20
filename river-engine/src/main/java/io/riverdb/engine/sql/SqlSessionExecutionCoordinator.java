@@ -484,6 +484,9 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       status = binder.bindJoin(bound.command, bound);
     }
+    if (status.isOk()) {
+      status = queries.prepareProjectionPrograms();
+    }
     return publishPreparedQuery(status);
   }
 

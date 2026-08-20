@@ -66,7 +66,9 @@ public final class SqlParser {
 
   public StatusCode parseQueryAppend(
       CharSequence sql, SqlQuery query, SqlCommand result) {
-    return queryParser.parseAppend(sql, query, result);
+    StatusCode status = queryParser.parseAppend(sql, query, result);
+    if (!status.isOk() && query != null) query.discardOnPredicates();
+    return status;
   }
 
   public int queryBlockDepth(CharSequence sql) {
@@ -91,7 +93,9 @@ public final class SqlParser {
       StatusCode status = SqlParameterAdmission.beginQuery(
           sql, parameters, input, queryParser);
       if (status.isOk()) status = queryParser.parse(sql, query, result);
-      return SqlParameterAdmission.finish(status, input);
+      status = SqlParameterAdmission.finish(status, input);
+      if (!status.isOk()) query.discardOnPredicates();
+      return status;
     } finally {
       input.clearParameters();
     }
@@ -110,7 +114,9 @@ public final class SqlParser {
     if (sql == null || query == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return queryParser.parse(sql, query, result);
+    StatusCode status = queryParser.parse(sql, query, result);
+    if (!status.isOk()) query.discardOnPredicates();
+    return status;
   }
 
   StatusCode parseQueryBlock(CharSequence sql, SqlCommand result) {
@@ -282,6 +288,10 @@ public final class SqlParser {
 
   StatusCode predicates(CharSequence sql, SqlCommand result, boolean qualified) {
     return predicateParser.parse(sql, result, qualified);
+  }
+
+  StatusCode joinPredicates(CharSequence sql, SqlCommand result) {
+    return predicateParser.parseOn(sql, result);
   }
 
   SqlComparison comparisonOperator(CharSequence sql) {
