@@ -67,11 +67,11 @@ final class SqlPersistedViewCompiler {
       return StatusCode.CORRUPTION;
     }
     StatusCode tailStatus = blockBinder.validateTail(bound, firstStoredBlock);
-    bound.blockPlans.reset();
+    bound.blockPlans().reset();
     if (!tailStatus.isOk()) {
       return StatusCode.CORRUPTION;
     }
-    status = bound.query.expandRootSelectAllFrom(firstStoredBlock);
+    status = bound.query.expandRootSelectAllFrom(1);
     if (!status.isOk()) return status;
     return bound.query.compileCombined(bound.command);
   }

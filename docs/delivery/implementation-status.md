@@ -25,8 +25,8 @@ or gate has passed.
 | --- | --- |
 | Integration branch | `master` |
 | Current wave | M5 useful v1 SQL surface |
-| Current target | Complete block-scoped aggregates and the remaining U01/U02f expression contexts |
-| Next product slice | Block-scoped aggregates, generalized predicates, JOIN/correlated expressions, then U06 |
+| Current target | Complete generalized block predicates and the remaining U01/U02f JOIN/correlated expression contexts |
+| Next product slice | Generalized block predicates, JOIN/correlated expressions, then U06 |
 | Lead integrator | Primary implementation agent |
 | Latest green functional checkpoint | 2026-08-15 generalized direct-root scalar/grouped `HAVING` — full `river-sql` and `river-engine` suites; mutation and U03/U04/U05 checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
@@ -77,7 +77,7 @@ SQL conformance profile.
 | U02c `BOOLEAN` and `DECIMAL(p,s)` | passed | Accepted exact representation/math/casts, predicate/aggregate/index/constraint, JDBC, recovery, and error evidence |
 | U02d local temporal types | passed | Accepted strict local temporal grammar/codec, catalog/row/default/check validation, DATE index, DML/predicates/update, corruption, and checkpoint/reopen evidence; TIME index admission was corrected in U02f after proving its full domain fits the existing key |
 | U02e time-zone semantics | passed | Accepted UTC instant storage, strict fixed/IANA area zones, DST gap/overlap behavior, session-state rollback semantics, tzdb reporting, statement-stable defaults, catalog v13, and checkpoint/reopen evidence |
-| U02f temporal durability/expressions | active | Direct-root projection, predicate, sort/group/distinct key, aggregate operands, generalized scalar/grouped HAVING, durable owner-column CHECK, view/derived composition, and direct-root computed INSERT/UPDATE/DELETE mutation checkpoints are accepted with typed WAL, backup, spill, EXPLAIN, and allocation evidence; block, JOIN/correlation, and broader CHECK/expression contexts remain |
+| U02f temporal durability/expressions | active | Direct-root expressions, generalized scalar/grouped HAVING, durable owner-column CHECK, direct-root computed mutations, projection composition, and block-scoped aggregate/DISTINCT stages through derived tables and UTF-8-v2 durable views are accepted with typed WAL, backup, spill, per-stage EXPLAIN, and allocation evidence; generalized inner predicates, JOIN/correlation, and broader CHECK/expression contexts remain |
 | U03a JDBC/protocol types | passed | Accepted protocol v3 binary values/parameters, authenticated all-type JDBC/CLI, Java-time/decimal mappings, exact metadata, conversion matrix, warnings, generated keys, bounded batches, failure states, and ownership/erasure evidence |
 | U06a type/temporal gate | active | Unified embedded/authenticated-JDBC/CLI/checkpoint/backup/fault fixture and independent relational-semantics review remain |
 

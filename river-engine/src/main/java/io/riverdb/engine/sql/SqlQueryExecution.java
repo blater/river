@@ -174,8 +174,8 @@ final class SqlQueryExecution {
     plan.setCommand(command);
     plan.setNestedDepth(query.sourcePlanDepth());
     plan.setOrderColumn(bound.orderColumn);
-    if (bound.blockPlans.count() > 0) {
-      plan.setBlockResult(bound.blockPlans.schema(0));
+    if (bound.hasBlockPlans()) {
+      plan.setBlockResult(bound.blockPlans().schema(0));
       if (blockPipeline != null) plan.setBlockStages(blockPipeline.stagePlan());
       if (blockPipeline != null && blockPipeline.active()) {
         plan.setActualRows(blockPipeline.rowCount());
@@ -215,7 +215,7 @@ final class SqlQueryExecution {
   }
 
   boolean hasBlockPipelinePlan() {
-    return bound.blockPlans.count() > 0;
+    return bound.hasBlockPlans();
   }
 
   SqlBoundPredicateEvaluator predicateEvaluator() {
@@ -256,7 +256,7 @@ final class SqlQueryExecution {
   }
 
   StatusCode describeCurrentPlan(SqlScanCursor cursor) {
-    return bound.blockPlans.count() > 0
+    return bound.hasBlockPlans()
         ? StatusCode.OK : planDescription.describe(plan);
   }
 
@@ -279,7 +279,7 @@ final class SqlQueryExecution {
   }
 
   private StatusCode beginParsedScan(SqlScanCursor cursor) {
-    if (bound.blockPlans.count() > 0) {
+    if (bound.hasBlockPlans()) {
       int rows = blockPipeline == null ? 0 : (int) blockPipeline.rowCount();
       return claimCursor(cursor, activeScan.claimSorted(rows));
     }
@@ -317,7 +317,7 @@ final class SqlQueryExecution {
     if (plan.explainResult()) {
       return nextExplainStep(cursor, result);
     }
-    if (bound.blockPlans.count() > 0
+    if (bound.hasBlockPlans()
         && blockPipeline != null && blockPipeline.active()) {
       StatusCode status = blockPipeline.next(result);
       if (status.isOk()) cursor.rowReturned();
@@ -552,6 +552,9 @@ final class SqlQueryExecution {
   private StatusCode closePhysicalResources() {
     StatusCode status = StatusCode.OK;
     status = catalogs.close();
+    if (status.isOk() && pointQueries.hasResources()) {
+      status = pointQueries.closeResources();
+    }
     if (status.isOk() && activeScan.joinInnerRelational().isActive()) {
       status = session.closeScan(activeScan.joinInnerRelational());
       if (status.isOk()) {

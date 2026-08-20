@@ -74,6 +74,7 @@ final class SqlBlockPhysicalRowReader {
 
   void reset() {
     if (utf8 == null) return;
+    utf8.clear();
     for (int index = 0; index < utf8.capacity(); index++) utf8.put(index, (byte) 0);
     utf8.clear();
   }

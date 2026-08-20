@@ -56,12 +56,13 @@ final class SqlBlockPipelineExecution {
 
   StatusCode prepare() {
     StatusCode status = close();
-    if (status.isOk()) status = stagePlan.describe(bound.blockPlans);
+    SqlBoundBlockPlans plans = bound.blockPlans();
+    if (status.isOk()) status = stagePlan.describe(plans);
     SqlBlockRowStore input = null;
-    for (int block = bound.blockPlans.count() - 1;
+    for (int block = plans.count() - 1;
         status.isOk() && block >= 0; block--) {
-      SqlBlockSchema child = block + 1 == bound.blockPlans.count()
-          ? bound.blockPlans.baseSchema() : bound.blockPlans.schema(block + 1);
+      SqlBlockSchema child = block + 1 == plans.count()
+          ? plans.baseSchema() : plans.schema(block + 1);
       status = binder.activate(bound, block, child);
       if (status.isOk()) status = projections.prepare(bound);
       if (!status.isOk()) break;
@@ -72,7 +73,7 @@ final class SqlBlockPipelineExecution {
     }
     if (status.isOk()) {
       finalStore = input;
-      finalSchema = bound.blockPlans.schema(0);
+      finalSchema = plans.schema(0);
       rows = 0;
     } else {
       close();
@@ -82,7 +83,7 @@ final class SqlBlockPipelineExecution {
 
   StatusCode next(SqlScanRowResult result) {
     if (finalStore == null || result == null) return StatusCode.CONFLICT;
-    if (rows >= bound.blockPlans.command(0).rowLimit()) return StatusCode.CONFLICT;
+    if (rows >= bound.blockPlans().command(0).rowLimit()) return StatusCode.CONFLICT;
     StatusCode status = finalStore.next(sourceRow);
     if (!status.isOk()) return status;
     long nullMask = 0;
@@ -104,7 +105,7 @@ final class SqlBlockPipelineExecution {
 
   StatusCode next(SqlExecutionResult result, long commitSequence) {
     if (finalStore == null || result == null) return StatusCode.CONFLICT;
-    if (rows >= bound.blockPlans.command(0).rowLimit()) return StatusCode.CONFLICT;
+    if (rows >= bound.blockPlans().command(0).rowLimit()) return StatusCode.CONFLICT;
     StatusCode status = finalStore.next(sourceRow);
     if (!status.isOk()) return status;
     long nullMask = fillOutput();
@@ -129,12 +130,13 @@ final class SqlBlockPipelineExecution {
   boolean hasResources() {
     return physicalCursor.isActive() || first.hasResources() || second.hasResources();
   }
-  StatusCode describe() { return stagePlan.describe(bound.blockPlans); }
+  StatusCode describe() { return stagePlan.describe(bound.blockPlans()); }
   SqlBlockStagePlan stagePlan() { return stagePlan; }
 
   StatusCode close() {
     StatusCode status = StatusCode.OK;
     if (physicalCursor.isActive()) status = session.closeScan(physicalCursor);
+    if (status.isOk()) status = physicalCursor.reset();
     StatusCode firstStatus = first.close();
     StatusCode secondStatus = second.close();
     if (status.isOk()) status = firstStatus;
@@ -184,7 +186,7 @@ final class SqlBlockPipelineExecution {
       SqlBlockRowStore input,
       SqlBlockRowStore output,
       int sortKey) {
-    SqlBlockSchema schema = bound.blockPlans.operandSchema(block);
+    SqlBlockSchema schema = bound.blockPlans().operandSchema(block);
     StatusCode status = output.begin(schema, sortKey, bound.command.isDescendingOrder());
     if (status.isOk() && input == null) status = session.beginScan(bound.table, physicalCursor);
     while (status.isOk()) {
@@ -196,8 +198,8 @@ final class SqlBlockPipelineExecution {
       if (!status.isOk()) break;
       status = predicates.matches(
           bound.command,
-          input == null ? bound.blockPlans.baseSchema()
-              : bound.blockPlans.schema(block + 1),
+          input == null ? bound.blockPlans().baseSchema()
+              : bound.blockPlans().schema(block + 1),
           sourceRow,
           bound,
           match);
@@ -230,8 +232,8 @@ final class SqlBlockPipelineExecution {
       if (!status.isOk()) break;
       status = predicates.matches(
           bound.command,
-          input == null ? bound.blockPlans.baseSchema()
-              : bound.blockPlans.schema(block + 1),
+          input == null ? bound.blockPlans().baseSchema()
+              : bound.blockPlans().schema(block + 1),
           sourceRow,
           bound,
           match);
@@ -245,7 +247,7 @@ final class SqlBlockPipelineExecution {
     if (status.isOk()) status = having.evaluate(
         bound.command, bound.havingPrograms, accumulator, 0, true, null, 0);
     if (!status.isOk()) return status;
-    status = output.begin(bound.blockPlans.schema(block), outputSortKey(block),
+    status = output.begin(bound.blockPlans().schema(block), outputSortKey(block),
         bound.command.isDescendingOrder());
     if (status.isOk() && having.matched()) {
       status = publishAggregate(projectedRow, false);
@@ -263,7 +265,7 @@ final class SqlBlockPipelineExecution {
     SqlBlockRowStore grouped = input == null || input == first ? second : first;
     if (grouped == output) grouped = output == first ? second : first;
     status = grouped.begin(
-        bound.blockPlans.schema(block), outputSortKey(block),
+        bound.blockPlans().schema(block), outputSortKey(block),
         bound.command.isDescendingOrder());
     boolean lookahead = false;
     while (status.isOk()) {
@@ -318,7 +320,7 @@ final class SqlBlockPipelineExecution {
 
   private StatusCode deduplicate(
       int block, SqlBlockRowStore sorted, SqlBlockRowStore output) {
-    StatusCode status = output.begin(bound.blockPlans.schema(block), -1, false);
+    StatusCode status = output.begin(bound.blockPlans().schema(block), -1, false);
     boolean available = false;
     while (status.isOk()) {
       status = sorted.next(sourceRow);
@@ -361,7 +363,7 @@ final class SqlBlockPipelineExecution {
       if (groupKeyRow.nullValue(0)) row.setNull(0);
       else {
         row.setValue(0, groupKeyRow.value(0));
-        if (bound.blockPlans.schema(activeBlock).varchar(0)) {
+        if (bound.blockPlans().schema(activeBlock).varchar(0)) {
           row.setText(0, groupKeyRow.text(0), 0, groupKeyRow.textLength(0));
         }
       }
@@ -390,7 +392,7 @@ final class SqlBlockPipelineExecution {
   private int encodeGroupKey() {
     for (int index = 0; index < groupText.length; index++) groupText[index] = 0;
     if (groupKeyRow.nullValue(0)
-        || !bound.blockPlans.operandSchema(activeBlock).varchar(0)) return 0;
+        || !bound.blockPlans().operandSchema(activeBlock).varchar(0)) return 0;
     return Utf8Text.encode(
         groupKeyRow.text(0), 0, groupKeyRow.textLength(0),
         Utf8Text.MAXIMUM_SCALARS, groupText, 0);
@@ -412,7 +414,7 @@ final class SqlBlockPipelineExecution {
 
   private int outputSortKey(int block) {
     return block == 0 && bound.command.isOrdered()
-        ? bound.blockPlans.schema(block).find(bound.command.orderColumnName()) : -1;
+        ? bound.blockPlans().schema(block).find(bound.command.orderColumnName()) : -1;
   }
 
   private long fillOutput() {

@@ -357,7 +357,12 @@ final class SqlSessionExecutionCoordinator {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (queries.syntheticScan()) {
-      return queries.closeSyntheticScan(cursor, result);
+      StatusCode status = queries.closeSyntheticScan(cursor, result);
+      if (!streaming.isActive()) return status;
+      boolean complete = status.isOk();
+      status = streaming.finish(status, complete, result);
+      if (complete && !streaming.isActive()) temporal.finishStatement();
+      return status;
     }
     result.reset();
     StatusCode status = queries.closePhysicalScan(cursor);

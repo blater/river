@@ -5,8 +5,8 @@
 Status: active M5 contract; U02a-U02e accepted on 2026-08-14; U02f
 ordered-scalar index format and direct-root expression checkpoint accepted on
 2026-08-15; deterministic column expression `CHECK` checkpoint accepted on
-2026-08-15; compile-time view/derived projection composition checkpoint
-accepted on 2026-08-15; bounded JDBC temporal-result mapping and remote-value
+2026-08-15; compile-time view/derived projection composition and block-scoped
+cardinality-stage checkpoints accepted on 2026-08-15; bounded JDBC temporal-result mapping and remote-value
 validation checkpoint accepted on 2026-08-15; bounded engine/protocol typed-
 parameter checkpoint accepted on 2026-08-15
 
@@ -52,15 +52,31 @@ chains, including `NULL`, current values, temporal text casts, and `AT TIME
 ZONE`. The flattened command executes through the accepted direct-root row
 path, and a selected composed output may use its materialized `ORDER BY` path.
 Exactly one column-bearing computed `WHERE` residual may appear in the
-outermost query over such a projection-only chain, including a reference to a
-selected composed output; inner predicates remain raw and may still provide
-source access. Inner computed predicates, a second computed predicate,
-disjunction and column-valued right-hand sides, generated-text ranges,
-JOIN/correlated expression contexts, and block-scoped grouping or distinct
-remain explicit `FEATURE_NOT_SUPPORTED`. Parenthesized arbitrary Boolean
-trees, more than one `AT TIME ZONE` operation per `HAVING` predicate, and
-post-aggregate expressions in block, join, nested, or correlated contexts also
-remain U02f work. A column may declare one
+outermost query over a composed chain, including a reference to a selected
+composed output; inner predicates remain raw. A chain may now contain
+`DISTINCT`, scalar aggregate, or grouped aggregate/`HAVING` cardinality stages
+in ad-hoc derived tables and durable views. Each aggregate stage retains the
+accepted direct-root aggregate-set and three-valued `HAVING` semantics, and
+all fixed-width and UTF-8 results are copied into an owned stage row before
+the child advances. Execution accumulates each stage once from the deepest
+source outward and publishes no outer row until every intermediate stage has
+succeeded. Two lazy spill-backed stores alternate between stages; each store
+admits at most 65,536 rows and 256 MiB of encoded rows, sort keys, and retained
+index arenas, returning `RESOURCE_EXHAUSTED` at either bound. `EXPLAIN
+[ANALYZE]` reports each cardinality stage, logical operation, physical sort,
+and analyzed stage row count. `ORDER BY` at the outer stage must resolve to one
+selected output.
+
+Durable view records use strict UTF-8 catalog format v2. V1, malformed,
+noncanonical, truncated, trailing, or unpaired UTF-16 input is rejected rather
+than adapted during this pre-V1 format replacement. Projection-only stored
+views retain their flattened point/index fast path; only a real cardinality
+barrier selects staged execution. Inner computed predicates, a second computed
+predicate, generated-text ranges or membership, JOIN/correlated/subquery
+contexts, and block-local computed predicates remain explicit
+`FEATURE_NOT_SUPPORTED`. Parenthesized arbitrary Boolean trees, more than one
+`AT TIME ZONE` operation per `HAVING` predicate, and aggregate stages inside
+join, nested, or correlated contexts also remain U02f work. A column may declare one
 durable `CHECK` whose bounded expression references only that column. All
 column checks share a 32-node/table arena; exhausting it returns
 `RESOURCE_EXHAUSTED`. An admitted expression uses

@@ -75,6 +75,12 @@ final class OfflineDatabaseBackupTest {
                 + "TIMESTAMP WITH TIME ZONE '1970-01-01 01:30:00+01:30'), "
                 + "(2, NULL, NULL, NULL, NULL)",
             command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE VIEW unicode_totals AS SELECT region,SUM(balance) AS total "
+                + "FROM accounts WHERE label='河川データ庫' GROUP BY region",
+            command));
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
@@ -116,6 +122,11 @@ final class OfflineDatabaseBackupTest {
     int restoredLabelLength = command.copyTextAt(1, restoredLabel, 0);
     assertEquals(6, restoredLabelLength);
     assertEquals("河川データ庫", new String(restoredLabel, 0, restoredLabelLength));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT total FROM unicode_totals WHERE region=7", command));
+    assertEquals(250, command.valueAt(0));
     assertEquals(
         StatusCode.OK,
         session.execute(

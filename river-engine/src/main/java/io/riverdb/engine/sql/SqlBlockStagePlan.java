@@ -7,7 +7,7 @@ import io.riverdb.sql.SqlQuery;
 
 /** Lazy bounded EXPLAIN state for one cardinality-stage pipeline. */
 final class SqlBlockStagePlan {
-  private static final int STEPS_PER_BLOCK = 6;
+  private static final int STEPS_PER_BLOCK = 8;
   private static final int MAXIMUM_STEPS =
       SqlQuery.MAXIMUM_QUERY_BLOCKS * STEPS_PER_BLOCK + 1;
   private static final long AGGREGATE = PackedText.pack("agg");
@@ -30,6 +30,10 @@ final class SqlBlockStagePlan {
     for (int block = 0; block < plans.count(); block++) {
       rowSteps[block] = count;
       StatusCode status = append(BLOCK, block + 1);
+      if (status.isOk() && plans.command(block).rowLimit() != Long.MAX_VALUE) {
+        status = append(io.riverdb.base.text.PackedText.pack("limit"),
+            plans.command(block).rowLimit());
+      }
       if (status.isOk()) status = logical(plans.command(block));
       if (!status.isOk()) return status;
     }
@@ -55,6 +59,10 @@ final class SqlBlockStagePlan {
     } else if (status.isOk()
         && command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN) {
       status = append(DISTINCT, command.columnCount());
+    }
+    if (status.isOk() && (SqlBinder.isGroupAggregate(command.type())
+        || command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN)) {
+      status = append(SORT, 0);
     }
     if (status.isOk() && command.isOrdered()) {
       status = append(SORT, command.isDescendingOrder() ? -1 : 1);

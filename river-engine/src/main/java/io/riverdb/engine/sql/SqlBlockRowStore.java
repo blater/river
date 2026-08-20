@@ -515,7 +515,10 @@ final class SqlBlockRowStore {
 
   private static void erase(ByteBuffer buffer, int length) {
     if (buffer == null) return;
-    for (int index = 0; index < length; index++) buffer.put(index, (byte) 0);
+    buffer.clear();
+    for (int index = 0; index < Math.min(length, buffer.capacity()); index++) {
+      buffer.put(index, (byte) 0);
+    }
     buffer.clear();
   }
 

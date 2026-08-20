@@ -17,7 +17,7 @@ final class BoundSqlStatement {
       new SqlBoundProjectionPrograms();
   final SqlBoundAggregateSet aggregates = new SqlBoundAggregateSet();
   final SqlBoundHavingPrograms havingPrograms = new SqlBoundHavingPrograms();
-  final SqlBoundBlockPlans blockPlans = new SqlBoundBlockPlans();
+  private SqlBoundBlockPlans blockPlans;
   final TableDefinition table = new TableDefinition();
   final TableDefinition joinTable = new TableDefinition();
   final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -51,7 +51,7 @@ final class BoundSqlStatement {
     projectionPrograms.reset();
     aggregates.reset();
     havingPrograms.reset();
-    blockPlans.reset();
+    if (blockPlans != null) blockPlans.reset();
     table.reset();
     joinTable.reset();
     predicateColumn = -1;
@@ -69,5 +69,14 @@ final class BoundSqlStatement {
     joinInnerColumn = -1;
     orderColumn = -1;
     sortKeyProjection = -1;
+  }
+
+  SqlBoundBlockPlans blockPlans() {
+    if (blockPlans == null) blockPlans = new SqlBoundBlockPlans();
+    return blockPlans;
+  }
+
+  boolean hasBlockPlans() {
+    return blockPlans != null && blockPlans.count() > 0;
   }
 }

@@ -336,6 +336,8 @@ final class SqlSessionAllocationTest {
       exerciseRecursiveExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseTextAggregate(session, cursor, scanRow, result);
+      exerciseBlockPipeline(session, cursor, scanRow, result);
+      exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
@@ -363,6 +365,8 @@ final class SqlSessionAllocationTest {
       exerciseRecursiveExists(session, cursor, scanRow, result);
       exerciseAggregate(session, cursor, scanRow, result);
       exerciseTextAggregate(session, cursor, scanRow, result);
+      exerciseBlockPipeline(session, cursor, scanRow, result);
+      exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
@@ -731,6 +735,38 @@ final class SqlSessionAllocationTest {
     allocationGuard += session.beginScan(
         "SELECT MIN(label) FROM texts "
             + "HAVING MIN(label)='alpha' AND MAX(label)='alpha'",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.textLengthAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseBlockPipeline(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT total FROM (SELECT SUM(balance) AS total FROM t "
+            + "HAVING MIN(region)=7) aggregate_stage",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseTextBlockPipeline(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT minimum FROM (SELECT MIN(label) AS minimum FROM texts "
+            + "HAVING MAX(label)='alpha') text_stage",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.textLengthAt(0);

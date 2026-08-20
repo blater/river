@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlQuery;
-import io.riverdb.sql.SqlScalarExpression;
 
 /** Shared admission policy for one durable, executable view definition. */
 final class SqlStoredViewPolicy {
@@ -46,70 +45,12 @@ final class SqlStoredViewPolicy {
 
   static StatusCode validateZones(
       SqlCommand command, SqlQuery query, SqlTemporalZoneNames zones) {
-    for (int block = 0; block < Math.max(1, query.blockCount()); block++) {
-      SqlCommand current = query.blockCount() == 0 ? command : query.block(block);
-      StatusCode status = validateCommandZones(current, zones);
-      if (!status.isOk()) return status;
-    }
-    return StatusCode.OK;
+    return SqlStoredViewZonePolicy.validate(command, query, zones);
   }
 
   static StatusCode validateZones(
       SqlQuery query, int firstBlock, SqlTemporalZoneNames zones) {
-    if (firstBlock < 0 || firstBlock >= query.blockCount()) {
-      return StatusCode.CORRUPTION;
-    }
-    for (int block = firstBlock; block < query.blockCount(); block++) {
-      StatusCode status = validateCommandZones(query.block(block), zones);
-      if (!status.isOk()) return status;
-    }
-    return StatusCode.OK;
-  }
-
-  private static StatusCode validateCommandZones(
-      SqlCommand command, SqlTemporalZoneNames zones) {
-    for (int projection = 0; projection < command.columnCount(); projection++) {
-      SqlScalarExpression expression = command.projectionExpression(projection);
-      StatusCode status = validateExpressionZones(command, expression, zones);
-      if (!status.isOk()) return status;
-    }
-    for (int lane = 0; lane < SqlCommand.MAXIMUM_COLUMNS; lane++) {
-      SqlScalarExpression expression = command.aggregateOperandExpression(lane);
-      if (expression == null || !expression.isAvailable()) continue;
-      StatusCode status = validateExpressionZones(command, expression, zones);
-      if (!status.isOk()) return status;
-    }
-    for (int predicate = 0; predicate < command.havingPredicateCount(); predicate++) {
-      int zoneNodes = 0;
-      for (int node = 0; node < command.havingNodeCount(predicate); node++) {
-        if (command.havingOperator(predicate, node) == SqlScalarExpression.AT_TIME_ZONE) {
-          if (++zoneNodes > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
-          if (zones.parse(command, command.havingOperand(predicate, node)) == null) {
-            return StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
-          }
-        }
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private static StatusCode validateExpressionZones(
-      SqlCommand command,
-      SqlScalarExpression expression,
-      SqlTemporalZoneNames zones) {
-    if (expression == null || !expression.isAvailable()) {
-      return StatusCode.OK;
-    }
-    int zoneNodes = 0;
-    for (int node = 0; node < expression.nodeCount(); node++) {
-      if (expression.operator(node) == SqlScalarExpression.AT_TIME_ZONE) {
-        if (++zoneNodes > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
-        if (zones.parse(command, expression.operand(node)) == null) {
-          return StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
-        }
-      }
-    }
-    return StatusCode.OK;
+    return SqlStoredViewZonePolicy.validate(query, firstBlock, zones);
   }
 
   private static boolean admittedType(SqlCommandType type) {
