@@ -25,8 +25,8 @@ or gate has passed.
 | --- | --- |
 | Integration branch | `master` |
 | Current wave | M5 useful v1 SQL surface |
-| Current target | Bounded n-table JOIN execution and durable n-table JOIN views |
-| Next product slice | P4C robust computed/correlated subqueries, then online schema evolution |
+| Current target | [Bounded n-table JOIN execution and durable n-table JOIN views](../plans/m5-n-table-joins.md) |
+| Next product slice | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) |
 | Lead integrator | Primary implementation agent |
 | Latest green functional checkpoint | 2026-08-20 strict UTF-8-v3 durable direct/deepest-derived JOIN views with ordered two-table lineage, checkpoint/WAL reopen, backup/restore, both-base dependency enforcement, stored 1,025-row spill, and corruption/allocation evidence — full `river-sql`, `river-engine`, and `river-backup` suites; prior checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
@@ -36,15 +36,17 @@ reviewed, and verified together from the exact detached integration commit.
 
 Product work proceeds in this order:
 
-1. Bounded n-table JOIN execution and durable views with complete dependency
-   lineage.
-2. P4C robust computed/correlated subqueries.
-3. Online schema evolution: `ALTER TABLE`, online index creation/removal, and
-   transactional changes to foreign keys, views, constraints, defaults, and
-   generated values.
-4. Broader CHECK expression semantics not required by the preceding slice.
-5. JDBC feature additions and known JDBC issues.
-6. Core crash/recovery, isolation, fault, bounded-growth, and soak promotion.
+1. [Bounded n-table JOIN execution and durable views](../plans/m5-n-table-joins.md)
+   with complete dependency lineage.
+2. [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md).
+3. [Online schema evolution](../plans/m5-online-schema-evolution.md):
+   `ALTER TABLE`, online index creation/removal, and transactional changes to
+   foreign keys, views, constraints, defaults, and generated values.
+4. [Durable subquery views](../plans/m5-durable-subquery-views.md) over the
+   admitted P4C and n-table source graph.
+5. Broader CHECK expression semantics not required by the preceding slices.
+6. JDBC feature additions and known JDBC issues.
+7. Core crash/recovery, isolation, fault, bounded-growth, and soak promotion.
 
 Lower-ranked work does not interrupt a higher-ranked slice unless it prevents
 that slice from executing through the embedded engine path.

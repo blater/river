@@ -66,4 +66,8 @@ docs/governance/*
 !docs/legacy-references.md
 !docs/plans/
 docs/plans/*
+!docs/plans/m5-n-table-joins.md
+!docs/plans/m5-p4c-subqueries.md
+!docs/plans/m5-online-schema-evolution.md
+!docs/plans/m5-durable-subquery-views.md
 !docs/plans/river-vector-semantic-search-plan.md
