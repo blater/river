@@ -25,14 +25,29 @@ or gate has passed.
 | --- | --- |
 | Integration branch | `master` |
 | Current wave | M5 useful v1 SQL surface |
-| Current target | Computed correlation and nested-predicate expansion |
-| Next product slice | Broader CHECK contexts, then U06 recovery/fault promotion evidence |
+| Current target | Bounded n-table JOIN execution and durable n-table JOIN views |
+| Next product slice | P4C robust computed/correlated subqueries, then online schema evolution |
 | Lead integrator | Primary implementation agent |
 | Latest green functional checkpoint | 2026-08-20 strict UTF-8-v3 durable direct/deepest-derived JOIN views with ordered two-table lineage, checkpoint/WAL reopen, backup/restore, both-base dependency enforcement, stored 1,025-row spill, and corruption/allocation evidence — full `river-sql`, `river-engine`, and `river-backup` suites; prior checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
 reviewed, and verified together from the exact detached integration commit.
+
+Product work proceeds in this order:
+
+1. Bounded n-table JOIN execution and durable views with complete dependency
+   lineage.
+2. P4C robust computed/correlated subqueries.
+3. Online schema evolution: `ALTER TABLE`, online index creation/removal, and
+   transactional changes to foreign keys, views, constraints, defaults, and
+   generated values.
+4. Broader CHECK expression semantics not required by the preceding slice.
+5. JDBC feature additions and known JDBC issues.
+6. Core crash/recovery, isolation, fault, bounded-growth, and soak promotion.
+
+Lower-ranked work does not interrupt a higher-ranked slice unless it prevents
+that slice from executing through the embedded engine path.
 
 K16 and U00 completed on 2026-08-12, satisfying their temporary priority
 override. Their focused ownership, recovery, SQL-semantics, allocation, and
