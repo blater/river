@@ -13,16 +13,16 @@ final class SqlDerivedPipelinePolicy {
     }
     for (int index = firstBlock; index < query.blockCount(); index++) {
       SqlCommand block = query.block(index);
-      StatusCode status = shape(block, index);
+      StatusCode status = shape(block, index, query.blockCount() - 1);
       if (status.isOk()) status = references.validate(index, true);
       if (!status.isOk()) return status;
     }
     return StatusCode.OK;
   }
 
-  private static StatusCode shape(SqlCommand block, int index) {
+  private static StatusCode shape(SqlCommand block, int index, int deepest) {
     if (index > 0 && block.isOrdered()
-        || block.type() == SqlCommandType.JOIN_SCAN) {
+        || block.type() == SqlCommandType.JOIN_SCAN && index != deepest) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     return admitted(block.type())
@@ -35,6 +35,7 @@ final class SqlDerivedPipelinePolicy {
   private static boolean admitted(SqlCommandType type) {
     return type == SqlCommandType.SCAN
         || type == SqlCommandType.SELECT
+        || type == SqlCommandType.JOIN_SCAN
         || type == SqlCommandType.DISTINCT_SCAN
         || type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE

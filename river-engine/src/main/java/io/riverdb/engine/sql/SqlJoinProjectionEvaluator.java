@@ -46,6 +46,29 @@ final class SqlJoinProjectionEvaluator {
     return StatusCode.OK;
   }
 
+  StatusCode project(
+      long leftKey,
+      HeapRowResult leftRow,
+      long rightKey,
+      HeapRowResult rightRow,
+      SqlBlockRow result) {
+    if (bound == null || leftRow == null || result == null) {
+      return StatusCode.CONFLICT;
+    }
+    result.reset(bound.projectedColumnCount);
+    for (int projection = 0;
+        projection < bound.projectionPrograms.count(); projection++) {
+      StatusCode status = evaluate(
+          projection, leftKey, leftRow, rightKey, rightRow);
+      if (status.isOk()) publish(projection, result);
+      if (!status.isOk()) {
+        result.reset(0);
+        return status;
+      }
+    }
+    return StatusCode.OK;
+  }
+
   private StatusCode evaluate(
       int projection,
       long leftKey,
@@ -99,6 +122,20 @@ final class SqlJoinProjectionEvaluator {
       result.setTextCharacterAt(projection, index, value.textCharacter(index));
     }
     return status;
+  }
+
+  private void publish(int projection, SqlBlockRow result) {
+    if (value.nullValue()) {
+      result.setNull(projection);
+      return;
+    }
+    result.setValue(projection, value.value());
+    if (!text()) return;
+    char[] target = result.text(projection);
+    for (int index = 0; index < value.textLength(); index++) {
+      target[index] = value.textCharacter(index);
+    }
+    result.setTextLength(projection, value.textLength());
   }
 
   private boolean text() {

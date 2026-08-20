@@ -13,12 +13,16 @@ final class SqlStoredViewPolicy {
     if (query.hasNestedTopology() || query.isExplain()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
+    if (command.type() == SqlCommandType.JOIN_SCAN) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    for (int block = 0; block < query.blockCount(); block++) {
+      if (query.block(block).type() == SqlCommandType.JOIN_SCAN) {
+        return StatusCode.FEATURE_NOT_SUPPORTED;
+      }
+    }
     if (query.sourcePlanDepth() >= SqlQuery.MAXIMUM_QUERY_BLOCKS) {
       return StatusCode.QUERY_TOO_COMPLEX;
-    }
-    if (command.type() == SqlCommandType.JOIN_SCAN
-        && SqlRowProjectionBinder.hasComputed(command)) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     if (!shape(command)
         || !hasUniqueOutputNames(command)) {

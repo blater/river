@@ -8,15 +8,21 @@ import io.riverdb.engine.relational.RelationalScanResult;
 final class SqlBlockSource {
   private final io.riverdb.engine.relational.RelationalSession session;
   private final BoundSqlStatement bound;
+  private final SqlRowProjectionEvaluator projections;
   private final SqlBlockPhysicalRowReader physical = new SqlBlockPhysicalRowReader();
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult result = new RelationalScanResult();
+  private final SqlJoinRowSource join;
 
   SqlBlockSource(
       io.riverdb.engine.relational.RelationalSession relationalSession,
-      BoundSqlStatement statement) {
+      BoundSqlStatement statement,
+      SqlJoinRowSource joinSource,
+      SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = statement;
+    join = joinSource;
+    projections = projectionEvaluator;
   }
 
   StatusCode begin(SqlBlockRowStore input) {
@@ -37,11 +43,38 @@ final class SqlBlockSource {
     return status.isOk() ? closed : status;
   }
 
-  boolean hasResources() { return cursor.isActive(); }
+  StatusCode beginJoin() {
+    return join.begin();
+  }
+
+  StatusCode nextJoin(SqlBlockRow row) {
+    if (row == null) return StatusCode.CONFLICT;
+    StatusCode status = join.next();
+    if (status.isOk()) {
+      status = projections.projectJoin(
+          join.outerKey(),
+          join.outerRow(),
+          join.innerKey(),
+          join.innerRow(),
+          row);
+    }
+    if (!status.isOk() && status != StatusCode.CONFLICT) row.reset(0);
+    return status;
+  }
+
+  StatusCode finishJoin(StatusCode status) {
+    StatusCode closed = join.close();
+    return status.isOk() ? closed : status;
+  }
+
+  boolean hasResources() {
+    return cursor.isActive() || join.hasResources();
+  }
 
   StatusCode close() {
     StatusCode status = cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
     if (status.isOk()) status = cursor.reset();
+    if (status.isOk()) status = join.close();
     physical.reset();
     return status;
   }

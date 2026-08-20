@@ -1,8 +1,6 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.RelationalSession;
-
 /** Publishes rows from the reusable physical JOIN source to a SQL scan. */
 final class SqlJoinExecution {
   private final BoundSqlStatement bound;
@@ -11,17 +9,14 @@ final class SqlJoinExecution {
   private final SqlRowProjectionEvaluator projections;
 
   SqlJoinExecution(
-      RelationalSession session,
       BoundSqlStatement statement,
       SqlPhysicalPlan physicalPlan,
-      SqlExpressionEvaluator expressions,
-      SqlBoundPredicateEvaluator predicates,
+      SqlJoinRowSource rowSource,
       SqlRowProjectionEvaluator projectionEvaluator) {
     bound = statement;
     plan = physicalPlan;
     projections = projectionEvaluator;
-    source = new SqlJoinRowSource(
-        session, statement, expressions, predicates);
+    source = rowSource;
   }
 
   StatusCode begin() {

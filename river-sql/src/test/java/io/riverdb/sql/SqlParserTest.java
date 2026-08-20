@@ -103,7 +103,7 @@ final class SqlParserTest {
   }
 
   @Test
-  void discardsRejectedQueryBlockOnArenasButWarmsDirectRoot() throws Exception {
+  void retainsAdmittedDeepestJoinArenaAndDiscardsRejectedTopology() throws Exception {
     SqlParser parser = new SqlParser();
     SqlQuery query = new SqlQuery();
     SqlCommand command = new SqlCommand();
@@ -122,15 +122,26 @@ final class SqlParserTest {
     assertTrue(on.get(command) != null);
 
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d.key FROM (" + join + ") d", query, command));
+    assertTrue(query.isBlockPipeline());
     java.lang.reflect.Field blocks = SqlQuery.class.getDeclaredField("blocks");
     blocks.setAccessible(true);
-    for (SqlCommand block : (SqlCommand[]) blocks.get(query)) {
-      assertNull(on.get(block));
-    }
+    SqlCommand[] owned = (SqlCommand[]) blocks.get(query);
+    assertNull(on.get(owned[0]));
+    assertTrue(on.get(owned[1]) != null);
     query.reset();
+    assertNull(on.get(owned[0]));
+    assertTrue(on.get(owned[1]) != null);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parseQuery(
+            "SELECT d.key FROM (SELECT a.key FROM accounts a JOIN regions r "
+                + "ON missing.id=a.key) d",
+            query,
+            command));
+    for (SqlCommand block : owned) assertNull(on.get(block));
     assertEquals(StatusCode.OK, parser.parse("SELECT id FROM moments", command));
   }
 

@@ -5,7 +5,15 @@ final class SqlDerivedPredicateReferences {
   private static final int PROGRAMS_PER_LEAF = 4;
 
   boolean valid(SqlCommand block, SqlCommand inner) {
-    SqlBooleanPredicateProgram predicates = block.wherePredicates();
+    if (!valid(block, inner, block.wherePredicates())) return false;
+    return block.type() != SqlCommandType.JOIN_SCAN
+        || valid(block, inner, block.onPredicates());
+  }
+
+  private static boolean valid(
+      SqlCommand block,
+      SqlCommand inner,
+      SqlBooleanPredicateProgram predicates) {
     for (int leaf = 0; leaf < predicates.leafCount(); leaf++) {
       for (int program = 0; program < PROGRAMS_PER_LEAF; program++) {
         if (!validProgram(block, inner, predicates, leaf, program)) return false;

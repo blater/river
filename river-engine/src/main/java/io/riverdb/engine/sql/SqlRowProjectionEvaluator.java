@@ -171,6 +171,16 @@ final class SqlRowProjectionEvaluator {
         outerKey, outerRow, innerKey, innerRow, result);
   }
 
+  StatusCode projectJoin(
+      long outerKey,
+      HeapRowResult outerRow,
+      long innerKey,
+      HeapRowResult innerRow,
+      SqlBlockRow result) {
+    return joinProjections.project(
+        outerKey, outerRow, innerKey, innerRow, result);
+  }
+
   StatusCode evaluateProgram(
       int program, long primaryKey, HeapRowResult source) {
     if (bound == null

@@ -34,6 +34,9 @@ final class SqlBlockRow {
     System.arraycopy(source, offset, target, 0, length);
     textLengths[column] = (short) length;
   }
+  void setTextLength(int column, int length) {
+    textLengths[column] = (short) length;
+  }
   void copyFrom(SqlBlockRow source) {
     reset(source.count);
     nullMask = source.nullMask;

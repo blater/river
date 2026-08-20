@@ -9,13 +9,18 @@ import io.riverdb.sql.SqlQuery;
 final class SqlBlockStagePlan {
   private static final int STEPS_PER_BLOCK = 8;
   private static final int MAXIMUM_STEPS =
-      SqlQuery.MAXIMUM_QUERY_BLOCKS * STEPS_PER_BLOCK + 1;
+      SqlQuery.MAXIMUM_QUERY_BLOCKS * STEPS_PER_BLOCK + 2;
   private static final long AGGREGATE = PackedText.pack("agg");
   private static final long BLOCK = PackedText.pack("block");
   private static final long DISTINCT = PackedText.pack("dedupe");
   private static final long FILTER = PackedText.pack("filter");
   private static final long GROUP = PackedText.pack("group");
   private static final long HAVING = PackedText.pack("having");
+  private static final long INDEX = PackedText.pack("index");
+  private static final long JOIN = PackedText.pack("join");
+  private static final long LEFT = PackedText.pack("left");
+  private static final long LOOKUP = PackedText.pack("lookup");
+  private static final long PRIMARY = PackedText.pack("primary");
   private static final long SORT = PackedText.pack("sort");
   private static final long TABLE = PackedText.pack("table");
 
@@ -37,7 +42,18 @@ final class SqlBlockStagePlan {
       if (status.isOk()) status = logical(plans.command(block));
       if (!status.isOk()) return status;
     }
-    return append(TABLE, -1);
+    int deepest = plans.count() - 1;
+    boolean join = plans.command(deepest).type()
+        == io.riverdb.sql.SqlCommandType.JOIN_SCAN;
+    int access = join ? plans.joinOuterAccessColumn(deepest) : -1;
+    StatusCode status = append(
+        access > 0 ? INDEX : access == 0 ? PRIMARY : TABLE, access);
+    if (status.isOk() && join) {
+      status = append(
+          plans.joinRightIndexed(deepest) ? LOOKUP : TABLE,
+          plans.joinRightColumn(deepest));
+    }
+    return status;
   }
 
   void setRows(int block, long actualRows) {
@@ -54,6 +70,12 @@ final class SqlBlockStagePlan {
     StatusCode status = outputOrder(command, distinct);
     if (status.isOk()) status = aggregate(command, distinct);
     if (status.isOk()) status = inputOrder(command, distinct);
+    if (status.isOk()
+        && command.type() == io.riverdb.sql.SqlCommandType.JOIN_SCAN) {
+      status = append(
+          command.isLeftJoin() ? LEFT : JOIN,
+          command.onPredicates().leafCount());
+    }
     if (status.isOk() && command.wherePredicates().leafCount() > 0) {
       status = append(FILTER, command.wherePredicates().leafCount());
     }

@@ -92,6 +92,10 @@ final class BoundSqlStatement {
 
   boolean hasOnBoolean() { return onBoolean != null && onBoolean.available(); }
 
+  void resetOnBoolean() {
+    if (onBoolean != null) onBoolean.reset();
+  }
+
   boolean hasBlockPlans() {
     return blockPlans != null && blockPlans.count() > 0;
   }

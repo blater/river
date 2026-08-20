@@ -36,7 +36,11 @@ final class SqlDerivedColumnResolver {
     return qualifier.length() == 0
         || sameName(qualifier, command.tableName())
         || command.tableAlias().length() > 0
-            && sameName(qualifier, command.tableAlias());
+            && sameName(qualifier, command.tableAlias())
+        || command.type() == SqlCommandType.JOIN_SCAN
+            && (sameName(qualifier, command.joinTableName())
+                || command.joinTableAlias().length() > 0
+                    && sameName(qualifier, command.joinTableAlias()));
   }
 
   static int outputIndex(SqlCommand command, CharSequence name) {

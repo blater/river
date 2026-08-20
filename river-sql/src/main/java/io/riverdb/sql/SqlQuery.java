@@ -28,7 +28,6 @@ public final class SqlQuery {
   public void reset() {
     for (int index = 0; index < blockCount; index++) {
       blocks[index].reset();
-      blocks[index].discardOnPredicates();
       scalarPredicates[index] = -1;
       existencePredicates[index] = 0;
       membershipPredicates[index] = 0;
@@ -133,7 +132,8 @@ public final class SqlQuery {
   private boolean hasCardinalityBlock() {
     for (int index = 0; index < blockCount; index++) {
       SqlCommandType type = blocks[index].type();
-      if (type == SqlCommandType.DISTINCT_SCAN
+      if (type == SqlCommandType.JOIN_SCAN
+          || type == SqlCommandType.DISTINCT_SCAN
           || type == SqlCommandType.COUNT
           || type == SqlCommandType.COUNT_VALUE
           || type == SqlCommandType.SUM

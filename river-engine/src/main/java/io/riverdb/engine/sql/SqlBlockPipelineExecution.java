@@ -1,26 +1,14 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.sql.SqlCommand;
-import io.riverdb.sql.SqlCommandType;
 
 /** Atomically materializes a bounded chain of cardinality-changing query blocks. */
 final class SqlBlockPipelineExecution {
   private final BoundSqlStatement bound;
-  private final SqlBlockPlanBinder binder;
-  private final SqlRowProjectionEvaluator projections;
-  private final SqlBlockSource source;
-  private final SqlBlockStageProjector projector;
-  private final SqlBlockProjectionStage projectionStage;
   private final SqlBlockRowStore first = new SqlBlockRowStore();
   private final SqlBlockRowStore second = new SqlBlockRowStore();
   private final SqlBlockRow sourceRow = new SqlBlockRow();
-  private final SqlAggregateAccumulatorSet accumulator =
-      new SqlAggregateAccumulatorSet();
-  private final SqlHavingEvaluator having;
-  private final SqlBlockAggregatePublisher publisher;
-  private final SqlBlockScalarAggregateStage scalarStage;
-  private final SqlBlockGroupedAggregateStage groupedStage;
+  private final SqlBlockStageRunner runner;
   private final SqlBlockStagePlan stagePlan = new SqlBlockStagePlan();
   private final long[] outputValues = new long[8];
   private final int[] outputTypes = new int[8];
@@ -32,45 +20,32 @@ final class SqlBlockPipelineExecution {
       io.riverdb.engine.relational.RelationalSession relationalSession,
       BoundSqlStatement statement,
       SqlBlockPlanBinder planBinder,
+      SqlJoinRowSource joinSource,
       SqlExpressionEvaluator expressions,
+      SqlBoundPredicateEvaluator predicateEvaluator,
       SqlRowProjectionEvaluator projectionEvaluator,
       SqlTemporalContext temporal) {
     bound = statement;
-    binder = planBinder;
-    projections = projectionEvaluator;
-    source = new SqlBlockSource(relationalSession, statement);
-    projector = new SqlBlockStageProjector(
-        statement, expressions, projectionEvaluator, temporal);
-    projectionStage = new SqlBlockProjectionStage(statement, source, projector);
-    having = new SqlHavingEvaluator(statement, expressions, temporal);
-    publisher = new SqlBlockAggregatePublisher(statement);
-    scalarStage = new SqlBlockScalarAggregateStage(
-        statement, source, projector, having, accumulator, publisher);
-    groupedStage = new SqlBlockGroupedAggregateStage(
-        statement, having, accumulator, publisher);
+    runner = new SqlBlockStageRunner(
+        relationalSession,
+        statement,
+        planBinder,
+        joinSource,
+        expressions,
+        predicateEvaluator,
+        projectionEvaluator,
+        temporal,
+        first,
+        second);
   }
 
   StatusCode prepare() {
     StatusCode status = close();
     SqlBoundBlockPlans plans = bound.blockPlans();
     if (status.isOk()) status = stagePlan.describe(plans);
-    SqlBlockRowStore input = null;
-    for (int block = plans.count() - 1;
-        status.isOk() && block >= 0; block--) {
-      SqlBlockSchema child = block + 1 == plans.count()
-          ? plans.baseSchema() : plans.schema(block + 1);
-      status = binder.activate(bound, block, child);
-      if (status.isOk()) status = projections.prepare(bound);
-      if (status.isOk()) status = projector.prepare();
-      if (status.isOk()) status = having.prepare(bound.command);
-      if (!status.isOk()) break;
-      SqlBlockRowStore output = input == first ? second : first;
-      status = execute(block, input, output);
-      input = status.isOk() ? finalStore : input;
-      if (status.isOk()) stagePlan.setRows(block, stageRows(block));
-    }
+    if (status.isOk()) status = runner.run(sourceRow, stagePlan);
     if (status.isOk()) {
-      finalStore = input;
+      finalStore = runner.finalStore();
       finalSchema = plans.schema(0);
       rows = 0;
     } else {
@@ -126,71 +101,22 @@ final class SqlBlockPipelineExecution {
   long rowCount() { return stageRows(0); }
   boolean active() { return finalStore != null; }
   boolean hasResources() {
-    return source.hasResources() || first.hasResources() || second.hasResources();
+    return runner.hasResources() || first.hasResources() || second.hasResources();
   }
   StatusCode describe() { return stagePlan.describe(bound.blockPlans()); }
   SqlBlockStagePlan stagePlan() { return stagePlan; }
 
   StatusCode close() {
-    StatusCode status = source.close();
+    StatusCode status = runner.close();
     StatusCode firstStatus = first.close();
     StatusCode secondStatus = second.close();
     if (status.isOk()) status = firstStatus;
     if (status.isOk()) status = secondStatus;
-    accumulator.clearAll();
-    projector.reset();
-    having.reset();
-    projectionStage.reset();
-    scalarStage.reset();
-    groupedStage.reset();
-    publisher.reset();
     sourceRow.reset(0);
     finalStore = null;
     finalSchema = null;
     rows = 0;
     return status;
-  }
-
-  private StatusCode execute(
-      int block, SqlBlockRowStore input, SqlBlockRowStore output) {
-    SqlCommand command = bound.command;
-    SqlCommandType type = command.type();
-    if (SqlBinder.isScalarAggregate(type)) {
-      StatusCode status = scalarStage.execute(
-          block, input, output, outputSortKey(block));
-      finalStore = status.isOk() ? output : null;
-      return status;
-    }
-    if (SqlBinder.isGroupAggregate(type)) {
-      StatusCode status = projectionStage.materialize(block, input, output, 0);
-      if (!status.isOk()) return status;
-      SqlBlockRowStore grouped = alternate(input, output);
-      status = groupedStage.execute(block, output, grouped, outputSortKey(block));
-      finalStore = status.isOk() ? grouped : null;
-      return status;
-    }
-    StatusCode status = projectionStage.materialize(block, input, output,
-        type == SqlCommandType.DISTINCT_SCAN ? 0 : outputSortKey(block));
-    if (!status.isOk()) return status;
-    if (type != SqlCommandType.DISTINCT_SCAN) {
-      finalStore = output;
-      return StatusCode.OK;
-    }
-    SqlBlockRowStore distinct = alternate(input, output);
-    status = projectionStage.deduplicate(block, output, distinct);
-    finalStore = status.isOk() ? distinct : null;
-    return status;
-  }
-
-  private int outputSortKey(int block) {
-    return block == 0 && bound.command.isOrdered()
-        ? bound.blockPlans().schema(block).find(bound.command.orderColumnName()) : -1;
-  }
-
-  private SqlBlockRowStore alternate(
-      SqlBlockRowStore input, SqlBlockRowStore output) {
-    SqlBlockRowStore alternate = input == null || input == first ? second : first;
-    return alternate == output ? output == first ? second : first : alternate;
   }
 
   private long fillOutput() {

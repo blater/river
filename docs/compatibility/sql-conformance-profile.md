@@ -9,7 +9,7 @@ ordered-scalar index format and direct-root expression checkpoint accepted on
 cardinality-stage checkpoints accepted on 2026-08-15; bounded JDBC temporal-result mapping and remote-value
 validation checkpoint accepted on 2026-08-15; bounded engine/protocol typed-
 parameter checkpoint accepted on 2026-08-15; bounded generalized-predicate
-P4A checkpoint accepted on 2026-08-20
+P4A and direct/staged P4B checkpoints accepted on 2026-08-20
 
 This profile is the semantic authority for River's admitted pre-V1 SQL
 surface. Parser acceptance is not support. A feature is supported only when
@@ -89,9 +89,15 @@ NULL-extended right row only when no candidate made `ON` true. A mandatory raw
 cross-scope equality on the top-level `AND` spine may drive the inner lookup
 but remains residual-checked; other admitted `ON` shapes use a bounded nested
 loop. Selected scalar expressions may reference either row, and generated/raw
-`VARCHAR` results are published from owned text. Direct JOIN `ORDER BY`,
-JOIN-backed P3 cardinality stages, and durable JOIN views with two-table
-dependency lineage remain explicit P4B2/P4B3 `FEATURE_NOT_SUPPORTED` work.
+`VARCHAR` results are published from owned text. Direct JOIN `ORDER BY`
+remains explicit `FEATURE_NOT_SUPPORTED`. One JOIN may instead be the deepest
+source of an ad-hoc P3 pipeline: its owned projected rows feed the existing
+alternating stores, and parent projection, scalar or grouped
+aggregate/`HAVING`, `DISTINCT`, and outer `ORDER BY` stages retain the same
+spill, atomic-publication, and `EXPLAIN [ANALYZE]` contracts. A JOIN in a
+nondeepest block, multiple JOIN blocks, and JOIN-local ordering fail closed.
+Durable JOIN views with two-table dependency lineage remain explicit P4B3
+`FEATURE_NOT_SUPPORTED` work.
 Nested/correlated column-to-column edges remain equality-only; auxiliary raw
 ranges, membership, NULL, and truth tests retain their prior admission, while
 computed or generalized correlated/subquery predicates remain deferred. More

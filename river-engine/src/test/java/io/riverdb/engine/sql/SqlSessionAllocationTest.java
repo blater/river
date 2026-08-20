@@ -18,6 +18,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class SqlSessionAllocationTest {
+  private static final String JOIN_BLOCK_PIPELINE =
+      "SELECT rendered,label FROM (SELECT CAST(tv.observed AS VARCHAR(32)) "
+          + "AS rendered,texts.label AS label FROM temporal_values tv "
+          + "JOIN texts ON tv.id=texts.id WHERE tv.id=1) joined";
   private static volatile long allocationGuard;
 
   @Test
@@ -301,6 +305,13 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         scanParameters.appendFixed(SqlTypeDescriptor.BIGINT, 7));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(JOIN_BLOCK_PIPELINE, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(26, scanRow.textLengthAt(0));
+    assertEquals(5, scanRow.textLengthAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
       exerciseCount(session, result);
@@ -317,6 +328,14 @@ final class SqlSessionAllocationTest {
       exerciseTypedPoint(session, pointParameters, result);
     }
     long threadId = Thread.currentThread().threadId();
+    long joinBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseJoinBlockPipeline(session, cursor, scanRow, result);
+    }
+    long joinAllocated = bean.getThreadAllocatedBytes(threadId) - joinBefore;
+    assertTrue(
+        joinAllocated <= 512,
+        "warmed JOIN block pipeline allocated bytes: " + joinAllocated);
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
@@ -791,6 +810,20 @@ final class SqlSessionAllocationTest {
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.textLengthAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseJoinBlockPipeline(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(JOIN_BLOCK_PIPELINE, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.textLengthAt(0);
+    allocationGuard += row.textLengthAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

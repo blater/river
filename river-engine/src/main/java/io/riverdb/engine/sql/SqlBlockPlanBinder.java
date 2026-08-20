@@ -11,9 +11,15 @@ final class SqlBlockPlanBinder {
   private final SqlBlockAggregateBinder aggregates = new SqlBlockAggregateBinder(expressions);
   private final SqlBlockProjectionBinder projections = new SqlBlockProjectionBinder(expressions);
   private final SqlBlockPredicateBinder predicates = new SqlBlockPredicateBinder();
+  private final SqlBlockJoinBinder joins;
   private final SqlBooleanPredicateEvaluator predicatePreflight;
 
   SqlBlockPlanBinder(SqlTemporalContext temporal) {
+    this(temporal, null);
+  }
+
+  SqlBlockPlanBinder(SqlTemporalContext temporal, SqlBinder sharedBinder) {
+    joins = sharedBinder == null ? null : new SqlBlockJoinBinder(sharedBinder);
     predicatePreflight = temporal == null ? null
         : new SqlBooleanPredicateEvaluator(new SqlExpressionEvaluator(), temporal);
   }
@@ -26,14 +32,25 @@ final class SqlBlockPlanBinder {
     StatusCode status = plans.capture(bound.query);
     if (!status.isOk()) return status;
     SqlCommand deepest = plans.command(plans.count() - 1);
-    status = session.resolveTable(deepest.tableName(), bound.table);
+    if (deepest.type() == SqlCommandType.JOIN_SCAN && joins == null) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
+    status = deepest.type() == SqlCommandType.JOIN_SCAN
+        ? joins.resolve(session, bound, deepest)
+        : session.resolveTable(deepest.tableName(), bound.table);
     if (status.isOk()) physicalSchema(bound);
     SqlBlockSchema child = plans.baseSchema();
     for (int block = plans.count() - 1;
         status.isOk() && block >= 0; block--) {
       status = activate(bound, block, child);
-      if (status.isOk() && evaluator != null) status = evaluator.prepare(bound);
-      if (status.isOk() && predicatePreflight != null) {
+      boolean join = status.isOk()
+          && bound.command.type() == SqlCommandType.JOIN_SCAN;
+      if (status.isOk() && join) {
+        status = joins.preflight(bound, predicatePreflight, evaluator);
+      } else if (status.isOk() && evaluator != null) {
+        status = evaluator.prepare(bound);
+      }
+      if (status.isOk() && !join && predicatePreflight != null) {
         status = predicatePreflight.prepare(bound.command, bound.whereBoolean);
       }
       if (status.isOk() && predicatePreflight != null) {
@@ -72,7 +89,10 @@ final class SqlBlockPlanBinder {
     resetActive(bound);
     SqlCommandType type = bound.command.type();
     SqlBlockSchema output = plans.schema(block);
-    if (SqlBinder.isScalarAggregate(type)) {
+    if (type == SqlCommandType.JOIN_SCAN) {
+      if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
+      return joins.bind(bound, plans, block, output);
+    } else if (SqlBinder.isScalarAggregate(type)) {
       status = aggregates.bind(bound.command, child, output, bound, false);
     } else if (SqlBinder.isGroupAggregate(type)) {
       status = aggregates.bind(bound.command, child, output, bound, true);
@@ -103,6 +123,7 @@ final class SqlBlockPlanBinder {
     bound.projectionPrograms.reset();
     bound.aggregates.reset();
     bound.whereBoolean.reset();
+    bound.resetOnBoolean();
     bound.havingBoolean.reset();
     bound.projectedColumnCount = 0;
     bound.predicateCount = 0;
@@ -111,5 +132,10 @@ final class SqlBlockPlanBinder {
     bound.distinctColumn = -1;
     bound.orderColumn = -1;
     bound.sortKeyProjection = -1;
+    bound.accessPredicate = -1;
+    bound.predicateColumn = -1;
+    bound.accessComparison = null;
+    bound.joinOuterColumn = -1;
+    bound.joinInnerColumn = -1;
   }
 }

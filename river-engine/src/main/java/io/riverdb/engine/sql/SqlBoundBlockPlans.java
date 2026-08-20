@@ -11,6 +11,10 @@ final class SqlBoundBlockPlans {
   private final SqlBlockSchema[] operandSchemas =
       new SqlBlockSchema[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final SqlBlockSchema baseSchema = new SqlBlockSchema();
+  private int joinBlock = -1;
+  private int joinRightColumn = -1;
+  private int joinOuterAccessColumn = -1;
+  private boolean joinRightIndexed;
   private int count;
 
   SqlBoundBlockPlans() {
@@ -35,7 +39,9 @@ final class SqlBoundBlockPlans {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     count = query.blockCount();
-    for (int index = 0; index < count; index++) commands[index] = query.block(index);
+    for (int index = 0; index < count; index++) {
+      commands[index] = query.block(index);
+    }
     return StatusCode.OK;
   }
 
@@ -47,6 +53,10 @@ final class SqlBoundBlockPlans {
     }
     count = 0;
     baseSchema.reset();
+    joinBlock = -1;
+    joinRightColumn = -1;
+    joinOuterAccessColumn = -1;
+    joinRightIndexed = false;
   }
 
   int count() { return count; }
@@ -54,4 +64,23 @@ final class SqlBoundBlockPlans {
   SqlBlockSchema schema(int block) { return schemas[block]; }
   SqlBlockSchema operandSchema(int block) { return operandSchemas[block]; }
   SqlBlockSchema baseSchema() { return baseSchema; }
+
+  void setJoinAccess(
+      int block,
+      int right,
+      int outerAccess,
+      boolean indexed) {
+    joinBlock = block;
+    joinRightColumn = right;
+    joinOuterAccessColumn = outerAccess;
+    joinRightIndexed = indexed;
+  }
+
+  int joinRightColumn(int block) { return block == joinBlock ? joinRightColumn : -1; }
+  int joinOuterAccessColumn(int block) {
+    return block == joinBlock ? joinOuterAccessColumn : -1;
+  }
+  boolean joinRightIndexed(int block) {
+    return block == joinBlock && joinRightIndexed;
+  }
 }
