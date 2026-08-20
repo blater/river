@@ -996,15 +996,32 @@ final class SqlParserTest {
             query,
             compiled));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT DISTINCT d FROM (SELECT day+1 AS d FROM moments) q",
+            query,
+            compiled));
+    assertEquals(SqlCommandType.DISTINCT_SCAN, query.block(0).type());
+    assertEquals(2, query.blockCount());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d,COUNT(*) FROM (SELECT day+1 AS d FROM moments) q GROUP BY d",
+            query,
+            compiled));
+    assertEquals(SqlCommandType.GROUP_COUNT, query.block(0).type());
+    assertEquals(2, query.blockCount());
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT d FROM (SELECT day AS d,COUNT(*) AS n FROM moments "
+                + "GROUP BY day ORDER BY day) q",
             query,
             compiled));
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         parser.parseQuery(
-            "SELECT d,COUNT(*) FROM (SELECT day+1 AS d FROM moments) q GROUP BY d",
+            "SELECT d FROM (SELECT day+1 AS d FROM moments ORDER BY d) q",
             query,
             compiled));
     assertEquals(

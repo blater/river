@@ -30,6 +30,12 @@ final class SqlSelectTailParser {
               sql, result.firstColumnName(), result.columnOutputName(0))
           : input.identifier(sql, result.writableOrderColumnName());
     }
+    if (status.isOk()
+        && (isGroupAggregate(type) || type == SqlCommandType.DISTINCT_SCAN)) {
+      CharSequence output = result.columnOutputName(0);
+      result.writableOrderColumnName().copyFrom(
+          output.length() > 0 ? output : result.firstColumnName());
+    }
     if (status.isOk() && input.consumeKeyword(sql, "ASC")) {
       result.setDescendingOrder(false);
     } else if (status.isOk() && input.consumeKeyword(sql, "DESC")) {

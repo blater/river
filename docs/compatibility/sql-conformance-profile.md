@@ -64,8 +64,9 @@ succeeded. Two lazy spill-backed stores alternate between stages; each store
 admits at most 65,536 rows and 256 MiB of encoded rows, sort keys, and retained
 index arenas, returning `RESOURCE_EXHAUSTED` at either bound. `EXPLAIN
 [ANALYZE]` reports each cardinality stage, logical operation, physical sort,
-and analyzed stage row count. `ORDER BY` at the outer stage must resolve to one
-selected output.
+and analyzed stage row count. `ORDER BY` is admitted only at the outer stage
+and must resolve to one selected output; inner-stage ordering is explicitly
+deferred rather than silently discarded.
 
 Durable view records use strict UTF-8 catalog format v2. V1, malformed,
 noncanonical, truncated, trailing, or unpaired UTF-16 input is rejected rather

@@ -28,7 +28,7 @@ or gate has passed.
 | Current target | Complete generalized block predicates and the remaining U01/U02f JOIN/correlated expression contexts |
 | Next product slice | Generalized block predicates, JOIN/correlated expressions, then U06 |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | 2026-08-15 generalized direct-root scalar/grouped `HAVING` — full `river-sql` and `river-engine` suites; mutation and U03/U04/U05 checkpoints retained |
+| Latest green functional checkpoint | 2026-08-20 block-scoped `DISTINCT`, scalar/grouped aggregate and generalized `HAVING` pipelines through derived tables and UTF-8-v2 durable views — full `river-sql`, `river-engine`, and `river-backup` suites; prior checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently

@@ -50,27 +50,39 @@ final class SqlBlockStagePlan {
   long rows(int step) { return rows[step]; }
 
   private StatusCode logical(SqlCommand command) {
-    StatusCode status = command.havingPredicateCount() > 0
-        ? append(HAVING, command.havingPredicateCount()) : StatusCode.OK;
-    if (status.isOk() && SqlBinder.isScalarAggregate(command.type())) {
-      status = append(AGGREGATE, command.aggregateInvocationCount());
-    } else if (status.isOk() && SqlBinder.isGroupAggregate(command.type())) {
-      status = append(GROUP, command.aggregateInvocationCount());
-    } else if (status.isOk()
-        && command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN) {
-      status = append(DISTINCT, command.columnCount());
-    }
-    if (status.isOk() && (SqlBinder.isGroupAggregate(command.type())
-        || command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN)) {
-      status = append(SORT, 0);
-    }
-    if (status.isOk() && command.isOrdered()) {
-      status = append(SORT, command.isDescendingOrder() ? -1 : 1);
-    }
+    boolean distinct = command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN;
+    StatusCode status = outputOrder(command, distinct);
+    if (status.isOk()) status = aggregate(command, distinct);
+    if (status.isOk()) status = inputOrder(command, distinct);
     if (status.isOk() && command.predicateCount() > 0) {
       status = append(FILTER, command.predicateCount());
     }
     return status;
+  }
+
+  private StatusCode outputOrder(SqlCommand command, boolean distinct) {
+    return command.isOrdered() && !distinct
+        ? append(SORT, command.isDescendingOrder() ? -1 : 1) : StatusCode.OK;
+  }
+
+  private StatusCode aggregate(SqlCommand command, boolean distinct) {
+    StatusCode status = command.havingPredicateCount() > 0
+        ? append(HAVING, command.havingPredicateCount()) : StatusCode.OK;
+    if (!status.isOk()) return status;
+    if (SqlBinder.isScalarAggregate(command.type())) {
+      return append(AGGREGATE, command.aggregateInvocationCount());
+    }
+    if (SqlBinder.isGroupAggregate(command.type())) {
+      return append(GROUP, command.aggregateInvocationCount());
+    }
+    return distinct ? append(DISTINCT, command.columnCount()) : StatusCode.OK;
+  }
+
+  private StatusCode inputOrder(SqlCommand command, boolean distinct) {
+    if (!SqlBinder.isGroupAggregate(command.type()) && !distinct) return StatusCode.OK;
+    long detail = distinct && command.isOrdered()
+        ? command.isDescendingOrder() ? -1 : 1 : 0;
+    return append(SORT, detail);
   }
 
   private StatusCode append(long operator, long detail) {

@@ -6,6 +6,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.sql.SqlExecutionResult;
+import io.riverdb.engine.sql.SqlScanCursor;
 import io.riverdb.engine.sql.SqlSession;
 import io.riverdb.engine.sql.SqlSessionOpenResult;
 import io.riverdb.tx.api.IsolationLevel;
@@ -59,6 +60,22 @@ final class CatalogViewSemanticCorruptionTest {
         StatusCode.OK,
         relational.indexedSession().update(key.space(), key.key(), encoded));
     assertEquals(
+        StatusCode.OK,
+        CatalogViewCodec.encode(
+            encoded,
+            "malformed_aggregate",
+            "SELECT SUM(id) AS total FROM moments",
+            moments.tableId()));
+    int queryOffset = 24 + "malformed_aggregate".length();
+    encoded.put(queryOffset, (byte) 0xc0);
+    encoded.put(queryOffset + 1, (byte) 0x80);
+    assertEquals(
+        StatusCode.OK,
+        RelationalKey.catalogTableKey("malformed_aggregate", key));
+    assertEquals(
+        StatusCode.OK,
+        relational.indexedSession().insert(key.space(), key.key(), encoded));
+    assertEquals(
         StatusCode.OK, relational.commit(new TransactionOutcome()));
 
     sql = openSql(database);
@@ -67,6 +84,11 @@ final class CatalogViewSemanticCorruptionTest {
         sql.execute(
             "SELECT bad FROM damaged_view WHERE id=1",
             new SqlExecutionResult()));
+    assertEquals(StatusCode.OK, sql.close());
+    sql = openSql(database);
+    assertEquals(
+        StatusCode.CORRUPTION,
+        sql.beginScan("SELECT total FROM malformed_aggregate", new SqlScanCursor()));
     assertEquals(StatusCode.OK, sql.close());
     assertEquals(StatusCode.OK, database.close());
   }

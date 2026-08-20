@@ -17,6 +17,7 @@ final class SqlBlockAggregateViewTest {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x424c4f434b504950L, 0x454c494e45303131L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+  private static final String HIGH_BMP = Character.toString(0xe000);
 
   @Test
   void executesAtomicAggregateAndDistinctStagesThroughPointAndStreaming(
@@ -44,9 +45,49 @@ final class SqlBlockAggregateViewTest {
     assertRows(
         session,
         result,
+        "SELECT n FROM (SELECT COUNT(*) AS n FROM events) counted",
+        new long[][] {{4}});
+    assertRows(
+        session,
+        result,
+        "SELECT n FROM (SELECT COUNT(*) AS n FROM events WHERE id<0) empty_count",
+        new long[][] {{0}});
+    assertRows(
+        session,
+        result,
+        "SELECT n FROM (SELECT COUNT(amount) AS n FROM events WHERE category=30) null_count",
+        new long[][] {{0}});
+    assertSingleNull(
+        session,
+        result,
+        "SELECT total FROM (SELECT SUM(amount) AS total FROM events WHERE id<0) empty_sum");
+    assertSingleNull(
+        session,
+        result,
+        "SELECT minimum FROM (SELECT MIN(amount) AS minimum FROM events WHERE id<0) empty_min");
+    assertSingleNull(
+        session,
+        result,
+        "SELECT maximum FROM (SELECT MAX(amount) AS maximum FROM events WHERE id<0) empty_max");
+    assertRows(
+        session,
+        result,
+        "SELECT category,SUM(total) AS twice FROM "
+            + "(SELECT category,SUM(amount) AS total FROM events GROUP BY category) grouped "
+            + "GROUP BY category ORDER BY category",
+        new long[][] {{10, 300}, {20, 300}, {30, 0}});
+    assertRows(
+        session,
+        result,
         "SELECT total FROM (SELECT SUM(amount) AS total FROM events "
             + "HAVING SUM(amount)<0) scalar",
         new long[0][]);
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute(
+            "SELECT total FROM (SELECT SUM(amount) AS total FROM events "
+                + "HAVING SUM(amount)<0) scalar",
+            result));
     assertEquals(
         StatusCode.OK,
         session.execute(
@@ -73,12 +114,31 @@ final class SqlBlockAggregateViewTest {
             "SELECT total FROM (SELECT category,SUM(amount) AS total FROM events "
                 + "GROUP BY category) grouped WHERE total=300",
             result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT category FROM (SELECT category,SUM(amount) AS total FROM events "
+                + "GROUP BY category) grouped ORDER BY category LIMIT 1",
+            result));
+    assertEquals(10, result.valueAt(0));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute(
+            "SELECT category FROM (SELECT category,SUM(amount) AS total FROM events "
+                + "GROUP BY category) grouped LIMIT 0",
+            result));
 
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         session.beginScan(
             "SELECT n FROM (SELECT COUNT(*) AS n FROM events "
                 + "WHERE EXTRACT(YEAR FROM day)=2024) computed_inner",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        session.beginScan(
+            "SELECT category FROM (SELECT category,SUM(amount) AS total FROM events "
+                + "GROUP BY category ORDER BY category) ordered_inner",
             new SqlScanCursor()));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -89,6 +149,8 @@ final class SqlBlockAggregateViewTest {
 
     assertPlan(session, result, false);
     assertPlan(session, result, true);
+    assertLimitPlan(session, result);
+    assertDistinctPlan(session, result);
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }
@@ -111,7 +173,7 @@ final class SqlBlockAggregateViewTest {
       StringBuilder insert = new StringBuilder("INSERT INTO labels VALUES ");
       for (int id = start; id <= end; id++) {
         if (id > start) insert.append(',');
-        String label = id % 3 == 0 ? "猫" : id % 3 == 1 ? "\ue000" : "😀";
+        String label = id % 3 == 0 ? "猫" : id % 3 == 1 ? HIGH_BMP : "😀";
         insert.append('(').append(id).append(",'").append(label)
             .append("',DATE '2024-01-01')");
       }
@@ -122,13 +184,46 @@ final class SqlBlockAggregateViewTest {
         session,
         result,
         "SELECT label FROM (SELECT DISTINCT label FROM labels) d ORDER BY label",
-        new String[] {"猫", "\ue000", "😀"});
+        new String[] {"猫", HIGH_BMP, "😀"});
+    assertRowCount(
+        session,
+        result,
+        "SELECT DISTINCT id FROM (SELECT DISTINCT id FROM labels) inner_distinct",
+        1_025);
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE empty_times (id BIGINT PRIMARY KEY, observed TIMESTAMP)",
+            result));
+    assertEquals(
+        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
+        session.beginScan(
+            "SELECT shifted FROM (SELECT MAX(observed AT TIME ZONE 'No/Such') AS shifted "
+                + "FROM empty_times) zoned",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO empty_times VALUES "
+                + "(1,TIMESTAMP '2024-03-31 01:30:00')",
+            result));
+    assertEquals(
+        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
+        session.beginScan(
+            "SELECT shifted FROM (SELECT MAX(observed AT TIME ZONE 'Europe/London') "
+                + "AS shifted FROM empty_times) zoned",
+            new SqlScanCursor()));
+    assertRows(
+        session,
+        result,
+        "SELECT n FROM (SELECT COUNT(*) AS n FROM empty_times) recovered",
+        new long[][] {{1}});
     assertTextRows(
         session,
         result,
         "SELECT label FROM (SELECT label,COUNT(*) AS n FROM labels "
             + "GROUP BY label HAVING COUNT(*)>300) g ORDER BY label",
-        new String[] {"猫", "\ue000", "😀"});
+        new String[] {"猫", HIGH_BMP, "😀"});
     assertTextRows(
         session,
         result,
@@ -149,7 +244,7 @@ final class SqlBlockAggregateViewTest {
         session,
         result,
         "SELECT label FROM (SELECT DISTINCT label FROM labels) d ORDER BY label",
-        new String[] {"猫", "\ue000", "😀"});
+        new String[] {"猫", HIGH_BMP, "😀"});
 
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
@@ -179,6 +274,11 @@ final class SqlBlockAggregateViewTest {
         StatusCode.OK,
         session.execute(
             "CREATE VIEW grand_total AS SELECT SUM(amount) AS total FROM events",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE VIEW event_count AS SELECT COUNT(*) AS n FROM events",
             result));
     assertEquals(
         StatusCode.OK,
@@ -213,6 +313,7 @@ final class SqlBlockAggregateViewTest {
         result,
         "SELECT total FROM grand_total",
         new long[][] {{600}});
+    assertRows(session, result, "SELECT n FROM event_count", new long[][] {{4}});
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
@@ -228,6 +329,7 @@ final class SqlBlockAggregateViewTest {
         result,
         "SELECT category,total FROM totals ORDER BY category",
         new long[][] {{10, 300}, {20, 300}, {30, 0}});
+    assertRows(session, result, "SELECT n FROM event_count", new long[][] {{4}});
     assertTextRows(
         session,
         result,
@@ -269,6 +371,48 @@ final class SqlBlockAggregateViewTest {
     assertPlanRow(session, cursor, row, "having", 1, -1);
     assertPlanRow(session, cursor, row, "group", 2, -1);
     assertPlanRow(session, cursor, row, "sort", 0, -1);
+    assertPlanRow(session, cursor, row, "table", -1, -1);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertLimitPlan(
+      SqlSession session, SqlExecutionResult result) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "EXPLAIN ANALYZE SELECT category FROM "
+                + "(SELECT category,SUM(amount) AS total FROM events GROUP BY category) grouped "
+                + "WHERE category<30 ORDER BY category LIMIT 1",
+            cursor));
+    assertPlanRow(session, cursor, row, "block", 1, 1);
+    assertPlanRow(session, cursor, row, "limit", 1, -1);
+    assertPlanRow(session, cursor, row, "sort", 1, -1);
+    assertPlanRow(session, cursor, row, "filter", 1, -1);
+    assertPlanRow(session, cursor, row, "block", 2, 3);
+    assertPlanRow(session, cursor, row, "group", 1, -1);
+    assertPlanRow(session, cursor, row, "sort", 0, -1);
+    assertPlanRow(session, cursor, row, "table", -1, -1);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertDistinctPlan(
+      SqlSession session, SqlExecutionResult result) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "EXPLAIN SELECT DISTINCT label FROM (SELECT label FROM events) projected "
+                + "ORDER BY label",
+            cursor));
+    assertPlanRow(session, cursor, row, "block", 1, -1);
+    assertPlanRow(session, cursor, row, "dedupe", 1, -1);
+    assertPlanRow(session, cursor, row, "sort", 1, -1);
+    assertPlanRow(session, cursor, row, "block", 2, -1);
     assertPlanRow(session, cursor, row, "table", -1, -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
@@ -354,6 +498,33 @@ final class SqlBlockAggregateViewTest {
       assertTrue(length >= 0);
       assertEquals(value, new String(text, 0, length));
     }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertRowCount(
+      SqlSession session,
+      SqlExecutionResult result,
+      String sql,
+      int expected) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    int count = 0;
+    StatusCode terminal;
+    while ((terminal = session.nextScan(cursor, row)).isOk()) count++;
+    assertEquals(expected, count);
+    assertEquals(StatusCode.CONFLICT, terminal);
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertSingleNull(
+      SqlSession session, SqlExecutionResult result, String sql) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertTrue(row.isNull(0));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }

@@ -77,7 +77,7 @@ final class SqlPointCommandExecutor {
   }
 
   boolean isPointQuery() {
-    return isPointQuery(bound.command.type());
+    return bound.query.isBlockPipeline() || isPointQuery(bound.command.type());
   }
 
   int affectedRows() {
