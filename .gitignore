@@ -33,6 +33,8 @@ replay_pid*
 .idea/
 .vscode/
 *.iml
+__pycache__/
+*.pyc
 
 # Benchmark and diagnostic artifacts
 benchmark-results/
