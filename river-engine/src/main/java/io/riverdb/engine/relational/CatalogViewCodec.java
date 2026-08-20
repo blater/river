@@ -8,8 +8,8 @@ import java.nio.ByteBuffer;
 /** Durable encoding for one bounded catalog view definition. */
 final class CatalogViewCodec {
   private static final long MAGIC = 0x5249564552564945L; // RIVERVIE
-  private static final int VERSION = 2;
-  private static final int HEADER_BYTES = 24;
+  private static final int VERSION = 3;
+  private static final int HEADER_BYTES = 32;
 
   private CatalogViewCodec() {
   }
@@ -18,7 +18,8 @@ final class CatalogViewCodec {
       ByteBuffer target,
       CharSequence name,
       CharSequence query,
-      int baseTableId) {
+      int baseTableId,
+      int joinTableId) {
     int queryBytes = Utf8Text.encodedLength(query);
     if (target == null
         || name == null
@@ -28,6 +29,7 @@ final class CatalogViewCodec {
         || query.length() <= 0
         || query.length() > ViewDefinition.MAXIMUM_QUERY_LENGTH
         || queryBytes <= 0
+        || !validEncodedLineage(baseTableId, joinTableId)
         || HEADER_BYTES + name.length() > target.capacity() - queryBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -36,7 +38,9 @@ final class CatalogViewCodec {
     target.putInt(8, VERSION);
     target.putInt(12, name.length());
     target.putInt(16, queryBytes);
-    target.putInt(20, baseTableId);
+    target.putInt(20, joinTableId == 0 ? 1 : 2);
+    target.putInt(24, baseTableId);
+    target.putInt(28, joinTableId);
     int offset = HEADER_BYTES;
     for (int index = 0; index < name.length(); index++) {
       target.put(offset++, (byte) name.charAt(index));
@@ -82,7 +86,8 @@ final class CatalogViewCodec {
     }
     status = result.setUtf8(scratch, HEADER_BYTES + nameBytes, queryBytes);
     if (!status.isOk()) return status;
-    result.setBaseTableId(scratch.getInt(20));
+    result.setLineage(
+        scratch.getInt(20), scratch.getInt(24), scratch.getInt(28));
     return StatusCode.OK;
   }
 
@@ -126,8 +131,7 @@ final class CatalogViewCodec {
       int queryBytes) {
     return source.length() >= HEADER_BYTES + 1
         && scratch.getInt(8) == VERSION
-        && scratch.getInt(20) > 0
-        && scratch.getInt(20) <= RelationalKey.MAXIMUM_TABLE_ID
+        && validDecodedLineage(scratch)
         && nameBytes > 0
         && nameBytes <= TableSchema.MAXIMUM_NAME_LENGTH
         && queryBytes > 0
@@ -143,8 +147,29 @@ final class CatalogViewCodec {
     StatusCode status = result.setUtf8(
         source, HEADER_BYTES + nameBytes, queryBytes);
     if (!status.isOk()) return status;
-    result.setBaseTableId(source.getInt(20));
+    result.setLineage(source.getInt(20), source.getInt(24), source.getInt(28));
     return StatusCode.OK;
+  }
+
+  private static boolean validEncodedLineage(int baseTableId, int joinTableId) {
+    return validTableId(baseTableId)
+        && (joinTableId == 0
+            || validTableId(joinTableId) && joinTableId != baseTableId);
+  }
+
+  private static boolean validDecodedLineage(ByteBuffer source) {
+    int count = source.getInt(20);
+    int baseTableId = source.getInt(24);
+    int joinTableId = source.getInt(28);
+    return validTableId(baseTableId)
+        && (count == 1 && joinTableId == 0
+            || count == 2
+                && validTableId(joinTableId)
+                && joinTableId != baseTableId);
+  }
+
+  private static boolean validTableId(int tableId) {
+    return tableId > 0 && tableId <= RelationalKey.MAXIMUM_TABLE_ID;
   }
 
   private static void clear(ByteBuffer target) {

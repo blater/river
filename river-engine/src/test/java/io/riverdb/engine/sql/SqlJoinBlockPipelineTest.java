@@ -71,18 +71,30 @@ final class SqlJoinBlockPipelineTest {
     assertDeepestOnly(session, result);
 
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
             "CREATE VIEW direct_join AS SELECT l.id AS lid FROM left_rows l "
                 + "JOIN right_rows r ON l.id=r.left_id",
             result));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
             "CREATE VIEW derived_join AS SELECT lid FROM "
                 + "(SELECT l.id AS lid FROM left_rows l JOIN right_rows r "
                 + "ON l.id=r.left_id) joined",
             result));
+    assertRows(
+        session,
+        result,
+        "SELECT lid FROM direct_join ORDER BY lid",
+        new long[][] {{1}, {1}, {2}, {3}});
+    assertRows(
+        session,
+        result,
+        "SELECT lid FROM derived_join ORDER BY lid",
+        new long[][] {{1}, {1}, {2}, {3}});
+    assertEquals(StatusCode.OK, session.execute("DROP VIEW direct_join", result));
+    assertEquals(StatusCode.OK, session.execute("DROP VIEW derived_join", result));
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT bucket FROM left_rows WHERE id=1", result));
@@ -126,27 +138,31 @@ final class SqlJoinBlockPipelineTest {
       assertEquals(StatusCode.OK, session.execute(left.toString(), result));
       assertEquals(StatusCode.OK, session.execute(right.toString(), result));
     }
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE VIEW spill_join AS SELECT l.id AS lid,l.bucket AS bucket,"
+                + "r.label AS label FROM spill_left l JOIN spill_right r "
+                + "ON l.id=r.id",
+            result));
 
     assertRows(
         session,
         result,
-        "SELECT bucket,COUNT(*) AS n FROM (SELECT l.bucket AS bucket "
-            + "FROM spill_left l JOIN spill_right r ON l.id=r.id) joined "
+        "SELECT bucket,COUNT(*) AS n FROM spill_join "
             + "GROUP BY bucket HAVING COUNT(*)>500 ORDER BY bucket",
         new long[][] {{0, 512}, {1, 513}});
     assertTextRows(
         session,
         result,
-        "SELECT DISTINCT label FROM (SELECT r.label AS label "
-            + "FROM spill_left l JOIN spill_right r ON l.id=r.id) joined "
-            + "ORDER BY label",
+        "SELECT DISTINCT label FROM spill_join ORDER BY label",
         new String[] {"猫", HIGH_BMP, "😀"});
     assertRowCount(
         session,
         result,
-        "SELECT lid FROM (SELECT l.id AS lid FROM spill_left l "
-            + "JOIN spill_right r ON l.id=r.id) joined",
+        "SELECT lid FROM spill_join",
         1_025);
+    assertEquals(StatusCode.OK, session.execute("DROP VIEW spill_join", result));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }

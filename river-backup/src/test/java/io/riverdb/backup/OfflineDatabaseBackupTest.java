@@ -60,6 +60,16 @@ final class OfflineDatabaseBackupTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
+            "CREATE TABLE regions (id BIGINT PRIMARY KEY,label VARCHAR(32))",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO regions VALUES (7,'東京地域'),(8,'north')",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
             "CREATE TABLE temporal_archive ("
                 + "id BIGINT PRIMARY KEY, day DATE, alarm TIME(3), "
                 + "observed TIMESTAMP(6) "
@@ -80,6 +90,13 @@ final class OfflineDatabaseBackupTest {
         session.execute(
             "CREATE VIEW unicode_totals AS SELECT region,SUM(balance) AS total "
                 + "FROM accounts WHERE label='河川データ庫' GROUP BY region",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE VIEW joined_accounts AS SELECT a.id AS account_id,"
+                + "a.balance AS balance,r.label AS region_label "
+                + "FROM accounts a JOIN regions r ON a.region=r.id",
             command));
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
@@ -127,6 +144,21 @@ final class OfflineDatabaseBackupTest {
         session.execute(
             "SELECT total FROM unicode_totals WHERE region=7", command));
     assertEquals(250, command.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT balance,region_label FROM joined_accounts "
+                + "WHERE account_id=2",
+            command));
+    assertEquals(250, command.valueAt(0));
+    char[] joinedLabel = new char[32];
+    int joinedLabelLength = command.copyTextAt(1, joinedLabel, 0);
+    assertEquals(4, joinedLabelLength);
+    assertEquals("東京地域", new String(joinedLabel, 0, joinedLabelLength));
+    assertEquals(StatusCode.OK, session.execute("DROP VIEW unicode_totals", command));
+    assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE accounts", command));
+    assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE regions", command));
+    assertEquals(StatusCode.OK, session.execute("DROP VIEW joined_accounts", command));
     assertEquals(
         StatusCode.OK,
         session.execute(

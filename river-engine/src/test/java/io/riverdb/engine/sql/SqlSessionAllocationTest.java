@@ -19,9 +19,11 @@ import org.junit.jupiter.api.io.TempDir;
 
 final class SqlSessionAllocationTest {
   private static final String JOIN_BLOCK_PIPELINE =
-      "SELECT rendered,label FROM (SELECT CAST(tv.observed AS VARCHAR(32)) "
+      "SELECT rendered,label FROM allocated_join";
+  private static final String JOIN_VIEW_DEFINITION =
+      "CREATE VIEW allocated_join AS SELECT CAST(tv.observed AS VARCHAR(32)) "
           + "AS rendered,texts.label AS label FROM temporal_values tv "
-          + "JOIN texts ON tv.id=texts.id WHERE tv.id=1) joined";
+          + "JOIN texts ON tv.id=texts.id WHERE tv.id=1";
   private static volatile long allocationGuard;
 
   @Test
@@ -160,6 +162,7 @@ final class SqlSessionAllocationTest {
             "CREATE VIEW temporal_derived AS SELECT id,next_day FROM "
                 + "(SELECT id,day+1 AS next_day FROM temporal_values) q",
             result));
+    assertEquals(StatusCode.OK, session.execute(JOIN_VIEW_DEFINITION, result));
     assertEquals(
         StatusCode.OK,
         session.execute(

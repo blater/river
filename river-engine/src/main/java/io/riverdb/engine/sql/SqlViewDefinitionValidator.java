@@ -8,9 +8,12 @@ import io.riverdb.sql.SqlParser;
 final class SqlViewDefinitionValidator {
   private final SqlParser parser = new SqlParser();
   private final BoundSqlStatement bound = new BoundSqlStatement();
-  private final SqlBinder binder = new SqlBinder();
-  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder(null);
+  private final SqlViewDefinitionBinder bindings;
   private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
+
+  SqlViewDefinitionValidator(SqlBinder sharedBinder) {
+    bindings = new SqlViewDefinitionBinder(sharedBinder);
+  }
 
   StatusCode validate(RelationalSession session, CharSequence viewSql) {
     bound.reset();
@@ -21,21 +24,14 @@ final class SqlViewDefinitionValidator {
     if (status.isOk()) {
       status = SqlStoredViewPolicy.validateZones(bound.command, bound.query, zones);
     }
-    if (status.isOk()) {
-      status = session.resolveTable(bound.command.tableName(), bound.table);
-    }
-    if (!status.isOk()) return status;
-    if (bound.query.isBlockPipeline()) return blockBinder.bind(session, bound, null);
-    if (SqlBinder.isGroupAggregate(bound.command.type())) {
-      return binder.bindGroupAggregate(bound.command, bound.query, bound);
-    }
-    if (bound.command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN) {
-      return binder.bindDistinct(bound.command, bound.query, bound);
-    }
-    return binder.bindDataCommand(bound.command, bound.query, bound);
+    return status.isOk() ? bindings.bind(session, bound) : status;
   }
 
   int tableId() {
     return bound.table.tableId();
+  }
+
+  int joinTableId() {
+    return bound.joinTable.tableId();
   }
 }

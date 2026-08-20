@@ -25,10 +25,10 @@ or gate has passed.
 | --- | --- |
 | Integration branch | `master` |
 | Current wave | M5 useful v1 SQL surface |
-| Current target | P4B3 durable two-table JOIN-view lineage |
-| Next product slice | Computed correlation, then broader CHECK contexts |
+| Current target | Computed correlation and nested-predicate expansion |
+| Next product slice | Broader CHECK contexts, then U06 recovery/fault promotion evidence |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | 2026-08-20 deepest computed `INNER`/`LEFT JOIN` feeding P3 projection, scalar/grouped aggregate/`HAVING`, `DISTINCT`, outer ordering, and 1,025-row spill with truthful plans and atomic failure/lifecycle evidence — full `river-sql` and `river-engine` suites; prior checkpoints retained |
+| Latest green functional checkpoint | 2026-08-20 strict UTF-8-v3 durable direct/deepest-derived JOIN views with ordered two-table lineage, checkpoint/WAL reopen, backup/restore, both-base dependency enforcement, stored 1,025-row spill, and corruption/allocation evidence — full `river-sql`, `river-engine`, and `river-backup` suites; prior checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
@@ -77,7 +77,7 @@ SQL conformance profile.
 | U02c `BOOLEAN` and `DECIMAL(p,s)` | passed | Accepted exact representation/math/casts, predicate/aggregate/index/constraint, JDBC, recovery, and error evidence |
 | U02d local temporal types | passed | Accepted strict local temporal grammar/codec, catalog/row/default/check validation, DATE index, DML/predicates/update, corruption, and checkpoint/reopen evidence; TIME index admission was corrected in U02f after proving its full domain fits the existing key |
 | U02e time-zone semantics | passed | Accepted UTC instant storage, strict fixed/IANA area zones, DST gap/overlap behavior, session-state rollback semantics, tzdb reporting, statement-stable defaults, catalog v13, and checkpoint/reopen evidence |
-| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables and UTF-8-v2 durable views, P4A's common bounded Boolean/3VL program at the direct root and every block/view stage, P4B1's separate bounded computed `ON` and post-join `WHERE` programs plus scoped computed projection for direct `INNER`/`LEFT JOIN`, and P4B2's deepest JOIN barrier feeding the existing P3 projection/cardinality/spill pipeline. Durable two-base JOIN views, computed correlation, and broader CHECK/expression contexts remain separate work. |
+| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables and strict UTF-8-v3 durable views, P4A's common bounded Boolean/3VL program at the direct root and every block/view stage, P4B1's separate bounded computed `ON` and post-join `WHERE` programs plus scoped computed projection for direct `INNER`/`LEFT JOIN`, P4B2's deepest JOIN barrier feeding the existing P3 projection/cardinality/spill pipeline, and P4B3's ordered two-base durable JOIN-view lineage through checkpoint/reopen and backup/restore. Computed correlation and broader CHECK/expression contexts remain separate work. |
 | U03a JDBC/protocol types | passed | Accepted protocol v3 binary values/parameters, authenticated all-type JDBC/CLI, Java-time/decimal mappings, exact metadata, conversion matrix, warnings, generated keys, bounded batches, failure states, and ownership/erasure evidence |
 | U06a type/temporal gate | active | Unified embedded/authenticated-JDBC/CLI/checkpoint/backup/fault fixture and independent relational-semantics review remain |
 

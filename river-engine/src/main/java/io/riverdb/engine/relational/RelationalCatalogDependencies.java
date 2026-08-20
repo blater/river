@@ -59,7 +59,7 @@ final class RelationalCatalogDependencies {
         status = decoded;
         break;
       }
-      if (scannedView.baseTableId() == tableId) {
+      if (references(scannedView, tableId)) {
         status = StatusCode.CONFLICT;
         break;
       }
@@ -86,10 +86,15 @@ final class RelationalCatalogDependencies {
   private StatusCode checkScannedView(int tableId) {
     StatusCode status = CatalogViewCodec.decodeForScan(
         catalogRow.row(), catalogScratch, scannedName, scannedView);
-    if (status.isOk() && scannedView.baseTableId() == tableId) {
+    if (status.isOk() && references(scannedView, tableId)) {
       return StatusCode.CONFLICT;
     }
     return status == StatusCode.CONFLICT ? StatusCode.OK : status;
+  }
+
+  private static boolean references(ViewDefinition view, int tableId) {
+    return view.baseTableId() == tableId
+        || view.tableCount() == 2 && view.joinTableId() == tableId;
   }
 
   private StatusCode beginScan(RelationalSession session) {

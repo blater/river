@@ -56,7 +56,7 @@ final class SqlPointCommandExecutor {
     if (bound.query.hasNestedTopology()) {
       return nestedPointStatus();
     }
-    StatusCode status = views.resolve(session, bound, binder);
+    StatusCode status = views.resolve(session, bound);
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     blockPipeline = status.isOk() && bound.query.isBlockPipeline();
     if (blockPipeline) {

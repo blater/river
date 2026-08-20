@@ -10,19 +10,33 @@ public final class ViewDefinition implements CharSequence {
 
   private final char[] query = new char[MAXIMUM_QUERY_LENGTH];
   private int length;
+  private int tableCount;
   private int baseTableId;
+  private int joinTableId;
 
   public void reset() {
     length = 0;
+    tableCount = 0;
     baseTableId = 0;
+    joinTableId = 0;
   }
 
-  void setBaseTableId(int tableId) {
-    baseTableId = tableId;
+  void setLineage(int count, int baseId, int joinId) {
+    tableCount = count;
+    baseTableId = baseId;
+    joinTableId = joinId;
+  }
+
+  public int tableCount() {
+    return tableCount;
   }
 
   public int baseTableId() {
     return baseTableId;
+  }
+
+  public int joinTableId() {
+    return joinTableId;
   }
 
   void append(char character) {

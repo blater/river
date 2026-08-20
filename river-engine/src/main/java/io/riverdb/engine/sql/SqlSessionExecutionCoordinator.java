@@ -23,9 +23,9 @@ final class SqlSessionExecutionCoordinator {
       new SqlBlockPlanBinder(temporal, binder);
   private final SqlRowProjectionEvaluator rowExpressions =
       new SqlRowProjectionEvaluator(expressions, temporal);
-  private final SqlViewExpander viewExpander = new SqlViewExpander();
+  private final SqlViewExpander viewExpander = new SqlViewExpander(binder);
   private final SqlViewDefinitionValidator viewValidator =
-      new SqlViewDefinitionValidator();
+      new SqlViewDefinitionValidator(binder);
   private final SqlTransactionState transactions;
   private final SqlCommandDispatcher dispatcher;
   private final SqlDmlExecutor dml;
@@ -450,7 +450,7 @@ final class SqlSessionExecutionCoordinator {
         || type == SqlCommandType.SHOW_COLUMNS) {
       return binder.captureExecutableQuery(bound);
     }
-    StatusCode expansion = viewExpander.resolve(session, bound, binder);
+    StatusCode expansion = viewExpander.resolve(session, bound);
     if (expansion.isOk()) expansion = binder.captureExecutableQuery(bound);
     if (!expansion.isOk()) return expansion;
     if (bound.query.isBlockPipeline()) return prepareBlockPipeline();

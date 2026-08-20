@@ -76,9 +76,13 @@ and analyzed stage row count. `ORDER BY` is admitted only at the outer stage
 and must resolve to one selected output; inner-stage ordering is explicitly
 deferred rather than silently discarded.
 
-Durable view records use strict UTF-8 catalog format v2. V1, malformed,
-noncanonical, truncated, trailing, or unpaired UTF-16 input is rejected rather
-than adapted during this pre-V1 format replacement. Projection-only stored
+Durable view records use strict UTF-8 catalog format v3. The fixed header owns
+one or two ordered physical-table IDs: a single-table view requires one valid
+base ID and a zero second ID, while an admitted JOIN view requires two valid,
+distinct IDs in SQL left/right order. V1, V2, malformed, noncanonical,
+truncated, trailing, duplicate-lineage, missing-lineage, or unpaired UTF-16
+input is rejected rather than adapted during this pre-V1 format replacement.
+Projection-only stored
 views retain their flattened point/index fast path; only a real cardinality
 barrier selects staged execution. The P4B1 direct-JOIN checkpoint assigns
 separate bounded canonical Boolean programs to `ON` and post-join `WHERE`.
@@ -96,8 +100,13 @@ alternating stores, and parent projection, scalar or grouped
 aggregate/`HAVING`, `DISTINCT`, and outer `ORDER BY` stages retain the same
 spill, atomic-publication, and `EXPLAIN [ANALYZE]` contracts. A JOIN in a
 nondeepest block, multiple JOIN blocks, and JOIN-local ordering fail closed.
-Durable JOIN views with two-table dependency lineage remain explicit P4B3
-`FEATURE_NOT_SUPPORTED` work.
+Direct and deepest-derived JOIN definitions may be durable views. CREATE binds
+both tables before catalog mutation; expansion reparses the stored query and
+requires an exact ordered-ID match before execution. Either base table blocks
+DROP and schema rename while the view exists, and the lineage survives
+checkpoint/WAL replay and offline backup/restore. Durable self-JOIN views
+remain `FEATURE_NOT_SUPPORTED` because the v3 lineage requires distinct base
+IDs.
 Nested/correlated column-to-column edges remain equality-only; auxiliary raw
 ranges, membership, NULL, and truth tests retain their prior admission, while
 computed or generalized correlated/subquery predicates remain deferred. More

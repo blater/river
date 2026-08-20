@@ -234,14 +234,18 @@ public final class RelationalSession {
   public StatusCode createView(
       CharSequence name,
       CharSequence query,
-      int baseTableId) {
+      int baseTableId,
+      int joinTableId) {
     if (!registeredTransaction
         || !RelationalKey.validName(name)
         || query == null
         || query.length() <= 0
         || query.length() > ViewDefinition.MAXIMUM_QUERY_LENGTH
         || baseTableId <= 0
-        || baseTableId > RelationalKey.MAXIMUM_TABLE_ID) {
+        || baseTableId > RelationalKey.MAXIMUM_TABLE_ID
+        || joinTableId < 0
+        || joinTableId > RelationalKey.MAXIMUM_TABLE_ID
+        || joinTableId == baseTableId) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (pendingDropType != PENDING_DROP_NONE) {
@@ -250,7 +254,8 @@ public final class RelationalSession {
     boolean acquired = !schemaChangeActive;
     StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
-      status = catalogDdl.createView(this, name, query, baseTableId);
+      status = catalogDdl.createView(
+          this, name, query, baseTableId, joinTableId);
     }
     finishFailedSchemaChange(status, acquired);
     return status;

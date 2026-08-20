@@ -10,14 +10,17 @@ import io.riverdb.sql.SqlParser;
 final class SqlPersistedViewCompiler {
   private final SqlParser parser = new SqlParser();
   private final SqlCommand viewCommand = new SqlCommand();
-  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder(null);
+  private final SqlBlockPlanBinder blockBinder;
   private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
   private final ViewDefinition definition = new ViewDefinition();
+
+  SqlPersistedViewCompiler(SqlBinder binder) {
+    blockBinder = new SqlBlockPlanBinder(null, binder);
+  }
 
   StatusCode expand(
       RelationalSession session,
       BoundSqlStatement bound,
-      SqlBinder binder,
       StatusCode tableStatus) {
     if (tableStatus != StatusCode.CONFLICT
         && tableStatus != StatusCode.CORRUPTION) {
@@ -62,8 +65,8 @@ final class SqlPersistedViewCompiler {
       return StatusCode.CORRUPTION;
     }
     SqlCommand base = bound.query.block(bound.query.blockCount() - 1);
-    status = session.resolveTable(base.tableName(), bound.table);
-    if (!status.isOk() || bound.table.tableId() != definition.baseTableId()) {
+    status = resolveLineage(session, bound, base);
+    if (!status.isOk()) {
       return StatusCode.CORRUPTION;
     }
     StatusCode tailStatus = blockBinder.validateTail(bound, firstStoredBlock);
@@ -74,5 +77,22 @@ final class SqlPersistedViewCompiler {
     status = bound.query.expandRootSelectAllFrom(1);
     if (!status.isOk()) return status;
     return bound.query.compileCombined(bound.command);
+  }
+
+  private StatusCode resolveLineage(
+      RelationalSession session,
+      BoundSqlStatement bound,
+      SqlCommand base) {
+    StatusCode status = session.resolveTable(base.tableName(), bound.table);
+    boolean join = base.type() == io.riverdb.sql.SqlCommandType.JOIN_SCAN;
+    if (status.isOk() && join) {
+      status = session.resolveTable(base.joinTableName(), bound.joinTable);
+    }
+    int count = join ? 2 : 1;
+    return status.isOk()
+        && definition.tableCount() == count
+        && definition.baseTableId() == bound.table.tableId()
+        && (!join || definition.joinTableId() == bound.joinTable.tableId())
+        ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 }

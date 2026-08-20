@@ -13,14 +13,6 @@ final class SqlStoredViewPolicy {
     if (query.hasNestedTopology() || query.isExplain()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    if (command.type() == SqlCommandType.JOIN_SCAN) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
-    }
-    for (int block = 0; block < query.blockCount(); block++) {
-      if (query.block(block).type() == SqlCommandType.JOIN_SCAN) {
-        return StatusCode.FEATURE_NOT_SUPPORTED;
-      }
-    }
     if (query.sourcePlanDepth() >= SqlQuery.MAXIMUM_QUERY_BLOCKS) {
       return StatusCode.QUERY_TOO_COMPLEX;
     }
@@ -55,7 +47,9 @@ final class SqlStoredViewPolicy {
   }
 
   private static boolean admittedType(SqlCommandType type) {
-    if (type == SqlCommandType.SCAN || type == SqlCommandType.SELECT) return true;
+    if (type == SqlCommandType.SCAN
+        || type == SqlCommandType.SELECT
+        || type == SqlCommandType.JOIN_SCAN) return true;
     return type == SqlCommandType.DISTINCT_SCAN
         || type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE

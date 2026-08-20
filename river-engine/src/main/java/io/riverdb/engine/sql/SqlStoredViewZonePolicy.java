@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlQuery;
 import io.riverdb.sql.SqlScalarExpression;
@@ -34,22 +35,43 @@ final class SqlStoredViewZonePolicy {
 
   private static StatusCode command(
       SqlCommand command, SqlTemporalZoneNames zones) {
+    if (command.type() == SqlCommandType.JOIN_SCAN) {
+      StatusCode status = predicates(command, command.onPredicates(), zones);
+      if (status.isOk()) {
+        status = predicates(command, command.wherePredicates(), zones);
+      }
+      return status.isOk() ? projections(command, zones) : status;
+    }
+    StatusCode status = projections(command, zones);
+    if (!status.isOk()) return status;
+    status = aggregates(command, zones);
+    if (!status.isOk()) return status;
+    status = predicates(command, command.wherePredicates(), zones);
+    if (status.isOk()) {
+      status = predicates(command, command.booleanHavingPredicates(), zones);
+    }
+    return status;
+  }
+
+  private static StatusCode projections(
+      SqlCommand command, SqlTemporalZoneNames zones) {
     for (int projection = 0; projection < command.columnCount(); projection++) {
       StatusCode status = expression(
           command, command.projectionExpression(projection), zones);
       if (!status.isOk()) return status;
     }
+    return StatusCode.OK;
+  }
+
+  private static StatusCode aggregates(
+      SqlCommand command, SqlTemporalZoneNames zones) {
     for (int lane = 0; lane < SqlCommand.MAXIMUM_COLUMNS; lane++) {
       SqlScalarExpression expression = command.aggregateOperandExpression(lane);
       if (expression == null || !expression.isAvailable()) continue;
       StatusCode status = expression(command, expression, zones);
       if (!status.isOk()) return status;
     }
-    StatusCode status = predicates(command, command.wherePredicates(), zones);
-    if (status.isOk()) {
-      status = predicates(command, command.booleanHavingPredicates(), zones);
-    }
-    return status;
+    return StatusCode.OK;
   }
 
   private static StatusCode predicates(
