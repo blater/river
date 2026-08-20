@@ -18,7 +18,7 @@ plugins {
 }
 
 group = "io.riverdb"
-version = "0.1.0-SNAPSHOT"
+version = "0.1.0-alpha.1"
 
 val productionModules = listOf(
   "river-base",
