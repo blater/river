@@ -77,7 +77,6 @@ final class SqlBlockGroupedAggregateStage {
     if (status.isOk() && groupLength < 0) status = StatusCode.CORRUPTION;
     if (status.isOk()) status = having.evaluate(
         bound.command,
-        bound.havingPrograms,
         accumulator,
         groupKeyRow.value(0),
         groupKeyRow.nullValue(0),

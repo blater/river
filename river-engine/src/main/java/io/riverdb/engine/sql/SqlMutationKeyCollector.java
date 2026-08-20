@@ -6,6 +6,7 @@ import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Collects a bounded stable key set for scan-based UPDATE and DELETE. */
@@ -66,7 +67,7 @@ final class SqlMutationKeyCollector {
 
   private StatusCode begin(SqlCommand command, BoundSqlStatement bound) {
     boolean bounded = bound.accessPredicate >= 0;
-    boolean equality = bounded && accessEquality(command, bound);
+    boolean equality = bounded && bound.accessComparison == SqlComparison.EQUAL;
     indexedScan = bounded && bound.predicateColumn > 0
         && bound.table.hasIndexOn(bound.predicateColumn);
     boolean primaryRange = bounded && bound.predicateColumn == 0;
@@ -123,11 +124,6 @@ final class SqlMutationKeyCollector {
     return row.length() < bound.table.fixedRowBytes()
             || row.length() > bound.table.maximumRowBytes()
         ? StatusCode.CORRUPTION : StatusCode.OK;
-  }
-
-  private static boolean accessEquality(
-      SqlCommand command, BoundSqlStatement bound) {
-    return command.isEqualityPredicate(bound.accessPredicate);
   }
 
   private static long accessValue(

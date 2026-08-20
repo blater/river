@@ -7,15 +7,19 @@ import io.riverdb.engine.relational.TableDefinition;
 
 /** Resolves captured nested-query blocks into reusable execution indices. */
 final class SqlQueryBlockBinder {
+  private final SqlNestedPredicateBinder predicates = new SqlNestedPredicateBinder();
+
   StatusCode bind(RelationalSession session, BoundSqlStatement bound) {
     BoundSqlQuery query = bound.executableQuery;
     query.beginBinding(bound.table);
-    for (int depth = 1; depth < query.blockCount(); depth++) {
-      StatusCode status = bindBlock(session, query, depth);
+    StatusCode status = predicates.bind(query, query.root(), bound.table, 0);
+    for (int depth = 1; status.isOk() && depth < query.blockCount(); depth++) {
+      status = bindBlock(session, query, depth);
       if (!status.isOk()) {
         return status;
       }
     }
+    if (!status.isOk()) return status;
     bindTopology(query);
     return StatusCode.OK;
   }
@@ -35,7 +39,7 @@ final class SqlQueryBlockBinder {
     if (!status.isOk()) {
       return status;
     }
-    status = bindPredicates(query, block, definition, depth);
+    status = predicates.bind(query, block, definition, depth);
     return status.isOk()
         ? validateResultEdge(query, depth - 1, block.projectionType())
         : status;
@@ -64,97 +68,6 @@ final class SqlQueryBlockBinder {
     return StatusCode.OK;
   }
 
-  private StatusCode bindPredicates(
-      BoundSqlQuery query,
-      BoundSqlQuery.Block block,
-      TableDefinition definition,
-      int depth) {
-    for (int predicate = 0; predicate < block.predicateCount(); predicate++) {
-      StatusCode status = bindPredicate(
-          query, block, definition, depth, predicate);
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private StatusCode bindPredicate(
-      BoundSqlQuery query,
-      BoundSqlQuery.Block block,
-      TableDefinition definition,
-      int depth,
-      int predicate) {
-    if (!hasValidQualifier(block, predicate)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int column = definition.findColumn(block.predicateColumnName(predicate));
-    if (column < 0 || hasInvalidRange(block, predicate)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (!block.isColumnPredicate(predicate)) {
-      return bindLiteralPredicate(query, block, definition, predicate, column);
-    }
-    return bindColumnPredicate(query, block, definition, depth, predicate, column);
-  }
-
-  private static boolean hasValidQualifier(
-      BoundSqlQuery.Block block, int predicate) {
-    CharSequence qualifier = block.predicateTableName(predicate);
-    return qualifier.length() == 0 || matchesQualifier(block, qualifier);
-  }
-
-  private static boolean hasInvalidRange(
-      BoundSqlQuery.Block block, int predicate) {
-    return block.isRangePredicate(predicate)
-        && block.predicateUpperExclusive(predicate)
-            <= block.predicateLowerInclusive(predicate);
-  }
-
-  private static StatusCode bindLiteralPredicate(
-      BoundSqlQuery query,
-      BoundSqlQuery.Block block,
-      TableDefinition definition,
-      int predicate,
-      int column) {
-    boolean nestedMembership = predicate == query.membershipPredicate(block.blockIndex());
-    if (!block.isNullPredicate(predicate) && !nestedMembership
-        && !SqlTypeDescriptor.canCompare(
-            definition.typeDescriptor(column),
-            block.predicateTypeDescriptor(predicate))) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    block.setPredicate(predicate, column, -1, -1);
-    return StatusCode.OK;
-  }
-
-  private static StatusCode bindColumnPredicate(
-      BoundSqlQuery query,
-      BoundSqlQuery.Block block,
-      TableDefinition definition,
-      int depth,
-      int predicate,
-      int column) {
-    int scope = resolveScope(
-        query, depth, block.predicateValueTableName(predicate));
-    if (scope < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    TableDefinition valueDefinition = query.block(scope).table();
-    int valueColumn = valueDefinition.findColumn(
-        block.predicateValueColumnName(predicate));
-    if (valueColumn < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (!SqlTypeDescriptor.canCompare(
-        definition.typeDescriptor(column),
-        valueDefinition.typeDescriptor(valueColumn))) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    block.setPredicate(predicate, column, valueColumn, scope);
-    return StatusCode.OK;
-  }
-
   private static StatusCode validateResultEdge(
       BoundSqlQuery query, int parent, int childType) {
     boolean scalar = query.hasScalarPredicate(parent);
@@ -166,7 +79,8 @@ final class SqlQueryBlockBinder {
     int predicate = scalar
         ? query.scalarPredicate(parent) : query.membershipPredicate(parent);
     int parentColumn = predicate < 0 ? -1
-        : parentBlock.table().findColumn(parentBlock.predicateColumnName(predicate));
+        : parentBlock.table().findColumn(
+            parentBlock.predicates().columnName(predicate));
     if (parentColumn < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -187,7 +101,7 @@ final class SqlQueryBlockBinder {
     boolean rootCorrelated = (correlation & 2) != 0;
     boolean intermediateCorrelated = (correlation & 4) != 0;
     boolean simple = query.blockCount() == 2;
-    query.setCorrelationTopology(
+    query.topology().set(
         simple && query.hasScalarPredicate() && correlated,
         simple && query.hasExistencePredicate() && correlated,
         simple && query.hasMembershipPredicate() && correlated,
@@ -198,8 +112,9 @@ final class SqlQueryBlockBinder {
 
   private static int correlationFlags(BoundSqlQuery.Block block, int depth) {
     int flags = block.isCorrelated() ? 1 : 0;
-    for (int predicate = 0; predicate < block.predicateCount(); predicate++) {
-      int scope = block.resolvedPredicateValueScope(predicate);
+    SqlNestedPredicatePlan predicates = block.predicates();
+    for (int predicate = 0; predicate < predicates.count(); predicate++) {
+      int scope = predicates.resolvedValueScope(predicate);
       if (scope == 0) {
         flags |= 2;
       } else if (scope > 0 && scope < depth) {
@@ -207,19 +122,6 @@ final class SqlQueryBlockBinder {
       }
     }
     return flags;
-  }
-
-  private static int resolveScope(
-      BoundSqlQuery query, int depth, CharSequence qualifier) {
-    if (qualifier.length() == 0) {
-      return -1;
-    }
-    for (int scope = depth; scope >= 0; scope--) {
-      if (matchesQualifier(query.block(scope), qualifier)) {
-        return scope;
-      }
-    }
-    return -1;
   }
 
   private static boolean isTextType(int descriptor) {

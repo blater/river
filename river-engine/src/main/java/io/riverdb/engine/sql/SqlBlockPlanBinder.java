@@ -10,7 +10,13 @@ final class SqlBlockPlanBinder {
   private final SqlBlockExpressionBinder expressions = new SqlBlockExpressionBinder();
   private final SqlBlockAggregateBinder aggregates = new SqlBlockAggregateBinder(expressions);
   private final SqlBlockProjectionBinder projections = new SqlBlockProjectionBinder(expressions);
-  private final SqlBlockPredicateBinder predicates = new SqlBlockPredicateBinder(expressions);
+  private final SqlBlockPredicateBinder predicates = new SqlBlockPredicateBinder();
+  private final SqlBooleanPredicateEvaluator predicatePreflight;
+
+  SqlBlockPlanBinder(SqlTemporalContext temporal) {
+    predicatePreflight = temporal == null ? null
+        : new SqlBooleanPredicateEvaluator(new SqlExpressionEvaluator(), temporal);
+  }
 
   StatusCode bind(
       RelationalSession session,
@@ -27,9 +33,16 @@ final class SqlBlockPlanBinder {
         status.isOk() && block >= 0; block--) {
       status = activate(bound, block, child);
       if (status.isOk() && evaluator != null) status = evaluator.prepare(bound);
+      if (status.isOk() && predicatePreflight != null) {
+        status = predicatePreflight.prepare(bound.command, bound.whereBoolean);
+      }
+      if (status.isOk() && predicatePreflight != null) {
+        status = predicatePreflight.prepare(bound.command, bound.havingBoolean);
+      }
       child = plans.schema(block);
     }
     if (status.isOk()) status = activate(bound, 0, plans.schema(1));
+    if (predicatePreflight != null) predicatePreflight.reset();
     return status;
   }
 
@@ -89,7 +102,8 @@ final class SqlBlockPlanBinder {
   private static void resetActive(BoundSqlStatement bound) {
     bound.projectionPrograms.reset();
     bound.aggregates.reset();
-    bound.havingPrograms.reset();
+    bound.whereBoolean.reset();
+    bound.havingBoolean.reset();
     bound.projectedColumnCount = 0;
     bound.predicateCount = 0;
     bound.groupColumn = -1;

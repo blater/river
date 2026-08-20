@@ -67,12 +67,6 @@ final class SqlSelectAggregateParser {
       }
       return status;
     }
-    if (type == SqlCommandType.SCAN
-        && result.hasPredicate()
-        && result.isEqualityPredicate()
-        && result.predicateExpression(0) == null) {
-      result.set(SqlCommandType.SELECT, 0, 0);
-    }
     return StatusCode.OK;
   }
 

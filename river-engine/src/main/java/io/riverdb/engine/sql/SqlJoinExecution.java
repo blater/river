@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableSchema;
@@ -41,8 +42,7 @@ final class SqlJoinExecution {
     BoundSqlQuery.Block command = bound.executableQuery.root();
     plan.setFilterCount(bound.predicateCount);
     boolean predicate = bound.accessPredicate >= 0;
-    boolean equality = predicate
-        && command.isEqualityPredicate(bound.accessPredicate);
+    boolean equality = predicate && bound.accessComparison == SqlComparison.EQUAL;
     boolean indexedOuter = predicate
         && bound.predicateColumn > 0
         && bound.table.hasIndexOn(bound.predicateColumn);
@@ -158,7 +158,9 @@ final class SqlJoinExecution {
         continue;
       }
       scan.matchJoin();
-      if (predicates.matchesJoin(innerKey, innerRow, false)) {
+      boolean matched = predicates.matchesJoin(innerKey, innerRow, false);
+      if (!predicates.joinStatus().isOk()) return predicates.joinStatus();
+      if (matched) {
         return setRowFromRememberedOuter(cursor, result, innerKey, innerRow);
       }
     }
@@ -175,8 +177,9 @@ final class SqlJoinExecution {
     if (!status.isOk()) {
       return status;
     }
-    return unmatched && predicates.matchesNullExtendedJoin()
-        ? setUnmatchedRow(cursor, result) : StatusCode.CONFLICT;
+    boolean matched = unmatched && predicates.matchesNullExtendedJoin();
+    return !predicates.joinStatus().isOk() ? predicates.joinStatus()
+        : matched ? setUnmatchedRow(cursor, result) : StatusCode.CONFLICT;
   }
 
   private boolean matchesJoinValue(long innerKey, HeapRowResult innerRow) {
@@ -219,7 +222,10 @@ final class SqlJoinExecution {
       HeapRowResult outerRow = plan.valueIndex() ? outerIndexed.row() : row.row();
       status = validate(
           outerRow, bound.table.fixedRowBytes(), bound.table.maximumRowBytes());
-      if (!status.isOk() || predicates.matchesJoin(outerKey, outerRow, true)) {
+      boolean matched = status.isOk()
+          && predicates.matchesJoin(outerKey, outerRow, true);
+      if (!predicates.joinStatus().isOk()) return predicates.joinStatus();
+      if (!status.isOk() || matched) {
         return status;
       }
     }
@@ -264,9 +270,11 @@ final class SqlJoinExecution {
     if (!status.isOk()) {
       return status;
     }
-    return predicates.matchesJoin(innerKey, innerRow, false)
-        ? setRow(cursor, result, outerKey, outerRow, innerKey, innerRow)
-        : StatusCode.CONFLICT;
+    boolean matched = predicates.matchesJoin(innerKey, innerRow, false);
+    return !predicates.joinStatus().isOk() ? predicates.joinStatus()
+        : matched
+            ? setRow(cursor, result, outerKey, outerRow, innerKey, innerRow)
+            : StatusCode.CONFLICT;
   }
 
   private StatusCode joinNonUnique(
@@ -284,8 +292,9 @@ final class SqlJoinExecution {
 
   private StatusCode unmatchedRow(
       SqlScanCursor cursor, SqlScanRowResult result) {
-    return plan.leftJoin() && predicates.matchesNullExtendedJoin()
-        ? setUnmatchedRow(cursor, result) : StatusCode.CONFLICT;
+    boolean matched = plan.leftJoin() && predicates.matchesNullExtendedJoin();
+    return !predicates.joinStatus().isOk() ? predicates.joinStatus()
+        : matched ? setUnmatchedRow(cursor, result) : StatusCode.CONFLICT;
   }
 
   private void rememberOuter(

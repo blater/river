@@ -51,7 +51,8 @@ final class CatalogViewSemanticCorruptionTest {
         CatalogViewCodec.encode(
             encoded,
             "damaged_view",
-            "SELECT id,day AS bad FROM moments WHERE EXTRACT(DAY FROM day)=29",
+            "SELECT moments.id AS bad FROM moments JOIN moments m "
+                + "ON moments.id=m.id WHERE EXTRACT(DAY FROM moments.day)=29",
             moments.tableId()));
     RelationalKey.KeyResult key = new RelationalKey.KeyResult();
     assertEquals(
@@ -82,7 +83,7 @@ final class CatalogViewSemanticCorruptionTest {
     assertEquals(
         StatusCode.CORRUPTION,
         sql.execute(
-            "SELECT bad FROM damaged_view WHERE id=1",
+            "SELECT bad FROM damaged_view WHERE bad=1",
             new SqlExecutionResult()));
     assertEquals(StatusCode.OK, sql.close());
     sql = openSql(database);

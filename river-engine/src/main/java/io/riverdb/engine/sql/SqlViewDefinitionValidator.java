@@ -9,7 +9,7 @@ final class SqlViewDefinitionValidator {
   private final SqlParser parser = new SqlParser();
   private final BoundSqlStatement bound = new BoundSqlStatement();
   private final SqlBinder binder = new SqlBinder();
-  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder();
+  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder(null);
   private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
 
   StatusCode validate(RelationalSession session, CharSequence viewSql) {

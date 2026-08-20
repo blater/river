@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlQuery;
 
 /** Reusable catalog-resolved state borrowed by one statement execution. */
@@ -16,24 +17,27 @@ final class BoundSqlStatement {
   final SqlBoundProjectionPrograms projectionPrograms =
       new SqlBoundProjectionPrograms();
   final SqlBoundAggregateSet aggregates = new SqlBoundAggregateSet();
-  final SqlBoundHavingPrograms havingPrograms = new SqlBoundHavingPrograms();
+  final SqlBoundBooleanPredicateProgram whereBoolean =
+      new SqlBoundBooleanPredicateProgram();
+  final SqlBoundBooleanPredicateProgram havingBoolean =
+      new SqlBoundBooleanPredicateProgram();
   private SqlBoundBlockPlans blockPlans;
   final TableDefinition table = new TableDefinition();
   final TableDefinition joinTable = new TableDefinition();
   final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updateResultTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
-  final int[] predicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
-  final int[] blockPredicateRightColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
   final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] projectedTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
 
   int predicateColumn;
   int predicateCount;
   int accessPredicate;
+  int pointTextColumn;
   long accessValue;
   long accessLowerInclusive;
   long accessUpperExclusive;
+  SqlComparison accessComparison;
   int updatedColumnCount;
   int projectedColumnCount;
   int groupColumn;
@@ -50,16 +54,19 @@ final class BoundSqlStatement {
     executableQuery.reset();
     projectionPrograms.reset();
     aggregates.reset();
-    havingPrograms.reset();
+    whereBoolean.reset();
+    havingBoolean.reset();
     if (blockPlans != null) blockPlans.reset();
     table.reset();
     joinTable.reset();
     predicateColumn = -1;
     predicateCount = 0;
     accessPredicate = -1;
+    pointTextColumn = -1;
     accessValue = 0;
     accessLowerInclusive = 0;
     accessUpperExclusive = 0;
+    accessComparison = null;
     updatedColumnCount = 0;
     projectedColumnCount = 0;
     groupColumn = -1;

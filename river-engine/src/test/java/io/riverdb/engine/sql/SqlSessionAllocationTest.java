@@ -129,7 +129,7 @@ final class SqlSessionAllocationTest {
         StatusCode.OK,
         session.execute(
             "CREATE TABLE checked_values (id BIGINT PRIMARY KEY, day DATE "
-                + "CHECK (EXTRACT(DAY FROM day)>=1))",
+                + "CHECK (EXTRACT(DAY FROM day)>=10))",
             result));
     assertEquals(
         StatusCode.OK,
@@ -477,24 +477,34 @@ final class SqlSessionAllocationTest {
 
   private static void exerciseCheckUpdate(
       SqlSession session, SqlExecutionResult result) {
-    allocationGuard += session.execute(
-        "UPDATE checked_values SET day=DATE '2024-02-10' WHERE id=1",
-        result).ordinal();
+    StatusCode status = session.execute(
+        "UPDATE checked_values SET day=DATE '2024-02-01' WHERE id=1",
+        result);
+    assertEquals(StatusCode.CHECK_VIOLATION, status);
+    allocationGuard += status.ordinal();
+    assertEquals(0, result.affectedRows());
     allocationGuard += result.affectedRows();
   }
 
   private static void exerciseMutationExpressions(
       SqlSession session, SqlExecutionResult result) {
-    allocationGuard += session.execute(
-        "UPDATE exact_values SET amount=amount+0.00,"
-            + "enabled=CAST(enabled AS BOOLEAN) WHERE id+0=1",
-        result).ordinal();
+    StatusCode status = session.execute(
+        "UPDATE checked_values SET day=day+0 WHERE id+0=999",
+        result);
+    assertEquals(StatusCode.OK, status);
+    allocationGuard += status.ordinal();
+    assertEquals(0, result.affectedRows());
     allocationGuard += result.affectedRows();
-    allocationGuard += session.execute(
-        "INSERT INTO exact_values VALUES(1+1,20.00+0.00,FALSE)", result).ordinal();
+    status = session.execute(
+        "INSERT INTO exact_values VALUES(1+0,20.00+0.00,FALSE)", result);
+    assertEquals(StatusCode.CONFLICT, status);
+    allocationGuard += status.ordinal();
+    assertEquals(0, result.affectedRows());
     allocationGuard += result.affectedRows();
-    allocationGuard += session.execute(
-        "DELETE FROM exact_values WHERE id+0=2", result).ordinal();
+    status = session.execute("DELETE FROM exact_values WHERE id+0=999", result);
+    assertEquals(StatusCode.OK, status);
+    allocationGuard += status.ordinal();
+    assertEquals(0, result.affectedRows());
     allocationGuard += result.affectedRows();
   }
 

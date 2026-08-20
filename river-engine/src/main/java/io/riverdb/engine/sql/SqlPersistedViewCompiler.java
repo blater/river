@@ -10,7 +10,7 @@ import io.riverdb.sql.SqlParser;
 final class SqlPersistedViewCompiler {
   private final SqlParser parser = new SqlParser();
   private final SqlCommand viewCommand = new SqlCommand();
-  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder();
+  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder(null);
   private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
   private final ViewDefinition definition = new ViewDefinition();
 

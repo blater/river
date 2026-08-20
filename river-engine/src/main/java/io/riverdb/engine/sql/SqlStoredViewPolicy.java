@@ -10,8 +10,7 @@ final class SqlStoredViewPolicy {
   private SqlStoredViewPolicy() {}
 
   static StatusCode validate(SqlCommand command, SqlQuery query) {
-    if (query.hasNestedTopology() || query.isExplain()
-        || command.hasComputedPredicate()) {
+    if (query.hasNestedTopology() || query.isExplain()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     if (query.sourcePlanDepth() >= SqlQuery.MAXIMUM_QUERY_BLOCKS) {
@@ -29,7 +28,6 @@ final class SqlStoredViewPolicy {
   }
 
   static StatusCode validateExpanded(SqlCommand command) {
-    if (command.hasComputedPredicate()) return StatusCode.FEATURE_NOT_SUPPORTED;
     return shape(command) && hasUniqueOutputNames(command)
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
@@ -39,8 +37,7 @@ final class SqlStoredViewPolicy {
         && !command.isSelectAll()
         && command.columnCount() > 0
         && !command.isOrdered()
-        && command.rowLimit() == Long.MAX_VALUE
-        && !command.hasDisjunction();
+        && command.rowLimit() == Long.MAX_VALUE;
   }
 
   static StatusCode validateZones(

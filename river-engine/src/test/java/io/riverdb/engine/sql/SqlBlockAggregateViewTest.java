@@ -128,12 +128,12 @@ final class SqlBlockAggregateViewTest {
                 + "GROUP BY category) grouped LIMIT 0",
             result));
 
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginScan(
-            "SELECT n FROM (SELECT COUNT(*) AS n FROM events "
-                + "WHERE EXTRACT(YEAR FROM day)=2024) computed_inner",
-            new SqlScanCursor()));
+    assertRows(
+        session,
+        result,
+        "SELECT n FROM (SELECT COUNT(*) AS n FROM events "
+            + "WHERE EXTRACT(YEAR FROM day)=2024) computed_inner",
+        new long[][] {{3}});
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         session.beginScan(

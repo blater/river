@@ -54,7 +54,8 @@ final class SqlGroupedExecution {
       SqlSortExecution sortExecution,
       SqlExpressionEvaluator evaluator,
       SqlBoundPredicateEvaluator predicateEvaluator,
-      SqlRowProjectionEvaluator projectionEvaluator) {
+      SqlRowProjectionEvaluator projectionEvaluator,
+      SqlTemporalContext temporal) {
     session = relationalSession;
     bound = statement;
     query = statement.executableQuery;
@@ -64,8 +65,10 @@ final class SqlGroupedExecution {
     expressions = evaluator;
     predicates = predicateEvaluator;
     projections = projectionEvaluator;
-    having = new SqlHavingEvaluator(evaluator, projectionEvaluator);
+    having = new SqlHavingEvaluator(statement, evaluator, temporal);
   }
+
+  StatusCode prepareHaving() { return having.prepare(bound.command); }
 
   StatusCode nextAggregate(SqlScanCursor cursor, SqlScanRowResult result) {
     while (true) {
@@ -89,6 +92,7 @@ final class SqlGroupedExecution {
   }
 
   void resetText() {
+    having.reset();
     accumulators.clear(bound.aggregates);
     lookaheadAccumulators.clear(bound.aggregates);
     erase(currentKeyText);
@@ -119,7 +123,6 @@ final class SqlGroupedExecution {
       BoundSqlQuery.Block command, SqlScanRowResult result) {
     StatusCode status = having.evaluate(
         bound.command,
-        bound.havingPrograms,
         accumulators,
         state.groupValue,
         state.groupNull,

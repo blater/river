@@ -34,13 +34,14 @@ final class SqlPointSelectExecution {
 
   StatusCode execute(SqlExecutionResult result) {
     BoundSqlQuery.Block command = bound.executableQuery.root();
-    if (command.type() != SqlCommandType.SELECT
+    if ((command.type() != SqlCommandType.SELECT
+            && command.type() != SqlCommandType.SCAN)
         || !hasEqualityAccess(command)
-        || bound.predicateColumn > 0
-            && !bound.table.hasUniqueIndexOn(bound.predicateColumn)) {
+        || accessColumn() > 0
+            && !bound.table.hasUniqueIndexOn(accessColumn())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (bound.predicateColumn > 0 && bound.table.isVarchar(bound.predicateColumn)) {
+    if (bound.pointTextColumn > 0) {
       return executeText(result);
     }
     long primaryKey;
@@ -113,8 +114,12 @@ final class SqlPointSelectExecution {
   }
 
   private boolean hasEqualityAccess(BoundSqlQuery.Block command) {
-    return bound.accessPredicate >= 0
-        && command.isEqualityPredicate(bound.accessPredicate);
+    return bound.pointTextColumn > 0 || bound.accessPredicate >= 0
+        && bound.accessComparison == io.riverdb.sql.SqlComparison.EQUAL;
+  }
+
+  private int accessColumn() {
+    return bound.pointTextColumn > 0 ? bound.pointTextColumn : bound.predicateColumn;
   }
 
   private StatusCode validateRow(HeapRowResult source) {

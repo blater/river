@@ -222,7 +222,7 @@ public final class SqlQuery {
 
   private StatusCode compileNestedPredicates(SqlCommand destination) {
     for (int index = 0; index < blockCount; index++) {
-      if (blocks[index].hasComputedPredicate()
+      if (!validNestedPredicates(blocks[index])
           || SqlDerivedProjectionCompiler.hasComputedProjection(blocks[index])) {
         return StatusCode.FEATURE_NOT_SUPPORTED;
       }
@@ -237,7 +237,6 @@ public final class SqlQuery {
   private boolean validNestedBlock(int index) {
     SqlCommand block = blocks[index];
     if ((block.type() != SqlCommandType.SCAN && block.type() != SqlCommandType.SELECT)
-        || block.hasDisjunction()
         || index > 0 && (block.isSelectAll() || block.columnCount() != 1)) {
       return false;
     }
@@ -257,7 +256,68 @@ public final class SqlQuery {
 
   private static boolean validNestedPredicate(SqlCommand block, int predicate) {
     return predicate < 0
-        || predicate < block.predicateCount() && block.isEqualityPredicate(predicate);
+        || predicate < block.wherePredicates().leafCount()
+            && block.wherePredicates().leafTest(predicate)
+                == SqlBooleanPredicateProgram.TEST_COMPARISON
+            && block.wherePredicates().comparison(predicate) == SqlComparison.EQUAL;
+  }
+
+  private static boolean validNestedPredicates(SqlCommand block) {
+    SqlBooleanPredicateProgram predicates = block.wherePredicates();
+    for (int node = 0; node < predicates.booleanNodeCount(); node++) {
+      int operator = predicates.booleanOperator(node);
+      if (operator != SqlBooleanPredicateProgram.BOOLEAN_LEAF
+          && operator != SqlBooleanPredicateProgram.BOOLEAN_AND) return false;
+    }
+    for (int leaf = 0; leaf < predicates.leafCount(); leaf++) {
+      int test = predicates.leafTest(leaf);
+      if (!rawNestedProgram(
+          predicates, leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, true)) return false;
+      if (test == SqlBooleanPredicateProgram.TEST_BETWEEN) {
+        if (predicates.leafNegated(leaf)
+            || !rawNestedLiteral(
+                predicates, leaf, SqlBooleanPredicateProgram.PROGRAM_LOWER)
+            || !rawNestedLiteral(
+                predicates, leaf, SqlBooleanPredicateProgram.PROGRAM_UPPER)) return false;
+        continue;
+      }
+      if (predicates.programNodeCount(
+              leaf, SqlBooleanPredicateProgram.PROGRAM_LOWER) != 0
+          || predicates.programNodeCount(
+              leaf, SqlBooleanPredicateProgram.PROGRAM_UPPER) != 0) return false;
+      if (test == SqlBooleanPredicateProgram.TEST_COMPARISON) {
+        if (!rawNestedProgram(
+            predicates, leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT, false)) return false;
+        boolean columnRight = predicates.programOperator(
+            leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0)
+            == SqlScalarExpression.COLUMN;
+        if (columnRight && predicates.comparison(leaf) != SqlComparison.EQUAL) return false;
+      } else if (test != SqlBooleanPredicateProgram.TEST_NULL
+          && test != SqlBooleanPredicateProgram.TEST_TRUTH
+          && test != SqlBooleanPredicateProgram.TEST_MEMBERSHIP) return false;
+    }
+    return true;
+  }
+
+  private static boolean rawNestedLiteral(
+      SqlBooleanPredicateProgram predicates, int leaf, int program) {
+    if (predicates.programNodeCount(leaf, program) != 1) return false;
+    int operator = predicates.programOperator(leaf, program, 0);
+    return operator == SqlScalarExpression.LITERAL || operator == SqlScalarExpression.NULL;
+  }
+
+  private static boolean rawNestedProgram(
+      SqlBooleanPredicateProgram predicates,
+      int leaf,
+      int program,
+      boolean required) {
+    int count = predicates.programNodeCount(leaf, program);
+    if (count == 0) return !required;
+    if (count != 1) return false;
+    int operator = predicates.programOperator(leaf, program, 0);
+    return operator == SqlScalarExpression.COLUMN
+        || !required && (operator == SqlScalarExpression.LITERAL
+            || operator == SqlScalarExpression.NULL);
   }
 
   public int blockCount() {
@@ -301,22 +361,6 @@ public final class SqlQuery {
 
   public SqlCommand scalarCommand() {
     return hasScalarPredicate() ? blocks[1] : null;
-  }
-
-  public StatusCode bindScalarValue(SqlCommand destination, long value) {
-    return bindScalarValue(destination, 0, value);
-  }
-
-  public StatusCode bindScalarValue(
-      SqlCommand destination,
-      int block,
-      long value) {
-    int predicate = scalarPredicate(block);
-    if (destination == null || predicate < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    destination.setPredicateValue(predicate, value);
-    return StatusCode.OK;
   }
 
   public boolean hasExistencePredicate() {

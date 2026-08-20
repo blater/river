@@ -55,11 +55,11 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM moments WHERE day IN (?)", parameters, command));
-    assertEquals(0, command.literalMembershipCount(0));
-    assertTrue(command.literalMembershipHasNull(0));
-    assertEquals(SqlTypeDescriptor.DATE, command.predicateTypeDescriptor(0));
+    assertEquals(1, membershipCount(command, 0));
+    assertTrue(membershipHasNull(command, 0));
+    assertEquals(SqlTypeDescriptor.DATE, predicateDescriptor(command, 0));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM moments WHERE day=?", parameters, command));
 
@@ -440,7 +440,7 @@ final class SqlParserTest {
         SqlScalarExpression.AT_TIME_ZONE,
         SqlScalarExpression.EXTRACT);
     assertText(
-        "UTC", command, command.havingOperand(0, 1));
+        "UTC", command, havingOperand(command, 0, 1));
     SqlCommand copied = new SqlCommand();
     copied.copyQueryFrom(command);
     assertHavingPostfix(
@@ -450,7 +450,7 @@ final class SqlParserTest {
         SqlScalarExpression.AT_TIME_ZONE,
         SqlScalarExpression.EXTRACT);
     assertText(
-        "UTC", copied, copied.havingOperand(0, 1));
+        "UTC", copied, havingOperand(copied, 0, 1));
 
     assertEquals(
         StatusCode.OK,
@@ -488,7 +488,7 @@ final class SqlParserTest {
             "SELECT category, COUNT(*) FROM moments GROUP BY category "
                 + "HAVING COUNT(*)+1>2",
             command));
-    assertEquals(1, command.havingPredicateCount());
+    assertEquals(1, command.booleanHavingPredicates().leafCount());
 
     assertEquals(
         StatusCode.OK,
@@ -496,7 +496,7 @@ final class SqlParserTest {
             "SELECT category, MAX(day) FROM moments GROUP BY category "
                 + "HAVING MAX(day)>=DATE '2024-03-01'",
             command));
-    assertEquals(1, command.havingPredicateCount());
+    assertEquals(1, command.booleanHavingPredicates().leafCount());
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -514,7 +514,7 @@ final class SqlParserTest {
             + "HAVING c BETWEEN 1 AND 2",
         command);
     assertName("c", command.columnAlias(0));
-    assertEquals(1, command.havingPredicateCount());
+    assertEquals(1, command.booleanHavingPredicates().leafCount());
     assertEquals(StatusCode.OK, groupAliasStatus);
     assertEquals(
         StatusCode.OK,
@@ -567,12 +567,20 @@ final class SqlParserTest {
                 + "MIN(day) BETWEEN DATE '2024-01-01' AND NULL AND "
                 + "MAX(day) NOT IN (DATE '2023-01-01',NULL)",
             command));
-    assertEquals(3, command.havingPredicateCount());
-    assertTrue(command.havingDisjunction(0));
-    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.havingComparison(1));
-    assertTrue(command.havingUpperNull(1));
-    assertEquals(SqlComparison.NOT_IN, command.havingComparison(2));
-    assertTrue(command.havingMembershipHasNull(2));
+    assertEquals(3, command.booleanHavingPredicates().leafCount());
+    assertEquals(
+        SqlBooleanPredicateProgram.BOOLEAN_OR,
+        command.booleanHavingPredicates().booleanOperator(
+            command.booleanHavingPredicates().root()));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_BETWEEN,
+        command.booleanHavingPredicates().leafTest(1));
+    assertEquals(
+        SqlScalarExpression.NULL,
+        command.booleanHavingPredicates().programOperator(
+            1, SqlBooleanPredicateProgram.PROGRAM_UPPER, 0));
+    assertTrue(command.booleanHavingPredicates().leafNegated(2));
+    assertTrue(havingMembershipHasNull(command, 2));
   }
 
   @Test
@@ -585,7 +593,7 @@ final class SqlParserTest {
             + "MIN(observed)=0 AND MAX(observed)=0";
     assertEquals(StatusCode.OK, parser.parse(eightInvocations, command));
     assertEquals(SqlAggregateSet.MAXIMUM_INVOCATIONS, command.aggregateInvocationCount());
-    assertEquals(SqlHavingPredicates.MAXIMUM_PREDICATES, command.havingPredicateCount());
+    assertEquals(SqlBooleanPredicateProgram.MAXIMUM_LEAVES, command.booleanHavingPredicates().leafCount());
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         parser.parse(eightInvocations + " AND SUM(observed)=0", command));
@@ -593,26 +601,32 @@ final class SqlParserTest {
     StringBuilder ninthPredicate = new StringBuilder(
         "SELECT COUNT(*) FROM moments HAVING COUNT(*)=0");
     for (int predicate = 1;
-        predicate < SqlHavingPredicates.MAXIMUM_PREDICATES;
+        predicate < SqlBooleanPredicateProgram.MAXIMUM_LEAVES;
         predicate++) {
       ninthPredicate.append(" AND COUNT(*)=").append(predicate);
     }
     assertEquals(StatusCode.OK, parser.parse(ninthPredicate, command));
-    assertEquals(SqlHavingPredicates.MAXIMUM_PREDICATES, command.havingPredicateCount());
+    assertEquals(SqlBooleanPredicateProgram.MAXIMUM_LEAVES, command.booleanHavingPredicates().leafCount());
     ninthPredicate.append(" AND COUNT(*)=9");
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(ninthPredicate, command));
 
     StringBuilder maximumNodes = new StringBuilder("SELECT COUNT(*) FROM moments HAVING ");
-    for (int node = 1; node < SqlHavingPredicates.MAXIMUM_NODES; node++) {
+    for (int node = 1;
+        node < SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES - 1;
+        node++) {
       maximumNodes.append("ABS(");
     }
     maximumNodes.append("COUNT(*)");
-    for (int node = 1; node < SqlHavingPredicates.MAXIMUM_NODES; node++) {
+    for (int node = 1;
+        node < SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES - 1;
+        node++) {
       maximumNodes.append(')');
     }
     maximumNodes.append(">=0");
     assertEquals(StatusCode.OK, parser.parse(maximumNodes, command));
-    assertEquals(SqlHavingPredicates.MAXIMUM_NODES, command.havingNodeCount(0));
+    assertEquals(
+        SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES - 1,
+        havingNodeCount(command, 0));
     maximumNodes.insert(
         "SELECT COUNT(*) FROM moments HAVING ".length(), "ABS(");
     maximumNodes.insert(maximumNodes.length() - 3, ')');
@@ -620,21 +634,21 @@ final class SqlParserTest {
 
     StringBuilder maximumMembers = new StringBuilder(
         "SELECT COUNT(*) FROM moments HAVING COUNT(*) IN (");
-    for (int member = 0; member < SqlHavingPredicates.MAXIMUM_MEMBERS; member++) {
+    for (int member = 0; member < SqlBooleanPredicateProgram.MAXIMUM_MEMBERS; member++) {
       if (member > 0) maximumMembers.append(',');
       maximumMembers.append(member);
     }
     maximumMembers.append(')');
     assertEquals(StatusCode.OK, parser.parse(maximumMembers, command));
     assertEquals(
-        SqlHavingPredicates.MAXIMUM_MEMBERS,
-        command.havingMemberCount(0));
+        SqlBooleanPredicateProgram.MAXIMUM_MEMBERS,
+        havingMemberCount(command, 0));
     maximumMembers.insert(maximumMembers.length() - 1, ",256");
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(maximumMembers, command));
   }
 
   @Test
-  void carriesOneComputedPredicateAndRejectsBroaderBooleanShapes() {
+  void carriesBoundedBooleanPredicatesAcrossAdmittedConsumers() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
 
@@ -644,23 +658,23 @@ final class SqlParserTest {
             "SELECT id FROM moments WHERE id=7 AND "
                 + "EXTRACT(DAY FROM observed AT TIME ZONE 'UTC')>=29",
             command));
-    assertEquals(SqlCommandType.SELECT, command.type());
-    assertEquals(2, command.predicateCount());
-    assertNull(command.predicateExpression(0));
-    SqlScalarExpression expression = command.predicateExpression(1);
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertNull(predicateExpression(command, 0));
+    SqlScalarExpression expression = predicateExpression(command, 1);
     assertPostfix(
         expression,
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.AT_TIME_ZONE,
         SqlScalarExpression.EXTRACT);
     assertTrue(expression.hasColumnReference());
-    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(1));
-    assertEquals(SqlTypeDescriptor.BIGINT, command.predicateTypeDescriptor(1));
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 1));
+    assertEquals(SqlTypeDescriptor.BIGINT, predicateDescriptor(command, 1));
 
     SqlCommand copied = new SqlCommand();
     copied.copyQueryFrom(command);
     assertPostfix(
-        copied.predicateExpression(1),
+        predicateExpression(copied, 1),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.AT_TIME_ZONE,
         SqlScalarExpression.EXTRACT);
@@ -673,7 +687,7 @@ final class SqlParserTest {
             command));
     assertEquals(SqlCommandType.GROUP_COUNT, command.type());
     assertPostfix(
-        command.predicateExpression(0),
+        predicateExpression(command, 0),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.EXTRACT);
     assertEquals(
@@ -684,15 +698,15 @@ final class SqlParserTest {
             command));
     assertEquals(SqlCommandType.DISTINCT_SCAN, command.type());
     assertPostfix(
-        command.predicateExpression(0),
+        predicateExpression(command, 0),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.EXTRACT);
 
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id FROM moments WHERE (id)=7", command));
-    assertNull(command.predicateExpression(0));
-    assertName("id", command.predicateColumnName(0));
+    assertNull(predicateExpression(command, 0));
+    assertName("id", predicateColumnName(command, 0));
 
     assertEquals(
         StatusCode.OK,
@@ -701,11 +715,20 @@ final class SqlParserTest {
                 + "TIME '01:02:03' AND TIME '01:02:03.123456'",
             command));
     assertPostfix(
-        command.predicateExpression(0),
+        predicateExpression(command, 0),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.CAST);
-    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
-    assertEquals(SqlTypeDescriptor.time(6), command.predicateTypeDescriptor(0));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_BETWEEN,
+        command.wherePredicates().leafTest(0));
+    assertEquals(
+        SqlTypeDescriptor.time(0),
+        predicateProgramDescriptor(
+            command.wherePredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_LOWER));
+    assertEquals(
+        SqlTypeDescriptor.time(6),
+        predicateProgramDescriptor(
+            command.wherePredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_UPPER));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -713,9 +736,20 @@ final class SqlParserTest {
                 + "TIMESTAMP '2024-01-01 00:00:00',"
                 + "TIMESTAMP '2024-01-01 00:00:00.123456')",
             command));
-    assertEquals(SqlComparison.IN, command.comparison(0));
-    assertEquals(SqlTypeDescriptor.timestamp(6), command.predicateTypeDescriptor(0));
-    assertEquals(2, command.literalMembershipCount(0));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_MEMBERSHIP,
+        command.wherePredicates().leafTest(0));
+    assertEquals(
+        SqlTypeDescriptor.timestamp(6),
+        predicateProgramDescriptor(
+            command.wherePredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_LEFT));
+    assertEquals(
+        SqlTypeDescriptor.timestamp(0),
+        command.wherePredicates().memberDescriptor(0, 0));
+    assertEquals(
+        SqlTypeDescriptor.timestamp(6),
+        command.wherePredicates().memberDescriptor(0, 1));
+    assertEquals(2, membershipCount(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -725,19 +759,26 @@ final class SqlParserTest {
                 + "TIMESTAMP WITH TIME ZONE "
                 + "'2024-01-01 00:00:00.123456+00:00')",
             command));
-    assertEquals(SqlComparison.NOT_IN, command.comparison(0));
-    assertTrue(command.literalMembershipHasNull(0));
+    assertTrue(command.wherePredicates().leafNegated(0));
+    assertTrue(membershipHasNull(command, 0));
     assertEquals(
         SqlTypeDescriptor.timestampWithTimeZone(6),
-        command.predicateTypeDescriptor(0));
+        predicateProgramDescriptor(
+            command.wherePredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_LEFT));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(0),
+        command.wherePredicates().memberDescriptor(0, 0));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(6),
+        command.wherePredicates().memberDescriptor(0, 2));
     copied.copyQueryFrom(command);
     assertPostfix(
-        copied.predicateExpression(0),
+        predicateExpression(copied, 0),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.CAST);
-    assertEquals(SqlComparison.NOT_IN, copied.comparison(0));
-    assertEquals(2, copied.literalMembershipCount(0));
-    assertTrue(copied.literalMembershipHasNull(0));
+    assertTrue(copied.wherePredicates().leafNegated(0));
+    assertEquals(3, membershipCount(copied, 0));
+    assertTrue(membershipHasNull(copied, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -745,24 +786,26 @@ final class SqlParserTest {
                 + "DATE '2024-01-01' AND DATE '2024-01-31'",
             command));
     assertEquals(SqlCommandType.COUNT, command.type());
-    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_BETWEEN,
+        command.wherePredicates().leafTest(0));
     assertPostfix(
-        command.predicateExpression(0),
+        predicateExpression(command, 0),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.LITERAL,
         SqlScalarExpression.ADD);
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IS UNKNOWN",
             command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed)=id",
             command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse(
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IN (day)",
             command));
@@ -774,12 +817,12 @@ final class SqlParserTest {
             new SqlQuery(),
             command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed)=29 OR id=1",
             command));
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed)=29 "
                 + "AND EXTRACT(YEAR FROM observed)=2024",
@@ -789,7 +832,8 @@ final class SqlParserTest {
         parser.parse(
             "UPDATE moments SET id=2 WHERE EXTRACT(DAY FROM observed)=29",
             command));
-    assertTrue(command.hasComputedPredicate());
+    assertTrue(command.wherePredicates().programNodeCount(
+        0, SqlBooleanPredicateProgram.PROGRAM_LEFT) > 1);
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -831,9 +875,9 @@ final class SqlParserTest {
             "SELECT observed, COUNT(*) FROM moments GROUP BY observed "
                 + "HAVING EXTRACT(DAY FROM observed)>1",
             command));
-    assertEquals(1, command.havingPredicateCount());
+    assertEquals(1, command.booleanHavingPredicates().leafCount());
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT id FROM (SELECT id FROM moments "
                 + "WHERE EXTRACT(DAY FROM observed)=29) m",
@@ -940,10 +984,10 @@ final class SqlParserTest {
             query,
             compiled));
     assertPostfix(
-        compiled.predicateExpression(0),
+        predicateExpression(compiled, 0),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.EXTRACT);
-    assertEquals(29, compiled.predicateValue(0));
+    assertEquals(29, predicateValue(compiled, 0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -952,13 +996,13 @@ final class SqlParserTest {
                 + "WHERE d=2024 AND id=1",
             query,
             compiled));
-    assertEquals(2, compiled.predicateCount());
+    assertEquals(2, compiled.wherePredicates().leafCount());
     assertPostfix(
-        compiled.predicateExpression(0),
+        predicateExpression(compiled, 0),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.EXTRACT);
-    assertNull(compiled.predicateExpression(1));
-    assertName("id", compiled.predicateColumnName(1));
+    assertNull(predicateExpression(compiled, 1));
+    assertName("id", predicateColumnName(compiled, 1));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -966,35 +1010,60 @@ final class SqlParserTest {
                 + "WHERE id=1) q WHERE EXTRACT(DAY FROM d)=29",
             query,
             compiled));
-    assertEquals(2, compiled.predicateCount());
-    assertNull(compiled.predicateExpression(0));
+    assertEquals(2, compiled.wherePredicates().leafCount());
+    assertNull(predicateExpression(compiled, 0));
     assertPostfix(
-        compiled.predicateExpression(1),
+        predicateExpression(compiled, 1),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.LITERAL,
         SqlScalarExpression.ADD,
         SqlScalarExpression.EXTRACT);
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d FROM (SELECT day+1 AS d FROM moments) q "
                 + "WHERE EXTRACT(DAY FROM d)=1 AND d=DATE '2024-03-01'",
             query,
             compiled));
+    assertEquals(2, compiled.wherePredicates().leafCount());
+    assertPostfix(
+        predicateExpression(compiled, 0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD,
+        SqlScalarExpression.EXTRACT);
+    assertPostfix(
+        predicateExpression(compiled, 1),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.LITERAL,
+        SqlScalarExpression.ADD);
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d,id FROM (SELECT day+1 AS d,id FROM moments) q "
                 + "WHERE d=DATE '2024-03-01' OR id=1",
             query,
             compiled));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        SqlBooleanPredicateProgram.BOOLEAN_OR,
+        compiled.wherePredicates().booleanOperator(
+            compiled.wherePredicates().root()));
+    assertEquals(
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d,other FROM (SELECT day+1 AS d,day AS other FROM moments) q "
                 + "WHERE d=other",
             query,
             compiled));
+    assertEquals(1, compiled.wherePredicates().leafCount());
+    assertEquals(
+        1,
+        compiled.wherePredicates().programNodeCount(
+            0, SqlBooleanPredicateProgram.PROGRAM_RIGHT));
+    assertEquals(
+        SqlScalarExpression.COLUMN,
+        compiled.wherePredicates().programOperator(
+            0, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -1041,13 +1110,13 @@ final class SqlParserTest {
                 + "AND label IN ('a','z',NULL)) q WHERE label='a'",
             query,
             compiled));
-    assertEquals(3, compiled.predicateCount());
-    assertText("a", compiled, compiled.predicateLowerInclusive(0));
-    assertText("z\0", compiled, compiled.predicateUpperExclusive(0));
-    assertText("a", compiled, compiled.literalMembershipValue(1, 0));
-    assertText("z", compiled, compiled.literalMembershipValue(1, 1));
-    assertEquals(true, compiled.literalMembershipHasNull(1));
-    assertText("a", compiled, compiled.predicateValue(2));
+    assertEquals(3, compiled.wherePredicates().leafCount());
+    assertText("a", compiled, predicateLower(compiled, 0));
+    assertText("z", compiled, predicateUpper(compiled, 0));
+    assertText("a", compiled, membershipValue(compiled, 1, 0));
+    assertText("z", compiled, membershipValue(compiled, 1, 1));
+    assertEquals(true, membershipHasNull(compiled, 1));
+    assertText("a", compiled, predicateValue(compiled, 2));
 
     assertEquals(
         StatusCode.OK,
@@ -1057,8 +1126,8 @@ final class SqlParserTest {
                 + "AND id IN (-9223372036854775808,0)) q",
             query,
             compiled));
-    assertEquals(Long.MIN_VALUE, compiled.predicateValue(0));
-    assertEquals(Long.MIN_VALUE, compiled.literalMembershipValue(1, 0));
+    assertEquals(Long.MIN_VALUE, predicateValue(compiled, 0));
+    assertEquals(Long.MIN_VALUE, membershipValue(compiled, 1, 0));
 
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
@@ -1113,10 +1182,10 @@ final class SqlParserTest {
         parser.parse(
             "SELECT id FROM invoices WHERE paid=TRUE AND amount BETWEEN 10.00 AND 20.00",
             command));
-    assertEquals(SqlTypeDescriptor.BOOLEAN, command.predicateTypeDescriptor(0));
-    assertEquals(SqlTypeDescriptor.decimal(4, 2), command.predicateTypeDescriptor(1));
-    assertEquals(1_000, command.predicateLowerInclusive(1));
-    assertEquals(2_001, command.predicateUpperExclusive(1));
+    assertEquals(SqlTypeDescriptor.BOOLEAN, predicateDescriptor(command, 0));
+    assertEquals(SqlTypeDescriptor.decimal(4, 2), predicateDescriptor(command, 1));
+    assertEquals(1_000, predicateLower(command, 1));
+    assertEquals(2_000, predicateUpper(command, 1));
 
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -1189,9 +1258,16 @@ final class SqlParserTest {
             "SELECT id FROM samples WHERE clock BETWEEN "
                 + "TIME '01:02:03' AND TIME '01:02:03.123456'",
             command));
-    assertEquals(SqlTypeDescriptor.time(6), command.predicateTypeDescriptor(0));
-    assertEquals(3_723_000_000L, command.predicateLowerInclusive(0));
-    assertEquals(3_723_123_457L, command.predicateUpperExclusive(0));
+    assertEquals(
+        SqlTypeDescriptor.time(0),
+        predicateProgramDescriptor(
+            command.wherePredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_LOWER));
+    assertEquals(
+        SqlTypeDescriptor.time(6),
+        predicateProgramDescriptor(
+            command.wherePredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_UPPER));
+    assertEquals(3_723_000_000L, predicateLower(command, 0));
+    assertEquals(3_723_123_456L, predicateUpper(command, 0));
 
     assertEquals(
         StatusCode.OK,
@@ -1201,11 +1277,19 @@ final class SqlParserTest {
                 + "TIMESTAMP '1970-01-01 00:00:00.123',"
                 + "TIMESTAMP '1970-01-01 00:00:00.123456')",
             command));
-    assertEquals(SqlTypeDescriptor.timestamp(6), command.predicateTypeDescriptor(0));
-    assertEquals(3, command.literalMembershipCount(0));
-    assertEquals(0, command.literalMembershipValue(0, 0));
-    assertEquals(123_000, command.literalMembershipValue(0, 1));
-    assertEquals(123_456, command.literalMembershipValue(0, 2));
+    assertEquals(3, membershipCount(command, 0));
+    assertEquals(
+        SqlTypeDescriptor.timestamp(0),
+        command.wherePredicates().memberDescriptor(0, 0));
+    assertEquals(
+        SqlTypeDescriptor.timestamp(3),
+        command.wherePredicates().memberDescriptor(0, 1));
+    assertEquals(
+        SqlTypeDescriptor.timestamp(6),
+        command.wherePredicates().memberDescriptor(0, 2));
+    assertEquals(0, membershipValue(command, 0, 0));
+    assertEquals(123_000, membershipValue(command, 0, 1));
+    assertEquals(123_456, membershipValue(command, 0, 2));
 
     assertEquals(
         StatusCode.OK,
@@ -1215,13 +1299,16 @@ final class SqlParserTest {
                 + "NULL,TIMESTAMP WITH TIME ZONE "
                 + "'1970-01-01 00:00:00.123456+00:00')",
             command));
+    assertEquals(3, membershipCount(command, 0));
+    assertEquals(
+        SqlTypeDescriptor.timestampWithTimeZone(0),
+        command.wherePredicates().memberDescriptor(0, 0));
     assertEquals(
         SqlTypeDescriptor.timestampWithTimeZone(6),
-        command.predicateTypeDescriptor(0));
-    assertEquals(2, command.literalMembershipCount(0));
-    assertTrue(command.literalMembershipHasNull(0));
-    assertEquals(0, command.literalMembershipValue(0, 0));
-    assertEquals(123_456, command.literalMembershipValue(0, 1));
+        command.wherePredicates().memberDescriptor(0, 2));
+    assertTrue(membershipHasNull(command, 0));
+    assertEquals(0, membershipValue(command, 0, 0));
+    assertEquals(123_456, membershipValue(command, 0, 2));
 
     assertEquals(
         StatusCode.OK,
@@ -1229,34 +1316,34 @@ final class SqlParserTest {
             "SELECT id FROM samples WHERE day BETWEEN "
                 + "DATE '2024-01-01' AND DATE '2024-01-02'",
             command));
-    assertEquals(SqlTypeDescriptor.DATE, command.predicateTypeDescriptor(0));
+    assertEquals(SqlTypeDescriptor.DATE, predicateDescriptor(command, 0));
 
     assertEquals(
-        StatusCode.DATATYPE_MISMATCH,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM samples WHERE clock BETWEEN "
                 + "TIME '01:02:03' AND TIMESTAMP '1970-01-01 01:02:03'",
             command));
     assertEquals(
-        StatusCode.DATATYPE_MISMATCH,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM samples WHERE day IN ("
                 + "DATE '1970-01-01',TIME '00:00:00')",
             command));
     assertEquals(
-        StatusCode.DATATYPE_MISMATCH,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM samples WHERE captured IN ("
                 + "TIMESTAMP '1970-01-01 00:00:00',"
                 + "TIMESTAMP WITH TIME ZONE '1970-01-01 00:00:00+00:00')",
             command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "SELECT id FROM samples WHERE clock IN (TIME '01:02:03',1)",
             command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("SELECT id FROM samples WHERE amount BETWEEN 1 AND 2.0", command));
   }
 
@@ -1400,18 +1487,23 @@ final class SqlParserTest {
         parser.parse(
             "SELECT id FROM labels WHERE code >= 'alpha' AND code < 'omega'",
             command));
-    assertEquals(2, command.predicateCount());
-    assertEquals(SqlTypeDescriptor.varchar(5), command.predicateTypeDescriptor(0));
-    assertEquals(SqlTypeDescriptor.varchar(5), command.predicateTypeDescriptor(1));
-    assertText("alpha", command, command.predicateValue(0));
-    assertText("omega", command, command.predicateValue(1));
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(SqlTypeDescriptor.varchar(5), predicateDescriptor(command, 0));
+    assertEquals(SqlTypeDescriptor.varchar(5), predicateDescriptor(command, 1));
+    assertText("alpha", command, predicateValue(command, 0));
+    assertText("omega", command, predicateValue(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM labels WHERE code IN ('beta', 'alpha')", command));
-    assertEquals(SqlTypeDescriptor.varchar(5), command.predicateTypeDescriptor(0));
-    assertText("beta", command, command.literalMembershipValue(0, 0));
-    assertText("alpha", command, command.literalMembershipValue(0, 1));
+    assertEquals(
+        SqlTypeDescriptor.varchar(4),
+        command.wherePredicates().memberDescriptor(0, 0));
+    assertEquals(
+        SqlTypeDescriptor.varchar(5),
+        command.wherePredicates().memberDescriptor(0, 1));
+    assertText("beta", command, membershipValue(command, 0, 0));
+    assertText("alpha", command, membershipValue(command, 0, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id, NULL FROM accounts WHERE id=1", command));
@@ -1643,10 +1735,10 @@ final class SqlParserTest {
     assertName("balance", command.columnName(2));
     assertEquals(7, command.insertValue(0, 0));
     assertEquals(StatusCode.OK, parser.parse("select value from accounts where key=7", command));
-    assertEquals(SqlCommandType.SELECT, command.type());
+    assertEquals(SqlCommandType.SCAN, command.type());
     assertName("value", command.firstColumnName());
-    assertName("key", command.predicateColumnName());
-    assertEquals(7, command.key());
+    assertName("key", predicateColumnName(command, 0));
+    assertEquals(7, predicateValue(command, 0));
     assertEquals(StatusCode.OK, parser.parse("SELECT COUNT(*) FROM accounts", command));
     assertEquals(SqlCommandType.COUNT, command.type());
     assertName("accounts", command.tableName());
@@ -1656,18 +1748,20 @@ final class SqlParserTest {
         parser.parse("SELECT COUNT(*) FROM accounts WHERE region=7", command));
     assertEquals(SqlCommandType.COUNT, command.type());
     assertEquals(true, command.hasPredicate());
-    assertEquals(true, command.isEqualityPredicate());
-    assertName("region", command.predicateColumnName());
-    assertEquals(7, command.key());
+    assertEquals(true, (predicateComparison(command, 0) == SqlComparison.EQUAL));
+    assertName("region", predicateColumnName(command, 0));
+    assertEquals(7, predicateValue(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT COUNT(*) FROM accounts WHERE region >= -2 AND region < 9",
             command));
     assertEquals(true, command.hasPredicate());
-    assertEquals(false, command.isEqualityPredicate());
-    assertEquals(-2, command.scanLowerInclusive());
-    assertEquals(9, command.scanUpperExclusive());
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 0));
+    assertEquals(-2, predicateValue(command, 0));
+    assertEquals(SqlComparison.LESS_THAN, predicateComparison(command, 1));
+    assertEquals(9, predicateValue(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -1689,7 +1783,9 @@ final class SqlParserTest {
     assertName("a", command.columnTableName(0));
     assertName("balance", command.columnName(0));
     assertName("total", command.columnAlias(0));
-    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 0));
+    assertEquals(SqlComparison.LESS_THAN, predicateComparison(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT MIN(a.balance) AS lowest FROM accounts a", command));
@@ -1748,7 +1844,7 @@ final class SqlParserTest {
                 + "GROUP BY region HAVING "
                 + "MAX(day+(CAST('2024-01-01' AS DATE)-day))>=DATE '2024-01-01'",
             command));
-    assertEquals(1, command.havingPredicateCount());
+    assertEquals(1, command.booleanHavingPredicates().leafCount());
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -1784,15 +1880,18 @@ final class SqlParserTest {
         parser.parse(
             "SELECT id FROM accounts WHERE region IN (7, -2, 7, NULL) AND id NOT IN (9)",
             command));
-    assertEquals(SqlComparison.IN, command.comparison(0));
-    assertEquals(2, command.literalMembershipCount(0));
-    assertEquals(-2, command.literalMembershipValue(0, 0));
-    assertEquals(7, command.literalMembershipValue(0, 1));
-    assertTrue(command.literalMembershipHasNull(0));
-    assertEquals(SqlComparison.NOT_IN, command.comparison(1));
-    assertEquals(1, command.literalMembershipCount(1));
-    assertEquals(9, command.literalMembershipValue(1, 0));
-    assertFalse(command.literalMembershipHasNull(1));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_MEMBERSHIP,
+        command.wherePredicates().leafTest(0));
+    assertEquals(4, membershipCount(command, 0));
+    assertEquals(7, membershipValue(command, 0, 0));
+    assertEquals(-2, membershipValue(command, 0, 1));
+    assertEquals(7, membershipValue(command, 0, 2));
+    assertTrue(membershipHasNull(command, 0));
+    assertTrue(command.wherePredicates().leafNegated(1));
+    assertEquals(1, membershipCount(command, 1));
+    assertEquals(9, membershipValue(command, 1, 0));
+    assertFalse(membershipHasNull(command, 1));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT id FROM accounts WHERE region IN ()", command));
@@ -1802,19 +1901,26 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id FROM accounts WHERE region BETWEEN -2 AND 9", command));
-    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
-    assertEquals(-2, command.predicateLowerInclusive(0));
-    assertEquals(10, command.predicateUpperExclusive(0));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_BETWEEN,
+        command.wherePredicates().leafTest(0));
+    assertEquals(-2, predicateLower(command, 0));
+    assertEquals(9, predicateUpper(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM accounts WHERE region BETWEEN 7 AND 9223372036854775807",
             command));
-    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(0));
-    assertEquals(7, command.predicateValue(0));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        SqlBooleanPredicateProgram.TEST_BETWEEN,
+        command.wherePredicates().leafTest(0));
+    assertEquals(7, predicateLower(command, 0));
+    assertEquals(
+        StatusCode.OK,
         parser.parse("SELECT id FROM accounts WHERE region BETWEEN 9 AND -2", command));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_BETWEEN,
+        command.wherePredicates().leafTest(0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -1825,7 +1931,7 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.GROUP_COUNT, command.type());
     assertName("region", command.firstColumnName());
     assertName("accounts", command.tableName());
-    assertEquals(2, command.predicateCount());
+    assertEquals(3, command.wherePredicates().leafCount());
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -1844,17 +1950,17 @@ final class SqlParserTest {
                 + "GROUP BY region HAVING SUM(balance) >= 100 "
                 + "ORDER BY region LIMIT 5",
             command));
-    assertEquals(1, command.havingPredicateCount());
-    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.havingComparison(0));
-    assertEquals(100, command.havingValue(0));
+    assertEquals(1, command.booleanHavingPredicates().leafCount());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, havingComparison(command, 0));
+    assertEquals(100, havingValue(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT region, COUNT(*) FROM accounts "
                 + "GROUP BY region HAVING COUNT(*) <> 1",
             command));
-    assertEquals(SqlComparison.NOT_EQUAL, command.havingComparison(0));
-    assertEquals(1, command.havingValue(0));
+    assertEquals(SqlComparison.NOT_EQUAL, havingComparison(command, 0));
+    assertEquals(1, havingValue(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -1907,10 +2013,12 @@ final class SqlParserTest {
                 + "WHERE accounts.region >= 7 AND accounts.region < 9 LIMIT 0",
             command));
     assertEquals(0, command.rowLimit());
-    assertName("accounts", command.predicateTableName());
-    assertName("region", command.predicateColumnName());
-    assertEquals(7, command.scanLowerInclusive());
-    assertEquals(9, command.scanUpperExclusive());
+    assertName("accounts", predicateTableName(command, 0));
+    assertName("region", predicateColumnName(command, 0));
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 0));
+    assertEquals(7, predicateValue(command, 0));
+    assertEquals(SqlComparison.LESS_THAN, predicateComparison(command, 1));
+    assertEquals(9, predicateValue(command, 1));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key FROM accounts LIMIT -1", command));
@@ -1922,7 +2030,7 @@ final class SqlParserTest {
             command));
     assertEquals(SqlCommandType.DISTINCT_SCAN, command.type());
     assertName("region", command.firstColumnName());
-    assertEquals(2, command.predicateCount());
+    assertEquals(2, command.wherePredicates().leafCount());
     assertEquals(2, command.rowLimit());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -1979,12 +2087,12 @@ final class SqlParserTest {
     assertName("r", command.joinTableAlias());
     assertName("a", command.columnTableName(0));
     assertName("r", command.columnTableName(1));
-    assertName("a", command.predicateTableName(0));
-    assertName("r", command.predicateTableName(1));
+    assertName("a", predicateTableName(command, 0));
+    assertName("r", predicateTableName(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT region, key, value FROM accounts WHERE key=7", command));
-    assertEquals(SqlCommandType.SELECT, command.type());
+    assertEquals(SqlCommandType.SCAN, command.type());
     assertEquals(3, command.columnCount());
     assertName("region", command.columnName(0));
     assertName("value", command.columnName(2));
@@ -1994,41 +2102,42 @@ final class SqlParserTest {
             "SELECT key, value FROM accounts WHERE key >= 11 AND key < 29",
             command));
     assertEquals(SqlCommandType.SCAN, command.type());
-    assertEquals(true, command.isBoundedScan());
-    assertEquals(11, command.scanLowerInclusive());
-    assertEquals(29, command.scanUpperExclusive());
+    assertFalse(command.isBoundedScan());
+    assertEquals(11, predicateValue(command, 0));
+    assertEquals(29, predicateValue(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT key, value FROM accounts WHERE value = 701",
             command));
-    assertEquals(SqlCommandType.SELECT, command.type());
-    assertEquals(701, command.key());
+    assertEquals(SqlCommandType.SCAN, command.type());
+    assertEquals(701, predicateValue(command, 0));
     assertName("key", command.firstColumnName());
     assertName("value", command.secondColumnName());
-    assertName("value", command.predicateColumnName());
+    assertName("value", predicateColumnName(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT key, value FROM accounts WHERE value >= -50 AND value < 75",
             command));
     assertEquals(SqlCommandType.SCAN, command.type());
-    assertEquals(-50, command.scanLowerInclusive());
-    assertEquals(75, command.scanUpperExclusive());
+    assertEquals(-50, predicateValue(command, 0));
+    assertEquals(75, predicateValue(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT key FROM accounts WHERE region=7 "
                 + "AND value >= 100 AND value < 300 AND key=2",
             command));
-    assertEquals(3, command.predicateCount());
-    assertName("region", command.predicateColumnName(0));
-    assertEquals(7, command.predicateValue(0));
-    assertName("value", command.predicateColumnName(1));
-    assertEquals(100, command.predicateLowerInclusive(1));
-    assertEquals(300, command.predicateUpperExclusive(1));
-    assertName("key", command.predicateColumnName(2));
-    assertEquals(2, command.predicateValue(2));
+    assertEquals(4, command.wherePredicates().leafCount());
+    assertName("region", predicateColumnName(command, 0));
+    assertEquals(7, predicateValue(command, 0));
+    assertName("value", predicateColumnName(command, 1));
+    assertEquals(100, predicateValue(command, 1));
+    assertName("value", predicateColumnName(command, 2));
+    assertEquals(300, predicateValue(command, 2));
+    assertName("key", predicateColumnName(command, 3));
+    assertEquals(2, predicateValue(command, 3));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -2037,11 +2146,11 @@ final class SqlParserTest {
                 + "WHERE accounts.region=7 AND accounts.value >= 100 "
                 + "AND accounts.value < 300 AND regions.code=7000",
             command));
-    assertEquals(3, command.predicateCount());
-    assertName("accounts", command.predicateTableName(1));
-    assertName("value", command.predicateColumnName(1));
-    assertName("regions", command.predicateTableName(2));
-    assertName("code", command.predicateColumnName(2));
+    assertEquals(4, command.wherePredicates().leafCount());
+    assertName("accounts", predicateTableName(command, 1));
+    assertName("value", predicateColumnName(command, 1));
+    assertName("regions", predicateTableName(command, 3));
+    assertName("code", predicateColumnName(command, 3));
     assertEquals(StatusCode.OK, parser.parse("UPDATE accounts SET value=11 WHERE key=7", command));
     assertEquals(SqlCommandType.UPDATE, command.type());
     assertEquals(11, command.value());
@@ -2104,9 +2213,9 @@ final class SqlParserTest {
         parser.parse(
             "UPDATE accounts SET region=9 WHERE balance >= 100 AND balance < 500",
             command));
-    assertEquals(false, command.isEqualityPredicate());
-    assertEquals(100, command.scanLowerInclusive());
-    assertEquals(500, command.scanUpperExclusive());
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(100, predicateValue(command, 0));
+    assertEquals(500, predicateValue(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse("UPDATE accounts SET balance=balance WHERE key=7", command));
@@ -2157,13 +2266,13 @@ final class SqlParserTest {
             command));
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
-    assertEquals(true, command.isEqualityPredicate());
+    assertEquals(true, (predicateComparison(command, 0) == SqlComparison.EQUAL));
     assertEquals(
         StatusCode.OK,
         parser.parse("DELETE FROM accounts WHERE key >= 10 AND key < 20", command));
-    assertEquals(false, command.isEqualityPredicate());
-    assertEquals(10, command.scanLowerInclusive());
-    assertEquals(20, command.scanUpperExclusive());
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(10, predicateValue(command, 0));
+    assertEquals(20, predicateValue(command, 1));
     assertEquals(StatusCode.OK, parser.parse("BEGIN;", command));
     assertEquals(SqlCommandType.BEGIN, command.type());
     assertEquals(false, command.isReadCommittedTransaction());
@@ -2273,7 +2382,7 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse("INSERT INTO labels VALUES (1, 'ninechars', NULL)", command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("SELECT id FROM labels WHERE code IN ('one', 2)", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -2343,7 +2452,7 @@ final class SqlParserTest {
       predicates.append('c').append(index).append('=').append(index);
     }
     assertEquals(StatusCode.OK, parser.parse(predicates, command));
-    assertEquals(SqlCommand.MAXIMUM_PREDICATES, command.predicateCount());
+    assertEquals(SqlCommand.MAXIMUM_PREDICATES, command.wherePredicates().leafCount());
     assertTrue(command.isAvailable());
 
     StringBuilder rows = new StringBuilder("INSERT INTO x VALUES ");
@@ -2369,23 +2478,31 @@ final class SqlParserTest {
                 + "WHERE region=7 OR region=8 AND value>100",
             command));
     assertEquals(SqlCommandType.SCAN, command.type());
-    assertEquals(3, command.predicateCount());
-    assertTrue(command.hasDisjunction());
-    assertFalse(command.predicateStartsDisjunction(0));
-    assertTrue(command.predicateStartsDisjunction(1));
-    assertFalse(command.predicateStartsDisjunction(2));
+    assertEquals(3, command.wherePredicates().leafCount());
+    SqlBooleanPredicateProgram predicates = command.wherePredicates();
+    assertEquals(5, predicates.booleanNodeCount());
+    assertEquals(SqlBooleanPredicateProgram.BOOLEAN_AND, predicates.booleanOperator(3));
+    assertEquals(1, predicates.booleanLeft(3));
+    assertEquals(2, predicates.booleanRight(3));
+    assertEquals(SqlBooleanPredicateProgram.BOOLEAN_OR, predicates.booleanOperator(4));
+    assertEquals(0, predicates.booleanLeft(4));
+    assertEquals(3, predicates.booleanRight(4));
 
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT id FROM metrics WHERE region=7 OR", command));
     SqlQuery query = new SqlQuery();
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d.id FROM "
                 + "(SELECT id FROM metrics WHERE region=7 OR region=8) d",
             query,
             command));
+    assertEquals(
+        SqlBooleanPredicateProgram.BOOLEAN_OR,
+        command.wherePredicates().booleanOperator(
+            command.wherePredicates().root()));
   }
 
   @Test
@@ -2409,8 +2526,8 @@ final class SqlParserTest {
     assertName("events", compiled.tableName());
     assertName("id", compiled.columnName(0));
     assertName("amount", compiled.columnName(1));
-    assertName("amount", compiled.predicateColumnName(0));
-    assertName("category", compiled.predicateColumnName(1));
+    assertName("amount", predicateColumnName(compiled, 0));
+    assertName("category", predicateColumnName(compiled, 1));
     assertName("id", compiled.orderColumnName());
 
     assertEquals(
@@ -2446,11 +2563,11 @@ final class SqlParserTest {
                 + "'2024-01-01 00:00:00.123+00:00'",
             view));
     assertEquals(StatusCode.OK, query.compileView(outer, view, compiled));
-    assertEquals(2, compiled.predicateCount());
+    assertEquals(2, compiled.wherePredicates().leafCount());
     assertEquals(
         SqlTypeDescriptor.timestampWithTimeZone(3),
-        compiled.predicateTypeDescriptor(0));
-    assertEquals(SqlTypeDescriptor.DATE, compiled.predicateTypeDescriptor(1));
+        predicateDescriptor(compiled, 0));
+    assertEquals(SqlTypeDescriptor.DATE, predicateDescriptor(compiled, 1));
   }
 
   @Test
@@ -2461,70 +2578,71 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id FROM metrics WHERE value=-4", command));
-    assertEquals(SqlComparison.EQUAL, command.comparison(0));
-    assertEquals(-4, command.predicateValue(0));
+    assertEquals(SqlComparison.EQUAL, predicateComparison(command, 0));
+    assertEquals(-4, predicateValue(command, 0));
 
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id FROM metrics WHERE value<>0", command));
-    assertEquals(SqlComparison.NOT_EQUAL, command.comparison(0));
+    assertEquals(SqlComparison.NOT_EQUAL, predicateComparison(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id FROM metrics WHERE value!=0", command));
-    assertEquals(SqlComparison.NOT_EQUAL, command.comparison(0));
+    assertEquals(SqlComparison.NOT_EQUAL, predicateComparison(command, 0));
 
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM metrics WHERE value<-9223372036854775807",
             command));
-    assertEquals(SqlComparison.LESS_THAN, command.comparison(0));
-    assertEquals(-9223372036854775807L, command.predicateValue(0));
+    assertEquals(SqlComparison.LESS_THAN, predicateComparison(command, 0));
+    assertEquals(-9223372036854775807L, predicateValue(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM metrics WHERE value<=-9223372036854775808",
             command));
-    assertEquals(SqlComparison.LESS_OR_EQUAL, command.comparison(0));
-    assertEquals(Long.MIN_VALUE, command.predicateValue(0));
+    assertEquals(SqlComparison.LESS_OR_EQUAL, predicateComparison(command, 0));
+    assertEquals(Long.MIN_VALUE, predicateValue(command, 0));
 
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id FROM metrics WHERE value>9223372036854775806", command));
-    assertEquals(SqlComparison.GREATER_THAN, command.comparison(0));
-    assertEquals(9223372036854775806L, command.predicateValue(0));
+    assertEquals(SqlComparison.GREATER_THAN, predicateComparison(command, 0));
+    assertEquals(9223372036854775806L, predicateValue(command, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT id FROM metrics WHERE value>=9223372036854775807", command));
-    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(0));
-    assertEquals(Long.MAX_VALUE, command.predicateValue(0));
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 0));
+    assertEquals(Long.MAX_VALUE, predicateValue(command, 0));
 
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM metrics WHERE value>=-5 AND value<8",
             command));
-    assertEquals(1, command.predicateCount());
-    assertEquals(SqlComparison.HALF_OPEN_RANGE, command.comparison(0));
-    assertEquals(-5, command.predicateLowerInclusive(0));
-    assertEquals(8, command.predicateUpperExclusive(0));
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 0));
+    assertEquals(-5, predicateValue(command, 0));
+    assertEquals(SqlComparison.LESS_THAN, predicateComparison(command, 1));
+    assertEquals(8, predicateValue(command, 1));
 
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM metrics WHERE value>=-5 AND value<=8",
             command));
-    assertEquals(2, command.predicateCount());
-    assertEquals(SqlComparison.GREATER_OR_EQUAL, command.comparison(0));
-    assertEquals(SqlComparison.LESS_OR_EQUAL, command.comparison(1));
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 0));
+    assertEquals(SqlComparison.LESS_OR_EQUAL, predicateComparison(command, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM metrics WHERE value>=-5 AND id<8",
             command));
-    assertEquals(2, command.predicateCount());
-    assertName("value", command.predicateColumnName(0));
-    assertName("id", command.predicateColumnName(1));
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertName("value", predicateColumnName(command, 0));
+    assertName("id", predicateColumnName(command, 1));
   }
 
   @Test
@@ -2543,12 +2661,13 @@ final class SqlParserTest {
     assertEquals(2, query.blockCount());
     assertName("accounts", command.tableName());
     assertName("id", command.firstColumnName());
-    assertEquals(2, command.predicateCount());
-    assertName("region", command.predicateColumnName(0));
-    assertEquals(7, command.predicateValue(0));
-    assertName("id", command.predicateColumnName(1));
-    assertEquals(1, command.predicateLowerInclusive(1));
-    assertEquals(5, command.predicateUpperExclusive(1));
+    assertEquals(3, command.wherePredicates().leafCount());
+    assertName("region", predicateColumnName(command, 0));
+    assertEquals(7, predicateValue(command, 0));
+    assertName("id", predicateColumnName(command, 1));
+    assertEquals(1, predicateValue(command, 1));
+    assertName("id", predicateColumnName(command, 2));
+    assertEquals(5, predicateValue(command, 2));
     assertName("region", command.orderColumnName());
     assertTrue(command.isDescendingOrder());
     assertEquals(2, command.rowLimit());
@@ -2563,8 +2682,9 @@ final class SqlParserTest {
             command));
     assertName("id", command.firstColumnName());
     assertName("result_id", command.columnOutputName(0));
-    assertName("balance", command.predicateColumnName(0));
-    assertName("id", command.predicateColumnName(1));
+    assertName("balance", predicateColumnName(command, 0));
+    assertName("balance", predicateColumnName(command, 1));
+    assertName("id", predicateColumnName(command, 2));
     assertName("id", command.orderColumnName());
     assertEquals(
         StatusCode.OK,
@@ -2664,15 +2784,15 @@ final class SqlParserTest {
     assertTrue(query.hasScalarPredicate());
     assertEquals(1, query.scalarPredicate());
     assertName("accounts", command.tableName());
-    assertName("region", command.predicateColumnName(0));
-    assertEquals(7, command.predicateValue(0));
-    assertName("balance", command.predicateColumnName(1));
-    assertEquals(0, command.predicateValue(1));
+    assertName("region", predicateColumnName(command, 0));
+    assertEquals(7, predicateValue(command, 0));
+    assertName("balance", predicateColumnName(command, 1));
+    assertEquals(0, predicateValue(command, 1));
     SqlCommand scalar = query.scalarCommand();
     assertName("lookup", scalar.tableName());
     assertName("balance", scalar.firstColumnName());
-    assertName("id", scalar.predicateColumnName());
-    assertEquals(7, scalar.predicateValue(0));
+    assertName("id", predicateColumnName(scalar, 0));
+    assertEquals(7, predicateValue(scalar, 0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -2682,11 +2802,11 @@ final class SqlParserTest {
             query,
             command));
     scalar = query.scalarCommand();
-    assertTrue(scalar.isColumnPredicate(0));
-    assertName("regions", scalar.predicateTableName(0));
-    assertName("id", scalar.predicateColumnName(0));
-    assertName("accounts", scalar.predicateValueTableName(0));
-    assertName("region", scalar.predicateValueColumnName(0));
+    assertTrue(isColumnPredicate(scalar, 0));
+    assertName("regions", predicateTableName(scalar, 0));
+    assertName("id", predicateColumnName(scalar, 0));
+    assertName("accounts", predicateValueTableName(scalar, 0));
+    assertName("region", predicateValueColumnName(scalar, 0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedScalarQuery(3), query, command));
@@ -2744,11 +2864,11 @@ final class SqlParserTest {
             query,
             command));
     SqlCommand correlated = query.existenceCommand();
-    assertTrue(correlated.isColumnPredicate(0));
-    assertName("regions", correlated.predicateTableName(0));
-    assertName("id", correlated.predicateColumnName(0));
-    assertName("accounts", correlated.predicateValueTableName(0));
-    assertName("region", correlated.predicateValueColumnName(0));
+    assertTrue(isColumnPredicate(correlated, 0));
+    assertName("regions", predicateTableName(correlated, 0));
+    assertName("id", predicateColumnName(correlated, 0));
+    assertName("accounts", predicateValueTableName(correlated, 0));
+    assertName("region", predicateValueColumnName(correlated, 0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -2762,8 +2882,8 @@ final class SqlParserTest {
     correlated = query.existenceCommand();
     assertName("accounts", correlated.tableName());
     assertName("b", correlated.tableAlias());
-    assertName("b", correlated.predicateTableName(0));
-    assertName("a", correlated.predicateValueTableName(0));
+    assertName("b", predicateTableName(correlated, 0));
+    assertName("a", predicateValueTableName(correlated, 0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedExistenceQuery(3), query, command));
@@ -2794,7 +2914,7 @@ final class SqlParserTest {
     assertTrue(query.hasMembershipPredicate());
     assertFalse(query.membershipNegated());
     assertEquals(1, query.membershipPredicate());
-    assertName("balance", command.predicateColumnName(1));
+    assertName("balance", predicateColumnName(command, 1));
     assertName("lookup", query.membershipCommand().tableName());
     assertName("balance", query.membershipCommand().firstColumnName());
     assertEquals(
@@ -2816,11 +2936,11 @@ final class SqlParserTest {
             command));
     SqlCommand correlated = query.membershipCommand();
     assertTrue(query.membershipNegated());
-    assertTrue(correlated.isColumnPredicate(0));
-    assertName("regions", correlated.predicateTableName(0));
-    assertName("id", correlated.predicateColumnName(0));
-    assertName("accounts", correlated.predicateValueTableName(0));
-    assertName("region", correlated.predicateValueColumnName(0));
+    assertTrue(isColumnPredicate(correlated, 0));
+    assertName("regions", predicateTableName(correlated, 0));
+    assertName("id", predicateColumnName(correlated, 0));
+    assertName("accounts", predicateValueTableName(correlated, 0));
+    assertName("region", predicateValueColumnName(correlated, 0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedMembershipQuery(3), query, command));
@@ -2869,9 +2989,9 @@ final class SqlParserTest {
     assertName("a", command.tableAlias());
     assertName("b", query.block(1).tableAlias());
     assertName("c", query.block(2).tableAlias());
-    assertTrue(query.block(2).isColumnPredicate(0));
-    assertName("a", query.block(2).predicateValueTableName(0));
-    assertName("id", query.block(2).predicateValueColumnName(0));
+    assertTrue(isColumnPredicate(query.block(2), 0));
+    assertName("a", predicateValueTableName(query.block(2), 0));
+    assertName("id", predicateValueColumnName(query.block(2), 0));
   }
 
   @Test
@@ -2884,20 +3004,26 @@ final class SqlParserTest {
             "SELECT id FROM nullable_values WHERE value IS NULL",
             command));
     assertEquals(SqlCommandType.SCAN, command.type());
-    assertEquals(1, command.predicateCount());
-    assertTrue(command.isNullPredicate(0));
-    assertFalse(command.isNullPredicateNegated(0));
+    assertEquals(1, command.wherePredicates().leafCount());
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_NULL,
+        command.wherePredicates().leafTest(0));
+    assertFalse(command.wherePredicates().leafNegated(0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
             "SELECT id FROM nullable_values "
                 + "WHERE value IS NOT NULL AND rank IS NULL",
             command));
-    assertEquals(2, command.predicateCount());
-    assertTrue(command.isNullPredicate(0));
-    assertTrue(command.isNullPredicateNegated(0));
-    assertTrue(command.isNullPredicate(1));
-    assertFalse(command.isNullPredicateNegated(1));
+    assertEquals(2, command.wherePredicates().leafCount());
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_NULL,
+        command.wherePredicates().leafTest(0));
+    assertTrue(command.wherePredicates().leafNegated(0));
+    assertEquals(
+        SqlBooleanPredicateProgram.TEST_NULL,
+        command.wherePredicates().leafTest(1));
+    assertFalse(command.wherePredicates().leafNegated(1));
   }
 
   @Test
@@ -3098,11 +3224,161 @@ final class SqlParserTest {
     }
   }
 
+  private static SqlScalarExpression predicateExpression(
+      SqlCommand command, int leaf) {
+    SqlBooleanPredicateProgram predicates = command.wherePredicates();
+    int count = predicates.programNodeCount(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT);
+    if (count == 1 && predicates.programOperator(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0)
+        == SqlScalarExpression.COLUMN) return null;
+    SqlScalarExpression expression = new SqlScalarExpression();
+    for (int node = 0; node < count; node++) {
+      expression.append(
+          predicates.programOperator(leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, node),
+          predicates.programOperand(leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, node),
+          predicates.programDescriptor(leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, node));
+    }
+    expression.finish(predicates.programDescriptor(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, count - 1));
+    return expression;
+  }
+
+  private static SqlComparison predicateComparison(SqlCommand command, int leaf) {
+    return command.wherePredicates().comparison(leaf);
+  }
+
+  private static int predicateDescriptor(SqlCommand command, int leaf) {
+    SqlBooleanPredicateProgram predicates = command.wherePredicates();
+    int program = predicates.leafTest(leaf) == SqlBooleanPredicateProgram.TEST_BETWEEN
+        ? SqlBooleanPredicateProgram.PROGRAM_LOWER
+        : SqlBooleanPredicateProgram.PROGRAM_RIGHT;
+    int count = predicates.programNodeCount(leaf, program);
+    if (count > 0) return predicates.programDescriptor(leaf, program, count - 1);
+    for (int member = 0; member < predicates.leafMemberCount(leaf); member++) {
+      int descriptor = predicates.memberDescriptor(leaf, member);
+      if (descriptor != 0) return descriptor;
+    }
+    return 0;
+  }
+
+  private static long predicateValue(SqlCommand command, int leaf) {
+    return predicateProgramValue(
+        command.wherePredicates(), leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT);
+  }
+
+  private static long predicateLower(SqlCommand command, int leaf) {
+    return predicateProgramValue(
+        command.wherePredicates(), leaf, SqlBooleanPredicateProgram.PROGRAM_LOWER);
+  }
+
+  private static long predicateUpper(SqlCommand command, int leaf) {
+    return predicateProgramValue(
+        command.wherePredicates(), leaf, SqlBooleanPredicateProgram.PROGRAM_UPPER);
+  }
+
+  private static long predicateProgramValue(
+      SqlBooleanPredicateProgram predicates, int leaf, int program) {
+    int count = predicates.programNodeCount(leaf, program);
+    return count == 0 ? 0 : predicates.programOperand(leaf, program, count - 1);
+  }
+
+  private static int predicateProgramDescriptor(
+      SqlBooleanPredicateProgram predicates, int leaf, int program) {
+    int count = predicates.programNodeCount(leaf, program);
+    return count == 0 ? 0 : predicates.programDescriptor(leaf, program, count - 1);
+  }
+
+  private static SqlIdentifier predicateColumnName(SqlCommand command, int leaf) {
+    int symbol = (int) command.wherePredicates().programOperand(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
+    return command.predicateSymbolName(symbol);
+  }
+
+  private static SqlIdentifier predicateTableName(SqlCommand command, int leaf) {
+    int symbol = (int) command.wherePredicates().programOperand(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
+    return command.predicateSymbolTable(symbol);
+  }
+
+  private static SqlIdentifier predicateValueTableName(SqlCommand command, int leaf) {
+    int symbol = (int) command.wherePredicates().programOperand(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
+    return command.predicateSymbolTable(symbol);
+  }
+
+  private static SqlIdentifier predicateValueColumnName(SqlCommand command, int leaf) {
+    int symbol = (int) command.wherePredicates().programOperand(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
+    return command.predicateSymbolName(symbol);
+  }
+
+  private static boolean isColumnPredicate(SqlCommand command, int leaf) {
+    SqlBooleanPredicateProgram predicates = command.wherePredicates();
+    return predicates.programNodeCount(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT) == 1
+        && predicates.programOperator(
+            leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0)
+        == SqlScalarExpression.COLUMN;
+  }
+
+  private static int membershipCount(SqlCommand command, int leaf) {
+    return command.wherePredicates().leafMemberCount(leaf);
+  }
+
+  private static long membershipValue(SqlCommand command, int leaf, int member) {
+    return command.wherePredicates().memberValue(leaf, member);
+  }
+
+  private static boolean membershipHasNull(SqlCommand command, int leaf) {
+    SqlBooleanPredicateProgram predicates = command.wherePredicates();
+    for (int member = 0; member < predicates.leafMemberCount(leaf); member++) {
+      if (predicates.memberNull(leaf, member)) return true;
+    }
+    return false;
+  }
+
+  private static SqlComparison havingComparison(SqlCommand command, int leaf) {
+    return command.booleanHavingPredicates().comparison(leaf);
+  }
+
+  private static long havingValue(SqlCommand command, int leaf) {
+    return predicateProgramValue(
+        command.booleanHavingPredicates(),
+        leaf,
+        SqlBooleanPredicateProgram.PROGRAM_RIGHT);
+  }
+
+  private static long havingOperand(SqlCommand command, int leaf, int node) {
+    return command.booleanHavingPredicates().programOperand(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, node);
+  }
+
+  private static int havingNodeCount(SqlCommand command, int leaf) {
+    return command.booleanHavingPredicates().programNodeCount(
+        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT);
+  }
+
+  private static int havingMemberCount(SqlCommand command, int leaf) {
+    return command.booleanHavingPredicates().leafMemberCount(leaf);
+  }
+
+  private static boolean havingMembershipHasNull(SqlCommand command, int leaf) {
+    SqlBooleanPredicateProgram predicates = command.booleanHavingPredicates();
+    for (int member = 0; member < predicates.leafMemberCount(leaf); member++) {
+      if (predicates.memberNull(leaf, member)) return true;
+    }
+    return false;
+  }
+
   private static void assertHavingPostfix(
       SqlCommand command, int predicate, int... expected) {
-    assertEquals(expected.length, command.havingNodeCount(predicate));
+    assertEquals(expected.length, havingNodeCount(command, predicate));
     for (int node = 0; node < expected.length; node++) {
-      assertEquals(expected[node], command.havingOperator(predicate, node));
+      assertEquals(
+          expected[node],
+          command.booleanHavingPredicates().programOperator(
+              predicate, SqlBooleanPredicateProgram.PROGRAM_LEFT, node));
     }
   }
 

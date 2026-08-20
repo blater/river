@@ -90,13 +90,14 @@ final class SqlScalarExpressionParser {
     return status;
   }
 
-  StatusCode parsePredicate(CharSequence sql, SqlCommand command) {
-    if (command == null || command.hasComputedPredicate()) {
-      return StatusCode.RESOURCE_EXHAUSTED;
+  StatusCode parsePredicateScratch(
+      CharSequence sql, SqlCommand command, SqlScalarExpression expression) {
+    if (command == null || expression == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     projectionCommand = command;
     predicateExpression = true;
-    StatusCode status = parseProgram(sql, command.writablePredicateExpression());
+    StatusCode status = parseProgram(sql, expression);
     projectionCommand = null;
     predicateExpression = false;
     return status;

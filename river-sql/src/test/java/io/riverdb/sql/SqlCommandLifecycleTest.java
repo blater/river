@@ -31,7 +31,7 @@ final class SqlCommandLifecycleTest {
     assertTrue(command.isSerializableTransaction());
     assertEquals(0, command.insertRowCount());
     assertEquals(0, command.columnCount());
-    assertEquals(0, command.predicateCount());
+    assertEquals(0, command.wherePredicates().leafCount());
   }
 
   @Test

@@ -7,6 +7,7 @@ import io.riverdb.engine.relational.SequenceValueResult;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.storage.heap.HeapRowResult;
 
@@ -144,7 +145,7 @@ final class SqlDmlExecutor {
 
   private StatusCode resolveDirectKey(
       SqlCommand command, BoundSqlStatement bound) {
-    directKey = accessValue(command, bound);
+    directKey = bound.accessValue;
     if (bound.predicateColumn == 0) {
       return StatusCode.OK;
     }
@@ -182,21 +183,10 @@ final class SqlDmlExecutor {
 
   private static boolean requiresScan(
       SqlCommand command, BoundSqlStatement bound) {
-    return command.hasComputedPredicate()
-        || bound.predicateCount != 1
-        || !accessEquality(command, bound)
+    return bound.predicateCount != 1
+        || bound.accessComparison != SqlComparison.EQUAL
         || bound.predicateColumn > 0
             && !bound.table.hasUniqueIndexOn(bound.predicateColumn);
   }
 
-  private static boolean accessEquality(
-      SqlCommand command, BoundSqlStatement bound) {
-    return bound.accessPredicate >= 0
-        && command.isEqualityPredicate(bound.accessPredicate);
-  }
-
-  private static long accessValue(
-      SqlCommand command, BoundSqlStatement bound) {
-    return bound.accessValue;
-  }
 }

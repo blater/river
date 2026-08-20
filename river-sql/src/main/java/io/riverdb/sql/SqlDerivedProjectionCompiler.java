@@ -37,38 +37,91 @@ final class SqlDerivedProjectionCompiler {
     return StatusCode.OK;
   }
 
-  StatusCode copyPredicate(
+  StatusCode copyPredicateProgram(
       int blockIndex,
-      SqlScalarExpression source,
-      SqlCommand destination) {
-    if (destination.hasComputedPredicate()) {
-      return StatusCode.RESOURCE_EXHAUSTED;
+      SqlBooleanPredicateProgram source,
+      int leaf,
+      int program,
+      SqlCommand destination,
+      SqlScalarExpression target) {
+    target.reset();
+    SqlCommand block = query.block(blockIndex);
+    int count = source.programNodeCount(leaf, program);
+    if (count == 0) return StatusCode.OK;
+    for (int node = 0; node < count; node++) {
+      int operator = source.programOperator(leaf, program, node);
+      StatusCode status = operator == SqlScalarExpression.COLUMN
+          ? appendPredicateColumn(
+              blockIndex,
+              block,
+              (int) source.programOperand(leaf, program, node),
+              source.programDescriptor(leaf, program, node),
+              destination,
+              target)
+          : appendPredicateNode(
+              block,
+              source,
+              leaf,
+              program,
+              node,
+              destination,
+              target);
+      if (!status.isOk()) return status;
     }
-    SqlScalarExpression target = destination.writablePredicateExpression();
-    StatusCode status = appendExpression(blockIndex, source, destination, target);
-    if (status.isOk()) finish(source, target);
-    return status;
+    int descriptor = source.programDescriptor(leaf, program, count - 1);
+    if (descriptor == 0) target.finishUnresolved();
+    else target.finish(descriptor);
+    return StatusCode.OK;
   }
 
-  StatusCode copyPredicateReference(
+  private StatusCode appendPredicateColumn(
       int blockIndex,
-      CharSequence name,
-      SqlCommand destination) {
-    if (destination.hasComputedPredicate()) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    int innerIndex = blockIndex + 1;
-    if (innerIndex >= query.blockCount()) {
+      SqlCommand block,
+      int symbol,
+      int descriptor,
+      SqlCommand destination,
+      SqlScalarExpression target) {
+    SqlIdentifier table = block.projectionSymbolTable(symbol);
+    SqlIdentifier name = block.projectionSymbolName(symbol);
+    if (table == null || name == null
+        || !SqlDerivedColumnResolver.validQualifier(table, block)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    SqlCommand inner = query.block(innerIndex);
-    int projection = SqlDerivedColumnResolver.outputIndex(inner, name);
-    if (projection < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    SqlScalarExpression source = inner.projectionExpression(projection);
-    SqlScalarExpression target = destination.writablePredicateExpression();
-    StatusCode status = appendExpression(innerIndex, source, destination, target);
-    if (status.isOk()) finish(source, target);
-    return status;
+    if (blockIndex + 1 < query.blockCount()) {
+      SqlCommand inner = query.block(blockIndex + 1);
+      int projection = SqlDerivedColumnResolver.outputIndex(inner, name);
+      return projection < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
+          : appendExpression(
+              blockIndex + 1,
+              inner.projectionExpression(projection),
+              destination,
+              target);
+    }
+    int targetSymbol = destination.registerPredicateSymbol("", name);
+    return targetSymbol >= 0
+            && target.append(SqlScalarExpression.COLUMN, targetSymbol, descriptor)
+        ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
+  }
+
+  private static StatusCode appendPredicateNode(
+      SqlCommand sourceCommand,
+      SqlBooleanPredicateProgram source,
+      int leaf,
+      int program,
+      int node,
+      SqlCommand destination,
+      SqlScalarExpression target) {
+    int operator = source.programOperator(leaf, program, node);
+    int descriptor = source.programDescriptor(leaf, program, node);
+    long operand = source.programOperand(leaf, program, node);
+    if (hasTextOperand(operator, descriptor)) {
+      operand = destination.copyTextFrom(sourceCommand, operand);
+      if (operand == SqlCommand.INVALID_TEXT_HANDLE) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+    }
+    return target.append(operator, operand, descriptor)
+        ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
   }
 
   private StatusCode appendExpression(

@@ -836,10 +836,12 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         reader.beginScan(
             "SELECT key, value FROM items WHERE key >= 9 AND key < 4",
             cursor));
+    assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
     assertEquals(
         StatusCode.OK,
         reader.execute("SELECT value FROM items WHERE key=4", execution));
@@ -2194,9 +2196,10 @@ final class SqlSessionTest {
         session.execute("UPDATE events SET amount=777 WHERE id >= 1 AND id < 7", result));
     assertEquals(2, result.affectedRows());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute(
             "DELETE FROM events WHERE id >= 7 AND id < 7", result));
+    assertEquals(0, result.affectedRows());
     assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM events", result));
     assertEquals(2, result.value());
     assertEquals(StatusCode.OK, database.close());

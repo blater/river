@@ -33,6 +33,7 @@ final class SqlQueryExecution {
   private final SqlSortExecution sorts;
   private final SqlActiveScanState activeScan = new SqlActiveScanState();
   private final SqlExpressionEvaluator expressions;
+  private final SqlTemporalContext temporal;
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final SqlJoinExecution joins;
   private final SqlCatalogScanExecution catalogs;
@@ -56,6 +57,7 @@ final class SqlQueryExecution {
     session = relationalSession;
     bound = boundStatement;
     expressions = evaluator;
+    this.temporal = temporal;
     rowProjections = projectionEvaluator;
     blockBinder = pipelineBinder;
     query = bound.executableQuery;
@@ -63,9 +65,9 @@ final class SqlQueryExecution {
     nestedExecution = new SqlNestedQueryExecution(
         session, bound, expressions);
     predicates = new SqlBoundPredicateEvaluator(
-        bound, expressions, nestedExecution, rowProjections);
+        bound, expressions, nestedExecution, temporal);
     pointQueries = new SqlPointQueryExecution(
-        session, bound, expressions, predicates, rowProjections);
+        session, bound, expressions, predicates, rowProjections, temporal);
     joins = new SqlJoinExecution(
         session, bound, plan, activeScan, expressions, predicates);
     sorts = new SqlSortExecution(
@@ -85,7 +87,8 @@ final class SqlQueryExecution {
         sorts,
         expressions,
         predicates,
-        rowProjections);
+        rowProjections,
+        temporal);
     catalogs = new SqlCatalogScanExecution(session, plan, activeScan, bound.table);
     scanPreparation = new SqlScanPreparation(
         session, bound, plan, activeScan, sorts, joins, aggregateExecution);
@@ -184,7 +187,9 @@ final class SqlQueryExecution {
   }
 
   StatusCode prepareProjectionPrograms() {
-    return rowProjections.prepare(bound);
+    StatusCode status = predicates.prepare();
+    if (status.isOk()) status = rowProjections.prepare(bound);
+    return status.isOk() ? groups.prepareHaving() : status;
   }
 
   StatusCode prepareBlockPipeline() {
@@ -195,7 +200,7 @@ final class SqlQueryExecution {
   private StatusCode preparePipeline() {
     if (blockPipeline == null) {
       blockPipeline = new SqlBlockPipelineExecution(
-          session, bound, blockBinder, expressions, rowProjections);
+          session, bound, blockBinder, expressions, rowProjections, temporal);
     }
     return explainOnly ? blockPipeline.describe() : blockPipeline.prepare();
   }
@@ -521,6 +526,7 @@ final class SqlQueryExecution {
           activeScan.explainCommitSequence());
       cursor.complete();
       activeScan.complete();
+      finishPointStatement();
       return StatusCode.OK;
     }
     if (plan.aggregate()) {
@@ -529,6 +535,7 @@ final class SqlQueryExecution {
           activeScan.aggregateCommitSequence());
       cursor.complete();
       activeScan.complete();
+      finishPointStatement();
       return StatusCode.OK;
     }
     return StatusCode.CONFLICT;
@@ -575,11 +582,21 @@ final class SqlQueryExecution {
       status = nestedExecution.close();
     }
     groups.resetText();
+    if (status.isOk()) {
+      predicates.reset();
+      rowProjections.reset();
+    }
     return status;
   }
 
   StatusCode executePointQuery(SqlExecutionResult result) {
     return pointQueries.execute(command.type(), result);
+  }
+
+  void finishPointStatement() {
+    predicates.reset();
+    rowProjections.reset();
+    pointQueries.finishStatement();
   }
 
   boolean hasPointResources() {

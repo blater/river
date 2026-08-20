@@ -6,9 +6,7 @@ import io.riverdb.sql.SqlScalarExpression;
 /** Statement-owned resolved postfix programs for row projections. */
 final class SqlBoundProjectionPrograms {
   static final int COMPUTED_PROJECTION = Integer.MIN_VALUE + 1;
-  static final int PREDICATE_LANE = TableSchema.MAXIMUM_COLUMNS;
-  static final int HAVING_LANE = PREDICATE_LANE + 1;
-  private static final int MAXIMUM_PROGRAMS = TableSchema.MAXIMUM_COLUMNS + 2;
+  private static final int MAXIMUM_PROGRAMS = TableSchema.MAXIMUM_COLUMNS;
 
   private final byte[][] operators =
       new byte[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
@@ -69,10 +67,6 @@ final class SqlBoundProjectionPrograms {
     }
   }
 
-  void beginPredicate() {
-    clear(PREDICATE_LANE);
-  }
-
   void beginMutations(int programs) {
     mutationCount = programs;
     mutationNodeCount = 0;
@@ -116,29 +110,6 @@ final class SqlBoundProjectionPrograms {
 
   private int mutationSlot(int program, int node) {
     return Byte.toUnsignedInt(mutationOffsets[program]) + node;
-  }
-
-  void beginHaving() {
-    clear(HAVING_LANE);
-  }
-
-  private void clear(int program) {
-    for (int node = 0; node < nodeCounts[program]; node++) {
-      operators[program][node] = 0;
-      operands[program][node] = 0;
-      descriptors[program][node] = 0;
-    }
-    nodeCounts[program] = 0;
-    resultDescriptors[program] = 0;
-    rawColumns[program] = -1;
-  }
-
-  boolean hasPredicate() {
-    return nodeCounts[PREDICATE_LANE] > 0;
-  }
-
-  boolean hasHaving() {
-    return nodeCounts[HAVING_LANE] > 0;
   }
 
   void append(

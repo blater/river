@@ -54,8 +54,8 @@ final class SqlBlockStagePlan {
     StatusCode status = outputOrder(command, distinct);
     if (status.isOk()) status = aggregate(command, distinct);
     if (status.isOk()) status = inputOrder(command, distinct);
-    if (status.isOk() && command.predicateCount() > 0) {
-      status = append(FILTER, command.predicateCount());
+    if (status.isOk() && command.wherePredicates().leafCount() > 0) {
+      status = append(FILTER, command.wherePredicates().leafCount());
     }
     return status;
   }
@@ -66,8 +66,9 @@ final class SqlBlockStagePlan {
   }
 
   private StatusCode aggregate(SqlCommand command, boolean distinct) {
-    StatusCode status = command.havingPredicateCount() > 0
-        ? append(HAVING, command.havingPredicateCount()) : StatusCode.OK;
+    int predicates = command.booleanHavingPredicates().leafCount();
+    StatusCode status = predicates > 0
+        ? append(HAVING, predicates) : StatusCode.OK;
     if (!status.isOk()) return status;
     if (SqlBinder.isScalarAggregate(command.type())) {
       return append(AGGREGATE, command.aggregateInvocationCount());

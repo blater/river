@@ -21,8 +21,7 @@ final class SqlDerivedPipelinePolicy {
   }
 
   private static StatusCode shape(SqlCommand block, int index) {
-    if (block.hasDisjunction() && block.hasComputedPredicate()
-        || index > 0 && (block.hasComputedPredicate() || block.isOrdered())
+    if (index > 0 && block.isOrdered()
         || block.type() == SqlCommandType.JOIN_SCAN) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }

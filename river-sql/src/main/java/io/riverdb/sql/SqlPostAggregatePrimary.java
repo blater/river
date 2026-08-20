@@ -75,7 +75,7 @@ final class SqlPostAggregatePrimary {
   }
 
   boolean valid(SqlScalarExpression expression) {
-    return leaves > 0 && !expression.hasColumnReference();
+    return !expression.hasColumnReference();
   }
 
   private int selectedInvocation(int slot) {

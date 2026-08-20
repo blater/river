@@ -157,6 +157,8 @@ final class SqlTemporalZonePlan {
     prepared = false;
   }
 
+  void reset() { clear(); }
+
   private long correctedCandidate(
       long localMicros,
       long candidate,

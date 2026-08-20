@@ -33,14 +33,16 @@ final class SqlBlockPipelineExecution {
       BoundSqlStatement statement,
       SqlBlockPlanBinder planBinder,
       SqlExpressionEvaluator expressions,
-      SqlRowProjectionEvaluator projectionEvaluator) {
+      SqlRowProjectionEvaluator projectionEvaluator,
+      SqlTemporalContext temporal) {
     bound = statement;
     binder = planBinder;
     projections = projectionEvaluator;
     source = new SqlBlockSource(relationalSession, statement);
-    projector = new SqlBlockStageProjector(statement, expressions, projectionEvaluator);
+    projector = new SqlBlockStageProjector(
+        statement, expressions, projectionEvaluator, temporal);
     projectionStage = new SqlBlockProjectionStage(statement, source, projector);
-    having = new SqlHavingEvaluator(expressions, projectionEvaluator);
+    having = new SqlHavingEvaluator(statement, expressions, temporal);
     publisher = new SqlBlockAggregatePublisher(statement);
     scalarStage = new SqlBlockScalarAggregateStage(
         statement, source, projector, having, accumulator, publisher);
@@ -59,6 +61,8 @@ final class SqlBlockPipelineExecution {
           ? plans.baseSchema() : plans.schema(block + 1);
       status = binder.activate(bound, block, child);
       if (status.isOk()) status = projections.prepare(bound);
+      if (status.isOk()) status = projector.prepare();
+      if (status.isOk()) status = having.prepare(bound.command);
       if (!status.isOk()) break;
       SqlBlockRowStore output = input == first ? second : first;
       status = execute(block, input, output);
@@ -135,6 +139,7 @@ final class SqlBlockPipelineExecution {
     if (status.isOk()) status = secondStatus;
     accumulator.clearAll();
     projector.reset();
+    having.reset();
     projectionStage.reset();
     scalarStage.reset();
     groupedStage.reset();

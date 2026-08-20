@@ -86,11 +86,7 @@ final class EmbeddedRiverTemporalPredicateTest {
         session.beginQuery(
             "SELECT id FROM events WHERE EXTRACT(DAY FROM day)=DATE '2024-02-28'",
             new QueryOpenResult()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT id FROM events WHERE (CURRENT_DATE)=DATE '2024-02-28'",
-            new QueryOpenResult()));
+    assertIds(session, result, "(CURRENT_DATE)=CURRENT_DATE", 1, 2, 3, 4);
     assertEquals(
         StatusCode.OK,
         session.execute(
@@ -111,16 +107,12 @@ final class EmbeddedRiverTemporalPredicateTest {
                 + "WHERE EXTRACT(DAY FROM events.day)=28",
             new QueryOpenResult()));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
-            "CREATE VIEW rejected_temporal_predicate AS SELECT id FROM events "
+            "CREATE VIEW temporal_predicate AS SELECT id FROM events "
                 + "WHERE EXTRACT(DAY FROM day)=28",
             result));
-    assertEquals(
-        StatusCode.CONFLICT,
-        session.beginQuery(
-            "SELECT id FROM rejected_temporal_predicate",
-            new QueryOpenResult()));
+    assertRows(session, "SELECT id FROM temporal_predicate ORDER BY id", 1);
 
     assertInvalidZoneBeforeRows(session, result);
     assertTerminalFailureAndCleanup(session, result);
@@ -327,19 +319,19 @@ final class EmbeddedRiverTemporalPredicateTest {
         "SELECT COUNT(*) FROM events WHERE day+0 BETWEEN "
             + "DATE '2024-02-28' AND DATE '2024-02-29'",
         "table");
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT id FROM events WHERE CAST(captured AS VARCHAR(32)) IN ("
-                + "'2024-02-28 10:00:00.000000+00:00')",
-            new QueryOpenResult()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT id FROM events WHERE CAST(captured AS VARCHAR(32)) BETWEEN "
-                + "'2024-02-28 00:00:00.000000+00:00' AND "
-                + "'2024-02-29 00:00:00.000000+00:00'",
-            new QueryOpenResult()));
+    assertIds(
+        session,
+        result,
+        "CAST(captured AS VARCHAR(32)) IN ("
+            + "'2024-02-28 10:00:00.000000+00:00')",
+        1);
+    assertIds(
+        session,
+        result,
+        "CAST(captured AS VARCHAR(32)) BETWEEN "
+            + "'2024-02-28 00:00:00.000000+00:00' AND "
+            + "'2024-02-29 00:00:00.000000+00:00'",
+        1);
   }
 
   private static void insertSpillRows(

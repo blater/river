@@ -8,7 +8,8 @@ ordered-scalar index format and direct-root expression checkpoint accepted on
 2026-08-15; compile-time view/derived projection composition and block-scoped
 cardinality-stage checkpoints accepted on 2026-08-15; bounded JDBC temporal-result mapping and remote-value
 validation checkpoint accepted on 2026-08-15; bounded engine/protocol typed-
-parameter checkpoint accepted on 2026-08-15
+parameter checkpoint accepted on 2026-08-15; bounded generalized-predicate
+P4A checkpoint accepted on 2026-08-20
 
 This profile is the semantic authority for River's admitted pre-V1 SQL
 surface. Parser acceptance is not support. A feature is supported only when
@@ -23,16 +24,22 @@ The current implementation supports `BIGINT`, `BOOLEAN`, `DECIMAL(p,s)`,
 current values. U02f has accepted raw temporal values through projection,
 joins, grouping, `HAVING`, distinct/order, sort spill, view/derived/nested
 queries, checkpoint-base/WAL replay, backup/restore, and warmed allocation
-paths. The direct-root expression checkpoint additionally supports bounded
-fixed-width exact-numeric and temporal projections and casts, one residual
-computed `WHERE` expression,
-including literal comparisons, `BETWEEN`, `IN`, and `NOT IN`; computed
-scalar-aggregate operands and filtering; and computed filtering before raw
-`GROUP BY`/grouped aggregates/`DISTINCT`. A raw direct-root grouping key may
+paths. The accepted P4A contract uses one bounded Boolean predicate program at
+the direct root and at every cardinality-changing derived-table or durable-view
+stage. Each program admits at most eight leaves, 32 shared scalar postfix
+nodes, 32 Boolean control nodes, depth 16, and 256 shared membership values.
+It implements `NOT`, parentheses, SQL `AND`-before-`OR` three-valued logic,
+bare Boolean truth, `IS [NOT] TRUE`/`FALSE`/`UNKNOWN`/`NULL`, and all six
+comparisons with scalar expressions on both sides. Inclusive `BETWEEN` bounds
+and `IN`/`NOT IN` members remain typed literal or parameter values. Generated
+`VARCHAR` ranges and membership compare owned text by Unicode scalar value.
+Computed scalar-aggregate operands and filtering, plus filtering before raw
+`GROUP BY`/grouped aggregates/`DISTINCT`, use that same program. A raw
+direct-root grouping key may
 also feed one column-bearing primitive computed aggregate operand. Direct-root
 scalar and grouped aggregates may apply a bounded post-aggregate `HAVING`
 clause. Up to eight structurally deduplicated aggregate invocations feed at
-most eight flat predicates sharing 32 postfix nodes and 256 membership values;
+most eight predicate leaves sharing 32 postfix nodes and 256 membership values;
 grouped execution reserves its first physical lane for the key and therefore
 admits seven operand-bearing invocations plus lane-free `COUNT(*)`. Predicates
 use SQL `AND`-before-`OR` three-valued logic and admit the six comparisons,
@@ -51,9 +58,10 @@ programs through selected aliases in durable views and ad-hoc derived-table
 chains, including `NULL`, current values, temporal text casts, and `AT TIME
 ZONE`. The flattened command executes through the accepted direct-root row
 path, and a selected composed output may use its materialized `ORDER BY` path.
-Exactly one column-bearing computed `WHERE` residual may appear in the
-outermost query over a composed chain, including a reference to a selected
-composed output; inner predicates remain raw. A chain may now contain
+Every block in a composed chain may apply its own bounded predicate before that
+block's projection, grouping, aggregate, `HAVING`, or distinct phase. A
+predicate may reference a selected composed output through the existing
+compile-time expression composition. A chain may contain
 `DISTINCT`, scalar aggregate, or grouped aggregate/`HAVING` cardinality stages
 in ad-hoc derived tables and durable views. Each aggregate stage retains the
 accepted direct-root aggregate-set and three-valued `HAVING` semantics, and
@@ -72,12 +80,16 @@ Durable view records use strict UTF-8 catalog format v2. V1, malformed,
 noncanonical, truncated, trailing, or unpaired UTF-16 input is rejected rather
 than adapted during this pre-V1 format replacement. Projection-only stored
 views retain their flattened point/index fast path; only a real cardinality
-barrier selects staged execution. Inner computed predicates, a second computed
-predicate, generated-text ranges or membership, JOIN/correlated/subquery
-contexts, and block-local computed predicates remain explicit
-`FEATURE_NOT_SUPPORTED`. Parenthesized arbitrary Boolean trees, more than one
-`AT TIME ZONE` operation per `HAVING` predicate, and aggregate stages inside
-join, nested, or correlated contexts also remain U02f work. A column may declare one
+barrier selects staged execution. Existing bounded raw JOIN and
+nested/correlated forms continue through their dedicated execution paths.
+JOIN predicates remain the admitted qualified raw conjunction shape, and
+nested/correlated column-to-column edges remain equality-only; auxiliary raw
+ranges, membership, NULL, and truth tests retain their prior admission.
+Computed JOIN expressions, generalized JOIN Boolean trees, and computed or
+generalized correlated/subquery predicates remain explicit
+`FEATURE_NOT_SUPPORTED` work for P4B and the correlation slice. More than one
+`AT TIME ZONE` operation in one scalar operand and aggregate stages inside a
+join, nested, or correlated context also remain U02f work. A column may declare one
 durable `CHECK` whose bounded expression references only that column. All
 column checks share a 32-node/table arena; exhausting it returns
 `RESOURCE_EXHAUSTED`. An admitted expression uses
@@ -87,14 +99,15 @@ comparison RHS is one typed literal. NULL/unknown passes, false is `23514`,
 and expression overflow retains its exact status. Current values, `AT TIME
 ZONE`, session-dependent local/zoned casts, text, cross-column and table-level
 check expressions, membership/ranges, and subqueries remain deferred. Direct
-root mutations admit one shared 32-node fixed-width postfix arena: source-free
-`INSERT` values and primary keys, old-row `UPDATE` assignments with simultaneous
-assignment semantics, and one computed residual `WHERE` for `UPDATE` or
-`DELETE`. Exact numeric and temporal operations, typed parameters and NULLs,
+root mutations admit one shared 32-node fixed-width assignment arena:
+source-free `INSERT` values and primary keys and old-row `UPDATE` assignments
+with simultaneous assignment semantics. `UPDATE` and `DELETE` filtering uses
+the common bounded Boolean predicate program. Exact numeric and temporal
+operations, typed parameters and NULLs,
 statement-stable current values, and explicit/session zone conversions use the
 same bound evaluator as row projections. `INSERT` column references, generated
-text results, a second computed predicate, joins, nested/derived mutation
-sources, and computed DML outside direct root remain `FEATURE_NOT_SUPPORTED`.
+text assignment results, joins, nested/derived mutation sources, and computed
+DML outside direct root remain `FEATURE_NOT_SUPPORTED`.
 NULL assignments still obey target nullability, and identity reservation keeps
 the existing gap-on-failure sequence policy while statement failure rolls back
 row, index, WAL, check, unique, and foreign-key effects. The final

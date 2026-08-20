@@ -280,6 +280,11 @@ final class EmbeddedRiverTemporalProjectionTest {
         session.execute(
             "SELECT y FROM temporal_projection WHERE y=2024 AND id=1", result));
     assertEquals(2024, result.valueAt(0));
+    assertRowCount(
+        session,
+        result,
+        "SELECT id FROM block_predicate ORDER BY id",
+        1);
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }
@@ -437,28 +442,25 @@ final class EmbeddedRiverTemporalProjectionTest {
     assertStablePredicateCurrent(session, result);
     assertInvalidComposedZone(session, result);
     assertComposedPredicateFailure(session, result);
+    assertRowCount(
+        session,
+        result,
+        "SELECT id FROM temporal_projection WHERE rendered BETWEEN "
+            + "'2024-01-01' AND '2024-12-31'",
+        4);
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT id FROM temporal_projection WHERE rendered BETWEEN "
-                + "'2024-01-01' AND '2024-12-31'",
-            new QueryOpenResult()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
-            "CREATE VIEW rejected_block_predicate AS SELECT id FROM moments "
+            "CREATE VIEW block_predicate AS SELECT id FROM moments "
                 + "WHERE EXTRACT(DAY FROM day)=29",
             result));
-    assertEquals(
-        StatusCode.CONFLICT,
-        session.beginQuery(
-            "SELECT id FROM rejected_block_predicate", new QueryOpenResult()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT id FROM (SELECT id FROM moments WHERE "
-                + "EXTRACT(DAY FROM day)=29) q",
-            new QueryOpenResult()));
+    assertRowCount(session, result, "SELECT id FROM block_predicate", 1);
+    assertRowCount(
+        session,
+        result,
+        "SELECT id FROM (SELECT id FROM moments WHERE "
+            + "EXTRACT(DAY FROM day)=29) q",
+        1);
   }
 
   private static void assertStablePredicateCurrent(

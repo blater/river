@@ -48,12 +48,13 @@ final class SqlPointCommandExecutor {
           ? dml.execute(bound.command, bound, result)
           : queries.executePointQuery(result);
     }
+    queries.finishPointStatement();
     return status;
   }
 
   private StatusCode prepareQuery() {
     if (bound.query.hasNestedTopology()) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
+      return nestedPointStatus();
     }
     StatusCode status = views.resolve(session, bound, binder);
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
@@ -66,6 +67,13 @@ final class SqlPointCommandExecutor {
     if (blockPipeline) return status;
     return status.isOk()
         ? binder.bindDataCommand(bound.command, bound.query, bound) : status;
+  }
+
+  private StatusCode nestedPointStatus() {
+    return bound.query.hasScalarPredicate()
+            || bound.query.hasMembershipPredicate()
+        ? StatusCode.FEATURE_NOT_SUPPORTED
+        : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
   private StatusCode prepareMutation() {
@@ -95,6 +103,7 @@ final class SqlPointCommandExecutor {
 
   private static boolean isPointQuery(SqlCommandType type) {
     return type == SqlCommandType.SELECT
+        || type == SqlCommandType.SCAN
         || type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE
         || SqlBinder.isValueAggregate(type);

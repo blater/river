@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
-import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlQuery;
 
 /** Statement-lifetime query syntax snapshot consumed after binding. */
@@ -15,16 +14,11 @@ final class BoundSqlQuery {
   private final int[] scalarPredicates = new int[MAXIMUM_BLOCKS];
   private final int[] existencePredicates = new int[MAXIMUM_BLOCKS];
   private final int[] membershipPredicates = new int[MAXIMUM_BLOCKS];
+  private final SqlNestedTopology topology = new SqlNestedTopology();
   private int blockCount;
   private int sourcePlanDepth;
   private long executableGeneration;
   private long nextGeneration;
-  private boolean correlatedScalar;
-  private boolean correlatedExistence;
-  private boolean correlatedMembership;
-  private boolean correlatedNestedChain;
-  private boolean recursiveNestedChain;
-  private boolean recursiveRootCorrelated;
   private boolean explain;
   private boolean analyze;
 
@@ -38,19 +32,14 @@ final class BoundSqlQuery {
 
   void reset() {
     for (int index = 0; index < blockCount; index++) {
-      blocks[index].resetBinding();
+      blocks[index].resetCaptured();
     }
     blockCount = 0;
     sourcePlanDepth = 0;
     executableGeneration = 0;
     explain = false;
     analyze = false;
-    correlatedScalar = false;
-    correlatedExistence = false;
-    correlatedMembership = false;
-    correlatedNestedChain = false;
-    recursiveNestedChain = false;
-    recursiveRootCorrelated = false;
+    topology.reset();
     for (int index = 0; index < blocks.length; index++) {
       scalarPredicates[index] = -1;
       existencePredicates[index] = 0;
@@ -60,12 +49,7 @@ final class BoundSqlQuery {
 
   void beginBinding(TableDefinition rootTable) {
     executableGeneration = 0;
-    correlatedScalar = false;
-    correlatedExistence = false;
-    correlatedMembership = false;
-    correlatedNestedChain = false;
-    recursiveNestedChain = false;
-    recursiveRootCorrelated = false;
+    topology.reset();
     for (int index = 0; index < blockCount; index++) {
       blocks[index].resetBinding();
     }
@@ -89,27 +73,7 @@ final class BoundSqlQuery {
     return executableGeneration;
   }
 
-  void setCorrelationTopology(
-      boolean scalar,
-      boolean existence,
-      boolean membership,
-      boolean nestedChain,
-      boolean recursiveChain,
-      boolean rootCorrelated) {
-    correlatedScalar = scalar;
-    correlatedExistence = existence;
-    correlatedMembership = membership;
-    correlatedNestedChain = nestedChain;
-    recursiveNestedChain = recursiveChain;
-    recursiveRootCorrelated = rootCorrelated;
-  }
-
-  boolean correlatedScalar() { return correlatedScalar; }
-  boolean correlatedExistence() { return correlatedExistence; }
-  boolean correlatedMembership() { return correlatedMembership; }
-  boolean correlatedNestedChain() { return correlatedNestedChain; }
-  boolean recursiveNestedChain() { return recursiveNestedChain; }
-  boolean recursiveRootCorrelated() { return recursiveRootCorrelated; }
+  SqlNestedTopology topology() { return topology; }
 
   StatusCode capture(SqlCommand root, SqlQuery query) {
     reset();
@@ -120,18 +84,24 @@ final class BoundSqlQuery {
     analyze = query.isAnalyze();
     int parserBlockCount = query.blockCount();
     sourcePlanDepth = query.sourcePlanDepth();
-    boolean nestedTopology = false;
-    for (int index = 0; !nestedTopology && index < parserBlockCount; index++) {
-      nestedTopology = query.hasScalarPredicate(index)
-          || query.hasExistencePredicate(index)
-          || query.hasMembershipPredicate(index);
-    }
+    boolean nestedTopology = hasNestedTopology(query, parserBlockCount);
     blockCount = nestedTopology ? Math.max(1, parserBlockCount) : 1;
-    StatusCode status = blocks[0].capture(root);
-    for (int index = 0;
-        nestedTopology && status.isOk() && index < parserBlockCount;
-        index++) {
-      status = blocks[index].capture(query.block(index));
+    StatusCode status = blocks[0].capture(root, nestedTopology);
+    if (nestedTopology && status.isOk()) {
+      status = captureNestedBlocks(query, parserBlockCount);
+    }
+    // The compiled root can differ from query block zero after view/derived
+    // expansion; it is the authoritative executable root.
+    if (status.isOk()) {
+      blocks[0].blockIndex = 0;
+    }
+    return status.isOk() ? blocks[0].capture(root, nestedTopology) : status;
+  }
+
+  private StatusCode captureNestedBlocks(SqlQuery query, int parserBlockCount) {
+    for (int index = 0; index < parserBlockCount; index++) {
+      StatusCode status = blocks[index].capture(query.block(index), true);
+      if (!status.isOk()) return status;
       blocks[index].blockIndex = index;
       scalarPredicates[index] = query.scalarPredicate(index);
       existencePredicates[index] = query.hasExistencePredicate(index)
@@ -141,12 +111,15 @@ final class BoundSqlQuery {
       blocks[index].membershipNegated = query.hasMembershipPredicate(index)
           && query.membershipNegated(index);
     }
-    // The compiled root can differ from query block zero after view/derived
-    // expansion; it is the authoritative executable root.
-    if (status.isOk()) {
-      blocks[0].blockIndex = 0;
+    return StatusCode.OK;
+  }
+
+  private static boolean hasNestedTopology(SqlQuery query, int count) {
+    for (int index = 0; index < count; index++) {
+      if (query.hasScalarPredicate(index) || query.hasExistencePredicate(index)
+          || query.hasMembershipPredicate(index)) return true;
     }
-    return status.isOk() ? blocks[0].capture(root) : status;
+    return false;
   }
 
   Block root() {
@@ -242,45 +215,21 @@ final class BoundSqlQuery {
   }
 
   static final class Block {
-    private final Name[] columnNames = new Name[SqlCommand.MAXIMUM_COLUMNS];
-    private final Name[] columnTables = new Name[SqlCommand.MAXIMUM_COLUMNS];
-    private final Name[] columnOutputs = new Name[SqlCommand.MAXIMUM_COLUMNS];
-    private final Name[] columnAliases = new Name[SqlCommand.MAXIMUM_COLUMNS];
+    private final SqlBoundName[] columnNames = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
+    private final SqlBoundName[] columnTables = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
+    private final SqlBoundName[] columnOutputs = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
+    private final SqlBoundName[] columnAliases = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
     private final boolean[] nullProjections = new boolean[SqlCommand.MAXIMUM_COLUMNS];
-    private final Name[] predicateColumns = new Name[SqlCommand.MAXIMUM_PREDICATES];
-    private final Name[] predicateTables = new Name[SqlCommand.MAXIMUM_PREDICATES];
-    private final Name[] predicateValueColumns = new Name[SqlCommand.MAXIMUM_PREDICATES];
-    private final Name[] predicateValueTables = new Name[SqlCommand.MAXIMUM_PREDICATES];
-    private final SqlComparison[] comparisons = new SqlComparison[SqlCommand.MAXIMUM_PREDICATES];
-    private final int[] predicateTypes = new int[SqlCommand.MAXIMUM_PREDICATES];
-    private final long[] predicateValues = new long[SqlCommand.MAXIMUM_PREDICATES];
-    private final long[] predicateLowers = new long[SqlCommand.MAXIMUM_PREDICATES];
-    private final long[] predicateUppers = new long[SqlCommand.MAXIMUM_PREDICATES];
-    private final boolean[] nullPredicates = new boolean[SqlCommand.MAXIMUM_PREDICATES];
-    private final boolean[] negatedNullPredicates = new boolean[SqlCommand.MAXIMUM_PREDICATES];
-    private final boolean[] columnPredicates = new boolean[SqlCommand.MAXIMUM_PREDICATES];
-    private final boolean[] disjunctionPredicates = new boolean[SqlCommand.MAXIMUM_PREDICATES];
-    private final int[] membershipCounts = new int[SqlCommand.MAXIMUM_PREDICATES];
-    private final boolean[] membershipNulls = new boolean[SqlCommand.MAXIMUM_PREDICATES];
-    private final int[] resolvedPredicateColumns = new int[SqlCommand.MAXIMUM_PREDICATES];
-    private final int[] resolvedPredicateValueColumns =
-        new int[SqlCommand.MAXIMUM_PREDICATES];
-    private final int[] resolvedPredicateValueScopes =
-        new int[SqlCommand.MAXIMUM_PREDICATES];
-    private final long[] membershipValues = new long[
-        SqlCommand.MAXIMUM_PREDICATES * SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES];
-    private final byte[] textBytes = new byte[SqlCommand.MAXIMUM_TEXT_BYTES];
+    private final SqlNestedPredicatePlan predicates = new SqlNestedPredicatePlan();
     private SqlCommandType type;
-    private final Name tableName = new Name();
-    private final Name tableAlias = new Name();
-    private final Name joinTableName = new Name();
-    private final Name joinTableAlias = new Name();
-    private final Name joinOuterColumnName = new Name();
-    private final Name joinInnerColumnName = new Name();
-    private final Name orderColumnName = new Name();
+    private final SqlBoundName tableName = new SqlBoundName();
+    private final SqlBoundName tableAlias = new SqlBoundName();
+    private final SqlBoundName joinTableName = new SqlBoundName();
+    private final SqlBoundName joinTableAlias = new SqlBoundName();
+    private final SqlBoundName joinOuterColumnName = new SqlBoundName();
+    private final SqlBoundName joinInnerColumnName = new SqlBoundName();
+    private final SqlBoundName orderColumnName = new SqlBoundName();
     private int columnCount;
-    private int predicateCount;
-    private int textLength;
     private long rowLimit;
     private boolean selectAll;
     private boolean ordered;
@@ -297,44 +246,24 @@ final class BoundSqlQuery {
 
     Block() {
       for (int index = 0; index < SqlCommand.MAXIMUM_COLUMNS; index++) {
-        columnNames[index] = new Name();
-        columnTables[index] = new Name();
-        columnOutputs[index] = new Name();
-        columnAliases[index] = new Name();
-        predicateColumns[index] = new Name();
-        predicateTables[index] = new Name();
-        predicateValueColumns[index] = new Name();
-        predicateValueTables[index] = new Name();
+        columnNames[index] = new SqlBoundName();
+        columnTables[index] = new SqlBoundName();
+        columnOutputs[index] = new SqlBoundName();
+        columnAliases[index] = new SqlBoundName();
       }
     }
 
-    StatusCode capture(SqlCommand source) {
+    StatusCode capture(SqlCommand source, boolean captureNestedPredicates) {
       if (source == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
+      predicates.resetCaptured();
       for (int index = 0; index < SqlCommand.MAXIMUM_COLUMNS; index++) {
         columnNames[index].copyFrom("");
         columnTables[index].copyFrom("");
         columnOutputs[index].copyFrom("");
         columnAliases[index].copyFrom("");
         nullProjections[index] = false;
-      }
-      for (int index = 0; index < SqlCommand.MAXIMUM_PREDICATES; index++) {
-        predicateColumns[index].copyFrom("");
-        predicateTables[index].copyFrom("");
-        predicateValueColumns[index].copyFrom("");
-        predicateValueTables[index].copyFrom("");
-        comparisons[index] = null;
-        predicateTypes[index] = 0;
-        predicateValues[index] = 0;
-        predicateLowers[index] = 0;
-        predicateUppers[index] = 0;
-        nullPredicates[index] = false;
-        negatedNullPredicates[index] = false;
-        columnPredicates[index] = false;
-        disjunctionPredicates[index] = false;
-        membershipCounts[index] = 0;
-        membershipNulls[index] = false;
       }
       type = source.type();
       tableName.copyFrom(source.tableName());
@@ -345,7 +274,6 @@ final class BoundSqlQuery {
       joinInnerColumnName.copyFrom(source.joinInnerColumnName());
       orderColumnName.copyFrom(source.orderColumnName());
       columnCount = source.columnCount();
-      predicateCount = source.predicateCount();
       rowLimit = source.rowLimit();
       selectAll = source.isSelectAll();
       ordered = source.isOrdered();
@@ -358,50 +286,12 @@ final class BoundSqlQuery {
         columnAliases[index].copyFrom(source.columnAlias(index));
         nullProjections[index] = source.isNullProjection(index);
       }
-      for (int index = 0; index < predicateCount; index++) {
-        predicateColumns[index].copyFrom(source.predicateColumnName(index));
-        predicateTables[index].copyFrom(source.predicateTableName(index));
-        predicateValueColumns[index].copyFrom(source.predicateValueColumnName(index));
-        predicateValueTables[index].copyFrom(source.predicateValueTableName(index));
-        comparisons[index] = source.comparison(index);
-        predicateTypes[index] = source.predicateTypeDescriptor(index);
-        predicateValues[index] = source.predicateValue(index);
-        predicateLowers[index] = source.predicateLowerInclusive(index);
-        predicateUppers[index] = source.predicateUpperExclusive(index);
-        nullPredicates[index] = source.isNullPredicate(index);
-        negatedNullPredicates[index] = source.isNullPredicateNegated(index);
-        columnPredicates[index] = source.isColumnPredicate(index);
-        disjunctionPredicates[index] = source.predicateStartsDisjunction(index);
-        membershipCounts[index] = source.literalMembershipCount(index);
-        membershipNulls[index] = source.literalMembershipHasNull(index);
-        int base = index * SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES;
-        for (int value = 0; value < membershipCounts[index]; value++) {
-          membershipValues[base + value] = source.literalMembershipValue(index, value);
-        }
-      }
-      textLength = 0;
-      for (int index = 0; index < predicateCount; index++) {
-        textLength = Math.max(textLength, textEnd(source, predicateValues[index]));
-        textLength = Math.max(textLength, textEnd(source, predicateLowers[index]));
-        textLength = Math.max(textLength, textEnd(source, predicateUppers[index]));
-        int base = index * SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES;
-        for (int value = 0; value < membershipCounts[index]; value++) {
-          textLength = Math.max(textLength, textEnd(source, membershipValues[base + value]));
-        }
-      }
-      if (textLength > textBytes.length) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      for (int predicate = 0; predicate < predicateCount; predicate++) {
-        copyText(source, predicateValues[predicate]);
-        copyText(source, predicateLowers[predicate]);
-        copyText(source, predicateUppers[predicate]);
-        int base = predicate * SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES;
-        for (int value = 0; value < membershipCounts[predicate]; value++) {
-          copyText(source, membershipValues[base + value]);
-        }
-      }
-      return StatusCode.OK;
+      return captureNestedPredicates ? predicates.capture(source) : StatusCode.OK;
+    }
+
+    private void resetCaptured() {
+      predicates.resetCaptured();
+      resetBinding();
     }
 
     void resetBinding() {
@@ -415,11 +305,7 @@ final class BoundSqlQuery {
       projectionType = 0;
       boundGeneration = 0;
       correlated = false;
-      for (int index = 0; index < resolvedPredicateColumns.length; index++) {
-        resolvedPredicateColumns[index] = -1;
-        resolvedPredicateValueColumns[index] = -1;
-        resolvedPredicateValueScopes[index] = -1;
-      }
+      predicates.resetBinding();
     }
 
     void bindRootTable(TableDefinition rootTable) {
@@ -442,9 +328,7 @@ final class BoundSqlQuery {
     }
 
     void setPredicate(int index, int column, int valueColumn, int valueScope) {
-      resolvedPredicateColumns[index] = column;
-      resolvedPredicateValueColumns[index] = valueColumn;
-      resolvedPredicateValueScopes[index] = valueScope;
+      predicates.setResolved(index, column, valueColumn, valueScope);
       correlated |= valueScope >= 0 && valueScope < blockIndex;
     }
 
@@ -453,27 +337,16 @@ final class BoundSqlQuery {
     TableDefinition table() { return table; }
     int projection() { return projection; }
     int projectionType() { return projectionType; }
-    int resolvedPredicateColumn(int index) { return resolvedPredicateColumns[index]; }
-    int resolvedPredicateValueColumn(int index) { return resolvedPredicateValueColumns[index]; }
-    int resolvedPredicateValueScope(int index) { return resolvedPredicateValueScopes[index]; }
+    SqlNestedPredicatePlan predicates() { return predicates; }
+    int predicateCount() { return predicates.count(); }
+    io.riverdb.sql.SqlComparison comparison(int index) {
+      return predicates.comparison(index);
+    }
+    boolean isNullPredicate(int index) { return predicates.isNullTest(index); }
+    boolean isNullPredicateNegated(int index) { return predicates.isNullTestNegated(index); }
+    boolean isColumnPredicate(int index) { return predicates.isColumnValue(index); }
     int blockIndex() { return blockIndex; }
     boolean isCorrelated() { return correlated; }
-
-    private void copyText(SqlCommand source, long handle) {
-      int length = source.textByteLength(handle);
-      if (length < 0) {
-        return;
-      }
-      int offset = (int) (handle >>> 32);
-      for (int index = 0; index < length; index++) {
-        textBytes[offset + index] = source.textByteAt(handle, index);
-      }
-    }
-
-    private static int textEnd(SqlCommand source, long handle) {
-      int length = source.textByteLength(handle);
-      return length < 0 ? 0 : (int) (handle >>> 32) + length;
-    }
 
     SqlCommandType type() { return type; }
     CharSequence tableName() { return tableName; }
@@ -490,87 +363,11 @@ final class BoundSqlQuery {
     CharSequence columnOutputName(int index) { return columnOutputs[index]; }
     CharSequence columnAlias(int index) { return columnAliases[index]; }
     boolean isNullProjection(int index) { return nullProjections[index]; }
-    int predicateCount() { return predicateCount; }
-    CharSequence predicateColumnName(int index) { return predicateColumns[index]; }
-    CharSequence predicateTableName(int index) { return predicateTables[index]; }
-    CharSequence predicateValueColumnName(int index) { return predicateValueColumns[index]; }
-    CharSequence predicateValueTableName(int index) { return predicateValueTables[index]; }
-    SqlComparison comparison(int index) { return comparisons[index]; }
-    int predicateTypeDescriptor(int index) { return predicateTypes[index]; }
-    long predicateValue(int index) { return predicateValues[index]; }
-    long predicateLowerInclusive(int index) { return predicateLowers[index]; }
-    long predicateUpperExclusive(int index) { return predicateUppers[index]; }
-    boolean isNullPredicate(int index) { return nullPredicates[index]; }
-    boolean isNullPredicateNegated(int index) { return negatedNullPredicates[index]; }
-    boolean isColumnPredicate(int index) { return columnPredicates[index]; }
-    boolean predicateStartsDisjunction(int index) { return disjunctionPredicates[index]; }
-    boolean hasDisjunction() {
-      for (int index = 0; index < predicateCount; index++) {
-        if (disjunctionPredicates[index]) return true;
-      }
-      return false;
-    }
-    boolean isEqualityPredicate(int index) { return comparisons[index] == SqlComparison.EQUAL; }
-    boolean isRangePredicate(int index) { return comparisons[index] == SqlComparison.HALF_OPEN_RANGE; }
-    boolean isLiteralMembership(int index) {
-      return comparisons[index] == SqlComparison.IN || comparisons[index] == SqlComparison.NOT_IN;
-    }
-    int literalMembershipCount(int index) { return membershipCounts[index]; }
-    long literalMembershipValue(int index, int value) {
-      return membershipValues[index * SqlCommand.MAXIMUM_LITERAL_MEMBERSHIP_VALUES + value];
-    }
-    boolean literalMembershipHasNull(int index) { return membershipNulls[index]; }
     boolean isSelectAll() { return selectAll; }
     boolean isOrdered() { return ordered; }
     boolean isDescendingOrder() { return descending; }
     boolean isLeftJoin() { return leftJoin; }
     long rowLimit() { return rowLimit; }
-    int textByteLength(long handle) {
-      int offset = (int) (handle >>> 32);
-      int length = (int) handle;
-      return offset >= 0 && length >= 0 && offset <= textLength - length ? length : -1;
-    }
-    byte textByteAt(long handle, int index) {
-      int length = textByteLength(handle);
-      return index >= 0 && index < length ? textBytes[(int) (handle >>> 32) + index] : 0;
-    }
   }
 
-  private static final class Name implements CharSequence {
-    private final char[] value = new char[64];
-    private int length;
-
-    void copyFrom(CharSequence source) {
-      length = Math.min(source == null ? 0 : source.length(), value.length);
-      for (int index = 0; index < length; index++) {
-        value[index] = source.charAt(index);
-      }
-    }
-
-    @Override
-    public int length() {
-      return length;
-    }
-
-    @Override
-    public char charAt(int index) {
-      if (index < 0 || index >= length) {
-        throw new IndexOutOfBoundsException(index);
-      }
-      return value[index];
-    }
-
-    @Override
-    public CharSequence subSequence(int start, int end) {
-      if (start < 0 || end < start || end > length) {
-        throw new IndexOutOfBoundsException(start);
-      }
-      return new String(value, start, end - start);
-    }
-
-    @Override
-    public String toString() {
-      return new String(value, 0, length);
-    }
-  }
 }

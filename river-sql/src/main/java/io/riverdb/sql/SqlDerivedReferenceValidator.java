@@ -5,6 +5,8 @@ import io.riverdb.base.error.StatusCode;
 /** Validates names and reachability across adjacent derived projection blocks. */
 final class SqlDerivedReferenceValidator {
   private final SqlQuery query;
+  private final SqlDerivedPredicateReferences predicates =
+      new SqlDerivedPredicateReferences();
 
   SqlDerivedReferenceValidator(SqlQuery ownedQuery) {
     query = ownedQuery;
@@ -15,7 +17,7 @@ final class SqlDerivedReferenceValidator {
     SqlCommand inner = blockIndex + 1 < query.blockCount()
         ? query.block(blockIndex + 1) : null;
     if (!validProjectionReferences(block, inner)
-        || !validPredicates(block, inner)
+        || !predicates.valid(block, inner)
         || !validOrder(block, inner)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -40,21 +42,13 @@ final class SqlDerivedReferenceValidator {
     return false;
   }
 
-  private static boolean references(SqlCommand outer, CharSequence output) {
+  private boolean references(SqlCommand outer, CharSequence output) {
     for (int projection = 0; projection < outer.columnCount(); projection++) {
       SqlScalarExpression expression = outer.projectionExpression(projection);
-      if (references(outer, expression, output)) return true;
+      if (expression != null && expression.isAvailable()
+          && references(outer, expression, output)) return true;
     }
-    for (int predicate = 0; predicate < outer.predicateCount(); predicate++) {
-      SqlScalarExpression expression = outer.predicateExpression(predicate);
-      if (expression != null && references(outer, expression, output)
-          || expression == null
-              && SqlDerivedColumnResolver.sameName(
-                  outer.predicateColumnName(predicate), output)) {
-        return true;
-      }
-    }
-    return false;
+    return predicates.references(outer, output);
   }
 
   private static boolean references(
@@ -96,26 +90,6 @@ final class SqlDerivedReferenceValidator {
     int invocation = block.aggregateOutputInvocation(output);
     return invocation >= 0
         && block.aggregateKind(invocation) == SqlAggregateKind.COUNT;
-  }
-
-  private static boolean validPredicates(SqlCommand block, SqlCommand inner) {
-    for (int predicate = 0; predicate < block.predicateCount(); predicate++) {
-      SqlScalarExpression expression = block.predicateExpression(predicate);
-      if (expression != null) {
-        if (!validExpressionReferences(block, inner, expression)) return false;
-        continue;
-      }
-      if (!SqlDerivedColumnResolver.validQualifier(
-              block.predicateTableName(predicate), block)
-          || block.isColumnPredicate(predicate)
-              && !SqlDerivedColumnResolver.validQualifier(
-                  block.predicateValueTableName(predicate), block)
-          || inner != null
-              && !outputContains(inner, block.predicateColumnName(predicate))) {
-        return false;
-      }
-    }
-    return true;
   }
 
   private static boolean validExpressionReferences(

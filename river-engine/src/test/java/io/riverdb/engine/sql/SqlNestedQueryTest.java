@@ -63,6 +63,12 @@ final class SqlNestedQueryTest {
             "SELECT o.id FROM names o WHERE EXISTS "
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             result));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        session.execute(
+            "SELECT o.id FROM names o WHERE o.id="
+                + "(SELECT i.id FROM names i WHERE i.id=o.id)",
+            result));
     assertEquals(StatusCode.OK, explain.reset());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,

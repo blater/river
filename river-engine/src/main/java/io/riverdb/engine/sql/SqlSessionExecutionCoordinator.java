@@ -17,9 +17,9 @@ final class SqlSessionExecutionCoordinator {
   private final SqlParameterSetSource parameterSource = new SqlParameterSetSource();
   private final BoundSqlStatement bound = new BoundSqlStatement();
   private final SqlBinder binder = new SqlBinder();
-  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder();
   private final SqlExpressionEvaluator expressions = new SqlExpressionEvaluator();
   private final SqlTemporalContext temporal = new SqlTemporalContext();
+  private final SqlBlockPlanBinder blockBinder = new SqlBlockPlanBinder(temporal);
   private final SqlRowProjectionEvaluator rowExpressions =
       new SqlRowProjectionEvaluator(expressions, temporal);
   private final SqlViewExpander viewExpander = new SqlViewExpander();

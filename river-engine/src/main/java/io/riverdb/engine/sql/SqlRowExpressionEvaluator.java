@@ -14,8 +14,7 @@ final class SqlRowExpressionEvaluator {
   private final long[] values = new long[SqlScalarExpression.MAXIMUM_NODES];
   private final int[] descriptors = new int[SqlScalarExpression.MAXIMUM_NODES];
   private final boolean[] nulls = new boolean[SqlScalarExpression.MAXIMUM_NODES];
-  private final char[] text = new char[510];
-  private final TextView textView = new TextView(text);
+  private final SqlRowTextScratch text = new SqlRowTextScratch();
   private final LocalTemporal.Value temporalValue = new LocalTemporal.Value();
   private final LocalTemporalCast.TextResult textResult = new LocalTemporalCast.TextResult();
   private final SqlTemporalContext.LongResult longResult = new SqlTemporalContext.LongResult();
@@ -23,7 +22,6 @@ final class SqlRowExpressionEvaluator {
   private final SqlExpressionEvaluator columns;
   private final SqlTemporalContext temporal;
   private int size;
-  private int textLength;
   private long aggregateValue;
   private boolean aggregateNull;
   private long[] aggregateValues;
@@ -53,8 +51,43 @@ final class SqlRowExpressionEvaluator {
     if (!nulls[0]
         && SqlTypeDescriptor.typeId(descriptors[0]) == SqlTypeDescriptor.TYPE_ID_VARCHAR
         && programs.rawColumn(projection) < 0) {
-      result.setText(projection, text, textLength);
+      result.setText(projection, text.writableCharacters(), text.length());
     }
+    return StatusCode.OK;
+  }
+
+  void beginPredicateOperand() {
+    size = 0;
+    text.clear();
+  }
+
+  StatusCode predicateOperandNode(
+      SqlCommand command,
+      int operator,
+      long operand,
+      int descriptor,
+      SqlTemporalZonePlan zone,
+      long primaryKey,
+      HeapRowResult source,
+      TableDefinition definition,
+      SqlBlockRow blockSource) {
+    if (operator == SqlScalarExpression.COLUMN && blockSource != null) {
+      return blockColumn(blockSource, (int) operand, descriptor);
+    }
+    return leaf(operator)
+        ? leaf(command, operator, operand, descriptor,
+            primaryKey, source, definition)
+        : binaryOperator(operator) ? binary(operator, descriptor)
+        : unary(operator, operand, descriptor, zone);
+  }
+
+  StatusCode finishPredicateOperand(SqlPredicateOperand result) {
+    if (size != 1) {
+      reset();
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.capture(this);
+    reset();
     return StatusCode.OK;
   }
 
@@ -67,7 +100,7 @@ final class SqlRowExpressionEvaluator {
       HeapRowResult source,
       TableDefinition definition) {
     size = 0;
-    textLength = 0;
+    text.clear();
     StatusCode status = StatusCode.OK;
     for (int node = 0;
         status.isOk() && node < programs.mutationNodeCount(expression);
@@ -100,7 +133,7 @@ final class SqlRowExpressionEvaluator {
       SqlBlockRow source,
       SqlBlockRow result) {
     size = 0;
-    textLength = 0;
+    text.clear();
     StatusCode status = StatusCode.OK;
     for (int node = 0;
         status.isOk() && node < programs.nodeCount(projection); node++) {
@@ -131,7 +164,7 @@ final class SqlRowExpressionEvaluator {
     if (nulls[0]) result.setNull(projection); else result.setValue(projection, values[0]);
     if (!nulls[0]
         && SqlTypeDescriptor.typeId(descriptors[0]) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      result.setText(projection, text, 0, textLength);
+      result.setText(projection, text.writableCharacters(), 0, text.length());
     }
     return StatusCode.OK;
   }
@@ -143,7 +176,7 @@ final class SqlRowExpressionEvaluator {
       SqlTemporalZonePlan zone,
       SqlBlockRow source) {
     size = 0;
-    textLength = 0;
+    text.clear();
     StatusCode status = StatusCode.OK;
     for (int node = 0;
         status.isOk() && node < programs.nodeCount(projection); node++) {
@@ -171,11 +204,8 @@ final class SqlRowExpressionEvaluator {
     descriptors[size] = descriptor;
     if (!nulls[size]
         && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      textLength = source.textLength(column);
-      if (textLength > text.length) return StatusCode.RESOURCE_EXHAUSTED;
-      for (int index = 0; index < textLength; index++) {
-        text[index] = source.textCharacter(column, index);
-      }
+      StatusCode status = text.loadBlock(source, column);
+      if (!status.isOk()) return status;
     }
     size++;
     return StatusCode.OK;
@@ -193,43 +223,28 @@ final class SqlRowExpressionEvaluator {
     return evaluate(command, programs, projection, zone, 0, null, null);
   }
 
-  StatusCode evaluateHaving(
-      SqlCommand command,
-      SqlBoundHavingPrograms programs,
-      int predicate,
-      SqlTemporalZonePlan zone,
+  void beginHavingPredicateOperand(
       long[] finalizedValues,
       boolean[] finalizedNulls,
       long finalizedGroup,
       boolean finalizedGroupNull) {
+    beginPredicateOperand();
     aggregateValues = finalizedValues;
     aggregateNulls = finalizedNulls;
     groupValue = finalizedGroup;
     groupNull = finalizedGroupNull;
-    size = 0;
-    textLength = 0;
-    StatusCode status = StatusCode.OK;
-    for (int node = 0;
-        status.isOk() && node < programs.nodeCount(predicate); node++) {
-      int operator = programs.operator(predicate, node);
-      status = leaf(operator)
-          ? havingLeaf(
-              command,
-              operator,
-              programs.operand(predicate, node),
-              programs.descriptor(predicate, node))
-          : binaryOperator(operator)
-              ? binary(operator, programs.descriptor(predicate, node))
-              : unary(
-                  operator,
-                  programs.operand(predicate, node),
-                  programs.descriptor(predicate, node),
-                  zone);
-    }
-    aggregateValues = null;
-    aggregateNulls = null;
-    return !status.isOk() || size == 1
-        ? status : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  StatusCode predicateHavingOperandNode(
+      SqlCommand command,
+      int operator,
+      long operand,
+      int descriptor,
+      SqlTemporalZonePlan zone) {
+    return leaf(operator)
+        ? havingLeaf(command, operator, operand, descriptor)
+        : binaryOperator(operator) ? binary(operator, descriptor)
+        : unary(operator, operand, descriptor, zone);
   }
 
   private StatusCode havingLeaf(
@@ -266,7 +281,7 @@ final class SqlRowExpressionEvaluator {
       HeapRowResult source,
       TableDefinition definition) {
     size = 0;
-    textLength = 0;
+    text.clear();
     StatusCode status = StatusCode.OK;
     for (int node = 0; status.isOk() && node < programs.nodeCount(projection); node++) {
       int operator = programs.operator(projection, node);
@@ -289,15 +304,15 @@ final class SqlRowExpressionEvaluator {
   boolean resultNull() { return nulls[0]; }
   long resultValue() { return values[0]; }
   int resultDescriptor() { return descriptors[0]; }
-  int resultTextLength() { return textLength; }
-  char resultTextCharacter(int index) { return text[index]; }
+  int resultTextLength() { return text.length(); }
+  char resultTextCharacter(int index) { return text.charAt(index); }
 
   void seedResult(long value, int descriptor, boolean nullValue) {
     values[0] = value;
     descriptors[0] = descriptor;
     nulls[0] = nullValue;
     size = 1;
-    textLength = 0;
+    text.clear();
   }
 
   private StatusCode leaf(
@@ -345,30 +360,11 @@ final class SqlRowExpressionEvaluator {
         && !nulls[size]
         && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       status = operator == SqlScalarExpression.LITERAL
-          ? loadLiteralText(command, operand) : loadRowText(source, values[size]);
+          ? text.loadLiteral(command, operand)
+          : text.loadRow(source, definition, values[size]);
     }
     size++;
     return status;
-  }
-
-  private StatusCode loadLiteralText(SqlCommand command, long handle) {
-    int length = command.textByteLength(handle);
-    if (length < 0 || length > text.length) return StatusCode.RESOURCE_EXHAUSTED;
-    for (int index = 0; index < length; index++) {
-      int character = Byte.toUnsignedInt(command.textByteAt(handle, index));
-      if (character > 0x7f) return StatusCode.INVALID_DATETIME_FORMAT;
-      text[index] = (char) character;
-    }
-    textLength = length;
-    return StatusCode.OK;
-  }
-
-  private StatusCode loadRowText(HeapRowResult source, long handle) {
-    int offset = (int) (handle >>> 32);
-    int length = (int) handle;
-    if (length < 0 || length > text.length) return StatusCode.RESOURCE_EXHAUSTED;
-    textLength = Utf8RowText.decode(source, offset, length, text);
-    return StatusCode.OK;
   }
 
   private StatusCode unary(
@@ -416,15 +412,14 @@ final class SqlRowExpressionEvaluator {
     }
     if (targetType == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       StatusCode status = temporal.formatTemporal(
-          value, source, target, text, textResult);
-      textLength = textResult.length;
+          value, source, target, text.writableCharacters(), textResult);
+      if (status.isOk()) text.publish(textResult.length); else text.clear();
       longResult.value = 0;
       return status;
     }
     if (sourceType == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-      textView.length = textLength;
       StatusCode status = LocalTemporalCast.parseText(
-          textView, 0, textLength, target, temporalValue);
+          text, 0, text.length(), target, temporalValue);
       longResult.value = temporalValue.value;
       return status;
     }
@@ -488,18 +483,11 @@ final class SqlRowExpressionEvaluator {
         && operator <= SqlScalarExpression.REMAINDER;
   }
 
-  private static final class TextView implements CharSequence {
-    private final char[] characters;
-    private int length;
-
-    TextView(char[] value) {
-      characters = value;
-    }
-
-    @Override public int length() { return length; }
-    @Override public char charAt(int index) { return characters[index]; }
-    @Override public CharSequence subSequence(int start, int end) {
-      throw new UnsupportedOperationException();
-    }
+  void reset() {
+    text.clear();
+    size = 0;
+    aggregateValues = null;
+    aggregateNulls = null;
   }
+
 }

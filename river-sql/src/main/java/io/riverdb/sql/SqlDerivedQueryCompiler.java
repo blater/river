@@ -33,8 +33,7 @@ final class SqlDerivedQueryCompiler {
     if (status.isOk()) status = predicates.copyOrder(root, destination);
     if (!status.isOk()) return status;
     destination.setRowLimit(root.rowLimit());
-    if (root.type() == SqlCommandType.SELECT
-        || destination.isEqualityPredicate()) {
+    if (root.type() == SqlCommandType.SELECT) {
       destination.set(SqlCommandType.SELECT, destination.key(), 0);
     } else {
       destination.setScan(0, 0, false);

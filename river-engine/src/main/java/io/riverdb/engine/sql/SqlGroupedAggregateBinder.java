@@ -22,7 +22,7 @@ final class SqlGroupedAggregateBinder {
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
     boolean computedKey = computedKey(command);
     boolean computedAggregate = hasComputedAggregate(command);
-    boolean computedHaving = command.havingPredicateCount() > 0;
+    boolean computedHaving = command.booleanHavingPredicates().isAvailable();
     StatusCode status = validateScope(
         query, computedKey, computedAggregate, computedHaving);
     if (status.isOk()) status = aggregates.bind(command, bound, true);

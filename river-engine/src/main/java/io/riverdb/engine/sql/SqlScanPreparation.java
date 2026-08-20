@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlCommandType;
 
 /** Selects and opens the physical operator for one fully bound SQL scan. */
@@ -65,7 +66,7 @@ final class SqlScanPreparation {
   }
 
   private StatusCode beginScalar(BoundSqlQuery.Block command) {
-    plan.setHavingCount(bound.command.havingPredicateCount());
+    plan.setHavingCount(bound.command.booleanHavingPredicates().leafCount());
     plan.setAccessColumn(bound.accessPredicate >= 0
         ? bound.predicateColumn == 0 || bound.table.hasIndexOn(bound.predicateColumn)
             ? bound.predicateColumn : -1
@@ -86,7 +87,8 @@ final class SqlScanPreparation {
 
   private StatusCode beginGrouped(
       BoundSqlQuery.Block command, boolean distinct, boolean explainOnly) {
-    plan.setHavingCount(distinct ? 0 : bound.command.havingPredicateCount());
+    plan.setHavingCount(distinct ? 0
+        : bound.command.booleanHavingPredicates().leafCount());
     plan.setFilterCount(bound.predicateCount);
     int groupedColumn = distinct ? bound.distinctColumn : bound.groupColumn;
     int aggregateColumn = distinct ? -1 : bound.groupAggregateColumn;
@@ -236,7 +238,7 @@ final class SqlScanPreparation {
 
   private StatusCode openRowSource(BoundSqlQuery.Block command, int indexColumn) {
     boolean bounded = bound.accessPredicate >= 0;
-    boolean equality = bounded && command.isEqualityPredicate(bound.accessPredicate);
+    boolean equality = bounded && bound.accessComparison == SqlComparison.EQUAL;
     if (indexColumn > 0) {
       if (!bounded || bound.predicateColumn != indexColumn) {
         return session.beginValueScan(bound.table, indexColumn, scan.relational());
@@ -268,32 +270,22 @@ final class SqlScanPreparation {
           ? session.beginValueScan(bound.table, column, scan.relational())
           : session.beginScan(bound.table, scan.relational());
     }
-    boolean equality = command.isEqualityPredicate(predicate);
-    long lower = equality
-        ? command.predicateValue(predicate) : command.predicateLowerInclusive(predicate);
+    boolean equality = bound.accessComparison == SqlComparison.EQUAL;
+    long lower = equality ? bound.accessValue : bound.accessLowerInclusive;
     if (equality) {
       return valueIndex
           ? session.beginExactValueScan(bound.table, column, lower, scan.relational())
           : session.beginExactScan(bound.table, lower, scan.relational());
     }
-    long upper = command.predicateUpperExclusive(predicate);
+    long upper = bound.accessUpperExclusive;
     return valueIndex
         ? session.beginValueScan(bound.table, column, lower, upper, scan.relational())
         : session.beginScan(bound.table, lower, upper, scan.relational());
   }
 
   private int orderedBoundPredicate(BoundSqlQuery.Block command, int column) {
-    if (command.hasDisjunction()) return -1;
-    int bounded = -1;
-    for (int index = 0; index < bound.predicateCount; index++) {
-      if (bound.predicateColumns[index] == column
-          && (command.isEqualityPredicate(index) || command.isRangePredicate(index))
-          && (bounded < 0 || command.isEqualityPredicate(index))) {
-        bounded = index;
-        if (command.isEqualityPredicate(index)) return index;
-      }
-    }
-    return bounded;
+    return bound.accessPredicate >= 0 && bound.predicateColumn == column
+        ? bound.accessPredicate : -1;
   }
 
   private long accessValue(BoundSqlQuery.Block command) {

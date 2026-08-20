@@ -26,7 +26,7 @@ final class SqlPlanDescription {
       BoundSqlStatement bound,
       BoundSqlQuery.Block command) {
     plan.setFilterCount(bound.predicateCount);
-    plan.setHavingCount(bound.command.havingPredicateCount());
+    plan.setHavingCount(bound.command.booleanHavingPredicates().leafCount());
     plan.setAggregate(
         command.type() == SqlCommandType.COUNT
             ? -1 : bound.projectedColumns[0]);

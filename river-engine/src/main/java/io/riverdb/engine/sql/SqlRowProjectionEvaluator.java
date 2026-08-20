@@ -9,10 +9,9 @@ import io.riverdb.storage.heap.HeapRowResult;
 
 /** Owns reusable row projection evaluation and statement-lifetime zone plans. */
 final class SqlRowProjectionEvaluator {
-  private final SqlTemporalZonePlan[] zones = new SqlTemporalZonePlan[
-      SqlBoundProjectionPrograms.HAVING_LANE + 1];
+  private final SqlTemporalZonePlan[] zones =
+      new SqlTemporalZonePlan[io.riverdb.engine.relational.TableSchema.MAXIMUM_COLUMNS];
   private final SqlTemporalZonePlan insertZone = new SqlTemporalZonePlan();
-  private final SqlTemporalZonePlan[] havingZones = new SqlTemporalZonePlan[8];
   private final long[] insertedValues =
       new long[SqlScalarExpression.MAXIMUM_NODES];
   private final int[] insertedDescriptors =
@@ -31,9 +30,6 @@ final class SqlRowProjectionEvaluator {
     this.temporal = temporal;
     this.columns = columns;
     for (int index = 0; index < zones.length; index++) zones[index] = new SqlTemporalZonePlan();
-    for (int index = 0; index < havingZones.length; index++) {
-      havingZones[index] = new SqlTemporalZonePlan();
-    }
   }
 
   StatusCode prepare(BoundSqlStatement statement) {
@@ -44,39 +40,13 @@ final class SqlRowProjectionEvaluator {
       StatusCode status = prepare(command, programs, projection);
       if (!status.isOk()) return status;
     }
-    StatusCode status = programs.hasPredicate()
-        ? prepare(command, programs, SqlBoundProjectionPrograms.PREDICATE_LANE)
-        : StatusCode.OK;
-    for (int predicate = 0;
-        status.isOk() && predicate < statement.havingPrograms.count(); predicate++) {
-      status = prepareHaving(command, statement.havingPrograms, predicate);
-    }
+    StatusCode status = StatusCode.OK;
     for (int expression = 0;
         status.isOk() && expression < programs.mutationCount();
         expression++) {
       status = prepareMutation(command, programs, expression);
     }
     return status;
-  }
-
-  private StatusCode prepareHaving(
-      SqlCommand command, SqlBoundHavingPrograms programs, int predicate) {
-    int zoneNodes = 0;
-    for (int node = 0; node < programs.nodeCount(predicate); node++) {
-      int operator = programs.operator(predicate, node);
-      if (operator >= SqlScalarExpression.CURRENT_DATE
-          && operator <= SqlScalarExpression.LOCALTIMESTAMP) {
-        StatusCode status = temporal.currentValue(
-            operator, programs.descriptor(predicate, node), current);
-        if (!status.isOk()) return status;
-      }
-      if (operator != SqlScalarExpression.AT_TIME_ZONE) continue;
-      if (++zoneNodes > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
-      StatusCode status = temporal.prepareZone(
-          command, programs.operand(predicate, node), havingZones[predicate]);
-      if (!status.isOk()) return status;
-    }
-    return StatusCode.OK;
   }
 
   private StatusCode prepareMutation(
@@ -188,33 +158,11 @@ final class SqlRowProjectionEvaluator {
     return StatusCode.OK;
   }
 
-  StatusCode evaluatePredicate(long primaryKey, HeapRowResult source) {
-    if (bound == null || !bound.projectionPrograms.hasPredicate()) {
-      return StatusCode.CONFLICT;
-    }
-    return evaluateProgram(
-        SqlBoundProjectionPrograms.PREDICATE_LANE, primaryKey, source);
-  }
-
-  StatusCode evaluatePredicateBlock(SqlBlockRow source) {
-    if (bound == null || !bound.projectionPrograms.hasPredicate()) {
-      return StatusCode.CONFLICT;
-    }
-    return expressions.evaluateBlock(
-        bound.command,
-        bound.projectionPrograms,
-        SqlBoundProjectionPrograms.PREDICATE_LANE,
-        zones[SqlBoundProjectionPrograms.PREDICATE_LANE],
-        source);
-  }
-
   StatusCode evaluateProgram(
       int program, long primaryKey, HeapRowResult source) {
     if (bound == null
         || program < 0
-        || program >= bound.projectionPrograms.count()
-            && (program != SqlBoundProjectionPrograms.PREDICATE_LANE
-                || !bound.projectionPrograms.hasPredicate())) {
+        || program >= bound.projectionPrograms.count()) {
       return StatusCode.CONFLICT;
     }
     return expressions.evaluate(
@@ -225,27 +173,6 @@ final class SqlRowProjectionEvaluator {
         primaryKey,
         source,
         bound.table);
-  }
-
-  StatusCode evaluateHaving(
-      int predicate,
-      long[] aggregateValues,
-      boolean[] aggregateNulls,
-      long groupValue,
-      boolean groupNull) {
-    if (bound == null || predicate < 0
-        || predicate >= bound.havingPrograms.count()) {
-      return StatusCode.CONFLICT;
-    }
-    return expressions.evaluateHaving(
-        bound.command,
-        bound.havingPrograms,
-        predicate,
-        havingZones[predicate],
-        aggregateValues,
-        aggregateNulls,
-        groupValue,
-        groupNull);
   }
 
   StatusCode evaluateMutation(
@@ -272,13 +199,6 @@ final class SqlRowProjectionEvaluator {
         bound.table);
   }
 
-  boolean predicateNull() { return expressions.resultNull(); }
-  long predicateValue() { return expressions.resultValue(); }
-  int predicateDescriptor() { return expressions.resultDescriptor(); }
-  int predicateTextLength() { return expressions.resultTextLength(); }
-  char predicateTextCharacter(int index) {
-    return expressions.resultTextCharacter(index);
-  }
   boolean resultNull() { return expressions.resultNull(); }
   long resultValue() { return expressions.resultValue(); }
   int resultDescriptor() { return expressions.resultDescriptor(); }
@@ -288,6 +208,11 @@ final class SqlRowProjectionEvaluator {
   }
 
   void reset() {
+    expressions.reset();
+    for (int index = 0; index < zones.length; index++) {
+      if (zones[index] != null) zones[index].reset();
+    }
+    insertZone.reset();
     bound = null;
   }
 }

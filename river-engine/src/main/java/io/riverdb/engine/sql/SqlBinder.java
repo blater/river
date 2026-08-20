@@ -36,14 +36,6 @@ final class SqlBinder {
       SqlCommand command,
       SqlQuery query,
       BoundSqlStatement bound) {
-    if (command.hasComputedPredicate()
-        && command.type() != SqlCommandType.SELECT
-        && command.type() != SqlCommandType.SCAN
-        && command.type() != SqlCommandType.UPDATE
-        && command.type() != SqlCommandType.DELETE
-        && !isScalarAggregate(command.type())) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
-    }
     bound.updatedColumnCount = 0;
     bound.predicateColumn = -1;
     bound.predicateCount = 0;
@@ -69,12 +61,6 @@ final class SqlBinder {
 
   private StatusCode bindProjectedCommand(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
-    if (command.hasComputedPredicate()
-        && (bound.executableQuery.blockCount() > 1
-            || command.type() != SqlCommandType.SELECT
-                && command.type() != SqlCommandType.SCAN)) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
-    }
     StatusCode status = bindProjections(command, bound);
     return status.isOk() ? predicates.bind(command, query, bound) : status;
   }
@@ -109,8 +95,7 @@ final class SqlBinder {
   }
 
   StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
-    if (SqlRowProjectionBinder.hasComputed(command)
-        || command.hasComputedPredicate()) {
+    if (SqlRowProjectionBinder.hasComputed(command)) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     if (SqlBindingNames.matchesTable(command, command.joinTableName())

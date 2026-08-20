@@ -3,62 +3,44 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlCommand;
 
-/** Evaluates the flat HAVING predicate set with AND precedence over OR. */
+/** Evaluates HAVING through the common bounded Boolean predicate evaluator. */
 final class SqlHavingEvaluator {
-  private static final int UNKNOWN = SqlHavingPredicateComparator.UNKNOWN;
-  private final SqlRowProjectionEvaluator programs;
-  private final SqlHavingPredicateComparator predicate;
-  private boolean matched;
+  private final BoundSqlStatement bound;
+  private final SqlBooleanPredicateEvaluator predicates;
+  private final SqlBooleanPredicateEvaluator.Match result =
+      new SqlBooleanPredicateEvaluator.Match();
 
   SqlHavingEvaluator(
+      BoundSqlStatement statement,
       SqlExpressionEvaluator expressions,
-      SqlRowProjectionEvaluator programEvaluator) {
-    programs = programEvaluator;
-    predicate = new SqlHavingPredicateComparator(expressions, programEvaluator);
+      SqlTemporalContext temporal) {
+    bound = statement;
+    predicates = new SqlBooleanPredicateEvaluator(expressions, temporal);
+  }
+
+  StatusCode prepare(SqlCommand command) {
+    return predicates.prepare(command, bound.havingBoolean);
   }
 
   StatusCode evaluate(
       SqlCommand command,
-      SqlBoundHavingPrograms having,
       SqlAggregateAccumulatorSet aggregates,
       long groupValue,
       boolean groupNull,
       byte[] groupText,
       int groupTextLength) {
-    int disjunction = 0;
-    int conjunction = 1;
-    for (int index = 0; index < command.havingPredicateCount(); index++) {
-      StatusCode status = programs.evaluateHaving(
-          index, aggregates.values(), aggregates.nulls(), groupValue, groupNull);
-      if (!status.isOk()) return reset(status);
-      predicate.evaluate(
-          command, having, aggregates, groupText, groupTextLength, index);
-      if (!predicate.status().isOk()) return reset(predicate.status());
-      conjunction = and(conjunction, predicate.truth());
-      if (command.havingDisjunction(index)) {
-        disjunction = or(disjunction, conjunction);
-        conjunction = 1;
-      }
-    }
-    matched = command.havingPredicateCount() == 0
-        || or(disjunction, conjunction) == 1;
-    return reset(StatusCode.OK);
+    return predicates.matchesHaving(
+        command,
+        bound.havingBoolean,
+        aggregates,
+        groupValue,
+        groupNull,
+        groupText,
+        groupTextLength,
+        result);
   }
 
-  boolean matched() { return matched; }
+  boolean matched() { return result.matched(); }
 
-  private StatusCode reset(StatusCode status) {
-    predicate.reset();
-    return status;
-  }
-
-  private static int and(int left, int right) {
-    return left == 0 || right == 0 ? 0
-        : left == UNKNOWN || right == UNKNOWN ? UNKNOWN : 1;
-  }
-
-  private static int or(int left, int right) {
-    return left == 1 || right == 1 ? 1
-        : left == UNKNOWN || right == UNKNOWN ? UNKNOWN : 0;
-  }
+  void reset() { predicates.reset(); }
 }

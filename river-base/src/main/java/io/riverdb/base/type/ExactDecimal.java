@@ -283,13 +283,17 @@ public final class ExactDecimal {
       int targetDescriptor,
       LongValue result) {
     if (result == null || !exactNumeric(sourceDescriptor)
-        || SqlTypeDescriptor.typeId(targetDescriptor)
-            != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
+        || !exactNumeric(targetDescriptor)) {
       return false;
     }
     int sourceScale = scale(sourceDescriptor);
     int targetScale = scale(targetDescriptor);
     if (targetScale >= sourceScale) {
+      if (SqlTypeDescriptor.typeId(targetDescriptor)
+          == SqlTypeDescriptor.TYPE_ID_BIGINT) {
+        result.value = value;
+        return sourceScale == 0;
+      }
       return widenScale(value, sourceDescriptor, targetDescriptor, result);
     }
     long divisor = POWERS_OF_TEN[sourceScale - targetScale];

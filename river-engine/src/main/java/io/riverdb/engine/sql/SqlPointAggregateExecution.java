@@ -38,14 +38,15 @@ final class SqlPointAggregateExecution {
       BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
       SqlBoundPredicateEvaluator predicateEvaluator,
-      SqlRowProjectionEvaluator projectionEvaluator) {
+      SqlRowProjectionEvaluator projectionEvaluator,
+      SqlTemporalContext temporal) {
     session = relationalSession;
     bound = statement;
     query = statement.executableQuery;
     expressions = evaluator;
     predicates = predicateEvaluator;
     projections = projectionEvaluator;
-    having = new SqlHavingEvaluator(evaluator, projectionEvaluator);
+    having = new SqlHavingEvaluator(statement, evaluator, temporal);
   }
 
   boolean accepts(SqlCommandType type) {
@@ -79,7 +80,6 @@ final class SqlPointAggregateExecution {
     if (status.isOk()) {
       status = having.evaluate(
           bound.command,
-          bound.havingPrograms,
           accumulators,
           0,
           true,
@@ -99,12 +99,14 @@ final class SqlPointAggregateExecution {
 
   private StatusCode prepare() {
     BoundSqlQuery.Block command = query.root();
+    StatusCode status = having.prepare(bound.command);
+    if (!status.isOk()) return status;
     state.reset(
         command.type(),
         bound.projectedColumns[0],
         bound.predicateCount > 0,
         bound.accessPredicate >= 0,
-        accessEquality(command));
+        accessEquality());
     configureAccess();
     configureRange(command);
     state.computed = bound.projectedColumnCount > 0
@@ -134,12 +136,12 @@ final class SqlPointAggregateExecution {
       return;
     }
     if (state.equality) {
-      state.lower = accessValue(command);
+      state.lower = bound.accessValue;
       state.upper = 0;
       return;
     }
-    state.lower = command.predicateLowerInclusive(bound.accessPredicate);
-    state.upper = command.predicateUpperExclusive(bound.accessPredicate);
+    state.lower = bound.accessLowerInclusive;
+    state.upper = bound.accessUpperExclusive;
   }
 
   private StatusCode beginScan() {
@@ -285,7 +287,12 @@ final class SqlPointAggregateExecution {
     return cursor.isActive();
   }
 
+  void finishStatement() {
+    having.reset();
+  }
+
   StatusCode closeResources() {
+    having.reset();
     if (!cursor.isActive()) return StatusCode.OK;
     StatusCode status = session.closeScan(cursor);
     if (status.isOk()) cursor.reset();
@@ -320,13 +327,9 @@ final class SqlPointAggregateExecution {
     text.clear();
   }
 
-  private boolean accessEquality(BoundSqlQuery.Block command) {
+  private boolean accessEquality() {
     return bound.accessPredicate >= 0
-        && command.isEqualityPredicate(bound.accessPredicate);
-  }
-
-  private long accessValue(BoundSqlQuery.Block command) {
-    return bound.accessValue;
+        && bound.accessComparison == io.riverdb.sql.SqlComparison.EQUAL;
   }
 
   private StatusCode validateRow(HeapRowResult source) {

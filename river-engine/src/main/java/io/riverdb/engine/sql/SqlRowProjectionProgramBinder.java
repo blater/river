@@ -25,15 +25,6 @@ final class SqlRowProjectionProgramBinder {
     return bindProgram(command, bound, expression, projection);
   }
 
-  StatusCode bindPredicate(
-      SqlCommand command, BoundSqlStatement bound, SqlScalarExpression expression) {
-    int lane = SqlBoundProjectionPrograms.PREDICATE_LANE;
-    StatusCode status = bindProgram(command, bound, expression, lane);
-    return status.isOk() && expression.hasColumnReference()
-        ? StatusCode.OK
-        : status.isOk() ? StatusCode.FEATURE_NOT_SUPPORTED : status;
-  }
-
   private StatusCode bindProgram(
       SqlCommand command,
       BoundSqlStatement bound,

@@ -50,7 +50,7 @@ final class SqlBlockScalarAggregateStage {
     status = source.finish(input, status);
     if (status.isOk()) status = accumulator.finish(bound.aggregates);
     if (status.isOk()) status = having.evaluate(
-        bound.command, bound.havingPrograms, accumulator, 0, true, null, 0);
+        bound.command, accumulator, 0, true, null, 0);
     if (!status.isOk()) return status;
     status = output.begin(
         bound.blockPlans().schema(block), sortKey,

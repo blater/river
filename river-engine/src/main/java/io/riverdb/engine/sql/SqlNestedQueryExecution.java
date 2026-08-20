@@ -112,6 +112,7 @@ final class SqlNestedQueryExecution {
     membershipCandidateDepth = -1;
     membershipCandidateOffset = 0;
     memberships.resetStatement();
+    predicates.reset();
     nestedCorrelated = false;
     correlatedScalar = false;
     correlatedExistence = false;
@@ -158,12 +159,12 @@ final class SqlNestedQueryExecution {
 
   StatusCode prepare(boolean explainOnly) {
     preparingCandidate = true;
-    correlatedScalar = query.correlatedScalar();
-    correlatedExistence = query.correlatedExistence();
-    correlatedMembership = query.correlatedMembership();
-    correlatedNestedChain = query.correlatedNestedChain();
-    recursiveNestedChain = query.recursiveNestedChain();
-    recursiveRootCorrelated = query.recursiveRootCorrelated();
+    correlatedScalar = query.topology().scalar();
+    correlatedExistence = query.topology().existence();
+    correlatedMembership = query.topology().membership();
+    correlatedNestedChain = query.topology().nestedChain();
+    recursiveNestedChain = query.topology().recursiveChain();
+    recursiveRootCorrelated = query.topology().rootCorrelated();
     try {
       if (query.blockCount() > 2
           && (query.hasScalarPredicate()
@@ -346,7 +347,7 @@ final class SqlNestedQueryExecution {
       BoundSqlQuery.Block predicateSource,
       int predicate) {
     return predicates.matchesLiteral(
-        primaryKey, source, definition, column, predicateSource, predicate);
+        primaryKey, source, definition, column, predicateSource.predicates(), predicate);
   }
 
   private boolean equalColumns(
@@ -394,15 +395,15 @@ final class SqlNestedQueryExecution {
   }
 
   int scalarPredicateColumn(int predicate) {
-    return nestedCommand.resolvedPredicateColumn(predicate);
+    return nestedCommand.predicates().resolvedColumn(predicate);
   }
 
   int scalarPredicateValueColumn(int predicate) {
-    return nestedCommand.resolvedPredicateValueColumn(predicate);
+    return nestedCommand.predicates().resolvedValueColumn(predicate);
   }
 
   boolean scalarPredicateValueOuter(int predicate) {
-    int scope = nestedCommand.resolvedPredicateValueScope(predicate);
+    int scope = nestedCommand.predicates().resolvedValueScope(predicate);
     return scope >= 0 && scope < nestedCommand.blockIndex();
   }
 
@@ -441,19 +442,19 @@ final class SqlNestedQueryExecution {
 
   int recursivePredicateColumn(int slot) {
     int depth = slot / BoundSqlQuery.MAXIMUM_PREDICATES;
-    return query.block(depth).resolvedPredicateColumn(
+    return query.block(depth).predicates().resolvedColumn(
         slot % BoundSqlQuery.MAXIMUM_PREDICATES);
   }
 
   int recursivePredicateValueColumn(int slot) {
     int depth = slot / BoundSqlQuery.MAXIMUM_PREDICATES;
-    return query.block(depth).resolvedPredicateValueColumn(
+    return query.block(depth).predicates().resolvedValueColumn(
         slot % BoundSqlQuery.MAXIMUM_PREDICATES);
   }
 
   int recursivePredicateValueScope(int slot) {
     int depth = slot / BoundSqlQuery.MAXIMUM_PREDICATES;
-    return query.block(depth).resolvedPredicateValueScope(
+    return query.block(depth).predicates().resolvedValueScope(
         slot % BoundSqlQuery.MAXIMUM_PREDICATES);
   }
 
@@ -620,12 +621,12 @@ final class SqlNestedQueryExecution {
   }
 
   private boolean hasIntermediateReference() {
-    return query.recursiveNestedChain();
+    return query.topology().recursiveChain();
   }
 
   private StatusCode bindRecursiveChain() {
-    recursiveNestedChain = query.recursiveNestedChain();
-    recursiveRootCorrelated = query.recursiveRootCorrelated();
+    recursiveNestedChain = query.topology().recursiveChain();
+    recursiveRootCorrelated = query.topology().rootCorrelated();
     for (int depth = 1; depth < query.blockCount(); depth++) {
       BoundSqlQuery.Block nested = query.block(depth);
       if (!availableBlock(nested)) {
@@ -762,10 +763,14 @@ final class SqlNestedQueryExecution {
     HeapRowResult source = rowResult.row();
     long primaryKey = rowResult.key();
     StatusCode status = validateRow(source, definition);
-    if (!status.isOk()
-        || !matchesRecursivePredicates(
-            depth, primaryKey, source, outerPrimaryKey, outerSource)) {
-      return status;
+    if (!status.isOk()) return status;
+    if (!matchesRecursivePredicates(
+        depth, primaryKey, source, outerPrimaryKey, outerSource)) {
+      StatusCode predicateStatus = predicates.status();
+      return predicateStatus.isOk() ? StatusCode.OK : predicateStatus;
+    }
+    if (!predicates.status().isOk()) {
+      return predicates.status();
     }
     if (depth + 1 < query.blockCount()) {
       status = evaluateRecursiveDescendant(
@@ -898,6 +903,7 @@ final class SqlNestedQueryExecution {
       HeapRowResult source,
       long outerPrimaryKey,
       HeapRowResult outerSource) {
+    predicates.reset();
     BoundSqlQuery.Block nested = query.block(depth);
     TableDefinition definition = recursiveTable(depth);
     int skipped = query.hasScalarPredicate(depth)
@@ -937,6 +943,11 @@ final class SqlNestedQueryExecution {
       HeapRowResult outerSource) {
     int column = recursivePredicateColumn(slot);
     boolean nullValue = isNull(source, definition, column);
+    if (nested.predicates().isTruth(predicate)) {
+      long value = nullValue ? 0 : readColumn(primaryKey, source, column);
+      return predicates.matchesTruth(
+          nested.predicates(), predicate, nullValue, value);
+    }
     if (nested.isNullPredicate(predicate)) {
       return nullValue != nested.isNullPredicateNegated(predicate);
     }
@@ -1219,7 +1230,7 @@ final class SqlNestedQueryExecution {
         inputBank,
         inputCount,
         inputHasNull);
-    return StatusCode.OK;
+    return predicates.status();
   }
 
   private StatusCode closeScalarCursor(
@@ -1462,6 +1473,7 @@ final class SqlNestedQueryExecution {
         existenceResult = true;
         break;
       }
+      if (status.isOk() && !predicates.status().isOk()) status = predicates.status();
     }
     return closeScalarCursor(cursorActive, status);
   }
@@ -1577,6 +1589,7 @@ final class SqlNestedQueryExecution {
               inputBank,
               inputCount,
               inputHasNull)) {
+        if (!predicates.status().isOk()) status = predicates.status();
         continue;
       }
       if (!status.isOk()) {
@@ -1646,6 +1659,7 @@ final class SqlNestedQueryExecution {
       int nestedMembershipBank,
       int nestedMembershipValueCount,
       boolean nestedMembershipHasNull) {
+    predicates.reset();
     for (int index = 0; index < scalar.predicateCount(); index++) {
       if (!matchesScalarPredicate(
           scalar,
@@ -1679,6 +1693,11 @@ final class SqlNestedQueryExecution {
       boolean nestedMembershipHasNull) {
     int predicateColumn = scalarPredicateColumn(index);
     boolean nullValue = isNull(source, nestedTable, predicateColumn);
+    if (scalar.predicates().isTruth(index)) {
+      long value = nullValue ? 0 : readColumn(primaryKey, source, predicateColumn);
+      return predicates.matchesTruth(
+          scalar.predicates(), index, nullValue, value);
+    }
     if (scalar.isNullPredicate(index)) {
       return nullValue != scalar.isNullPredicateNegated(index);
     }
