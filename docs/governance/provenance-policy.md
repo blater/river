@@ -20,19 +20,28 @@ version 3, in `LICENSE`. AGPL-3.0 is the initial project license. New original
 River source is contributed under that license unless a separately accepted
 license-change decision defines the migration, notice, and contributor effects.
 
-## Legacy Ingres boundary
+## Reference Material boundary
 
-The project owner approved the workspace Ingres source and historical tests as
-core reference material for River functionality, kernel design, test suites,
+The project owner approved the workspace reference source and historical tests as
+reference material for River functionality, kernel design, test suites,
 and kernel tests. Contributors may inspect and adapt ideas or behavior from
-those references. A change that adapts logic, tests, fixtures, messages, or
-layouts identifies the source path/version and records whether the result is a
-new River design, a behavioral adaptation, or copied material.
+those references in creating specifications and plans. 
 
-Approval to use the references does not create a direct compatibility promise
+### Chinese Wall 
+
+The reader, be it human or agent, may create plans and specifications 
+from approved reference material but a *different* human or agent must 
+perform any implementation based on those plans/specs, without visibility 
+of the original reference material.
+
+A change that adapts logic, tests, fixtures, messages, or layouts identifies the 
+source path/version and records whether the result is a new River design, 
+or a behavioural adaptation.  Verbatim or mechanically translated material is 
+expressly forbidden.
+
+Approval to read the references does not create a direct compatibility promise
 or waive attribution and notice obligations. River's accepted product, SQL,
-format, and API profiles remain authoritative. Verbatim or mechanically
-translated material receives explicit file-level review before merge.
+format, and API profiles remain authoritative. 
 
 ## Artifact ledger
 
