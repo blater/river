@@ -90,8 +90,7 @@ public final class SqlParser {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     try {
-      StatusCode status = SqlParameterAdmission.beginQuery(
-          sql, parameters, input, queryParser);
+      StatusCode status = SqlParameterAdmission.beginQuery(parameters, input);
       if (status.isOk()) status = queryParser.parse(sql, query, result);
       status = SqlParameterAdmission.finish(status, input);
       if (!status.isOk()) {

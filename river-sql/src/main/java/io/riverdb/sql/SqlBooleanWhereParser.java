@@ -8,6 +8,7 @@ final class SqlBooleanWhereParser {
   private final SqlScalarExpressionParser expressions;
   private final SqlPostAggregateExpressionParser postAggregate;
   private final SqlComparisonParser comparisons;
+  private final SqlSubqueryComparisonParser subqueryComparisons;
   private final SqlScalarExpression left = new SqlScalarExpression();
   private final SqlScalarExpression right = new SqlScalarExpression();
   private final SqlScalarExpression lower = new SqlScalarExpression();
@@ -32,6 +33,7 @@ final class SqlBooleanWhereParser {
     expressions = scalarExpressions;
     postAggregate = null;
     comparisons = new SqlComparisonParser(parserInput);
+    subqueryComparisons = new SqlSubqueryComparisonParser(parserInput, scalarExpressions);
   }
 
   SqlBooleanWhereParser(
@@ -40,6 +42,7 @@ final class SqlBooleanWhereParser {
     expressions = null;
     postAggregate = new SqlPostAggregateExpressionParser(parserInput, selected);
     comparisons = new SqlComparisonParser(parserInput);
+    subqueryComparisons = new SqlSubqueryComparisonParser(parserInput, null);
   }
 
   StatusCode parse(CharSequence sql, SqlCommand result) {
@@ -164,6 +167,13 @@ final class SqlBooleanWhereParser {
     input.skipSpaces(sql);
     int exists = subqueryAt(input.position(), SqlQuery.SUBQUERY_EXISTS);
     if (exists >= 0) return subqueryExists(sql, exists);
+    int scalar = subqueryAt(input.position(), SqlQuery.SUBQUERY_SCALAR);
+    if (scalar >= 0) {
+      StatusCode status = subqueryComparisons.parseLeft(
+          sql, scalar, command, target, subqueries, right);
+      parsedNode = subqueryComparisons.node();
+      return status;
+    }
     StatusCode status = parseExpression(sql, left);
     int leaf = status.isOk() ? target.appendLeaf(left) : -2;
     if (status.isOk() && leaf < 0) status = StatusCode.RESOURCE_EXHAUSTED;

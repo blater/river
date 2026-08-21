@@ -3,7 +3,7 @@ package io.riverdb.sql;
 import io.riverdb.base.error.StatusCode;
 
 /** Quoted-text-safe discovery and synthetic source ownership for one subquery block. */
-final class SqlNestedSubquerySource implements CharSequence {
+final class SqlNestedSubquerySource implements CharSequence, SqlParameterOrdinalSource {
   private final int[] starts = new int[SqlQuery.MAXIMUM_EDGES];
   private final int[] opens = new int[SqlQuery.MAXIMUM_EDGES];
   private final int[] closes = new int[SqlQuery.MAXIMUM_EDGES];
@@ -28,7 +28,7 @@ final class SqlNestedSubquerySource implements CharSequence {
       if (where < 0 || opening < where) return StatusCode.FEATURE_NOT_SUPPORTED;
       int close = matchingClose(sql, opening, to);
       if (close < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-      int kind = kind(sql, from, opening);
+      int kind = kind(sql, from, opening, close, to);
       if (kind == 0) return StatusCode.FEATURE_NOT_SUPPORTED;
       if (count >= SqlBooleanPredicateProgram.MAXIMUM_LEAVES) {
         return StatusCode.RESOURCE_EXHAUSTED;
@@ -80,6 +80,13 @@ final class SqlNestedSubquerySource implements CharSequence {
   }
 
   @Override
+  public int parameterOrdinal(int offset) {
+    int original = originalOffset(offset);
+    if (original < 0 || source.charAt(original) != '?') return -1;
+    return SqlParameterOrdinalSource.ordinal(source, original);
+  }
+
+  @Override
   public CharSequence subSequence(int from, int to) {
     throw new UnsupportedOperationException();
   }
@@ -99,14 +106,42 @@ final class SqlNestedSubquerySource implements CharSequence {
     length -= removed;
   }
 
-  private static int kind(CharSequence sql, int start, int opening) {
+  private int originalOffset(int index) {
+    if (index < 0 || index >= length) return -1;
+    int output = 0;
+    int original = start;
+    for (int item = 0; item < count; item++) {
+      int edge = firstEdge + item;
+      int plain = starts[edge] - original;
+      if (index < output + plain) return original + index - output;
+      output += plain;
+      int replacement = replacementLength(kinds[edge]);
+      if (index < output + replacement) return -1;
+      output += replacement;
+      original = closes[edge] + 1;
+    }
+    return original + index - output;
+  }
+
+  private static int kind(
+      CharSequence sql, int start, int opening, int close, int end) {
     if (priorKeywordStart(sql, start, opening, "EXISTS") >= 0) {
       return SqlQuery.SUBQUERY_EXISTS;
     }
     if (priorKeywordStart(sql, start, opening, "IN") >= 0) {
       return SqlQuery.SUBQUERY_MEMBERSHIP;
     }
-    return priorComparison(sql, start, opening) ? SqlQuery.SUBQUERY_SCALAR : 0;
+    return priorComparison(sql, start, opening) || followingComparison(sql, close + 1, end)
+        ? SqlQuery.SUBQUERY_SCALAR : 0;
+  }
+
+  private static boolean followingComparison(CharSequence sql, int start, int end) {
+    int index = start;
+    while (index < end && Character.isWhitespace(sql.charAt(index))) index++;
+    if (index >= end) return false;
+    char character = sql.charAt(index);
+    return character == '=' || character == '<' || character == '>'
+        || character == '!' && index + 1 < end && sql.charAt(index + 1) == '=';
   }
 
   private static boolean priorComparison(CharSequence sql, int start, int opening) {

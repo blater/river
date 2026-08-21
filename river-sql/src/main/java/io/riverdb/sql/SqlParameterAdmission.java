@@ -44,13 +44,10 @@ final class SqlParameterAdmission {
   }
 
   static StatusCode beginQuery(
-      CharSequence sql,
       SqlParameterSource source,
-      SqlParserInput input,
-      SqlQueryParser parser) {
+      SqlParserInput input) {
     input.beginParameters(source);
-    return hasMarker(sql) && parser.hasNestedTopology(sql)
-        ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
+    return StatusCode.OK;
   }
 
   static StatusCode finish(StatusCode status, SqlParserInput input) {

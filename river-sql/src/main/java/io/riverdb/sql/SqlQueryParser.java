@@ -65,12 +65,6 @@ final class SqlQueryParser {
     return depth;
   }
 
-  boolean hasNestedTopology(CharSequence sql) {
-    int start = skipExplainPrefix(sql);
-    return start < 0 || findDerivedSource(sql, start, sql.length()) >= 0
-        || nested.hasPredicateSubquery(sql, start, sql.length());
-  }
-
   private StatusCode parseDerivedBlocks(
       CharSequence sql, int start, int end, SqlQuery query) {
     int open = findDerivedSource(sql, start, end);
@@ -181,7 +175,7 @@ final class SqlQueryParser {
         || character >= '0' && character <= '9' || character == '_';
   }
 
-  private static final class SourceView implements CharSequence {
+  private static final class SourceView implements CharSequence, SqlParameterOrdinalSource {
     private CharSequence source;
     private int firstStart;
     private int firstLength;
@@ -201,6 +195,12 @@ final class SqlQueryParser {
       if (index < 0 || index >= length()) throw new IndexOutOfBoundsException(index);
       return index < firstLength ? source.charAt(firstStart + index)
           : source.charAt(secondStart + index - firstLength);
+    }
+    @Override public int parameterOrdinal(int offset) {
+      if (offset < 0 || offset >= length() || charAt(offset) != '?') return -1;
+      int original = offset < firstLength ? firstStart + offset
+          : secondStart + offset - firstLength;
+      return SqlParameterOrdinalSource.ordinal(source, original);
     }
     @Override public CharSequence subSequence(int start, int end) {
       throw new UnsupportedOperationException();
