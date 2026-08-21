@@ -70,6 +70,11 @@ bounded query graph and the ordinary scalar/three-valued Boolean engine. The
 complete architectural and semantic contract is
 [the P4C delivery plan](../plans/m5-p4c-subqueries.md).
 
+Delivery progress: P4C-0 through P4C-4 are accepted on
+`feature/p4c-subqueries` at `6efa2b5`. Joined root and child graph blocks now
+run through the common 2–8-role join engine; P4C-5 value/cache completion and
+P4C-6 access/plan truth are the next production tasks.
+
 ### Included target
 
 - Multiple sibling and recursive `EXISTS`, scalar, and `IN`/`NOT IN` edges

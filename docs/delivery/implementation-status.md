@@ -44,18 +44,19 @@ reviewed, and verified together from the exact detached integration commit.
 | Shipped bounded-join alpha | `release/0.1.0-alpha.1` | `e72967e` | Clean and pushed through accepted J7a durable statistics and deterministic SQL-order costing |
 | Join continuation | `feature/n-table-joins` | `e72967e` | Matches the Alpha 1 release checkpoint; J7b physical inner-island reordering is explicitly deferred beyond the alpha |
 | P4C recovery snapshot | `wip/p4c-subqueries-snapshot` | `794641e` | Clean and pushed immutable checkpoint of the pre-integration work |
-| P4C continuation | `feature/p4c-subqueries` | `4a77011` | P4C-0 and Wave 1 accepted and pushed: canonical graph tests, lexical marker order, lexical role scope/projection, and semantics fixtures; P4C-4 through P4C-6 are next |
+| P4C continuation | `feature/p4c-subqueries` | `6efa2b5` | P4C-0 through P4C-4 accepted: canonical graph/marker/scope semantics plus 2–8-role joined root and child execution; P4C-5 and P4C-6 are next |
 
-P4C-0 and the first parallel wave are accepted through `4a77011`. The branch
-now has canonical graph lifecycle coverage, scalar-subquery comparison
+P4C-0 through P4C-4 are accepted through `6efa2b5`. The branch now has
+canonical graph lifecycle coverage, scalar-subquery comparison
 normalization, statement-global lexical marker ordinals, packed lexical
 block/role scope binding, computed child projection, and active sibling,
 recursive, 3VL, laziness, cardinality, and failure-atomicity fixtures. Joined
-root and child graph execution remains deliberately fail-closed until P4C-4.
-The next parallel wave is P4C-4 n-table graph runtime, P4C-5 value/cache
-semantics, and P4C-6 plan/access truth. Full-engine promotion also must resolve
-the known grouped-HAVING null-zone failure and `temporal_derived` allocation
-fixture corruption. The snapshot branch remains recovery evidence only.
+root and child graph blocks now execute through the common n-table join source
+with LEFT/null continuation, owned Unicode tuples, P3 atomicity, retry-safe
+cleanup, and warmed allocation evidence. P4C-5 value/cache semantics and P4C-6
+plan/access truth are next. Full-engine promotion retains one baseline
+non-JOIN point-subquery status-oracle mismatch for P4C-7. The snapshot branch
+remains recovery evidence only.
 
 Product work proceeds in this order:
 
