@@ -77,7 +77,7 @@ final class SqlBlockStageRunner {
 
   private StatusCode prepareActive(int block) {
     if (bound.command.type() == SqlCommandType.JOIN_SCAN) {
-      StatusCode status = joinStage.prepare();
+      StatusCode status = joinStage.prepare(block);
       return status.isOk() ? having.prepare(bound.command) : status;
     }
     StatusCode status = projections.prepare(bound);

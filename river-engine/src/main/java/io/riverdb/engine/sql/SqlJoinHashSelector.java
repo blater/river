@@ -13,26 +13,26 @@ final class SqlJoinHashSelector {
   void select(
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram program,
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
       int stage) {
-    if (selected || bound.hasPhysicalJoinStrategy()
+    if (selected || context.hasPhysicalStrategy()
         || !SqlJoinPredicateClassifier.total(source)) return;
-    collect(source, program, program.root(), bound, stage);
+    collect(source, program, program.root(), context, stage);
   }
 
   private void collect(
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram program,
       int node,
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
       int stage) {
     if (selected) return;
     int operator = program.booleanOperator(node);
     if (operator == SqlBooleanPredicateProgram.BOOLEAN_AND) {
-      collect(source, program, program.booleanLeft(node), bound, stage);
-      collect(source, program, program.booleanRight(node), bound, stage);
+      collect(source, program, program.booleanLeft(node), context, stage);
+      collect(source, program, program.booleanRight(node), context, stage);
     } else if (operator == SqlBooleanPredicateProgram.BOOLEAN_LEAF) {
-      candidate(source, program, program.booleanLeft(node), bound, stage);
+      candidate(source, program, program.booleanLeft(node), context, stage);
     }
   }
 
@@ -40,7 +40,7 @@ final class SqlJoinHashSelector {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram program,
       int leaf,
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
       int stage) {
     if (source.leafTest(leaf) != SqlBooleanPredicateProgram.TEST_COMPARISON
         || source.comparison(leaf) != SqlComparison.EQUAL) return;
@@ -58,19 +58,19 @@ final class SqlJoinHashSelector {
     if (outerRole < 0 || outerRole >= current) return;
     int outerColumn = leftRole == current ? rightColumn : leftColumn;
     int innerColumn = leftRole == current ? leftColumn : rightColumn;
-    int outerDescriptor = bound.joinRole(outerRole).typeDescriptor(outerColumn);
-    int innerDescriptor = bound.joinRole(current).typeDescriptor(innerColumn);
+    int outerDescriptor = context.table(outerRole).typeDescriptor(outerColumn);
+    int innerDescriptor = context.table(current).typeDescriptor(innerColumn);
     if (!SqlTypeDescriptor.canCompare(outerDescriptor, innerDescriptor)
-        || indexed(bound, stage)) return;
-    bound.setJoinStrategy(
+        || indexed(context, stage)) return;
+    context.setStrategy(
         stage, SqlJoinStrategy.HASH, outerRole, outerColumn, innerColumn);
     selected = true;
   }
 
-  private static boolean indexed(BoundSqlStatement bound, int stage) {
-    int column = bound.joinAccessInnerColumn(stage);
+  private static boolean indexed(SqlBoundJoinContext context, int stage) {
+    int column = context.accessInnerColumn(stage);
     return column >= 0
-        && (column == 0 || bound.joinRole(stage + 1).hasIndexOn(column));
+        && (column == 0 || context.table(stage + 1).hasIndexOn(column));
   }
 
 }

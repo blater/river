@@ -2,37 +2,42 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.sql.SqlCommand;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Lazy subordinate HASH/MERGE candidate workspaces for one selected stage. */
 final class SqlJoinStrategyCandidates {
   private final RelationalSession session;
-  private final BoundSqlStatement bound;
   private SqlJoinHashWorkspace hash;
   private SqlJoinMergeWorkspace merge;
+  private SqlBoundJoinContext context;
+  private SqlCommand command;
   private int stage = -1;
   private int strategy = SqlJoinStrategy.NESTED_LOOP;
   private boolean fallback;
 
-  SqlJoinStrategyCandidates(
-      RelationalSession relationalSession, BoundSqlStatement statement) {
+  SqlJoinStrategyCandidates(RelationalSession relationalSession) {
     session = relationalSession;
-    bound = statement;
+  }
+
+  void configure(SqlBoundJoinContext joinContext, SqlCommand canonicalCommand) {
+    context = joinContext;
+    command = canonicalCommand;
   }
 
   StatusCode begin() {
     resetMetrics();
     stage = selectedStage();
     if (stage < 0) return StatusCode.OK;
-    strategy = bound.joinStrategy(stage);
+    strategy = context.strategy(stage);
     StatusCode status;
     if (strategy == SqlJoinStrategy.HASH) {
       if (hash == null) hash = new SqlJoinHashWorkspace(session);
-      status = hash.begin(bound);
+      status = hash.begin(command, context);
       if (status.isOk()) fallback = hash.fallback();
     } else {
       if (merge == null) merge = new SqlJoinMergeWorkspace(session);
-      status = merge.begin(bound);
+      status = merge.begin(context);
     }
     return status;
   }
@@ -40,7 +45,7 @@ final class SqlJoinStrategyCandidates {
   StatusCode beginProbe(
       SqlJoinRoleRows rows, SqlExpressionEvaluator expressions) {
     return strategy == SqlJoinStrategy.HASH
-        ? hash.beginProbe(rows, bound) : merge.beginProbe(rows, expressions);
+        ? hash.beginProbe(rows, context) : merge.beginProbe(rows, expressions);
   }
 
   StatusCode nextCandidate() {
@@ -82,8 +87,8 @@ final class SqlJoinStrategyCandidates {
 
   private int selectedStage() {
     for (int current = 0;
-        current < bound.command.joinChain().stageCount(); current++) {
-      if (bound.joinStrategy(current) != SqlJoinStrategy.NESTED_LOOP) return current;
+        current < command.joinChain().stageCount(); current++) {
+      if (context.strategy(current) != SqlJoinStrategy.NESTED_LOOP) return current;
     }
     return -1;
   }

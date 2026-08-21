@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlComparison;
+import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.storage.heap.HeapRowResult;
 
@@ -16,6 +17,9 @@ final class SqlBoundPredicateEvaluator {
       new SqlBooleanPredicateEvaluator[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final SqlBooleanPredicateWorkspace joinWorkspace;
   private final SqlTemporalContext temporal;
+  private SqlCommand joinCommand;
+  private SqlBoundJoinContext joinContext;
+  private SqlBoundBooleanPredicateProgram joinWhere;
   private final SqlBooleanPredicateEvaluator.Match booleanMatch =
       new SqlBooleanPredicateEvaluator.Match();
   private boolean matched;
@@ -37,19 +41,28 @@ final class SqlBoundPredicateEvaluator {
   }
 
   StatusCode prepare() {
+    return booleans.prepare(bound.command, bound.whereBoolean);
+  }
+
+  StatusCode configureJoin(
+      SqlCommand command,
+      SqlBoundJoinContext context,
+      SqlBoundBooleanPredicateProgram where) {
+    joinCommand = command;
+    joinContext = context;
+    joinWhere = where;
     StatusCode status = StatusCode.OK;
-    int stages = bound.command.joinChain() == null
-        ? 0 : bound.command.joinChain().stageCount();
+    int stages = command.joinChain().stageCount();
     for (int stage = 0; status.isOk() && stage < stages; stage++) {
       if (joinOn[stage] == null) {
         joinOn[stage] = new SqlBooleanPredicateEvaluator(joinWorkspace, temporal);
       }
-      status = bound.hasOnBoolean(stage)
-          ? joinOn[stage].prepare(bound.command, bound.onBoolean(stage))
+      status = context.hasOnBoolean(stage)
+          ? joinOn[stage].prepare(command, context.onBoolean(stage))
           : StatusCode.OK;
     }
     return status.isOk()
-        ? booleans.prepare(bound.command, bound.whereBoolean) : status;
+        ? booleans.prepare(command, where) : status;
   }
 
   void reset() {
@@ -59,6 +72,9 @@ final class SqlBoundPredicateEvaluator {
     }
     matched = false;
     joinStatus = StatusCode.OK;
+    joinCommand = null;
+    joinContext = null;
+    joinWhere = null;
   }
 
   StatusCode evaluate(long primaryKey, HeapRowResult source) {
@@ -87,8 +103,8 @@ final class SqlBoundPredicateEvaluator {
 
   boolean matchesJoinOn(int stage, SqlJoinRoleRows rows) {
     joinStatus = joinOn[stage].matchesJoin(
-        bound.command,
-        bound.onBoolean(stage),
+        joinCommand,
+        joinContext.onBoolean(stage),
         rows,
         booleanMatch);
     return joinStatus.isOk() && booleanMatch.matched();
@@ -104,8 +120,8 @@ final class SqlBoundPredicateEvaluator {
 
   boolean matchesJoinWhere(SqlJoinRoleRows rows) {
     joinStatus = booleans.matchesJoin(
-        bound.command,
-        bound.whereBoolean,
+        joinCommand,
+        joinWhere,
         rows,
         booleanMatch);
     return joinStatus.isOk() && booleanMatch.matched();

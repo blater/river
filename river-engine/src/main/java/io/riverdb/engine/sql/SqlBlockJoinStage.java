@@ -6,7 +6,6 @@ import io.riverdb.base.error.StatusCode;
 final class SqlBlockJoinStage {
   private final BoundSqlStatement bound;
   private final SqlBlockSource source;
-  private final SqlBoundPredicateEvaluator predicates;
   private final SqlRowProjectionEvaluator projections;
 
   SqlBlockJoinStage(
@@ -16,12 +15,12 @@ final class SqlBlockJoinStage {
       SqlRowProjectionEvaluator projectionEvaluator) {
     bound = statement;
     source = blockSource;
-    predicates = predicateEvaluator;
     projections = projectionEvaluator;
   }
 
-  StatusCode prepare() {
-    StatusCode status = predicates.prepare();
+  StatusCode prepare(int block) {
+    StatusCode status = source.configureJoin(
+        bound.existingJoinContext(block), bound.blockPlans().command(block));
     return status.isOk() ? projections.prepare(bound) : status;
   }
 

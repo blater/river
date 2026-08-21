@@ -86,15 +86,17 @@ final class SqlPersistedViewCompiler {
       BoundSqlStatement bound,
       SqlCommand base) {
     boolean join = base.type() == io.riverdb.sql.SqlCommandType.JOIN_SCAN;
+    int block = Math.max(0, bound.query.blockCount() - 1);
+    SqlBoundJoinContext context = join ? bound.joinContext(block) : null;
     StatusCode status = join
-        ? binder.resolveJoinRoles(session, base, bound, true)
+        ? binder.resolveJoinRoles(session, base, context, null, true)
         : session.resolveTable(base.tableName(), bound.table);
     if (!status.isOk()) return StatusCode.CORRUPTION;
     int count = join ? base.joinChain().roleCount() : 1;
     if (definition.tableCount() != count) return StatusCode.CORRUPTION;
     for (int index = 0; index < count; index++) {
       int rebound = join
-          ? bound.joinRole(index).tableId() : bound.table.tableId();
+          ? context.table(index).tableId() : bound.table.tableId();
       if (definition.tableId(index) != rebound) {
         return StatusCode.CORRUPTION;
       }

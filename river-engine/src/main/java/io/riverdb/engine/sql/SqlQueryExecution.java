@@ -62,7 +62,7 @@ final class SqlQueryExecution {
         session, bound, expressions, temporal);
     predicates = new SqlBoundPredicateEvaluator(
         bound, expressions, subqueries, temporal);
-    joinSource = new SqlJoinChainSource(session, bound, expressions, predicates);
+    joinSource = new SqlJoinChainSource(session, expressions, predicates);
     pointQueries = new SqlPointQueryExecution(
         session, bound, expressions, predicates, rowProjections, temporal);
     joins = new SqlJoinExecution(
@@ -191,9 +191,16 @@ final class SqlQueryExecution {
   StatusCode prepareProjectionPrograms() {
     StatusCode status = query.edgeCount() > 0
         ? subqueries.prepare() : StatusCode.OK;
-    if (status.isOk() && query.edgeCount() == 0) status = predicates.prepare();
+    if (status.isOk() && command.type() != SqlCommandType.JOIN_SCAN
+        && query.edgeCount() == 0) {
+      status = predicates.prepare();
+    }
     if (status.isOk()) status = rowProjections.prepare(bound);
     return status.isOk() ? groups.prepareHaving() : status;
+  }
+
+  StatusCode configureJoin() {
+    return joins.configure(bound.command, bound.existingJoinContext(0));
   }
 
   StatusCode prepareBlockPipeline() {

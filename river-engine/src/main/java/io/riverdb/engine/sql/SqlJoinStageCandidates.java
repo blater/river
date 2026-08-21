@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
+import io.riverdb.sql.SqlCommand;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Physical candidate dispatcher with one active subordinate strategy workspace. */
@@ -10,17 +11,20 @@ final class SqlJoinStageCandidates {
   private static final int OPENED = 1;
   private static final int FINISHED = 2;
   private static final int CANDIDATE = 3;
-  private final BoundSqlStatement bound;
   private final RelationalSession session;
   private final SqlJoinStrategyCandidates strategies;
+  private SqlBoundJoinContext context;
   private int outcome;
   private boolean unique;
 
-  SqlJoinStageCandidates(
-      RelationalSession relationalSession, BoundSqlStatement statement) {
+  SqlJoinStageCandidates(RelationalSession relationalSession) {
     session = relationalSession;
-    bound = statement;
-    strategies = new SqlJoinStrategyCandidates(relationalSession, statement);
+    strategies = new SqlJoinStrategyCandidates(relationalSession);
+  }
+
+  void configure(SqlBoundJoinContext joinContext, SqlCommand command) {
+    context = joinContext;
+    strategies.configure(joinContext, command);
   }
 
   StatusCode begin() {
@@ -43,12 +47,12 @@ final class SqlJoinStageCandidates {
       return status;
     }
     int rightRole = current + 1;
-    int outerRole = bound.joinAccessOuterRole(current);
-    int outerColumn = bound.joinAccessOuterColumn(current);
+    int outerRole = context.accessOuterRole(current);
+    int outerColumn = context.accessOuterColumn(current);
     if (outerColumn < 0) return beginTable(current, rightRole, cursors, rows);
     HeapRowResult outerRow = rows.row(outerRole);
     if (outerRow == null
-        || expressions.isNull(outerRow, bound.joinRole(outerRole), outerColumn)) {
+        || expressions.isNull(outerRow, context.table(outerRole), outerColumn)) {
       outcome = FINISHED;
       return StatusCode.OK;
     }
@@ -105,14 +109,14 @@ final class SqlJoinStageCandidates {
       SqlJoinChainCursors cursors,
       SqlJoinRoleRows rows,
       SqlExpressionEvaluator expressions) {
-    int innerColumn = bound.joinAccessInnerColumn(current);
+    int innerColumn = context.accessInnerColumn(current);
     if (innerColumn < 0 || cursors.rightIndexed(current)) return true;
     int rightRole = current + 1;
     HeapRowResult right = rows.row(rightRole);
-    TableDefinition rightTable = bound.joinRole(rightRole);
+    TableDefinition rightTable = context.table(rightRole);
     if (expressions.isNull(right, rightTable, innerColumn)) return false;
-    int outerRole = bound.joinAccessOuterRole(current);
-    int outerColumn = bound.joinAccessOuterColumn(current);
+    int outerRole = context.accessOuterRole(current);
+    int outerColumn = context.accessOuterColumn(current);
     long leftValue = expressions.readColumn(
         rows.key(outerRole), rows.row(outerRole), outerColumn);
     long rightValue = expressions.readColumn(
@@ -121,7 +125,7 @@ final class SqlJoinStageCandidates {
         rightValue,
         rightTable.typeDescriptor(innerColumn),
         leftValue,
-        bound.joinRole(outerRole).typeDescriptor(outerColumn)) == 0;
+        context.table(outerRole).typeDescriptor(outerColumn)) == 0;
   }
 
   boolean fallback(int current) { return strategies.fallback(current); }

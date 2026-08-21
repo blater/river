@@ -54,6 +54,26 @@ final class SqlAccessEdgeSelector {
     clear();
   }
 
+  void selectJoin(
+      SqlBooleanPredicateProgram source,
+      SqlBoundBooleanPredicateProgram programs,
+      SqlBoundJoinContext context) {
+    count = 0;
+    collect(source, programs, programs.root());
+    context.accessPredicate = -1;
+    context.predicateColumn = -1;
+    context.accessComparison = null;
+    int best = -1;
+    TableDefinition table = context.table(0);
+    for (int edge = 0; edge < count; edge++) {
+      if (comparisons[edge] != SqlComparison.EQUAL) continue;
+      int score = score(table, columns[edge], comparisons[edge]);
+      if (score > best && publish(context, edge)) best = score;
+    }
+    selectRange(context, best);
+    clear();
+  }
+
   private void selectTextPoint(BoundSqlStatement bound) {
     for (int edge = 0; edge < count; edge++) {
       int column = columns[edge];
@@ -156,6 +176,31 @@ final class SqlAccessEdgeSelector {
     return true;
   }
 
+  private boolean publish(SqlBoundJoinContext context, int edge) {
+    int column = columns[edge];
+    int target = context.table(0).typeDescriptor(column);
+    SqlComparison comparison = comparisons[edge];
+    if (comparison == SqlComparison.HALF_OPEN_RANGE) {
+      return normalizeRange(
+              values[edge], descriptors[edge], SqlComparison.GREATER_OR_EQUAL,
+              upperValues[edge], upperDescriptors[edge], SqlComparison.LESS_OR_EQUAL,
+              target)
+          && publishRange(context, edge, column);
+    }
+    if (comparison != SqlComparison.EQUAL
+        || !convert(values[edge], descriptors[edge], target, comparison)) {
+      return false;
+    }
+    long value = convertedValue;
+    context.accessPredicate = leaves[edge];
+    context.predicateColumn = column;
+    context.accessComparison = comparison;
+    context.accessValue = value;
+    context.accessLowerInclusive = value;
+    context.accessUpperExclusive = value;
+    return true;
+  }
+
   private void selectRange(BoundSqlStatement bound, int previousBest) {
     int best = previousBest;
     for (int edge = 0; edge < count; edge++) {
@@ -169,6 +214,24 @@ final class SqlAccessEdgeSelector {
       bound.accessComparison = SqlComparison.HALF_OPEN_RANGE;
       bound.accessLowerInclusive = normalizedLower;
       bound.accessUpperExclusive = normalizedUpper;
+      best = score;
+    }
+  }
+
+  private void selectRange(SqlBoundJoinContext context, int previousBest) {
+    int best = previousBest;
+    TableDefinition table = context.table(0);
+    for (int edge = 0; edge < count; edge++) {
+      int column = columns[edge];
+      int score = score(table, column, SqlComparison.HALF_OPEN_RANGE);
+      if (score <= best || !rangeForColumn(column, table.typeDescriptor(column))) {
+        continue;
+      }
+      context.accessPredicate = leaves[edge];
+      context.predicateColumn = column;
+      context.accessComparison = SqlComparison.HALF_OPEN_RANGE;
+      context.accessLowerInclusive = normalizedLower;
+      context.accessUpperExclusive = normalizedUpper;
       best = score;
     }
   }
@@ -226,6 +289,16 @@ final class SqlAccessEdgeSelector {
     bound.accessComparison = SqlComparison.HALF_OPEN_RANGE;
     bound.accessLowerInclusive = normalizedLower;
     bound.accessUpperExclusive = normalizedUpper;
+    return true;
+  }
+
+  private boolean publishRange(
+      SqlBoundJoinContext context, int edge, int column) {
+    context.accessPredicate = leaves[edge];
+    context.predicateColumn = column;
+    context.accessComparison = SqlComparison.HALF_OPEN_RANGE;
+    context.accessLowerInclusive = normalizedLower;
+    context.accessUpperExclusive = normalizedUpper;
     return true;
   }
 

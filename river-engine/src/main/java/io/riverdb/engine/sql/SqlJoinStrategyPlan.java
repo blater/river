@@ -30,21 +30,21 @@ final class SqlJoinStrategyPlan {
     left[step] = leftStage;
   }
 
-  int directInner(BoundSqlStatement bound, int stage) {
-    return bound.joinStrategy(stage) != SqlJoinStrategy.NESTED_LOOP
-        ? bound.joinStrategyInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
+  int directInner(SqlBoundJoinContext context, int stage) {
+    return context.strategy(stage) != SqlJoinStrategy.NESTED_LOOP
+        ? context.strategyInnerColumn(stage) : context.accessInnerColumn(stage);
   }
 
-  int directAccess(BoundSqlStatement bound, int stage, int inner) {
-    int strategy = bound.joinStrategy(stage);
+  int directAccess(SqlBoundJoinContext context, int stage, int inner) {
+    int strategy = context.strategy(stage);
     if (strategy == SqlJoinStrategy.HASH || inner < 0) return 0;
     if (strategy == SqlJoinStrategy.MERGE) {
       if (inner == 0) return 0;
-      return bound.joinRole(stage + 1).hasIndexOn(inner) ? 1 : 3;
+      return context.table(stage + 1).hasIndexOn(inner) ? 1 : 3;
     }
-    boolean indexed = inner == 0 || bound.joinRole(stage + 1).hasIndexOn(inner);
+    boolean indexed = inner == 0 || context.table(stage + 1).hasIndexOn(inner);
     if (!indexed) return 0;
-    return inner == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(inner) ? 2 : 1;
+    return inner == 0 || context.table(stage + 1).hasUniqueIndexOn(inner) ? 2 : 1;
   }
 
   long access(int strategy, int access) {
