@@ -1,15 +1,16 @@
 # M5 bounded n-table JOIN delivery plan
 
-Status: J1-J5 accepted and shipped at alpha checkpoint `4c50133`; J6a
-index-ordered merge accepted at `48a239d`; J6b right-sort-fed and later-stage
-merge accepted at `7917393`; J7 cost planning remains planned.
+Status: J1-J6b are accepted on the alpha line; J7a durable statistics and
+SQL-order strategy costing are accepted at `4de99ca`. J7b physical inner-island
+reordering is deliberately deferred beyond this alpha.
 
 Owner: relational execution lead. Catalog-format changes require an independent
 durability/compatibility review before promotion.
 
-Repository checkpoint: `master` contains the pushed J1-J5 alpha; J6b is the
-`7917393` code checkpoint on `feature/n-table-joins`. P4C continues independently
-on `feature/p4c-subqueries`; it is not part of this checkpoint.
+Repository checkpoint: `release/0.1.0-alpha.1` contains J1-J6b and
+`feature/n-table-joins` contains the accepted J7a code checkpoint `4de99ca`.
+P4C continues independently on `feature/p4c-subqueries`; it is not part of this
+checkpoint.
 
 ## Outcome
 
@@ -31,7 +32,7 @@ The completed slice supports:
 - direct or deepest-derived durable views with exact ordered role lineage;
 - bounded nested-loop, hash, and merge physical strategies behind the same
   logical stage semantics; and
-- cost-based left-deep ordering and strategy selection for inner-join islands.
+- durable bounded statistics and deterministic SQL-order strategy costing.
 
 This plan deliberately does not include P4C subqueries. It establishes the
 multi-role scope and row-provider boundary that P4C consumes next.
@@ -49,10 +50,11 @@ multi-role scope and row-provider boundary that P4C consumes next.
   `ON` program and to `WHERE`.
 - A ninth role returns `RESOURCE_EXHAUSTED`. Recognized but excluded join forms
   return `FEATURE_NOT_SUPPORTED`.
-- Hash execution is bounded to 65,536 in-memory build rows, 64 MiB of retained
-  hash state, 32 spill partitions, and 256 MiB of join spill per statement.
-- Cost enumeration uses fixed arrays for at most 256 role subsets; it does not
-  allocate plan candidates on the statement or row path.
+- Hash execution uses stable in-memory buckets through the existing 1,024-row
+  store threshold, then the same store's bounded nested fallback through
+  65,536 rows/256 MiB. Partitioned spill hashing is deferred.
+- J7b cost enumeration will use fixed arrays for at most 256 role subsets; J7a
+  allocates no plan candidates on the statement or row path.
 
 Excluded from this slice are `RIGHT`, `FULL`, `CROSS`, `NATURAL`, and `USING`
 joins; parenthesized/right-deep join trees; lateral relations; joined DML; and
@@ -221,21 +223,30 @@ serially; no stage retains a second hash/sort arena after close.
 
 ## Statistics and cost planning
 
-J7 adds one compact `SqlJoinPlanner`; it does not build a second logical query
-tree. Statistics are schema-epoch-owned catalog data produced by bounded
-`ANALYZE table` scans and contain, for each of at most eight columns: row count,
-NULL count, bounded distinct estimate, and typed min/max where representable.
-Index uniqueness/readiness remains authoritative. Stale or absent statistics
-select conservative SQL-order nested/index execution rather than guessed
-reordering.
+J7a is accepted for the alpha. One compact `SqlJoinPlanner` costs the existing
+SQL-order chain; it does not build a second logical query tree. Table-ID-owned
+catalog statistics are produced by bounded `ANALYZE [TABLE] name` scans and
+contain row and NULL counts, an exact-or-capped 1,024-value distinct count, and
+typed min/max for representable fixed-width columns. The record stores the
+analyzed commit epoch, survives checkpoint/WAL replay and backup/restore, and
+is deleted atomically with its table. DML does not refresh it: administrators
+rerun `ANALYZE` when fresh estimates matter.
 
-The planner splits a chain at every `LEFT JOIN`. Each maximal all-inner island
-is reordered independently with fixed-array dynamic programming over at most
-256 role subsets. A LEFT stage and everything to its left remain an order
-barrier; no role may move across it. For each legal extension, estimate and
-compare indexed nested-loop, table nested-loop, hash, and merge costs using one
-documented deterministic formula. Ties resolve by SQL role order, then nested
-loop, hash, and merge, so identical catalog state yields an identical plan.
+When every role has statistics and all join programs are proven total, J7a
+estimates each SQL-order stage and deterministically compares nested-loop,
+hash, and merge costs for the already eligible physical-strategy stage. Index
+uniqueness/readiness remains authoritative. Missing statistics retain the
+accepted deterministic J5/J6 selector rather than inventing cardinalities.
+`EXPLAIN [ANALYZE]` adds per-role `exact`/`sample` statistics rows and per-stage
+`est` rows; execution counters retain their existing candidate/output meaning.
+
+J7b is deliberately deferred beyond this alpha. It will split a chain at every
+`LEFT JOIN` and reorder each maximal all-inner island with fixed-array dynamic
+programming over at most 256 role subsets. A LEFT stage and everything to its
+left remain an order barrier; no role may move across it. For each legal
+extension it will compare indexed nested-loop, table nested-loop, hash, and
+merge costs. Ties resolve by SQL role order, then nested loop, hash, and merge,
+so identical catalog state yields an identical plan.
 
 Reordering is also an error-semantics barrier. An inner island may be permuted
 only when every moved ON program and every downstream per-row program whose
@@ -244,11 +255,9 @@ classifier. Otherwise retain SQL role order and only choose a strategy that
 preserves candidate/residual order. This conservative rule is removed only by
 a later explicit logical residual schedule with its own semantics and tests.
 
-The chosen plan retains original role IDs for name binding and result metadata
-while storing a separate physical stage order. `EXPLAIN` reports logical roles,
-physical order, selected strategy, statistics epoch, and whether each estimate
-was exact, sampled, or absent. `ANALYZE` adds estimated-versus-actual candidate
-and output rows without changing the plan during execution.
+J7b will retain original role IDs for name binding and result metadata while
+storing a separate physical stage order. Until then physical order is SQL role
+order and absent statistics are represented by the pre-J7 plan shape.
 
 `EXPLAIN` emits, in stage order:
 
@@ -318,9 +327,12 @@ dropped. Backup copies v4 bytes unchanged and restore revalidates them.
    right relation through the existing row store and admit later physical
    stages when the incoming equality chain already proves compatible order,
    without a second executor or spill format.
-8. **J7 — cost planning:** add bounded catalog statistics/`ANALYZE`, fixed-array
-   inner-island enumeration, LEFT barriers, deterministic strategy costs,
-   physical order/estimate reporting, invalidation, reopen, and backup evidence.
+8. **J7a — SQL-order cost planning (alpha accepted):** add bounded durable
+   catalog statistics/`ANALYZE`, deterministic strategy costs, estimate
+   reporting, table-ID invalidation, reopen, and backup evidence.
+9. **J7b — physical join ordering (deferred):** add fixed-array inner-island
+   enumeration, LEFT/error barriers, physical-order reporting, and exact
+   reordered-versus-SQL-order equivalence evidence.
 
 Each slice is committed only when its newly admitted syntax has a real runtime
 consumer or remains explicitly fail-closed. No partial silent admission.
@@ -342,9 +354,10 @@ Promotion requires focused and full affected-module evidence for:
 - index-ordered and explicitly sorted merge joins, duplicate runs crossing a
   spill boundary, LEFT residual-false runs, NULL ordering, and exact identity
   with nested loop/hash;
-- deterministic statistics capture and invalidation, absent/stale fallback,
-  eight-role inner-island reordering, multiple LEFT barriers, cost ties, and
-  estimated-versus-actual plan evidence;
+- deterministic statistics capture and table-ID invalidation, absent/stale
+  fallback, cost ties, and estimated-versus-actual SQL-order plan evidence;
+- for J7b only, eight-role inner-island reordering, multiple LEFT/error
+  barriers, and physical-order equivalence evidence;
 - direct projection/order and P3 aggregate/group/`HAVING`/`DISTINCT`/spill;
 - exact `EXPLAIN ANALYZE` stage order and counts;
 - runtime overflow/DST/text corruption after an earlier candidate, terminal

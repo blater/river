@@ -12,8 +12,10 @@ production release. Use disposable data and keep independent backups.
 - The eight documented SQL scalar families, typed parameters/results, DML,
   joins, derived tables, aggregation, grouping/HAVING, DISTINCT, ordering,
   bounded spill, EXPLAIN, and EXPLAIN ANALYZE.
-- Bounded raw nested/correlated query forms and durable direct or
-  deepest-derived two-table JOIN views.
+- Two-to-eight-role inner/left joins, direct and deepest-derived durable JOIN
+  views with ordered lineage, bounded hash/merge strategies, direct/P3
+  ordering and spill, and durable `ANALYZE` statistics for SQL-order costing.
+- Bounded raw nested/correlated query forms.
 
 ## Known limitations
 
@@ -35,9 +37,13 @@ production release. Use disposable data and keep independent backups.
 - Backup is quiescent/offline. Online backup, in-place upgrade, migration,
   repair automation, and production operational tooling are not complete.
 - Computed/generalized correlation, nested parameters and durable nested
-  views, broader cross-column or contextual CHECK expressions, direct JOIN
-  ordering, multiple/nondeep JOIN blocks, and generalized JOIN/correlation
-  combinations fail closed or remain unsupported.
+  views, broader cross-column or contextual CHECK expressions,
+  multiple/nondeep JOIN blocks, and generalized JOIN/correlation combinations
+  fail closed or remain unsupported.
+- Join statistics remain unchanged after DML until `ANALYZE` is rerun. The
+  alpha costs strategies in SQL role order; physical inner-island reordering
+  is deferred. Hash input beyond the in-memory envelope uses the documented
+  stable bounded fallback rather than partitioned spill hashing.
 - Replication, failover, online schema migration, and production observability
   are not included.
 - JDK 25 is required. Packaging is source/Gradle based; no supported native
