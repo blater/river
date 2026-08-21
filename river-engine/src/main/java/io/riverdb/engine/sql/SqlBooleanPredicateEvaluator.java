@@ -26,8 +26,7 @@ final class SqlBooleanPredicateEvaluator {
   private final SqlPredicateOperand upper;
   private final SqlTemporalContext.LongResult current =
       new SqlTemporalContext.LongResult();
-  private final SqlTemporalZonePlan[] zones = new SqlTemporalZonePlan[
-      SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
+  private SqlTemporalZonePlan[] zones;
   private SqlCommand command;
   private SqlBoundBooleanPredicateProgram programs;
   private long primaryKey;
@@ -43,6 +42,10 @@ final class SqlBooleanPredicateEvaluator {
   private byte[] havingGroupText;
   private int havingGroupTextLength;
   private int truth;
+  private SqlSubqueryLeafEvaluator subqueries;
+  private SqlNestedRowProvider nestedRows;
+  private final SqlSubqueryLeafEvaluator.Truth subqueryTruth =
+      new SqlSubqueryLeafEvaluator.Truth();
 
   SqlBooleanPredicateEvaluator(
       SqlExpressionEvaluator columnReader, SqlTemporalContext temporalContext) {
@@ -93,6 +96,10 @@ final class SqlBooleanPredicateEvaluator {
       }
       if (operator != SqlScalarExpression.AT_TIME_ZONE) continue;
       if (++zoneNodes > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
+      if (zones == null) {
+        zones = new SqlTemporalZonePlan[
+            SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
+      }
       if (zones[slot] == null) zones[slot] = new SqlTemporalZonePlan();
       StatusCode status = temporal.prepareZone(
           source, bound.operand(leaf, program, node), zones[slot]);
@@ -123,6 +130,24 @@ final class SqlBooleanPredicateEvaluator {
     StatusCode status = evaluateNode(bound.root());
     if (status.isOk()) result.matched = truth == TRUE;
     clearEvaluation();
+    return status;
+  }
+
+  StatusCode matchesNested(
+      SqlCommand source,
+      SqlBoundBooleanPredicateProgram bound,
+      long key,
+      HeapRowResult row,
+      TableDefinition definition,
+      SqlSubqueryLeafEvaluator nested,
+      SqlNestedRowProvider rows,
+      Match result) {
+    SqlSubqueryLeafEvaluator previous = subqueries;
+    subqueries = nested;
+    nestedRows = rows;
+    StatusCode status = matches(source, bound, key, row, definition, result);
+    subqueries = previous;
+    nestedRows = null;
     return status;
   }
 
@@ -222,10 +247,16 @@ final class SqlBooleanPredicateEvaluator {
   }
 
   private StatusCode evaluateLeaf(int leaf) {
-    StatusCode status = operand(
-        leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, left);
-    if (!status.isOk()) return status;
     int test = programs.leafTest(leaf);
+    if (test == SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS) {
+      return subquery(leaf, null);
+    }
+    StatusCode status = operand(leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT, left);
+    if (!status.isOk()) return status;
+    if (test == SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON
+        || test == SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP) {
+      return subquery(leaf, left);
+    }
     if (test == SqlBooleanPredicateProgram.TEST_NULL) {
       truth = left.nullValue() != programs.negated(leaf) ? TRUE : FALSE;
       return StatusCode.OK;
@@ -247,6 +278,16 @@ final class SqlBooleanPredicateEvaluator {
     }
     return test == SqlBooleanPredicateProgram.TEST_MEMBERSHIP
         ? membership(leaf) : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private StatusCode subquery(int leaf, SqlPredicateOperand operand) {
+    if (subqueries == null || programs.subqueryEdge(leaf) < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = subqueries.evaluate(
+        programs.subqueryEdge(leaf), operand, subqueryTruth);
+    if (status.isOk()) truth = subqueryTruth.value();
+    return status;
   }
 
   private StatusCode explicitTruth(int leaf) {
@@ -334,7 +375,11 @@ final class SqlBooleanPredicateEvaluator {
           havingGroupTextLength,
           result);
     }
-    SqlTemporalZonePlan zone = zones[programSlot(leaf, program)];
+    SqlTemporalZonePlan zone = zones == null ? null : zones[programSlot(leaf, program)];
+    if (nestedRows != null) {
+      return expressions.evaluateNested(
+          command, programs, leaf, program, zone, nestedRows, result);
+    }
     if (join) {
       return expressions.evaluateJoin(
           command,
@@ -408,6 +453,8 @@ final class SqlBooleanPredicateEvaluator {
     havingGroupText = null;
     havingGroupTextLength = 0;
     truth = FALSE;
+    subqueries = null;
+    nestedRows = null;
     resetOperands();
   }
 
@@ -422,12 +469,14 @@ final class SqlBooleanPredicateEvaluator {
   }
 
   private void resetZones() {
+    if (zones == null) return;
     for (int index = 0; index < zones.length; index++) {
       if (zones[index] != null) {
         zones[index].reset();
         zones[index] = null;
       }
     }
+    zones = null;
   }
 
   static final class Match {

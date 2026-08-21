@@ -20,17 +20,25 @@ final class SqlBlockStageProjector {
     predicates = new SqlBlockPredicateEvaluator(statement, expressions, temporal);
   }
 
-  StatusCode prepare() { return predicates.prepare(bound.command); }
+  StatusCode prepare(int block) {
+    return bound.executableQuery.edgeCount() > 0
+            && block == bound.executableQuery.sourceBlockCount() - 1
+        ? StatusCode.OK : predicates.prepare(bound.command);
+  }
 
   StatusCode project(
       int block,
       SqlBlockRow source,
       SqlBlockRow destination,
       Projected result) {
-    StatusCode status = predicates.matches(bound.command, source, match);
+    boolean nestedSource = bound.executableQuery.edgeCount() > 0
+        && block == bound.executableQuery.sourceBlockCount() - 1;
+    StatusCode status = nestedSource
+        ? StatusCode.OK : predicates.matches(bound.command, source, match);
     if (!status.isOk()) return status;
-    result.available = match.matched;
-    return match.matched ? projections.projectBlock(source, destination) : StatusCode.OK;
+    result.available = nestedSource || match.matched;
+    return result.available
+        ? projections.projectBlock(source, destination) : StatusCode.OK;
   }
 
   void reset() { predicates.reset(); }

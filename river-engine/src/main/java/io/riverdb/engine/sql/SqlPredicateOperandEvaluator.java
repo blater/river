@@ -49,6 +49,35 @@ final class SqlPredicateOperandEvaluator {
     return status;
   }
 
+  StatusCode evaluateNested(
+      SqlCommand command,
+      SqlBoundBooleanPredicateProgram programs,
+      int leaf,
+      int program,
+      SqlTemporalZonePlan zone,
+      SqlNestedRowProvider rows,
+      SqlPredicateOperand result) {
+    machine.beginPredicateOperand();
+    StatusCode status = StatusCode.OK;
+    for (int node = 0;
+        status.isOk() && node < programs.nodeCount(leaf, program); node++) {
+      int scope = programs.scope(leaf, program, node);
+      status = machine.predicateOperandNode(
+          command,
+          programs.operator(leaf, program, node),
+          programs.operand(leaf, program, node),
+          programs.descriptor(leaf, program, node),
+          zone,
+          rows.key(scope),
+          rows.row(scope),
+          rows.table(scope),
+          null);
+    }
+    if (status.isOk()) return machine.finishPredicateOperand(result);
+    machine.reset();
+    return status;
+  }
+
   StatusCode evaluateHaving(
       SqlCommand command,
       SqlBoundBooleanPredicateProgram programs,

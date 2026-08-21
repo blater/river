@@ -8,12 +8,13 @@ final class SqlDerivedPipelinePolicy {
 
   static StatusCode validate(
       SqlQuery query, SqlDerivedReferenceValidator references, int firstBlock) {
-    if (query.blockCount() < 2 || firstBlock < 0 || firstBlock >= query.blockCount()) {
+    int count = query.sourceBlockCount();
+    if (count < 2 || firstBlock < 0 || firstBlock >= count) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int index = firstBlock; index < query.blockCount(); index++) {
+    for (int index = firstBlock; index < count; index++) {
       SqlCommand block = query.block(index);
-      StatusCode status = shape(block, index, query.blockCount() - 1);
+      StatusCode status = shape(block, index, count - 1);
       if (status.isOk()) status = references.validate(index, true);
       if (!status.isOk()) return status;
     }

@@ -124,14 +124,24 @@ public final class SqlParser {
     return parseText(sql, result);
   }
 
-  StatusCode parseSyntheticQueryBlock(
-      CharSequence sql, int replacementOffset, SqlCommand result) {
-    predicateParser.beginSynthetic(replacementOffset);
+  StatusCode parseSubqueryBlock(
+      CharSequence sql,
+      int[] offsets,
+      int[] kinds,
+      int[] edges,
+      int count,
+      SqlCommand result) {
+    if (offsets == null || kinds == null || edges == null || result == null
+        || count < 0 || count > SqlBooleanPredicateProgram.MAXIMUM_LEAVES
+        || count > offsets.length || count > kinds.length || count > edges.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    predicateParser.beginSubqueries(offsets, kinds, edges, count);
     return parseText(sql, result);
   }
 
-  int syntheticPredicateIndex() {
-    return predicateParser.syntheticPredicateIndex();
+  int subqueryLeaf(int index) {
+    return predicateParser.subqueryLeaf(index);
   }
 
 

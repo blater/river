@@ -9,6 +9,7 @@ final class SqlBlockSource {
   private final io.riverdb.engine.relational.RelationalSession session;
   private final BoundSqlStatement bound;
   private final SqlRowProjectionEvaluator projections;
+  private final SqlBoundPredicateEvaluator predicates;
   private final SqlBlockPhysicalRowReader physical = new SqlBlockPhysicalRowReader();
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult result = new RelationalScanResult();
@@ -18,10 +19,12 @@ final class SqlBlockSource {
       io.riverdb.engine.relational.RelationalSession relationalSession,
       BoundSqlStatement statement,
       SqlJoinChainSource joinSource,
+      SqlBoundPredicateEvaluator predicateEvaluator,
       SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = statement;
     join = joinSource;
+    predicates = predicateEvaluator;
     projections = projectionEvaluator;
   }
 
@@ -31,9 +34,23 @@ final class SqlBlockSource {
 
   StatusCode next(SqlBlockRowStore input, SqlBlockRow row) {
     if (input != null) return input.next(row);
-    StatusCode status = session.nextScan(cursor, result);
-    return status.isOk()
-        ? physical.read(result.key(), result.row(), bound.table, row) : status;
+    while (true) {
+      StatusCode status = session.nextScan(cursor, result);
+      if (!status.isOk()) return status;
+      if (bound.executableQuery.edgeCount() == 0) {
+        return physical.read(result.key(), result.row(), bound.table, row);
+      }
+      status = predicates.evaluate(result.key(), result.row());
+      if (!status.isOk()) return status;
+      if (!predicates.matched()) {
+        predicates.releaseEvaluatedRow();
+        continue;
+      }
+      status = physical.read(
+          result.key(), predicates.evaluatedRow(result.row()), bound.table, row);
+      predicates.releaseEvaluatedRow();
+      return status;
+    }
   }
 
   StatusCode finish(SqlBlockRowStore input, StatusCode status) {

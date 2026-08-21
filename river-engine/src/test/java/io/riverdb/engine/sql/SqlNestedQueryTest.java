@@ -64,18 +64,20 @@ final class SqlNestedQueryTest {
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             result));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.INVALID_EXTERNAL_INPUT,
         session.execute(
             "SELECT o.id FROM names o WHERE o.id="
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             result));
     assertEquals(StatusCode.OK, explain.reset());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.beginScan(
             "SELECT COUNT(*) FROM names o WHERE EXISTS "
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             explain));
+    assertEquals(StatusCode.OK, session.nextScan(explain, new SqlScanRowResult()));
+    assertEquals(StatusCode.OK, session.closeScan(explain, result));
     assertEquals(
         StatusCode.OK,
         session.execute(
@@ -208,11 +210,13 @@ final class SqlNestedQueryTest {
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         session.beginScan(
             "SELECT id FROM probes WHERE value IN "
                 + "(SELECT value FROM candidates)",
             cursor));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
         StatusCode.OK,

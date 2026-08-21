@@ -24,13 +24,15 @@ final class SqlBooleanScalarBinder {
       int leaf,
       int program,
       int visibleRoles,
-      boolean having) {
+      boolean having,
+      BoundSqlQuery nested,
+      int nestedBlock) {
     target.beginProgram(leaf, program);
     size = 0;
     for (int node = 0; node < source.programNodeCount(leaf, program); node++) {
       StatusCode status = bindNode(
           command, source, target, statement, schema,
-          leaf, program, node, visibleRoles, having);
+          leaf, program, node, visibleRoles, having, nested, nestedBlock);
       if (!status.isOk()) return status;
     }
     if (size != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -52,7 +54,9 @@ final class SqlBooleanScalarBinder {
       int program,
       int node,
       int visibleRoles,
-      boolean having) {
+      boolean having,
+      BoundSqlQuery nested,
+      int nestedBlock) {
     int operator = source.programOperator(leaf, program, node);
     long operand = source.programOperand(leaf, program, node);
     int descriptor = source.programDescriptor(leaf, program, node);
@@ -65,6 +69,10 @@ final class SqlBooleanScalarBinder {
       return group(source, target, statement, leaf, program, operator, having);
     }
     if (operator == SqlScalarExpression.COLUMN) {
+      if (nested != null) {
+        return nestedColumn(
+            command, target, nested, nestedBlock, leaf, program, operator, operand);
+      }
       return column(
           command, target, statement, schema, leaf, program,
           operator, operand, visibleRoles);
@@ -86,6 +94,49 @@ final class SqlBooleanScalarBinder {
             && operator <= SqlScalarExpression.REMAINDER
         ? binary(target, leaf, program, operator, operand)
         : StatusCode.FEATURE_NOT_SUPPORTED;
+  }
+
+  private StatusCode nestedColumn(
+      SqlCommand command,
+      SqlBoundBooleanPredicateProgram target,
+      BoundSqlQuery query,
+      int block,
+      int leaf,
+      int program,
+      int operator,
+      long operand) {
+    int symbol = (int) operand;
+    CharSequence name = command.projectionSymbolName(symbol);
+    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    if (name == null || qualifier == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    int scope = qualifier.length() == 0 ? block : nestedScope(query, block, qualifier);
+    BoundSqlQuery.Block source = query.block(scope);
+    int column = source == null || source.table() == null
+        ? -1 : source.table().findColumn(name);
+    if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (scope != block) query.markCorrelated(block, scope);
+    return push(
+        target,
+        leaf,
+        program,
+        operator,
+        column,
+        source.table().typeDescriptor(column),
+        false,
+        scope);
+  }
+
+  private static int nestedScope(
+      BoundSqlQuery query, int block, CharSequence qualifier) {
+    int scope = block;
+    while (scope >= 0) {
+      BoundSqlQuery.Block source = query.block(scope);
+      if (SqlBindingNames.same(qualifier, source.tableName())
+          || source.tableAlias().length() > 0
+              && SqlBindingNames.same(qualifier, source.tableAlias())) return scope;
+      scope = query.blockParent(scope);
+    }
+    return -1;
   }
 
   private StatusCode aggregate(

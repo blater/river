@@ -11,12 +11,16 @@ final class SqlJoinOuterRow {
   private ByteBuffer bytes;
   private int highWater;
 
+  void prepare() {
+    if (bytes == null) bytes = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
+  }
+
   StatusCode capture(HeapRowResult source) {
     if (source == null || source.length() < 0
         || source.length() > TableSchema.MAXIMUM_ROW_BYTES) {
       return StatusCode.CORRUPTION;
     }
-    if (bytes == null) bytes = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
+    prepare();
     erase();
     bytes.clear();
     bytes.limit(source.length());

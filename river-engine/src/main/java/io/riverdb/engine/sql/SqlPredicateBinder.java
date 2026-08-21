@@ -21,10 +21,6 @@ final class SqlPredicateBinder {
     bound.predicateColumn = -1;
     bound.pointTextColumn = -1;
     bound.accessComparison = null;
-    if (query.hasNestedTopology()) {
-      bound.whereBoolean.reset();
-      return StatusCode.OK;
-    }
     StatusCode status = booleans.bindWhere(command, bound);
     if (status.isOk() && command.wherePredicates().isAvailable()) {
       access.select(command.wherePredicates(), bound.whereBoolean, bound);

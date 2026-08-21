@@ -10,9 +10,7 @@ import io.riverdb.storage.heap.HeapRowResult;
 final class SqlBoundPredicateEvaluator {
   private final BoundSqlStatement bound;
   private final BoundSqlQuery query;
-  private final SqlExpressionEvaluator expressions;
-  private final SqlNestedQueryExecution nested;
-  private final SqlNestedPredicateEvaluator nestedPredicates;
+  private final SqlSubqueryGraphExecution subqueries;
   private final SqlBooleanPredicateEvaluator booleans;
   private final SqlBooleanPredicateEvaluator[] joinOn =
       new SqlBooleanPredicateEvaluator[SqlJoinChain.MAXIMUM_JOIN_STAGES];
@@ -26,13 +24,11 @@ final class SqlBoundPredicateEvaluator {
   SqlBoundPredicateEvaluator(
       BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
-      SqlNestedQueryExecution nestedExecution,
+      SqlSubqueryGraphExecution graph,
       SqlTemporalContext temporal) {
     bound = statement;
     query = statement.executableQuery;
-    expressions = evaluator;
-    nested = nestedExecution;
-    nestedPredicates = new SqlNestedPredicateEvaluator(evaluator);
+    subqueries = graph;
     this.temporal = temporal;
     SqlBooleanPredicateWorkspace workspace =
         new SqlBooleanPredicateWorkspace(evaluator, temporal);
@@ -61,36 +57,30 @@ final class SqlBoundPredicateEvaluator {
     for (SqlBooleanPredicateEvaluator evaluator : joinOn) {
       if (evaluator != null) evaluator.reset();
     }
-    nestedPredicates.reset();
     matched = false;
     joinStatus = StatusCode.OK;
   }
 
   StatusCode evaluate(long primaryKey, HeapRowResult source) {
     matched = false;
-    if (nested.rejectsOuterRow()) return StatusCode.OK;
-    if (bound.whereBoolean.available() && !bound.query.hasNestedTopology()) {
-      StatusCode status = booleans.matches(
+    if (query.edgeCount() > 0) {
+      StatusCode status = subqueries.matches(
+          query.sourceBlockCount() - 1,
+          primaryKey,
+          source,
+          booleanMatch);
+      if (status.isOk()) matched = booleanMatch.matched();
+      return status;
+    }
+    StatusCode status = booleans.matches(
           bound.command,
           bound.whereBoolean,
           primaryKey,
           source,
           bound.table,
           booleanMatch);
-      if (status.isOk()) matched = booleanMatch.matched();
-      return status;
-    }
-    BoundSqlQuery.Block command = query.root();
-    nestedPredicates.reset();
-    for (int index = 0; index < bound.predicateCount; index++) {
-      boolean predicateMatched = matches(
-          primaryKey, source, command.predicates(), index);
-      StatusCode status = nestedPredicates.status();
-      if (!status.isOk()) return status;
-      if (!predicateMatched) return StatusCode.OK;
-    }
-    matched = true;
-    return StatusCode.OK;
+    if (status.isOk()) matched = booleanMatch.matched();
+    return status;
   }
 
   boolean matched() { return matched; }
@@ -104,6 +94,14 @@ final class SqlBoundPredicateEvaluator {
     return joinStatus.isOk() && booleanMatch.matched();
   }
 
+  HeapRowResult evaluatedRow(HeapRowResult original) {
+    return subqueries.evaluatedRow(query.sourceBlockCount() - 1, original);
+  }
+
+  void releaseEvaluatedRow() {
+    subqueries.releaseRow(query.sourceBlockCount() - 1);
+  }
+
   boolean matchesJoinWhere(SqlJoinRoleRows rows) {
     joinStatus = booleans.matchesJoin(
         bound.command,
@@ -115,32 +113,4 @@ final class SqlBoundPredicateEvaluator {
 
   StatusCode joinStatus() { return joinStatus; }
 
-  private boolean matches(
-      long primaryKey,
-      HeapRowResult source,
-      SqlNestedPredicatePlan command,
-      int index) {
-    int column = command.resolvedColumn(index);
-    boolean nullValue = expressions.isNull(source, bound.table, column);
-    if (command.isTruth(index)) {
-      long value = nullValue ? 0 : expressions.readColumn(primaryKey, source, column);
-      return nestedPredicates.matchesTruth(command, index, nullValue, value);
-    }
-    if (command.isNullTest(index)) {
-      return nullValue != command.isNullTestNegated(index);
-    }
-    if (nullValue) {
-      return false;
-    }
-    long value = expressions.readColumn(primaryKey, source, column);
-    if (query.hasMembershipPredicate() && query.membershipPredicate() == index) {
-      return nested.matchesMembership(
-          value, bound.table.typeDescriptor(column), source, column);
-    }
-    if (query.hasScalarPredicate() && query.scalarPredicate() == index) {
-      return nested.matchesScalar(value, bound.table.typeDescriptor(column));
-    }
-    return nestedPredicates.matchesLiteral(
-        primaryKey, source, bound.table, column, command, index);
-  }
 }

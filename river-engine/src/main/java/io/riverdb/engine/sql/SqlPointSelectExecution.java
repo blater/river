@@ -60,7 +60,11 @@ final class SqlPointSelectExecution {
     if (status.isOk()) status = validateRow(source);
     if (status.isOk()) status = predicates.evaluate(primaryKey, source);
     if (status.isOk() && !predicates.matched()) status = StatusCode.CONFLICT;
-    if (status.isOk()) status = project(result, primaryKey, source);
+    if (status.isOk()) {
+      source = predicates.evaluatedRow(source);
+      status = project(result, primaryKey, source);
+    }
+    if (status.isOk() || status == StatusCode.CONFLICT) predicates.releaseEvaluatedRow();
     return status;
   }
 
@@ -89,10 +93,13 @@ final class SqlPointSelectExecution {
       if (status.isOk()) status = validateRow(source);
       if (status.isOk()) status = predicates.evaluate(textRow.key(), source);
       if (status.isOk() && predicates.matched()) {
+        source = predicates.evaluatedRow(source);
         status = project(result, textRow.key(), source);
+        predicates.releaseEvaluatedRow();
         found = status.isOk();
         break;
       }
+      if (status.isOk()) predicates.releaseEvaluatedRow();
     }
     status = finishText(active, status);
     return status.isOk() && !found ? StatusCode.CONFLICT : status;

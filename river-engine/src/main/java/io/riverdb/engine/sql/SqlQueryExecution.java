@@ -10,18 +10,12 @@ import io.riverdb.storage.heap.HeapRowResult;
 
 /** Opens, advances, and closes one prepared query using reusable physical state. */
 final class SqlQueryExecution {
-  private static final int NESTED_SCALAR = 1;
-  private static final int NESTED_EXISTENCE = 2;
-  private static final int NESTED_MEMBERSHIP = 3;
-  private static final int MAXIMUM_MEMBERSHIP_VALUES =
-      SqlNestedQueryExecution.MAXIMUM_MEMBERSHIP_VALUES;
-
   private final RelationalSession session;
   private BoundSqlQuery.Block command;
   private final BoundSqlQuery query;
   private final SqlExecutionResult aggregateExecution = new SqlExecutionResult();
   private final BoundSqlStatement bound;
-  private final SqlNestedQueryExecution nestedExecution;
+  private final SqlSubqueryGraphExecution subqueries;
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlPhysicalPlan plan = new SqlPhysicalPlan();
   private final SqlPlanDescription planDescription = new SqlPlanDescription();
@@ -64,10 +58,10 @@ final class SqlQueryExecution {
     blockBinder = pipelineBinder;
     query = bound.executableQuery;
     command = query.root();
-    nestedExecution = new SqlNestedQueryExecution(
-        session, bound, expressions);
+    subqueries = new SqlSubqueryGraphExecution(
+        session, bound, expressions, temporal);
     predicates = new SqlBoundPredicateEvaluator(
-        bound, expressions, nestedExecution, temporal);
+        bound, expressions, subqueries, temporal);
     joinSource = new SqlJoinChainSource(session, bound, expressions, predicates);
     pointQueries = new SqlPointQueryExecution(
         session, bound, expressions, predicates, rowProjections, temporal);
@@ -79,7 +73,7 @@ final class SqlQueryExecution {
         plan,
         activeScan,
         expressions,
-        nestedExecution,
+        subqueries,
         predicates,
         rowProjections,
         joinSource);
@@ -137,15 +131,16 @@ final class SqlQueryExecution {
     if (!resetStatus.isOk()) {
       return resetStatus;
     }
-    StatusCode status = nestedExecution.resetForStatement();
+    StatusCode status = subqueries.close();
     if (!status.isOk()) {
       return status;
     }
     command = query.root();
     plan.reset();
+    if (query.edgeCount() > 0) plan.setSubqueries(subqueries.plan());
     explainOnly = false;
     plan.setCommand(command);
-    plan.setNestedDepth(query.sourcePlanDepth());
+    plan.setNestedDepth(query.planDepth());
     if (command.type() == SqlCommandType.SHOW_TABLES) {
       if (query.isExplain()) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -169,7 +164,9 @@ final class SqlQueryExecution {
   }
 
   StatusCode prepareNested() {
-    return nestedExecution.prepare(explainOnly);
+    if (!explainOnly) return subqueries.prepare();
+    subqueries.describe();
+    return StatusCode.OK;
   }
 
   boolean explainOnly() {
@@ -179,7 +176,8 @@ final class SqlQueryExecution {
   void adoptPreparedQuery() {
     command = query.root();
     plan.setCommand(command);
-    plan.setNestedDepth(query.sourcePlanDepth());
+    plan.setNestedDepth(query.planDepth());
+    if (query.edgeCount() > 0) plan.setSubqueries(subqueries.plan());
     plan.setOrderColumn(bound.orderColumn);
     if (bound.hasBlockPlans()) {
       plan.setBlockResult(bound.blockPlans().schema(0));
@@ -191,7 +189,9 @@ final class SqlQueryExecution {
   }
 
   StatusCode prepareProjectionPrograms() {
-    StatusCode status = predicates.prepare();
+    StatusCode status = query.edgeCount() > 0
+        ? subqueries.prepare() : StatusCode.OK;
+    if (status.isOk() && query.edgeCount() == 0) status = predicates.prepare();
     if (status.isOk()) status = rowProjections.prepare(bound);
     return status.isOk() ? groups.prepareHaving() : status;
   }
@@ -214,6 +214,9 @@ final class SqlQueryExecution {
           rowProjections,
           temporal);
     }
+    StatusCode status = query.edgeCount() > 0
+        ? subqueries.prepare() : StatusCode.OK;
+    if (!status.isOk()) return status;
     return explainOnly ? blockPipeline.describe() : blockPipeline.prepare();
   }
 
@@ -427,22 +430,17 @@ final class SqlQueryExecution {
           ? indexed.key() : result.relational().key();
       HeapRowResult source = plan.valueIndex()
           ? indexed.row() : result.relational().row();
-      source = nestedExecution.evaluatedRow(source);
-      if (nestedExecution.rejectsOuterRow()) {
-        continue;
-      }
       status = predicates.evaluate(primaryKey, source);
       if (!status.isOk()) return status;
-      if (!predicates.matched()) continue;
-      status = evaluateAfterPredicates(primaryKey, source);
-      if (!status.isOk()) {
-        return status;
-      }
-      source = nestedExecution.evaluatedRow(source);
-      if (nestedExecution.rejectsOuterRow()) {
+      source = subqueries.evaluatedRow(
+          query.sourceBlockCount() - 1, source);
+      if (!predicates.matched()) {
+        subqueries.releaseRow(query.sourceBlockCount() - 1);
         continue;
       }
-      return projectRelationalRow(primaryKey, source, cursor, result);
+      status = projectRelationalRow(primaryKey, source, cursor, result);
+      subqueries.releaseRow(query.sourceBlockCount() - 1);
+      return status;
     }
   }
 
@@ -455,20 +453,7 @@ final class SqlQueryExecution {
         ? indexed.key() : result.relational().key();
     HeapRowResult source = plan.valueIndex()
         ? indexed.row() : result.relational().row();
-    return evaluateBeforePredicates(primaryKey, source);
-  }
-
-  private StatusCode evaluateBeforePredicates(
-      long primaryKey, HeapRowResult source) {
-    StatusCode status = validateRow(source);
-    return status.isOk()
-        ? nestedExecution.evaluateBeforePredicates(primaryKey, source)
-        : status;
-  }
-
-  private StatusCode evaluateAfterPredicates(
-      long primaryKey, HeapRowResult source) {
-    return nestedExecution.evaluateAfterPredicates(primaryKey, source);
+    return validateRow(source);
   }
 
   private StatusCode nextRelationalSource(SqlScanRowResult result) {
@@ -539,8 +524,7 @@ final class SqlQueryExecution {
           activeScan.explainCommitSequence());
       cursor.complete();
       activeScan.complete();
-      finishPointStatement();
-      return StatusCode.OK;
+      return finishPointStatement();
     }
     if (plan.aggregate()) {
       result.setTransaction(
@@ -548,8 +532,7 @@ final class SqlQueryExecution {
           activeScan.aggregateCommitSequence());
       cursor.complete();
       activeScan.complete();
-      finishPointStatement();
-      return StatusCode.OK;
+      return finishPointStatement();
     }
     return StatusCode.CONFLICT;
   }
@@ -572,6 +555,7 @@ final class SqlQueryExecution {
   private StatusCode closePhysicalResources() {
     StatusCode status = StatusCode.OK;
     status = catalogs.close();
+    if (status.isOk()) status = subqueries.reset();
     status = joins.closeAfter(status);
     if (status.isOk() && pointQueries.hasResources()) {
       status = pointQueries.closeResources();
@@ -586,9 +570,6 @@ final class SqlQueryExecution {
       status = blockPipeline.close();
     }
     if (status.isOk()) pointBlockPipeline = false;
-    if (status.isOk()) {
-      status = nestedExecution.close();
-    }
     groups.resetText();
     if (status.isOk()) {
       predicates.reset();
@@ -601,20 +582,23 @@ final class SqlQueryExecution {
     return pointQueries.execute(command.type(), result);
   }
 
-  void finishPointStatement() {
+  StatusCode finishPointStatement() {
     predicates.reset();
+    StatusCode status = subqueries.reset();
     rowProjections.reset();
     pointQueries.finishStatement();
+    return status;
   }
 
   boolean hasPointResources() {
-    return pointQueries.hasResources()
+    return subqueries.hasResources() || pointQueries.hasResources()
         || pointBlockPipeline
             && blockPipeline != null && blockPipeline.hasResources();
   }
 
   StatusCode closePointResources() {
-    StatusCode status = pointQueries.closeResources();
+    StatusCode status = subqueries.reset();
+    if (status.isOk()) status = pointQueries.closeResources();
     if (status.isOk() && pointBlockPipeline
         && blockPipeline != null && blockPipeline.hasResources()) {
       status = blockPipeline.close();
