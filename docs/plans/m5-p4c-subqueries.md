@@ -1,10 +1,24 @@
 # M5 P4C robust subquery delivery plan
 
-Status: approved architecture plan; implementation follows the bounded n-table
-JOIN plan.
+Status: active WIP rebased onto bounded-join alpha `4c50133`. The continuation
+checkpoint is `19abbff` on `feature/p4c-subqueries`; no P4C slice is accepted
+yet.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
+
+## Recovery and restart checkpoint
+
+- `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
+  point for the original P4C work.
+- `feature/p4c-subqueries` at `19abbff` is the clean pushed continuation branch,
+  rebased onto `4c50133`; `river-sql` and `river-engine` main sources compile.
+- Before feature work resumes, migrate parser/lifecycle tests that still call
+  the deleted singleton subquery API and fix the null zone-state failure in the
+  joined P3 spill regression.
+- These checkpoints preserve work and integration intent; they are not P4C
+  promotion evidence. Focused semantics/allocation tests, affected full suites,
+  design-debt checks, and independent review remain required.
 
 ## Outcome
 

@@ -1,10 +1,14 @@
 # M5 bounded n-table JOIN delivery plan
 
-Status: J1-J5 accepted for the alpha; J6 merge and J7 cost planning remain
-planned.
+Status: J1-J5 accepted and shipped at alpha checkpoint `4c50133`; J6 merge and
+J7 cost planning remain planned.
 
 Owner: relational execution lead. Catalog-format changes require an independent
 durability/compatibility review before promotion.
+
+Repository checkpoint: `master` and `feature/n-table-joins` are clean and
+pushed at `4c50133`. P4C continues independently on
+`feature/p4c-subqueries`; it is not part of the accepted join checkpoint.
 
 ## Outcome
 

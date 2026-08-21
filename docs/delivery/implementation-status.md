@@ -28,11 +28,25 @@ or gate has passed.
 | Current target | [Bounded n-table JOIN merge strategy and cost planning](../plans/m5-n-table-joins.md) |
 | Next product slice | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | 2026-08-21 bounded two-to-eight-role INNER/LEFT chains through direct/P3/order/spill plans; UTF-8-v4 durable direct/deepest-derived and self-join views with exact 32-slot ordered lineage, checkpoint/WAL reopen, dependency enforcement and backup/restore; bounded typed hash execution with explicit stable spill fallback — full `river-sql`, `river-engine`, and `river-backup` suites plus allocation, design-debt, and independent semantic/durability reviews green; prior checkpoints retained |
+| Latest green functional checkpoint | `4c50133` (2026-08-21) — bounded two-to-eight-role INNER/LEFT chains through direct/P3/order/spill plans; UTF-8-v4 durable direct/deepest-derived and self-join views with exact 32-slot ordered lineage, checkpoint/WAL reopen, dependency enforcement and backup/restore; bounded typed hash execution with explicit stable spill fallback — full `river-sql`, `river-engine`, and `river-backup` suites plus allocation, design-debt, and independent semantic/durability reviews green; prior checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
 reviewed, and verified together from the exact detached integration commit.
+
+### Active branch checkpoints
+
+| Purpose | Branch | Commit | Status |
+| --- | --- | --- | --- |
+| Shipped bounded-join alpha | `master`, `feature/n-table-joins` | `4c50133` | Clean, pushed, and accepted through J5; J6 merge and J7 costing remain planned |
+| P4C recovery snapshot | `wip/p4c-subqueries-snapshot` | `794641e` | Clean and pushed immutable checkpoint of the pre-integration work |
+| P4C continuation | `feature/p4c-subqueries` | `19abbff` | Clean, pushed, rebased onto `4c50133`, and main-source compile green; not acceptance-ready |
+
+P4C resumes from `19abbff`. Its first gates are to migrate the stale parser and
+lifecycle tests away from the deleted singleton subquery API, then correct the
+null zone-state failure exposed by the joined P3 spill regression. The snapshot
+branch is recovery evidence only and must not be merged in place of the rebased
+continuation branch.
 
 Product work proceeds in this order:
 
