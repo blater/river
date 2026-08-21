@@ -78,7 +78,7 @@ final class SqlSubqueryAcceptanceFixture {
             + "(1,1,10),(2,2,20),(3,2,21)");
   }
 
-  private void execute(String sql) {
+  void execute(String sql) {
     assertEquals(StatusCode.OK, session.execute(sql, result), sql);
   }
 }

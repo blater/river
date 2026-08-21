@@ -170,7 +170,7 @@ final class SqlNestedQueryTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 1_024, opened));
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
@@ -209,12 +209,23 @@ final class SqlNestedQueryTest {
 
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
+    assertRows(
+        session,
+        "SELECT id FROM probes WHERE value IN "
+            + "(SELECT value FROM candidates WHERE id<=1024)",
+        new long[] {1});
+    assertRows(
+        session,
+        "SELECT id FROM probes WHERE value IN "
+            + "(SELECT value FROM candidates LIMIT 1024)",
+        new long[] {1});
     assertEquals(
         StatusCode.OK,
         session.beginScan(
             "SELECT id FROM probes WHERE value IN "
-                + "(SELECT value FROM candidates)",
+                + "(SELECT value FROM candidates LIMIT 1025)",
             cursor));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, cursor.reset());

@@ -49,10 +49,12 @@ final class SqlSubqueryGraphExecution
     int root = query.sourceBlockCount() - 1;
     for (int block = root; status.isOk() && block < query.blockCount(); block++) {
       status = predicates.prepare(block);
-      if (status.isOk() && block > root) status = projections.prepare(block);
+      boolean valueProjection = block > root && valueProjection(block);
+      if (status.isOk() && valueProjection) status = projections.prepare(block);
       if (status.isOk()) frames.prepare(
           block,
-          block > root && text(query.block(block).projectionType()),
+          valueProjection,
+          valueProjection && text(query.block(block).projectionType()),
           predicates.joinPredicates(block));
     }
     return status;
@@ -142,6 +144,15 @@ final class SqlSubqueryGraphExecution
 
   private boolean joined(int block) {
     return query.block(block).joinChain() != null;
+  }
+
+  private boolean valueProjection(int block) {
+    for (int edge = 0; edge < query.edgeCount(); edge++) {
+      if (query.edgeChild(edge) == block) {
+        return query.edgeKind(edge) != io.riverdb.sql.SqlQuery.SUBQUERY_EXISTS;
+      }
+    }
+    return false;
   }
 
 }

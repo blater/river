@@ -17,6 +17,7 @@ final class SqlSubqueryValueScanner {
   private final int[] counts = new int[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] matched = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] nullResults = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final boolean[] caching = new boolean[SqlQuery.MAXIMUM_EDGES];
 
   SqlSubqueryValueScanner(
       BoundSqlQuery boundQuery,
@@ -97,8 +98,8 @@ final class SqlSubqueryValueScanner {
     }
     StatusCode status = frames.begin(child);
     if (!status.isOk()) return frames.finish(child, status);
-    boolean cached = cache.enabled(edge);
-    if (cached) cache.start(edge);
+    caching[edge] = cache.enabled(edge);
+    if (caching[edge]) cache.start(edge);
     counts[child] = 0;
     matched[child] = false;
     nullResults[child] = false;
@@ -114,7 +115,7 @@ final class SqlSubqueryValueScanner {
         continue;
       }
       plan.accept(edge);
-      status = acceptValue(edge, child, left, cached);
+      status = acceptValue(edge, child, left);
       if (!status.isOk()) return abort(child, status);
       if (counts[child] >= query.block(child).rowLimit()) break;
     }
@@ -122,7 +123,7 @@ final class SqlSubqueryValueScanner {
     if (!status.isOk()) {
       return status;
     }
-    if (cached) cache.completeValues(edge, counts[child]);
+    if (caching[edge]) cache.completeValues(edge, counts[child]);
     publish(edge, child, left, truth);
     return StatusCode.OK;
   }
@@ -130,8 +131,7 @@ final class SqlSubqueryValueScanner {
   private StatusCode acceptValue(
       int edge,
       int child,
-      SqlPredicateOperand left,
-      boolean cached) {
+      SqlPredicateOperand left) {
     if (++counts[child] > SqlSubqueryResultCache.MAXIMUM_RESULTS) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -141,11 +141,17 @@ final class SqlSubqueryValueScanner {
     if (candidate.nullValue()) nullResults[child] = true;
     else if (left != null && !left.nullValue()
         && compare(left, candidate, comparison(edge))) matched[child] = true;
-    if (cached) status = cache.append(edge, candidate);
+    retain(edge, candidate);
     frames.release(child);
     if (!status.isOk()) return status;
     return query.edgeKind(edge) == SqlQuery.SUBQUERY_SCALAR && counts[child] > 1
         ? StatusCode.CARDINALITY_VIOLATION : StatusCode.OK;
+  }
+
+  private void retain(int edge, SqlPredicateOperand candidate) {
+    if (!caching[edge] || cache.append(edge, candidate)) return;
+    cache.abandon(edge);
+    caching[edge] = false;
   }
 
   private void publish(

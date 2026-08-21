@@ -1,6 +1,5 @@
 package io.riverdb.engine.sql;
 
-import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlQuery;
@@ -54,18 +53,17 @@ final class SqlSubqueryResultCache {
 
   boolean enabled(int edge) { return cacheable[edge]; }
   boolean available(int edge) { return states[edge] != 0; }
-  int start(int edge) {
+  void start(int edge) {
     heads[edge] = -1;
     tails[edge] = -1;
-    return used;
   }
 
-  StatusCode append(int edge, SqlPredicateOperand source) {
+  boolean append(int edge, SqlPredicateOperand source) {
     if (query.edgeKind(edge) == SqlQuery.SUBQUERY_SCALAR) {
       captureScalar(edge, source);
-      return StatusCode.OK;
+      return true;
     }
-    if (used >= MAXIMUM_RESULTS) return StatusCode.RESOURCE_EXHAUSTED;
+    if (used >= MAXIMUM_RESULTS) return false;
     int slot = used++;
     next[slot] = -1;
     if (tails[edge] < 0) heads[edge] = slot;
@@ -82,7 +80,7 @@ final class SqlSubqueryResultCache {
       }
       textLengths[slot] = (short) length;
     }
-    return StatusCode.OK;
+    return true;
   }
 
   void completeValues(int edge, int count) {
@@ -131,9 +129,18 @@ final class SqlSubqueryResultCache {
         ? SqlBooleanPredicateEvaluator.UNKNOWN : SqlBooleanPredicateEvaluator.FALSE;
   }
 
-  void rollback(int start) {
-    clearRange(start, used);
-    used = start;
+  void abandon(int edge) {
+    int slot = heads[edge];
+    while (slot >= 0) {
+      int following = next[slot];
+      clearSlot(slot);
+      slot = following;
+    }
+    heads[edge] = -1;
+    tails[edge] = -1;
+    counts[edge] = 0;
+    states[edge] = 0;
+    cacheable[edge] = false;
   }
 
   void clear() {
@@ -171,18 +178,21 @@ final class SqlSubqueryResultCache {
 
   private void clearRange(int start, int end) {
     if (values == null) return;
-    for (int slot = start; slot < end; slot++) {
-      values[slot] = 0;
-      descriptors[slot] = 0;
-      nulls[slot] = false;
-      int length = Short.toUnsignedInt(textLengths[slot]);
-      if (membershipText != null) {
-        int offset = slot * 510;
-        for (int index = 0; index < length; index++) membershipText[offset + index] = 0;
-      }
-      textLengths[slot] = 0;
-    }
+    for (int slot = start; slot < end; slot++) clearSlot(slot);
     operand.clear();
+  }
+
+  private void clearSlot(int slot) {
+    values[slot] = 0;
+    descriptors[slot] = 0;
+    nulls[slot] = false;
+    int length = Short.toUnsignedInt(textLengths[slot]);
+    if (membershipText != null) {
+      int offset = slot * 510;
+      for (int index = 0; index < length; index++) membershipText[offset + index] = 0;
+    }
+    textLengths[slot] = 0;
+    next[slot] = -1;
   }
 
   private void prepareMembership(boolean textValues) {

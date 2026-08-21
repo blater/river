@@ -112,7 +112,7 @@ final class SqlSessionAllocationTest {
             result));
     assertEquals(
         StatusCode.OK,
-        session.execute("INSERT INTO raw_texts VALUES (2, 'alpha')", result));
+        session.execute("INSERT INTO raw_texts VALUES (2, '多🙂')", result));
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX texts_label ON texts(label)", result));
@@ -232,6 +232,7 @@ final class SqlSessionAllocationTest {
     assertEquals(SqlTypeDescriptor.BIGINT, scanRow.typeDescriptorAt(0));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertTextMembershipCache(session, cursor, scanRow, result);
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
         StatusCode.OK,
@@ -410,6 +411,7 @@ final class SqlSessionAllocationTest {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
+      exerciseTextMembershipCache(session, cursor, scanRow, result);
       exerciseExists(session, cursor, scanRow, result);
       exerciseCorrelatedMembership(session, cursor, scanRow, result);
       exerciseRecursiveExists(session, cursor, scanRow, result);
@@ -442,6 +444,7 @@ final class SqlSessionAllocationTest {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
+      exerciseTextMembershipCache(session, cursor, scanRow, result);
       exerciseExists(session, cursor, scanRow, result);
       exerciseCorrelatedMembership(session, cursor, scanRow, result);
       exerciseRecursiveExists(session, cursor, scanRow, result);
@@ -923,6 +926,44 @@ final class SqlSessionAllocationTest {
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void assertTextMembershipCache(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT labels.id FROM labels WHERE '多🙂' IN "
+                + "(SELECT raw_texts.label FROM raw_texts WHERE raw_texts.id=2)",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseTextMembershipCache(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT labels.id FROM labels WHERE '多🙂' IN "
+            + "(SELECT raw_texts.label FROM raw_texts WHERE raw_texts.id=2)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

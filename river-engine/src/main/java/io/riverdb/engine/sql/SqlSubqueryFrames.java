@@ -52,10 +52,13 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
 
   void prepare(
       int block,
+      boolean valueProjection,
       boolean textProjection,
       SqlJoinPredicateCallback joinPredicates) {
     int frame = frame(block);
-    if (projected[frame] == null) projected[frame] = new SqlPredicateOperand();
+    if (valueProjection && projected[frame] == null) {
+      projected[frame] = new SqlPredicateOperand();
+    }
     if (joinPredicates != null) {
       joined.prepare(block, joinPredicates);
     } else if (cursors[frame] == null) {
