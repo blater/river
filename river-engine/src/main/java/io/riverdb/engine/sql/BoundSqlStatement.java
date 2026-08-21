@@ -196,10 +196,16 @@ final class BoundSqlStatement {
   int joinStrategyInnerColumn(int stage) { return joinStrategyInnerColumns[stage]; }
 
   boolean hasPhysicalJoinStrategy() {
-    for (byte strategy : joinStrategies) {
-      if (Byte.toUnsignedInt(strategy) != SqlJoinStrategy.NESTED_LOOP) return true;
+    return physicalJoinStrategyStage() >= 0;
+  }
+
+  int physicalJoinStrategyStage() {
+    for (int stage = 0; stage < joinStrategies.length; stage++) {
+      if (Byte.toUnsignedInt(joinStrategies[stage]) != SqlJoinStrategy.NESTED_LOOP) {
+        return stage;
+      }
     }
-    return false;
+    return -1;
   }
 
   boolean hasBlockPlans() {

@@ -15,6 +15,7 @@ final class SqlJoinStrategyPlan {
   private static final long JOIN = PackedText.pack("join");
   private static final long LEFT = PackedText.pack("left");
   private static final long LOOKUP = PackedText.pack("lookup");
+  private static final long SORT = PackedText.pack("sort");
   private static final long TABLE = PackedText.pack("table");
   private final byte[] strategies = new byte[SqlJoinChainPlan.MAXIMUM_STEPS];
   private final boolean[] left = new boolean[SqlJoinChainPlan.MAXIMUM_STEPS];
@@ -37,7 +38,10 @@ final class SqlJoinStrategyPlan {
   int directAccess(BoundSqlStatement bound, int stage, int inner) {
     int strategy = bound.joinStrategy(stage);
     if (strategy == SqlJoinStrategy.HASH || inner < 0) return 0;
-    if (strategy == SqlJoinStrategy.MERGE) return inner == 0 ? 0 : 1;
+    if (strategy == SqlJoinStrategy.MERGE) {
+      if (inner == 0) return 0;
+      return bound.joinRole(stage + 1).hasIndexOn(inner) ? 1 : 3;
+    }
     boolean indexed = inner == 0 || bound.joinRole(stage + 1).hasIndexOn(inner);
     if (!indexed) return 0;
     return inner == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(inner) ? 2 : 1;
@@ -45,7 +49,9 @@ final class SqlJoinStrategyPlan {
 
   long access(int strategy, int access) {
     if (strategy == SqlJoinStrategy.HASH) return TABLE;
-    if (strategy == SqlJoinStrategy.MERGE) return access == 1 ? INDEX : TABLE;
+    if (strategy == SqlJoinStrategy.MERGE) {
+      return access == 3 ? SORT : access == 1 ? INDEX : TABLE;
+    }
     return access == 2 ? LOOKUP : access == 1 ? INDEX : TABLE;
   }
 

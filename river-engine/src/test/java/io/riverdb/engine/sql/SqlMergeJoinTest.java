@@ -33,6 +33,8 @@ final class SqlMergeJoinTest {
 
     assertDuplicateCartesianAndP3(session, result);
     assertTypedComparatorAndNestedIdentity(session, result);
+    assertNullableOuterKeyDoesNotReuseRun(session, result);
+    assertSortFedAndLaterStage(session, result);
     assertLeftResidualAndPlans(session, result);
     assertOversizedRunSpillsAndReuses(session, result);
 
@@ -133,6 +135,28 @@ final class SqlMergeJoinTest {
     assertCount(session, result, "SELECT COUNT(*) FROM (" + nested + ") pairs", 5);
   }
 
+  private static void assertNullableOuterKeyDoesNotReuseRun(
+      SqlSession session, SqlExecutionResult result) {
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE merge_nullable_outer "
+                + "(id BIGINT PRIMARY KEY,k BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO merge_nullable_outer VALUES (1,10),(2,NULL)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE INDEX merge_nullable_outer_k ON merge_nullable_outer(k)", result));
+    String query = "SELECT a.id,b.id FROM merge_nullable_outer a "
+        + "JOIN merge_right b ON a.k=b.k";
+    assertPlanContains(session, result, "EXPLAIN " + query, "merge");
+    assertRows(session, result, query, new long[][] {{1, 12}, {1, 11}});
+  }
+
   private static void assertLeftResidualAndPlans(
       SqlSession session, SqlExecutionResult result) {
     String query = "SELECT a.id AS aid,b.id AS bid FROM merge_left a "
@@ -160,6 +184,117 @@ final class SqlMergeJoinTest {
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 
+  private static void assertSortFedAndLaterStage(
+      SqlSession session, SqlExecutionResult result) {
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE merge_unsorted "
+                + "(id BIGINT PRIMARY KEY,left_id BIGINT,flag BOOLEAN)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO merge_unsorted VALUES "
+                + "(1,3,TRUE),(2,1,TRUE),(3,1,FALSE),(4,4,TRUE)",
+            result));
+    assertRows(
+        session,
+        result,
+        "SELECT a.id,b.id FROM merge_left a JOIN merge_unsorted b "
+            + "ON a.id=b.left_id",
+        new long[][] {{1, 2}, {1, 3}, {3, 1}, {4, 4}});
+    assertSortFedLeftPlan(session, result);
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE merge_middle (id BIGINT PRIMARY KEY,left_id BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO merge_middle VALUES (101,1),(102,2),(103,3),(104,4)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE INDEX merge_middle_left ON merge_middle(left_id)", result));
+    String later = "SELECT a.id AS aid,b.id AS bid,c.id AS cid "
+        + "FROM merge_left a JOIN merge_middle b ON a.id=b.left_id "
+        + "JOIN merge_unsorted c ON a.id=c.left_id";
+    assertRows(
+        session,
+        result,
+        "SELECT aid,SUM(cid) AS total FROM (" + later
+            + ") joined GROUP BY aid ORDER BY aid",
+        new long[][] {{1, 5}, {3, 1}, {4, 4}});
+    assertLaterMergePlan(session, result, later);
+    assertEarlierLeftNullFeedsLaterMerge(session, result);
+  }
+
+  private static void assertEarlierLeftNullFeedsLaterMerge(
+      SqlSession session, SqlExecutionResult result) {
+    String query = "SELECT a.id,b.id,c.id FROM merge_left a "
+        + "LEFT JOIN merge_middle b ON a.id=b.left_id AND b.id<>102 "
+        + "LEFT JOIN merge_unsorted c ON b.left_id=c.left_id";
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(query, cursor));
+    assertThreeValues(session, cursor, row, 1, 101, 2);
+    assertThreeValues(session, cursor, row, 1, 101, 3);
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertTrue(row.isNull(1));
+    assertTrue(row.isNull(2));
+    assertThreeValues(session, cursor, row, 3, 103, 1);
+    assertThreeValues(session, cursor, row, 4, 104, 4);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertSortFedLeftPlan(
+      SqlSession session, SqlExecutionResult result) {
+    String query = "SELECT a.id,b.id FROM merge_left a "
+        + "LEFT JOIN merge_unsorted b ON a.id=b.left_id AND b.flag=TRUE";
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(query, cursor));
+    assertValueRow(session, cursor, row, 1, 2);
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertTrue(row.isNull(1));
+    assertValueRow(session, cursor, row, 3, 1);
+    assertValueRow(session, cursor, row, 4, 4);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan("EXPLAIN ANALYZE " + query, cursor));
+    assertPlanRow(session, cursor, row, "primary", 0, 4);
+    assertPlanRow(session, cursor, row, "sort", 1, 4);
+    assertPlanRow(session, cursor, row, "on", 2, 3);
+    assertPlanRow(session, cursor, row, "extend", 1, 1);
+    assertPlanRow(session, cursor, row, "mleft", 2, 4);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertLaterMergePlan(
+      SqlSession session, SqlExecutionResult result, String query) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan("EXPLAIN ANALYZE " + query, cursor));
+    assertPlanRow(session, cursor, row, "table", -1, 4);
+    assertPlanRow(session, cursor, row, "index", 1, 4);
+    assertPlanRow(session, cursor, row, "on", 1, 4);
+    assertPlanRow(session, cursor, row, "join", 1, 4);
+    assertPlanRow(session, cursor, row, "sort", 1, 4);
+    assertPlanRow(session, cursor, row, "on", 1, 4);
+    assertPlanRow(session, cursor, row, "merge", 1, 4);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
   private static void assertOversizedRunSpillsAndReuses(
       SqlSession session, SqlExecutionResult result) {
     assertEquals(
@@ -176,9 +311,6 @@ final class SqlMergeJoinTest {
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE INDEX merge_probe_k ON merge_probe(k)", result));
-    assertEquals(
-        StatusCode.OK,
-        session.execute("CREATE INDEX merge_run_k ON merge_run(k)", result));
     for (int start = 1; start <= 1_025; start += 64) {
       int end = Math.min(1_025, start + 63);
       StringBuilder insert = new StringBuilder("INSERT INTO merge_run VALUES ");
@@ -209,6 +341,19 @@ final class SqlMergeJoinTest {
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(left, row.valueAt(0));
     assertEquals(right, row.valueAt(1));
+  }
+
+  private static void assertThreeValues(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      long first,
+      long second,
+      long third) {
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(first, row.valueAt(0));
+    assertEquals(second, row.valueAt(1));
+    assertEquals(third, row.valueAt(2));
   }
 
   private static void assertCount(

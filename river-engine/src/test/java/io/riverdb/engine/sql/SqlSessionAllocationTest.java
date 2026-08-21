@@ -955,8 +955,8 @@ final class SqlSessionAllocationTest {
       SqlExecutionResult result) {
     allocationGuard += cursor.reset().ordinal();
     allocationGuard += session.beginScan(
-        "SELECT t.id,labels.code FROM t "
-            + "JOIN labels ON t.region=labels.region",
+        "SELECT t.id,raw_labels.code FROM t "
+            + "JOIN raw_labels ON t.region=raw_labels.region",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);

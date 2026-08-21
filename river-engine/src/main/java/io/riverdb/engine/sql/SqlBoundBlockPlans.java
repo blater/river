@@ -92,8 +92,9 @@ final class SqlBoundBlockPlans {
           && (right == 0 || bound.joinRole(stage + 1).hasIndexOn(right));
       boolean unique = strategy != SqlJoinStrategy.MERGE && indexed
           && (right == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(right));
-      int access = unique ? 2 : (indexed
-          && !(strategy == SqlJoinStrategy.MERGE && right == 0) ? 1 : 0);
+      int access = strategy == SqlJoinStrategy.MERGE && !indexed ? 3
+          : unique ? 2 : (indexed
+              && !(strategy == SqlJoinStrategy.MERGE && right == 0) ? 1 : 0);
       joinAccessKinds[stage] = (byte) access;
       joinStrategies[stage] = (byte) strategy;
     }

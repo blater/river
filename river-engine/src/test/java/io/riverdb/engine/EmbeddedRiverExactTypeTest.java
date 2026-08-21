@@ -297,11 +297,11 @@ final class EmbeddedRiverExactTypeTest {
             queryResult));
     query = queryResult.query();
     assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(1, row.valueAt(0));
-    assertEquals(10, row.valueAt(1));
-    assertEquals(StatusCode.OK, query.next(row));
     assertEquals(2, row.valueAt(0));
     assertEquals(20, row.valueAt(1));
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(10, row.valueAt(1));
     assertEquals(StatusCode.OK, query.next(row));
     assertEquals(false, row.isAvailable());
     assertEquals(StatusCode.OK, query.close(command));
