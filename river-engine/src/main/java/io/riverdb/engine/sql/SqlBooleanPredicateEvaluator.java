@@ -361,13 +361,14 @@ final class SqlBooleanPredicateEvaluator {
   }
 
   private StatusCode operand(int leaf, int program, SqlPredicateOperand result) {
+    SqlTemporalZonePlan zone = zones == null ? null : zones[programSlot(leaf, program)];
     if (havingAggregates != null) {
       return expressions.evaluateHaving(
           command,
           programs,
           leaf,
           program,
-          zones[programSlot(leaf, program)],
+          zone,
           havingAggregates,
           havingGroupValue,
           havingGroupNull,
@@ -375,7 +376,6 @@ final class SqlBooleanPredicateEvaluator {
           havingGroupTextLength,
           result);
     }
-    SqlTemporalZonePlan zone = zones == null ? null : zones[programSlot(leaf, program)];
     if (nestedRows != null) {
       return expressions.evaluateNested(
           command, programs, leaf, program, zone, nestedRows, result);

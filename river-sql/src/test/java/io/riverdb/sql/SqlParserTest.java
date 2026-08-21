@@ -3043,6 +3043,45 @@ final class SqlParserTest {
   }
 
   @Test
+  void measuresDerivedJoinDepthWithoutAdmittingPredicateSubqueries() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        2,
+        parser.queryBlockDepth(
+            "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+                + "JOIN right_rows r ON l.id=r.left_id) joined"));
+    assertEquals(
+        -1,
+        parser.queryBlockDepth(
+            "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+                + "WHERE EXISTS (SELECT id FROM right_rows)) joined"));
+    assertEquals(
+        -1,
+        parser.queryBlockDepth(
+            "SELECT lid FROM (SELECT id AS lid FROM left_rows) joined "
+                + "WHERE lid IN (SELECT left_id FROM right_rows)"));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery("SELECT id FROM outer_rows", query, command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQueryAppend(
+            "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+                + "JOIN right_rows r ON l.id=r.left_id) joined",
+            query,
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQueryAppend(
+            "SELECT lid FROM (SELECT id AS lid FROM left_rows) joined "
+                + "WHERE lid IN (SELECT left_id FROM right_rows)",
+            query,
+            command));
+  }
+
+  @Test
   void parsesExplainWithoutCopyingTheNestedQueryText() {
     SqlParser parser = new SqlParser();
     SqlQuery query = new SqlQuery();
