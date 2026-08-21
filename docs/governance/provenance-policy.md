@@ -61,6 +61,16 @@ independent implementer, and confirms that the implementer did not access the
 outside material. A missing separation or attestation blocks implementation
 acceptance.
 
+### Historical compliance clarification
+
+The Chinese wall has been followed rigorously for River work to date. The
+failure to state that requirement in this repository's provenance
+documentation was a documentation error, caught only during the 2026-08-21
+audit. The isolation process was nevertheless enforced by overriding
+instructions maintained outside this repository. The omission was therefore
+not a waiver of the wall or a failure to apply it; this policy now records the
+requirement explicitly and makes the existing practice auditable.
+
 Approval to read the references does not create a direct compatibility promise
 or waive attribution and notice obligations. River's accepted product, SQL,
 format, and API profiles remain authoritative. 

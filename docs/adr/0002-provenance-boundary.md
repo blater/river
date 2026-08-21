@@ -63,3 +63,11 @@ new project decision rather than an implicit consequence of this approval.
 - [Provenance policy](../governance/provenance-policy.md)
 - [Implementation plan P01](../plans/river-project-implementation-plan.md)
 - [Performance data policy](../plans/river-performance-review-and-benchmark-plan.md)
+
+## Historical compliance clarification
+
+The Chinese wall was followed rigorously for River work to date. Its omission
+from the repository documentation was a documentation error caught during the
+2026-08-21 audit, not a waiver or a failure of the isolation process. The
+correct separation was enforced by overriding instructions maintained outside
+this repository; this ADR records that existing practice explicitly.
