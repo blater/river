@@ -27,17 +27,39 @@ reference material for River functionality, kernel design, test suites,
 and kernel tests. Contributors may inspect and adapt ideas or behavior from
 those references in creating specifications and plans. 
 
-### Chinese Wall 
+### Chinese Wall
 
-The reader, be it human or agent, may create plans and specifications 
-from approved reference material but a *different* human or agent must 
-perform any implementation based on those plans/specs, without visibility 
-of the original reference material.
+The reader, whether human or agent, may inspect approved outside code or
+documentation and produce a River-owned feature description, plan, contract,
+specification, or test intent. That reader must not implement the resulting
+feature or component. A different human or agent must perform the
+implementation, and the implementer must not have access to the original
+outside code or documentation, its excerpts, screenshots, transcripts,
+diffs, copied tests, or other extracts. The handoff must contain only the
+River-owned requirements and decisions needed to implement the behavior.
 
-A change that adapts logic, tests, fixtures, messages, or layouts identifies the 
-source path/version and records whether the result is a new River design, 
-or a behavioural adaptation.  Verbatim or mechanically translated material is 
-expressly forbidden.
+This is a mandatory Chinese wall, not a recommendation or a declaration that
+can be waived for convenience. The same separation applies when the roles are
+held by humans, agents, or a human/agent pair. If the implementer has already
+seen the outside material, a new implementer without that access is required;
+the original reader may review the result only through the independent review
+process and may not supply reference-derived patches.
+
+Outright copying is expressly forbidden. This includes verbatim copying,
+mechanical translation, line-by-line or structure-preserving ports,
+transcription, renaming-only rewrites, copying or adapting source tests and
+fixtures as implementation inputs, and copying distinctive text, code,
+layouts, or documentation. Ideas, documented behavior, and independently
+derived requirements may inform a new River design, but River artifacts must
+be written independently from the handoff and must not reproduce the outside
+expression.
+
+A change that uses outside material identifies the source path/version and
+records whether the result is a new River design or a behavioral adaptation.
+The provenance record also identifies the reference reader/specifier and the
+independent implementer, and confirms that the implementer did not access the
+outside material. A missing separation or attestation blocks implementation
+acceptance.
 
 Approval to read the references does not create a direct compatibility promise
 or waive attribution and notice obligations. River's accepted product, SQL,

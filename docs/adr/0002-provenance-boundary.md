@@ -26,6 +26,15 @@ regression data.
 
 - Missing identity, version, license, use, or approval blocks artifact use.
 - Exposure to legacy implementation detail is disclosed on related work.
+- A human or agent who reads outside code or documentation may specify the
+  resulting River behavior but may not implement it; a different human or
+  agent must implement from the River-owned handoff without access to the
+  outside material or extracts from it.
+- Outright copying is forbidden, including verbatim copying, mechanical
+  translation, line-by-line or structure-preserving ports, renaming-only
+  rewrites, and copying source tests, fixtures, layouts, code, or text.
+- The provenance record names the reader/specifier and independent implementer
+  and attests to the Chinese-wall separation before acceptance.
 - External datasets are fetched on demand unless redistribution is approved.
 - Compatible repository licenses do not prove attribution, notice, or
   provenance acceptability.
