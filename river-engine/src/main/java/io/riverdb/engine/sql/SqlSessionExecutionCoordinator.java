@@ -522,9 +522,6 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       status = binder.bindDataCommand(bound.command, bound.query, bound);
     }
-    if (status.isOk()) {
-      status = queries.prepareNested();
-    }
     if (status.isOk() && bound.command.isOrdered()) {
       status = binder.bindOrder(bound.command, bound);
     }

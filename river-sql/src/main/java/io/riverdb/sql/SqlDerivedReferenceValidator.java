@@ -14,7 +14,7 @@ final class SqlDerivedReferenceValidator {
 
   StatusCode validate(int blockIndex, boolean allowUnusedComputed) {
     SqlCommand block = query.block(blockIndex);
-    SqlCommand inner = blockIndex + 1 < query.blockCount()
+    SqlCommand inner = blockIndex + 1 < query.sourceBlockCount()
         ? query.block(blockIndex + 1) : null;
     if (!validProjectionReferences(block, inner)
         || !predicates.valid(block, inner)

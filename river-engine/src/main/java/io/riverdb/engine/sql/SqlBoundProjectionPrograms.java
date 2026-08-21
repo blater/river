@@ -140,6 +140,14 @@ final class SqlBoundProjectionPrograms {
     rawColumns[projection] = rawColumn;
   }
 
+  void resolveNullProjection(int projection, int descriptor) {
+    if (nodeCounts[projection] == 1
+        && operators[projection][0] == SqlScalarExpression.NULL) {
+      descriptors[projection][0] = descriptor;
+      resultDescriptors[projection] = descriptor;
+    }
+  }
+
   int count() {
     return count;
   }

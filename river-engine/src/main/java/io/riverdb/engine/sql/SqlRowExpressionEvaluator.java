@@ -56,6 +56,20 @@ final class SqlRowExpressionEvaluator {
     return StatusCode.OK;
   }
 
+  StatusCode evaluateOperand(
+      SqlCommand command,
+      SqlBoundProjectionPrograms programs,
+      SqlTemporalZonePlan zone,
+      long key,
+      HeapRowResult row,
+      TableDefinition table,
+      SqlPredicateOperand result) {
+    StatusCode status = evaluate(command, programs, 0, zone, key, row, table);
+    if (status.isOk()) result.capture(this);
+    reset();
+    return status;
+  }
+
   void beginPredicateOperand() {
     size = 0;
     text.clear();

@@ -292,6 +292,7 @@ final class SqlGroupedExecution {
 
   private StatusCode nextSourceValue() {
     while (true) {
+      predicates.releaseEvaluatedRow();
       StatusCode status = nextSource();
       long primaryKey = plan.valueIndex() ? indexed.key() : row.key();
       HeapRowResult source = plan.valueIndex() ? indexed.row() : row.row();
@@ -308,6 +309,7 @@ final class SqlGroupedExecution {
       if (!predicates.matched()) {
         continue;
       }
+      source = predicates.evaluatedRow(source);
       return captureValue(primaryKey, source);
     }
   }

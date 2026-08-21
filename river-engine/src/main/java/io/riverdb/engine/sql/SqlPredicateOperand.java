@@ -36,6 +36,34 @@ final class SqlPredicateOperand {
     nullValue = false;
   }
 
+  void prepareText() {
+    ensureText(0);
+  }
+
+  void copyFrom(SqlPredicateOperand source) {
+    clear();
+    value = source.value;
+    descriptor = source.descriptor;
+    nullValue = source.nullValue;
+    if (!nullValue
+        && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      ensureText(source.textLength);
+      for (int index = 0; index < source.textLength; index++) {
+        text[index] = source.text[index];
+      }
+      textLength = source.textLength;
+    }
+  }
+
+  void setTextCharacters(
+      char[] source, int offset, int length, int typeDescriptor) {
+    clear();
+    descriptor = typeDescriptor;
+    ensureText(length);
+    for (int index = 0; index < length; index++) text[index] = source[offset + index];
+    textLength = length;
+  }
+
   void setNull(int typeDescriptor) {
     clear();
     descriptor = typeDescriptor;

@@ -48,14 +48,11 @@ final class SqlPointCommandExecutor {
           ? dml.execute(bound.command, bound, result)
           : queries.executePointQuery(result);
     }
-    queries.finishPointStatement();
-    return status;
+    StatusCode finished = queries.finishPointStatement();
+    return status.isOk() ? finished : status;
   }
 
   private StatusCode prepareQuery() {
-    if (bound.query.hasNestedTopology()) {
-      return nestedPointStatus();
-    }
     StatusCode status = views.resolve(session, bound);
     if (status.isOk()) status = binder.captureExecutableQuery(bound);
     blockPipeline = status.isOk() && bound.query.isBlockPipeline();
@@ -67,13 +64,6 @@ final class SqlPointCommandExecutor {
     if (blockPipeline) return status;
     return status.isOk()
         ? binder.bindDataCommand(bound.command, bound.query, bound) : status;
-  }
-
-  private StatusCode nestedPointStatus() {
-    return bound.query.hasScalarPredicate()
-            || bound.query.hasMembershipPredicate()
-        ? StatusCode.FEATURE_NOT_SUPPORTED
-        : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
   private StatusCode prepareMutation() {

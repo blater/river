@@ -43,7 +43,7 @@ final class SqlExecutionOwnershipTest {
       assertFalse(CatalogIndexCursor.class.isAssignableFrom(type), field.getName());
       assertFalse(ByteBuffer.class.isAssignableFrom(type), field.getName());
       assertFalse(SqlSortWorkspace.class.isAssignableFrom(type), field.getName());
-      assertFalse(SqlNestedQueryExecution.class.isAssignableFrom(type), field.getName());
+      assertFalse(SqlSubqueryGraphExecution.class.isAssignableFrom(type), field.getName());
       assertFalse(SqlPhysicalPlan.class.isAssignableFrom(type), field.getName());
       assertFalse(hasWorkspaceName(field.getName()), field.getName());
     }
@@ -83,7 +83,7 @@ final class SqlExecutionOwnershipTest {
         assertEquals("projectedValues", field.getName());
       }
       physicalPlans += type == SqlPhysicalPlan.class ? 1 : 0;
-      nestedExecutions += type == SqlNestedQueryExecution.class ? 1 : 0;
+      nestedExecutions += type == SqlSubqueryGraphExecution.class ? 1 : 0;
       sortExecutions += type == SqlSortExecution.class ? 1 : 0;
     }
     assertEquals(1, physicalPlans);
@@ -108,8 +108,8 @@ final class SqlExecutionOwnershipTest {
   }
 
   @Test
-  void nestedExecutionKeepsItsMutableStoragePrivate() {
-    for (Field field : SqlNestedQueryExecution.class.getDeclaredFields()) {
+  void subqueryGraphKeepsItsMutableStoragePrivate() {
+    for (Field field : SqlSubqueryGraphExecution.class.getDeclaredFields()) {
       if (Modifier.isStatic(field.getModifiers())) {
         continue;
       }

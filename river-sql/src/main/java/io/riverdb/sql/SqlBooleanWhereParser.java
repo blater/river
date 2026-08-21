@@ -23,8 +23,7 @@ final class SqlBooleanWhereParser {
   private SqlBooleanPredicateProgram target;
   private int depth;
   private int parsedNode = -1;
-  private int syntheticOffset = -1;
-  private int syntheticLeaf = -1;
+  private final SqlSubqueryLeafRegistry subqueries = new SqlSubqueryLeafRegistry();
   private boolean grouped;
 
   SqlBooleanWhereParser(
@@ -63,7 +62,6 @@ final class SqlBooleanWhereParser {
     }
     target.reset();
     depth = 0;
-    syntheticLeaf = -1;
     StatusCode status = disjunction(sql);
     if (status.isOk() && !target.finish(parsedNode)) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -84,7 +82,6 @@ final class SqlBooleanWhereParser {
     }
     target.reset();
     depth = 0;
-    syntheticLeaf = -1;
     StatusCode status = disjunction(sql);
     if (status.isOk() && !target.finish(parsedNode)) {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
@@ -95,17 +92,17 @@ final class SqlBooleanWhereParser {
   }
 
   void beginStandard() {
-    syntheticOffset = -1;
-    syntheticLeaf = -1;
+    clearSubqueries();
   }
 
-  void beginSynthetic(int replacementOffset) {
-    syntheticOffset = replacementOffset;
-    syntheticLeaf = -1;
+  void beginSubqueries(
+      int[] offsets, int[] kinds, int[] edges, int count) {
+    beginStandard();
+    subqueries.begin(offsets, kinds, edges, count);
   }
 
-  int syntheticLeaf() {
-    return syntheticLeaf;
+  int subqueryLeaf(int index) {
+    return subqueries.leaf(index);
   }
 
   private StatusCode disjunction(CharSequence sql) {
@@ -161,11 +158,28 @@ final class SqlBooleanWhereParser {
   }
 
   private StatusCode leaf(CharSequence sql) {
+    input.skipSpaces(sql);
+    int exists = subqueryAt(input.position(), SqlQuery.SUBQUERY_EXISTS);
+    if (exists >= 0) return subqueryExists(sql, exists);
     StatusCode status = parseExpression(sql, left);
     int leaf = status.isOk() ? target.appendLeaf(left) : -2;
     if (status.isOk() && leaf < 0) status = StatusCode.RESOURCE_EXHAUSTED;
     if (status.isOk()) status = leafTest(sql, leaf);
     if (status.isOk()) {
+      parsedNode = target.appendBoolean(
+          SqlBooleanPredicateProgram.BOOLEAN_LEAF, leaf, 0);
+      if (parsedNode < 0) status = StatusCode.RESOURCE_EXHAUSTED;
+    }
+    return status;
+  }
+
+  private StatusCode subqueryExists(CharSequence sql, int synthetic) {
+    StatusCode status = input.requireKeyword(sql, "TRUE");
+    int leaf = status.isOk()
+        ? target.appendSubqueryExists(subqueries.edge(synthetic)) : -2;
+    if (status.isOk() && leaf < 0) status = StatusCode.RESOURCE_EXHAUSTED;
+    if (status.isOk()) {
+      subqueries.setLeaf(synthetic, leaf);
       parsedNode = target.appendBoolean(
           SqlBooleanPredicateProgram.BOOLEAN_LEAF, leaf, 0);
       if (parsedNode < 0) status = StatusCode.RESOURCE_EXHAUSTED;
@@ -196,9 +210,16 @@ final class SqlBooleanWhereParser {
     if (comparison == null || comparison == SqlComparison.HALF_OPEN_RANGE) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (syntheticOffset >= 0) {
-      input.skipSpaces(sql);
-      if (input.position() == syntheticOffset) syntheticLeaf = leaf;
+    input.skipSpaces(sql);
+    int scalar = subqueryAt(input.position(), SqlQuery.SUBQUERY_SCALAR);
+    if (scalar >= 0) {
+      StatusCode status = input.requireCharacter(sql, '0');
+      if (status.isOk() && !target.setSubqueryComparison(
+          leaf, comparison, subqueries.edge(scalar))) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
+      if (status.isOk()) subqueries.setLeaf(scalar, leaf);
+      return status;
     }
     StatusCode status = parseExpression(sql, right);
     if (status.isOk() && !target.setComparison(leaf, comparison, right)) {
@@ -246,6 +267,18 @@ final class SqlBooleanWhereParser {
 
   private StatusCode membership(CharSequence sql, int leaf, boolean negated) {
     StatusCode status = input.requireCharacter(sql, '(');
+    input.skipSpaces(sql);
+    int subquery = subqueryAt(input.position(), SqlQuery.SUBQUERY_MEMBERSHIP);
+    if (status.isOk() && subquery >= 0) {
+      status = input.requireCharacter(sql, '0');
+      if (status.isOk()) status = input.requireCharacter(sql, ')');
+      if (status.isOk() && !target.setSubqueryMembership(
+          leaf, subqueries.edge(subquery), negated)) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
+      if (status.isOk()) subqueries.setLeaf(subquery, leaf);
+      return status;
+    }
     int count = 0;
     boolean complete = false;
     while (status.isOk() && !complete) {
@@ -318,6 +351,14 @@ final class SqlBooleanWhereParser {
     parsedNode = -1;
     depth = 0;
     grouped = false;
+  }
+
+  private int subqueryAt(int offset, int kind) {
+    return subqueries.find(offset, kind);
+  }
+
+  private void clearSubqueries() {
+    subqueries.clear();
   }
 
   private boolean startsBooleanGroup(CharSequence sql) {

@@ -17,7 +17,7 @@ final class SqlSortExecution {
   private final SqlPhysicalPlan plan;
   private final SqlActiveScanState scan;
   private final SqlExpressionEvaluator expressions;
-  private final SqlNestedQueryExecution nested;
+  private final SqlSubqueryGraphExecution subqueries;
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlRowProjectionEvaluator projections;
   private final SqlProjectedRow projected = new SqlProjectedRow();
@@ -34,7 +34,7 @@ final class SqlSortExecution {
       SqlPhysicalPlan physicalPlan,
       SqlActiveScanState activeScan,
       SqlExpressionEvaluator evaluator,
-      SqlNestedQueryExecution nestedExecution,
+      SqlSubqueryGraphExecution graph,
       SqlBoundPredicateEvaluator predicateEvaluator,
       SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
@@ -42,7 +42,7 @@ final class SqlSortExecution {
     plan = physicalPlan;
     scan = activeScan;
     expressions = evaluator;
-    nested = nestedExecution;
+    subqueries = graph;
     predicates = predicateEvaluator;
     projections = projectionEvaluator;
   }
@@ -190,30 +190,25 @@ final class SqlSortExecution {
   private StatusCode append(
       long primaryKey, HeapRowResult source, int orderColumn) {
     StatusCode status = validate(source, bound.table);
-    if (status.isOk()) {
-      status = nested.evaluateBeforePredicates(primaryKey, source);
-      source = nested.evaluatedRow(source);
-    }
-    if (!status.isOk() || nested.rejectsOuterRow()) {
-      return status;
-    }
+    if (!status.isOk()) return status;
     status = predicates.evaluate(primaryKey, source);
     if (!status.isOk()) return status;
+    int root = bound.executableQuery.sourceBlockCount() - 1;
+    source = subqueries.evaluatedRow(root, source);
     if (!predicates.matched()) {
+      subqueries.releaseRow(root);
       return StatusCode.OK;
-    }
-    status = nested.evaluateAfterPredicates(primaryKey, source);
-    source = nested.evaluatedRow(source);
-    if (!status.isOk() || nested.rejectsOuterRow()) {
-      return status;
     }
     if (bound.projectionPrograms.count() > 0) {
       status = projections.project(primaryKey, source, projected);
-      if (!status.isOk()) return status;
+      if (!status.isOk()) {
+        subqueries.releaseRow(root);
+        return status;
+      }
     } else {
       projectRaw(primaryKey, source);
     }
-    return workspace.append(
+    status = workspace.append(
         sortKey(primaryKey, source, orderColumn),
         sortKeyNull(source, orderColumn),
         primaryKey,
@@ -221,6 +216,8 @@ final class SqlSortExecution {
         bound.projectionPrograms.count() > 0 ? projected.nullMask() : outputNullMask,
         source,
         projected);
+    subqueries.releaseRow(root);
+    return status;
   }
 
   private long sortKey(

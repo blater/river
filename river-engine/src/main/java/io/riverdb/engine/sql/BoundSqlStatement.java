@@ -19,6 +19,10 @@ final class BoundSqlStatement {
   final SqlBoundAggregateSet aggregates = new SqlBoundAggregateSet();
   final SqlBoundBooleanPredicateProgram whereBoolean =
       new SqlBoundBooleanPredicateProgram();
+  private final SqlBoundBooleanPredicateProgram[] nestedBooleans =
+      new SqlBoundBooleanPredicateProgram[io.riverdb.sql.SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final SqlBoundProjectionPrograms[] nestedProjections =
+      new SqlBoundProjectionPrograms[io.riverdb.sql.SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private SqlBoundBooleanPredicateProgram onBoolean;
   final SqlBoundBooleanPredicateProgram havingBoolean =
       new SqlBoundBooleanPredicateProgram();
@@ -56,6 +60,10 @@ final class BoundSqlStatement {
     projectionPrograms.reset();
     aggregates.reset();
     whereBoolean.reset();
+    for (int depth = 0; depth < nestedBooleans.length; depth++) {
+      if (nestedBooleans[depth] != null) nestedBooleans[depth].reset();
+      if (nestedProjections[depth] != null) nestedProjections[depth].reset();
+    }
     if (onBoolean != null) onBoolean.reset();
     havingBoolean.reset();
     if (blockPlans != null) blockPlans.reset();
@@ -98,5 +106,21 @@ final class BoundSqlStatement {
 
   boolean hasBlockPlans() {
     return blockPlans != null && blockPlans.count() > 0;
+  }
+
+  SqlBoundBooleanPredicateProgram nestedBoolean(int block) {
+    if (block < 0 || block >= nestedBooleans.length) return null;
+    if (nestedBooleans[block] == null) {
+      nestedBooleans[block] = new SqlBoundBooleanPredicateProgram();
+    }
+    return nestedBooleans[block];
+  }
+
+  SqlBoundProjectionPrograms nestedProjection(int block) {
+    if (block < 0 || block >= nestedProjections.length) return null;
+    if (nestedProjections[block] == null) {
+      nestedProjections[block] = new SqlBoundProjectionPrograms();
+    }
+    return nestedProjections[block];
   }
 }

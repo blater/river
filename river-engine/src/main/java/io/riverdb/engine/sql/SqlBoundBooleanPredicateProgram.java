@@ -33,6 +33,8 @@ final class SqlBoundBooleanPredicateProgram {
       new SqlComparison[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
   private final boolean[] negated =
       new boolean[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
+  private final byte[] subqueryEdges =
+      new byte[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
   private final short[] memberOffsets =
       new short[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
   private final short[] memberCounts =
@@ -71,6 +73,7 @@ final class SqlBoundBooleanPredicateProgram {
       tests[leaf] = 0;
       comparisons[leaf] = null;
       negated[leaf] = false;
+      subqueryEdges[leaf] = -1;
       memberOffsets[leaf] = 0;
       memberCounts[leaf] = 0;
     }
@@ -103,6 +106,7 @@ final class SqlBoundBooleanPredicateProgram {
       tests[leaf] = (byte) source.leafTest(leaf);
       comparisons[leaf] = source.comparison(leaf);
       negated[leaf] = source.leafNegated(leaf);
+      subqueryEdges[leaf] = (byte) source.subqueryEdge(leaf);
       memberOffsets[leaf] = (short) copyMembers(source, leaf);
       memberCounts[leaf] = (short) source.leafMemberCount(leaf);
       for (int program = 0; program < PROGRAMS_PER_LEAF; program++) {
@@ -193,6 +197,12 @@ final class SqlBoundBooleanPredicateProgram {
     int slot = programSlot(leaf, program);
     resultDescriptors[slot] = descriptor;
     unresolvedResults[slot] = false;
+    if (Byte.toUnsignedInt(counts[slot]) == 1) {
+      int node = Byte.toUnsignedInt(offsets[slot]);
+      if (operators[node] == io.riverdb.sql.SqlScalarExpression.NULL) {
+        descriptors[node] = descriptor;
+      }
+    }
   }
 
   boolean available() { return root >= 0; }
@@ -204,6 +214,7 @@ final class SqlBoundBooleanPredicateProgram {
   int leafTest(int leaf) { return Byte.toUnsignedInt(tests[leaf]); }
   SqlComparison comparison(int leaf) { return comparisons[leaf]; }
   boolean negated(int leaf) { return negated[leaf]; }
+  int subqueryEdge(int leaf) { return subqueryEdges[leaf]; }
   int nodeCount(int leaf, int program) {
     return Byte.toUnsignedInt(counts[programSlot(leaf, program)]);
   }

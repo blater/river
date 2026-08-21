@@ -12,6 +12,7 @@ final class SqlBlockPlanBinder {
   private final SqlBlockProjectionBinder projections = new SqlBlockProjectionBinder(expressions);
   private final SqlBlockPredicateBinder predicates = new SqlBlockPredicateBinder();
   private final SqlBlockJoinBinder joins;
+  private final SqlBinder binder;
   private final SqlBooleanPredicateEvaluator predicatePreflight;
 
   SqlBlockPlanBinder(SqlTemporalContext temporal) {
@@ -19,6 +20,7 @@ final class SqlBlockPlanBinder {
   }
 
   SqlBlockPlanBinder(SqlTemporalContext temporal, SqlBinder sharedBinder) {
+    binder = sharedBinder;
     joins = sharedBinder == null ? null : new SqlBlockJoinBinder(sharedBinder);
     predicatePreflight = temporal == null ? null
         : new SqlBooleanPredicateEvaluator(new SqlExpressionEvaluator(), temporal);
@@ -38,6 +40,10 @@ final class SqlBlockPlanBinder {
     status = deepest.type() == SqlCommandType.JOIN_SCAN
         ? joins.resolve(session, bound, deepest)
         : session.resolveTable(deepest.tableName(), bound.table);
+    if (status.isOk() && bound.executableQuery.edgeCount() > 0) {
+      status = binder == null
+          ? StatusCode.FEATURE_NOT_SUPPORTED : binder.bindQueryBlocks(session, bound);
+    }
     if (status.isOk()) physicalSchema(bound);
     SqlBlockSchema child = plans.baseSchema();
     for (int block = plans.count() - 1;
@@ -50,7 +56,9 @@ final class SqlBlockPlanBinder {
       } else if (status.isOk() && evaluator != null) {
         status = evaluator.prepare(bound);
       }
-      if (status.isOk() && !join && predicatePreflight != null) {
+      boolean nestedSource = bound.executableQuery.edgeCount() > 0
+          && block == bound.executableQuery.sourceBlockCount() - 1;
+      if (status.isOk() && !join && !nestedSource && predicatePreflight != null) {
         status = predicatePreflight.prepare(bound.command, bound.whereBoolean);
       }
       if (status.isOk() && predicatePreflight != null) {

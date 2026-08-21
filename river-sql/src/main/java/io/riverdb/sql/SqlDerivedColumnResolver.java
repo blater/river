@@ -11,7 +11,7 @@ final class SqlDerivedColumnResolver {
   int copy(int blockIndex, CharSequence name, SqlIdentifier destination) {
     CharSequence resolved = name;
     for (int sourceIndex = blockIndex + 1;
-        sourceIndex < query.blockCount();
+        sourceIndex < query.sourceBlockCount();
         sourceIndex++) {
       SqlCommand source = query.block(sourceIndex);
       int projection = outputIndex(source, resolved);

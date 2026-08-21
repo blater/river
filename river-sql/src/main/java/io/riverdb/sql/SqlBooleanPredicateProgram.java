@@ -19,6 +19,9 @@ public final class SqlBooleanPredicateProgram {
   public static final int TEST_BETWEEN = 4;
   public static final int TEST_MEMBERSHIP = 5;
   public static final int TEST_BOOLEAN = 6;
+  public static final int TEST_SUBQUERY_EXISTS = 7;
+  public static final int TEST_SUBQUERY_COMPARISON = 8;
+  public static final int TEST_SUBQUERY_MEMBERSHIP = 9;
 
   public static final int TRUTH_TRUE = 1;
   public static final int TRUTH_FALSE = 2;
@@ -41,6 +44,7 @@ public final class SqlBooleanPredicateProgram {
   private final byte[] leafTests = new byte[MAXIMUM_LEAVES];
   private final SqlComparison[] comparisons = new SqlComparison[MAXIMUM_LEAVES];
   private final boolean[] leafNegated = new boolean[MAXIMUM_LEAVES];
+  private final byte[] subqueryEdges = new byte[MAXIMUM_LEAVES];
   private final short[] memberOffsets = new short[MAXIMUM_LEAVES];
   private final short[] memberCounts = new short[MAXIMUM_LEAVES];
   private long[] memberValues;
@@ -71,6 +75,7 @@ public final class SqlBooleanPredicateProgram {
       leafTests[leaf] = 0;
       comparisons[leaf] = null;
       leafNegated[leaf] = false;
+      subqueryEdges[leaf] = -1;
       memberOffsets[leaf] = 0;
       memberCounts[leaf] = 0;
     }
@@ -108,6 +113,7 @@ public final class SqlBooleanPredicateProgram {
     System.arraycopy(source.leafTests, 0, leafTests, 0, leafCount);
     System.arraycopy(source.comparisons, 0, comparisons, 0, leafCount);
     System.arraycopy(source.leafNegated, 0, leafNegated, 0, leafCount);
+    System.arraycopy(source.subqueryEdges, 0, subqueryEdges, 0, leafCount);
     System.arraycopy(source.memberOffsets, 0, memberOffsets, 0, leafCount);
     System.arraycopy(source.memberCounts, 0, memberCounts, 0, leafCount);
     ensureMembers(sourceMemberCount);
@@ -126,10 +132,26 @@ public final class SqlBooleanPredicateProgram {
   public int appendLeaf(SqlScalarExpression left) {
     if (leafCount >= MAXIMUM_LEAVES) return -1;
     int leaf = leafCount++;
+    subqueryEdges[leaf] = -1;
     if (!appendProgram(leaf, PROGRAM_LEFT, left)) {
       leafCount--;
       return -1;
     }
+    return leaf;
+  }
+
+  int appendSubqueryExists(int edge) {
+    if (leafCount >= MAXIMUM_LEAVES || edge < 0 || edge >= SqlQuery.MAXIMUM_EDGES) {
+      return -1;
+    }
+    int leaf = leafCount++;
+    subqueryEdges[leaf] = (byte) edge;
+    int first = leaf * PROGRAMS_PER_LEAF;
+    for (int program = 0; program < PROGRAMS_PER_LEAF; program++) {
+      programOffsets[first + program] = (byte) scalarNodeCount;
+      programCounts[first + program] = 0;
+    }
+    leafTests[leaf] = TEST_SUBQUERY_EXISTS;
     return leaf;
   }
 
@@ -201,6 +223,26 @@ public final class SqlBooleanPredicateProgram {
     return true;
   }
 
+  boolean setSubqueryComparison(
+      int leaf, SqlComparison comparison, int edge) {
+    if (!validLeaf(leaf) || comparison == null
+        || comparison == SqlComparison.HALF_OPEN_RANGE
+        || comparison == SqlComparison.IN || comparison == SqlComparison.NOT_IN
+        || edge < 0 || edge >= SqlQuery.MAXIMUM_EDGES) return false;
+    leafTests[leaf] = TEST_SUBQUERY_COMPARISON;
+    comparisons[leaf] = comparison;
+    subqueryEdges[leaf] = (byte) edge;
+    return true;
+  }
+
+  boolean setSubqueryMembership(int leaf, int edge, boolean negated) {
+    if (!validLeaf(leaf) || edge < 0 || edge >= SqlQuery.MAXIMUM_EDGES) return false;
+    leafTests[leaf] = TEST_SUBQUERY_MEMBERSHIP;
+    leafNegated[leaf] = negated;
+    subqueryEdges[leaf] = (byte) edge;
+    return true;
+  }
+
   private void ensureMembers(int required) {
     if (required == 0 || memberValues != null && required <= memberValues.length) return;
     int capacity = memberValues == null
@@ -250,6 +292,12 @@ public final class SqlBooleanPredicateProgram {
   public boolean finish(int rootNode) {
     if (rootNode < 0 || rootNode >= booleanNodeCount || leafCount == 0
         || Byte.toUnsignedInt(booleanDepth[rootNode]) > MAXIMUM_DEPTH) return false;
+    for (int leaf = 0; leaf < leafCount; leaf++) {
+      int test = Byte.toUnsignedInt(leafTests[leaf]);
+      boolean subquery = test >= TEST_SUBQUERY_EXISTS
+          && test <= TEST_SUBQUERY_MEMBERSHIP;
+      if (subquery != (subqueryEdges[leaf] >= 0)) return false;
+    }
     root = rootNode;
     return true;
   }
@@ -297,6 +345,9 @@ public final class SqlBooleanPredicateProgram {
   public int leafTest(int leaf) { return Byte.toUnsignedInt(leafTests[leaf]); }
   public SqlComparison comparison(int leaf) { return comparisons[leaf]; }
   public boolean leafNegated(int leaf) { return leafNegated[leaf]; }
+  public int subqueryEdge(int leaf) {
+    return leaf >= 0 && leaf < leafCount ? subqueryEdges[leaf] : -1;
+  }
   public int programNodeCount(int leaf, int program) {
     return programCount(leaf, program);
   }

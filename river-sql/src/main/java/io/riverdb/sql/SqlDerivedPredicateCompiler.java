@@ -36,7 +36,7 @@ final class SqlDerivedPredicateCompiler {
     SqlBooleanPredicateProgram target = destination.writableWherePredicates();
     target.reset();
     int combined = -1;
-    for (int block = query.blockCount() - 1; block >= 0; block--) {
+    for (int block = query.sourceBlockCount() - 1; block >= 0; block--) {
       SqlCommand sourceCommand = query.block(block);
       SqlBooleanPredicateProgram source = sourceCommand.wherePredicates();
       if (!source.isAvailable()) continue;

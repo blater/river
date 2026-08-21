@@ -166,7 +166,7 @@ final class SqlScanPreparation {
 
   private StatusCode beginRows(BoundSqlQuery.Block command, boolean explainOnly) {
     plan.setCommand(command);
-    plan.setNestedDepth(query.sourcePlanDepth());
+    plan.setNestedDepth(query.planDepth());
     plan.setFilterCount(bound.predicateCount);
     configureRowResult(command);
     if (explainOnly && query.blockCount() > 1) {

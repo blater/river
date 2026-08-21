@@ -45,6 +45,7 @@ final class SqlPhysicalPlan {
   private boolean sort;
   private long actualRows;
   private SqlBlockStagePlan blockStages;
+  private SqlSubqueryPlan subqueries;
 
   SqlPhysicalPlan() {
     for (int index = 0; index < resultNames.length; index++) {
@@ -82,6 +83,7 @@ final class SqlPhysicalPlan {
     sort = false;
     actualRows = 0;
     blockStages = null;
+    subqueries = null;
   }
 
   void resetSteps() {
@@ -93,6 +95,8 @@ final class SqlPhysicalPlan {
     blockStages = stages;
     stepCount = 0;
   }
+
+  void setSubqueries(SqlSubqueryPlan nested) { subqueries = nested; }
 
   void setAccessColumn(int column) {
     accessColumn = column;
@@ -365,21 +369,28 @@ final class SqlPhysicalPlan {
   }
 
   int stepCount() {
-    return blockStages == null ? stepCount : blockStages.count();
+    return baseStepCount() + (subqueries == null ? 0 : subqueries.count());
   }
 
   long operator(int index) {
+    int base = baseStepCount();
+    if (index >= base) return subqueries.operator(index - base);
     return blockStages == null ? operators[index] : blockStages.operator(index);
   }
 
   long detail(int index) {
+    int base = baseStepCount();
+    if (index >= base) return subqueries.detail(index - base);
     return blockStages == null ? details[index] : blockStages.detail(index);
   }
 
   long stepRows(int index) {
-    return blockStages == null ? index == 0 ? actualRows : -1
-        : blockStages.rows(index);
+    int base = baseStepCount();
+    if (index >= base) return subqueries.rows(index - base);
+    return blockStages == null ? index == 0 ? actualRows : -1 : blockStages.rows(index);
   }
+
+  private int baseStepCount() { return blockStages == null ? stepCount : blockStages.count(); }
 
   private static final class ResultName implements CharSequence {
     private final char[] value = new char[64];

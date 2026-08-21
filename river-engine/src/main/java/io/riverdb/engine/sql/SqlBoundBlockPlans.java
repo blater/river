@@ -34,11 +34,12 @@ final class SqlBoundBlockPlans {
 
   private StatusCode capture(SqlQuery query, boolean requirePipeline) {
     reset();
+    int sourceBlocks = query == null ? 0 : query.sourceBlockCount();
     if (query == null || requirePipeline && !query.isBlockPipeline()
-        || query.blockCount() < 2 || query.blockCount() > commands.length) {
+        || sourceBlocks < 2 || sourceBlocks > commands.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    count = query.blockCount();
+    count = sourceBlocks;
     for (int index = 0; index < count; index++) {
       commands[index] = query.block(index);
     }
