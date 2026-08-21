@@ -31,9 +31,11 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
   private final long[] estimatedRows =
       new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private int roleCount;
+  private int queryBlock = -1;
   private boolean estimatesAvailable;
 
   void beginRoles(int roles, TableDefinition borrowedRoot) {
+    queryBlock = -1;
     roleCount = roles;
     for (int role = 0; role < roles; role++) {
       if (role == 0 && borrowedRoot != null) {
@@ -46,6 +48,25 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
       }
       if (statistics[role] == null) statistics[role] = new TableStatistics();
     }
+  }
+
+  void borrowRoles(int block, BoundSqlQuery.Block schemas) {
+    reset();
+    queryBlock = block;
+    roleCount = schemas == null ? 0 : schemas.roleCount();
+    for (int role = 0; role < roleCount; role++) {
+      tables[role] = schemas.table(role);
+      ownedTables[role] = false;
+      if (statistics[role] == null) statistics[role] = new TableStatistics();
+    }
+  }
+
+  void usePackedScopes(int block) { queryBlock = block; }
+
+  int localRole(int scope) {
+    if (queryBlock < 0) return scope;
+    return SqlNestedRowProvider.block(scope) == queryBlock
+        ? SqlNestedRowProvider.role(scope) : -1;
   }
 
   TableDefinition table(int role) {
@@ -77,6 +98,7 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
       ownedTables[role] = false;
     }
     roleCount = 0;
+    queryBlock = -1;
     resetOnBooleans();
     resetJoinAccess();
     resetStrategies();

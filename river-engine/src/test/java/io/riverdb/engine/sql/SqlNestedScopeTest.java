@@ -1,6 +1,9 @@
 package io.riverdb.engine.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
@@ -138,6 +141,191 @@ final class SqlNestedScopeTest {
     fixture.close();
   }
 
+  @Test
+  void bindsJoinedGraphScopesWithoutOverwritingPackedPrograms(@TempDir Path root) {
+    Fixture fixture = open(root);
+    createFixture(fixture.session, fixture.result);
+    RelationalSessionOpenResult opened = new RelationalSessionOpenResult();
+    assertEquals(StatusCode.OK, fixture.database.createSession(opened));
+    RelationalSession relational = opened.session();
+    assertEquals(StatusCode.OK, relational.begin(IsolationLevel.REPEATABLE_READ));
+
+    BoundSqlStatement rootJoin = graph(
+        "SELECT a.id FROM join_scope_a a WHERE EXISTS "
+            + "(SELECT i.id FROM inner_scope i WHERE i.id=a.id)");
+    replaceJoinBlock(
+        rootJoin,
+        0,
+        "SELECT a.id FROM join_scope_a a JOIN join_scope_b b ON a.id=b.id",
+        true);
+    SqlBinder binder = new SqlBinder();
+    assertEquals(StatusCode.OK, bindGraph(relational, binder, rootJoin));
+    SqlBoundJoinContext rootContext = rootJoin.existingJoinContext(0);
+    assertProgramScope(rootContext.onBoolean(0), SqlNestedRowProvider.scope(0, 0));
+    assertProgramScope(rootContext.onBoolean(0), SqlNestedRowProvider.scope(0, 1));
+    assertEquals(
+        StatusCode.OK,
+        binder.bindJoinProjection(rootJoin.query.block(0), rootJoin, rootContext));
+    assertProgramScope(rootContext.onBoolean(0), SqlNestedRowProvider.scope(0, 0));
+    assertProgramScope(rootContext.onBoolean(0), SqlNestedRowProvider.scope(0, 1));
+
+    BoundSqlStatement nearest = graph(
+        "SELECT o.id FROM outer_scope o WHERE EXISTS "
+            + "(SELECT m.id FROM middle_scope m WHERE EXISTS "
+            + "(SELECT a.id FROM join_scope_a a WHERE a.id=m.id))");
+    replaceJoinBlock(
+        nearest,
+        2,
+        "SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+            + "ON a.id=b.id AND nearest_only=b.b_only "
+            + "AND m.shared=b.b_only WHERE a.id=m.id",
+        false);
+    assertEquals(StatusCode.OK, bindGraph(relational, new SqlBinder(), nearest));
+    assertEquals(1, nearest.executableQuery.block(2).correlationScope());
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        bindGraph(
+            relational,
+            new SqlBinder(),
+            joinedRoot(
+                "SELECT a.id FROM join_scope_a a WHERE EXISTS "
+                    + "(SELECT i.id FROM inner_scope i WHERE i.id=a.id)",
+                "SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+                    + "ON a.id=b.id AND c.c_only=b.b_only "
+                    + "JOIN join_scope_c c ON b.id=c.id")));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        bindGraph(
+            relational,
+            new SqlBinder(),
+            joinedChild(
+                "SELECT o.id FROM outer_scope o WHERE EXISTS "
+                    + "(SELECT a.id FROM join_scope_a a WHERE a.id=o.id)",
+                "SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+                    + "ON a.id=b.id AND id=1 WHERE a.id=o.id")));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        bindGraph(
+            relational,
+            new SqlBinder(),
+            joinedChild(
+                "SELECT o.id FROM outer_scope o WHERE EXISTS "
+                    + "(SELECT a.id FROM join_scope_a a WHERE a.id=o.id)",
+                "SELECT o.id FROM join_scope_a o JOIN join_scope_b b "
+                    + "ON o.id=b.id AND o.outer_only=1 WHERE o.id=1")));
+
+    BoundSqlStatement siblings = graph(
+        "SELECT o.id FROM outer_scope o WHERE EXISTS "
+            + "(SELECT a.id FROM join_scope_a a WHERE a.id=o.id) OR EXISTS "
+            + "(SELECT c.id FROM join_scope_c c WHERE c.id=o.id)");
+    replaceJoinBlock(
+        siblings,
+        1,
+        "SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+            + "ON a.id=b.id AND a.a_only=b.b_only WHERE a.id=o.id",
+        false);
+    replaceJoinBlock(
+        siblings,
+        2,
+        "SELECT c.id FROM join_scope_c c JOIN join_scope_b d "
+            + "ON c.id=d.id AND c.c_only=d.b_only WHERE c.id=o.id",
+        false);
+    assertEquals(StatusCode.OK, bindGraph(relational, new SqlBinder(), siblings));
+    SqlBoundJoinContext first = siblings.existingJoinContext(1);
+    SqlBoundJoinContext second = siblings.existingJoinContext(2);
+    assertNotSame(first, second);
+    assertNotSame(first.onBoolean(0), second.onBoolean(0));
+    assertProgramScope(first.onBoolean(0), SqlNestedRowProvider.scope(1, 1));
+    assertProgramScope(second.onBoolean(0), SqlNestedRowProvider.scope(2, 1));
+    for (int role = 0; role < 2; role++) {
+      assertSame(siblings.executableQuery.block(1).table(role), first.table(role));
+      assertSame(siblings.executableQuery.block(2).table(role), second.table(role));
+    }
+    SqlTemporalContext temporal = new SqlTemporalContext();
+    assertEquals(StatusCode.OK, temporal.beginStatement());
+    SqlSubqueryGraphExecution execution = new SqlSubqueryGraphExecution(
+        relational, siblings, new SqlExpressionEvaluator(), temporal);
+    assertEquals(StatusCode.OK, execution.prepare());
+    assertNotSame(execution.joinPredicates(1), execution.joinPredicates(2));
+    assertEquals(StatusCode.OK, execution.close());
+    temporal.finishStatement();
+    siblings.reset();
+    assertNull(first.table(0));
+    assertNull(second.table(0));
+
+    assertEquals(StatusCode.OK, relational.commit(new TransactionOutcome()));
+    fixture.close();
+  }
+
+  private static BoundSqlStatement graph(String sql) {
+    BoundSqlStatement bound = new BoundSqlStatement();
+    assertEquals(
+        StatusCode.OK,
+        new SqlParser().parseQuery(sql, bound.query, bound.command),
+        sql);
+    int root = bound.query.sourceBlockCount() - 1;
+    assertEquals(
+        StatusCode.OK,
+        bound.executableQuery.capture(bound.query.block(root), bound.query),
+        sql);
+    return bound;
+  }
+
+  private static BoundSqlStatement joinedRoot(String graphSql, String joinSql) {
+    BoundSqlStatement bound = graph(graphSql);
+    replaceJoinBlock(bound, 0, joinSql, true);
+    return bound;
+  }
+
+  private static BoundSqlStatement joinedChild(String graphSql, String joinSql) {
+    BoundSqlStatement bound = graph(graphSql);
+    replaceJoinBlock(bound, 1, joinSql, false);
+    return bound;
+  }
+
+  private static void replaceJoinBlock(
+      BoundSqlStatement bound,
+      int block,
+      String sql,
+      boolean retainWhere) {
+    // Remove this internal replacement when joined graph blocks pass parser admission.
+    SqlCommand replacement = new SqlCommand();
+    assertEquals(StatusCode.OK, new SqlParser().parse(sql, replacement), sql);
+    if (retainWhere) {
+      replacement.wherePredicates().copyFrom(
+          bound.query.block(block).wherePredicates());
+    }
+    assertEquals(StatusCode.OK, bound.query.block(block).copyBlockFrom(replacement));
+    assertEquals(StatusCode.OK, bound.executableQuery.block(block).capture(replacement));
+  }
+
+  private static StatusCode bindGraph(
+      RelationalSession session, SqlBinder binder, BoundSqlStatement bound) {
+    int root = bound.query.sourceBlockCount() - 1;
+    SqlCommand command = bound.query.block(root);
+    StatusCode status;
+    if (command.joinChain() == null) {
+      status = session.resolveTable(command.tableName(), bound.table);
+    } else {
+      status = binder.resolveJoinRoles(
+          session, command, bound.joinContext(root), null, true);
+    }
+    return status.isOk() ? binder.bindQueryBlocks(session, bound) : status;
+  }
+
+  private static void assertProgramScope(
+      SqlBoundBooleanPredicateProgram program, int expected) {
+    for (int leaf = 0; leaf < program.leafCount(); leaf++) {
+      for (int side = 0; side < 4; side++) {
+        for (int node = 0; node < program.nodeCount(leaf, side); node++) {
+          if (program.scope(leaf, side, node) == expected) return;
+        }
+      }
+    }
+    assertEquals(expected, -1, "missing packed scope");
+  }
+
   private static void assertJoinedResolver(Fixture fixture) {
     RelationalSessionOpenResult opened = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, fixture.database.createSession(opened));
@@ -229,6 +417,11 @@ final class SqlNestedScopeTest {
     execute(
         session,
         result,
+        "CREATE TABLE join_scope_c "
+            + "(id BIGINT PRIMARY KEY,c_only BIGINT)");
+    execute(
+        session,
+        result,
         "INSERT INTO outer_scope VALUES "
             + "(1,100,70,5,'猫😀',95),(2,200,80,7,'éclair',150)");
     execute(
@@ -249,6 +442,7 @@ final class SqlNestedScopeTest {
             + "(1,10,95,7,'猫😀'),(2,20,150,8,'éclair')");
     execute(session, result, "INSERT INTO join_scope_a VALUES (1,100),(2,200)");
     execute(session, result, "INSERT INTO join_scope_b VALUES (1,95),(2,150)");
+    execute(session, result, "INSERT INTO join_scope_c VALUES (1,95),(2,150)");
   }
 
   private static void execute(

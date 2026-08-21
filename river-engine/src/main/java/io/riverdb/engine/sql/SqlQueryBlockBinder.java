@@ -7,12 +7,11 @@ import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
-import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.sql.SqlQuery;
 
 /** Resolves every physical block and canonical program in a subquery graph. */
 final class SqlQueryBlockBinder {
-  private final SqlBooleanPredicateBinder booleans = new SqlBooleanPredicateBinder();
+  private final SqlNestedJoinBinder joins = new SqlNestedJoinBinder();
   private final SqlNestedProjectionBinder projections = new SqlNestedProjectionBinder();
 
   StatusCode bind(RelationalSession session, BoundSqlStatement bound) {
@@ -20,7 +19,7 @@ final class SqlQueryBlockBinder {
     int root = query.sourceBlockCount() - 1;
     query.beginBinding(bound.table, root);
     if (query.edgeCount() == 0) return StatusCode.OK;
-    StatusCode status = bindRootRoles(bound, root);
+    StatusCode status = joins.bindRootRoles(bound, root);
     if (!status.isOk()) return status;
     for (int block = root + 1; block < query.blockCount(); block++) {
       status = resolve(session, bound, block);
@@ -28,7 +27,7 @@ final class SqlQueryBlockBinder {
     }
     for (int block = root; block < query.blockCount(); block++) {
       SqlCommand command = bound.query.block(block);
-      status = booleans.bindNested(command, bound, query, block);
+      status = joins.bindPredicates(command, bound, query, block);
       if (!status.isOk()) return status;
     }
     for (int edge = 0; edge < query.edgeCount(); edge++) {
@@ -48,26 +47,14 @@ final class SqlQueryBlockBinder {
       StatusCode status = session.resolveTable(block.roleTableName(role), table);
       if (!status.isOk()) return status;
     }
+    StatusCode status = joins.borrowRoles(session, bound, blockIndex, block);
+    if (!status.isOk()) return status;
     return projections.bind(
         bound.query.block(blockIndex),
         bound.executableQuery,
         blockIndex,
         bound.nestedProjection(blockIndex),
         block);
-  }
-
-  private static StatusCode bindRootRoles(BoundSqlStatement bound, int root) {
-    BoundSqlQuery.Block block = bound.executableQuery.block(root);
-    SqlJoinChain joins = block == null ? null : block.joinChain();
-    if (joins == null) return StatusCode.OK;
-    SqlBoundJoinContext context = bound.existingJoinContext(root);
-    if (context == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    for (int role = 0; role < joins.roleCount(); role++) {
-      TableDefinition table = context.table(role);
-      if (table == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-      block.bindRoleTable(role, table);
-    }
-    return StatusCode.OK;
   }
 
   private static StatusCode validateEdge(BoundSqlStatement bound, int edge) {

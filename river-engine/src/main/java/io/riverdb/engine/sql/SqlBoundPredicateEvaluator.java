@@ -8,7 +8,7 @@ import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Evaluates the predicates of the currently bound statement without allocating. */
-final class SqlBoundPredicateEvaluator {
+final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
   private final BoundSqlStatement bound;
   private final BoundSqlQuery query;
   private final SqlSubqueryGraphExecution subqueries;

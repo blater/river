@@ -24,11 +24,13 @@ final class SqlAccessEdgeSelector {
   private long convertedValue;
   private long normalizedLower;
   private long normalizedUpper;
+  private SqlBoundJoinContext joinContext;
 
   void select(
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram programs,
       BoundSqlStatement bound) {
+    joinContext = null;
     count = 0;
     collect(source, programs, programs.root());
     bound.accessPredicate = -1;
@@ -58,6 +60,7 @@ final class SqlAccessEdgeSelector {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram programs,
       SqlBoundJoinContext context) {
+    joinContext = context;
     count = 0;
     collect(source, programs, programs.root());
     context.accessPredicate = -1;
@@ -120,8 +123,8 @@ final class SqlAccessEdgeSelector {
       comparison = reverse(comparison);
     }
     if (column >= 0
-        && programs.scope(leaf, literalProgram == right ? left : right, 0)
-            != SqlBoundBooleanPredicateProgram.SCOPE_LEFT) return;
+        && !rootScope(
+            programs.scope(leaf, literalProgram == right ? left : right, 0))) return;
     if (column < 0 || !literal(source, leaf, literalProgram)) return;
     columns[count] = column;
     leaves[count] = leaf;
@@ -140,8 +143,7 @@ final class SqlAccessEdgeSelector {
     int upper = SqlBooleanPredicateProgram.PROGRAM_UPPER;
     int column = programs.rawColumn(leaf, left);
     if (source.leafNegated(leaf) || column < 0
-        || programs.scope(leaf, left, 0)
-            != SqlBoundBooleanPredicateProgram.SCOPE_LEFT
+        || !rootScope(programs.scope(leaf, left, 0))
         || !literal(source, leaf, lower) || !literal(source, leaf, upper)) return;
     columns[count] = column;
     leaves[count] = leaf;
@@ -430,5 +432,12 @@ final class SqlAccessEdgeSelector {
       upperDescriptors[edge] = 0;
     }
     count = 0;
+    joinContext = null;
+  }
+
+  private boolean rootScope(int scope) {
+    return joinContext == null
+        ? scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
+        : joinContext.localRole(scope) == 0;
   }
 }

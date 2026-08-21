@@ -14,27 +14,78 @@ final class SqlNestedColumnResolver {
       int currentBlock,
       CharSequence qualifier,
       CharSequence name) {
+    BoundSqlQuery.Block current = query == null ? null : query.block(currentBlock);
+    return resolve(
+        query,
+        currentBlock,
+        current == null ? 0 : current.roleCount(),
+        qualifier,
+        name);
+  }
+
+  StatusCode resolve(
+      BoundSqlQuery query,
+      int currentBlock,
+      int visibleLocalRoles,
+      CharSequence qualifier,
+      CharSequence name) {
     clear();
-    if (query == null || qualifier == null || name == null) {
+    if (query == null || qualifier == null || name == null
+        || visibleLocalRoles < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    return resolveVisible(
+        query, currentBlock, visibleLocalRoles, qualifier, name);
+  }
+
+  private StatusCode resolveVisible(
+      BoundSqlQuery query,
+      int currentBlock,
+      int visibleLocalRoles,
+      CharSequence qualifier,
+      CharSequence name) {
     int scope = currentBlock;
     while (scope >= 0) {
       BoundSqlQuery.Block candidate = query.block(scope);
-      StatusCode status = qualifier.length() == 0
-          ? unqualified(candidate, scope, name)
-          : qualified(candidate, scope, qualifier, name);
+      int visibleRoles = visibleRoles(
+          candidate, scope == currentBlock, visibleLocalRoles);
+      StatusCode status = resolveScope(
+          candidate, scope, visibleRoles, qualifier, name);
       if (status != StatusCode.CONFLICT) return status;
       scope = query.blockParent(scope);
     }
     return StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
+  private StatusCode resolveScope(
+      BoundSqlQuery.Block candidate,
+      int scope,
+      int visibleRoles,
+      CharSequence qualifier,
+      CharSequence name) {
+    return qualifier.length() == 0
+        ? unqualified(candidate, scope, visibleRoles, name)
+        : qualified(candidate, scope, visibleRoles, qualifier, name);
+  }
+
+  private static int visibleRoles(
+      BoundSqlQuery.Block candidate,
+      boolean current,
+      int visibleLocalRoles) {
+    if (candidate == null) return 0;
+    return current
+        ? Math.min(visibleLocalRoles, candidate.roleCount())
+        : candidate.roleCount();
+  }
+
   private StatusCode unqualified(
-      BoundSqlQuery.Block candidate, int scope, CharSequence name) {
+      BoundSqlQuery.Block candidate,
+      int scope,
+      int visibleRoles,
+      CharSequence name) {
     int matches = 0;
     for (int candidateRole = 0;
-        candidate != null && candidateRole < candidate.roleCount();
+        candidate != null && candidateRole < visibleRoles;
         candidateRole++) {
       TableDefinition table = candidate.table(candidateRole);
       int resolved = table == null ? -1 : table.findColumn(name);
@@ -51,12 +102,13 @@ final class SqlNestedColumnResolver {
   private StatusCode qualified(
       BoundSqlQuery.Block candidate,
       int scope,
+      int visibleRoles,
       CharSequence qualifier,
       CharSequence name) {
     int matchingRoles = 0;
     int matchingRole = -1;
     for (int candidateRole = 0;
-        candidate != null && candidateRole < candidate.roleCount();
+        candidate != null && candidateRole < visibleRoles;
         candidateRole++) {
       if (!SqlBindingNames.same(qualifier, candidate.roleTableName(candidateRole))
           && (candidate.roleAlias(candidateRole).length() == 0
