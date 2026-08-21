@@ -44,27 +44,30 @@ final class SqlJoinChainPlan {
   private int count;
 
   StatusCode describe(
-      BoundSqlStatement bound, SqlJoinChainSource rowSource, boolean withActuals) {
-    int rootAccess = bound.joinStrategy(0) == SqlJoinStrategy.MERGE
-        ? bound.joinStrategyOuterColumn(0)
-        : bound.accessPredicate >= 0
-            && (bound.predicateColumn == 0
-                || bound.table.hasIndexOn(bound.predicateColumn))
-            ? bound.predicateColumn : -1;
+      SqlCommand command,
+      SqlBoundJoinContext context,
+      SqlJoinChainSource rowSource,
+      boolean withActuals) {
+    int rootAccess = context.strategy(0) == SqlJoinStrategy.MERGE
+        ? context.strategyOuterColumn(0)
+        : context.accessPredicate >= 0
+            && (context.predicateColumn == 0
+                || context.table(0).hasIndexOn(context.predicateColumn))
+            ? context.predicateColumn : -1;
     begin(rowSource, withActuals);
     StatusCode status = root(rootAccess);
-    if (status.isOk()) status = statistics(bound, 0);
-    SqlJoinChain chain = bound.command.joinChain();
+    if (status.isOk()) status = statistics(context, 0);
+    SqlJoinChain chain = command.joinChain();
     for (int stage = 0; status.isOk() && stage < chain.stageCount(); stage++) {
-      int strategy = bound.joinStrategy(stage);
-      int inner = strategyPlan.directInner(bound, stage);
+      int strategy = context.strategy(stage);
+      int inner = strategyPlan.directInner(context, stage);
       status = stage(
-          chain, stage, inner, strategyPlan.directAccess(bound, stage, inner),
+          chain, stage, inner, strategyPlan.directAccess(context, stage, inner),
           strategy);
-      if (status.isOk()) status = statistics(bound, stage + 1);
-      if (status.isOk()) status = estimate(bound, stage);
+      if (status.isOk()) status = statistics(context, stage + 1);
+      if (status.isOk()) status = estimate(context, stage);
     }
-    return finish(status, bound.command);
+    return finish(status, command);
   }
 
   StatusCode describe(
@@ -147,17 +150,17 @@ final class SqlJoinChainPlan {
         -1);
   }
 
-  private StatusCode statistics(BoundSqlStatement bound, int role) {
-    if (!bound.joinEstimatesAvailable()) return StatusCode.OK;
+  private StatusCode statistics(SqlBoundJoinContext context, int role) {
+    if (!context.estimatesAvailable()) return StatusCode.OK;
     return appendEstimate(
-        bound.joinStatistics(role).sampled() ? SAMPLED : EXACT,
-        bound.joinStatistics(role).epoch(),
-        bound.joinStatistics(role).rowCount());
+        context.statistics(role).sampled() ? SAMPLED : EXACT,
+        context.statistics(role).epoch(),
+        context.statistics(role).rowCount());
   }
 
-  private StatusCode estimate(BoundSqlStatement bound, int stage) {
-    return bound.joinEstimatesAvailable()
-        ? appendEstimate(ESTIMATE, stage + 1, bound.joinEstimatedRows(stage))
+  private StatusCode estimate(SqlBoundJoinContext context, int stage) {
+    return context.estimatesAvailable()
+        ? appendEstimate(ESTIMATE, stage + 1, context.estimatedRows(stage))
         : StatusCode.OK;
   }
 

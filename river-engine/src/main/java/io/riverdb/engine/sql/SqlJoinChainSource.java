@@ -2,16 +2,18 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlJoinChain;
+import io.riverdb.sql.SqlCommand;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Resumable left-deep executor for one bounded canonical JOIN chain. */
 final class SqlJoinChainSource {
-  private final BoundSqlStatement bound;
   private final SqlExpressionEvaluator expressions;
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlJoinChainCursors cursors;
   private final SqlJoinStageCandidates physical;
   private final SqlJoinRoleRows rows;
+  private SqlBoundJoinContext context;
+  private SqlCommand command;
   private final boolean[] opened =
       new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final boolean[] matched =
@@ -35,18 +37,32 @@ final class SqlJoinChainSource {
 
   SqlJoinChainSource(
       io.riverdb.engine.relational.RelationalSession session,
-      BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
       SqlBoundPredicateEvaluator predicateEvaluator) {
-    bound = statement;
     expressions = evaluator;
     predicates = predicateEvaluator;
-    cursors = new SqlJoinChainCursors(session, statement);
-    physical = new SqlJoinStageCandidates(session, statement);
-    rows = new SqlJoinRoleRows(statement);
+    cursors = new SqlJoinChainCursors(session);
+    physical = new SqlJoinStageCandidates(session);
+    rows = new SqlJoinRoleRows();
+  }
+
+  StatusCode configure(
+      SqlBoundJoinContext joinContext,
+      SqlCommand canonicalCommand,
+      SqlBoundBooleanPredicateProgram where) {
+    if (hasResources() || joinContext == null || canonicalCommand == null) {
+      return StatusCode.CONFLICT;
+    }
+    context = joinContext;
+    command = canonicalCommand;
+    cursors.configure(context, command);
+    physical.configure(context, command);
+    rows.configure(context);
+    return predicates.configureJoin(command, context, where);
   }
 
   StatusCode begin() {
+    if (context == null || command == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     resetProgress();
     resetMetrics();
     StatusCode status = physical.begin();
@@ -130,7 +146,7 @@ final class SqlJoinChainSource {
     }
     matched[stage] = true;
     onTrue[stage]++;
-    if (stage + 1 == bound.command.joinChain().stageCount()) {
+    if (stage + 1 == command.joinChain().stageCount()) {
       boolean where = predicates.matchesJoinWhere(rows);
       if (!predicates.joinStatus().isOk()) return predicates.joinStatus();
       if (where) whereTrue++;
@@ -144,7 +160,7 @@ final class SqlJoinChainSource {
   }
 
   private StatusCode finishStage() {
-    SqlJoinChain joins = bound.command.joinChain();
+    SqlJoinChain joins = command.joinChain();
     int rightRole = stage + 1;
     if (!matched[stage] && joins.isLeft(stage) && !nullEmitted[stage]) {
       nullEmitted[stage] = true;

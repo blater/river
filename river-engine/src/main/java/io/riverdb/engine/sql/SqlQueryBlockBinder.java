@@ -60,8 +60,10 @@ final class SqlQueryBlockBinder {
     BoundSqlQuery.Block block = bound.executableQuery.block(root);
     SqlJoinChain joins = block == null ? null : block.joinChain();
     if (joins == null) return StatusCode.OK;
+    SqlBoundJoinContext context = bound.existingJoinContext(root);
+    if (context == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     for (int role = 0; role < joins.roleCount(); role++) {
-      TableDefinition table = bound.joinRole(role);
+      TableDefinition table = context.table(role);
       if (table == null) return StatusCode.INVALID_EXTERNAL_INPUT;
       block.bindRoleTable(role, table);
     }

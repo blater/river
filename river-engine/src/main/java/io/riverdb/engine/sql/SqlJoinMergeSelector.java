@@ -7,27 +7,28 @@ final class SqlJoinMergeSelector {
   private final int[] orderedColumns =
       new int[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_ROLES];
 
-  void select(SqlCommand command, BoundSqlStatement bound) {
+  void select(SqlCommand command, SqlBoundJoinContext context) {
     if (command.joinChain().stageCount() == 0
         || !SqlJoinPredicateClassifier.totalJoinOrder(command)) return;
     for (int role = 0; role < orderedColumns.length; role++) orderedColumns[role] = -1;
-    orderedColumns[0] = rootOrder(bound);
-    int selected = bound.physicalJoinStrategyStage();
+    orderedColumns[0] = rootOrder(context);
+    int selected = context.physicalStrategyStage();
     for (int stage = 0; stage < command.joinChain().stageCount(); stage++) {
-      int outerRole = bound.joinAccessOuterRole(stage);
-      int outerColumn = bound.joinAccessOuterColumn(stage);
-      int innerColumn = bound.joinAccessInnerColumn(stage);
+      int outerRole = context.accessOuterRole(stage);
+      int outerColumn = context.accessOuterColumn(stage);
+      int innerColumn = context.accessInnerColumn(stage);
       boolean ordered = outerRole >= 0 && innerColumn >= 0
           && orderedColumns[outerRole] == outerColumn;
       boolean selectableOrder = ordered || stage == 0
           && selected <= 0
-          && bound.accessPredicate < 0
+          && context.accessPredicate < 0
           && outerRole == 0
           && outerColumn >= 0
-          && (outerColumn == 0 || bound.table.hasIndexOn(outerColumn));
+          && (outerColumn == 0 || context.table(0).hasIndexOn(outerColumn));
       if (selectableOrder
-          && selectable(bound, stage, selected, outerRole, outerColumn)) {
-        bound.setJoinStrategy(
+          && selectable(
+              command, context, stage, selected, outerRole, outerColumn)) {
+        context.setStrategy(
             stage, SqlJoinStrategy.MERGE, outerRole, outerColumn, innerColumn);
         return;
       }
@@ -36,24 +37,25 @@ final class SqlJoinMergeSelector {
   }
 
   private static boolean selectable(
-      BoundSqlStatement bound,
+      SqlCommand command,
+      SqlBoundJoinContext context,
       int stage,
       int selected,
       int outerRole,
       int outerColumn) {
     if (selected >= 0 && selected != stage) return false;
-    if (selected == stage && bound.joinStrategy(stage) != SqlJoinStrategy.HASH) {
+    if (selected == stage && context.strategy(stage) != SqlJoinStrategy.HASH) {
       return false;
     }
-    return !(stage == 0 && bound.accessPredicate >= 0)
+    return !(stage == 0 && context.accessPredicate >= 0)
         && !(stage == 0
-        && bound.command.joinChain().isLeft(stage)
-        && bound.joinRole(outerRole).isNullable(outerColumn));
+        && command.joinChain().isLeft(stage)
+        && context.table(outerRole).isNullable(outerColumn));
   }
 
-  private static int rootOrder(BoundSqlStatement bound) {
-    if (bound.accessPredicate < 0) return 0;
-    int column = bound.predicateColumn;
-    return column == 0 || bound.table.hasIndexOn(column) ? column : 0;
+  private static int rootOrder(SqlBoundJoinContext context) {
+    if (context.accessPredicate < 0) return 0;
+    int column = context.predicateColumn;
+    return column == 0 || context.table(0).hasIndexOn(column) ? column : 0;
   }
 }

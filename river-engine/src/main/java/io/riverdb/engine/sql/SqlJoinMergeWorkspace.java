@@ -23,20 +23,20 @@ final class SqlJoinMergeWorkspace {
     rightRows = new SqlJoinMergeRightRows(relationalSession);
   }
 
-  StatusCode begin(BoundSqlStatement bound) {
+  StatusCode begin(SqlBoundJoinContext context) {
     StatusCode status = close();
     if (!status.isOk()) return status;
-    stage = bound.physicalJoinStrategyStage();
-    if (stage < 0 || bound.joinStrategy(stage) != SqlJoinStrategy.MERGE) {
+    stage = context.physicalStrategyStage();
+    if (stage < 0 || context.strategy(stage) != SqlJoinStrategy.MERGE) {
       return StatusCode.OK;
     }
-    outerRole = bound.joinStrategyOuterRole(stage);
-    outerTable = bound.joinRole(outerRole);
-    outerColumn = bound.joinStrategyOuterColumn(stage);
+    outerRole = context.strategyOuterRole(stage);
+    outerTable = context.table(outerRole);
+    outerColumn = context.strategyOuterColumn(stage);
     outerDescriptor = outerTable.typeDescriptor(outerColumn);
     prepareOuter();
     status = rightRows.begin(
-        bound.joinRole(stage + 1), bound.joinStrategyInnerColumn(stage));
+        context.table(stage + 1), context.strategyInnerColumn(stage));
     active = status.isOk();
     return status;
   }

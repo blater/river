@@ -91,38 +91,41 @@ final class SqlBoundBlockPlans {
   SqlBlockSchema operandSchema(int block) { return operandSchemas[block]; }
   SqlBlockSchema baseSchema() { return baseSchema; }
 
-  void setJoinAccess(int block, BoundSqlStatement bound) {
+  void setJoinAccess(
+      int block,
+      SqlCommand command,
+      SqlBoundJoinContext context) {
     joinBlock = block;
-    joinRootAccessColumn = bound.joinStrategy(0) == SqlJoinStrategy.MERGE
-        ? bound.joinStrategyOuterColumn(0)
-        : bound.accessPredicate >= 0
-            && (bound.predicateColumn == 0
-                || bound.table.hasIndexOn(bound.predicateColumn))
-            ? bound.predicateColumn : -1;
-    joinStageCount = bound.command.joinChain().stageCount();
-    joinEstimatesAvailable = bound.joinEstimatesAvailable();
+    joinRootAccessColumn = context.strategy(0) == SqlJoinStrategy.MERGE
+        ? context.strategyOuterColumn(0)
+        : context.accessPredicate >= 0
+            && (context.predicateColumn == 0
+                || context.table(0).hasIndexOn(context.predicateColumn))
+            ? context.predicateColumn : -1;
+    joinStageCount = command.joinChain().stageCount();
+    joinEstimatesAvailable = context.estimatesAvailable();
     if (joinEstimatesAvailable) {
       for (int role = 0; role <= joinStageCount; role++) {
-        joinStatisticsEpochs[role] = bound.joinStatistics(role).epoch();
-        joinStatisticsRows[role] = bound.joinStatistics(role).rowCount();
-        joinStatisticsSampled[role] = bound.joinStatistics(role).sampled();
+        joinStatisticsEpochs[role] = context.statistics(role).epoch();
+        joinStatisticsRows[role] = context.statistics(role).rowCount();
+        joinStatisticsSampled[role] = context.statistics(role).sampled();
       }
     }
     for (int stage = 0; stage < joinStageCount; stage++) {
-      int strategy = bound.joinStrategy(stage);
+      int strategy = context.strategy(stage);
       int right = strategy != SqlJoinStrategy.NESTED_LOOP
-          ? bound.joinStrategyInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
+          ? context.strategyInnerColumn(stage) : context.accessInnerColumn(stage);
       joinRightColumns[stage] = right;
       boolean indexed = strategy != SqlJoinStrategy.HASH && right >= 0
-          && (right == 0 || bound.joinRole(stage + 1).hasIndexOn(right));
+          && (right == 0 || context.table(stage + 1).hasIndexOn(right));
       boolean unique = strategy != SqlJoinStrategy.MERGE && indexed
-          && (right == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(right));
+          && (right == 0 || context.table(stage + 1).hasUniqueIndexOn(right));
       int access = strategy == SqlJoinStrategy.MERGE && !indexed ? 3
           : unique ? 2 : (indexed
               && !(strategy == SqlJoinStrategy.MERGE && right == 0) ? 1 : 0);
       joinAccessKinds[stage] = (byte) access;
       joinStrategies[stage] = (byte) strategy;
-      joinEstimatedRows[stage] = bound.joinEstimatedRows(stage);
+      joinEstimatedRows[stage] = context.estimatedRows(stage);
     }
   }
 

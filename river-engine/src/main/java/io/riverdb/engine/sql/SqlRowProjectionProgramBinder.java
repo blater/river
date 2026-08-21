@@ -14,6 +14,7 @@ final class SqlRowProjectionProgramBinder {
   private int size;
   private boolean generatedTemporalText;
   private boolean join;
+  private SqlBoundJoinContext joinContext;
   private final SqlJoinRoleResolver joinRoles = new SqlJoinRoleResolver();
 
   StatusCode bind(SqlCommand command, BoundSqlStatement bound, int projection) {
@@ -24,11 +25,16 @@ final class SqlRowProjectionProgramBinder {
   }
 
   StatusCode bindJoin(
-      SqlCommand command, BoundSqlStatement bound, int projection) {
+      SqlCommand command,
+      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
+      int projection) {
     join = true;
+    joinContext = context;
     SqlScalarExpression expression = command.projectionExpression(projection);
     StatusCode status = bindProgram(command, bound, expression, projection);
     join = false;
+    joinContext = null;
     return status.isOk() ? publishProjection(bound, expression, projection) : status;
   }
 
@@ -96,7 +102,7 @@ final class SqlRowProjectionProgramBinder {
     int column;
     if (join) {
       if (!joinRoles.resolve(
-          command, bound, symbol, command.joinChain().roleCount())) {
+          command, joinContext, symbol, command.joinChain().roleCount())) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       scope = joinRoles.role();
@@ -109,7 +115,7 @@ final class SqlRowProjectionProgramBinder {
             projection,
             SqlScalarExpression.COLUMN,
             column,
-            (join ? SqlJoinRoleResolver.table(bound, scope) : bound.table)
+            (join ? joinContext.table(scope) : bound.table)
                 .typeDescriptor(column),
             false,
             scope);

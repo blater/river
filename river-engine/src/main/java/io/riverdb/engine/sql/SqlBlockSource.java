@@ -64,6 +64,12 @@ final class SqlBlockSource {
     return join.begin();
   }
 
+  StatusCode configureJoin(
+      SqlBoundJoinContext context,
+      io.riverdb.sql.SqlCommand command) {
+    return join.configure(context, command, bound.whereBoolean);
+  }
+
   void resetJoinMetrics() { join.resetMetrics(); }
 
   StatusCode nextJoin(SqlBlockRow row) {

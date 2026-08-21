@@ -32,14 +32,17 @@ final class SqlRowProjectionBinder {
     return publish(bound, count);
   }
 
-  StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
+  StatusCode bindJoin(
+      SqlCommand command,
+      BoundSqlStatement bound,
+      SqlBoundJoinContext context) {
     int count = command.columnCount();
     if (command.isSelectAll() || count <= 0 || count > bound.projectedColumns.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     bound.projectionPrograms.begin(count);
     for (int index = 0; index < count; index++) {
-      StatusCode status = programs.bindJoin(command, bound, index);
+      StatusCode status = programs.bindJoin(command, bound, context, index);
       if (!status.isOk()) {
         bound.projectionPrograms.reset();
         return status;

@@ -21,6 +21,7 @@ final class SqlBooleanScalarBinder {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram target,
       BoundSqlStatement statement,
+      SqlBoundJoinContext context,
       SqlBlockSchema schema,
       int leaf,
       int program,
@@ -32,7 +33,7 @@ final class SqlBooleanScalarBinder {
     size = 0;
     for (int node = 0; node < source.programNodeCount(leaf, program); node++) {
       StatusCode status = bindNode(
-          command, source, target, statement, schema,
+          command, source, target, statement, context, schema,
           leaf, program, node, visibleRoles, having, nested, nestedBlock);
       if (!status.isOk()) return status;
     }
@@ -50,6 +51,7 @@ final class SqlBooleanScalarBinder {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram target,
       BoundSqlStatement statement,
+      SqlBoundJoinContext context,
       SqlBlockSchema schema,
       int leaf,
       int program,
@@ -75,7 +77,7 @@ final class SqlBooleanScalarBinder {
             command, target, nested, nestedBlock, leaf, program, operator, operand);
       }
       return column(
-          command, target, statement, schema, leaf, program,
+          command, target, statement, context, schema, leaf, program,
           operator, operand, visibleRoles);
     }
     if (operator == SqlScalarExpression.NULL) {
@@ -173,6 +175,7 @@ final class SqlBooleanScalarBinder {
       SqlCommand command,
       SqlBoundBooleanPredicateProgram target,
       BoundSqlStatement statement,
+      SqlBoundJoinContext context,
       SqlBlockSchema schema,
       int leaf,
       int program,
@@ -183,7 +186,7 @@ final class SqlBooleanScalarBinder {
     int column;
     if (visibleRoles > 0) {
       if (!joinRoles.resolve(
-          command, statement, (int) operand, visibleRoles)) {
+          command, context, (int) operand, visibleRoles)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       scope = joinRoles.role();
@@ -191,7 +194,7 @@ final class SqlBooleanScalarBinder {
     } else column = resolve(command, statement, schema, (int) operand);
     if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     int descriptor = visibleRoles > 0
-        ? SqlJoinRoleResolver.table(statement, scope).typeDescriptor(column)
+        ? context.table(scope).typeDescriptor(column)
         : schema == null
             ? statement.table.typeDescriptor(column) : schema.descriptor(column);
     return push(

@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.sql.SqlCommand;
 /** Publishes rows from the reusable physical JOIN source to a SQL scan. */
 final class SqlJoinExecution {
   private final BoundSqlStatement bound;
@@ -8,6 +9,8 @@ final class SqlJoinExecution {
   private final SqlJoinChainSource source;
   private final SqlRowProjectionEvaluator projections;
   private final SqlJoinChainPlan stages;
+  private SqlBoundJoinContext context;
+  private SqlCommand command;
 
   SqlJoinExecution(
       BoundSqlStatement statement,
@@ -20,6 +23,14 @@ final class SqlJoinExecution {
     projections = projectionEvaluator;
     source = rowSource;
     stages = joinPlan;
+  }
+
+  StatusCode configure(
+      SqlCommand canonicalCommand,
+      SqlBoundJoinContext joinContext) {
+    command = canonicalCommand;
+    context = joinContext;
+    return source.configure(context, command, bound.whereBoolean);
   }
 
   StatusCode begin() {
@@ -47,22 +58,22 @@ final class SqlJoinExecution {
     return status;
   }
 
-  private StatusCode configurePlan(BoundSqlQuery.Block command) {
-    plan.setFilterCount(bound.command.wherePredicates().leafCount());
-    plan.setSort(command.isOrdered());
+  private StatusCode configurePlan(BoundSqlQuery.Block executable) {
+    plan.setFilterCount(command.wherePredicates().leafCount());
+    plan.setSort(executable.isOrdered());
     for (int projection = 0;
         projection < bound.projectedColumnCount; projection++) {
       plan.setResultColumn(
           projection,
           bound.projectedColumns[projection],
           bound.projectionPrograms.resultDescriptor(projection),
-          command.columnOutputName(projection));
+          executable.columnOutputName(projection));
       plan.setResultNullable(
           projection,
-          SqlJoinResultNullability.nullable(bound, projection));
+          SqlJoinResultNullability.nullable(command, context, bound, projection));
     }
     StatusCode status = stages.describe(
-        bound, source, bound.executableQuery.isAnalyze());
+        command, context, source, bound.executableQuery.isAnalyze());
     if (status.isOk()) plan.setJoinStages(stages);
     return status;
   }

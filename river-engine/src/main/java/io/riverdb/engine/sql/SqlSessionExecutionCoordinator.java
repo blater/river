@@ -485,17 +485,19 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode prepareJoinQuery() {
+    SqlBoundJoinContext context = bound.joinContext(0);
     StatusCode status = binder.resolveJoinRoles(
-        session, bound.command, bound, false);
+        session, bound.command, context, bound.table, false);
     if (status.isOk()) {
       status = binder.bindQueryBlocks(session, bound);
     }
     if (status.isOk()) {
-      status = binder.bindJoin(bound.command, bound);
+      status = binder.bindJoin(bound.command, bound, context);
     }
     if (status.isOk() && bound.command.isOrdered()) {
       status = binder.bindJoinOrder(bound.command, bound);
     }
+    if (status.isOk()) status = queries.configureJoin();
     if (status.isOk()) {
       status = queries.explainOnly()
           ? temporal.validateZones(bound.command, bound.query)

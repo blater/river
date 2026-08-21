@@ -5,96 +5,96 @@ import io.riverdb.sql.SqlCommand;
 
 /** Deterministic bounded cost choice over the existing SQL-order join chain. */
 final class SqlJoinPlanner {
-  void select(SqlCommand command, BoundSqlStatement bound) {
-    bound.resetJoinEstimates();
+  void select(SqlCommand command, SqlBoundJoinContext context) {
+    context.resetEstimates();
     if (!SqlJoinPredicateClassifier.totalJoinOrder(command)
-        || !statisticsAvailable(command, bound)) return;
-    long outerRows = bound.joinStatistics(0).rowCount();
+        || !statisticsAvailable(command, context)) return;
+    long outerRows = context.statistics(0).rowCount();
     for (int stage = 0; stage < command.joinChain().stageCount(); stage++) {
-      long innerRows = bound.joinStatistics(stage + 1).rowCount();
-      long estimated = estimateStage(bound, stage, outerRows, innerRows);
+      long innerRows = context.statistics(stage + 1).rowCount();
+      long estimated = estimateStage(context, stage, outerRows, innerRows);
       if (command.joinChain().isLeft(stage) && estimated < outerRows) {
         estimated = outerRows;
       }
-      bound.setJoinEstimatedRows(stage, estimated);
+      context.setEstimatedRows(stage, estimated);
       outerRows = estimated;
     }
-    chooseStrategy(bound);
+    chooseStrategy(context);
   }
 
-  private static void chooseStrategy(BoundSqlStatement bound) {
-    int stage = bound.physicalJoinStrategyStage();
+  private static void chooseStrategy(SqlBoundJoinContext context) {
+    int stage = context.physicalStrategyStage();
     if (stage < 0) return;
-    int strategy = bound.joinStrategy(stage);
+    int strategy = context.strategy(stage);
     long outerRows = stage == 0
-        ? bound.joinStatistics(0).rowCount()
-        : bound.joinEstimatedRows(stage - 1);
-    long innerRows = bound.joinStatistics(stage + 1).rowCount();
-    long outputRows = bound.joinEstimatedRows(stage);
-    long nested = nestedCost(bound, stage, outerRows, innerRows, outputRows);
+        ? context.statistics(0).rowCount()
+        : context.estimatedRows(stage - 1);
+    long innerRows = context.statistics(stage + 1).rowCount();
+    long outputRows = context.estimatedRows(stage);
+    long nested = nestedCost(context, stage, outerRows, innerRows, outputRows);
     long hash = saturatedAdd(saturatedAdd(outerRows, innerRows), outputRows);
-    long merge = mergeCost(bound, stage, outerRows, innerRows, outputRows);
+    long merge = mergeCost(context, stage, outerRows, innerRows, outputRows);
     if (strategy == SqlJoinStrategy.MERGE && hash < merge && hash < nested) {
-      bound.setJoinStrategy(
+      context.setStrategy(
           stage,
           SqlJoinStrategy.HASH,
-          bound.joinStrategyOuterRole(stage),
-          bound.joinStrategyOuterColumn(stage),
-          bound.joinStrategyInnerColumn(stage));
+          context.strategyOuterRole(stage),
+          context.strategyOuterColumn(stage),
+          context.strategyInnerColumn(stage));
     } else {
       long selected = strategy == SqlJoinStrategy.HASH ? hash : merge;
-      if (nested <= selected) bound.clearJoinStrategy(stage);
+      if (nested <= selected) context.clearStrategy(stage);
     }
   }
 
   private static long nestedCost(
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
       int stage,
       long outerRows,
       long innerRows,
       long outputRows) {
-    int inner = bound.joinAccessInnerColumn(stage);
+    int inner = context.accessInnerColumn(stage);
     if (inner < 0) return saturatedMultiply(outerRows, innerRows);
-    if (inner == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(inner)) {
+    if (inner == 0 || context.table(stage + 1).hasUniqueIndexOn(inner)) {
       return outerRows;
     }
-    if (bound.joinRole(stage + 1).hasIndexOn(inner)) return outputRows;
+    if (context.table(stage + 1).hasIndexOn(inner)) return outputRows;
     return saturatedMultiply(outerRows, innerRows);
   }
 
   private static long mergeCost(
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
       int stage,
       long outerRows,
       long innerRows,
       long outputRows) {
-    int inner = bound.joinStrategyInnerColumn(stage);
+    int inner = context.strategyInnerColumn(stage);
     boolean ordered = inner == 0 || inner > 0
-        && bound.joinRole(stage + 1).hasIndexOn(inner);
+        && context.table(stage + 1).hasIndexOn(inner);
     long innerCost = ordered
         ? innerRows : saturatedMultiply(innerRows, logarithm(innerRows));
     return saturatedAdd(saturatedAdd(outerRows, innerCost), outputRows);
   }
 
   private static long estimateStage(
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
       int stage,
       long outerRows,
       long innerRows) {
     if (outerRows == 0 || innerRows == 0) return 0;
-    int outerRole = bound.joinAccessOuterRole(stage);
-    int outerColumn = bound.joinAccessOuterColumn(stage);
-    int innerColumn = bound.joinAccessInnerColumn(stage);
-    if (innerColumn < 0 && bound.joinStrategy(stage) != SqlJoinStrategy.NESTED_LOOP) {
-      outerRole = bound.joinStrategyOuterRole(stage);
-      outerColumn = bound.joinStrategyOuterColumn(stage);
-      innerColumn = bound.joinStrategyInnerColumn(stage);
+    int outerRole = context.accessOuterRole(stage);
+    int outerColumn = context.accessOuterColumn(stage);
+    int innerColumn = context.accessInnerColumn(stage);
+    if (innerColumn < 0 && context.strategy(stage) != SqlJoinStrategy.NESTED_LOOP) {
+      outerRole = context.strategyOuterRole(stage);
+      outerColumn = context.strategyOuterColumn(stage);
+      innerColumn = context.strategyInnerColumn(stage);
     }
     if (outerRole < 0 || outerColumn < 0 || innerColumn < 0) {
       return saturatedMultiply(outerRows, innerRows);
     }
-    TableStatistics outer = bound.joinStatistics(outerRole);
-    TableStatistics inner = bound.joinStatistics(stage + 1);
+    TableStatistics outer = context.statistics(outerRole);
+    TableStatistics inner = context.statistics(stage + 1);
     long distinct = Math.max(
         outer.distinctCount(outerColumn), inner.distinctCount(innerColumn));
     return distinct <= 0
@@ -102,10 +102,10 @@ final class SqlJoinPlanner {
   }
 
   private static boolean statisticsAvailable(
-      SqlCommand command, BoundSqlStatement bound) {
+      SqlCommand command, SqlBoundJoinContext context) {
     for (int role = 0; role < command.joinChain().roleCount(); role++) {
-      TableStatistics statistics = bound.joinStatistics(role);
-      if (statistics == null || !statistics.availableFor(bound.joinRole(role))) {
+      TableStatistics statistics = context.statistics(role);
+      if (statistics == null || !statistics.availableFor(context.table(role))) {
         return false;
       }
     }
