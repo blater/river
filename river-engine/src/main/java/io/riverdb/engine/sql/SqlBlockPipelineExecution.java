@@ -24,6 +24,7 @@ final class SqlBlockPipelineExecution {
       SqlJoinChainPlan joinPlan,
       SqlExpressionEvaluator expressions,
       SqlBoundPredicateEvaluator predicateEvaluator,
+      SqlSubqueryGraphExecution subqueries,
       SqlRowProjectionEvaluator projectionEvaluator,
       SqlTemporalContext temporal) {
     bound = statement;
@@ -35,6 +36,7 @@ final class SqlBlockPipelineExecution {
         joinSource,
         expressions,
         predicateEvaluator,
+        subqueries,
         projectionEvaluator,
         temporal,
         first,

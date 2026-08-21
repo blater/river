@@ -8,12 +8,12 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Resumable left-deep executor for one bounded canonical JOIN chain. */
 final class SqlJoinChainSource {
   private final SqlExpressionEvaluator expressions;
-  private final SqlJoinPredicateCallback predicates;
   private final SqlJoinChainCursors cursors;
   private final SqlJoinStageCandidates physical;
   private final SqlJoinRoleRows rows;
   private SqlBoundJoinContext context;
   private SqlCommand command;
+  private SqlJoinPredicateCallback predicates;
   private final boolean[] opened =
       new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final boolean[] matched =
@@ -37,10 +37,8 @@ final class SqlJoinChainSource {
 
   SqlJoinChainSource(
       io.riverdb.engine.relational.RelationalSession session,
-      SqlExpressionEvaluator evaluator,
-      SqlJoinPredicateCallback predicateEvaluator) {
+      SqlExpressionEvaluator evaluator) {
     expressions = evaluator;
-    predicates = predicateEvaluator;
     cursors = new SqlJoinChainCursors(session);
     physical = new SqlJoinStageCandidates(session);
     rows = new SqlJoinRoleRows();
@@ -49,12 +47,15 @@ final class SqlJoinChainSource {
   StatusCode configure(
       SqlBoundJoinContext joinContext,
       SqlCommand canonicalCommand,
-      SqlBoundBooleanPredicateProgram where) {
-    if (hasResources() || joinContext == null || canonicalCommand == null) {
+      SqlBoundBooleanPredicateProgram where,
+      SqlJoinPredicateCallback predicateCallback) {
+    if (hasResources() || joinContext == null || canonicalCommand == null
+        || predicateCallback == null) {
       return StatusCode.CONFLICT;
     }
     context = joinContext;
     command = canonicalCommand;
+    predicates = predicateCallback;
     cursors.configure(context, command);
     physical.configure(context, command);
     rows.configure(context);

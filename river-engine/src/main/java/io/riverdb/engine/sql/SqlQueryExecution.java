@@ -41,6 +41,7 @@ final class SqlQueryExecution {
   private SqlBlockPipelineExecution blockPipeline;
   private boolean pointBlockPipeline;
   private boolean explainOnly;
+  private boolean subqueriesPrepared;
   private long scanGeneration;
 
   SqlQueryExecution(
@@ -62,11 +63,11 @@ final class SqlQueryExecution {
         session, bound, expressions, temporal);
     predicates = new SqlBoundPredicateEvaluator(
         bound, expressions, subqueries, temporal);
-    joinSource = new SqlJoinChainSource(session, expressions, predicates);
+    joinSource = new SqlJoinChainSource(session, expressions);
     pointQueries = new SqlPointQueryExecution(
         session, bound, expressions, predicates, rowProjections, temporal);
     joins = new SqlJoinExecution(
-        bound, plan, joinSource, rowProjections, joinPlan);
+        bound, plan, joinSource, predicates, rowProjections, joinPlan);
     sorts = new SqlSortExecution(
         session,
         bound,
@@ -135,6 +136,8 @@ final class SqlQueryExecution {
     if (!status.isOk()) {
       return status;
     }
+    subqueries.clearExternalJoinSource();
+    subqueriesPrepared = false;
     command = query.root();
     plan.reset();
     if (query.edgeCount() > 0) plan.setSubqueries(subqueries.plan());
@@ -164,7 +167,7 @@ final class SqlQueryExecution {
   }
 
   StatusCode prepareNested() {
-    if (!explainOnly) return subqueries.prepare();
+    if (!explainOnly) return prepareSubqueries();
     subqueries.describe();
     return StatusCode.OK;
   }
@@ -189,8 +192,7 @@ final class SqlQueryExecution {
   }
 
   StatusCode prepareProjectionPrograms() {
-    StatusCode status = query.edgeCount() > 0
-        ? subqueries.prepare() : StatusCode.OK;
+    StatusCode status = prepareSubqueries();
     if (status.isOk() && command.type() != SqlCommandType.JOIN_SCAN
         && query.edgeCount() == 0) {
       status = predicates.prepare();
@@ -200,7 +202,17 @@ final class SqlQueryExecution {
   }
 
   StatusCode configureJoin() {
-    return joins.configure(bound.command, bound.existingJoinContext(0));
+    if (query.edgeCount() == 0) {
+      return joins.configure(bound.command, bound.existingJoinContext(0));
+    }
+    int root = query.sourceBlockCount() - 1;
+    subqueries.registerExternalJoinSource(root, joinSource);
+    StatusCode status = prepareSubqueries();
+    return status.isOk() ? joins.configure(
+        bound.query.block(root),
+        bound.existingJoinContext(root),
+        bound.nestedBoolean(root),
+        subqueries.joinPredicates(root)) : status;
   }
 
   StatusCode prepareBlockPipeline() {
@@ -218,11 +230,15 @@ final class SqlQueryExecution {
           joinPlan,
           expressions,
           predicates,
+          subqueries,
           rowProjections,
           temporal);
     }
-    StatusCode status = query.edgeCount() > 0
-        ? subqueries.prepare() : StatusCode.OK;
+    int source = query.sourceBlockCount() - 1;
+    if (query.edgeCount() > 0 && query.block(source).joinChain() != null) {
+      subqueries.registerExternalJoinSource(source, joinSource);
+    }
+    StatusCode status = prepareSubqueries();
     if (!status.isOk()) return status;
     return explainOnly ? blockPipeline.describe() : blockPipeline.prepare();
   }
@@ -579,6 +595,7 @@ final class SqlQueryExecution {
     if (status.isOk()) pointBlockPipeline = false;
     groups.resetText();
     if (status.isOk()) {
+      subqueriesPrepared = false;
       predicates.reset();
       rowProjections.reset();
     }
@@ -592,6 +609,7 @@ final class SqlQueryExecution {
   StatusCode finishPointStatement() {
     predicates.reset();
     StatusCode status = subqueries.reset();
+    if (status.isOk()) subqueriesPrepared = false;
     rowProjections.reset();
     pointQueries.finishStatement();
     return status;
@@ -605,12 +623,20 @@ final class SqlQueryExecution {
 
   StatusCode closePointResources() {
     StatusCode status = subqueries.reset();
+    if (status.isOk()) subqueriesPrepared = false;
     if (status.isOk()) status = pointQueries.closeResources();
     if (status.isOk() && pointBlockPipeline
         && blockPipeline != null && blockPipeline.hasResources()) {
       status = blockPipeline.close();
     }
     if (status.isOk()) pointBlockPipeline = false;
+    return status;
+  }
+
+  private StatusCode prepareSubqueries() {
+    if (query.edgeCount() == 0 || subqueriesPrepared) return StatusCode.OK;
+    StatusCode status = subqueries.prepare();
+    if (status.isOk()) subqueriesPrepared = true;
     return status;
   }
 

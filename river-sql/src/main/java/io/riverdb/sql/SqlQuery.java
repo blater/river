@@ -218,16 +218,13 @@ public final class SqlQuery {
   }
 
   private StatusCode validNestedChildren() {
-    if (blocks[sourceBlockCount - 1].type() == SqlCommandType.JOIN_SCAN) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
-    }
     for (int block = sourceBlockCount; block < blockCount; block++) {
       SqlCommand command = blocks[block];
       if (command.type() != SqlCommandType.SCAN
           && command.type() != SqlCommandType.SELECT
+          && command.type() != SqlCommandType.JOIN_SCAN
           || command.isSelectAll() || command.columnCount() != 1
-          || command.isOrdered()
-          || command.joinChain() != null) {
+          || command.isOrdered()) {
         return StatusCode.FEATURE_NOT_SUPPORTED;
       }
     }

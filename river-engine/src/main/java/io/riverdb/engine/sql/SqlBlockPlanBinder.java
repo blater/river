@@ -54,6 +54,7 @@ final class SqlBlockPlanBinder {
       if (status.isOk() && join && evaluator != null) {
         status = joins.preflight(
             bound,
+            block,
             plans.command(block),
             bound.existingJoinContext(block),
             predicatePreflight,
@@ -123,7 +124,8 @@ final class SqlBlockPlanBinder {
 
   private void physicalSchema(BoundSqlStatement bound, int deepest) {
     SqlBlockSchema physical = bound.blockPlans().baseSchema();
-    SqlBoundJoinContext context = bound.existingJoinContext(deepest);
+    SqlBoundJoinContext context = bound.blockPlans().command(deepest).joinChain() == null
+        ? null : bound.existingJoinContext(deepest);
     io.riverdb.engine.relational.TableDefinition table = context == null
         ? bound.table : context.table(0);
     physical.set(table.columnCount());

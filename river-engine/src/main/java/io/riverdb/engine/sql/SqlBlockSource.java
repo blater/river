@@ -14,16 +14,19 @@ final class SqlBlockSource {
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult result = new RelationalScanResult();
   private final SqlJoinChainSource join;
+  private final SqlSubqueryGraphExecution subqueries;
 
   SqlBlockSource(
       io.riverdb.engine.relational.RelationalSession relationalSession,
       BoundSqlStatement statement,
       SqlJoinChainSource joinSource,
       SqlBoundPredicateEvaluator predicateEvaluator,
+      SqlSubqueryGraphExecution graph,
       SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = statement;
     join = joinSource;
+    subqueries = graph;
     predicates = predicateEvaluator;
     projections = projectionEvaluator;
   }
@@ -54,6 +57,9 @@ final class SqlBlockSource {
   }
 
   StatusCode finish(SqlBlockRowStore input, StatusCode status) {
+    if (subqueries.hasResources()) {
+      return status.isOk() ? StatusCode.CONFLICT : status;
+    }
     StatusCode closed = input == null
         ? cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK
         : input.close();
@@ -66,8 +72,14 @@ final class SqlBlockSource {
 
   StatusCode configureJoin(
       SqlBoundJoinContext context,
-      io.riverdb.sql.SqlCommand command) {
-    return join.configure(context, command, bound.whereBoolean);
+      io.riverdb.sql.SqlCommand command,
+      SqlBoundBooleanPredicateProgram where,
+      SqlJoinPredicateCallback predicates) {
+    return join.configure(
+        context,
+        command,
+        where,
+        predicates == null ? this.predicates : predicates);
   }
 
   void resetJoinMetrics() { join.resetMetrics(); }
@@ -94,6 +106,7 @@ final class SqlBlockSource {
   }
 
   StatusCode close() {
+    if (subqueries.hasResources()) return StatusCode.CONFLICT;
     StatusCode status = cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
     if (status.isOk()) status = cursor.reset();
     if (status.isOk()) status = join.close();

@@ -28,8 +28,10 @@ final class SqlSubqueryGraphExecution
     projections = new SqlNestedProjectionExecution(
         statement, evaluator, temporalContext);
     cache = new SqlSubqueryResultCache(query, evaluator);
+    SqlSubqueryJoinFrames joined = new SqlSubqueryJoinFrames(
+        relationalSession, statement, evaluator);
     frames = new SqlSubqueryFrames(
-        relationalSession, statement, evaluator, temporalContext);
+        relationalSession, statement, evaluator, temporalContext, joined);
     predicates = new SqlSubqueryPredicateBank(
         statement, evaluator, temporalContext, this, frames);
     plan = new SqlSubqueryPlan(statement, frames.access());
@@ -41,6 +43,7 @@ final class SqlSubqueryGraphExecution
     StatusCode status = close();
     if (!status.isOk() || query.edgeCount() == 0) return status;
     cache.prepare();
+    frames.prepareGraph();
     frames.prepareAccess();
     plan.reset();
     int root = query.sourceBlockCount() - 1;
@@ -48,7 +51,9 @@ final class SqlSubqueryGraphExecution
       status = predicates.prepare(block);
       if (status.isOk() && block > root) status = projections.prepare(block);
       if (status.isOk()) frames.prepare(
-          block, block > root && text(query.block(block).projectionType()));
+          block,
+          block > root && text(query.block(block).projectionType()),
+          predicates.joinPredicates(block));
     }
     return status;
   }
@@ -78,11 +83,20 @@ final class SqlSubqueryGraphExecution
 
   @Override
   public StatusCode accept(int child) {
-    return predicates.accept(child);
+    return joined(child) ? StatusCode.OK : predicates.accept(child);
   }
 
-  @Override
-  public boolean accepted(int child) { return predicates.accepted(child); }
+  @Override public boolean accepted(int child) {
+    return joined(child) || predicates.accepted(child);
+  }
+
+  void registerExternalJoinSource(int block, SqlJoinChainSource source) {
+    frames.registerExternalJoinSource(block, source);
+  }
+
+  void clearExternalJoinSource() {
+    frames.clearExternalJoinSource();
+  }
 
   HeapRowResult evaluatedRow(int block, HeapRowResult original) {
     return frames.evaluatedRow(block, original);
@@ -112,6 +126,7 @@ final class SqlSubqueryGraphExecution
   StatusCode reset() {
     StatusCode status = close();
     if (!status.isOk()) return status;
+    frames.clearExternalJoinSource();
     predicates.reset();
     projections.reset();
     return StatusCode.OK;
@@ -123,6 +138,10 @@ final class SqlSubqueryGraphExecution
 
   private static boolean text(int descriptor) {
     return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+  }
+
+  private boolean joined(int block) {
+    return query.block(block).joinChain() != null;
   }
 
 }

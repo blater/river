@@ -70,7 +70,8 @@ final class SqlSubqueryPredicateBank {
   boolean accepted(int block) { return matches[block].matched(); }
 
   SqlJoinPredicateCallback joinPredicates(int block) {
-    return joined == null ? null : joined.evaluator(block);
+    return joined == null || bound.query.block(block).joinChain() == null
+        ? null : joined.evaluator(block);
   }
 
   void reset() {

@@ -29,32 +29,52 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
   private final TableDefinition[] tables =
       new TableDefinition[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] copied = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final SqlSubqueryJoinFrames joined;
 
   SqlSubqueryFrames(
       RelationalSession relationalSession,
       BoundSqlStatement bound,
       SqlExpressionEvaluator evaluator,
-      SqlTemporalContext temporal) {
+      SqlTemporalContext temporal,
+      SqlSubqueryJoinFrames joinFrames) {
     session = relationalSession;
     query = bound.executableQuery;
+    joined = joinFrames;
     access = new SqlSubqueryAccess(relationalSession, bound, evaluator, temporal);
   }
 
   void prepareAccess() { access.prepare(); }
   SqlSubqueryAccess access() { return access; }
 
-  void prepare(int block, boolean textProjection) {
+  void prepareGraph() {
+    joined.prepareGraph();
+  }
+
+  void prepare(
+      int block,
+      boolean textProjection,
+      SqlJoinPredicateCallback joinPredicates) {
     int frame = frame(block);
-    if (cursors[frame] == null) {
+    if (projected[frame] == null) projected[frame] = new SqlPredicateOperand();
+    if (joinPredicates != null) {
+      joined.prepare(block, joinPredicates);
+    } else if (cursors[frame] == null) {
       cursors[frame] = new RelationalScanCursor();
       results[frame] = new RelationalScanResult();
       indexed[frame] = new ValueIndexLookupResult();
       owned[frame] = new SqlJoinOuterRow();
-      projected[frame] = new SqlPredicateOperand();
     }
-    if (parent(block)) owned[frame].prepare();
+    if (joinPredicates == null && parent(block)) owned[frame].prepare();
     if (textProjection) projected[frame].prepareText();
-    tables[block] = query.block(block).table();
+    if (joinPredicates == null) tables[block] = query.block(block).table();
+  }
+
+  void registerExternalJoinSource(int block, SqlJoinChainSource source) {
+    joined.registerExternal(block, source);
+  }
+
+  void clearExternalJoinSource() {
+    joined.clearExternal();
   }
 
   void activate(int block, long key, HeapRowResult row) {
@@ -65,6 +85,10 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
   }
 
   StatusCode own(int block) {
+    SqlJoinChainSource joined = joinedSource(block);
+    if (joined != null) {
+      return joined.rows().ownThrough(query.block(block).roleCount() - 1);
+    }
     if (copied[block]) return StatusCode.OK;
     SqlJoinOuterRow target = owned[frame(block)];
     StatusCode status = target.capture(rows[block]);
@@ -76,11 +100,15 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
   }
 
   StatusCode begin(int child) {
+    SqlJoinPredicateCallback predicates = joinedPredicate(child);
+    if (predicates != null) return joined.begin(child);
     tables[child] = query.block(child).table();
     return access.begin(child, this, cursors[frame(child)]);
   }
 
   StatusCode next(int child) {
+    SqlJoinChainSource joined = joinedSource(child);
+    if (joined != null) return joined.next();
     int frame = frame(child);
     StatusCode status = access.next(
         child, cursors[frame], results[frame], indexed[frame]);
@@ -95,7 +123,11 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
 
   StatusCode finish(int child, StatusCode body) {
     int frame = frame(child);
-    StatusCode closed = closeFrame(frame);
+    if (deeperResources(frame)) {
+      return body.isOk() ? StatusCode.CONFLICT : body;
+    }
+    StatusCode closed = joinedPredicate(child) == null
+        ? closeFrame(frame) : joined.closeFrame(frame);
     if (closed.isOk()) release(child);
     return body.isOk() ? closed : body;
   }
@@ -105,6 +137,7 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
   }
 
   void release(int block) {
+    if (joinedPredicate(block) != null) return;
     if (copied[block]) {
       owned[frame(block)].reset();
       copied[block] = false;
@@ -114,10 +147,14 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
   }
 
   @Override public long key(int block, int role) {
-    return valid(block) && role == 0 ? keys[block] : 0;
+    SqlJoinChainSource joined = joinedSource(block);
+    return joined != null ? joined.rows().key(role)
+        : valid(block) && role == 0 ? keys[block] : 0;
   }
   @Override public HeapRowResult row(int block, int role) {
-    return valid(block) && role == 0 ? rows[block] : null;
+    SqlJoinChainSource joined = joinedSource(block);
+    return joined != null ? joined.rows().row(role)
+        : valid(block) && role == 0 ? rows[block] : null;
   }
   @Override public TableDefinition table(int block, int role) {
     BoundSqlQuery.Block source = valid(block) ? query.block(block) : null;
@@ -126,7 +163,8 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
 
   StatusCode close() {
     for (int frame = cursors.length - 1; frame >= 0; frame--) {
-      StatusCode status = closeFrame(frame);
+      StatusCode status = joined.closeFrame(frame);
+      if (status.isOk()) status = closeFrame(frame);
       if (!status.isOk()) return status;
     }
     for (int block = 0; block < rows.length; block++) release(block);
@@ -140,7 +178,7 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
     for (int frame = 0; frame < cursors.length; frame++) {
       if (cursors[frame] != null && cursors[frame].isActive()) return true;
     }
-    return false;
+    return joined.hasResources();
   }
 
   private StatusCode closeFrame(int frame) {
@@ -152,6 +190,22 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
       indexed[frame].reset();
     }
     return status;
+  }
+
+  private boolean deeperResources(int frame) {
+    if (joined.deeperResources(frame)) return true;
+    for (int deeper = frame + 1; deeper < cursors.length; deeper++) {
+      if (cursors[deeper] != null && cursors[deeper].isActive()) return true;
+    }
+    return false;
+  }
+
+  private SqlJoinChainSource joinedSource(int block) {
+    return joined.source(block);
+  }
+
+  private SqlJoinPredicateCallback joinedPredicate(int block) {
+    return joined.predicate(block);
   }
 
   private int frame(int block) { return query.blockDepth(block) - 1; }

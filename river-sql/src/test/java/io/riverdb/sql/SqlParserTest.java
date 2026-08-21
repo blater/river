@@ -3595,6 +3595,49 @@ final class SqlParserTest {
   }
 
   @Test
+  void admitsJoinedPredicateBlocksButKeepsExcludedChildShapesFailClosed() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT a.id FROM accounts a JOIN lookup b ON a.id=b.id "
+                + "WHERE EXISTS (SELECT i.id FROM lookup i WHERE i.id=b.id)",
+            query,
+            command));
+    assertEquals(SqlCommandType.JOIN_SCAN, query.block(0).type());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT o.id FROM accounts o WHERE EXISTS "
+                + "(SELECT b.id FROM accounts a JOIN lookup b ON a.id=b.id "
+                + "WHERE b.id=o.id)",
+            query,
+            command));
+    assertEquals(SqlCommandType.JOIN_SCAN, query.block(1).type());
+
+    String[] excluded = {
+        "SELECT a.id FROM accounts a JOIN lookup b ON a.id=b.id ORDER BY a.id",
+        "SELECT a.id,b.id FROM accounts a JOIN lookup b ON a.id=b.id",
+        "SELECT * FROM accounts a JOIN lookup b ON a.id=b.id",
+        "SELECT x.id FROM (SELECT a.id FROM accounts a "
+            + "JOIN lookup b ON a.id=b.id) x"
+    };
+    for (String child : excluded) {
+      assertEquals(
+          StatusCode.FEATURE_NOT_SUPPORTED,
+          parser.parseQuery(
+              "SELECT id FROM accounts WHERE EXISTS (" + child + ")",
+              query,
+              command),
+          child);
+      assertEquals(0, query.blockCount());
+      assertEquals(0, query.edgeCount());
+    }
+  }
+
+  @Test
   void parsesNullPredicates() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
