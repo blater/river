@@ -1,8 +1,9 @@
 # M5 P4C robust subquery delivery plan
 
-Status: Alpha 2 implementation contract approved. The continuation checkpoint
-`128906f` is cleanly rebased onto accepted Alpha 1 `e72967e` and main-source
-compilation is green; no P4C slice is accepted yet.
+Status: Alpha 2 implementation contract approved. The continuation branch at
+`a84b5f5` contains the cleanly rebased production checkpoint `128906f` on
+accepted Alpha 1 `e72967e`; main-source compilation is green, but no P4C slice
+is accepted yet.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,8 +12,9 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `128906f` is the clean continuation code checkpoint,
-  rebased onto `e72967e`; `river-sql` and `river-engine` main sources compile.
+- `feature/p4c-subqueries` at `a84b5f5` contains continuation code checkpoint
+  `128906f`, rebased onto `e72967e`; `river-sql` and `river-engine` main sources
+  compile.
 - The next implementation gates are the exact handoff steps below. Parser,
   lifecycle, temporal, plan, and allocation tests still require migration.
 - These checkpoints preserve work and integration intent; they are not P4C
@@ -244,28 +246,116 @@ accepted child rows, scalar/cardinality results, and parent rows accepted.
 Cache hits increment invocations but not physical child rows. Plain `EXPLAIN`
 never evaluates a child.
 
-## Implementation handoff
+## Prioritized implementation task list
 
 The rebased continuation already owns the canonical graph, graph executor,
 frame bank, primitive cache, value scanner, access selector, and plan carrier,
-and deletes the legacy singleton nested engine. The remaining implementation
-must proceed in this order:
+and deletes the legacy singleton nested engine. Work proceeds through the
+following dependency graph; a higher-numbered task does not displace an open
+lower-numbered blocker.
 
-1. Replace the temporary root/child JOIN rejection with the accepted
-   `SqlJoinChainSource` role provider; do not add a subquery-only join path.
-2. Generalize `SqlNestedProjectionBinder` from child-local columns to the same
-   block/role/ancestor overlay used by Boolean operands, including owned text.
-3. Complete global lexical parameter-marker capture and bind it once per
-   statement before any graph program is prepared.
-4. Migrate the stale parser, lifecycle, temporal, plan, and allocation tests to
-   the graph contract; no removed singleton API may be restored for tests.
-5. Complete consumer and plan integration, then run the acceptance matrix
-   below. Do not begin durable subquery views or child cardinality stages as a
-   convenience expansion.
+```text
+P4C-0 focused-test baseline
+  |
+  +--> P4C-1 parser/marker order --------+
+  +--> P4C-2 lexical scope/projection ---+--> P4C-4 n-table graph runtime --+
+  +--> P4C-3 acceptance fixtures --------+--> P4C-5 value/cache semantics --+--> P4C-7 consumers
+                                           P4C-6 plan/access carrier -------+       |
+                                                                                   v
+                                                                        P4C-8 hardening
+                                                                                   |
+                                                                                   v
+                                                                        P4C-9 promotion
+```
 
-The branch may be committed at internal compile/test waypoints, but Alpha 2 is
-promotable only as the complete C1-C4 vertical slice. No intermediate waypoint
-widens the documented SQL surface.
+### P4C-0 — restore a trustworthy focused-test baseline
+
+This is the only task that starts before feature implementation.
+
+- Migrate `SqlParserTest` and `SqlCommandLifecycleTest` from the deleted
+  scalar/existence/membership singleton methods to `SqlSubqueryGraph` edges.
+- Compile all SQL and engine tests, then migrate the existing
+  `SqlNestedQueryTest` and `SqlExecutionOwnershipTest` expectations that encode
+  the old bridge. Do not restore production compatibility methods, disable
+  tests, or turn an implemented semantic regression into an unsupported case.
+- Keep tests for already-supported behavior green. Add new Alpha 2 behavior as
+  an acceptance fixture alongside the production task that admits it.
+- Commit this test migration separately. Its gate is green SQL/engine test
+  compilation plus the four focused classes above. Production changes are
+  limited to a demonstrably necessary test seam or a proven regression in the
+  behavior already admitted at the starting checkpoint; P4C-0 does not admit
+  new syntax or semantics.
+
+### First parallel wave after P4C-0
+
+P4C-1 and P4C-2 may run in parallel in separate worktrees. P4C-3 may also run
+in parallel because it owns only new test fixtures and performs read-only
+contract review. One lead integrator owns the bound overlay contract and lands
+the streams in task-number order.
+
+| Task | Deliverable | Primary ownership | Completion gate |
+| --- | --- | --- | --- |
+| **P4C-1** | Parse scalar subqueries on either comparison side and assign typed-marker ordinals in original SQL lexical order across every graph block. Preserve exact graph bounds, copy/reset, and FNS classifications. | `river-sql`: `SqlNestedQueryParser`, `SqlNestedSubquerySource`, `SqlQueryParser`, `SqlSubqueryGraph`, `SqlSubqueryLeafRegistry`, parser tests | Sibling/descendant/quoted-source parsing, marker-order/type/null tests, 8/31/32 bounds plus one, parser allocation/reuse gate |
+| **P4C-2** | Generalize child predicate and projected scalar binding to `(block, role, column)` lexical scope. Resolve local roles first, then the nearest unique ancestor; support joined blocks and owned text without a second AST. | `river-engine`: `SqlQueryBlockBinder`, `SqlNestedProjectionBinder`, `SqlNestedProjectionExecution`, `SqlNestedRowProvider`, Boolean scalar binders | Three scopes, shadowing, local fallback, ambiguity/future/sibling rejection, joined-role projection, all-family typed NULL/text tests |
+| **P4C-3** | Build contract-level fixtures and an independent semantics oracle for sibling/recursive 3VL, correlation, n-table roles, consumer atomicity, and exact failure precedence. It must not edit production owners. | New focused test classes split by parser, scope/value semantics, consumers, and lifecycle | Tests compile against the canonical APIs; each future assertion is enabled only with its owning production task; no duplicated helper engine |
+
+P4C-1 and P4C-2 meet at one explicit handoff: the parser supplies stable graph
+block/edge IDs and lexical marker ordinals; the engine binds those IDs to the
+block/role/column overlay without reparsing SQL text.
+
+### Second parallel wave after P4C-1 and P4C-2
+
+P4C-4, P4C-5, and the structural portion of P4C-6 may proceed concurrently
+after the overlay handoff is frozen. Their production file ownership is
+disjoint. Runtime counter calls from P4C-4/P4C-5 into P4C-6 are agreed before
+editing; no stream creates another graph executor, row provider, cache, or
+plan framework.
+
+| Task | Deliverable | Primary ownership | Completion gate |
+| --- | --- | --- | --- |
+| **P4C-4** | Replace the temporary root/child JOIN rejection with the existing `SqlJoinChainSource` and role rows. Own every active ancestor composite before a child cursor opens; preserve INNER/LEFT semantics, stage-local ON, final WHERE, and retry-safe inner-to-outer close. | `SqlSubqueryFrames`, `SqlSubqueryCandidateEvaluator`, `SqlSubqueryGraphExecution`, n-table source adapters | Joined parent and joined child at 2/3/8 roles, later-role correlation, LEFT-null continuation, Unicode lifetime, terminal failure/reuse, no subquery-only join path |
+| **P4C-5** | Complete scalar/`EXISTS`/membership evaluation, child projection, lazy cache, LIMIT/cardinality, recursive continuation, and resource bounds using the common expression engine. | `SqlSubqueryLeafEvaluator`, `SqlSubqueryValueScanner`, `SqlSubqueryResultCache`, projection execution | Scalar 0/1/2, complete IN/NOT IN 3VL, sibling and descendant replay, 1,024/1,025, long/short text erase, eager-zone versus lazy-runtime precedence |
+| **P4C-6** | Stabilize child access and per-edge plan/counter carriers. Select only safe mandatory raw edges; otherwise use and report TABLE. Plain EXPLAIN binds but never executes. | `SqlSubqueryAccess`, `SqlSubqueryPlan`, plan description tests | Equality/range/extrema equivalence, computed fallback, identical EXPLAIN/ANALYZE shape, truthful invocation/cache/candidate/accepted/result counts |
+
+### Integration and promotion path
+
+These tasks are intentionally serialized through the lead integrator because
+they touch shared query lifecycle and consumer routing.
+
+1. **P4C-7 — consumer integration.** Apply graph filtering exactly once before
+   direct point/stream projection, scalar and grouped aggregation, `HAVING`,
+   `DISTINCT`, sort/spill, and deepest P3 publication. Consumers use the owned
+   evaluated row until all values are copied, then release it. A nested error
+   publishes no aggregate, group, sort/store row, or point result.
+2. **P4C-8 — lifecycle and allocation hardening.** Prove eager all-program
+   preflight before any scan; lazy row-time error/short-circuit behavior;
+   terminal status repetition; close-failure retry; text/cache/frame erasure;
+   checkpoint/reopen of base data; zero per-row allocation; and bounded idle,
+   scalar, membership, recursive, joined, spill, and P3 retained deltas.
+3. **P4C-9 — Alpha 2 promotion.** Run the full SQL and engine suites, focused
+   temporal/ownership/allocation/plan gates, `tools/designdebt.sh`, diff and
+   clean-checkout policy, then obtain independent relational-semantics and
+   performance/allocation verdicts on the exact commit. Update conformance,
+   status, roadmap, and limitations only after those gates are green.
+
+The branch may be committed at the numbered internal waypoints, but Alpha 2 is
+promotable only as the complete C1-C4 vertical slice. Durable subquery views,
+child cardinality stages, TPC-C storage work, and unrelated JDBC work do not
+enter these workstreams.
+
+### Parallel-work operating rules
+
+- Parallel builders use separate Git worktrees, disjoint file ownership, and
+  separate `GRADLE_USER_HOME` plus `--project-cache-dir`. Only one Gradle build
+  runs in any shared checkout.
+- The lead integrator alone changes shared lifecycle owners such as
+  `SqlQueryExecution` and performs final consumer composition.
+- Test-fixture work does not modify production contracts. A read-only
+  semantics/allocation reviewer may run alongside every wave and reports
+  concrete blockers to the integrator.
+- Each waypoint lands as a small reviewed commit with focused success and the
+  material failure/reuse boundary. Parallel branches are rebased and integrated
+  one at a time; broad merge-conflict resolution is not an architecture step.
 
 ## Delivery slices
 

@@ -41,18 +41,19 @@ reviewed, and verified together from the exact detached integration commit.
 
 | Purpose | Branch | Commit | Status |
 | --- | --- | --- | --- |
-| Shipped bounded-join alpha | `release/0.1.0-alpha.1` | `46d7678` | Clean and pushed through accepted J6b; J7a is the next promotable feature checkpoint |
-| Join continuation | `feature/n-table-joins` | `4de99ca` | J7a durable statistics and SQL-order costing accepted; J7b physical inner-island reordering is explicitly deferred beyond the alpha |
+| Shipped bounded-join alpha | `release/0.1.0-alpha.1` | `e72967e` | Clean and pushed through accepted J7a durable statistics and deterministic SQL-order costing |
+| Join continuation | `feature/n-table-joins` | `e72967e` | Matches the Alpha 1 release checkpoint; J7b physical inner-island reordering is explicitly deferred beyond the alpha |
 | P4C recovery snapshot | `wip/p4c-subqueries-snapshot` | `794641e` | Clean and pushed immutable checkpoint of the pre-integration work |
-| P4C continuation | `feature/p4c-subqueries` | `128906f` | Cleanly rebased onto Alpha 1 `e72967e`; main-source compile green; Alpha 2 contract refined, but implementation remains unaccepted |
+| P4C continuation | `feature/p4c-subqueries` | `a84b5f5` | Cleanly rebased onto Alpha 1 `e72967e`; Alpha 1–3 roadmap and Alpha 2 contract are pushed; main-source compile green, but implementation remains unaccepted |
 
-P4C resumes from `128906f`. Its first implementation gates are to replace the
-temporary root/child JOIN rejection with the shared n-table role provider,
-generalize child projections to the common lexical ancestor scope, complete
-global lexical marker binding, and migrate stale parser/lifecycle/temporal/plan
-tests without restoring the deleted singleton engine. The snapshot branch is
-recovery evidence only and must not be merged in place of the rebased
-continuation branch.
+P4C resumes from `a84b5f5`. P4C-0 first migrates the stale parser, lifecycle,
+nested-query, and ownership tests to the canonical graph API without restoring
+the deleted singleton engine. The prioritized task list then permits parser/
+marker work, lexical scope/projection work, and new acceptance fixtures to run
+in parallel before n-table runtime, value/cache semantics, and plan/access
+streams converge on serialized consumer and lifecycle integration. The
+snapshot branch is recovery evidence only and must not be merged in place of
+the rebased continuation branch.
 
 Product work proceeds in this order:
 
