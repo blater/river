@@ -1,6 +1,6 @@
 # River alpha delivery roadmap
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 This roadmap defines the product boundary of each River alpha. It records what
 users can rely on for evaluation, the hard limits they must design around, and
@@ -14,7 +14,7 @@ cleaner implementation.
 | Delivery | Goal | Status | Estimated remaining engineering |
 | --- | --- | --- | ---: |
 | Alpha 1 | Useful bounded embedded/loopback SQL database with durable n-table joins | Shipped at `e72967e` | Complete |
-| Alpha 2 | Robust computed and correlated predicate subqueries (P4C) | Active on `feature/p4c-subqueries` | 16–27 engineer-days |
+| Alpha 2 | Robust computed and correlated predicate subqueries (P4C) | Active on `feature/p4c-subqueries` | 11–18 engineer-days |
 | Alpha 3 | Run a functional one-warehouse TPC-C workload through the independently supplied driver | Planned | 48–84 engineer-days after Alpha 2, excluding driver work |
 
 Alpha 2 is the current product slice. Alpha 3 does not broaden Alpha 2 while
@@ -70,10 +70,11 @@ bounded query graph and the ordinary scalar/three-valued Boolean engine. The
 complete architectural and semantic contract is
 [the P4C delivery plan](../plans/m5-p4c-subqueries.md).
 
-Delivery progress: P4C-0 through P4C-4 are accepted on
-`feature/p4c-subqueries` at `6efa2b5`. Joined root and child graph blocks now
-run through the common 2–8-role join engine; P4C-5 value/cache completion and
-P4C-6 access/plan truth are the next production tasks.
+Delivery progress: P4C-0 through P4C-5 are accepted on
+`feature/p4c-subqueries` at `75105de`. Joined root and child graph blocks run
+through the common 2–8-role join engine, and scalar/`EXISTS`/membership value,
+LIMIT, cache, resource-bound, temporal, Unicode, and allocation semantics are
+complete. P4C-6 access/plan truth is the next production task.
 
 ### Included target
 
