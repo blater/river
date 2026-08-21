@@ -1,9 +1,9 @@
 # M5 P4C robust subquery delivery plan
 
-Status: Alpha 2 implementation contract approved. The continuation branch at
-`a84b5f5` contains the cleanly rebased production checkpoint `128906f` on
-accepted Alpha 1 `e72967e`; main-source compilation is green, but no P4C slice
-is accepted yet.
+Status: Alpha 2 implementation contract approved. P4C-0 and the first parallel
+wave (P4C-1 through P4C-3) are accepted on `feature/p4c-subqueries` at
+`4a77011`. Alpha 2 remains incomplete; the next production wave is P4C-4
+through P4C-6.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -12,11 +12,16 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `a84b5f5` contains continuation code checkpoint
-  `128906f`, rebased onto `e72967e`; `river-sql` and `river-engine` main sources
-  compile.
-- The next implementation gates are the exact handoff steps below. Parser,
-  lifecycle, temporal, plan, and allocation tests still require migration.
+- `feature/p4c-subqueries` at `4a77011` contains accepted P4C-0 and Wave 1:
+  canonical graph tests, lexical marker ordering, `(block, role, column)` scope
+  binding, computed child projection, and contract-level semantics fixtures.
+- Joined root and child graph execution remains explicitly
+  `FEATURE_NOT_SUPPORTED` until P4C-4 wires the existing join-chain source.
+- The next implementation gates are P4C-4 through P4C-6 below. The affected
+  focused suites and design-debt checks are green. Full-engine promotion is
+  still blocked by the existing grouped-HAVING null-zone failure and the
+  `temporal_derived` allocation-fixture corruption; their owning downstream
+  tasks must resolve them before P4C-9.
 - These checkpoints preserve work and integration intent; they are not P4C
   promotion evidence. Focused semantics/allocation tests, affected full suites,
   design-debt checks, and independent review remain required.
@@ -270,6 +275,8 @@ P4C-0 focused-test baseline
 
 ### P4C-0 — restore a trustworthy focused-test baseline
 
+Status: accepted at `019fe86`.
+
 This is the only task that starts before feature implementation.
 
 - Migrate `SqlParserTest` and `SqlCommandLifecycleTest` from the deleted
@@ -287,6 +294,10 @@ This is the only task that starts before feature implementation.
   new syntax or semantics.
 
 ### First parallel wave after P4C-0
+
+Status: accepted and integrated through `4a77011` (`ef64e4f` P4C-1,
+`8cc3676` P4C-2, and `26dc6c5` P4C-3). Independent relational-semantics review
+is GO; the joined-graph temporary rejection is pinned by a real session test.
 
 P4C-1 and P4C-2 may run in parallel in separate worktrees. P4C-3 may also run
 in parallel because it owns only new test fixtures and performs read-only
