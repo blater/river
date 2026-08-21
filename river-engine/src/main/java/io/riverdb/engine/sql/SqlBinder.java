@@ -101,8 +101,7 @@ final class SqlBinder {
     if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
     StatusCode status = predicates.bindJoin(command, bound);
     if (status.isOk()) status = joinRows.bindJoin(command, bound);
-    return status.isOk() && joins.stageCount() != 1
-        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
+    return status;
   }
 
   StatusCode resolveJoinRoles(

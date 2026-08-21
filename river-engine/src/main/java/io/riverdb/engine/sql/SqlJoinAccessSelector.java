@@ -11,24 +11,24 @@ final class SqlJoinAccessSelector {
   void select(
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram program,
-      BoundSqlStatement bound) {
-    bound.joinOuterColumn = -1;
-    bound.joinInnerColumn = -1;
+      BoundSqlStatement bound,
+      int stage) {
     bestScore = -1;
-    if (program.available()) collect(source, program, program.root(), bound);
+    if (program.available()) collect(source, program, program.root(), bound, stage);
   }
 
   private void collect(
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram program,
       int node,
-      BoundSqlStatement bound) {
+      BoundSqlStatement bound,
+      int stage) {
     int operator = program.booleanOperator(node);
     if (operator == SqlBooleanPredicateProgram.BOOLEAN_AND) {
-      collect(source, program, program.booleanLeft(node), bound);
-      collect(source, program, program.booleanRight(node), bound);
+      collect(source, program, program.booleanLeft(node), bound, stage);
+      collect(source, program, program.booleanRight(node), bound, stage);
     } else if (operator == SqlBooleanPredicateProgram.BOOLEAN_LEAF) {
-      candidate(source, program, program.booleanLeft(node), bound);
+      candidate(source, program, program.booleanLeft(node), bound, stage);
     }
   }
 
@@ -36,7 +36,8 @@ final class SqlJoinAccessSelector {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram program,
       int leaf,
-      BoundSqlStatement bound) {
+      BoundSqlStatement bound,
+      int stage) {
     if (source.leafTest(leaf) != SqlBooleanPredicateProgram.TEST_COMPARISON
         || source.comparison(leaf) != SqlComparison.EQUAL) return;
     int left = SqlBooleanPredicateProgram.PROGRAM_LEFT;
@@ -46,13 +47,15 @@ final class SqlJoinAccessSelector {
     if (leftColumn < 0 || rightColumn < 0) return;
     int leftScope = program.scope(leaf, left, 0);
     int rightScope = program.scope(leaf, right, 0);
-    if (leftScope == rightScope) return;
-    int outer = leftScope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
-        ? leftColumn : rightColumn;
-    int inner = leftScope == SqlBoundBooleanPredicateProgram.SCOPE_RIGHT
-        ? leftColumn : rightColumn;
-    int outerDescriptor = bound.table.typeDescriptor(outer);
-    int innerDescriptor = bound.joinTable.typeDescriptor(inner);
+    int rightRole = stage + 1;
+    if (leftScope == rightScope
+        || leftScope != rightRole && rightScope != rightRole) return;
+    int outerRole = leftScope == rightRole ? rightScope : leftScope;
+    if (outerRole < 0 || outerRole >= rightRole) return;
+    int outer = leftScope == rightRole ? rightColumn : leftColumn;
+    int inner = leftScope == rightRole ? leftColumn : rightColumn;
+    int outerDescriptor = bound.joinRole(outerRole).typeDescriptor(outer);
+    int innerDescriptor = bound.joinRole(rightRole).typeDescriptor(inner);
     if (SqlTypeDescriptor.comparisonFamily(outerDescriptor)
             != SqlTypeDescriptor.comparisonFamily(innerDescriptor)
         || outerDescriptor != innerDescriptor
@@ -60,11 +63,10 @@ final class SqlJoinAccessSelector {
                 == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC
         || SqlTypeDescriptor.typeId(innerDescriptor)
             == SqlTypeDescriptor.TYPE_ID_VARCHAR) return;
-    int score = inner == 0 || bound.joinTable.hasUniqueIndexOn(inner)
-        ? 2 : bound.joinTable.hasIndexOn(inner) ? 1 : 0;
+    int score = inner == 0 || bound.joinRole(rightRole).hasUniqueIndexOn(inner)
+        ? 2 : bound.joinRole(rightRole).hasIndexOn(inner) ? 1 : 0;
     if (score > bestScore) {
-      bound.joinOuterColumn = outer;
-      bound.joinInnerColumn = inner;
+      bound.setJoinAccess(stage, outerRole, outer, inner);
       bestScore = score;
     }
   }

@@ -37,8 +37,7 @@ final class SqlPredicateBinder {
     bound.accessPredicate = -1;
     bound.predicateColumn = -1;
     bound.accessComparison = null;
-    bound.joinOuterColumn = -1;
-    bound.joinInnerColumn = -1;
+    bound.resetJoinAccess();
     StatusCode status = StatusCode.OK;
     for (int stage = 0;
         status.isOk() && stage < command.joinChain().stageCount(); stage++) {
@@ -48,9 +47,13 @@ final class SqlPredicateBinder {
     if (status.isOk() && command.wherePredicates().isAvailable()) {
       access.select(command.wherePredicates(), bound.whereBoolean, bound);
     }
-    if (status.isOk()) {
+    for (int stage = 0;
+        status.isOk() && stage < command.joinChain().stageCount(); stage++) {
       joinAccess.select(
-          command.joinChain().onPredicates(0), bound.onBoolean(), bound);
+          command.joinChain().onPredicates(stage),
+          bound.onBoolean(stage),
+          bound,
+          stage);
     }
     return status;
   }

@@ -162,23 +162,15 @@ final class SqlRowProjectionEvaluator {
   }
 
   StatusCode projectJoin(
-      long outerKey,
-      HeapRowResult outerRow,
-      long innerKey,
-      HeapRowResult innerRow,
+      SqlJoinRoleRows rows,
       SqlScanRowResult result) {
-    return joinProjections.project(
-        outerKey, outerRow, innerKey, innerRow, result);
+    return joinProjections.project(rows, result);
   }
 
   StatusCode projectJoin(
-      long outerKey,
-      HeapRowResult outerRow,
-      long innerKey,
-      HeapRowResult innerRow,
+      SqlJoinRoleRows rows,
       SqlBlockRow result) {
-    return joinProjections.project(
-        outerKey, outerRow, innerKey, innerRow, result);
+    return joinProjections.project(rows, result);
   }
 
   StatusCode evaluateProgram(

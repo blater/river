@@ -40,14 +40,16 @@ final class SqlBlockJoinBinder {
     if (block != plans.count() - 1) return StatusCode.FEATURE_NOT_SUPPORTED;
     StatusCode status = binder.bindJoin(bound.command, bound);
     if (!status.isOk()) return status;
+    if (bound.command.joinChain().stageCount() > 1) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     output.set(bound.projectedColumnCount);
     for (int column = 0; column < bound.projectedColumnCount; column++) {
       output.setColumn(
           column,
           bound.command.columnOutputName(column),
           bound.projectedTypeDescriptors[column],
-          SqlJoinResultNullability.nullable(
-              bound, bound.command.isLeftJoin(), column));
+          SqlJoinResultNullability.nullable(bound, column));
     }
     int right = bound.joinInnerColumn;
     int outerAccess = bound.accessPredicate >= 0

@@ -5,13 +5,13 @@ import io.riverdb.base.error.StatusCode;
 final class SqlJoinExecution {
   private final BoundSqlStatement bound;
   private final SqlPhysicalPlan plan;
-  private final SqlJoinRowSource source;
+  private final SqlJoinChainSource source;
   private final SqlRowProjectionEvaluator projections;
 
   SqlJoinExecution(
       BoundSqlStatement statement,
       SqlPhysicalPlan physicalPlan,
-      SqlJoinRowSource rowSource,
+      SqlJoinChainSource rowSource,
       SqlRowProjectionEvaluator projectionEvaluator) {
     bound = statement;
     plan = physicalPlan;
@@ -29,10 +29,7 @@ final class SqlJoinExecution {
     StatusCode status = source.next();
     if (status.isOk()) {
       status = projections.projectJoin(
-          source.outerKey(),
-          source.outerRow(),
-          source.innerKey(),
-          source.innerRow(),
+          source.rows(),
           result);
     }
     if (status.isOk()) cursor.rowReturned();
@@ -59,7 +56,7 @@ final class SqlJoinExecution {
           command.columnOutputName(projection));
       plan.setResultNullable(
           projection,
-          SqlJoinResultNullability.nullable(bound, command.isLeftJoin(), projection));
+          SqlJoinResultNullability.nullable(bound, projection));
     }
   }
 

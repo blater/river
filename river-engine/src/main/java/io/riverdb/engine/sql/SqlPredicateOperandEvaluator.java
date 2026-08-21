@@ -112,21 +112,16 @@ final class SqlPredicateOperandEvaluator {
       int leaf,
       int program,
       SqlTemporalZonePlan zone,
-      long outerKey,
-      HeapRowResult outerRow,
-      TableDefinition outerTable,
-      long innerKey,
-      HeapRowResult innerRow,
-      TableDefinition innerTable,
+      SqlJoinRoleRows rows,
       SqlPredicateOperand result) {
     machine.beginPredicateOperand();
     StatusCode status = StatusCode.OK;
     for (int node = 0;
         status.isOk() && node < programs.nodeCount(leaf, program); node++) {
       int scope = programs.scope(leaf, program, node);
-      boolean inner = scope == SqlBoundBooleanPredicateProgram.SCOPE_RIGHT;
       int operator = programs.operator(leaf, program, node);
-      if (inner && innerRow == null
+      HeapRowResult row = rows.row(scope);
+      if (row == null
           && operator == io.riverdb.sql.SqlScalarExpression.COLUMN) {
         status = machine.predicateNullColumnNode(
             programs.descriptor(leaf, program, node));
@@ -137,9 +132,9 @@ final class SqlPredicateOperandEvaluator {
             programs.operand(leaf, program, node),
             programs.descriptor(leaf, program, node),
             zone,
-            inner ? innerKey : outerKey,
-            inner ? innerRow : outerRow,
-            inner ? innerTable : outerTable,
+            rows.key(scope),
+            row,
+            rows.table(scope),
             null);
       }
     }

@@ -12,12 +12,12 @@ final class SqlBlockSource {
   private final SqlBlockPhysicalRowReader physical = new SqlBlockPhysicalRowReader();
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult result = new RelationalScanResult();
-  private final SqlJoinRowSource join;
+  private final SqlJoinChainSource join;
 
   SqlBlockSource(
       io.riverdb.engine.relational.RelationalSession relationalSession,
       BoundSqlStatement statement,
-      SqlJoinRowSource joinSource,
+      SqlJoinChainSource joinSource,
       SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = statement;
@@ -52,10 +52,7 @@ final class SqlBlockSource {
     StatusCode status = join.next();
     if (status.isOk()) {
       status = projections.projectJoin(
-          join.outerKey(),
-          join.outerRow(),
-          join.innerKey(),
-          join.innerRow(),
+          join.rows(),
           row);
     }
     if (!status.isOk() && status != StatusCode.CONFLICT) row.reset(0);

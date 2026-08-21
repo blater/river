@@ -50,7 +50,9 @@ final class SqlViewDefinitionBinder {
       BoundSqlStatement bound,
       SqlCommand command) {
     StatusCode status = resolveRight(session, bound, command);
-    return status.isOk() ? binder.bindJoin(command, bound) : status;
+    if (status.isOk()) status = binder.bindJoin(command, bound);
+    return status.isOk() && command.joinChain().stageCount() > 1
+        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
   }
 
   private StatusCode resolveJoin(

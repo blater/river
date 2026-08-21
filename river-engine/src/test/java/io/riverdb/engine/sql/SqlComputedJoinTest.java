@@ -526,13 +526,13 @@ final class SqlComputedJoinTest {
                 + "JOIN role_right b ON a.left_key=b.right_key "
                 + "JOIN missing_role c ON b.id=c.id",
             new SqlScanCursor()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginScan(
-            "SELECT a.id,c.id FROM role_left a "
-                + "JOIN role_right b ON a.left_key=b.right_key "
-                + "JOIN right_rows c ON b.id=c.id",
-            new SqlScanCursor()));
+    assertPairs(
+        session,
+        execution,
+        "SELECT a.id,c.id FROM role_left a "
+            + "JOIN role_right b ON a.left_key=b.right_key "
+            + "JOIN role_bool c ON b.id=c.id",
+        2, 7);
     assertLeftSelfJoinNullability(session, execution);
     assertEquals(
         StatusCode.OK,

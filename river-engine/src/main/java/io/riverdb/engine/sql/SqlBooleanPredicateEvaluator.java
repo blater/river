@@ -36,9 +36,7 @@ final class SqlBooleanPredicateEvaluator {
   private SqlBlockRow blockRow;
   private boolean block;
   private boolean join;
-  private long joinInnerKey;
-  private HeapRowResult joinInnerRow;
-  private TableDefinition joinInnerTable;
+  private SqlJoinRoleRows joinRows;
   private SqlAggregateAccumulatorSet havingAggregates;
   private long havingGroupValue;
   private boolean havingGroupNull;
@@ -154,12 +152,7 @@ final class SqlBooleanPredicateEvaluator {
   StatusCode matchesJoin(
       SqlCommand source,
       SqlBoundBooleanPredicateProgram bound,
-      long outerKey,
-      HeapRowResult outerRow,
-      TableDefinition outerTable,
-      long innerKey,
-      HeapRowResult innerRow,
-      TableDefinition innerTable,
+      SqlJoinRoleRows rows,
       Match result) {
     result.matched = false;
     if (!bound.available()) {
@@ -169,12 +162,7 @@ final class SqlBooleanPredicateEvaluator {
     command = source;
     programs = bound;
     join = true;
-    primaryKey = outerKey;
-    physicalRow = outerRow;
-    table = outerTable;
-    joinInnerKey = innerKey;
-    joinInnerRow = innerRow;
-    joinInnerTable = innerTable;
+    joinRows = rows;
     blockRow = null;
     block = false;
     StatusCode status = evaluateNode(bound.root());
@@ -354,12 +342,7 @@ final class SqlBooleanPredicateEvaluator {
           leaf,
           program,
           zone,
-          primaryKey,
-          physicalRow,
-          table,
-          joinInnerKey,
-          joinInnerRow,
-          joinInnerTable,
+          joinRows,
           result);
     }
     return expressions.evaluate(
@@ -418,9 +401,7 @@ final class SqlBooleanPredicateEvaluator {
     blockRow = null;
     block = false;
     join = false;
-    joinInnerKey = 0;
-    joinInnerRow = null;
-    joinInnerTable = null;
+    joinRows = null;
     havingAggregates = null;
     havingGroupValue = 0;
     havingGroupNull = false;

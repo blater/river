@@ -33,6 +33,12 @@ final class BoundSqlStatement {
   final int[] updateResultTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] projectedTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final byte[] joinAccessOuterRoles =
+      new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final int[] joinAccessOuterColumns =
+      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final int[] joinAccessInnerColumns =
+      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
 
   int predicateColumn;
   int predicateCount;
@@ -80,6 +86,7 @@ final class BoundSqlStatement {
     distinctColumn = -1;
     joinOuterColumn = -1;
     joinInnerColumn = -1;
+    resetJoinAccess();
     orderColumn = -1;
     sortKeyProjection = -1;
   }
@@ -104,8 +111,12 @@ final class BoundSqlStatement {
   }
 
   boolean hasOnBoolean() {
-    return onBooleans != null && onBooleans[0] != null
-        && onBooleans[0].available();
+    return hasOnBoolean(0);
+  }
+
+  boolean hasOnBoolean(int stage) {
+    return onBooleans != null && stage >= 0 && stage < onBooleans.length
+        && onBooleans[stage] != null && onBooleans[stage].available();
   }
 
   void resetOnBoolean() {
@@ -138,6 +149,30 @@ final class BoundSqlStatement {
     }
     joinRoleCount = 0;
   }
+
+  void resetJoinAccess() {
+    for (int stage = 0; stage < joinAccessOuterRoles.length; stage++) {
+      joinAccessOuterRoles[stage] = -1;
+      joinAccessOuterColumns[stage] = -1;
+      joinAccessInnerColumns[stage] = -1;
+    }
+    joinOuterColumn = -1;
+    joinInnerColumn = -1;
+  }
+
+  void setJoinAccess(int stage, int outerRole, int outerColumn, int innerColumn) {
+    joinAccessOuterRoles[stage] = (byte) outerRole;
+    joinAccessOuterColumns[stage] = outerColumn;
+    joinAccessInnerColumns[stage] = innerColumn;
+    if (stage == 0) {
+      joinOuterColumn = outerColumn;
+      joinInnerColumn = innerColumn;
+    }
+  }
+
+  int joinAccessOuterRole(int stage) { return joinAccessOuterRoles[stage]; }
+  int joinAccessOuterColumn(int stage) { return joinAccessOuterColumns[stage]; }
+  int joinAccessInnerColumn(int stage) { return joinAccessInnerColumns[stage]; }
 
   boolean hasBlockPlans() {
     return blockPlans != null && blockPlans.count() > 0;

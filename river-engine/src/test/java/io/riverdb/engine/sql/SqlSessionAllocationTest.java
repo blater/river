@@ -315,6 +315,21 @@ final class SqlSessionAllocationTest {
     assertEquals(5, scanRow.textLengthAt(1));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT t.id,labels.code,texts.label FROM t "
+                + "JOIN labels ON t.region=labels.region "
+                + "JOIN texts ON labels.id=texts.id "
+                + "WHERE t.id=1 AND labels.id=1",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(1, scanRow.valueAt(0));
+    assertEquals(70, scanRow.valueAt(1));
+    assertEquals(5, scanRow.textLengthAt(2));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
       exerciseCount(session, result);
@@ -370,6 +385,7 @@ final class SqlSessionAllocationTest {
       exerciseBlockPipeline(session, cursor, scanRow, result);
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseNTableJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseComputedTextJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
@@ -400,6 +416,7 @@ final class SqlSessionAllocationTest {
       exerciseBlockPipeline(session, cursor, scanRow, result);
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseNTableJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseComputedTextJoin(session, cursor, scanRow, result);
       exerciseLeftJoin(session, cursor, scanRow, result);
@@ -912,6 +929,24 @@ final class SqlSessionAllocationTest {
     allocationGuard += row.valueAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseNTableJoin(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT t.id,labels.code,texts.label FROM t "
+            + "JOIN labels ON t.region=labels.region "
+            + "JOIN texts ON labels.id=texts.id "
+            + "WHERE t.id=1 AND labels.id=1",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0) + row.valueAt(1) + row.textLengthAt(2);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

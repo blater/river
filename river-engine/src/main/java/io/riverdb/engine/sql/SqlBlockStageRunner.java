@@ -27,7 +27,7 @@ final class SqlBlockStageRunner {
       RelationalSession session,
       BoundSqlStatement statement,
       SqlBlockPlanBinder planBinder,
-      SqlJoinRowSource joinSource,
+      SqlJoinChainSource joinSource,
       SqlExpressionEvaluator expressions,
       SqlBoundPredicateEvaluator predicates,
       SqlRowProjectionEvaluator projectionEvaluator,

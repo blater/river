@@ -6,18 +6,16 @@ import io.riverdb.sql.SqlScalarExpression;
 final class SqlJoinResultNullability {
   private SqlJoinResultNullability() {}
 
-  static boolean nullable(
-      BoundSqlStatement bound, boolean leftJoin, int projection) {
+  static boolean nullable(BoundSqlStatement bound, int projection) {
     for (int node = 0;
         node < bound.projectionPrograms.nodeCount(projection); node++) {
       int operator = bound.projectionPrograms.operator(projection, node);
       if (operator == SqlScalarExpression.NULL) return true;
       if (operator != SqlScalarExpression.COLUMN) continue;
       int column = (int) bound.projectionPrograms.operand(projection, node);
-      int scope = bound.projectionPrograms.scope(projection, node);
-      if (scope == SqlBoundBooleanPredicateProgram.SCOPE_RIGHT) {
-        if (leftJoin || bound.joinTable.isNullable(column)) return true;
-      } else if (bound.table.isNullable(column)) {
+      int role = bound.projectionPrograms.scope(projection, node);
+      if (role > 0 && bound.command.joinChain().isLeft(role - 1)
+          || bound.joinRole(role).isNullable(column)) {
         return true;
       }
     }

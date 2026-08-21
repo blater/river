@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlComparison;
+import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Evaluates the predicates of the currently bound statement without allocating. */
@@ -13,7 +14,10 @@ final class SqlBoundPredicateEvaluator {
   private final SqlNestedQueryExecution nested;
   private final SqlNestedPredicateEvaluator nestedPredicates;
   private final SqlBooleanPredicateEvaluator booleans;
-  private final SqlBooleanPredicateEvaluator joinOn;
+  private final SqlBooleanPredicateEvaluator[] joinOn =
+      new SqlBooleanPredicateEvaluator[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final SqlBooleanPredicateWorkspace joinWorkspace;
+  private final SqlTemporalContext temporal;
   private final SqlBooleanPredicateEvaluator.Match booleanMatch =
       new SqlBooleanPredicateEvaluator.Match();
   private boolean matched;
@@ -29,22 +33,34 @@ final class SqlBoundPredicateEvaluator {
     expressions = evaluator;
     nested = nestedExecution;
     nestedPredicates = new SqlNestedPredicateEvaluator(evaluator);
+    this.temporal = temporal;
     SqlBooleanPredicateWorkspace workspace =
         new SqlBooleanPredicateWorkspace(evaluator, temporal);
+    joinWorkspace = workspace;
     booleans = new SqlBooleanPredicateEvaluator(workspace, temporal);
-    joinOn = new SqlBooleanPredicateEvaluator(workspace, temporal);
   }
 
   StatusCode prepare() {
-    StatusCode status = bound.hasOnBoolean()
-        ? joinOn.prepare(bound.command, bound.onBoolean()) : StatusCode.OK;
+    StatusCode status = StatusCode.OK;
+    int stages = bound.command.joinChain() == null
+        ? 0 : bound.command.joinChain().stageCount();
+    for (int stage = 0; status.isOk() && stage < stages; stage++) {
+      if (joinOn[stage] == null) {
+        joinOn[stage] = new SqlBooleanPredicateEvaluator(joinWorkspace, temporal);
+      }
+      status = bound.hasOnBoolean(stage)
+          ? joinOn[stage].prepare(bound.command, bound.onBoolean(stage))
+          : StatusCode.OK;
+    }
     return status.isOk()
         ? booleans.prepare(bound.command, bound.whereBoolean) : status;
   }
 
   void reset() {
     booleans.reset();
-    joinOn.reset();
+    for (SqlBooleanPredicateEvaluator evaluator : joinOn) {
+      if (evaluator != null) evaluator.reset();
+    }
     nestedPredicates.reset();
     matched = false;
     joinStatus = StatusCode.OK;
@@ -79,38 +95,20 @@ final class SqlBoundPredicateEvaluator {
 
   boolean matched() { return matched; }
 
-  boolean matchesJoinOn(
-      long outerKey,
-      HeapRowResult outerRow,
-      long innerKey,
-      HeapRowResult innerRow) {
-    joinStatus = joinOn.matchesJoin(
+  boolean matchesJoinOn(int stage, SqlJoinRoleRows rows) {
+    joinStatus = joinOn[stage].matchesJoin(
         bound.command,
-        bound.onBoolean(),
-        outerKey,
-        outerRow,
-        bound.table,
-        innerKey,
-        innerRow,
-        bound.joinTable,
+        bound.onBoolean(stage),
+        rows,
         booleanMatch);
     return joinStatus.isOk() && booleanMatch.matched();
   }
 
-  boolean matchesJoinWhere(
-      long outerKey,
-      HeapRowResult outerRow,
-      long innerKey,
-      HeapRowResult innerRow) {
+  boolean matchesJoinWhere(SqlJoinRoleRows rows) {
     joinStatus = booleans.matchesJoin(
         bound.command,
         bound.whereBoolean,
-        outerKey,
-        outerRow,
-        bound.table,
-        innerKey,
-        innerRow,
-        bound.joinTable,
+        rows,
         booleanMatch);
     return joinStatus.isOk() && booleanMatch.matched();
   }

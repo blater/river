@@ -20,7 +20,7 @@ final class SqlBlockPipelineExecution {
       io.riverdb.engine.relational.RelationalSession relationalSession,
       BoundSqlStatement statement,
       SqlBlockPlanBinder planBinder,
-      SqlJoinRowSource joinSource,
+      SqlJoinChainSource joinSource,
       SqlExpressionEvaluator expressions,
       SqlBoundPredicateEvaluator predicateEvaluator,
       SqlRowProjectionEvaluator projectionEvaluator,

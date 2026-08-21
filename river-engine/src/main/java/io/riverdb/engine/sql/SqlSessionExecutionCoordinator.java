@@ -486,6 +486,11 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       status = binder.bindJoin(bound.command, bound);
     }
+    if (status.isOk()
+        && bound.command.joinChain().stageCount() > 1
+        && (bound.query.isExplain() || bound.query.isAnalyze())) {
+      status = StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     if (status.isOk()) {
       status = queries.prepareProjectionPrograms();
     }

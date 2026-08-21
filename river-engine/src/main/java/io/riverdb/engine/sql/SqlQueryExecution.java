@@ -36,7 +36,7 @@ final class SqlQueryExecution {
   private final SqlTemporalContext temporal;
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final SqlJoinExecution joins;
-  private final SqlJoinRowSource joinSource;
+  private final SqlJoinChainSource joinSource;
   private final SqlCatalogScanExecution catalogs;
   private final SqlScanPreparation scanPreparation;
   private final SqlGroupedExecution groups;
@@ -67,7 +67,7 @@ final class SqlQueryExecution {
         session, bound, expressions);
     predicates = new SqlBoundPredicateEvaluator(
         bound, expressions, nestedExecution, temporal);
-    joinSource = new SqlJoinRowSource(session, bound, expressions, predicates);
+    joinSource = new SqlJoinChainSource(session, bound, expressions, predicates);
     pointQueries = new SqlPointQueryExecution(
         session, bound, expressions, predicates, rowProjections, temporal);
     joins = new SqlJoinExecution(

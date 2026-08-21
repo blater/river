@@ -23,20 +23,16 @@ final class SqlJoinProjectionEvaluator {
   }
 
   StatusCode project(
-      long leftKey,
-      HeapRowResult leftRow,
-      long rightKey,
-      HeapRowResult rightRow,
+      SqlJoinRoleRows rows,
       SqlScanRowResult result) {
-    if (bound == null || leftRow == null || result == null) {
+    if (bound == null || rows == null || result == null) {
       return StatusCode.CONFLICT;
     }
     result.beginProjected(
-        leftKey, bound.projectedTypeDescriptors, bound.projectedColumnCount);
+        rows.key(0), bound.projectedTypeDescriptors, bound.projectedColumnCount);
     for (int projection = 0;
         projection < bound.projectionPrograms.count(); projection++) {
-      StatusCode status = evaluate(
-          projection, leftKey, leftRow, rightKey, rightRow);
+      StatusCode status = evaluate(projection, rows);
       if (status.isOk()) status = publish(projection, result);
       if (!status.isOk()) {
         result.reset();
@@ -47,19 +43,15 @@ final class SqlJoinProjectionEvaluator {
   }
 
   StatusCode project(
-      long leftKey,
-      HeapRowResult leftRow,
-      long rightKey,
-      HeapRowResult rightRow,
+      SqlJoinRoleRows rows,
       SqlBlockRow result) {
-    if (bound == null || leftRow == null || result == null) {
+    if (bound == null || rows == null || result == null) {
       return StatusCode.CONFLICT;
     }
     result.reset(bound.projectedColumnCount);
     for (int projection = 0;
         projection < bound.projectionPrograms.count(); projection++) {
-      StatusCode status = evaluate(
-          projection, leftKey, leftRow, rightKey, rightRow);
+      StatusCode status = evaluate(projection, rows);
       if (status.isOk()) publish(projection, result);
       if (!status.isOk()) {
         result.reset(0);
@@ -69,12 +61,7 @@ final class SqlJoinProjectionEvaluator {
     return StatusCode.OK;
   }
 
-  private StatusCode evaluate(
-      int projection,
-      long leftKey,
-      HeapRowResult leftRow,
-      long rightKey,
-      HeapRowResult rightRow) {
+  private StatusCode evaluate(int projection, SqlJoinRoleRows rows) {
     expressions.beginPredicateOperand();
     SqlBoundProjectionPrograms programs = bound.projectionPrograms;
     StatusCode status = StatusCode.OK;
@@ -82,23 +69,20 @@ final class SqlJoinProjectionEvaluator {
         status.isOk() && node < programs.nodeCount(projection); node++) {
       int operator = programs.operator(projection, node);
       int scope = programs.scope(projection, node);
-      boolean right = scope == SqlBoundBooleanPredicateProgram.SCOPE_RIGHT;
-      if (right && rightRow == null && operator == SqlScalarExpression.COLUMN) {
+      HeapRowResult row = rows.row(scope);
+      if (row == null && operator == SqlScalarExpression.COLUMN) {
         status = expressions.predicateNullColumnNode(
             programs.descriptor(projection, node));
       } else {
-        long key = right ? rightKey : leftKey;
-        HeapRowResult row = right ? rightRow : leftRow;
-        TableDefinition table = right ? bound.joinTable : bound.table;
         status = expressions.predicateOperandNode(
             bound.command,
             operator,
             programs.operand(projection, node),
             programs.descriptor(projection, node),
             zones[projection],
-            key,
+            rows.key(scope),
             row,
-            table,
+            rows.table(scope),
             null);
       }
     }
