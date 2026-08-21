@@ -39,9 +39,12 @@ final class SqlJoinChainPlan {
 
   StatusCode describe(
       BoundSqlStatement bound, SqlJoinChainSource rowSource, boolean withActuals) {
-    int rootAccess = bound.accessPredicate >= 0
-        && (bound.predicateColumn == 0 || bound.table.hasIndexOn(bound.predicateColumn))
-        ? bound.predicateColumn : -1;
+    int rootAccess = bound.joinStrategy(0) == SqlJoinStrategy.MERGE
+        ? bound.joinStrategyOuterColumn(0)
+        : bound.accessPredicate >= 0
+            && (bound.predicateColumn == 0
+                || bound.table.hasIndexOn(bound.predicateColumn))
+            ? bound.predicateColumn : -1;
     begin(rowSource, withActuals);
     StatusCode status = root(rootAccess);
     SqlJoinChain chain = bound.command.joinChain();
@@ -125,7 +128,7 @@ final class SqlJoinChainPlan {
 
   private StatusCode stage(
       SqlJoinChain chain, int stage, int inner, int access, int strategy) {
-    boolean selectedHash = strategy == SqlJoinStrategy.HASH;
+    boolean selectedStrategy = strategy != SqlJoinStrategy.NESTED_LOOP;
     StatusCode status = append(
         strategyPlan.access(strategy, access),
         inner,
@@ -145,7 +148,7 @@ final class SqlJoinChainPlan {
         chain.onPredicates(stage).leafCount(),
         PUBLISHED,
         stage);
-    if (status.isOk() && selectedHash) {
+    if (status.isOk() && selectedStrategy) {
       strategyPlan.set(published, strategy, chain.isLeft(stage));
     }
     return status;

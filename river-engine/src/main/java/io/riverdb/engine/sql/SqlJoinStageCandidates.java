@@ -5,38 +5,29 @@ import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.storage.heap.HeapRowResult;
 
-/** Physical candidate dispatcher with one subordinate lazy HASH workspace. */
+/** Physical candidate dispatcher with one active subordinate strategy workspace. */
 final class SqlJoinStageCandidates {
   private static final int OPENED = 1;
   private static final int FINISHED = 2;
   private static final int CANDIDATE = 3;
   private final BoundSqlStatement bound;
   private final RelationalSession session;
-  private SqlJoinHashWorkspace workspace;
-  private int stage = -1;
+  private final SqlJoinStrategyCandidates strategies;
   private int outcome;
   private boolean unique;
-  private boolean fallback;
 
   SqlJoinStageCandidates(
       RelationalSession relationalSession, BoundSqlStatement statement) {
     session = relationalSession;
     bound = statement;
+    strategies = new SqlJoinStrategyCandidates(relationalSession, statement);
   }
 
   StatusCode begin() {
-    resetMetrics();
-    stage = SqlJoinHashWorkspace.selectedStage(bound);
-    if (stage < 0) return StatusCode.OK;
-    if (workspace == null) workspace = new SqlJoinHashWorkspace(session);
-    StatusCode status = workspace.begin(bound);
-    if (status.isOk()) {
-      fallback = workspace.fallback();
-    }
-    return status;
+    return strategies.begin();
   }
 
-  boolean handles(int current) { return current == stage; }
+  boolean handles(int current) { return strategies.handles(current); }
 
   StatusCode beginStage(
       int current,
@@ -47,7 +38,7 @@ final class SqlJoinStageCandidates {
     unique = false;
     if (handles(current)) {
       StatusCode status = rows.ownThrough(current);
-      if (status.isOk()) status = workspace.beginProbe(rows, bound);
+      if (status.isOk()) status = strategies.beginProbe(rows, expressions);
       if (status.isOk()) outcome = OPENED;
       return status;
     }
@@ -95,7 +86,8 @@ final class SqlJoinStageCandidates {
       int current, SqlJoinChainCursors cursors, SqlJoinRoleRows rows) {
     int rightRole = current + 1;
     StatusCode status = handles(current)
-        ? workspace.nextCandidate() : cursors.nextRole(rightRole);
+        ? strategies.nextCandidate()
+        : cursors.nextRole(rightRole);
     if (status == StatusCode.CONFLICT && !handles(current)) {
       StatusCode closed = cursors.closeRole(rightRole);
       return closed.isOk() ? StatusCode.CONFLICT : closed;
@@ -103,8 +95,8 @@ final class SqlJoinStageCandidates {
     if (!status.isOk()) return status;
     rows.borrow(
         rightRole,
-        handles(current) ? workspace.key() : cursors.key(rightRole),
-        handles(current) ? workspace.row() : cursors.row(rightRole));
+        handles(current) ? strategies.key() : cursors.key(rightRole),
+        handles(current) ? strategies.row() : cursors.row(rightRole));
     return StatusCode.OK;
   }
 
@@ -132,16 +124,13 @@ final class SqlJoinStageCandidates {
         bound.joinRole(outerRole).typeDescriptor(outerColumn)) == 0;
   }
 
-  boolean fallback(int current) { return current == stage && fallback; }
-  boolean hasResources() { return workspace != null && workspace.hasResources(); }
+  boolean fallback(int current) { return strategies.fallback(current); }
+  boolean hasResources() { return strategies.hasResources(); }
 
-  StatusCode close() {
-    return workspace == null ? StatusCode.OK : workspace.close();
-  }
+  StatusCode close() { return strategies.close(); }
 
   void resetMetrics() {
-    stage = -1;
-    fallback = false;
+    strategies.resetMetrics();
   }
 
   private StatusCode beginTable(

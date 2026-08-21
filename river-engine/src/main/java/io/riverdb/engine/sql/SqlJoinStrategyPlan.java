@@ -9,6 +9,8 @@ final class SqlJoinStrategyPlan {
   private static final long FALL_LEFT = PackedText.pack("fbleft");
   private static final long HASH = PackedText.pack("hash");
   private static final long HASH_LEFT = PackedText.pack("hleft");
+  private static final long MERGE = PackedText.pack("merge");
+  private static final long MERGE_LEFT = PackedText.pack("mleft");
   private static final long INDEX = PackedText.pack("index");
   private static final long JOIN = PackedText.pack("join");
   private static final long LEFT = PackedText.pack("left");
@@ -28,12 +30,14 @@ final class SqlJoinStrategyPlan {
   }
 
   int directInner(BoundSqlStatement bound, int stage) {
-    return bound.joinStrategy(stage) == SqlJoinStrategy.HASH
-        ? bound.joinHashInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
+    return bound.joinStrategy(stage) != SqlJoinStrategy.NESTED_LOOP
+        ? bound.joinStrategyInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
   }
 
   int directAccess(BoundSqlStatement bound, int stage, int inner) {
-    if (bound.joinStrategy(stage) == SqlJoinStrategy.HASH || inner < 0) return 0;
+    int strategy = bound.joinStrategy(stage);
+    if (strategy == SqlJoinStrategy.HASH || inner < 0) return 0;
+    if (strategy == SqlJoinStrategy.MERGE) return inner == 0 ? 0 : 1;
     boolean indexed = inner == 0 || bound.joinRole(stage + 1).hasIndexOn(inner);
     if (!indexed) return 0;
     return inner == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(inner) ? 2 : 1;
@@ -41,11 +45,13 @@ final class SqlJoinStrategyPlan {
 
   long access(int strategy, int access) {
     if (strategy == SqlJoinStrategy.HASH) return TABLE;
+    if (strategy == SqlJoinStrategy.MERGE) return access == 1 ? INDEX : TABLE;
     return access == 2 ? LOOKUP : access == 1 ? INDEX : TABLE;
   }
 
   long published(int strategy, boolean leftStage) {
     if (strategy == SqlJoinStrategy.HASH) return leftStage ? HASH_LEFT : HASH;
+    if (strategy == SqlJoinStrategy.MERGE) return leftStage ? MERGE_LEFT : MERGE;
     return leftStage ? LEFT : JOIN;
   }
 

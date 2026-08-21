@@ -398,6 +398,7 @@ final class SqlSessionAllocationTest {
       exerciseBlockPipeline(session, cursor, scanRow, result);
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseMergeJoin(session, cursor, scanRow, result);
       exerciseNTableJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseComputedTextJoin(session, cursor, scanRow, result);
@@ -429,6 +430,7 @@ final class SqlSessionAllocationTest {
       exerciseBlockPipeline(session, cursor, scanRow, result);
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseMergeJoin(session, cursor, scanRow, result);
       exerciseNTableJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseComputedTextJoin(session, cursor, scanRow, result);
@@ -937,6 +939,24 @@ final class SqlSessionAllocationTest {
         "SELECT t.id, labels.code FROM t "
             + "JOIN labels ON t.region=labels.region "
             + "WHERE t.id=1 AND labels.code >= 70 AND labels.code < 72",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseMergeJoin(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT t.id,labels.code FROM t "
+            + "JOIN labels ON t.region=labels.region",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);

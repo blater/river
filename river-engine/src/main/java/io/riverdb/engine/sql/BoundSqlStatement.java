@@ -40,11 +40,11 @@ final class BoundSqlStatement {
       new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final byte[] joinStrategies =
       new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final byte[] joinHashOuterRoles =
+  private final byte[] joinStrategyOuterRoles =
       new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final int[] joinHashOuterColumns =
+  private final int[] joinStrategyOuterColumns =
       new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final int[] joinHashInnerColumns =
+  private final int[] joinStrategyInnerColumns =
       new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
 
   int predicateColumn;
@@ -172,27 +172,35 @@ final class BoundSqlStatement {
   void resetJoinStrategies() {
     for (int stage = 0; stage < joinStrategies.length; stage++) {
       joinStrategies[stage] = SqlJoinStrategy.NESTED_LOOP;
-      joinHashOuterRoles[stage] = -1;
-      joinHashOuterColumns[stage] = -1;
-      joinHashInnerColumns[stage] = -1;
+      joinStrategyOuterRoles[stage] = -1;
+      joinStrategyOuterColumns[stage] = -1;
+      joinStrategyInnerColumns[stage] = -1;
     }
   }
 
-  void setJoinHash(
+  void setJoinStrategy(
       int stage,
+      int strategy,
       int outerRole,
       int outerColumn,
       int innerColumn) {
-    joinStrategies[stage] = SqlJoinStrategy.HASH;
-    joinHashOuterRoles[stage] = (byte) outerRole;
-    joinHashOuterColumns[stage] = outerColumn;
-    joinHashInnerColumns[stage] = innerColumn;
+    joinStrategies[stage] = (byte) strategy;
+    joinStrategyOuterRoles[stage] = (byte) outerRole;
+    joinStrategyOuterColumns[stage] = outerColumn;
+    joinStrategyInnerColumns[stage] = innerColumn;
   }
 
   int joinStrategy(int stage) { return Byte.toUnsignedInt(joinStrategies[stage]); }
-  int joinHashOuterRole(int stage) { return joinHashOuterRoles[stage]; }
-  int joinHashOuterColumn(int stage) { return joinHashOuterColumns[stage]; }
-  int joinHashInnerColumn(int stage) { return joinHashInnerColumns[stage]; }
+  int joinStrategyOuterRole(int stage) { return joinStrategyOuterRoles[stage]; }
+  int joinStrategyOuterColumn(int stage) { return joinStrategyOuterColumns[stage]; }
+  int joinStrategyInnerColumn(int stage) { return joinStrategyInnerColumns[stage]; }
+
+  boolean hasPhysicalJoinStrategy() {
+    for (byte strategy : joinStrategies) {
+      if (Byte.toUnsignedInt(strategy) != SqlJoinStrategy.NESTED_LOOP) return true;
+    }
+    return false;
+  }
 
   boolean hasBlockPlans() {
     return blockPlans != null && blockPlans.count() > 0;

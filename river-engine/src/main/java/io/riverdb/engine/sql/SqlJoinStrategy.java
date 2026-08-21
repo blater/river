@@ -4,6 +4,7 @@ package io.riverdb.engine.sql;
 final class SqlJoinStrategy {
   static final int NESTED_LOOP = 1;
   static final int HASH = 2;
+  static final int MERGE = 3;
 
   private SqlJoinStrategy() {
   }

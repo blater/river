@@ -76,20 +76,25 @@ final class SqlBoundBlockPlans {
 
   void setJoinAccess(int block, BoundSqlStatement bound) {
     joinBlock = block;
-    joinRootAccessColumn = bound.accessPredicate >= 0
-        && (bound.predicateColumn == 0 || bound.table.hasIndexOn(bound.predicateColumn))
-        ? bound.predicateColumn : -1;
+    joinRootAccessColumn = bound.joinStrategy(0) == SqlJoinStrategy.MERGE
+        ? bound.joinStrategyOuterColumn(0)
+        : bound.accessPredicate >= 0
+            && (bound.predicateColumn == 0
+                || bound.table.hasIndexOn(bound.predicateColumn))
+            ? bound.predicateColumn : -1;
     joinStageCount = bound.command.joinChain().stageCount();
     for (int stage = 0; stage < joinStageCount; stage++) {
       int strategy = bound.joinStrategy(stage);
-      int right = strategy == SqlJoinStrategy.HASH
-          ? bound.joinHashInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
+      int right = strategy != SqlJoinStrategy.NESTED_LOOP
+          ? bound.joinStrategyInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
       joinRightColumns[stage] = right;
       boolean indexed = strategy != SqlJoinStrategy.HASH && right >= 0
           && (right == 0 || bound.joinRole(stage + 1).hasIndexOn(right));
-      boolean unique = indexed
+      boolean unique = strategy != SqlJoinStrategy.MERGE && indexed
           && (right == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(right));
-      joinAccessKinds[stage] = (byte) (unique ? 2 : indexed ? 1 : 0);
+      int access = unique ? 2 : (indexed
+          && !(strategy == SqlJoinStrategy.MERGE && right == 0) ? 1 : 0);
+      joinAccessKinds[stage] = (byte) access;
       joinStrategies[stage] = (byte) strategy;
     }
   }

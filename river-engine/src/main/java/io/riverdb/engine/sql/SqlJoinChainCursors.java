@@ -46,6 +46,13 @@ final class SqlJoinChainCursors {
   StatusCode beginRoot() {
     configureRights();
     activeRoleCount = bound.command.joinChain().roleCount();
+    if (bound.joinStrategy(0) == SqlJoinStrategy.MERGE) {
+      int column = bound.joinStrategyOuterColumn(0);
+      rootValueIndex = column > 0;
+      return rootValueIndex
+          ? session.beginValueScan(bound.table, column, cursors[0])
+          : session.beginScan(bound.table, cursors[0]);
+    }
     boolean predicate = bound.accessPredicate >= 0;
     boolean equality = predicate && bound.accessComparison == SqlComparison.EQUAL;
     rootValueIndex = predicate && bound.predicateColumn > 0

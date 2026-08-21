@@ -3,7 +3,6 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlComparison;
-import io.riverdb.sql.SqlScalarExpression;
 
 /** Selects one conservative total raw-equality HASH stage before cost planning. */
 final class SqlJoinHashSelector {
@@ -16,7 +15,8 @@ final class SqlJoinHashSelector {
       SqlBoundBooleanPredicateProgram program,
       BoundSqlStatement bound,
       int stage) {
-    if (selected || !total(source)) return;
+    if (selected || bound.hasPhysicalJoinStrategy()
+        || !SqlJoinPredicateClassifier.total(source)) return;
     collect(source, program, program.root(), bound, stage);
   }
 
@@ -62,7 +62,8 @@ final class SqlJoinHashSelector {
     int innerDescriptor = bound.joinRole(current).typeDescriptor(innerColumn);
     if (!SqlTypeDescriptor.canCompare(outerDescriptor, innerDescriptor)
         || indexed(bound, stage)) return;
-    bound.setJoinHash(stage, outerRole, outerColumn, innerColumn);
+    bound.setJoinStrategy(
+        stage, SqlJoinStrategy.HASH, outerRole, outerColumn, innerColumn);
     selected = true;
   }
 
@@ -72,31 +73,4 @@ final class SqlJoinHashSelector {
         && (column == 0 || bound.joinRole(stage + 1).hasIndexOn(column));
   }
 
-  private static boolean total(SqlBooleanPredicateProgram source) {
-    for (int leaf = 0; leaf < source.leafCount(); leaf++) {
-      int test = source.leafTest(leaf);
-      if (!simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT)) {
-        return false;
-      }
-      if (test == SqlBooleanPredicateProgram.TEST_COMPARISON
-          && !simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_RIGHT)
-          || test == SqlBooleanPredicateProgram.TEST_BETWEEN
-              && (!simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_LOWER)
-                  || !simple(source, leaf, SqlBooleanPredicateProgram.PROGRAM_UPPER))) {
-        return false;
-      }
-      if (test < SqlBooleanPredicateProgram.TEST_COMPARISON
-          || test > SqlBooleanPredicateProgram.TEST_BOOLEAN) return false;
-    }
-    return true;
-  }
-
-  private static boolean simple(
-      SqlBooleanPredicateProgram source, int leaf, int program) {
-    if (source.programNodeCount(leaf, program) != 1) return false;
-    int operator = source.programOperator(leaf, program, 0);
-    return operator == SqlScalarExpression.COLUMN
-        || operator == SqlScalarExpression.LITERAL
-        || operator == SqlScalarExpression.NULL;
-  }
 }

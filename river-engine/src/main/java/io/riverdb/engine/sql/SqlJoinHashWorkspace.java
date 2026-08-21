@@ -42,9 +42,9 @@ final class SqlJoinHashWorkspace {
     stage = selectedStage(bound);
     if (stage < 0) return StatusCode.OK;
     table = bound.joinRole(stage + 1);
-    innerColumn = bound.joinHashInnerColumn(stage);
+    innerColumn = bound.joinStrategyInnerColumn(stage);
     prepareSchema(table);
-    prepareRow(outerRow, bound.joinRole(bound.joinHashOuterRole(stage)));
+    prepareRow(outerRow, bound.joinRole(bound.joinStrategyOuterRole(stage)));
     writer.prepare();
     status = store.begin(schema, -1, false);
     if (!status.isOk()) return status;
@@ -64,8 +64,8 @@ final class SqlJoinHashWorkspace {
       store.rewind();
       return StatusCode.OK;
     }
-    int outerRole = bound.joinHashOuterRole(stage);
-    int outerColumn = bound.joinHashOuterColumn(stage);
+    int outerRole = bound.joinStrategyOuterRole(stage);
+    int outerColumn = bound.joinStrategyOuterColumn(stage);
     HeapRowResult row = rows.row(outerRole);
     if (row == null) return StatusCode.OK;
     TableDefinition outerTable = bound.joinRole(outerRole);

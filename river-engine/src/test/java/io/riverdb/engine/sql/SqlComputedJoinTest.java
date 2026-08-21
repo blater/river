@@ -302,14 +302,14 @@ final class SqlComputedJoinTest {
                 + "ON r.id=l.id",
             cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack("table"), row.valueAt(0));
+    assertEquals(PackedText.pack("primary"), row.valueAt(0));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack("lookup"), row.valueAt(0));
+    assertEquals(PackedText.pack("table"), row.valueAt(0));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(PackedText.pack("on"), row.valueAt(0));
     assertEquals(1, row.valueAt(1));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack("join"), row.valueAt(0));
+    assertEquals(PackedText.pack("merge"), row.valueAt(0));
     assertEquals(1, row.valueAt(1));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
