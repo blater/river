@@ -1,8 +1,8 @@
 # M5 P4C robust subquery delivery plan
 
-Status: active WIP rebased onto bounded-join alpha `4c50133`. The continuation
-checkpoint is `19abbff` on `feature/p4c-subqueries`; no P4C slice is accepted
-yet.
+Status: Alpha 2 implementation contract approved. The continuation checkpoint
+`128906f` is cleanly rebased onto accepted Alpha 1 `e72967e` and main-source
+compilation is green; no P4C slice is accepted yet.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,14 +11,41 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `19abbff` is the clean pushed continuation branch,
-  rebased onto `4c50133`; `river-sql` and `river-engine` main sources compile.
-- Before feature work resumes, migrate parser/lifecycle tests that still call
-  the deleted singleton subquery API and fix the null zone-state failure in the
-  joined P3 spill regression.
+- `feature/p4c-subqueries` at `128906f` is the clean continuation code checkpoint,
+  rebased onto `e72967e`; `river-sql` and `river-engine` main sources compile.
+- The next implementation gates are the exact handoff steps below. Parser,
+  lifecycle, temporal, plan, and allocation tests still require migration.
 - These checkpoints preserve work and integration intent; they are not P4C
   promotion evidence. Focused semantics/allocation tests, affected full suites,
   design-debt checks, and independent review remain required.
+
+## Alpha 2 scope decisions
+
+The following decisions are fixed for implementation and are not left to an
+individual builder:
+
+- A subquery block is a physical `SELECT`/`SCAN` over one table or one admitted
+  two-to-eight-role n-table join. It may have the canonical `WHERE`, one
+  computed scalar projection, and `LIMIT`.
+- Aggregate, `GROUP BY`, `HAVING`, `DISTINCT`, `ORDER BY`, and a P3 derived
+  pipeline inside a child subquery remain `FEATURE_NOT_SUPPORTED`. Those
+  operations remain admitted for consumers outside the nested-filtered source.
+- A scalar subquery may be either operand of one of the six comparisons.
+  `EXISTS` and subquery membership retain the grammar below.
+- Every column node in a child predicate or projected scalar expression uses
+  the same lexical resolver. It may reference local roles or any visible
+  ancestor role. An unqualified name resolves locally first, then at the
+  nearest ancestor scope containing exactly one match; qualification is
+  required to disambiguate multiple visible roles.
+- Typed parameter markers are admitted in parent and child blocks. Their
+  ordinals follow the original SQL text left to right across the complete
+  graph; the parser must not derive marker order from depth-first execution.
+- Joined ancestors and joined children are part of Alpha 2. Durable views over
+  any subquery graph remain fail-closed for the separately prioritized durable
+  subquery-view slice.
+- An `EXISTS` SELECT expression is resolved for names and basic shape only. It
+  is not type-prepared, temporally prepared, evaluated, or allowed to fail at
+  runtime because SQL discards that value.
 
 ## Outcome
 
@@ -50,7 +77,8 @@ The completed slice supports:
   depth 16, and 256 literal membership values.
 - At most eight relation roles per block and 32 physical relation roles across
   the whole query graph.
-- A scalar or membership child projects exactly one bounded scalar expression.
+- A scalar or membership child projects exactly one bounded scalar expression;
+  its column nodes use the lexical local/ancestor scope rules above.
 - A reached membership child accepts at most 1,024 result rows; row 1,025
   returns `RESOURCE_EXHAUSTED`, even if an earlier candidate matched. `LIMIT`
   applies before this bound.
@@ -78,7 +106,7 @@ root, exact edge/leaf agreement, and true parent-derived depth.
 Admitted predicate forms are:
 
 - `[NOT] EXISTS (query)`;
-- any of the six comparisons where one scalar operand is `(query)`; and
+- any of the six comparisons where exactly one scalar operand is `(query)`; and
 - `scalar [NOT] IN (query)`.
 
 Scalar subqueries inside arbitrary SELECT-list expressions, row-valued
@@ -86,12 +114,12 @@ subqueries, `ANY`/`ALL`, CTEs, recursive SQL, and lateral `FROM` items remain
 `FEATURE_NOT_SUPPORTED`. This plan concerns predicate subqueries and their
 one-value child projection.
 
-Typed parameters are admitted in all blocks. Marker ordinals follow lexical SQL
-order across parent and child text; binding is statement-global and preserves
-typed NULL. Durable views containing subqueries remain fail-closed during P4C
-and are admitted by the explicit next core-SQL slice. The n-table view v4
-format already owns up to 32 ordered physical lineage entries; P4C does not
-silently change catalog admission.
+Typed parameters are admitted in all blocks under the Alpha 2 ordering rule
+above; binding is statement-global and preserves typed NULL. Durable views
+containing subqueries remain fail-closed during P4C and are admitted by the
+explicit later core-SQL slice. The n-table view v4 format already owns up to 32
+ordered physical lineage entries; P4C does not silently change catalog
+admission.
 
 ## Scope and binding
 
@@ -216,6 +244,29 @@ accepted child rows, scalar/cardinality results, and parent rows accepted.
 Cache hits increment invocations but not physical child rows. Plain `EXPLAIN`
 never evaluates a child.
 
+## Implementation handoff
+
+The rebased continuation already owns the canonical graph, graph executor,
+frame bank, primitive cache, value scanner, access selector, and plan carrier,
+and deletes the legacy singleton nested engine. The remaining implementation
+must proceed in this order:
+
+1. Replace the temporary root/child JOIN rejection with the accepted
+   `SqlJoinChainSource` role provider; do not add a subquery-only join path.
+2. Generalize `SqlNestedProjectionBinder` from child-local columns to the same
+   block/role/ancestor overlay used by Boolean operands, including owned text.
+3. Complete global lexical parameter-marker capture and bind it once per
+   statement before any graph program is prepared.
+4. Migrate the stale parser, lifecycle, temporal, plan, and allocation tests to
+   the graph contract; no removed singleton API may be restored for tests.
+5. Complete consumer and plan integration, then run the acceptance matrix
+   below. Do not begin durable subquery views or child cardinality stages as a
+   convenience expansion.
+
+The branch may be committed at internal compile/test waypoints, but Alpha 2 is
+promotable only as the complete C1-C4 vertical slice. No intermediate waypoint
+widens the documented SQL surface.
+
 ## Delivery slices
 
 1. **C1 — graph and binding:** land the canonical graph, sibling/recursive
@@ -226,8 +277,8 @@ never evaluates a child.
    point/stream consumers. Delete `SqlNestedQueryExecution`,
    `SqlNestedPredicatePlan`, `SqlMembershipValues`, and every bridge evaluator.
 3. **C3 — full consumers and n-table scopes:** admit joined children/ancestors,
-   aggregation, group/`HAVING`, `DISTINCT`, order/spill, and P3 sources through
-   the same graph runner. Add safe child access selection.
+   and feed outer aggregation, group/`HAVING`, `DISTINCT`, order/spill, and P3
+   consumers through the same graph runner. Add safe child access selection.
 4. **C4 — plans and hardening:** complete per-edge plans/counters, temporal and
    corruption precedence, allocation/retention evidence, checkpoint/reopen of
    base data followed by ad-hoc queries, and full compatibility migration.
@@ -241,6 +292,9 @@ Promotion requires:
 - parser precedence with sibling `EXISTS`/scalar/`IN`, descendants, quotes,
   escaped quotes, true depth, exact 8/31/32 bounds plus one, copy/reset/reuse,
   and every exclusion returning its documented status;
+- scalar-subquery placement on either comparison side, child-local and
+  ancestor-qualified projected expressions, global lexical marker order, and
+  exact FNS evidence for child aggregate/group/distinct/order/P3 forms;
 - three lexical depths, alias shadowing, unqualified fallback, ambiguity,
   sibling/future rejection, and correlation to multiple joined roles;
 - scalar zero/one/two-row results for all admitted families, typed NULL on

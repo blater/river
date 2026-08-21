@@ -4,6 +4,9 @@ River 0.1.0-alpha.1 is the first public evaluation checkpoint. It provides a
 useful embedded and authenticated loopback SQL/JDBC surface, but it is not a
 production release. Use disposable data and keep independent backups.
 
+The complete Alpha 1–Alpha 3 sequence and its numeric limits are maintained in
+the [alpha delivery roadmap](alpha-roadmap.md).
+
 ## Included in this alpha
 
 - Durable heap and B+tree storage, WAL recovery, checkpoints, transactions,

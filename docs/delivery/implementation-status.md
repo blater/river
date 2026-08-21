@@ -9,6 +9,9 @@ This ledger records promotion evidence against the deliverable IDs in the
 file or passing unit test is not, by itself, evidence that a broad deliverable
 or gate has passed.
 
+The release-level feature scope and hard limits for Alpha 1 through Alpha 3 are
+maintained in the [alpha delivery roadmap](alpha-roadmap.md).
+
 ## Status vocabulary
 
 | Status | Meaning |
@@ -24,9 +27,9 @@ or gate has passed.
 | Field | Value |
 | --- | --- |
 | Integration branch | `master` |
-| Current wave | M5 useful v1 SQL surface |
+| Current wave | Alpha 2 / M5 robust SQL subqueries |
 | Current target | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md) |
-| Next product slice | [Online schema evolution](../plans/m5-online-schema-evolution.md), then [durable subquery views](../plans/m5-durable-subquery-views.md) |
+| Next product slice | [Alpha 3 functional TPC-C readiness](alpha-roadmap.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) and [durable subquery views](../plans/m5-durable-subquery-views.md) |
 | Lead integrator | Primary implementation agent |
 | Latest green functional checkpoint | `4de99ca` (2026-08-21) — durable bounded `ANALYZE` statistics and deterministic SQL-order nested/hash/merge costing, with canonical catalog trust checks, estimate-plan truth, 1,024/1,025 bounds, drop/recreate invalidation, checkpoint/WAL reopen, backup restore, full SQL/engine/backup, allocation, design-debt, and independent durability gates green |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
@@ -41,12 +44,14 @@ reviewed, and verified together from the exact detached integration commit.
 | Shipped bounded-join alpha | `release/0.1.0-alpha.1` | `46d7678` | Clean and pushed through accepted J6b; J7a is the next promotable feature checkpoint |
 | Join continuation | `feature/n-table-joins` | `4de99ca` | J7a durable statistics and SQL-order costing accepted; J7b physical inner-island reordering is explicitly deferred beyond the alpha |
 | P4C recovery snapshot | `wip/p4c-subqueries-snapshot` | `794641e` | Clean and pushed immutable checkpoint of the pre-integration work |
-| P4C continuation | `feature/p4c-subqueries` | `19abbff` | Clean, pushed, rebased onto `4c50133`, and main-source compile green; not acceptance-ready |
+| P4C continuation | `feature/p4c-subqueries` | `128906f` | Cleanly rebased onto Alpha 1 `e72967e`; main-source compile green; Alpha 2 contract refined, but implementation remains unaccepted |
 
-P4C resumes from `19abbff`. Its first gates are to migrate the stale parser and
-lifecycle tests away from the deleted singleton subquery API, then correct the
-null zone-state failure exposed by the joined P3 spill regression. The snapshot
-branch is recovery evidence only and must not be merged in place of the rebased
+P4C resumes from `128906f`. Its first implementation gates are to replace the
+temporary root/child JOIN rejection with the shared n-table role provider,
+generalize child projections to the common lexical ancestor scope, complete
+global lexical marker binding, and migrate stale parser/lifecycle/temporal/plan
+tests without restoring the deleted singleton engine. The snapshot branch is
+recovery evidence only and must not be merged in place of the rebased
 continuation branch.
 
 Product work proceeds in this order:
@@ -54,14 +59,15 @@ Product work proceeds in this order:
 1. [Bounded n-table JOIN execution and durable views](../plans/m5-n-table-joins.md)
    with complete dependency lineage.
 2. [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md).
-3. [Online schema evolution](../plans/m5-online-schema-evolution.md):
+3. [Alpha 3 functional TPC-C readiness](alpha-roadmap.md): composite relational keys, scale-appropriate bounded storage, composite DML/access, and the exact transaction SQL required by the independent driver.
+4. [Online schema evolution](../plans/m5-online-schema-evolution.md):
    `ALTER TABLE`, online index creation/removal, and transactional changes to
    foreign keys, views, constraints, defaults, and generated values.
-4. [Durable subquery views](../plans/m5-durable-subquery-views.md) over the
+5. [Durable subquery views](../plans/m5-durable-subquery-views.md) over the
    admitted P4C and n-table source graph.
-5. Broader CHECK expression semantics not required by the preceding slices.
-6. JDBC feature additions and known JDBC issues.
-7. Core crash/recovery, isolation, fault, bounded-growth, and soak promotion.
+6. Broader CHECK expression semantics not required by the preceding slices.
+7. JDBC feature additions and known JDBC issues.
+8. Core crash/recovery, isolation, fault, bounded-growth, and soak promotion.
 
 Lower-ranked work does not interrupt a higher-ranked slice unless it prevents
 that slice from executing through the embedded engine path.
