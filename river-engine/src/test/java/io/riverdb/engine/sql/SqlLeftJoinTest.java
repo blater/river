@@ -72,7 +72,16 @@ final class SqlLeftJoinTest {
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertTrue(row.isVarchar(0));
+    assertEquals(PackedText.pack("table"), row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack("index"), row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack("on"), row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack("extend"), row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(PackedText.pack("left"), row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());

@@ -76,37 +76,43 @@ and analyzed stage row count. `ORDER BY` is admitted only at the outer stage
 and must resolve to one selected output; inner-stage ordering is explicitly
 deferred rather than silently discarded.
 
-Durable view records use strict UTF-8 catalog format v3. The fixed header owns
-one or two ordered physical-table IDs: a single-table view requires one valid
-base ID and a zero second ID, while an admitted JOIN view requires two valid,
-distinct IDs in SQL left/right order. V1, V2, malformed, noncanonical,
-truncated, trailing, duplicate-lineage, missing-lineage, or unpaired UTF-16
-input is rejected rather than adapted during this pre-V1 format replacement.
+Durable view records use strict UTF-8 catalog format v4. The fixed header owns
+an ordered lineage count and 32 physical-table ID slots; used IDs are in SQL
+role order and every unused slot is zero. Repeated physical IDs are valid only
+for distinctly aliased self-join roles. Older versions, malformed or
+noncanonical counts/IDs, nonzero unused slots, truncated or trailing records,
+lineage mismatches, malformed UTF-8, and unpaired UTF-16 input are rejected
+rather than adapted during this pre-V1 format replacement.
 Projection-only stored
 views retain their flattened point/index fast path; only a real cardinality
-barrier selects staged execution. The P4B1 direct-JOIN checkpoint assigns
-separate bounded canonical Boolean programs to `ON` and post-join `WHERE`.
-Qualified operands may reference either JOIN row in comparisons, Boolean
-composition, range and membership tests, and selected scalar programs. `ON
-TRUE` establishes match state before `WHERE`; `LEFT JOIN` publishes a
-NULL-extended right row only when no candidate made `ON` true. A mandatory raw
-cross-scope equality on the top-level `AND` spine may drive the inner lookup
-but remains residual-checked; other admitted `ON` shapes use a bounded nested
-loop. Selected scalar expressions may reference either row, and generated/raw
-`VARCHAR` results are published from owned text. Direct JOIN `ORDER BY`
-remains explicit `FEATURE_NOT_SUPPORTED`. One JOIN may instead be the deepest
-source of an ad-hoc P3 pipeline: its owned projected rows feed the existing
+barrier selects staged execution. A joined block contains two through eight
+left-associative `INNER`/`LEFT` relation roles, with one bounded canonical `ON`
+program per stage and one post-chain `WHERE` program. Each `ON` sees the roles
+already introduced plus its current right role; `WHERE` and projection see all
+roles. `ON TRUE` alone establishes stage match state, and each `LEFT` stage
+publishes one current-right NULL extension only after no candidate made its
+`ON` true. A mandatory raw equality may drive primary/secondary access or the
+bounded hash strategy, but every candidate receives the complete residual.
+Other admitted shapes use the common nested-loop fallback. Hashing covers the
+fixed, exact decimal, temporal, Boolean, and Unicode-scalar equality families;
+after the existing 1,024-row/4 MiB store spills, the alpha reports and uses a
+stable bounded nested fallback. Partitioned spill hash, merge join, and cost
+planning remain performance work. Selected scalar expressions may reference
+any role, and generated/raw `VARCHAR` results are published from owned text.
+Direct joined `ORDER BY` accepts a selected output name; qualified physical
+role expressions remain `FEATURE_NOT_SUPPORTED`, and ambiguous unqualified
+names remain invalid. One joined chain may instead be the deepest source of an
+ad-hoc P3 pipeline: its owned projected rows feed the existing
 alternating stores, and parent projection, scalar or grouped
 aggregate/`HAVING`, `DISTINCT`, and outer `ORDER BY` stages retain the same
 spill, atomic-publication, and `EXPLAIN [ANALYZE]` contracts. A JOIN in a
-nondeepest block, multiple JOIN blocks, and JOIN-local ordering fail closed.
-Direct and deepest-derived JOIN definitions may be durable views. CREATE binds
-both tables before catalog mutation; expansion reparses the stored query and
-requires an exact ordered-ID match before execution. Either base table blocks
+nondeepest block and multiple joined blocks fail closed. Direct and
+deepest-derived joined definitions may be durable views. CREATE binds every
+role before catalog mutation; expansion reparses the stored query and requires
+an exact ordered lineage match before execution. Every referenced table blocks
 DROP and schema rename while the view exists, and the lineage survives
-checkpoint/WAL replay and offline backup/restore. Durable self-JOIN views
-remain `FEATURE_NOT_SUPPORTED` because the v3 lineage requires distinct base
-IDs.
+checkpoint/WAL replay and offline backup/restore. Distinctly aliased durable
+self-joins are admitted.
 Nested/correlated column-to-column edges remain equality-only; auxiliary raw
 ranges, membership, NULL, and truth tests retain their prior admission, while
 computed or generalized correlated/subquery predicates remain deferred. More

@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Last updated: 2026-08-20
+Last updated: 2026-08-21
 
 This ledger records promotion evidence against the deliverable IDs in the
 [implementation plan](../plans/river-project-implementation-plan.md). A source
@@ -25,10 +25,10 @@ or gate has passed.
 | --- | --- |
 | Integration branch | `master` |
 | Current wave | M5 useful v1 SQL surface |
-| Current target | [Bounded n-table JOIN execution and durable n-table JOIN views](../plans/m5-n-table-joins.md) |
+| Current target | [Bounded n-table JOIN merge strategy and cost planning](../plans/m5-n-table-joins.md) |
 | Next product slice | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | 2026-08-20 strict UTF-8-v3 durable direct/deepest-derived JOIN views with ordered two-table lineage, checkpoint/WAL reopen, backup/restore, both-base dependency enforcement, stored 1,025-row spill, and corruption/allocation evidence — full `river-sql`, `river-engine`, and `river-backup` suites; prior checkpoints retained |
+| Latest green functional checkpoint | 2026-08-21 bounded two-to-eight-role INNER/LEFT chains through direct/P3/order/spill plans; UTF-8-v4 durable direct/deepest-derived and self-join views with exact 32-slot ordered lineage, checkpoint/WAL reopen, dependency enforcement and backup/restore; bounded typed hash execution with explicit stable spill fallback — full `river-sql`, `river-engine`, and `river-backup` suites plus allocation, design-debt, and independent semantic/durability reviews green; prior checkpoints retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
@@ -94,7 +94,7 @@ SQL conformance profile.
 | U02c `BOOLEAN` and `DECIMAL(p,s)` | passed | Accepted exact representation/math/casts, predicate/aggregate/index/constraint, JDBC, recovery, and error evidence |
 | U02d local temporal types | passed | Accepted strict local temporal grammar/codec, catalog/row/default/check validation, DATE index, DML/predicates/update, corruption, and checkpoint/reopen evidence; TIME index admission was corrected in U02f after proving its full domain fits the existing key |
 | U02e time-zone semantics | passed | Accepted UTC instant storage, strict fixed/IANA area zones, DST gap/overlap behavior, session-state rollback semantics, tzdb reporting, statement-stable defaults, catalog v13, and checkpoint/reopen evidence |
-| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables and strict UTF-8-v3 durable views, P4A's common bounded Boolean/3VL program at the direct root and every block/view stage, P4B1's separate bounded computed `ON` and post-join `WHERE` programs plus scoped computed projection for direct `INNER`/`LEFT JOIN`, P4B2's deepest JOIN barrier feeding the existing P3 projection/cardinality/spill pipeline, and P4B3's ordered two-base durable JOIN-view lineage through checkpoint/reopen and backup/restore. Computed correlation and broader CHECK/expression contexts remain separate work. |
+| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables, P4A's common bounded Boolean/3VL program, and bounded two-to-eight-role computed `INNER`/`LEFT JOIN` chains through direct/P3/order/spill execution. Durable views use strict UTF-8-v4 ordered lineage for up to 32 physical roles, including aliased self-joins, through checkpoint/reopen and backup/restore. Typed hash equality is admitted in memory with explicit bounded spill fallback; merge/cost planning, computed correlation, and broader CHECK/expression contexts remain separate work. |
 | U03a JDBC/protocol types | passed | Accepted protocol v3 binary values/parameters, authenticated all-type JDBC/CLI, Java-time/decimal mappings, exact metadata, conversion matrix, warnings, generated keys, bounded batches, failure states, and ownership/erasure evidence |
 | U06a type/temporal gate | active | Unified embedded/authenticated-JDBC/CLI/checkpoint/backup/fault fixture and independent relational-semantics review remain |
 

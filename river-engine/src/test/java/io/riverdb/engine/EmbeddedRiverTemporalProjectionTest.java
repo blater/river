@@ -228,13 +228,18 @@ final class EmbeddedRiverTemporalProjectionTest {
                 + "SELECT id FROM moments WHERE id IN (SELECT id FROM moments)",
             result));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
             "CREATE VIEW joined_temporal_projection AS "
                 + "SELECT EXTRACT(DAY FROM left_side.day) AS d "
                 + "FROM moments left_side JOIN moments right_side "
                 + "ON left_side.id=right_side.id",
             result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT d FROM joined_temporal_projection WHERE d=29", result));
+    assertEquals(29, result.valueAt(0));
     assertRowCount(
         session,
         result,

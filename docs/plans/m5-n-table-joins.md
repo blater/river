@@ -1,6 +1,7 @@
 # M5 bounded n-table JOIN delivery plan
 
-Status: approved architecture plan; implementation not started.
+Status: J1-J5 accepted for the alpha; J6 merge and J7 cost planning remain
+planned.
 
 Owner: relational execution lead. Catalog-format changes require an independent
 durability/compatibility review before promotion.
@@ -167,6 +168,16 @@ still exceeds the memory bound falls back to nested loop for that partition;
 it never allocates an unbounded table or silently drops rows. Total join spill
 above 256 MiB returns `RESOURCE_EXHAUSTED` and follows normal terminal cleanup.
 
+The accepted J5 alpha checkpoint deliberately stops before that partitioned
+implementation. It hashes a stable right-side build while the existing
+`SqlBlockRowStore` remains in memory (at most 1,024 rows and its 4 MiB memory
+cap). If that store spills, execution reports an explicit `fallbk`/`fbleft`
+operator and replays the stored right rows in stable nested-loop order. The
+same store still enforces the 65,536-row and 256 MiB statement bounds. This is
+a performance limitation, not a semantic or durability alternative. The
+32-partition/64 MiB hash expansion remains post-alpha work and must reuse the
+same store/codec rather than add another spill format.
+
 ### Merge join
 
 Merge join is eligible for the same mandatory raw equality edge when both
@@ -274,9 +285,11 @@ dropped. Backup copies v4 bytes unchanged and restore revalidates them.
 4. **J4 — durability:** replace view v3 with v4, admit direct/deepest-derived
    n-role views, enforce every dependency, and prove checkpoint/WAL reopen,
    backup/restore, corruption, and allocation boundaries.
-5. **J5 — hash strategy:** add the shared bounded hash workspace, in-memory and
-   partitioned execution, skew fallback, all typed equality hashing, LEFT and
-   duplicate semantics, spill/resource cleanup, and truthful plans.
+5. **J5 — hash strategy (alpha accepted):** add the shared bounded in-memory
+   hash workspace, all typed equality hashing, LEFT and duplicate semantics,
+   existing-store spill with explicit stable nested fallback, cleanup, and
+   truthful plans. Partitioned spill hashing remains the documented extension
+   above.
 6. **J6 — merge strategy:** reuse existing index/order and sort/spill owners,
    add duplicate-run handling and LEFT residual match tracking, and prove merge
    versus nested/hash result identity.
