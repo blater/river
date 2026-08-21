@@ -40,7 +40,6 @@ __pycache__/
 benchmark-results/
 *.jfr
 
-docs/*
 !docs/compatibility/
 docs/compatibility/*
 !docs/compatibility/README.md
