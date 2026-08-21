@@ -23,7 +23,7 @@ final class SqlSessionAllocationTest {
   private static final String JOIN_VIEW_DEFINITION =
       "CREATE VIEW allocated_join AS SELECT CAST(tv.observed AS VARCHAR(32)) "
           + "AS rendered,texts.label AS label FROM temporal_values tv "
-          + "JOIN texts ON tv.id=texts.id WHERE tv.id=1";
+          + "JOIN texts ON tv.id=texts.id JOIN t ON texts.id=t.id WHERE tv.id=1";
   private static volatile long allocationGuard;
 
   @Test

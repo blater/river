@@ -8,8 +8,10 @@ import java.nio.ByteBuffer;
 /** Durable encoding for one bounded catalog view definition. */
 final class CatalogViewCodec {
   private static final long MAGIC = 0x5249564552564945L; // RIVERVIE
-  private static final int VERSION = 3;
-  private static final int HEADER_BYTES = 32;
+  private static final int VERSION = 4;
+  private static final int LINEAGE_OFFSET = 24;
+  private static final int HEADER_BYTES = LINEAGE_OFFSET
+      + ViewDefinition.MAXIMUM_LINEAGE_TABLES * Integer.BYTES;
 
   private CatalogViewCodec() {
   }
@@ -18,8 +20,8 @@ final class CatalogViewCodec {
       ByteBuffer target,
       CharSequence name,
       CharSequence query,
-      int baseTableId,
-      int joinTableId) {
+      int[] tableIds,
+      int tableCount) {
     int queryBytes = Utf8Text.encodedLength(query);
     if (target == null
         || name == null
@@ -29,7 +31,7 @@ final class CatalogViewCodec {
         || query.length() <= 0
         || query.length() > ViewDefinition.MAXIMUM_QUERY_LENGTH
         || queryBytes <= 0
-        || !validEncodedLineage(baseTableId, joinTableId)
+        || !validEncodedLineage(tableIds, tableCount)
         || HEADER_BYTES + name.length() > target.capacity() - queryBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -38,9 +40,12 @@ final class CatalogViewCodec {
     target.putInt(8, VERSION);
     target.putInt(12, name.length());
     target.putInt(16, queryBytes);
-    target.putInt(20, joinTableId == 0 ? 1 : 2);
-    target.putInt(24, baseTableId);
-    target.putInt(28, joinTableId);
+    target.putInt(20, tableCount);
+    for (int index = 0; index < ViewDefinition.MAXIMUM_LINEAGE_TABLES; index++) {
+      target.putInt(
+          LINEAGE_OFFSET + index * Integer.BYTES,
+          index < tableCount ? tableIds[index] : 0);
+    }
     int offset = HEADER_BYTES;
     for (int index = 0; index < name.length(); index++) {
       target.put(offset++, (byte) name.charAt(index));
@@ -86,8 +91,7 @@ final class CatalogViewCodec {
     }
     status = result.setUtf8(scratch, HEADER_BYTES + nameBytes, queryBytes);
     if (!status.isOk()) return status;
-    result.setLineage(
-        scratch.getInt(20), scratch.getInt(24), scratch.getInt(28));
+    result.setLineage(scratch, LINEAGE_OFFSET, scratch.getInt(20));
     return StatusCode.OK;
   }
 
@@ -147,25 +151,31 @@ final class CatalogViewCodec {
     StatusCode status = result.setUtf8(
         source, HEADER_BYTES + nameBytes, queryBytes);
     if (!status.isOk()) return status;
-    result.setLineage(source.getInt(20), source.getInt(24), source.getInt(28));
+    result.setLineage(source, LINEAGE_OFFSET, source.getInt(20));
     return StatusCode.OK;
   }
 
-  private static boolean validEncodedLineage(int baseTableId, int joinTableId) {
-    return validTableId(baseTableId)
-        && (joinTableId == 0
-            || validTableId(joinTableId) && joinTableId != baseTableId);
+  private static boolean validEncodedLineage(int[] tableIds, int tableCount) {
+    if (tableIds == null
+        || tableCount < 1
+        || tableCount > ViewDefinition.MAXIMUM_LINEAGE_TABLES
+        || tableCount > tableIds.length) {
+      return false;
+    }
+    for (int index = 0; index < tableCount; index++) {
+      if (!validTableId(tableIds[index])) return false;
+    }
+    return true;
   }
 
   private static boolean validDecodedLineage(ByteBuffer source) {
     int count = source.getInt(20);
-    int baseTableId = source.getInt(24);
-    int joinTableId = source.getInt(28);
-    return validTableId(baseTableId)
-        && (count == 1 && joinTableId == 0
-            || count == 2
-                && validTableId(joinTableId)
-                && joinTableId != baseTableId);
+    if (count < 1 || count > ViewDefinition.MAXIMUM_LINEAGE_TABLES) return false;
+    for (int index = 0; index < ViewDefinition.MAXIMUM_LINEAGE_TABLES; index++) {
+      int tableId = source.getInt(LINEAGE_OFFSET + index * Integer.BYTES);
+      if (index < count ? !validTableId(tableId) : tableId != 0) return false;
+    }
+    return true;
   }
 
   private static boolean validTableId(int tableId) {

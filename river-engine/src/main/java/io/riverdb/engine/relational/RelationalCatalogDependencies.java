@@ -93,8 +93,10 @@ final class RelationalCatalogDependencies {
   }
 
   private static boolean references(ViewDefinition view, int tableId) {
-    return view.baseTableId() == tableId
-        || view.tableCount() == 2 && view.joinTableId() == tableId;
+    for (int index = 0; index < view.tableCount(); index++) {
+      if (view.tableId(index) == tableId) return true;
+    }
+    return false;
   }
 
   private StatusCode beginScan(RelationalSession session) {

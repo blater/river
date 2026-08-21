@@ -7,36 +7,32 @@ import java.nio.ByteBuffer;
 /** Caller-owned bounded SQL text for one durable logical view definition. */
 public final class ViewDefinition implements CharSequence {
   public static final int MAXIMUM_QUERY_LENGTH = 768;
+  public static final int MAXIMUM_LINEAGE_TABLES = 32;
 
   private final char[] query = new char[MAXIMUM_QUERY_LENGTH];
+  private final int[] tableIds = new int[MAXIMUM_LINEAGE_TABLES];
   private int length;
   private int tableCount;
-  private int baseTableId;
-  private int joinTableId;
 
   public void reset() {
     length = 0;
+    for (int index = 0; index < tableCount; index++) tableIds[index] = 0;
     tableCount = 0;
-    baseTableId = 0;
-    joinTableId = 0;
   }
 
-  void setLineage(int count, int baseId, int joinId) {
+  void setLineage(ByteBuffer source, int offset, int count) {
     tableCount = count;
-    baseTableId = baseId;
-    joinTableId = joinId;
+    for (int index = 0; index < count; index++) {
+      tableIds[index] = source.getInt(offset + index * Integer.BYTES);
+    }
   }
 
   public int tableCount() {
     return tableCount;
   }
 
-  public int baseTableId() {
-    return baseTableId;
-  }
-
-  public int joinTableId() {
-    return joinTableId;
+  public int tableId(int index) {
+    return index >= 0 && index < tableCount ? tableIds[index] : 0;
   }
 
   void append(char character) {

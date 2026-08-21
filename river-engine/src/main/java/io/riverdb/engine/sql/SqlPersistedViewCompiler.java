@@ -89,11 +89,16 @@ final class SqlPersistedViewCompiler {
     StatusCode status = join
         ? binder.resolveJoinRoles(session, base, bound, true)
         : session.resolveTable(base.tableName(), bound.table);
-    int count = join ? 2 : 1;
-    return status.isOk()
-        && definition.tableCount() == count
-        && definition.baseTableId() == bound.table.tableId()
-        && (!join || definition.joinTableId() == bound.joinRole(1).tableId())
-        ? StatusCode.OK : StatusCode.CORRUPTION;
+    if (!status.isOk()) return StatusCode.CORRUPTION;
+    int count = join ? base.joinChain().roleCount() : 1;
+    if (definition.tableCount() != count) return StatusCode.CORRUPTION;
+    for (int index = 0; index < count; index++) {
+      int rebound = join
+          ? bound.joinRole(index).tableId() : bound.table.tableId();
+      if (definition.tableId(index) != rebound) {
+        return StatusCode.CORRUPTION;
+      }
+    }
+    return StatusCode.OK;
   }
 }

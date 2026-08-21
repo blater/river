@@ -98,12 +98,12 @@ final class RelationalCatalogDdl {
       RelationalSession session,
       CharSequence name,
       CharSequence query,
-      int baseTableId,
-      int joinTableId) {
+      int[] tableIds,
+      int tableCount) {
     StatusCode status = availableName(session, name);
     if (status.isOk()) {
       status = CatalogViewCodec.encode(
-          output, name, query, baseTableId, joinTableId);
+          output, name, query, tableIds, tableCount);
     }
     if (status.isOk()) {
       status = session.indexedSession().insert(key.space(), key.key(), output);

@@ -44,7 +44,7 @@ final class CatalogViewSemanticCorruptionTest {
         sql.execute(
             "CREATE VIEW damaged_view AS SELECT id FROM moments", result));
     for (String name : new String[] {
-        "swapped_view", "missing_view", "invalid_zone_view"
+        "swapped_view", "duplicate_view", "missing_view", "invalid_zone_view"
     }) {
       assertEquals(
           StatusCode.OK,
@@ -64,7 +64,7 @@ final class CatalogViewSemanticCorruptionTest {
     ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
     assertEquals(
         StatusCode.OK,
-        CatalogViewCodec.encode(
+        encode(
             encoded,
             "damaged_view",
             "SELECT moments.id AS bad FROM moments JOIN moments m "
@@ -79,7 +79,20 @@ final class CatalogViewSemanticCorruptionTest {
         relational.indexedSession().update(key.space(), key.key(), encoded));
     assertEquals(
         StatusCode.OK,
-        CatalogViewCodec.encode(
+        encode(
+            encoded,
+            "duplicate_view",
+            "SELECT m.id AS bad FROM moments m JOIN facts f ON m.id=f.id",
+            moments.tableId(),
+            moments.tableId()));
+    assertEquals(
+        StatusCode.OK, RelationalKey.catalogTableKey("duplicate_view", key));
+    assertEquals(
+        StatusCode.OK,
+        relational.indexedSession().update(key.space(), key.key(), encoded));
+    assertEquals(
+        StatusCode.OK,
+        encode(
             encoded,
             "swapped_view",
             "SELECT m.id AS bad FROM moments m JOIN facts f ON m.id=f.id",
@@ -92,7 +105,7 @@ final class CatalogViewSemanticCorruptionTest {
         relational.indexedSession().update(key.space(), key.key(), encoded));
     assertEquals(
         StatusCode.OK,
-        CatalogViewCodec.encode(
+        encode(
             encoded,
             "missing_view",
             "SELECT m.id AS bad FROM moments m JOIN facts f ON m.id=f.id",
@@ -105,7 +118,7 @@ final class CatalogViewSemanticCorruptionTest {
         relational.indexedSession().update(key.space(), key.key(), encoded));
     assertEquals(
         StatusCode.OK,
-        CatalogViewCodec.encode(
+        encode(
             encoded,
             "invalid_zone_view",
             "SELECT m.id AS bad FROM moments m JOIN facts f "
@@ -120,13 +133,13 @@ final class CatalogViewSemanticCorruptionTest {
         relational.indexedSession().update(key.space(), key.key(), encoded));
     assertEquals(
         StatusCode.OK,
-        CatalogViewCodec.encode(
+        encode(
             encoded,
             "malformed_aggregate",
             "SELECT SUM(id) AS total FROM moments",
             moments.tableId(),
             0));
-    int queryOffset = 32 + "malformed_aggregate".length();
+    int queryOffset = 152 + "malformed_aggregate".length();
     encoded.put(queryOffset, (byte) 0xc0);
     encoded.put(queryOffset + 1, (byte) 0x80);
     assertEquals(
@@ -147,6 +160,9 @@ final class CatalogViewSemanticCorruptionTest {
     assertEquals(
         StatusCode.CORRUPTION,
         sql.execute("SELECT bad FROM swapped_view", new SqlExecutionResult()));
+    assertEquals(
+        StatusCode.CORRUPTION,
+        sql.execute("SELECT bad FROM duplicate_view", new SqlExecutionResult()));
     assertEquals(
         StatusCode.CORRUPTION,
         sql.execute("SELECT bad FROM invalid_zone_view", new SqlExecutionResult()));
@@ -196,13 +212,12 @@ final class CatalogViewSemanticCorruptionTest {
     ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
     assertEquals(
         StatusCode.OK,
-        CatalogViewCodec.encode(
+        encode(
             encoded,
             "corrupt_view",
             "SELECT id FROM events",
             events.tableId(),
             0));
-    encoded.putInt(20, 2);
     encoded.putInt(28, events.tableId());
     RelationalKey.KeyResult key = new RelationalKey.KeyResult();
     assertEquals(StatusCode.OK, RelationalKey.catalogTableKey("corrupt_view", key));
@@ -224,5 +239,17 @@ final class CatalogViewSemanticCorruptionTest {
     SqlSessionOpenResult result = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, result));
     return result.session();
+  }
+
+  private static StatusCode encode(
+      ByteBuffer target,
+      CharSequence name,
+      CharSequence query,
+      int firstTableId,
+      int secondTableId) {
+    int[] tableIds = secondTableId == 0
+        ? new int[] {firstTableId} : new int[] {firstTableId, secondTableId};
+    return CatalogViewCodec.encode(
+        target, name, query, tableIds, tableIds.length);
   }
 }

@@ -60,12 +60,23 @@ final class OfflineDatabaseBackupTest {
     assertEquals(
         StatusCode.OK,
         session.execute(
-            "CREATE TABLE regions (id BIGINT PRIMARY KEY,label VARCHAR(32))",
+            "CREATE TABLE regions (id BIGINT PRIMARY KEY,label VARCHAR(32),"
+                + "country BIGINT)",
             command));
     assertEquals(
         StatusCode.OK,
         session.execute(
-            "INSERT INTO regions VALUES (7,'東京地域'),(8,'north')",
+            "INSERT INTO regions VALUES (7,'東京地域',81),(8,'north',44)",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE countries (id BIGINT PRIMARY KEY,label VARCHAR(32))",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO countries VALUES (81,'日本'),(44,'Britain')",
             command));
     assertEquals(
         StatusCode.OK,
@@ -96,7 +107,8 @@ final class OfflineDatabaseBackupTest {
         session.execute(
             "CREATE VIEW joined_accounts AS SELECT a.id AS account_id,"
                 + "a.balance AS balance,r.label AS region_label "
-                + "FROM accounts a JOIN regions r ON a.region=r.id",
+                + "FROM accounts a JOIN regions r ON a.region=r.id "
+                + "JOIN countries c ON r.country=c.id",
             command));
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
@@ -158,6 +170,7 @@ final class OfflineDatabaseBackupTest {
     assertEquals(StatusCode.OK, session.execute("DROP VIEW unicode_totals", command));
     assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE accounts", command));
     assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE regions", command));
+    assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE countries", command));
     assertEquals(StatusCode.OK, session.execute("DROP VIEW joined_accounts", command));
     assertEquals(
         StatusCode.OK,

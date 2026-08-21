@@ -153,7 +153,7 @@ final class SqlJoinBlockPipelineTest {
         session.execute(
             "CREATE VIEW spill_join AS SELECT l.id AS lid,l.bucket AS bucket,"
                 + "r.label AS label FROM spill_left l JOIN spill_right r "
-                + "ON l.id=r.id",
+                + "ON l.id=r.id JOIN spill_third t ON r.id=t.id",
             result));
 
     assertRows(

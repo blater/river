@@ -43,10 +43,7 @@ final class SqlViewDefinitionBinder {
       if (!status.isOk()) return status;
     }
     StatusCode status = blocks.bind(session, bound, null);
-    return status.isOk()
-        && deepest.type() == SqlCommandType.JOIN_SCAN
-        && deepest.joinChain().stageCount() > 1
-        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
+    return status;
   }
 
   private StatusCode bindJoin(
@@ -55,8 +52,7 @@ final class SqlViewDefinitionBinder {
       SqlCommand command) {
     StatusCode status = resolveRight(session, bound, command);
     if (status.isOk()) status = binder.bindJoin(command, bound);
-    return status.isOk() && command.joinChain().stageCount() > 1
-        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
+    return status;
   }
 
   private StatusCode resolveJoin(
@@ -64,7 +60,7 @@ final class SqlViewDefinitionBinder {
       BoundSqlStatement bound,
       SqlCommand command) {
     StatusCode status = binder.resolveJoinRoles(session, command, bound, true);
-    return status.isOk() ? rejectRepeatedPhysicalRole(bound, command) : status;
+    return status;
   }
 
   private StatusCode resolveRight(
@@ -72,18 +68,6 @@ final class SqlViewDefinitionBinder {
       BoundSqlStatement bound,
       SqlCommand command) {
     StatusCode status = binder.resolveJoinRoles(session, command, bound, false);
-    return status.isOk() ? rejectRepeatedPhysicalRole(bound, command) : status;
-  }
-
-  private static StatusCode rejectRepeatedPhysicalRole(
-      BoundSqlStatement bound, SqlCommand command) {
-    for (int right = 1; right < command.joinChain().roleCount(); right++) {
-      for (int left = 0; left < right; left++) {
-        if (bound.joinRole(left).tableId() == bound.joinRole(right).tableId()) {
-          return StatusCode.FEATURE_NOT_SUPPORTED;
-        }
-      }
-    }
-    return StatusCode.OK;
+    return status;
   }
 }

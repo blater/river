@@ -203,16 +203,16 @@ final class SqlCommandDispatcher {
     StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
     boolean began = status.isOk();
     boolean implicit = began && atomic.implicit();
-    int tableId = 0;
-    int joinTableId = 0;
     if (status.isOk() && create) {
       status = viewValidator.validate(session, viewSql);
-      tableId = status.isOk() ? viewValidator.tableId() : 0;
-      joinTableId = status.isOk() ? viewValidator.joinTableId() : 0;
     }
     if (status.isOk()) {
       status = create
-          ? session.createView(viewName, viewSql, tableId, joinTableId)
+          ? session.createView(
+              viewName,
+              viewSql,
+              viewValidator.tableIds(),
+              viewValidator.tableCount())
           : session.dropView(viewName);
     }
     if (began) {

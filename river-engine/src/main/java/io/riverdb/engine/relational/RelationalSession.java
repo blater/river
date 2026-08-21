@@ -234,18 +234,14 @@ public final class RelationalSession {
   public StatusCode createView(
       CharSequence name,
       CharSequence query,
-      int baseTableId,
-      int joinTableId) {
+      int[] tableIds,
+      int tableCount) {
     if (!registeredTransaction
         || !RelationalKey.validName(name)
         || query == null
         || query.length() <= 0
         || query.length() > ViewDefinition.MAXIMUM_QUERY_LENGTH
-        || baseTableId <= 0
-        || baseTableId > RelationalKey.MAXIMUM_TABLE_ID
-        || joinTableId < 0
-        || joinTableId > RelationalKey.MAXIMUM_TABLE_ID
-        || joinTableId == baseTableId) {
+        || !validViewLineage(tableIds, tableCount)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (pendingDropType != PENDING_DROP_NONE) {
@@ -255,10 +251,24 @@ public final class RelationalSession {
     StatusCode status = acquireSchemaChange();
     if (status.isOk()) {
       status = catalogDdl.createView(
-          this, name, query, baseTableId, joinTableId);
+          this, name, query, tableIds, tableCount);
     }
     finishFailedSchemaChange(status, acquired);
     return status;
+  }
+
+  private static boolean validViewLineage(int[] tableIds, int tableCount) {
+    if (tableIds == null
+        || tableCount < 1
+        || tableCount > ViewDefinition.MAXIMUM_LINEAGE_TABLES
+        || tableCount > tableIds.length) {
+      return false;
+    }
+    for (int index = 0; index < tableCount; index++) {
+      if (tableIds[index] <= 0
+          || tableIds[index] > RelationalKey.MAXIMUM_TABLE_ID) return false;
+    }
+    return true;
   }
 
   public StatusCode dropView(CharSequence name) {

@@ -174,7 +174,7 @@ final class SqlNTableJoinTest {
 
   private static void assertEightRolesPreserveOwnedText(
       SqlSession session, SqlExecutionResult result) {
-    String sql = "SELECT a.id+h.v,a.label FROM chain0 a "
+    String sql = "SELECT a.id+h.v AS total,a.label AS label FROM chain0 a "
         + "JOIN chain1 b ON a.k=b.k JOIN chain2 c ON b.k=c.k AND c.id=1 "
         + "JOIN chain3 d ON c.k=d.k JOIN chain4 e ON d.k=e.k "
         + "JOIN chain5 f ON e.k=f.k JOIN chain6 g ON f.k=g.k "
@@ -183,6 +183,20 @@ final class SqlNTableJoinTest {
     SqlScanRowResult row = new SqlScanRowResult();
     char[] text = new char[32];
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(72, row.valueAt(0));
+    assertEquals(9, row.copyTextAt(1, text, 0));
+    assertEquals("outer-é😀", new String(text, 0, 9));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE VIEW durable_eight AS " + sql, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan("SELECT total,label FROM durable_eight", cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(72, row.valueAt(0));
     assertEquals(9, row.copyTextAt(1, text, 0));
@@ -329,14 +343,24 @@ final class SqlNTableJoinTest {
             + ") joined GROUP BY cv HAVING SUM(aid+1)>2 ORDER BY cv",
         new long[][] {{22, 3}});
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute("CREATE VIEW deferred_chain AS " + join, result));
+    assertRows(
+        session,
+        result,
+        "SELECT aid,cv FROM deferred_chain ORDER BY aid",
+        new long[][] {{1, 21}, {2, 22}});
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
             "CREATE VIEW deferred_derived AS SELECT aid FROM ("
                 + join + ") joined",
             result));
+    assertRows(
+        session,
+        result,
+        "SELECT aid FROM deferred_derived ORDER BY aid",
+        new long[][] {{1}, {2}});
     String invalid = "SELECT a.id FROM chain0 a "
         + "JOIN chain1 b ON a.k=b.k "
         + "JOIN chain2 c ON b.v=a.label";

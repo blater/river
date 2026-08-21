@@ -41,7 +41,8 @@ final class SqlJoinViewTest {
         session.execute(
             "CREATE VIEW direct_join AS SELECT l.id AS lid,r.amount+1 AS adjusted "
                 + "FROM join_left l LEFT JOIN join_right r "
-                + "ON l.id=r.left_id AND r.flag=TRUE",
+                + "ON l.id=r.left_id AND r.flag=TRUE "
+                + "LEFT JOIN join_extra e ON r.id=e.right_id AND e.enabled=TRUE",
             result));
     assertDirectRows(session, result);
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
@@ -51,7 +52,8 @@ final class SqlJoinViewTest {
             "CREATE VIEW grouped_join AS SELECT bucket,SUM(amount+1) AS total "
                 + "FROM (SELECT l.bucket AS bucket,r.amount AS amount "
                 + "FROM join_left l JOIN join_right r "
-                + "ON l.id=r.left_id AND r.flag=TRUE) joined "
+                + "ON l.id=r.left_id AND r.flag=TRUE "
+                + "JOIN join_extra e ON r.id=e.right_id AND e.enabled=TRUE) joined "
                 + "GROUP BY bucket HAVING SUM(amount+1)>200",
             result));
     assertRows(
@@ -68,12 +70,18 @@ final class SqlJoinViewTest {
         session.execute("DROP TABLE join_right", result));
     assertEquals(
         StatusCode.CONFLICT,
+        session.execute("DROP TABLE join_extra", result));
+    assertEquals(
+        StatusCode.CONFLICT,
         session.execute(
             "ALTER TABLE join_right RENAME TO renamed_right", result));
     assertEquals(
         StatusCode.CONFLICT,
         session.execute(
             "ALTER TABLE join_right RENAME COLUMN amount TO total", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("ALTER TABLE join_extra RENAME TO renamed_extra", result));
     assertDirectPlan(session, result);
     assertGroupedPlan(session, result);
     assertTemporalBoundaries(session, result);
@@ -104,6 +112,7 @@ final class SqlJoinViewTest {
         StatusCode.CONFLICT,
         session.execute("DROP TABLE join_right", result));
     assertEquals(StatusCode.OK, session.execute("DROP VIEW grouped_join", result));
+    assertEquals(StatusCode.OK, session.execute("DROP TABLE join_extra", result));
     assertEquals(StatusCode.OK, session.execute("DROP TABLE join_right", result));
     assertEquals(StatusCode.OK, session.execute("DROP TABLE join_left", result));
     assertEquals(StatusCode.OK, session.close());
@@ -141,6 +150,16 @@ final class SqlJoinViewTest {
             "INSERT INTO join_right VALUES "
                 + "(11,1,100,TRUE),(12,1,101,FALSE),(21,2,200,TRUE)",
             result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE join_extra (id BIGINT PRIMARY KEY,right_id BIGINT,"
+                + "enabled BOOLEAN)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO join_extra VALUES (101,11,TRUE),(102,21,TRUE)", result));
   }
 
   private static void assertSelfJoinBoundary(
@@ -162,18 +181,30 @@ final class SqlJoinViewTest {
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
             "CREATE VIEW direct_self_join AS SELECT l.id AS lid "
                 + "FROM join_left l JOIN join_left r ON l.id=r.id",
             result));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
             "CREATE VIEW derived_self_join AS SELECT lid FROM "
                 + "(SELECT l.id AS lid FROM join_left l "
                 + "JOIN join_left r ON l.id=r.id) joined",
             result));
+    assertRows(
+        session,
+        result,
+        "SELECT lid FROM direct_self_join ORDER BY lid",
+        new long[][] {{1}, {2}, {3}});
+    assertRows(
+        session,
+        result,
+        "SELECT lid FROM derived_self_join ORDER BY lid",
+        new long[][] {{1}, {2}, {3}});
+    assertEquals(StatusCode.OK, session.execute("DROP VIEW direct_self_join", result));
+    assertEquals(StatusCode.OK, session.execute("DROP VIEW derived_self_join", result));
   }
 
   private static void assertOrderedLineage(
@@ -186,12 +217,15 @@ final class SqlJoinViewTest {
     ViewDefinition view = new ViewDefinition();
     TableDefinition left = new TableDefinition();
     TableDefinition right = new TableDefinition();
+    TableDefinition extra = new TableDefinition();
     assertEquals(StatusCode.OK, opened.session().resolveTable("join_left", left));
     assertEquals(StatusCode.OK, opened.session().resolveTable("join_right", right));
+    assertEquals(StatusCode.OK, opened.session().resolveTable("join_extra", extra));
     assertEquals(StatusCode.OK, opened.session().resolveView(viewName, view));
-    assertEquals(2, view.tableCount());
-    assertEquals(left.tableId(), view.baseTableId());
-    assertEquals(right.tableId(), view.joinTableId());
+    assertEquals(3, view.tableCount());
+    assertEquals(left.tableId(), view.tableId(0));
+    assertEquals(right.tableId(), view.tableId(1));
+    assertEquals(extra.tableId(), view.tableId(2));
     assertEquals(
         StatusCode.OK,
         opened.session().abort(new TransactionOutcome()));
@@ -279,6 +313,10 @@ final class SqlJoinViewTest {
     assertPlanRow(session, cursor, row, "on", 2, -1);
     assertPlanRow(session, cursor, row, "extend", 1, -1);
     assertPlanRow(session, cursor, row, "left", 2, -1);
+    assertPlanRow(session, cursor, row, "table", 1, -1);
+    assertPlanRow(session, cursor, row, "on", 2, -1);
+    assertPlanRow(session, cursor, row, "extend", 2, -1);
+    assertPlanRow(session, cursor, row, "left", 2, -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
@@ -299,6 +337,9 @@ final class SqlJoinViewTest {
     assertPlanRow(session, cursor, row, "block", 3, 2);
     assertPlanRow(session, cursor, row, "table", -1, 3);
     assertPlanRow(session, cursor, row, "index", 1, 3);
+    assertPlanRow(session, cursor, row, "on", 2, 2);
+    assertPlanRow(session, cursor, row, "join", 2, 2);
+    assertPlanRow(session, cursor, row, "table", 1, 4);
     assertPlanRow(session, cursor, row, "on", 2, 2);
     assertPlanRow(session, cursor, row, "join", 2, 2);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
