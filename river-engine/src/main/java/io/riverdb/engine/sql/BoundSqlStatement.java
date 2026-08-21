@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
+import io.riverdb.engine.relational.TableStatistics;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlJoinChain;
@@ -26,6 +27,7 @@ final class BoundSqlStatement {
   private SqlBoundBlockPlans blockPlans;
   final TableDefinition table = new TableDefinition();
   private TableDefinition[] joinTables;
+  private TableStatistics[] joinStatistics;
   private int joinRoleCount;
   final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -46,6 +48,9 @@ final class BoundSqlStatement {
       new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final int[] joinStrategyInnerColumns =
       new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final long[] joinEstimatedRows =
+      new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private boolean joinEstimatesAvailable;
 
   int predicateColumn;
   int predicateCount;
@@ -90,6 +95,7 @@ final class BoundSqlStatement {
     distinctColumn = -1;
     resetJoinAccess();
     resetJoinStrategies();
+    resetJoinEstimates();
     orderColumn = -1;
     sortKeyProjection = -1;
   }
@@ -134,6 +140,12 @@ final class BoundSqlStatement {
         joinTables[role - 1] = new TableDefinition();
       }
     }
+    if (joinStatistics == null) {
+      joinStatistics = new TableStatistics[SqlJoinChain.MAXIMUM_JOIN_ROLES];
+    }
+    for (int role = 0; role < roles; role++) {
+      if (joinStatistics[role] == null) joinStatistics[role] = new TableStatistics();
+    }
   }
 
   TableDefinition joinRole(int role) {
@@ -142,10 +154,20 @@ final class BoundSqlStatement {
     return joinTables == null ? null : joinTables[role - 1];
   }
 
+  TableStatistics joinStatistics(int role) {
+    return joinStatistics == null || role < 0 || role >= joinRoleCount
+        ? null : joinStatistics[role];
+  }
+
   private void resetJoinRoles() {
     if (joinTables != null) {
       for (TableDefinition definition : joinTables) {
         if (definition != null) definition.reset();
+      }
+    }
+    if (joinStatistics != null) {
+      for (TableStatistics statistics : joinStatistics) {
+        if (statistics != null) statistics.reset();
       }
     }
     joinRoleCount = 0;
@@ -178,6 +200,13 @@ final class BoundSqlStatement {
     }
   }
 
+  void clearJoinStrategy(int stage) {
+    joinStrategies[stage] = SqlJoinStrategy.NESTED_LOOP;
+    joinStrategyOuterRoles[stage] = -1;
+    joinStrategyOuterColumns[stage] = -1;
+    joinStrategyInnerColumns[stage] = -1;
+  }
+
   void setJoinStrategy(
       int stage,
       int strategy,
@@ -194,6 +223,21 @@ final class BoundSqlStatement {
   int joinStrategyOuterRole(int stage) { return joinStrategyOuterRoles[stage]; }
   int joinStrategyOuterColumn(int stage) { return joinStrategyOuterColumns[stage]; }
   int joinStrategyInnerColumn(int stage) { return joinStrategyInnerColumns[stage]; }
+
+  void resetJoinEstimates() {
+    for (int stage = 0; stage < joinEstimatedRows.length; stage++) {
+      joinEstimatedRows[stage] = 0;
+    }
+    joinEstimatesAvailable = false;
+  }
+
+  void setJoinEstimatedRows(int stage, long rows) {
+    joinEstimatedRows[stage] = rows;
+    joinEstimatesAvailable = true;
+  }
+
+  boolean joinEstimatesAvailable() { return joinEstimatesAvailable; }
+  long joinEstimatedRows(int stage) { return joinEstimatedRows[stage]; }
 
   boolean hasPhysicalJoinStrategy() {
     return physicalJoinStrategyStage() >= 0;

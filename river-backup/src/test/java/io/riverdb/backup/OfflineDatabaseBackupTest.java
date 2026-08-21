@@ -7,10 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.sql.SqlExecutionResult;
+import io.riverdb.engine.sql.SqlScanCursor;
+import io.riverdb.engine.sql.SqlScanRowResult;
 import io.riverdb.engine.sql.SqlSession;
 import io.riverdb.engine.sql.SqlSessionOpenResult;
 import java.io.IOException;
@@ -110,6 +113,9 @@ final class OfflineDatabaseBackupTest {
                 + "FROM accounts a JOIN regions r ON a.region=r.id "
                 + "JOIN countries c ON r.country=c.id",
             command));
+    assertEquals(StatusCode.OK, session.execute("ANALYZE accounts", command));
+    assertEquals(StatusCode.OK, session.execute("ANALYZE regions", command));
+    assertEquals(StatusCode.OK, session.execute("ANALYZE countries", command));
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", command));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
@@ -167,6 +173,7 @@ final class OfflineDatabaseBackupTest {
     int joinedLabelLength = command.copyTextAt(1, joinedLabel, 0);
     assertEquals(4, joinedLabelLength);
     assertEquals("東京地域", new String(joinedLabel, 0, joinedLabelLength));
+    assertRestoredStatisticsPlan(session, command);
     assertEquals(StatusCode.OK, session.execute("DROP VIEW unicode_totals", command));
     assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE accounts", command));
     assertEquals(StatusCode.CONFLICT, session.execute("DROP TABLE regions", command));
@@ -223,5 +230,26 @@ final class OfflineDatabaseBackupTest {
         StatusCode.CORRUPTION,
         backup.restore(backupDirectory, corruptRestore, restoreResult));
     assertFalse(restoreResult.isComplete());
+  }
+
+  private static void assertRestoredStatisticsPlan(
+      SqlSession session, SqlExecutionResult result) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "EXPLAIN SELECT a.id,r.id,c.id FROM accounts a "
+                + "JOIN regions r ON a.region=r.id "
+                + "JOIN countries c ON r.country=c.id",
+            cursor));
+    int exact = 0;
+    StatusCode status;
+    while ((status = session.nextScan(cursor, row)).isOk()) {
+      if (row.valueAt(0) == PackedText.pack("exact")) exact++;
+    }
+    assertEquals(StatusCode.CONFLICT, status);
+    assertEquals(3, exact);
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 }

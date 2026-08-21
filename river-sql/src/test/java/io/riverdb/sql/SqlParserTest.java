@@ -2594,6 +2594,23 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesAnalyzeTableAndRecoversFromMalformedInput() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(StatusCode.OK, parser.parse("ANALYZE accounts", command));
+    assertEquals(SqlCommandType.ANALYZE_TABLE, command.type());
+    assertName("accounts", command.tableName());
+    assertEquals(StatusCode.OK, parser.parse("ANALYZE TABLE regions", command));
+    assertEquals(SqlCommandType.ANALYZE_TABLE, command.type());
+    assertName("regions", command.tableName());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("ANALYZE", command));
+    assertEquals(StatusCode.OK, parser.parse("ANALYZE countries", command));
+    assertName("countries", command.tableName());
+  }
+
+  @Test
   void rejectsMalformedUnsupportedAndOverflowInput() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();

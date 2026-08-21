@@ -129,6 +129,30 @@ final class RelationalCatalogDdl {
         ? session.indexedSession().delete(key.space(), key.key()) : status;
   }
 
+  StatusCode writeStatistics(
+      RelationalSession session,
+      TableDefinition table,
+      TableStatistics statistics) {
+    if (table == null
+        || !table.isOwnedBy(schemaGate)
+        || statistics == null
+        || !statistics.canonicalFor(table)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long statisticsKey = RelationalKey.tableStatisticsKey(table.tableId());
+    CatalogStatisticsCodec.encode(output, statistics);
+    StatusCode status = session.indexedSession().fetchByKey(
+        RelationalKey.CATALOG_SEQUENCE_SPACE, statisticsKey, catalogRow);
+    if (status.isOk()) {
+      return session.indexedSession().update(
+          RelationalKey.CATALOG_SEQUENCE_SPACE, statisticsKey, output);
+    }
+    return status == StatusCode.CONFLICT
+        ? session.indexedSession().insert(
+            RelationalKey.CATALOG_SEQUENCE_SPACE, statisticsKey, output)
+        : status;
+  }
+
   private StatusCode availableName(
       RelationalSession session, CharSequence name) {
     StatusCode status = RelationalKey.catalogTableKey(name, key);

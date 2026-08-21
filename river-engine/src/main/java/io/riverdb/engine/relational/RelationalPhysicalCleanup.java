@@ -182,7 +182,18 @@ final class RelationalPhysicalCleanup {
     if (status.isOk()) {
       status = session.indexedSession().delete(catalogKey.space(), catalogKey.key());
     }
+    if (status.isOk()) status = deleteStatistics(session, table.tableId());
     return finishTransaction(session, outcome, status);
+  }
+
+  private StatusCode deleteStatistics(RelationalSession session, int tableId) {
+    long key = RelationalKey.tableStatisticsKey(tableId);
+    StatusCode status = session.indexedSession().fetchByKey(
+        RelationalKey.CATALOG_SEQUENCE_SPACE, key, catalogRow.row());
+    if (status == StatusCode.CONFLICT) return StatusCode.OK;
+    return status.isOk()
+        ? session.indexedSession().delete(RelationalKey.CATALOG_SEQUENCE_SPACE, key)
+        : status;
   }
 
   private int collectIndexCatalogKeys(

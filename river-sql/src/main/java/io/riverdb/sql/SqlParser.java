@@ -195,10 +195,8 @@ public final class SqlParser {
   }
 
   private StatusCode parseDataStatement(CharSequence sql, SqlCommand result) {
-    if (consumeKeyword(sql, "SHOW")) return parseShow(sql, result);
-    if (consumeKeyword(sql, "ALTER")) return catalogCommands.parseAlter(sql, result);
-    if (consumeKeyword(sql, "DROP")) return catalogCommands.parseDrop(sql, result);
-    if (consumeKeyword(sql, "CREATE")) return creates.parse(sql, result);
+    StatusCode catalog = parseCatalogStatement(sql, result);
+    if (catalog != null) return catalog;
     if (consumeKeyword(sql, "INSERT")) {
       StatusCode status = dataChanges.parseInsert(sql, result);
       if (status.isOk()) result.setInsert();
@@ -216,6 +214,20 @@ public final class SqlParser {
       return status;
     }
     return StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private StatusCode parseCatalogStatement(CharSequence sql, SqlCommand result) {
+    if (consumeKeyword(sql, "ANALYZE")) return parseAnalyze(sql, result);
+    if (consumeKeyword(sql, "SHOW")) return parseShow(sql, result);
+    if (consumeKeyword(sql, "ALTER")) return catalogCommands.parseAlter(sql, result);
+    if (consumeKeyword(sql, "DROP")) return catalogCommands.parseDrop(sql, result);
+    return consumeKeyword(sql, "CREATE") ? creates.parse(sql, result) : null;
+  }
+
+  private StatusCode parseAnalyze(CharSequence sql, SqlCommand result) {
+    consumeKeyword(sql, "TABLE");
+    result.set(SqlCommandType.ANALYZE_TABLE, 0, 0);
+    return identifier(sql, result.writableTableName());
   }
 
   private StatusCode parseBegin(CharSequence sql, SqlCommand result) {

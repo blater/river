@@ -90,6 +90,17 @@ public final class RelationalSession {
     return catalogReader.resolveView(name, result);
   }
 
+  public StatusCode resolveStatistics(
+      TableDefinition table, TableStatistics result) {
+    return catalogReader.resolveStatistics(table, result);
+  }
+
+  public StatusCode writeStatistics(
+      TableDefinition table, TableStatistics statistics) {
+    if (!registeredTransaction) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return catalogDdl.writeStatistics(this, table, statistics);
+  }
+
   public StatusCode beginCatalogObjectScan(CatalogObjectCursor cursor) {
     if (!registeredTransaction) {
       return StatusCode.INVALID_EXTERNAL_INPUT;

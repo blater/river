@@ -29,6 +29,7 @@ final class SqlCommandDispatcher {
   private final TableDefinition referencedTable = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
   private final ByteBuffer row = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
+  private SqlAnalyzeTableExecution analyzeTables;
 
   SqlCommandDispatcher(
       RelationalDatabase relational,
@@ -62,8 +63,17 @@ final class SqlCommandDispatcher {
         || type == SqlCommandType.ALTER_TABLE_RENAME_COLUMN
         || type == SqlCommandType.ALTER_INDEX_RENAME
         || type == SqlCommandType.NEXT_SEQUENCE_VALUE
+        || type == SqlCommandType.ANALYZE_TABLE
         || type == SqlCommandType.SCALAR_EXPRESSION
         || type == SqlCommandType.CHECKPOINT;
+  }
+
+  boolean hasResources() {
+    return analyzeTables != null && analyzeTables.hasResources();
+  }
+
+  StatusCode closeResources() {
+    return analyzeTables == null ? StatusCode.OK : analyzeTables.closeResources();
   }
 
   StatusCode execute(
@@ -141,6 +151,9 @@ final class SqlCommandDispatcher {
       }
       return status;
     }
+    if (type == SqlCommandType.ANALYZE_TABLE) {
+      return executeAnalyzeTable(command, atomic, result);
+    }
     if (type == SqlCommandType.CREATE_VIEW || type == SqlCommandType.DROP_VIEW) {
       return executeViewChange(command, viewValidator, atomic, result);
     }
@@ -148,6 +161,26 @@ final class SqlCommandDispatcher {
       return executeCreateTable(command, atomic, result);
     }
     return executeCatalogMutation(command, atomic, result);
+  }
+
+  private StatusCode executeAnalyzeTable(
+      SqlCommand command,
+      SqlAtomicStatementLifecycle atomic,
+      SqlExecutionResult result) {
+    StatusCode status = atomic.begin(IsolationLevel.SERIALIZABLE);
+    boolean began = status.isOk();
+    boolean implicit = began && atomic.implicit();
+    if (status.isOk()) {
+      if (analyzeTables == null) analyzeTables = new SqlAnalyzeTableExecution(session);
+      status = analyzeTables.analyze(command.tableName());
+    }
+    if (began) status = atomic.finish(status);
+    if (status.isOk()) {
+      long commitSequence = implicit ? transactions.commitSequence() : 0;
+      result.setUpdate(analyzeTables.rowCount(), commitSequence);
+      result.setTransaction(transactions.isExplicit(), commitSequence);
+    }
+    return status;
   }
 
   private StatusCode executeCreateTable(

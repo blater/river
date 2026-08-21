@@ -121,6 +121,11 @@ final class SqlBinder {
     for (int role = first; status.isOk() && role < joins.roleCount(); role++) {
       status = session.resolveTable(joins.tableName(role), bound.joinRole(role));
     }
+    for (int role = 0; status.isOk() && role < joins.roleCount(); role++) {
+      status = session.resolveStatistics(
+          bound.joinRole(role), bound.joinStatistics(role));
+      if (status == StatusCode.CONFLICT) status = StatusCode.OK;
+    }
     return status;
   }
 

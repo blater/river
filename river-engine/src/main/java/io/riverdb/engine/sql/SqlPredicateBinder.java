@@ -12,6 +12,7 @@ final class SqlPredicateBinder {
   private final SqlJoinAccessSelector joinAccess = new SqlJoinAccessSelector();
   private final SqlJoinHashSelector joinHash = new SqlJoinHashSelector();
   private final SqlJoinMergeSelector joinMerge = new SqlJoinMergeSelector();
+  private final SqlJoinPlanner joinPlanner = new SqlJoinPlanner();
 
   StatusCode bind(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
@@ -68,6 +69,7 @@ final class SqlPredicateBinder {
           stage);
     }
     if (status.isOk()) joinMerge.select(command, bound);
+    if (status.isOk()) joinPlanner.select(command, bound);
     return status;
   }
 

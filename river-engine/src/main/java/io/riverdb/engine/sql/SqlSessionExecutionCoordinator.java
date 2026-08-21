@@ -426,7 +426,8 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode retryPendingCleanup() {
-    StatusCode status = pointCommands.closeResources();
+    StatusCode status = dispatcher.closeResources();
+    if (status.isOk()) status = pointCommands.closeResources();
     if (status.isOk() && atomic.isActive()) {
       status = atomic.retry();
     }
