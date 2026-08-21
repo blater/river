@@ -25,10 +25,10 @@ or gate has passed.
 | --- | --- |
 | Integration branch | `master` |
 | Current wave | M5 useful v1 SQL surface |
-| Current target | [Bounded n-table JOIN sort-fed merge and cost planning](../plans/m5-n-table-joins.md) |
+| Current target | [Bounded n-table JOIN cost planning](../plans/m5-n-table-joins.md) |
 | Next product slice | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | `48a239d` (2026-08-21) — conservative stage-zero index-ordered equality merge with duplicate-run spill, LEFT residual semantics, direct/P3 plan truth and warmed allocation; full `river-engine` suite and design-debt gate green. The broader J1-J5 SQL/engine/backup evidence at `4c50133` remains retained |
+| Latest green functional checkpoint | `7917393` (2026-08-21) — right-sort-fed and later-stage equality merge through the existing row store, with LEFT/null semantics, P3 composition, exact plan truth, 1,025-row spill, warmed allocation, full `river-engine`, focused backup, and design-debt gates green. The broader J1-J5 SQL/engine/backup evidence at `4c50133` remains retained |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
@@ -39,7 +39,7 @@ reviewed, and verified together from the exact detached integration commit.
 | Purpose | Branch | Commit | Status |
 | --- | --- | --- | --- |
 | Shipped bounded-join alpha | `master` | `4c50133` | Clean, pushed, and accepted through J5 |
-| Join continuation | `feature/n-table-joins` | `48a239d` | J6a index-ordered merge accepted; sort-fed/general J6b and J7 costing remain planned |
+| Join continuation | `feature/n-table-joins` | `7917393` | J6a/J6b merge accepted; J7 bounded statistics, costing, and inner-island planning remain planned |
 | P4C recovery snapshot | `wip/p4c-subqueries-snapshot` | `794641e` | Clean and pushed immutable checkpoint of the pre-integration work |
 | P4C continuation | `feature/p4c-subqueries` | `19abbff` | Clean, pushed, rebased onto `4c50133`, and main-source compile green; not acceptance-ready |
 
@@ -109,7 +109,7 @@ SQL conformance profile.
 | U02c `BOOLEAN` and `DECIMAL(p,s)` | passed | Accepted exact representation/math/casts, predicate/aggregate/index/constraint, JDBC, recovery, and error evidence |
 | U02d local temporal types | passed | Accepted strict local temporal grammar/codec, catalog/row/default/check validation, DATE index, DML/predicates/update, corruption, and checkpoint/reopen evidence; TIME index admission was corrected in U02f after proving its full domain fits the existing key |
 | U02e time-zone semantics | passed | Accepted UTC instant storage, strict fixed/IANA area zones, DST gap/overlap behavior, session-state rollback semantics, tzdb reporting, statement-stable defaults, catalog v13, and checkpoint/reopen evidence |
-| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables, P4A's common bounded Boolean/3VL program, and bounded two-to-eight-role computed `INNER`/`LEFT JOIN` chains through direct/P3/order/spill execution. Durable views use strict UTF-8-v4 ordered lineage for up to 32 physical roles, including aliased self-joins, through checkpoint/reopen and backup/restore. Typed hash equality is admitted in memory with explicit bounded spill fallback; merge/cost planning, computed correlation, and broader CHECK/expression contexts remain separate work. |
+| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables, P4A's common bounded Boolean/3VL program, and bounded two-to-eight-role computed `INNER`/`LEFT JOIN` chains through direct/P3/order/spill execution. Durable views use strict UTF-8-v4 ordered lineage for up to 32 physical roles, including aliased self-joins, through checkpoint/reopen and backup/restore. Typed hash equality has bounded spill fallback; merge supports existing-index order plus right-sort-fed and proven later-stage order. Cost planning, computed correlation, and broader CHECK/expression contexts remain separate work. |
 | U03a JDBC/protocol types | passed | Accepted protocol v3 binary values/parameters, authenticated all-type JDBC/CLI, Java-time/decimal mappings, exact metadata, conversion matrix, warnings, generated keys, bounded batches, failure states, and ownership/erasure evidence |
 | U06a type/temporal gate | active | Unified embedded/authenticated-JDBC/CLI/checkpoint/backup/fault fixture and independent relational-semantics review remain |
 

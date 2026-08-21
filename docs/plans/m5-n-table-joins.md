@@ -1,15 +1,15 @@
 # M5 bounded n-table JOIN delivery plan
 
-Status: J1-J5 accepted and shipped at alpha checkpoint `4c50133`; conservative
-index-ordered J6a merge accepted at `48a239d`; sort-fed J6b merge and J7 cost
-planning remain planned.
+Status: J1-J5 accepted and shipped at alpha checkpoint `4c50133`; J6a
+index-ordered merge accepted at `48a239d`; J6b right-sort-fed and later-stage
+merge accepted at `7917393`; J7 cost planning remains planned.
 
 Owner: relational execution lead. Catalog-format changes require an independent
 durability/compatibility review before promotion.
 
-Repository checkpoint: `master` contains the pushed J1-J5 alpha; J6a is the
-`48a239d` code checkpoint on `feature/n-table-joins`. P4C continues
-independently on `feature/p4c-subqueries`; it is not part of this checkpoint.
+Repository checkpoint: `master` contains the pushed J1-J5 alpha; J6b is the
+`7917393` code checkpoint on `feature/n-table-joins`. P4C continues independently
+on `feature/p4c-subqueries`; it is not part of this checkpoint.
 
 ## Outcome
 
@@ -199,15 +199,21 @@ so `LEFT JOIN` null extension occurs only after the entire equal run. Duplicate
 runs too large for the row scratch spill through the existing sort store. Merge
 join must not introduce another sorter, collation, text owner, or spill format.
 
-The accepted J6a alpha checkpoint is deliberately conservative. It selects a
+The accepted J6a checkpoint is deliberately conservative. It selects a
 stage-zero equality merge only when the existing primary/value indexes already
 provide both orders, no stronger root predicate access would be displaced, no
 HASH stage has already claimed the one shared strategy workspace, and all
 order-sensitive programs are proven total. It reuses `SqlBlockRowStore` for a
 single duplicate run, including its existing spill and resource bounds.
-Explicit sort-fed inputs, later-stage merge, cross-descriptor ordering, and
-cost-based choice remain J6b/J7 work; nested/index and J5 HASH remain the
-truthful fallbacks.
+
+The accepted J6b checkpoint sorts an unindexed right relation once through the
+existing `SqlBlockRowStore`, then feeds that order into the same merge stage. It
+also admits a later physical merge stage when equality links prove that the
+incoming composite already carries the required order. This preserves
+streaming incoming composites and does not add a second sorter, spill format,
+or join executor. Sorting/materializing the incoming composite, cross-descriptor
+ordering, and cost-based choice remain J7 work; nested/index and J5 HASH remain
+the truthful fallbacks.
 
 The query owns one reusable physical-strategy workspace and at most the two
 spill stores already required to materialize/sort one stage. Stages reuse it
@@ -308,9 +314,10 @@ dropped. Backup copies v4 bytes unchanged and restore revalidates them.
 6. **J6a — index-ordered merge (alpha accepted):** reuse existing index order
    and row-store spill for one stage-zero duplicate run, retain per-left-row
    residual match state, and preserve established root-access/HASH priority.
-7. **J6b — sort-fed/general merge:** feed compatible order from the existing
-   sort/spill owner and admit later physical stages without a second executor
-   or spill format.
+7. **J6b — right-sort-fed/later-stage merge (accepted):** sort an unindexed
+   right relation through the existing row store and admit later physical
+   stages when the incoming equality chain already proves compatible order,
+   without a second executor or spill format.
 8. **J7 — cost planning:** add bounded catalog statistics/`ANALYZE`, fixed-array
    inner-island enumeration, LEFT barriers, deterministic strategy costs,
    physical order/estimate reporting, invalidation, reopen, and backup evidence.
