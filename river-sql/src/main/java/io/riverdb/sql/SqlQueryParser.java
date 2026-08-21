@@ -32,7 +32,7 @@ final class SqlQueryParser {
   StatusCode parseAppend(CharSequence sql, SqlQuery query, SqlCommand result) {
     if (sql == null || query == null || result == null
         || skipExplainPrefix(sql) != skipSpaces(sql, 0)
-        || nested.hasPredicateSubquery(sql, 0, sql.length())) {
+        || blockDepth(sql) < 0) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     result.reset();
@@ -49,20 +49,23 @@ final class SqlQueryParser {
   }
 
   int blockDepth(CharSequence sql) {
-    if (sql == null || skipExplainPrefix(sql) != skipSpaces(sql, 0)
-        || nested.hasPredicateSubquery(sql, 0, sql.length())) return -1;
+    if (sql == null || skipExplainPrefix(sql) != skipSpaces(sql, 0)) return -1;
     int start = 0;
     int end = sql.length();
     int depth = 1;
-    int open;
-    while ((open = findDerivedSource(sql, start, end)) >= 0) {
+    while (true) {
+      int open = findDerivedSource(sql, start, end);
+      if (open < 0) {
+        return nested.hasPredicateSubquery(sql, start, end) ? -1 : depth;
+      }
       int close = matchingCloseParenthesis(sql, open, end);
       if (close < 0) return -1;
+      if (nested.hasPredicateSubquery(sql, start, open)
+          || nested.hasPredicateSubquery(sql, close + 1, end)) return -1;
       depth++;
       start = open + 1;
       end = close;
     }
-    return depth;
   }
 
   private StatusCode parseDerivedBlocks(
