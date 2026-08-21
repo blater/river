@@ -45,8 +45,8 @@ final class SqlJoinAccessSelector {
     int leftColumn = program.rawColumn(leaf, left);
     int rightColumn = program.rawColumn(leaf, right);
     if (leftColumn < 0 || rightColumn < 0) return;
-    int leftScope = program.scope(leaf, left, 0);
-    int rightScope = program.scope(leaf, right, 0);
+    int leftScope = context.localRole(program.scope(leaf, left, 0));
+    int rightScope = context.localRole(program.scope(leaf, right, 0));
     int rightRole = stage + 1;
     if (leftScope == rightScope
         || leftScope != rightRole && rightScope != rightRole) return;

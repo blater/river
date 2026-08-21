@@ -66,11 +66,26 @@ final class SqlBooleanPredicateBinder {
       BoundSqlStatement statement,
       BoundSqlQuery query,
       int block) {
-    joinRoles = 0;
+    BoundSqlQuery.Block current = query.block(block);
+    joinRoles = current == null ? 0 : current.roleCount();
     having = false;
     return bind(
         command, command.wherePredicates(), statement.nestedBoolean(block),
         statement, null, null, query, block);
+  }
+
+  StatusCode bindNestedJoinOn(
+      SqlCommand command,
+      BoundSqlStatement statement,
+      SqlBoundJoinContext context,
+      BoundSqlQuery query,
+      int block,
+      int stage) {
+    joinRoles = stage + 2;
+    having = false;
+    return bind(
+        command, command.joinChain().onPredicates(stage), context.onBoolean(stage),
+        statement, context, null, query, block);
   }
 
   private StatusCode bind(

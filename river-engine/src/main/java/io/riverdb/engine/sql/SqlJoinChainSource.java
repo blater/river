@@ -8,7 +8,7 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Resumable left-deep executor for one bounded canonical JOIN chain. */
 final class SqlJoinChainSource {
   private final SqlExpressionEvaluator expressions;
-  private final SqlBoundPredicateEvaluator predicates;
+  private final SqlJoinPredicateCallback predicates;
   private final SqlJoinChainCursors cursors;
   private final SqlJoinStageCandidates physical;
   private final SqlJoinRoleRows rows;
@@ -38,7 +38,7 @@ final class SqlJoinChainSource {
   SqlJoinChainSource(
       io.riverdb.engine.relational.RelationalSession session,
       SqlExpressionEvaluator evaluator,
-      SqlBoundPredicateEvaluator predicateEvaluator) {
+      SqlJoinPredicateCallback predicateEvaluator) {
     expressions = evaluator;
     predicates = predicateEvaluator;
     cursors = new SqlJoinChainCursors(session);

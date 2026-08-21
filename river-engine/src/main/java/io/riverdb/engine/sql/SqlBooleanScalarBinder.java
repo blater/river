@@ -74,7 +74,8 @@ final class SqlBooleanScalarBinder {
     if (operator == SqlScalarExpression.COLUMN) {
       if (nested != null) {
         return nestedColumn(
-            command, target, nested, nestedBlock, leaf, program, operator, operand);
+            command, target, nested, nestedBlock, visibleRoles,
+            leaf, program, operator, operand);
       }
       return column(
           command, target, statement, context, schema, leaf, program,
@@ -104,6 +105,7 @@ final class SqlBooleanScalarBinder {
       SqlBoundBooleanPredicateProgram target,
       BoundSqlQuery query,
       int block,
+      int visibleRoles,
       int leaf,
       int program,
       int operator,
@@ -112,7 +114,8 @@ final class SqlBooleanScalarBinder {
     CharSequence name = command.projectionSymbolName(symbol);
     CharSequence qualifier = command.projectionSymbolTable(symbol);
     if (name == null || qualifier == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = nestedColumns.resolve(query, block, qualifier, name);
+    StatusCode status = nestedColumns.resolve(
+        query, block, visibleRoles, qualifier, name);
     if (!status.isOk()) return status;
     int sourceBlock = nestedColumns.block();
     int sourceRole = nestedColumns.role();

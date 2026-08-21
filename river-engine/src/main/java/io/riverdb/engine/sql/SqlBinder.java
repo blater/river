@@ -108,8 +108,16 @@ final class SqlBinder {
     SqlJoinChain joins = command.joinChain();
     if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
     StatusCode status = predicates.bindJoin(command, bound, context);
-    if (status.isOk()) status = joinRows.bindJoin(command, bound, context);
-    return status;
+    return status.isOk() ? bindJoinProjection(command, bound, context) : status;
+  }
+
+  StatusCode bindJoinProjection(
+      SqlCommand command,
+      BoundSqlStatement bound,
+      SqlBoundJoinContext context) {
+    return command.joinChain() == null
+        ? StatusCode.FEATURE_NOT_SUPPORTED
+        : joinRows.bindJoin(command, bound, context);
   }
 
   StatusCode resolveJoinRoles(

@@ -3,7 +3,6 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalSession;
-import io.riverdb.sql.SqlQuery;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Executes canonical predicate-subquery leaves with depth-owned cursor frames. */
@@ -12,14 +11,7 @@ final class SqlSubqueryGraphExecution
 
   private final BoundSqlStatement bound;
   private final BoundSqlQuery query;
-  private final SqlExpressionEvaluator expressions;
-  private final SqlTemporalContext temporal;
-  private final SqlBooleanPredicateWorkspace[] workspaces =
-      new SqlBooleanPredicateWorkspace[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final SqlBooleanPredicateEvaluator[] evaluators =
-      new SqlBooleanPredicateEvaluator[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final SqlBooleanPredicateEvaluator.Match[] matches =
-      new SqlBooleanPredicateEvaluator.Match[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final SqlSubqueryPredicateBank predicates;
   private final SqlSubqueryFrames frames;
   private final SqlSubqueryResultCache cache;
   private final SqlSubqueryPlan plan;
@@ -33,13 +25,13 @@ final class SqlSubqueryGraphExecution
       SqlTemporalContext temporalContext) {
     bound = statement;
     query = statement.executableQuery;
-    expressions = evaluator;
-    temporal = temporalContext;
     projections = new SqlNestedProjectionExecution(
         statement, evaluator, temporalContext);
     cache = new SqlSubqueryResultCache(query, evaluator);
     frames = new SqlSubqueryFrames(
         relationalSession, statement, evaluator, temporalContext);
+    predicates = new SqlSubqueryPredicateBank(
+        statement, evaluator, temporalContext, this, frames);
     plan = new SqlSubqueryPlan(statement, frames.access());
     scanner = new SqlSubqueryValueScanner(
         query, frames, projections, cache, evaluator, this, plan);
@@ -53,17 +45,7 @@ final class SqlSubqueryGraphExecution
     plan.reset();
     int root = query.sourceBlockCount() - 1;
     for (int block = root; status.isOk() && block < query.blockCount(); block++) {
-      int frame = query.blockDepth(block) - 1;
-      if (workspaces[frame] == null) {
-        workspaces[frame] = new SqlBooleanPredicateWorkspace(expressions, temporal);
-      }
-      if (evaluators[block] == null) {
-        evaluators[block] = new SqlBooleanPredicateEvaluator(
-            workspaces[frame], temporal);
-        matches[block] = new SqlBooleanPredicateEvaluator.Match();
-      }
-      status = evaluators[block].prepare(
-          bound.query.block(block), bound.nestedBoolean(block));
+      status = predicates.prepare(block);
       if (status.isOk() && block > root) status = projections.prepare(block);
       if (status.isOk()) frames.prepare(
           block, block > root && text(query.block(block).projectionType()));
@@ -82,16 +64,7 @@ final class SqlSubqueryGraphExecution
       HeapRowResult row,
       SqlBooleanPredicateEvaluator.Match result) {
     frames.activate(block, key, row);
-    StatusCode status = evaluators[block].matchesNested(
-        bound.query.block(block),
-        bound.nestedBoolean(block),
-        key,
-        row,
-        frames.table(block, 0),
-        this,
-        frames,
-        result);
-    return status;
+    return predicates.matches(block, key, row, result);
   }
 
   @Override
@@ -105,19 +78,11 @@ final class SqlSubqueryGraphExecution
 
   @Override
   public StatusCode accept(int child) {
-    return evaluators[child].matchesNested(
-        bound.query.block(child),
-        bound.nestedBoolean(child),
-        frames.key(child, 0),
-        frames.row(child, 0),
-        frames.table(child, 0),
-        this,
-        frames,
-        matches[child]);
+    return predicates.accept(child);
   }
 
   @Override
-  public boolean accepted(int child) { return matches[child].matched(); }
+  public boolean accepted(int child) { return predicates.accepted(child); }
 
   HeapRowResult evaluatedRow(int block, HeapRowResult original) {
     return frames.evaluatedRow(block, original);
@@ -140,12 +105,14 @@ final class SqlSubqueryGraphExecution
 
   SqlSubqueryPlan plan() { return plan; }
 
+  SqlJoinPredicateCallback joinPredicates(int block) {
+    return predicates.joinPredicates(block);
+  }
+
   StatusCode reset() {
     StatusCode status = close();
     if (!status.isOk()) return status;
-    for (int block = 0; block < evaluators.length; block++) {
-      if (evaluators[block] != null) evaluators[block].reset();
-    }
+    predicates.reset();
     projections.reset();
     return StatusCode.OK;
   }

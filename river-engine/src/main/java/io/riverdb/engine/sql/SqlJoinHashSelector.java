@@ -49,8 +49,8 @@ final class SqlJoinHashSelector {
     int leftColumn = program.rawColumn(leaf, left);
     int rightColumn = program.rawColumn(leaf, right);
     if (leftColumn < 0 || rightColumn < 0) return;
-    int leftRole = program.scope(leaf, left, 0);
-    int rightRole = program.scope(leaf, right, 0);
+    int leftRole = context.localRole(program.scope(leaf, left, 0));
+    int rightRole = context.localRole(program.scope(leaf, right, 0));
     int current = stage + 1;
     if (leftRole == rightRole
         || leftRole != current && rightRole != current) return;

@@ -492,7 +492,9 @@ final class SqlSessionExecutionCoordinator {
       status = binder.bindQueryBlocks(session, bound);
     }
     if (status.isOk()) {
-      status = binder.bindJoin(bound.command, bound, context);
+      status = bound.executableQuery.edgeCount() == 0
+          ? binder.bindJoin(bound.command, bound, context)
+          : binder.bindJoinProjection(bound.command, bound, context);
     }
     if (status.isOk() && bound.command.isOrdered()) {
       status = binder.bindJoinOrder(bound.command, bound);
