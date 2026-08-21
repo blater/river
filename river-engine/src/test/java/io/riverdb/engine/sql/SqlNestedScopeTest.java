@@ -116,6 +116,28 @@ final class SqlNestedScopeTest {
     fixture.close();
   }
 
+  @Test
+  void keepsJoinedGraphExecutionFailClosedUntilP4C4(@TempDir Path root) {
+    Fixture fixture = open(root);
+    createFixture(fixture.session, fixture.result);
+
+    assertExplain(
+        fixture.session,
+        "EXPLAIN SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+            + "ON a.id=b.id WHERE EXISTS "
+            + "(SELECT i.id FROM inner_scope i WHERE i.id=a.id)",
+        StatusCode.FEATURE_NOT_SUPPORTED);
+    assertExplain(
+        fixture.session,
+        "EXPLAIN SELECT o.id FROM outer_scope o WHERE EXISTS "
+            + "(SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+            + "ON a.id=b.id WHERE a.id=o.id)",
+        StatusCode.FEATURE_NOT_SUPPORTED);
+    assertRows(fixture.session, "SELECT id FROM outer_scope", 1, 2);
+
+    fixture.close();
+  }
+
   private static void assertJoinedResolver(Fixture fixture) {
     RelationalSessionOpenResult opened = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, fixture.database.createSession(opened));
