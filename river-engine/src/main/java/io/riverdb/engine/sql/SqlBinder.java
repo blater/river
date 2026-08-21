@@ -5,6 +5,7 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
+import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.sql.SqlQuery;
 
 /** Resolves parser-owned names and literals into reusable execution state. */
@@ -96,13 +97,28 @@ final class SqlBinder {
   }
 
   StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
-    if (SqlBindingNames.matchesTable(command, command.joinTableName())
-        || command.joinTableAlias().length() > 0
-            && SqlBindingNames.matchesTable(command, command.joinTableAlias())) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    SqlJoinChain joins = command.joinChain();
+    if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
+    StatusCode status = predicates.bindJoin(command, bound);
+    if (status.isOk()) status = joinRows.bindJoin(command, bound);
+    return status.isOk() && joins.stageCount() != 1
+        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
+  }
+
+  StatusCode resolveJoinRoles(
+      RelationalSession session,
+      SqlCommand command,
+      BoundSqlStatement bound,
+      boolean resolveLeft) {
+    SqlJoinChain joins = command.joinChain();
+    if (joins == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    bound.beginJoinRoles(joins.roleCount());
+    int first = resolveLeft ? 0 : 1;
+    StatusCode status = StatusCode.OK;
+    for (int role = first; status.isOk() && role < joins.roleCount(); role++) {
+      status = session.resolveTable(joins.tableName(role), bound.joinRole(role));
     }
-    StatusCode status = joinRows.bindJoin(command, bound);
-    return status.isOk() ? predicates.bindJoin(command, bound) : status;
+    return status;
   }
 
   static boolean isValueAggregate(SqlCommandType type) {

@@ -6,8 +6,12 @@ final class SqlDerivedPredicateReferences {
 
   boolean valid(SqlCommand block, SqlCommand inner) {
     if (!valid(block, inner, block.wherePredicates())) return false;
-    return block.type() != SqlCommandType.JOIN_SCAN
-        || valid(block, inner, block.onPredicates());
+    SqlJoinChain joins = block.joinChain();
+    if (joins == null) return true;
+    for (int stage = 0; stage < joins.stageCount(); stage++) {
+      if (!valid(block, inner, joins.onPredicates(stage))) return false;
+    }
+    return true;
   }
 
   private static boolean valid(

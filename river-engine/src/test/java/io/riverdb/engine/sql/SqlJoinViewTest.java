@@ -145,12 +145,22 @@ final class SqlJoinViewTest {
 
   private static void assertSelfJoinBoundary(
       SqlSession session, SqlExecutionResult result) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.beginScan(
             "SELECT lid FROM (SELECT l.id AS lid FROM join_left l "
                 + "JOIN join_left r ON l.id=r.id) joined ORDER BY lid",
-            new SqlScanCursor()));
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(3, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         session.execute(

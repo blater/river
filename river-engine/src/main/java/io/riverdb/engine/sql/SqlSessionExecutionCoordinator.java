@@ -478,7 +478,8 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode prepareJoinQuery() {
-    StatusCode status = session.resolveTable(bound.command.joinTableName(), bound.joinTable);
+    StatusCode status = binder.resolveJoinRoles(
+        session, bound.command, bound, false);
     if (status.isOk()) {
       status = binder.bindQueryBlocks(session, bound);
     }

@@ -23,8 +23,6 @@ public final class SqlCommand {
   private final SqlIdentifier tableName = new SqlIdentifier();
   private final SqlIdentifier renamedTableName = new SqlIdentifier();
   private final SqlIdentifier tableAlias = new SqlIdentifier();
-  private final SqlIdentifier joinTableName = new SqlIdentifier();
-  private final SqlIdentifier joinTableAlias = new SqlIdentifier();
   private final SqlIdentifier indexName = new SqlIdentifier();
   private final SqlIdentifier renamedIndexName = new SqlIdentifier();
   private final SqlIdentifier sequenceName = new SqlIdentifier();
@@ -37,7 +35,7 @@ public final class SqlCommand {
   private final SqlAggregateSet aggregates = new SqlAggregateSet();
   private final SqlBooleanPredicateProgram wherePredicates =
       new SqlBooleanPredicateProgram();
-  private SqlBooleanPredicateProgram onPredicates;
+  private SqlJoinChain joinChain;
   private final SqlBooleanPredicateProgram booleanHavingPredicates =
       new SqlBooleanPredicateProgram();
   private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
@@ -85,7 +83,6 @@ public final class SqlCommand {
   private boolean readCommittedTransaction;
   private boolean serializableTransaction;
   private boolean descendingOrder;
-  private boolean leftJoin;
   private boolean primaryKeyIdentity;
   private int insertRowCount;
   private int insertColumnCount;
@@ -108,8 +105,6 @@ public final class SqlCommand {
     tableName.reset();
     renamedTableName.reset();
     tableAlias.reset();
-    joinTableName.reset();
-    joinTableAlias.reset();
     indexName.reset();
     renamedIndexName.reset();
     sequenceName.reset();
@@ -120,7 +115,7 @@ public final class SqlCommand {
     mutationExpressions.reset();
     aggregates.reset();
     wherePredicates.reset();
-    if (onPredicates != null) onPredicates.reset();
+    if (joinChain != null) joinChain.reset();
     booleanHavingPredicates.reset();
     for (SqlIdentifier columnName : columnNames) {
       columnName.reset();
@@ -159,7 +154,6 @@ public final class SqlCommand {
     readCommittedTransaction = false;
     serializableTransaction = false;
     descendingOrder = false;
-    leftJoin = false;
     primaryKeyIdentity = false;
     insertRowCount = 0;
     insertColumnCount = 0;
@@ -183,10 +177,10 @@ public final class SqlCommand {
     }
   }
 
-  void discardOnPredicates() {
-    if (onPredicates != null) {
-      onPredicates.reset();
-      onPredicates = null;
+  void discardJoinChain() {
+    if (joinChain != null) {
+      joinChain.reset();
+      joinChain = null;
     }
   }
 
@@ -204,10 +198,6 @@ public final class SqlCommand {
     type = commandType;
     key = primaryKey;
     value = rowValue;
-  }
-
-  void setLeftJoin() {
-    leftJoin = true;
   }
 
   void setScan(long lowerInclusive, long upperExclusive, boolean bounded) {
@@ -250,17 +240,16 @@ public final class SqlCommand {
     projections.copyFrom(source.projections);
     aggregates.copyFrom(source.aggregates);
     wherePredicates.copyFrom(source.wherePredicates);
-    if (source.onPredicates != null && source.onPredicates.isAvailable()) {
-      writableOnPredicates().copyFrom(source.onPredicates);
+    boolean joined = source.joinChain != null && source.joinChain.stageCount() > 0;
+    if (joined) {
+      writableJoinChain().copyFrom(source.joinChain);
+    } else {
+      tableName.copyFrom(source.tableName);
+      tableAlias.copyFrom(source.tableAlias);
     }
     booleanHavingPredicates.copyFrom(source.booleanHavingPredicates);
     System.arraycopy(source.textBytes, 0, textBytes, 0, source.textBytesUsed);
     textBytesUsed = source.textBytesUsed;
-    tableName.copyFrom(source.tableName);
-    tableAlias.copyFrom(source.tableAlias);
-    joinTableName.copyFrom(source.joinTableName);
-    joinTableAlias.copyFrom(source.joinTableAlias);
-    leftJoin = source.leftJoin;
     for (int index = 0; index < source.columnCount; index++) {
       writableNextColumnName().copyFrom(source.columnNames[index]);
       writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
@@ -345,12 +334,17 @@ public final class SqlCommand {
     return tableAlias;
   }
 
-  SqlIdentifier writableJoinTableName() {
-    return joinTableName;
+  SqlJoinChain beginJoinChain() {
+    SqlJoinChain joins = writableJoinChain();
+    joins.begin(tableName, tableAlias);
+    tableName.reset();
+    tableAlias.reset();
+    return joins;
   }
 
-  SqlIdentifier writableJoinTableAlias() {
-    return joinTableAlias;
+  SqlJoinChain writableJoinChain() {
+    if (joinChain == null) joinChain = new SqlJoinChain();
+    return joinChain;
   }
 
   SqlIdentifier writableIndexName() {
@@ -400,11 +394,6 @@ public final class SqlCommand {
 
   SqlBooleanPredicateProgram writableWherePredicates() {
     return wherePredicates;
-  }
-
-  SqlBooleanPredicateProgram writableOnPredicates() {
-    if (onPredicates == null) onPredicates = new SqlBooleanPredicateProgram();
-    return onPredicates;
   }
 
   SqlBooleanPredicateProgram writableBooleanHavingPredicates() {
@@ -646,7 +635,8 @@ public final class SqlCommand {
   }
 
   public SqlIdentifier tableName() {
-    return tableName;
+    return joinChain == null || joinChain.roleCount() == 0
+        ? tableName : joinChain.tableName(0);
   }
 
   public SqlIdentifier renamedTableName() {
@@ -654,19 +644,8 @@ public final class SqlCommand {
   }
 
   public SqlIdentifier tableAlias() {
-    return tableAlias;
-  }
-
-  public SqlIdentifier joinTableName() {
-    return joinTableName;
-  }
-
-  public SqlIdentifier joinTableAlias() {
-    return joinTableAlias;
-  }
-
-  public boolean isLeftJoin() {
-    return leftJoin;
+    return joinChain == null || joinChain.roleCount() == 0
+        ? tableAlias : joinChain.alias(0);
   }
 
   public SqlIdentifier indexName() {
@@ -715,8 +694,28 @@ public final class SqlCommand {
     return wherePredicates;
   }
 
+  public SqlJoinChain joinChain() {
+    return joinChain != null && joinChain.stageCount() > 0 ? joinChain : null;
+  }
+
+  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
+  public SqlIdentifier joinTableName() {
+    return joinChain().tableName(1);
+  }
+
+  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
+  public SqlIdentifier joinTableAlias() {
+    return joinChain().alias(1);
+  }
+
+  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
+  public boolean isLeftJoin() {
+    return joinChain().isLeft(0);
+  }
+
+  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
   public SqlBooleanPredicateProgram onPredicates() {
-    return writableOnPredicates();
+    return joinChain().onPredicates(0);
   }
 
   public SqlBooleanPredicateProgram booleanHavingPredicates() {

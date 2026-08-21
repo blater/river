@@ -10,11 +10,13 @@ import io.riverdb.sql.SqlParser;
 final class SqlPersistedViewCompiler {
   private final SqlParser parser = new SqlParser();
   private final SqlCommand viewCommand = new SqlCommand();
+  private final SqlBinder binder;
   private final SqlBlockPlanBinder blockBinder;
   private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
   private final ViewDefinition definition = new ViewDefinition();
 
   SqlPersistedViewCompiler(SqlBinder binder) {
+    this.binder = binder;
     blockBinder = new SqlBlockPlanBinder(null, binder);
   }
 
@@ -83,11 +85,10 @@ final class SqlPersistedViewCompiler {
       RelationalSession session,
       BoundSqlStatement bound,
       SqlCommand base) {
-    StatusCode status = session.resolveTable(base.tableName(), bound.table);
     boolean join = base.type() == io.riverdb.sql.SqlCommandType.JOIN_SCAN;
-    if (status.isOk() && join) {
-      status = session.resolveTable(base.joinTableName(), bound.joinTable);
-    }
+    StatusCode status = join
+        ? binder.resolveJoinRoles(session, base, bound, true)
+        : session.resolveTable(base.tableName(), bound.table);
     int count = join ? 2 : 1;
     return status.isOk()
         && definition.tableCount() == count

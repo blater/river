@@ -5,6 +5,7 @@ import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
+import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.sql.SqlQuery;
 
 /** Reusable catalog-resolved state borrowed by one statement execution. */
@@ -19,12 +20,14 @@ final class BoundSqlStatement {
   final SqlBoundAggregateSet aggregates = new SqlBoundAggregateSet();
   final SqlBoundBooleanPredicateProgram whereBoolean =
       new SqlBoundBooleanPredicateProgram();
-  private SqlBoundBooleanPredicateProgram onBoolean;
+  private SqlBoundBooleanPredicateProgram[] onBooleans;
   final SqlBoundBooleanPredicateProgram havingBoolean =
       new SqlBoundBooleanPredicateProgram();
   private SqlBoundBlockPlans blockPlans;
   final TableDefinition table = new TableDefinition();
   final TableDefinition joinTable = new TableDefinition();
+  private TableDefinition[] additionalJoinTables;
+  private int joinRoleCount;
   final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updateResultTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -56,11 +59,12 @@ final class BoundSqlStatement {
     projectionPrograms.reset();
     aggregates.reset();
     whereBoolean.reset();
-    if (onBoolean != null) onBoolean.reset();
+    resetOnBoolean();
     havingBoolean.reset();
     if (blockPlans != null) blockPlans.reset();
     table.reset();
     joinTable.reset();
+    resetJoinRoles();
     predicateColumn = -1;
     predicateCount = 0;
     accessPredicate = -1;
@@ -85,15 +89,54 @@ final class BoundSqlStatement {
     return blockPlans;
   }
 
-  SqlBoundBooleanPredicateProgram onBoolean() {
-    if (onBoolean == null) onBoolean = new SqlBoundBooleanPredicateProgram();
-    return onBoolean;
+  SqlBoundBooleanPredicateProgram onBoolean() { return onBoolean(0); }
+
+  SqlBoundBooleanPredicateProgram onBoolean(int stage) {
+    if (stage < 0 || stage >= SqlJoinChain.MAXIMUM_JOIN_STAGES) return null;
+    if (onBooleans == null) {
+      onBooleans = new SqlBoundBooleanPredicateProgram[
+          SqlJoinChain.MAXIMUM_JOIN_STAGES];
+    }
+    if (onBooleans[stage] == null) {
+      onBooleans[stage] = new SqlBoundBooleanPredicateProgram();
+    }
+    return onBooleans[stage];
   }
 
-  boolean hasOnBoolean() { return onBoolean != null && onBoolean.available(); }
+  boolean hasOnBoolean() {
+    return onBooleans != null && onBooleans[0] != null
+        && onBooleans[0].available();
+  }
 
   void resetOnBoolean() {
-    if (onBoolean != null) onBoolean.reset();
+    if (onBooleans == null) return;
+    for (SqlBoundBooleanPredicateProgram program : onBooleans) {
+      if (program != null) program.reset();
+    }
+  }
+
+  void beginJoinRoles(int roles) {
+    joinRoleCount = roles;
+    if (roles <= 2 || additionalJoinTables != null) return;
+    additionalJoinTables = new TableDefinition[
+        SqlJoinChain.MAXIMUM_JOIN_ROLES - 2];
+    for (int role = 2; role < SqlJoinChain.MAXIMUM_JOIN_ROLES; role++) {
+      additionalJoinTables[role - 2] = new TableDefinition();
+    }
+  }
+
+  TableDefinition joinRole(int role) {
+    if (role < 0 || role >= joinRoleCount) return null;
+    if (role == 0) return table;
+    if (role == 1) return joinTable;
+    return additionalJoinTables == null ? null : additionalJoinTables[role - 2];
+  }
+
+  private void resetJoinRoles() {
+    if (additionalJoinTables != null) {
+      for (TableDefinition definition : additionalJoinTables) definition.reset();
+    }
+    joinRoleCount = 0;
   }
 
   boolean hasBlockPlans() {

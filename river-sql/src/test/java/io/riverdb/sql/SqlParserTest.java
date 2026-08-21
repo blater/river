@@ -59,7 +59,7 @@ final class SqlParserTest {
         2, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
     assertText("Aé😀", copied, text);
     command.reset();
-    assertEquals(0, command.onPredicates().leafCount());
+    assertNull(command.joinChain());
     assertEquals(StatusCode.OK, parser.parse("SELECT id FROM moments", command));
 
     assertEquals(
@@ -115,11 +115,12 @@ final class SqlParserTest {
     String join = "SELECT a.key FROM accounts a JOIN regions r ON r.id IN ("
         + members + ")";
     assertEquals(StatusCode.OK, parser.parse(join, command));
-    java.lang.reflect.Field on = SqlCommand.class.getDeclaredField("onPredicates");
-    on.setAccessible(true);
-    assertTrue(on.get(command) != null);
+    java.lang.reflect.Field joins = SqlCommand.class.getDeclaredField("joinChain");
+    joins.setAccessible(true);
+    assertTrue(joins.get(command) != null);
     command.reset();
-    assertTrue(on.get(command) != null);
+    assertTrue(joins.get(command) != null);
+    assertNull(command.joinChain());
 
     assertEquals(
         StatusCode.OK,
@@ -129,11 +130,11 @@ final class SqlParserTest {
     java.lang.reflect.Field blocks = SqlQuery.class.getDeclaredField("blocks");
     blocks.setAccessible(true);
     SqlCommand[] owned = (SqlCommand[]) blocks.get(query);
-    assertNull(on.get(owned[0]));
-    assertTrue(on.get(owned[1]) != null);
+    assertNull(joins.get(owned[0]));
+    assertTrue(joins.get(owned[1]) != null);
     query.reset();
-    assertNull(on.get(owned[0]));
-    assertTrue(on.get(owned[1]) != null);
+    assertNull(joins.get(owned[0]));
+    assertTrue(joins.get(owned[1]) != null);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parseQuery(
@@ -141,8 +142,94 @@ final class SqlParserTest {
                 + "ON missing.id=a.key) d",
             query,
             command));
-    for (SqlCommand block : owned) assertNull(on.get(block));
+    for (SqlCommand block : owned) assertNull(joins.get(block));
     assertEquals(StatusCode.OK, parser.parse("SELECT id FROM moments", command));
+  }
+
+  @Test
+  void ownsEightRoleJoinChainAndFailsClosedAtNinth() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    SqlCommand copied = new SqlCommand();
+    String eight = "SELECT a.id,h.id FROM a a "
+        + "JOIN b b ON a.id=b.id "
+        + "LEFT JOIN c c ON b.id=c.id "
+        + "INNER JOIN d d ON c.id=d.id "
+        + "JOIN e e ON d.id=e.id "
+        + "LEFT OUTER JOIN f f ON e.id=f.id "
+        + "JOIN g g ON f.id=g.id "
+        + "JOIN h h ON g.id=h.id WHERE h.id=a.id";
+    assertEquals(StatusCode.OK, parser.parse(eight, command));
+    SqlJoinChain chain = command.joinChain();
+    assertEquals(8, chain.roleCount());
+    assertEquals(7, chain.stageCount());
+    assertName("a", chain.tableName(0));
+    assertName("h", chain.tableName(7));
+    assertEquals(SqlJoinChain.LEFT, chain.joinKind(1));
+    assertEquals(SqlJoinChain.LEFT, chain.joinKind(4));
+    for (int stage = 0; stage < chain.stageCount(); stage++) {
+      assertEquals(stage + 1, chain.rightRole(stage));
+      assertEquals(1, chain.onPredicates(stage).leafCount());
+    }
+    copied.copyQueryFrom(command);
+    assertEquals(8, copied.joinChain().roleCount());
+    assertName("h", copied.joinChain().alias(7));
+    assertEquals(1, copied.joinChain().onPredicates(6).leafCount());
+    command.reset();
+    assertNull(command.joinChain());
+    assertEquals(StatusCode.OK, parser.parse("SELECT m.id FROM moments m", command));
+    assertNull(command.joinChain());
+
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parse(eight.replace(" WHERE", " JOIN i i ON h.id=i.id WHERE"), command));
+    assertEquals(StatusCode.OK, parser.parse("SELECT m.id FROM moments m", command));
+  }
+
+  @Test
+  void classifiesJoinFormsAndNamespacesExactly() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parse("SELECT a.id,b.id FROM t a JOIN t b ON id=id", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT x.id FROM a x JOIN b x ON x.id=x.id", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a JOIN b a ON a.id=a.id", command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse("SELECT a.id FROM a RIGHT JOIN b ON a.id=b.id", command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse("SELECT a.id FROM a JOIN b USING (id)", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a LEFT b ON a.id=b.id", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a OUTER JOIN b ON a.id=b.id", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a AS JOIN b ON a.id=b.id", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a AS WHERE", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a AS ON", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a ON", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a USING", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT a.id FROM a JOIN b AS WHERE ON a.id=b.id", command));
+    assertEquals(StatusCode.OK, parser.parse("SELECT m.id FROM moments m", command));
   }
 
   @Test

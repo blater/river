@@ -30,20 +30,27 @@ final class SqlPredicateBinder {
   }
 
   StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
-    bound.predicateCount = command.onPredicates().leafCount()
-        + command.wherePredicates().leafCount();
+    bound.predicateCount = command.wherePredicates().leafCount();
+    for (int stage = 0; stage < command.joinChain().stageCount(); stage++) {
+      bound.predicateCount += command.joinChain().onPredicates(stage).leafCount();
+    }
     bound.accessPredicate = -1;
     bound.predicateColumn = -1;
     bound.accessComparison = null;
     bound.joinOuterColumn = -1;
     bound.joinInnerColumn = -1;
-    StatusCode status = booleans.bindJoinOn(command, bound);
+    StatusCode status = StatusCode.OK;
+    for (int stage = 0;
+        status.isOk() && stage < command.joinChain().stageCount(); stage++) {
+      status = booleans.bindJoinOn(command, bound, stage);
+    }
     if (status.isOk()) status = booleans.bindJoinWhere(command, bound);
     if (status.isOk() && command.wherePredicates().isAvailable()) {
       access.select(command.wherePredicates(), bound.whereBoolean, bound);
     }
     if (status.isOk()) {
-      joinAccess.select(command.onPredicates(), bound.onBoolean(), bound);
+      joinAccess.select(
+          command.joinChain().onPredicates(0), bound.onBoolean(), bound);
     }
     return status;
   }

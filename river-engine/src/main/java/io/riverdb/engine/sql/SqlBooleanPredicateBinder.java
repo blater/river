@@ -8,11 +8,11 @@ import io.riverdb.sql.SqlScalarExpression;
 /** Resolves every scalar program and validates one Boolean predicate tree. */
 final class SqlBooleanPredicateBinder {
   private final SqlBooleanScalarBinder scalars = new SqlBooleanScalarBinder();
-  private boolean join;
+  private int joinRoles;
   private boolean having;
 
   StatusCode bindWhere(SqlCommand command, BoundSqlStatement statement) {
-    join = false;
+    joinRoles = 0;
     having = false;
     return bind(
         command, command.wherePredicates(), statement.whereBoolean,
@@ -23,7 +23,7 @@ final class SqlBooleanPredicateBinder {
       SqlCommand command,
       BoundSqlStatement statement,
       SqlBlockSchema schema) {
-    join = false;
+    joinRoles = 0;
     having = false;
     return bind(
         command, command.wherePredicates(), statement.whereBoolean,
@@ -31,23 +31,24 @@ final class SqlBooleanPredicateBinder {
   }
 
   StatusCode bindJoinWhere(SqlCommand command, BoundSqlStatement statement) {
-    join = true;
+    joinRoles = command.joinChain().roleCount();
     having = false;
     return bind(
         command, command.wherePredicates(), statement.whereBoolean,
         statement, null);
   }
 
-  StatusCode bindJoinOn(SqlCommand command, BoundSqlStatement statement) {
-    join = true;
+  StatusCode bindJoinOn(
+      SqlCommand command, BoundSqlStatement statement, int stage) {
+    joinRoles = stage + 2;
     having = false;
     return bind(
-        command, command.onPredicates(), statement.onBoolean(),
+        command, command.joinChain().onPredicates(stage), statement.onBoolean(stage),
         statement, null);
   }
 
   StatusCode bindHaving(SqlCommand command, BoundSqlStatement statement) {
-    join = false;
+    joinRoles = 0;
     having = true;
     return bind(
         command, command.booleanHavingPredicates(), statement.havingBoolean,
@@ -70,7 +71,7 @@ final class SqlBooleanPredicateBinder {
         if (source.programNodeCount(leaf, program) == 0) continue;
         StatusCode status = scalars.bind(
             command, source, target, statement, schema,
-            leaf, program, join, having);
+            leaf, program, joinRoles, having);
         if (!status.isOk()) return status;
       }
       StatusCode status = SqlBooleanPredicateTypes.validate(source, target, leaf);

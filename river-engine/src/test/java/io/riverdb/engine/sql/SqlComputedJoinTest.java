@@ -76,6 +76,7 @@ final class SqlComputedJoinTest {
     assertTemporalRuntimeCleanup(session, execution);
     assertLateProjectionFailureIsAtomic(session, execution);
     assertDirectOrderDeferred(session, execution);
+    assertRoleAwareBindingAndMultiStageGuard(session, execution);
 
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
@@ -430,6 +431,135 @@ final class SqlComputedJoinTest {
         StatusCode.OK,
         session.execute("SELECT amount FROM left_rows WHERE id=1", execution));
     assertEquals(10, execution.valueAt(0));
+  }
+
+  private static void assertRoleAwareBindingAndMultiStageGuard(
+      SqlSession session, SqlExecutionResult execution) {
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE role_left (id BIGINT PRIMARY KEY, left_key BIGINT)",
+            execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE role_right (id BIGINT PRIMARY KEY, right_key BIGINT)",
+            execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE role_bool (id BIGINT PRIMARY KEY, flag BOOLEAN)",
+            execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO role_left VALUES (1,11),(2,22)", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO role_right VALUES (7,22),(8,33)", execution));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO role_bool VALUES (7,TRUE)", execution));
+    assertPairs(
+        session,
+        execution,
+        "SELECT left_key,right_key FROM role_left l JOIN role_right r "
+            + "ON left_key=right_key",
+        22, 22);
+    assertPairs(
+        session,
+        execution,
+        "SELECT a.id,b.id FROM role_left a JOIN role_left b ON a.id=b.id",
+        1, 1, 2, 2);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT a.id FROM role_left a JOIN role_right b ON id=id",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT id FROM role_left a JOIN role_right b ON a.id=b.id",
+            new SqlScanCursor()));
+    assertPairs(
+        session,
+        execution,
+        "SELECT l.id,r.id FROM role_left l JOIN role_right r "
+            + "ON l.left_key=r.right_key WHERE left_key=22",
+        2, 7);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT a.id FROM role_left a JOIN role_right b ON a.id=b.id "
+                + "WHERE id=1",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT a.id FROM role_left a JOIN role_left b "
+                + "ON role_left.id=b.id",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT a.id,c.id FROM role_left a "
+                + "JOIN role_right b ON a.left_key=c.id "
+                + "JOIN right_rows c ON b.id=c.id",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT a.id,c.id FROM role_left a "
+                + "JOIN role_right b ON a.left_key=b.right_key "
+                + "JOIN right_rows c ON id=id",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.DATATYPE_MISMATCH,
+        session.beginScan(
+            "SELECT a.id,c.id FROM role_left a "
+                + "JOIN role_right b ON a.left_key=b.right_key "
+                + "JOIN role_bool c ON b.right_key=c.flag",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.beginScan(
+            "SELECT a.id,c.id FROM role_left a "
+                + "JOIN role_right b ON a.left_key=b.right_key "
+                + "JOIN missing_role c ON b.id=c.id",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        session.beginScan(
+            "SELECT a.id,c.id FROM role_left a "
+                + "JOIN role_right b ON a.left_key=b.right_key "
+                + "JOIN right_rows c ON b.id=c.id",
+            new SqlScanCursor()));
+    assertLeftSelfJoinNullability(session, execution);
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT left_key FROM role_left WHERE id=2", execution));
+    assertEquals(22, execution.valueAt(0));
+  }
+
+  private static void assertLeftSelfJoinNullability(
+      SqlSession session, SqlExecutionResult execution) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT a.id,b.id FROM role_left a LEFT JOIN role_left b "
+                + "ON a.id=b.id+10",
+            cursor));
+    assertEquals(SqlTypeDescriptor.BIGINT, session.scanColumnTypeDescriptor(cursor, 1));
+    assertTrue(session.scanColumnIsNullable(cursor, 1));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertTrue(row.isNull(1));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertTrue(row.isNull(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
   }
 
   private static void assertPairs(

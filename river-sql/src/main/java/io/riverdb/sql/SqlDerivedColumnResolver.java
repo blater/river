@@ -33,14 +33,19 @@ final class SqlDerivedColumnResolver {
   }
 
   static boolean validQualifier(CharSequence qualifier, SqlCommand command) {
-    return qualifier.length() == 0
-        || sameName(qualifier, command.tableName())
-        || command.tableAlias().length() > 0
-            && sameName(qualifier, command.tableAlias())
-        || command.type() == SqlCommandType.JOIN_SCAN
-            && (sameName(qualifier, command.joinTableName())
-                || command.joinTableAlias().length() > 0
-                    && sameName(qualifier, command.joinTableAlias()));
+    if (qualifier.length() == 0) return true;
+    SqlJoinChain joins = command.joinChain();
+    if (joins == null) {
+      return sameName(qualifier, command.tableName())
+          || command.tableAlias().length() > 0
+              && sameName(qualifier, command.tableAlias());
+    }
+    for (int role = 0; role < joins.roleCount(); role++) {
+      if (sameName(qualifier, joins.tableName(role))
+          || joins.alias(role).length() > 0
+              && sameName(qualifier, joins.alias(role))) return true;
+    }
+    return false;
   }
 
   static int outputIndex(SqlCommand command, CharSequence name) {

@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.engine.relational.CatalogIndexCursor;
@@ -10,6 +11,7 @@ import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlParser;
+import io.riverdb.sql.SqlJoinChain;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -148,6 +150,38 @@ final class SqlExecutionOwnershipTest {
     bound.executableQuery.beginBinding(bound.table);
     bound.executableQuery.publishBinding();
     assertTrue(bound.executableQuery.executableGeneration() > published);
+  }
+
+  @Test
+  void executableSnapshotOwnsTheFullJoinChainAndClearsItOnReuse() {
+    BoundSqlStatement bound = new BoundSqlStatement();
+    SqlParser parser = new SqlParser();
+    SqlBinder binder = new SqlBinder();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT a.id,c.id FROM first_table a "
+                + "LEFT JOIN second_table b ON a.id=b.id "
+                + "JOIN third_table c ON b.id=c.id WHERE c.id=a.id",
+            bound.query,
+            bound.command));
+    assertEquals(StatusCode.OK, binder.captureExecutableQuery(bound));
+    bound.command.reset();
+    SqlJoinChain chain = bound.executableQuery.root().joinChain();
+    assertEquals(3, chain.roleCount());
+    assertEquals(2, chain.stageCount());
+    assertTrue(chain.isLeft(0));
+    assertEquals(1, chain.onPredicates(0).leafCount());
+    assertEquals(1, chain.onPredicates(1).leafCount());
+    assertTrue(SqlBindingNames.same("third_table", chain.tableName(2)));
+
+    bound.reset();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM first_table", bound.query, bound.command));
+    assertEquals(StatusCode.OK, binder.captureExecutableQuery(bound));
+    assertNull(bound.executableQuery.root().joinChain());
   }
 
   private static boolean hasWorkspaceName(String name) {

@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
 
@@ -13,6 +14,7 @@ final class SqlRowProjectionProgramBinder {
   private int size;
   private boolean generatedTemporalText;
   private boolean join;
+  private final SqlJoinRoleResolver joinRoles = new SqlJoinRoleResolver();
 
   StatusCode bind(SqlCommand command, BoundSqlStatement bound, int projection) {
     join = false;
@@ -90,11 +92,16 @@ final class SqlRowProjectionProgramBinder {
       int projection,
       int node) {
     int symbol = (int) expression.operand(node);
-    int scope = join ? joinScope(command, symbol)
-        : SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
-    int column = join
-        ? resolveJoinSymbol(command, bound, symbol, scope)
-        : resolveSymbol(command, bound, symbol);
+    int scope = SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
+    int column;
+    if (join) {
+      if (!joinRoles.resolve(
+          command, bound, symbol, command.joinChain().roleCount())) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      scope = joinRoles.role();
+      column = joinRoles.column();
+    } else column = resolveSymbol(command, bound, symbol);
     return column < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : push(
@@ -102,8 +109,8 @@ final class SqlRowProjectionProgramBinder {
             projection,
             SqlScalarExpression.COLUMN,
             column,
-            (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
-                ? bound.table : bound.joinTable).typeDescriptor(column),
+            (join ? SqlJoinRoleResolver.table(bound, scope) : bound.table)
+                .typeDescriptor(column),
             false,
             scope);
   }
@@ -229,7 +236,9 @@ final class SqlRowProjectionProgramBinder {
         ? BoundSqlStatement.NULL_PROJECTION
         : raw >= 0
             ? scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
-                ? raw : -raw - 1
+                ? raw
+                : scope == SqlBoundBooleanPredicateProgram.SCOPE_RIGHT
+                    ? -raw - 1 : joinedColumn(scope, raw)
             : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
     bound.projectedColumns[projection] = column;
     return duplicate(bound, projection, column)
@@ -248,28 +257,6 @@ final class SqlRowProjectionProgramBinder {
     return bound.table.findColumn(name);
   }
 
-  private static int joinScope(SqlCommand command, int symbol) {
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
-    if (qualifier == null) return -1;
-    if (SqlBindingNames.matchesTable(command, qualifier)) {
-      return SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
-    }
-    return SqlBindingNames.matchesJoinTable(command, qualifier)
-        ? SqlBoundBooleanPredicateProgram.SCOPE_RIGHT : -1;
-  }
-
-  private static int resolveJoinSymbol(
-      SqlCommand command,
-      BoundSqlStatement bound,
-      int symbol,
-      int scope) {
-    if (scope < 0) return -1;
-    CharSequence name = command.projectionSymbolName(symbol);
-    if (name == null) return -1;
-    return (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
-        ? bound.table : bound.joinTable).findColumn(name);
-  }
-
   private static boolean duplicate(
       BoundSqlStatement bound, int projection, int column) {
     if (column == SqlBoundProjectionPrograms.COMPUTED_PROJECTION) return false;
@@ -277,5 +264,9 @@ final class SqlRowProjectionProgramBinder {
       if (bound.projectedColumns[previous] == column) return true;
     }
     return false;
+  }
+
+  private static int joinedColumn(int role, int column) {
+    return Integer.MIN_VALUE + 2 + role * TableSchema.MAXIMUM_COLUMNS + column;
   }
 }

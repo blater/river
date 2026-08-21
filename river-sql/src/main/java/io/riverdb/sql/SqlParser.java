@@ -67,7 +67,7 @@ public final class SqlParser {
   public StatusCode parseQueryAppend(
       CharSequence sql, SqlQuery query, SqlCommand result) {
     StatusCode status = queryParser.parseAppend(sql, query, result);
-    if (!status.isOk() && query != null) query.discardOnPredicates();
+    if (!status.isOk() && query != null) query.discardJoinChains();
     return status;
   }
 
@@ -94,7 +94,7 @@ public final class SqlParser {
           sql, parameters, input, queryParser);
       if (status.isOk()) status = queryParser.parse(sql, query, result);
       status = SqlParameterAdmission.finish(status, input);
-      if (!status.isOk()) query.discardOnPredicates();
+      if (!status.isOk()) query.discardJoinChains();
       return status;
     } finally {
       input.clearParameters();
@@ -115,7 +115,7 @@ public final class SqlParser {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = queryParser.parse(sql, query, result);
-    if (!status.isOk()) query.discardOnPredicates();
+    if (!status.isOk()) query.discardJoinChains();
     return status;
   }
 
@@ -290,8 +290,11 @@ public final class SqlParser {
     return predicateParser.parse(sql, result, qualified);
   }
 
-  StatusCode joinPredicates(CharSequence sql, SqlCommand result) {
-    return predicateParser.parseOn(sql, result);
+  StatusCode joinPredicates(
+      CharSequence sql,
+      SqlCommand result,
+      SqlBooleanPredicateProgram destination) {
+    return predicateParser.parseOn(sql, result, destination);
   }
 
   SqlComparison comparisonOperator(CharSequence sql) {
@@ -312,6 +315,7 @@ public final class SqlParser {
       CharSequence sql,
       SqlCommand result) {
     if (consumeKeyword(sql, "AS")) {
+      if (joinAliasReserved(sql)) return StatusCode.INVALID_EXTERNAL_INPUT;
       return identifier(sql, result.writableTableAlias());
     }
     skipSpaces(sql);
@@ -319,13 +323,7 @@ public final class SqlParser {
     if (position >= sql.length()
         || sql.charAt(position) == ';'
         || sql.charAt(position) == ')'
-        || nextKeyword(sql, "LEFT")
-        || nextKeyword(sql, "JOIN")
-        || nextKeyword(sql, "WHERE")
-        || nextKeyword(sql, "HAVING")
-        || nextKeyword(sql, "GROUP")
-        || nextKeyword(sql, "ORDER")
-        || nextKeyword(sql, "LIMIT")) {
+        || joinAliasReserved(sql)) {
       return StatusCode.OK;
     }
     return identifierStart(sql.charAt(input.position()))
@@ -335,18 +333,37 @@ public final class SqlParser {
 
   StatusCode optionalJoinTableAlias(
       CharSequence sql,
-      SqlCommand result) {
+      SqlIdentifier alias) {
     if (consumeKeyword(sql, "AS")) {
-      return identifier(sql, result.writableJoinTableAlias());
+      if (joinAliasReserved(sql)) return StatusCode.INVALID_EXTERNAL_INPUT;
+      return identifier(sql, alias);
     }
     skipSpaces(sql);
     if (input.position() >= sql.length()
-        || nextKeyword(sql, "ON")) {
+        || joinAliasReserved(sql)) {
       return StatusCode.OK;
     }
     return identifierStart(sql.charAt(input.position()))
-        ? identifier(sql, result.writableJoinTableAlias())
+        ? identifier(sql, alias)
         : StatusCode.OK;
+  }
+
+  private boolean joinAliasReserved(CharSequence sql) {
+    return nextKeyword(sql, "ON")
+        || nextKeyword(sql, "USING")
+        || nextKeyword(sql, "JOIN")
+        || nextKeyword(sql, "INNER")
+        || nextKeyword(sql, "LEFT")
+        || nextKeyword(sql, "RIGHT")
+        || nextKeyword(sql, "FULL")
+        || nextKeyword(sql, "CROSS")
+        || nextKeyword(sql, "NATURAL")
+        || nextKeyword(sql, "OUTER")
+        || nextKeyword(sql, "WHERE")
+        || nextKeyword(sql, "HAVING")
+        || nextKeyword(sql, "GROUP")
+        || nextKeyword(sql, "ORDER")
+        || nextKeyword(sql, "LIMIT");
   }
 
   private boolean nextKeyword(CharSequence sql, String keyword) {

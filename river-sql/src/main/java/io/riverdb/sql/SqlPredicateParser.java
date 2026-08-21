@@ -37,12 +37,11 @@ final class SqlPredicateParser {
     return status;
   }
 
-  StatusCode parseOn(CharSequence sql, SqlCommand result) {
-    StatusCode status = booleans.parseOn(sql, result);
-    if (status.isOk() && !result.onPredicates().allColumnsQualified(result)) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return status;
+  StatusCode parseOn(
+      CharSequence sql,
+      SqlCommand result,
+      SqlBooleanPredicateProgram destination) {
+    return booleans.parseOn(sql, result, destination);
   }
 
   SqlComparison comparisonOperator(CharSequence sql) {

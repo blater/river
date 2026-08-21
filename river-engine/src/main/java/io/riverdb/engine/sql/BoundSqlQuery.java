@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
+import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.sql.SqlQuery;
 
 /** Statement-lifetime query syntax snapshot consumed after binding. */
@@ -224,15 +225,13 @@ final class BoundSqlQuery {
     private SqlCommandType type;
     private final SqlBoundName tableName = new SqlBoundName();
     private final SqlBoundName tableAlias = new SqlBoundName();
-    private final SqlBoundName joinTableName = new SqlBoundName();
-    private final SqlBoundName joinTableAlias = new SqlBoundName();
+    private SqlJoinChain joinChain;
     private final SqlBoundName orderColumnName = new SqlBoundName();
     private int columnCount;
     private long rowLimit;
     private boolean selectAll;
     private boolean ordered;
     private boolean descending;
-    private boolean leftJoin;
     private boolean membershipNegated;
     private TableDefinition table;
     private boolean ownsTable;
@@ -264,17 +263,24 @@ final class BoundSqlQuery {
         nullProjections[index] = false;
       }
       type = source.type();
-      tableName.copyFrom(source.tableName());
-      tableAlias.copyFrom(source.tableAlias());
-      joinTableName.copyFrom(source.joinTableName());
-      joinTableAlias.copyFrom(source.joinTableAlias());
+      boolean joined = source.joinChain() != null;
+      if (joined) {
+        tableName.copyFrom("");
+        tableAlias.copyFrom("");
+      } else {
+        tableName.copyFrom(source.tableName());
+        tableAlias.copyFrom(source.tableAlias());
+      }
+      if (source.joinChain() != null) {
+        if (joinChain == null) joinChain = new SqlJoinChain();
+        joinChain.copyFrom(source.joinChain());
+      } else if (joinChain != null) joinChain.reset();
       orderColumnName.copyFrom(source.orderColumnName());
       columnCount = source.columnCount();
       rowLimit = source.rowLimit();
       selectAll = source.isSelectAll();
       ordered = source.isOrdered();
       descending = source.isDescendingOrder();
-      leftJoin = source.isLeftJoin();
       for (int index = 0; index < columnCount; index++) {
         columnNames[index].copyFrom(source.columnName(index));
         columnTables[index].copyFrom(source.columnTableName(index));
@@ -286,6 +292,7 @@ final class BoundSqlQuery {
     }
 
     private void resetCaptured() {
+      if (joinChain != null) joinChain.reset();
       predicates.resetCaptured();
       resetBinding();
     }
@@ -345,10 +352,17 @@ final class BoundSqlQuery {
     boolean isCorrelated() { return correlated; }
 
     SqlCommandType type() { return type; }
-    CharSequence tableName() { return tableName; }
-    CharSequence tableAlias() { return tableAlias; }
-    CharSequence joinTableName() { return joinTableName; }
-    CharSequence joinTableAlias() { return joinTableAlias; }
+    CharSequence tableName() {
+      return joinChain() == null ? tableName : joinChain.tableName(0);
+    }
+    CharSequence tableAlias() {
+      return joinChain() == null ? tableAlias : joinChain.alias(0);
+    }
+    CharSequence joinTableName() { return joinChain.tableName(1); }
+    CharSequence joinTableAlias() { return joinChain.alias(1); }
+    SqlJoinChain joinChain() {
+      return joinChain != null && joinChain.stageCount() > 0 ? joinChain : null;
+    }
     CharSequence orderColumnName() { return orderColumnName; }
     int columnCount() { return columnCount; }
     CharSequence firstColumnName() { return columnName(0); }
@@ -360,7 +374,7 @@ final class BoundSqlQuery {
     boolean isSelectAll() { return selectAll; }
     boolean isOrdered() { return ordered; }
     boolean isDescendingOrder() { return descending; }
-    boolean isLeftJoin() { return leftJoin; }
+    boolean isLeftJoin() { return joinChain.isLeft(0); }
     long rowLimit() { return rowLimit; }
   }
 

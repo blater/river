@@ -12,6 +12,7 @@ final class SqlBooleanScalarBinder {
       new int[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
   private final boolean[] untyped =
       new boolean[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
+  private final SqlJoinRoleResolver joinRoles = new SqlJoinRoleResolver();
   private int size;
 
   StatusCode bind(
@@ -22,14 +23,14 @@ final class SqlBooleanScalarBinder {
       SqlBlockSchema schema,
       int leaf,
       int program,
-      boolean join,
+      int visibleRoles,
       boolean having) {
     target.beginProgram(leaf, program);
     size = 0;
     for (int node = 0; node < source.programNodeCount(leaf, program); node++) {
       StatusCode status = bindNode(
           command, source, target, statement, schema,
-          leaf, program, node, join, having);
+          leaf, program, node, visibleRoles, having);
       if (!status.isOk()) return status;
     }
     if (size != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -50,7 +51,7 @@ final class SqlBooleanScalarBinder {
       int leaf,
       int program,
       int node,
-      boolean join,
+      int visibleRoles,
       boolean having) {
     int operator = source.programOperator(leaf, program, node);
     long operand = source.programOperand(leaf, program, node);
@@ -66,7 +67,7 @@ final class SqlBooleanScalarBinder {
     if (operator == SqlScalarExpression.COLUMN) {
       return column(
           command, target, statement, schema, leaf, program,
-          operator, operand, join);
+          operator, operand, visibleRoles);
     }
     if (operator == SqlScalarExpression.NULL) {
       int typed = descriptor == 0 ? SqlTypeDescriptor.BIGINT : descriptor;
@@ -138,16 +139,20 @@ final class SqlBooleanScalarBinder {
       int program,
       int operator,
       long operand,
-      boolean join) {
-    int scope = join ? joinScope(command, (int) operand)
-        : SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
-    int column = join
-        ? resolveJoin(command, statement, (int) operand, scope)
-        : resolve(command, statement, schema, (int) operand);
+      int visibleRoles) {
+    int scope = SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
+    int column;
+    if (visibleRoles > 0) {
+      if (!joinRoles.resolve(
+          command, statement, (int) operand, visibleRoles)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      scope = joinRoles.role();
+      column = joinRoles.column();
+    } else column = resolve(command, statement, schema, (int) operand);
     if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int descriptor = join
-        ? (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
-            ? statement.table : statement.joinTable).typeDescriptor(column)
+    int descriptor = visibleRoles > 0
+        ? SqlJoinRoleResolver.table(statement, scope).typeDescriptor(column)
         : schema == null
             ? statement.table.typeDescriptor(column) : schema.descriptor(column);
     return push(
@@ -265,25 +270,4 @@ final class SqlBooleanScalarBinder {
     return schema == null ? statement.table.findColumn(name) : schema.find(name);
   }
 
-  private static int joinScope(SqlCommand command, int symbol) {
-    CharSequence qualifier = command.projectionSymbolTable(symbol);
-    if (qualifier == null) return -1;
-    if (SqlBindingNames.matchesTable(command, qualifier)) {
-      return SqlBoundBooleanPredicateProgram.SCOPE_LEFT;
-    }
-    return SqlBindingNames.matchesJoinTable(command, qualifier)
-        ? SqlBoundBooleanPredicateProgram.SCOPE_RIGHT : -1;
-  }
-
-  private static int resolveJoin(
-      SqlCommand command,
-      BoundSqlStatement statement,
-      int symbol,
-      int scope) {
-    if (scope < 0) return -1;
-    CharSequence name = command.projectionSymbolName(symbol);
-    if (name == null) return -1;
-    return (scope == SqlBoundBooleanPredicateProgram.SCOPE_LEFT
-        ? statement.table : statement.joinTable).findColumn(name);
-  }
 }

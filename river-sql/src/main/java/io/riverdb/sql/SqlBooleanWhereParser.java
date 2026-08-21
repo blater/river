@@ -47,8 +47,11 @@ final class SqlBooleanWhereParser {
     return parse(sql, result, result == null ? null : result.writableWherePredicates());
   }
 
-  StatusCode parseOn(CharSequence sql, SqlCommand result) {
-    return parse(sql, result, result == null ? null : result.writableOnPredicates());
+  StatusCode parseOn(
+      CharSequence sql,
+      SqlCommand result,
+      SqlBooleanPredicateProgram destination) {
+    return parse(sql, result, destination);
   }
 
   private StatusCode parse(
@@ -385,6 +388,13 @@ final class SqlBooleanWhereParser {
         || startsKeyword(sql, position, "AND")
         || startsKeyword(sql, position, "OR")
         || startsKeyword(sql, position, "WHERE")
+        || startsKeyword(sql, position, "JOIN")
+        || startsKeyword(sql, position, "INNER")
+        || startsKeyword(sql, position, "LEFT")
+        || startsKeyword(sql, position, "RIGHT")
+        || startsKeyword(sql, position, "FULL")
+        || startsKeyword(sql, position, "CROSS")
+        || startsKeyword(sql, position, "NATURAL")
         || startsKeyword(sql, position, "GROUP")
         || startsKeyword(sql, position, "HAVING")
         || startsKeyword(sql, position, "ORDER")

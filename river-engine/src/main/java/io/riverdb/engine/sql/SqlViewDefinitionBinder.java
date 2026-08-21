@@ -57,17 +57,27 @@ final class SqlViewDefinitionBinder {
       RelationalSession session,
       BoundSqlStatement bound,
       SqlCommand command) {
-    StatusCode status = session.resolveTable(command.tableName(), bound.table);
-    return status.isOk() ? resolveRight(session, bound, command) : status;
+    StatusCode status = binder.resolveJoinRoles(session, command, bound, true);
+    return status.isOk() ? rejectRepeatedPhysicalRole(bound, command) : status;
   }
 
-  private static StatusCode resolveRight(
+  private StatusCode resolveRight(
       RelationalSession session,
       BoundSqlStatement bound,
       SqlCommand command) {
-    StatusCode status = session.resolveTable(
-        command.joinTableName(), bound.joinTable);
-    return status.isOk() && bound.table.tableId() == bound.joinTable.tableId()
-        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
+    StatusCode status = binder.resolveJoinRoles(session, command, bound, false);
+    return status.isOk() ? rejectRepeatedPhysicalRole(bound, command) : status;
+  }
+
+  private static StatusCode rejectRepeatedPhysicalRole(
+      BoundSqlStatement bound, SqlCommand command) {
+    for (int right = 1; right < command.joinChain().roleCount(); right++) {
+      for (int left = 0; left < right; left++) {
+        if (bound.joinRole(left).tableId() == bound.joinRole(right).tableId()) {
+          return StatusCode.FEATURE_NOT_SUPPORTED;
+        }
+      }
+    }
+    return StatusCode.OK;
   }
 }

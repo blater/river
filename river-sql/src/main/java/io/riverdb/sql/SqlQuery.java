@@ -115,9 +115,9 @@ public final class SqlQuery {
     return derivedCompiler.validatePipeline(firstBlock);
   }
 
-  void discardOnPredicates() {
+  void discardJoinChains() {
     for (int index = 0; index < blockCount; index++) {
-      blocks[index].discardOnPredicates();
+      blocks[index].discardJoinChain();
     }
   }
 

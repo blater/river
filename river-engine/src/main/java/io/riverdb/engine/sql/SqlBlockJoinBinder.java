@@ -16,9 +16,7 @@ final class SqlBlockJoinBinder {
       RelationalSession session,
       BoundSqlStatement bound,
       SqlCommand command) {
-    StatusCode status = session.resolveTable(command.tableName(), bound.table);
-    return status.isOk()
-        ? session.resolveTable(command.joinTableName(), bound.joinTable) : status;
+    return binder.resolveJoinRoles(session, command, bound, true);
   }
 
   StatusCode preflight(

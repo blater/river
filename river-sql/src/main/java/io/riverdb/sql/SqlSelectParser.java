@@ -92,8 +92,7 @@ final class SqlSelectParser {
       return status;
     }
     if (consumeKeyword(sql, "WHERE")) {
-      status = predicates(
-          sql, result, result.type() == SqlCommandType.JOIN_SCAN);
+      status = predicates(sql, result, false);
     }
     if (!status.isOk()) {
       return status;
