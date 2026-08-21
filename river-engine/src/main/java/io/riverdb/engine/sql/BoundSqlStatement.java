@@ -38,6 +38,14 @@ final class BoundSqlStatement {
       new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final int[] joinAccessInnerColumns =
       new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final byte[] joinStrategies =
+      new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final byte[] joinHashOuterRoles =
+      new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final int[] joinHashOuterColumns =
+      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final int[] joinHashInnerColumns =
+      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
 
   int predicateColumn;
   int predicateCount;
@@ -81,6 +89,7 @@ final class BoundSqlStatement {
     groupAggregateColumn = -1;
     distinctColumn = -1;
     resetJoinAccess();
+    resetJoinStrategies();
     orderColumn = -1;
     sortKeyProjection = -1;
   }
@@ -159,6 +168,31 @@ final class BoundSqlStatement {
   int joinAccessOuterRole(int stage) { return joinAccessOuterRoles[stage]; }
   int joinAccessOuterColumn(int stage) { return joinAccessOuterColumns[stage]; }
   int joinAccessInnerColumn(int stage) { return joinAccessInnerColumns[stage]; }
+
+  void resetJoinStrategies() {
+    for (int stage = 0; stage < joinStrategies.length; stage++) {
+      joinStrategies[stage] = SqlJoinStrategy.NESTED_LOOP;
+      joinHashOuterRoles[stage] = -1;
+      joinHashOuterColumns[stage] = -1;
+      joinHashInnerColumns[stage] = -1;
+    }
+  }
+
+  void setJoinHash(
+      int stage,
+      int outerRole,
+      int outerColumn,
+      int innerColumn) {
+    joinStrategies[stage] = SqlJoinStrategy.HASH;
+    joinHashOuterRoles[stage] = (byte) outerRole;
+    joinHashOuterColumns[stage] = outerColumn;
+    joinHashInnerColumns[stage] = innerColumn;
+  }
+
+  int joinStrategy(int stage) { return Byte.toUnsignedInt(joinStrategies[stage]); }
+  int joinHashOuterRole(int stage) { return joinHashOuterRoles[stage]; }
+  int joinHashOuterColumn(int stage) { return joinHashOuterColumns[stage]; }
+  int joinHashInnerColumn(int stage) { return joinHashInnerColumns[stage]; }
 
   boolean hasBlockPlans() {
     return blockPlans != null && blockPlans.count() > 0;

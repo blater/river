@@ -18,6 +18,8 @@ final class SqlBoundBlockPlans {
       new int[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final byte[] joinAccessKinds =
       new byte[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final byte[] joinStrategies =
+      new byte[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private int count;
 
   SqlBoundBlockPlans() {
@@ -62,6 +64,7 @@ final class SqlBoundBlockPlans {
     for (int stage = 0; stage < joinRightColumns.length; stage++) {
       joinRightColumns[stage] = -1;
       joinAccessKinds[stage] = 0;
+      joinStrategies[stage] = 0;
     }
   }
 
@@ -78,13 +81,16 @@ final class SqlBoundBlockPlans {
         ? bound.predicateColumn : -1;
     joinStageCount = bound.command.joinChain().stageCount();
     for (int stage = 0; stage < joinStageCount; stage++) {
-      int right = bound.joinAccessInnerColumn(stage);
+      int strategy = bound.joinStrategy(stage);
+      int right = strategy == SqlJoinStrategy.HASH
+          ? bound.joinHashInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
       joinRightColumns[stage] = right;
-      boolean indexed = right >= 0
+      boolean indexed = strategy != SqlJoinStrategy.HASH && right >= 0
           && (right == 0 || bound.joinRole(stage + 1).hasIndexOn(right));
       boolean unique = indexed
           && (right == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(right));
       joinAccessKinds[stage] = (byte) (unique ? 2 : indexed ? 1 : 0);
+      joinStrategies[stage] = (byte) strategy;
     }
   }
 
@@ -97,5 +103,9 @@ final class SqlBoundBlockPlans {
   }
   int joinAccessKind(int block, int stage) {
     return block == joinBlock ? joinAccessKinds[stage] : 0;
+  }
+  int joinStrategy(int block, int stage) {
+    return block == joinBlock
+        ? Byte.toUnsignedInt(joinStrategies[stage]) : SqlJoinStrategy.NESTED_LOOP;
   }
 }

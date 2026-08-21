@@ -20,8 +20,6 @@ final class SqlJoinChainPlan {
   private static final long EXTEND = PackedText.pack("extend");
   private static final long FILTER = PackedText.pack("filter");
   private static final long INDEX = PackedText.pack("index");
-  private static final long JOIN = PackedText.pack("join");
-  private static final long LEFT = PackedText.pack("left");
   private static final long LOOKUP = PackedText.pack("lookup");
   private static final long ON = PackedText.pack("on");
   private static final long PRIMARY = PackedText.pack("primary");
@@ -34,6 +32,7 @@ final class SqlJoinChainPlan {
   private final long[] details = new long[MAXIMUM_STEPS];
   private final byte[] metrics = new byte[MAXIMUM_STEPS];
   private final byte[] stages = new byte[MAXIMUM_STEPS];
+  private final SqlJoinStrategyPlan strategyPlan = new SqlJoinStrategyPlan();
   private SqlJoinChainSource source;
   private boolean analyzed;
   private int count;
@@ -47,13 +46,11 @@ final class SqlJoinChainPlan {
     StatusCode status = root(rootAccess);
     SqlJoinChain chain = bound.command.joinChain();
     for (int stage = 0; status.isOk() && stage < chain.stageCount(); stage++) {
-      int inner = bound.joinAccessInnerColumn(stage);
-      boolean indexed = inner >= 0
-          && (inner == 0 || bound.joinRole(stage + 1).hasIndexOn(inner));
-      boolean unique = indexed
-          && (inner == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(inner));
+      int strategy = bound.joinStrategy(stage);
+      int inner = strategyPlan.directInner(bound, stage);
       status = stage(
-          chain, stage, inner, unique ? 2 : indexed ? 1 : 0);
+          chain, stage, inner, strategyPlan.directAccess(bound, stage, inner),
+          strategy);
     }
     return finish(status, bound.command);
   }
@@ -72,13 +69,17 @@ final class SqlJoinChainPlan {
           chain,
           stage,
           plans.joinRightColumn(block, stage),
-          plans.joinAccessKind(block, stage));
+          plans.joinAccessKind(block, stage),
+          plans.joinStrategy(block, stage));
     }
     return finish(status, plans.command(block));
   }
 
   int count() { return count; }
-  long operator(int step) { return operators[step]; }
+  long operator(int step) {
+    return strategyPlan.operator(
+        step, stages[step], operators[step], analyzed, source);
+  }
   long detail(int step) { return details[step]; }
 
   long rows(int step) {
@@ -86,7 +87,7 @@ final class SqlJoinChainPlan {
     int stage = stages[step];
     return switch (metrics[step]) {
       case ROOT -> source.rootCandidates();
-      case CANDIDATES -> source.stageCandidates(stage);
+      case CANDIDATES -> source.stageAccessRows(stage);
       case ON_TRUE -> source.stageOnTrue(stage);
       case EXTENSIONS -> source.stageNullExtensions(stage);
       case PUBLISHED -> source.stagePublished(stage);
@@ -103,6 +104,7 @@ final class SqlJoinChainPlan {
     details[count] = detail;
     metrics[count] = (byte) metric;
     stages[count] = (byte) stage;
+    strategyPlan.clear(count);
     count++;
     return StatusCode.OK;
   }
@@ -122,9 +124,10 @@ final class SqlJoinChainPlan {
   }
 
   private StatusCode stage(
-      SqlJoinChain chain, int stage, int inner, int access) {
+      SqlJoinChain chain, int stage, int inner, int access, int strategy) {
+    boolean selectedHash = strategy == SqlJoinStrategy.HASH;
     StatusCode status = append(
-        access == 2 ? LOOKUP : access == 1 ? INDEX : TABLE,
+        strategyPlan.access(strategy, access),
         inner,
         CANDIDATES,
         stage);
@@ -135,13 +138,17 @@ final class SqlJoinChainPlan {
     if (status.isOk() && chain.isLeft(stage)) {
       status = append(EXTEND, stage + 1, EXTENSIONS, stage);
     }
-    return status.isOk()
-        ? append(
-            chain.isLeft(stage) ? LEFT : JOIN,
-            chain.onPredicates(stage).leafCount(),
-            PUBLISHED,
-            stage)
-        : status;
+    if (!status.isOk()) return status;
+    int published = count;
+    status = append(
+        strategyPlan.published(strategy, chain.isLeft(stage)),
+        chain.onPredicates(stage).leafCount(),
+        PUBLISHED,
+        stage);
+    if (status.isOk() && selectedHash) {
+      strategyPlan.set(published, strategy, chain.isLeft(stage));
+    }
+    return status;
   }
 
   private StatusCode finish(StatusCode status, SqlCommand command) {

@@ -54,6 +54,7 @@ final class SqlBlockRow {
   long nullMask() { return nullMask; }
   int count() { return count; }
   int textLength(int column) { return Short.toUnsignedInt(textLengths[column]); }
+  void prepareText(int column) { text(column); }
   char[] text(int column) {
     if (text[column] == null) {
       text[column] = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];

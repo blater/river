@@ -23,6 +23,10 @@ final class SqlJoinExecution {
   }
 
   StatusCode begin() {
+    if (bound.executableQuery.root().rowLimit() == 0) {
+      source.resetMetrics();
+      return configurePlan(bound.executableQuery.root());
+    }
     StatusCode status = source.begin();
     if (status.isOk()) status = configurePlan(bound.executableQuery.root());
     return status;

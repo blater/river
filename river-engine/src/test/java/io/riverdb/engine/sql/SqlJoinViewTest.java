@@ -316,7 +316,7 @@ final class SqlJoinViewTest {
     assertPlanRow(session, cursor, row, "table", 1, -1);
     assertPlanRow(session, cursor, row, "on", 2, -1);
     assertPlanRow(session, cursor, row, "extend", 2, -1);
-    assertPlanRow(session, cursor, row, "left", 2, -1);
+    assertPlanRow(session, cursor, row, "hleft", 2, -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
@@ -339,9 +339,9 @@ final class SqlJoinViewTest {
     assertPlanRow(session, cursor, row, "index", 1, 3);
     assertPlanRow(session, cursor, row, "on", 2, 2);
     assertPlanRow(session, cursor, row, "join", 2, 2);
-    assertPlanRow(session, cursor, row, "table", 1, 4);
+    assertPlanRow(session, cursor, row, "table", 1, 2);
     assertPlanRow(session, cursor, row, "on", 2, 2);
-    assertPlanRow(session, cursor, row, "join", 2, 2);
+    assertPlanRow(session, cursor, row, "hash", 2, 2);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }

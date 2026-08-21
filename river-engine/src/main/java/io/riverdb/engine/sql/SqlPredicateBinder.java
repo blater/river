@@ -10,6 +10,7 @@ final class SqlPredicateBinder {
       new SqlBooleanPredicateBinder();
   private final SqlAccessEdgeSelector access = new SqlAccessEdgeSelector();
   private final SqlJoinAccessSelector joinAccess = new SqlJoinAccessSelector();
+  private final SqlJoinHashSelector joinHash = new SqlJoinHashSelector();
 
   StatusCode bind(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
@@ -38,6 +39,7 @@ final class SqlPredicateBinder {
     bound.predicateColumn = -1;
     bound.accessComparison = null;
     bound.resetJoinAccess();
+    bound.resetJoinStrategies();
     StatusCode status = StatusCode.OK;
     for (int stage = 0;
         status.isOk() && stage < command.joinChain().stageCount(); stage++) {
@@ -50,6 +52,15 @@ final class SqlPredicateBinder {
     for (int stage = 0;
         status.isOk() && stage < command.joinChain().stageCount(); stage++) {
       joinAccess.select(
+          command.joinChain().onPredicates(stage),
+          bound.onBoolean(stage),
+          bound,
+          stage);
+    }
+    joinHash.begin();
+    for (int stage = 0;
+        status.isOk() && stage < command.joinChain().stageCount(); stage++) {
+      joinHash.select(
           command.joinChain().onPredicates(stage),
           bound.onBoolean(stage),
           bound,

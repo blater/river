@@ -231,6 +231,19 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         session.beginScan(
+            "SELECT t.id,raw_labels.code FROM t JOIN raw_labels "
+                + "ON t.region=raw_labels.region WHERE t.id=1",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(70, scanRow.valueAt(1));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));
+    assertEquals(71, scanRow.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
             "SELECT id, day+1 AS key_day FROM temporal_values ORDER BY key_day",
             cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, scanRow));

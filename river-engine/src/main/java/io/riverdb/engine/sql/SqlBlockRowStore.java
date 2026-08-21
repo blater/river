@@ -108,6 +108,18 @@ final class SqlBlockRowStore {
     return status.isOk() ? codec.decode(destination, schema, stored) : status;
   }
 
+  StatusCode readAt(int position, SqlBlockRow destination) {
+    if (schema == null || destination == null
+        || position < 0 || position >= rowCount) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int stored = index.stored(position);
+    StatusCode status = readRecord(stored);
+    return status.isOk() ? codec.decode(destination, schema, stored) : status;
+  }
+
+  void rewind() { next = 0; }
+
   int rowCount() { return rowCount; }
   boolean spilled() { return spilled; }
   boolean hasResources() { return schema != null || channel != null || path != null; }

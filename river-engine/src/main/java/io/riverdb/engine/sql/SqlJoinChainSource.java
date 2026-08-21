@@ -1,7 +1,6 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.storage.heap.HeapRowResult;
 
@@ -11,6 +10,7 @@ final class SqlJoinChainSource {
   private final SqlExpressionEvaluator expressions;
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlJoinChainCursors cursors;
+  private final SqlJoinStageCandidates physical;
   private final SqlJoinRoleRows rows;
   private final boolean[] opened =
       new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
@@ -42,13 +42,15 @@ final class SqlJoinChainSource {
     expressions = evaluator;
     predicates = predicateEvaluator;
     cursors = new SqlJoinChainCursors(session, statement);
+    physical = new SqlJoinStageCandidates(session, statement);
     rows = new SqlJoinRoleRows(statement);
   }
 
   StatusCode begin() {
     resetProgress();
     resetMetrics();
-    return cursors.beginRoot();
+    StatusCode status = physical.begin();
+    return status.isOk() ? cursors.beginRoot() : status;
   }
 
   void resetMetrics() { resetCounters(); }
@@ -94,68 +96,30 @@ final class SqlJoinChainSource {
   }
 
   private StatusCode beginStage() {
-    int rightRole = stage + 1;
-    int outerRole = bound.joinAccessOuterRole(stage);
-    int outerColumn = bound.joinAccessOuterColumn(stage);
-    if (outerColumn >= 0) {
-      HeapRowResult outerRow = rows.row(outerRole);
-      if (outerRow == null
-          || expressions.isNull(
-              outerRow, bound.joinRole(outerRole), outerColumn)) {
-        finished[stage] = true;
-        return StatusCode.OK;
-      }
-      long value = expressions.readColumn(
-          rows.key(outerRole), outerRow, outerColumn);
-      StatusCode status = rows.ownThrough(stage);
-      if (!status.isOk()) return status;
-      if (cursors.rightUnique(stage)) return uniqueRole(rightRole, value);
-      status = cursors.beginRole(rightRole, value);
-      if (status == StatusCode.CONFLICT && cursors.rightIndexed(stage)) {
-        finished[stage] = true;
-        return StatusCode.OK;
-      }
-      if (!status.isOk()) return status;
-      opened[stage] = true;
-      return StatusCode.OK;
-    }
-    StatusCode status = rows.ownThrough(stage);
+    StatusCode status = physical.beginStage(stage, cursors, rows, expressions);
     if (!status.isOk()) return status;
-    status = cursors.beginRole(rightRole, 0);
-    if (!status.isOk()) return status;
-    opened[stage] = true;
-    return StatusCode.OK;
-  }
-
-  private StatusCode uniqueRole(int role, long value) {
-    uniqueTried[stage] = true;
-    StatusCode status = cursors.fetchRole(role, value);
-    if (status == StatusCode.CONFLICT) {
-      finished[stage] = true;
-      return StatusCode.OK;
-    }
-    if (!status.isOk()) return status;
+    opened[stage] = physical.opened();
+    finished[stage] = physical.finished();
+    uniqueTried[stage] = physical.unique();
+    if (!physical.candidate()) return StatusCode.OK;
     candidates[stage]++;
-    rows.borrow(role, cursors.key(role), cursors.row(role));
     status = acceptCandidate();
     if (status.isOk()) beginAccepted = true;
     return status;
   }
 
   private StatusCode nextScannedCandidate() {
-    int rightRole = stage + 1;
-    StatusCode status = cursors.nextRole(rightRole);
+    StatusCode status = physical.nextCandidate(stage, cursors, rows);
     if (status == StatusCode.CONFLICT) {
-      status = cursors.closeRole(rightRole);
-      if (!status.isOk()) return status;
       opened[stage] = false;
       finished[stage] = true;
       return finishStage();
     }
     if (!status.isOk()) return status;
     candidates[stage]++;
-    rows.borrow(rightRole, cursors.key(rightRole), cursors.row(rightRole));
-    if (!matchesFirstAccess()) return StatusCode.CONFLICT;
+    if (!physical.matchesAccess(stage, cursors, rows, expressions)) {
+      return StatusCode.CONFLICT;
+    }
     return acceptCandidate();
   }
 
@@ -202,28 +166,6 @@ final class SqlJoinChainSource {
     return StatusCode.CONFLICT;
   }
 
-  private boolean matchesFirstAccess() {
-    int innerColumn = bound.joinAccessInnerColumn(stage);
-    if (innerColumn < 0 || cursors.rightIndexed(stage)) return true;
-    int rightRole = stage + 1;
-    HeapRowResult right = rows.row(rightRole);
-    TableDefinition rightTable = bound.joinRole(rightRole);
-    if (expressions.isNull(right, rightTable, innerColumn)) {
-      return false;
-    }
-    int outerRole = bound.joinAccessOuterRole(stage);
-    int outerColumn = bound.joinAccessOuterColumn(stage);
-    long left = expressions.readColumn(
-        rows.key(outerRole), rows.row(outerRole), outerColumn);
-    long value = expressions.readColumn(
-        rows.key(rightRole), right, innerColumn);
-    return expressions.compareExact(
-        value,
-        rightTable.typeDescriptor(innerColumn),
-        left,
-        bound.joinRole(outerRole).typeDescriptor(outerColumn)) == 0;
-  }
-
   private void resetStages() {
     for (int current = 0; current < opened.length; current++) resetStage(current);
   }
@@ -241,17 +183,26 @@ final class SqlJoinChainSource {
   boolean innerUnique() { return cursors.rightUnique(0); }
   boolean outerValueIndex() { return cursors.rootValueIndex(); }
   long rootCandidates() { return rootCandidates; }
-  long stageCandidates(int current) { return candidates[current]; }
+  long stageAccessRows(int current) {
+    return candidates[current];
+  }
   long stageOnTrue(int current) { return onTrue[current]; }
   long stageNullExtensions(int current) { return nullExtensions[current]; }
   long stagePublished(int current) {
     return onTrue[current] + nullExtensions[current];
   }
   long whereTrue() { return whereTrue; }
-  boolean hasResources() { return cursors.hasResources(); }
+  boolean stageFallback(int current) {
+    return physical.fallback(current);
+  }
+  boolean hasResources() {
+    return physical.hasResources() || cursors.hasResources();
+  }
 
   StatusCode close() {
-    StatusCode status = cursors.closeAll();
+    StatusCode status = physical.close();
+    if (!status.isOk()) return status;
+    status = cursors.closeAll();
     if (!status.isOk()) return status;
     rows.reset();
     resetProgress();
@@ -272,5 +223,6 @@ final class SqlJoinChainSource {
       onTrue[current] = 0;
       nullExtensions[current] = 0;
     }
+    physical.resetMetrics();
   }
 }

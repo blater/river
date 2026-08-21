@@ -87,9 +87,10 @@ final class SqlExplainTest {
             "EXPLAIN SELECT events.id, labels.code FROM events "
                 + "JOIN labels ON events.category=labels.category",
             cursor));
-    assertPlanRow(session, cursor, row, "join", 1);
     assertPlanRow(session, cursor, row, "table", -1);
     assertPlanRow(session, cursor, row, "table", 1);
+    assertPlanRow(session, cursor, row, "on", 1);
+    assertPlanRow(session, cursor, row, "hash", 1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
 
@@ -100,9 +101,15 @@ final class SqlExplainTest {
             "EXPLAIN ANALYZE SELECT events.id, labels.code FROM events "
                 + "JOIN labels ON events.category=labels.category",
             cursor));
-    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack("join"), row.valueAt(0));
+    assertPlanRow(session, cursor, row, "table", -1);
+    assertEquals(3, row.valueAt(2));
+    assertPlanRow(session, cursor, row, "table", 1);
     assertEquals(5, row.valueAt(2));
+    assertPlanRow(session, cursor, row, "on", 1);
+    assertEquals(5, row.valueAt(2));
+    assertPlanRow(session, cursor, row, "hash", 1);
+    assertEquals(5, row.valueAt(2));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
 
     assertEquals(StatusCode.OK, cursor.reset());
