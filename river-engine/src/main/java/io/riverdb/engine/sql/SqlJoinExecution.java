@@ -7,22 +7,29 @@ final class SqlJoinExecution {
   private final SqlPhysicalPlan plan;
   private final SqlJoinChainSource source;
   private final SqlRowProjectionEvaluator projections;
+  private final SqlJoinChainPlan stages;
 
   SqlJoinExecution(
       BoundSqlStatement statement,
       SqlPhysicalPlan physicalPlan,
       SqlJoinChainSource rowSource,
-      SqlRowProjectionEvaluator projectionEvaluator) {
+      SqlRowProjectionEvaluator projectionEvaluator,
+      SqlJoinChainPlan joinPlan) {
     bound = statement;
     plan = physicalPlan;
     projections = projectionEvaluator;
     source = rowSource;
+    stages = joinPlan;
   }
 
   StatusCode begin() {
     StatusCode status = source.begin();
-    if (status.isOk()) configurePlan(bound.executableQuery.root());
+    if (status.isOk()) status = configurePlan(bound.executableQuery.root());
     return status;
+  }
+
+  StatusCode describe() {
+    return configurePlan(bound.executableQuery.root());
   }
 
   StatusCode next(SqlScanCursor cursor, SqlScanRowResult result) {
@@ -36,17 +43,9 @@ final class SqlJoinExecution {
     return status;
   }
 
-  private void configurePlan(BoundSqlQuery.Block command) {
+  private StatusCode configurePlan(BoundSqlQuery.Block command) {
     plan.setFilterCount(bound.command.wherePredicates().leafCount());
-    plan.setAccessColumn(source.outerValueIndex() ? bound.predicateColumn
-        : bound.predicateColumn == 0 ? 0 : -1);
-    plan.setJoin(
-        bound.joinOuterColumn,
-        bound.joinInnerColumn,
-        bound.command.onPredicates().leafCount(),
-        command.isLeftJoin(),
-        source.innerIndexed(),
-        source.innerUnique());
+    plan.setSort(command.isOrdered());
     for (int projection = 0;
         projection < bound.projectedColumnCount; projection++) {
       plan.setResultColumn(
@@ -58,6 +57,10 @@ final class SqlJoinExecution {
           projection,
           SqlJoinResultNullability.nullable(bound, projection));
     }
+    StatusCode status = stages.describe(
+        bound, source, bound.executableQuery.isAnalyze());
+    if (status.isOk()) plan.setJoinStages(stages);
+    return status;
   }
 
   boolean hasResources() { return source.hasResources(); }

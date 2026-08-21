@@ -9,7 +9,7 @@ final class SqlBlockPipelineExecution {
   private final SqlBlockRowStore second = new SqlBlockRowStore();
   private final SqlBlockRow sourceRow = new SqlBlockRow();
   private final SqlBlockStageRunner runner;
-  private final SqlBlockStagePlan stagePlan = new SqlBlockStagePlan();
+  private final SqlBlockStagePlan stagePlan;
   private final long[] outputValues = new long[8];
   private final int[] outputTypes = new int[8];
   private SqlBlockRowStore finalStore;
@@ -21,11 +21,13 @@ final class SqlBlockPipelineExecution {
       BoundSqlStatement statement,
       SqlBlockPlanBinder planBinder,
       SqlJoinChainSource joinSource,
+      SqlJoinChainPlan joinPlan,
       SqlExpressionEvaluator expressions,
       SqlBoundPredicateEvaluator predicateEvaluator,
       SqlRowProjectionEvaluator projectionEvaluator,
       SqlTemporalContext temporal) {
     bound = statement;
+    stagePlan = new SqlBlockStagePlan(joinSource, joinPlan);
     runner = new SqlBlockStageRunner(
         relationalSession,
         statement,
@@ -42,7 +44,9 @@ final class SqlBlockPipelineExecution {
   StatusCode prepare() {
     StatusCode status = close();
     SqlBoundBlockPlans plans = bound.blockPlans();
-    if (status.isOk()) status = stagePlan.describe(plans);
+    if (status.isOk()) {
+      status = stagePlan.describe(plans, bound.executableQuery.isAnalyze());
+    }
     if (status.isOk()) status = runner.run(sourceRow, stagePlan);
     if (status.isOk()) {
       finalStore = runner.finalStore();
@@ -103,15 +107,16 @@ final class SqlBlockPipelineExecution {
   boolean hasResources() {
     return runner.hasResources() || first.hasResources() || second.hasResources();
   }
-  StatusCode describe() { return stagePlan.describe(bound.blockPlans()); }
+  StatusCode describe() {
+    return stagePlan.describe(bound.blockPlans(), false);
+  }
   SqlBlockStagePlan stagePlan() { return stagePlan; }
 
   StatusCode close() {
     StatusCode status = runner.close();
-    StatusCode firstStatus = first.close();
-    StatusCode secondStatus = second.close();
-    if (status.isOk()) status = firstStatus;
-    if (status.isOk()) status = secondStatus;
+    if (status.isOk()) status = first.close();
+    if (status.isOk()) status = second.close();
+    if (!status.isOk()) return status;
     sourceRow.reset(0);
     finalStore = null;
     finalSchema = null;

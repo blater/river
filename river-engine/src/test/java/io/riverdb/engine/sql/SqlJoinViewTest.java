@@ -274,9 +274,11 @@ final class SqlJoinViewTest {
         session.beginScan("EXPLAIN SELECT lid FROM direct_join", cursor));
     assertPlanRow(session, cursor, row, "block", 1, -1);
     assertPlanRow(session, cursor, row, "block", 2, -1);
-    assertPlanRow(session, cursor, row, "left", 2, -1);
     assertPlanRow(session, cursor, row, "table", -1, -1);
-    assertPlanRow(session, cursor, row, "lookup", 1, -1);
+    assertPlanRow(session, cursor, row, "index", 1, -1);
+    assertPlanRow(session, cursor, row, "on", 2, -1);
+    assertPlanRow(session, cursor, row, "extend", 1, -1);
+    assertPlanRow(session, cursor, row, "left", 2, -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
@@ -295,9 +297,10 @@ final class SqlJoinViewTest {
     assertPlanRow(session, cursor, row, "group", 1, -1);
     assertPlanRow(session, cursor, row, "sort", 0, -1);
     assertPlanRow(session, cursor, row, "block", 3, 2);
-    assertPlanRow(session, cursor, row, "join", 2, -1);
-    assertPlanRow(session, cursor, row, "table", -1, -1);
-    assertPlanRow(session, cursor, row, "lookup", 1, -1);
+    assertPlanRow(session, cursor, row, "table", -1, 3);
+    assertPlanRow(session, cursor, row, "index", 1, 3);
+    assertPlanRow(session, cursor, row, "on", 2, 2);
+    assertPlanRow(session, cursor, row, "join", 2, 2);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }

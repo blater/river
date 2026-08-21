@@ -93,7 +93,7 @@ final class SqlPersistedViewCompiler {
     return status.isOk()
         && definition.tableCount() == count
         && definition.baseTableId() == bound.table.tableId()
-        && (!join || definition.joinTableId() == bound.joinTable.tableId())
+        && (!join || definition.joinTableId() == bound.joinRole(1).tableId())
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 }

@@ -209,7 +209,7 @@ final class SqlSortSpill {
       byte[] textLengths,
       char[] text,
       int row) {
-    int rowLength = containsText ? rowLengths[row] : 0;
+    int rowLength = containsText ? rowLengths[rowSlots[row]] : 0;
     int fixedBytes = fixedBytes();
     int dataBytes = fixedBytes + (containsText ? Integer.BYTES + rowLength : 0);
     record.clear();

@@ -22,6 +22,14 @@ final class SqlJoinChainSource {
       new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final boolean[] uniqueTried =
       new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final long[] candidates =
+      new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final long[] onTrue =
+      new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final long[] nullExtensions =
+      new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private long rootCandidates;
+  private long whereTrue;
   private int stage = -1;
   private boolean beginAccepted;
 
@@ -39,8 +47,11 @@ final class SqlJoinChainSource {
 
   StatusCode begin() {
     resetProgress();
+    resetMetrics();
     return cursors.beginRoot();
   }
+
+  void resetMetrics() { resetCounters(); }
 
   StatusCode next() {
     while (true) {
@@ -56,6 +67,7 @@ final class SqlJoinChainSource {
   private StatusCode nextRoot() {
     StatusCode status = cursors.nextRoot();
     if (!status.isOk()) return status;
+    rootCandidates++;
     rows.clearFrom(0);
     rows.borrow(0, cursors.key(0), cursors.row(0));
     resetStages();
@@ -123,6 +135,7 @@ final class SqlJoinChainSource {
       return StatusCode.OK;
     }
     if (!status.isOk()) return status;
+    candidates[stage]++;
     rows.borrow(role, cursors.key(role), cursors.row(role));
     status = acceptCandidate();
     if (status.isOk()) beginAccepted = true;
@@ -140,6 +153,7 @@ final class SqlJoinChainSource {
       return finishStage();
     }
     if (!status.isOk()) return status;
+    candidates[stage]++;
     rows.borrow(rightRole, cursors.key(rightRole), cursors.row(rightRole));
     if (!matchesFirstAccess()) return StatusCode.CONFLICT;
     return acceptCandidate();
@@ -151,9 +165,11 @@ final class SqlJoinChainSource {
           ? StatusCode.CONFLICT : predicates.joinStatus();
     }
     matched[stage] = true;
+    onTrue[stage]++;
     if (stage + 1 == bound.command.joinChain().stageCount()) {
       boolean where = predicates.matchesJoinWhere(rows);
       if (!predicates.joinStatus().isOk()) return predicates.joinStatus();
+      if (where) whereTrue++;
       return where ? StatusCode.OK : StatusCode.CONFLICT;
     }
     StatusCode status = rows.ownThrough(stage + 1);
@@ -168,10 +184,12 @@ final class SqlJoinChainSource {
     int rightRole = stage + 1;
     if (!matched[stage] && joins.isLeft(stage) && !nullEmitted[stage]) {
       nullEmitted[stage] = true;
+      nullExtensions[stage]++;
       rows.setNull(rightRole);
       if (stage + 1 == joins.stageCount()) {
         boolean where = predicates.matchesJoinWhere(rows);
         if (!predicates.joinStatus().isOk()) return predicates.joinStatus();
+        if (where) whereTrue++;
         return where ? StatusCode.OK : StatusCode.CONFLICT;
       }
       stage++;
@@ -222,6 +240,14 @@ final class SqlJoinChainSource {
   boolean innerIndexed() { return cursors.rightIndexed(0); }
   boolean innerUnique() { return cursors.rightUnique(0); }
   boolean outerValueIndex() { return cursors.rootValueIndex(); }
+  long rootCandidates() { return rootCandidates; }
+  long stageCandidates(int current) { return candidates[current]; }
+  long stageOnTrue(int current) { return onTrue[current]; }
+  long stageNullExtensions(int current) { return nullExtensions[current]; }
+  long stagePublished(int current) {
+    return onTrue[current] + nullExtensions[current];
+  }
+  long whereTrue() { return whereTrue; }
   boolean hasResources() { return cursors.hasResources(); }
 
   StatusCode close() {
@@ -236,5 +262,15 @@ final class SqlJoinChainSource {
     stage = -1;
     beginAccepted = false;
     resetStages();
+  }
+
+  private void resetCounters() {
+    rootCandidates = 0;
+    whereTrue = 0;
+    for (int current = 0; current < candidates.length; current++) {
+      candidates[current] = 0;
+      onTrue[current] = 0;
+      nullExtensions[current] = 0;
+    }
   }
 }

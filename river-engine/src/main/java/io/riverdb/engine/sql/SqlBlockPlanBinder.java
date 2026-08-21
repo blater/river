@@ -45,15 +45,16 @@ final class SqlBlockPlanBinder {
       status = activate(bound, block, child);
       boolean join = status.isOk()
           && bound.command.type() == SqlCommandType.JOIN_SCAN;
-      if (status.isOk() && join) {
+      if (status.isOk() && join && evaluator != null) {
         status = joins.preflight(bound, predicatePreflight, evaluator);
       } else if (status.isOk() && evaluator != null) {
         status = evaluator.prepare(bound);
       }
-      if (status.isOk() && !join && predicatePreflight != null) {
+      if (status.isOk() && evaluator != null
+          && !join && predicatePreflight != null) {
         status = predicatePreflight.prepare(bound.command, bound.whereBoolean);
       }
-      if (status.isOk() && predicatePreflight != null) {
+      if (status.isOk() && evaluator != null && predicatePreflight != null) {
         status = predicatePreflight.prepare(bound.command, bound.havingBoolean);
       }
       child = plans.schema(block);
@@ -135,7 +136,5 @@ final class SqlBlockPlanBinder {
     bound.accessPredicate = -1;
     bound.predicateColumn = -1;
     bound.accessComparison = null;
-    bound.joinOuterColumn = -1;
-    bound.joinInnerColumn = -1;
   }
 }

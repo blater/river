@@ -47,6 +47,8 @@ final class SqlBlockSource {
     return join.begin();
   }
 
+  void resetJoinMetrics() { join.resetMetrics(); }
+
   StatusCode nextJoin(SqlBlockRow row) {
     if (row == null) return StatusCode.CONFLICT;
     StatusCode status = join.next();

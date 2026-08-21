@@ -25,8 +25,7 @@ final class BoundSqlStatement {
       new SqlBoundBooleanPredicateProgram();
   private SqlBoundBlockPlans blockPlans;
   final TableDefinition table = new TableDefinition();
-  final TableDefinition joinTable = new TableDefinition();
-  private TableDefinition[] additionalJoinTables;
+  private TableDefinition[] joinTables;
   private int joinRoleCount;
   final int[] insertSourceByColumn = new int[TableSchema.MAXIMUM_COLUMNS];
   final int[] updatedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
@@ -53,8 +52,6 @@ final class BoundSqlStatement {
   int groupColumn;
   int groupAggregateColumn;
   int distinctColumn;
-  int joinOuterColumn;
-  int joinInnerColumn;
   int orderColumn;
   int sortKeyProjection;
 
@@ -69,7 +66,6 @@ final class BoundSqlStatement {
     havingBoolean.reset();
     if (blockPlans != null) blockPlans.reset();
     table.reset();
-    joinTable.reset();
     resetJoinRoles();
     predicateColumn = -1;
     predicateCount = 0;
@@ -84,8 +80,6 @@ final class BoundSqlStatement {
     groupColumn = -1;
     groupAggregateColumn = -1;
     distinctColumn = -1;
-    joinOuterColumn = -1;
-    joinInnerColumn = -1;
     resetJoinAccess();
     orderColumn = -1;
     sortKeyProjection = -1;
@@ -95,8 +89,6 @@ final class BoundSqlStatement {
     if (blockPlans == null) blockPlans = new SqlBoundBlockPlans();
     return blockPlans;
   }
-
-  SqlBoundBooleanPredicateProgram onBoolean() { return onBoolean(0); }
 
   SqlBoundBooleanPredicateProgram onBoolean(int stage) {
     if (stage < 0 || stage >= SqlJoinChain.MAXIMUM_JOIN_STAGES) return null;
@@ -108,10 +100,6 @@ final class BoundSqlStatement {
       onBooleans[stage] = new SqlBoundBooleanPredicateProgram();
     }
     return onBooleans[stage];
-  }
-
-  boolean hasOnBoolean() {
-    return hasOnBoolean(0);
   }
 
   boolean hasOnBoolean(int stage) {
@@ -128,24 +116,28 @@ final class BoundSqlStatement {
 
   void beginJoinRoles(int roles) {
     joinRoleCount = roles;
-    if (roles <= 2 || additionalJoinTables != null) return;
-    additionalJoinTables = new TableDefinition[
-        SqlJoinChain.MAXIMUM_JOIN_ROLES - 2];
-    for (int role = 2; role < SqlJoinChain.MAXIMUM_JOIN_ROLES; role++) {
-      additionalJoinTables[role - 2] = new TableDefinition();
+    if (roles <= 1) return;
+    if (joinTables == null) {
+      joinTables = new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES - 1];
+    }
+    for (int role = 1; role < roles; role++) {
+      if (joinTables[role - 1] == null) {
+        joinTables[role - 1] = new TableDefinition();
+      }
     }
   }
 
   TableDefinition joinRole(int role) {
     if (role < 0 || role >= joinRoleCount) return null;
     if (role == 0) return table;
-    if (role == 1) return joinTable;
-    return additionalJoinTables == null ? null : additionalJoinTables[role - 2];
+    return joinTables == null ? null : joinTables[role - 1];
   }
 
   private void resetJoinRoles() {
-    if (additionalJoinTables != null) {
-      for (TableDefinition definition : additionalJoinTables) definition.reset();
+    if (joinTables != null) {
+      for (TableDefinition definition : joinTables) {
+        if (definition != null) definition.reset();
+      }
     }
     joinRoleCount = 0;
   }
@@ -156,18 +148,12 @@ final class BoundSqlStatement {
       joinAccessOuterColumns[stage] = -1;
       joinAccessInnerColumns[stage] = -1;
     }
-    joinOuterColumn = -1;
-    joinInnerColumn = -1;
   }
 
   void setJoinAccess(int stage, int outerRole, int outerColumn, int innerColumn) {
     joinAccessOuterRoles[stage] = (byte) outerRole;
     joinAccessOuterColumns[stage] = outerColumn;
     joinAccessInnerColumns[stage] = innerColumn;
-    if (stage == 0) {
-      joinOuterColumn = outerColumn;
-      joinInnerColumn = innerColumn;
-    }
   }
 
   int joinAccessOuterRole(int stage) { return joinAccessOuterRoles[stage]; }

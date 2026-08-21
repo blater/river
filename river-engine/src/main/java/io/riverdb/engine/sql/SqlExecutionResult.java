@@ -85,8 +85,12 @@ public final class SqlExecutionResult {
         || !isVarchar(index)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    textLengths[index] = Utf8RowText.decode(
+    int decoded = Utf8RowText.decode(
         source, offset, length, textValues[index]);
+    if (decoded < 0) {
+      return StatusCode.CORRUPTION;
+    }
+    textLengths[index] = decoded;
     return StatusCode.OK;
   }
 

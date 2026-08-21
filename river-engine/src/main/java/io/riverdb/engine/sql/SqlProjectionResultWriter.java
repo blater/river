@@ -23,7 +23,9 @@ final class SqlProjectionResultWriter {
     StatusCode status = setRawText(
         result, source, bound.table, bound.projectedColumns,
         bound.projectedColumnCount, projected.nullMask());
-    return status.isOk() ? setGeneratedText(result, projected) : status;
+    if (status.isOk()) status = setGeneratedText(result, projected);
+    if (!status.isOk()) result.reset();
+    return status;
   }
 
   StatusCode writeScan(
@@ -42,7 +44,9 @@ final class SqlProjectionResultWriter {
         cursor.projectedColumnCount());
     StatusCode status = setRawText(
         result, source, table, cursor, projected.nullMask());
-    return status.isOk() ? setGeneratedText(result, projected) : status;
+    if (status.isOk()) status = setGeneratedText(result, projected);
+    if (!status.isOk()) result.reset();
+    return status;
   }
 
   private static StatusCode setRawText(

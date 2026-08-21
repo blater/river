@@ -358,8 +358,6 @@ final class BoundSqlQuery {
     CharSequence tableAlias() {
       return joinChain() == null ? tableAlias : joinChain.alias(0);
     }
-    CharSequence joinTableName() { return joinChain.tableName(1); }
-    CharSequence joinTableAlias() { return joinChain.alias(1); }
     SqlJoinChain joinChain() {
       return joinChain != null && joinChain.stageCount() > 0 ? joinChain : null;
     }
@@ -374,7 +372,6 @@ final class BoundSqlQuery {
     boolean isSelectAll() { return selectAll; }
     boolean isOrdered() { return ordered; }
     boolean isDescendingOrder() { return descending; }
-    boolean isLeftJoin() { return joinChain.isLeft(0); }
     long rowLimit() { return rowLimit; }
   }
 

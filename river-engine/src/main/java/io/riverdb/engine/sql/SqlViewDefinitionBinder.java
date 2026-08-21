@@ -42,7 +42,11 @@ final class SqlViewDefinitionBinder {
       StatusCode status = resolveJoin(session, bound, deepest);
       if (!status.isOk()) return status;
     }
-    return blocks.bind(session, bound, null);
+    StatusCode status = blocks.bind(session, bound, null);
+    return status.isOk()
+        && deepest.type() == SqlCommandType.JOIN_SCAN
+        && deepest.joinChain().stageCount() > 1
+        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
   }
 
   private StatusCode bindJoin(

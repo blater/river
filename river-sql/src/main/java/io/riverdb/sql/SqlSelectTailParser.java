@@ -20,10 +20,6 @@ final class SqlSelectTailParser {
 
   private StatusCode parseOrder(CharSequence sql, SqlCommand result) {
     SqlCommandType type = result.type();
-    if (type == SqlCommandType.JOIN_SCAN) {
-      return input.consumeKeyword(sql, "ORDER")
-          ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
-    }
     if (!input.consumeKeyword(sql, "ORDER")) {
       return StatusCode.OK;
     }
@@ -32,7 +28,7 @@ final class SqlSelectTailParser {
       status = isGroupAggregate(type) || type == SqlCommandType.DISTINCT_SCAN
           ? parser.matchingEitherIdentifier(
               sql, result.firstColumnName(), result.columnOutputName(0))
-          : input.identifier(sql, result.writableOrderColumnName());
+          : parseOrderName(sql, result);
     }
     if (status.isOk()
         && (isGroupAggregate(type) || type == SqlCommandType.DISTINCT_SCAN)) {
@@ -50,6 +46,12 @@ final class SqlSelectTailParser {
       }
     }
     return status;
+  }
+
+  private StatusCode parseOrderName(CharSequence sql, SqlCommand result) {
+    StatusCode status = input.identifier(sql, result.writableOrderColumnName());
+    return status.isOk() && input.consumeCharacter(sql, '.')
+        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
   }
 
   private StatusCode parseLimit(CharSequence sql, SqlCommand result) {

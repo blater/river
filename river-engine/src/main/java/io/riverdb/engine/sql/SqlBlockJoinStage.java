@@ -27,18 +27,27 @@ final class SqlBlockJoinStage {
 
   StatusCode materialize(
       int block, SqlBlockRowStore output, SqlBlockRow sourceRow) {
+    long limit = bound.blockPlans().command(block).rowLimit();
     StatusCode status = output.begin(
         bound.blockPlans().schema(block), -1, false);
-    if (status.isOk()) status = source.beginJoin();
-    while (status.isOk()) {
+    boolean began = false;
+    if (status.isOk() && limit > 0) {
+      status = source.beginJoin();
+      began = status.isOk();
+    } else if (status.isOk()) {
+      source.resetJoinMetrics();
+    }
+    long accepted = 0;
+    while (status.isOk() && accepted < limit) {
       status = source.nextJoin(sourceRow);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
       if (status.isOk()) status = output.append(sourceRow);
+      if (status.isOk()) accepted++;
     }
-    status = source.finishJoin(status);
+    if (began) status = source.finishJoin(status);
     sourceRow.reset(0);
     return status.isOk() ? output.finish() : status;
   }

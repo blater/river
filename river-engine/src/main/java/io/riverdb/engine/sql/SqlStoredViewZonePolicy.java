@@ -36,7 +36,12 @@ final class SqlStoredViewZonePolicy {
   private static StatusCode command(
       SqlCommand command, SqlTemporalZoneNames zones) {
     if (command.type() == SqlCommandType.JOIN_SCAN) {
-      StatusCode status = predicates(command, command.onPredicates(), zones);
+      StatusCode status = StatusCode.OK;
+      for (int stage = 0;
+          status.isOk() && stage < command.joinChain().stageCount(); stage++) {
+        status = predicates(
+            command, command.joinChain().onPredicates(stage), zones);
+      }
       if (status.isOk()) {
         status = predicates(command, command.wherePredicates(), zones);
       }

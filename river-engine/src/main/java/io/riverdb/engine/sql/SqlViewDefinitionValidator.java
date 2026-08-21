@@ -32,6 +32,6 @@ final class SqlViewDefinitionValidator {
   }
 
   int joinTableId() {
-    return bound.joinTable.tableId();
+    return bound.joinRole(1) == null ? 0 : bound.joinRole(1).tableId();
   }
 }

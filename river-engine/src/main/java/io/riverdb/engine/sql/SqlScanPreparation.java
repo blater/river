@@ -58,8 +58,11 @@ final class SqlScanPreparation {
       return beginGrouped(command, true, explainOnly);
     }
     if (type == SqlCommandType.JOIN_SCAN) {
-      StatusCode status = joins.begin();
-      return status.isOk() ? scan.claim() : status;
+      StatusCode status = explainOnly ? joins.describe() : joins.begin();
+      if (!status.isOk()) return status;
+      if (explainOnly || !command.isOrdered()) return scan.claim();
+      status = sorts.materializeJoin();
+      return status.isOk() ? scan.claimSorted(sorts.totalRows()) : status;
     }
     return type == SqlCommandType.SCAN || type == SqlCommandType.SELECT
         ? beginRows(command, explainOnly) : StatusCode.INVALID_EXTERNAL_INPUT;

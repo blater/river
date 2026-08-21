@@ -17,9 +17,6 @@ final class SqlBlockStagePlan {
   private static final long GROUP = PackedText.pack("group");
   private static final long HAVING = PackedText.pack("having");
   private static final long INDEX = PackedText.pack("index");
-  private static final long JOIN = PackedText.pack("join");
-  private static final long LEFT = PackedText.pack("left");
-  private static final long LOOKUP = PackedText.pack("lookup");
   private static final long PRIMARY = PackedText.pack("primary");
   private static final long SORT = PackedText.pack("sort");
   private static final long TABLE = PackedText.pack("table");
@@ -28,31 +25,44 @@ final class SqlBlockStagePlan {
   private final long[] details = new long[MAXIMUM_STEPS];
   private final long[] rows = new long[MAXIMUM_STEPS];
   private final int[] rowSteps = new int[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final SqlJoinChainSource source;
+  private final SqlJoinChainPlan joins;
+  private int joinOffset = -1;
   private int count;
 
-  StatusCode describe(SqlBoundBlockPlans plans) {
+  SqlBlockStagePlan(
+      SqlJoinChainSource joinSource, SqlJoinChainPlan joinPlan) {
+    source = joinSource;
+    joins = joinPlan;
+  }
+
+  StatusCode describe(SqlBoundBlockPlans plans, boolean withActuals) {
     count = 0;
+    joinOffset = -1;
     for (int block = 0; block < plans.count(); block++) {
       rowSteps[block] = count;
       StatusCode status = append(BLOCK, block + 1);
-      if (status.isOk() && plans.command(block).rowLimit() != Long.MAX_VALUE) {
+      boolean join = plans.command(block).type()
+          == io.riverdb.sql.SqlCommandType.JOIN_SCAN;
+      if (status.isOk() && !join
+          && plans.command(block).rowLimit() != Long.MAX_VALUE) {
         status = append(io.riverdb.base.text.PackedText.pack("limit"),
             plans.command(block).rowLimit());
       }
-      if (status.isOk()) status = logical(plans.command(block));
+      if (status.isOk() && !join) status = logical(plans.command(block), false);
+      if (status.isOk() && join) {
+        joinOffset = count;
+        status = joins.describe(plans, block, source, withActuals);
+      }
       if (!status.isOk()) return status;
     }
     int deepest = plans.count() - 1;
     boolean join = plans.command(deepest).type()
         == io.riverdb.sql.SqlCommandType.JOIN_SCAN;
-    int access = join ? plans.joinOuterAccessColumn(deepest) : -1;
+    if (join) return StatusCode.OK;
+    int access = -1;
     StatusCode status = append(
         access > 0 ? INDEX : access == 0 ? PRIMARY : TABLE, access);
-    if (status.isOk() && join) {
-      status = append(
-          plans.joinRightIndexed(deepest) ? LOOKUP : TABLE,
-          plans.joinRightColumn(deepest));
-    }
     return status;
   }
 
@@ -60,23 +70,26 @@ final class SqlBlockStagePlan {
     if (block >= 0 && block < rowSteps.length) rows[rowSteps[block]] = actualRows;
   }
 
-  int count() { return count; }
-  long operator(int step) { return operators[step]; }
-  long detail(int step) { return details[step]; }
-  long rows(int step) { return rows[step]; }
+  int count() { return count + (joinOffset < 0 ? 0 : joins.count()); }
+  long operator(int step) {
+    return joinOffset >= 0 && step >= joinOffset
+        ? joins.operator(step - joinOffset) : operators[step];
+  }
+  long detail(int step) {
+    return joinOffset >= 0 && step >= joinOffset
+        ? joins.detail(step - joinOffset) : details[step];
+  }
+  long rows(int step) {
+    return joinOffset >= 0 && step >= joinOffset
+        ? joins.rows(step - joinOffset) : rows[step];
+  }
 
-  private StatusCode logical(SqlCommand command) {
+  private StatusCode logical(SqlCommand command, boolean join) {
     boolean distinct = command.type() == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN;
     StatusCode status = outputOrder(command, distinct);
     if (status.isOk()) status = aggregate(command, distinct);
     if (status.isOk()) status = inputOrder(command, distinct);
-    if (status.isOk()
-        && command.type() == io.riverdb.sql.SqlCommandType.JOIN_SCAN) {
-      status = append(
-          command.isLeftJoin() ? LEFT : JOIN,
-          command.onPredicates().leafCount());
-    }
-    if (status.isOk() && command.wherePredicates().leafCount() > 0) {
+    if (status.isOk() && !join && command.wherePredicates().leafCount() > 0) {
       status = append(FILTER, command.wherePredicates().leafCount());
     }
     return status;

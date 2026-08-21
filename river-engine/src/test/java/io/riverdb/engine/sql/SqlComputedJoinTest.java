@@ -75,7 +75,7 @@ final class SqlComputedJoinTest {
     assertTemporalPreflight(session, execution);
     assertTemporalRuntimeCleanup(session, execution);
     assertLateProjectionFailureIsAtomic(session, execution);
-    assertDirectOrderDeferred(session, execution);
+    assertDirectOrder(session, execution);
     assertRoleAwareBindingAndMultiStageGuard(session, execution);
 
     assertEquals(StatusCode.OK, session.close());
@@ -302,12 +302,15 @@ final class SqlComputedJoinTest {
                 + "ON r.id=l.id",
             cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack("join"), row.valueAt(0));
-    assertEquals(1, row.valueAt(1));
-    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(PackedText.pack("table"), row.valueAt(0));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
     assertEquals(PackedText.pack("lookup"), row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack("on"), row.valueAt(0));
+    assertEquals(1, row.valueAt(1));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack("join"), row.valueAt(0));
+    assertEquals(1, row.valueAt(1));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
   }
@@ -340,13 +343,19 @@ final class SqlComputedJoinTest {
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack("join"), row.valueAt(0));
+    assertEquals(PackedText.pack("table"), row.valueAt(0));
+    assertEquals(3, row.valueAt(2));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack(rightAccess), row.valueAt(0));
+    assertEquals("lookup".equals(rightAccess) ? 3 : 12, row.valueAt(2));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack("on"), row.valueAt(0));
     assertEquals(onLeaves, row.valueAt(1));
     assertEquals(1, row.valueAt(2));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack("table"), row.valueAt(0));
-    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
-    assertEquals(PackedText.pack(rightAccess), row.valueAt(0));
+    assertEquals(PackedText.pack("join"), row.valueAt(0));
+    assertEquals(onLeaves, row.valueAt(1));
+    assertEquals(1, row.valueAt(2));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
   }
@@ -419,14 +428,14 @@ final class SqlComputedJoinTest {
     assertEquals(30, execution.valueAt(0));
   }
 
-  private static void assertDirectOrderDeferred(
+  private static void assertDirectOrder(
       SqlSession session, SqlExecutionResult execution) {
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginScan(
-            "SELECT l.id,r.id FROM left_rows l JOIN right_rows r "
-                + "ON l.id=r.id ORDER BY l.id",
-            new SqlScanCursor()));
+    assertPairs(
+        session,
+        execution,
+        "SELECT l.id AS lid,r.id AS rid FROM left_rows l JOIN right_rows r "
+            + "ON l.id=r.id ORDER BY lid DESC",
+        3, 3, 2, 2, 1, 1);
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT amount FROM left_rows WHERE id=1", execution));

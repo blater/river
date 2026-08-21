@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
@@ -37,8 +38,10 @@ final class SqlNTableJoinTest {
     assertIndexedAndTableStagesAgree(session, result);
     assertMixedLeftNullPropagation(session, result);
     assertEightRolesPreserveOwnedText(session, result);
+    assertDirectOrderUsesProjectedJoinTuples(session, result);
+    assertThreeRolePlanTruth(session, result);
     assertTerminalTemporalFailureClosesEveryRole(session, result);
-    assertDeferredComposedConsumers(session, result);
+    assertComposedConsumerBoundaries(session, result);
 
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
@@ -188,6 +191,97 @@ final class SqlNTableJoinTest {
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 
+  private static void assertDirectOrderUsesProjectedJoinTuples(
+      SqlSession session, SqlExecutionResult result) {
+    String source = " FROM chain0 a JOIN chain1 b ON a.k=b.k "
+        + "JOIN chain2 c ON b.k=c.k AND c.v<100";
+    assertRows(
+        session,
+        result,
+        "SELECT a.id AS aid,c.v AS cv" + source + " ORDER BY cv DESC",
+        new long[][] {{2, 22}, {1, 21}});
+    assertRows(
+        session,
+        result,
+        "SELECT a.id AS aid,c.v AS cv" + source
+            + " ORDER BY aid DESC LIMIT 1",
+        new long[][] {{2, 22}});
+
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    char[] text = new char[32];
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT a.id AS aid,a.label AS label" + source
+                + " ORDER BY label",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(9, row.copyTextAt(1, text, 0));
+    assertEquals("outer-é😀", new String(text, 0, 9));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertEquals(6, row.copyTextAt(1, text, 0));
+    assertEquals("second", new String(text, 0, 6));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        session.beginScan(
+            "SELECT a.id,b.id FROM chain0 a JOIN chain1 b ON a.k=b.k "
+                + "ORDER BY a.id",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.beginScan(
+            "SELECT a.id,b.id FROM chain0 a JOIN chain1 b ON a.k=b.k "
+                + "ORDER BY id",
+            new SqlScanCursor()));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute(
+            "SELECT a.id AS aid,b.id AS bid FROM chain0 a "
+                + "JOIN chain1 b ON a.k=b.k ORDER BY aid",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT label FROM chain0 WHERE id=1", result));
+    assertEquals(9, result.textLengthAt(0));
+  }
+
+  private static void assertThreeRolePlanTruth(
+      SqlSession session, SqlExecutionResult result) {
+    String query = "SELECT a.id AS aid,b.v AS bv,c.v AS cv FROM chain0 a "
+        + "JOIN chain1 b ON a.k=b.k LEFT JOIN chain2 c "
+        + "ON b.k=c.k AND c.id=1 WHERE a.id>0 ORDER BY aid DESC LIMIT 1";
+    assertThreeRolePlan(session, result, "EXPLAIN " + query, false);
+    assertThreeRolePlan(session, result, "EXPLAIN ANALYZE " + query, true);
+  }
+
+  private static void assertThreeRolePlan(
+      SqlSession session,
+      SqlExecutionResult result,
+      String sql,
+      boolean analyze) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    assertPlanRow(session, cursor, row, "table", -1, analyze ? 2 : -1);
+    assertPlanRow(session, cursor, row, "index", 1, analyze ? 2 : -1);
+    assertPlanRow(session, cursor, row, "on", 1, analyze ? 2 : -1);
+    assertPlanRow(session, cursor, row, "join", 1, analyze ? 2 : -1);
+    assertPlanRow(session, cursor, row, "index", 1, analyze ? 3 : -1);
+    assertPlanRow(session, cursor, row, "on", 2, analyze ? 1 : -1);
+    assertPlanRow(session, cursor, row, "extend", 2, analyze ? 1 : -1);
+    assertPlanRow(session, cursor, row, "left", 2, analyze ? 2 : -1);
+    assertPlanRow(session, cursor, row, "filter", 1, analyze ? 2 : -1);
+    assertPlanRow(session, cursor, row, "sort", -1, analyze ? 2 : -1);
+    assertPlanRow(session, cursor, row, "limit", 1, analyze ? 1 : -1);
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
   private static void assertTerminalTemporalFailureClosesEveryRole(
       SqlSession session, SqlExecutionResult result) {
     SqlScanCursor cursor = new SqlScanCursor();
@@ -215,25 +309,32 @@ final class SqlNTableJoinTest {
     assertEquals(9, result.textLengthAt(0));
   }
 
-  private static void assertDeferredComposedConsumers(
+  private static void assertComposedConsumerBoundaries(
       SqlSession session, SqlExecutionResult result) {
-    String join = "SELECT a.id,c.v FROM chain0 a JOIN chain1 b ON a.k=b.k "
-        + "JOIN chain2 c ON b.k=c.k";
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginScan("EXPLAIN " + join, new SqlScanCursor()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginScan(
-            "SELECT id FROM (" + join + ") joined",
-            new SqlScanCursor()));
+    String join = "SELECT a.id AS aid,c.v AS cv FROM chain0 a "
+        + "JOIN chain1 b ON a.k=b.k "
+        + "JOIN chain2 c ON b.k=c.k AND c.v<100";
+    SqlScanCursor explain = new SqlScanCursor();
+    assertEquals(StatusCode.OK, session.beginScan("EXPLAIN " + join, explain));
+    assertEquals(StatusCode.OK, session.closeScan(explain, result));
+    assertRows(
+        session,
+        result,
+        "SELECT aid FROM (" + join + ") joined",
+        new long[][] {{1}, {2}});
+    assertRows(
+        session,
+        result,
+        "SELECT cv,SUM(aid+1) AS total FROM (" + join
+            + ") joined GROUP BY cv HAVING SUM(aid+1)>2 ORDER BY cv",
+        new long[][] {{22, 3}});
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         session.execute("CREATE VIEW deferred_chain AS " + join, result));
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         session.execute(
-            "CREATE VIEW deferred_derived AS SELECT id FROM ("
+            "CREATE VIEW deferred_derived AS SELECT aid FROM ("
                 + join + ") joined",
             result));
     String invalid = "SELECT a.id FROM chain0 a "
@@ -266,5 +367,19 @@ final class SqlNTableJoinTest {
     }
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void assertPlanRow(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      String operator,
+      long detail,
+      long actualRows) {
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(PackedText.pack(operator), row.valueAt(0));
+    assertEquals(detail, row.valueAt(1));
+    assertEquals(actualRows < 0, row.isNull(2));
+    if (actualRows >= 0) assertEquals(actualRows, row.valueAt(2));
   }
 }

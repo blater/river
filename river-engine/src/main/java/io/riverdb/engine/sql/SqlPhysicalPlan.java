@@ -30,21 +30,15 @@ final class SqlPhysicalPlan {
   private boolean aggregate;
   private boolean groupAggregate;
   private boolean distinct;
-  private boolean join;
-  private boolean leftJoin;
-  private boolean joinInnerIndexed;
-  private boolean joinInnerUnique;
   private boolean explainResult;
   private boolean explainAnalyzed;
   private int groupColumn = -1;
   private int groupAggregateColumn = -1;
   private int orderColumn = -1;
-  private int joinOuterColumn = -1;
-  private int joinInnerColumn = -1;
-  private int joinPredicateCount;
   private boolean sort;
   private long actualRows;
   private SqlBlockStagePlan blockStages;
+  private SqlJoinChainPlan joinStages;
 
   SqlPhysicalPlan() {
     for (int index = 0; index < resultNames.length; index++) {
@@ -67,30 +61,32 @@ final class SqlPhysicalPlan {
     aggregate = false;
     groupAggregate = false;
     distinct = false;
-    join = false;
-    leftJoin = false;
-    joinInnerIndexed = false;
-    joinInnerUnique = false;
     explainResult = false;
     explainAnalyzed = false;
     groupColumn = -1;
     groupAggregateColumn = -1;
     orderColumn = -1;
-    joinOuterColumn = -1;
-    joinInnerColumn = -1;
-    joinPredicateCount = 0;
     sort = false;
     actualRows = 0;
     blockStages = null;
+    joinStages = null;
   }
 
   void resetSteps() {
     stepCount = 0;
     blockStages = null;
+    joinStages = null;
   }
 
   void setBlockStages(SqlBlockStagePlan stages) {
     blockStages = stages;
+    joinStages = null;
+    stepCount = 0;
+  }
+
+  void setJoinStages(SqlJoinChainPlan stages) {
+    joinStages = stages;
+    blockStages = null;
     stepCount = 0;
   }
 
@@ -219,48 +215,6 @@ final class SqlPhysicalPlan {
     return distinct;
   }
 
-  void setJoin(
-      int outerColumn,
-      int innerColumn,
-      int predicateCount,
-      boolean preserveOuter,
-      boolean indexedInner,
-      boolean uniqueInner) {
-    join = true;
-    joinOuterColumn = outerColumn;
-    joinInnerColumn = innerColumn;
-    joinPredicateCount = predicateCount;
-    leftJoin = preserveOuter;
-    joinInnerIndexed = indexedInner;
-    joinInnerUnique = uniqueInner;
-  }
-
-  boolean join() {
-    return join;
-  }
-
-  int joinOuterColumn() {
-    return joinOuterColumn;
-  }
-
-  int joinInnerColumn() {
-    return joinInnerColumn;
-  }
-
-  int joinPredicateCount() { return joinPredicateCount; }
-
-  boolean leftJoin() {
-    return leftJoin;
-  }
-
-  boolean joinInnerIndexed() {
-    return joinInnerIndexed;
-  }
-
-  boolean joinInnerUnique() {
-    return joinInnerUnique;
-  }
-
   void setExplainResult(boolean analyzed) {
     explainResult = true;
     explainAnalyzed = analyzed;
@@ -365,20 +319,24 @@ final class SqlPhysicalPlan {
   }
 
   int stepCount() {
-    return blockStages == null ? stepCount : blockStages.count();
+    return blockStages != null ? blockStages.count()
+        : joinStages != null ? joinStages.count() : stepCount;
   }
 
   long operator(int index) {
-    return blockStages == null ? operators[index] : blockStages.operator(index);
+    return blockStages != null ? blockStages.operator(index)
+        : joinStages != null ? joinStages.operator(index) : operators[index];
   }
 
   long detail(int index) {
-    return blockStages == null ? details[index] : blockStages.detail(index);
+    return blockStages != null ? blockStages.detail(index)
+        : joinStages != null ? joinStages.detail(index) : details[index];
   }
 
   long stepRows(int index) {
-    return blockStages == null ? index == 0 ? actualRows : -1
-        : blockStages.rows(index);
+    return blockStages != null ? blockStages.rows(index)
+        : joinStages != null ? joinStages.rows(index)
+            : index == 0 ? actualRows : -1;
   }
 
   private static final class ResultName implements CharSequence {

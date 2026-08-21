@@ -37,6 +37,7 @@ final class SqlQueryExecution {
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final SqlJoinExecution joins;
   private final SqlJoinChainSource joinSource;
+  private final SqlJoinChainPlan joinPlan = new SqlJoinChainPlan();
   private final SqlCatalogScanExecution catalogs;
   private final SqlScanPreparation scanPreparation;
   private final SqlGroupedExecution groups;
@@ -71,7 +72,7 @@ final class SqlQueryExecution {
     pointQueries = new SqlPointQueryExecution(
         session, bound, expressions, predicates, rowProjections, temporal);
     joins = new SqlJoinExecution(
-        bound, plan, joinSource, rowProjections);
+        bound, plan, joinSource, rowProjections, joinPlan);
     sorts = new SqlSortExecution(
         session,
         bound,
@@ -80,7 +81,8 @@ final class SqlQueryExecution {
         expressions,
         nestedExecution,
         predicates,
-        rowProjections);
+        rowProjections,
+        joinSource);
     groups = new SqlGroupedExecution(
         session,
         bound,
@@ -206,6 +208,7 @@ final class SqlQueryExecution {
           bound,
           blockBinder,
           joinSource,
+          joinPlan,
           expressions,
           predicates,
           rowProjections,
@@ -271,6 +274,7 @@ final class SqlQueryExecution {
 
   StatusCode describeCurrentPlan(SqlScanCursor cursor) {
     return bound.hasBlockPlans()
+        || command.type() == SqlCommandType.JOIN_SCAN
         ? StatusCode.OK : planDescription.describe(plan);
   }
 
@@ -352,7 +356,7 @@ final class SqlQueryExecution {
     if (plan.sorts()) {
       return sorts.next(cursor, result);
     }
-    if (plan.join()) {
+    if (command.type() == SqlCommandType.JOIN_SCAN) {
       return joins.next(cursor, result);
     }
     return nextRelationalRow(cursor, result);

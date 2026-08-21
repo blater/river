@@ -472,7 +472,13 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk() && !bound.query.isBlockPipeline()) {
       return StatusCode.CORRUPTION;
     }
-    if (status.isOk()) status = blockBinder.bind(session, bound, rowExpressions);
+    if (status.isOk()) {
+      status = blockBinder.bind(
+          session, bound, queries.explainOnly() ? null : rowExpressions);
+    }
+    if (status.isOk() && queries.explainOnly()) {
+      status = temporal.validateZones(bound.command, bound.query);
+    }
     if (status.isOk()) status = queries.prepareBlockPipeline();
     return publishPreparedQuery(status);
   }
@@ -486,13 +492,13 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       status = binder.bindJoin(bound.command, bound);
     }
-    if (status.isOk()
-        && bound.command.joinChain().stageCount() > 1
-        && (bound.query.isExplain() || bound.query.isAnalyze())) {
-      status = StatusCode.FEATURE_NOT_SUPPORTED;
+    if (status.isOk() && bound.command.isOrdered()) {
+      status = binder.bindJoinOrder(bound.command, bound);
     }
     if (status.isOk()) {
-      status = queries.prepareProjectionPrograms();
+      status = queries.explainOnly()
+          ? temporal.validateZones(bound.command, bound.query)
+          : queries.prepareProjectionPrograms();
     }
     return publishPreparedQuery(status);
   }
@@ -582,9 +588,6 @@ final class SqlSessionExecutionCoordinator {
   private StatusCode failStreamingStart(StatusCode status) {
     StatusCode cleanup = queries.retryFailedStartCleanup();
     boolean complete = cleanup.isOk();
-    if (!complete) {
-      status = cleanup;
-    }
     status = streaming.failStart(status, complete);
     if (complete && !streaming.isActive()) {
       queries.completeFailedStart();
@@ -598,13 +601,12 @@ final class SqlSessionExecutionCoordinator {
     StatusCode cleanup = queries.closePhysicalScan(cursor);
     boolean physicalCleanupComplete = cleanup.isOk();
     StatusCode status = streaming.finish(
-        cleanup, physicalCleanupComplete, queries.aggregateExecution());
+        executionStatus.isOk() ? cleanup : executionStatus,
+        physicalCleanupComplete,
+        queries.aggregateExecution());
     if (physicalCleanupComplete && !streaming.isActive()) {
       queries.completeScan(cursor);
       temporal.finishStatement();
-    }
-    if (status.isOk() && !executionStatus.isOk()) {
-      status = executionStatus;
     }
     return status.isOk()
         ? queries.claimExplainResult(cursor, queries.aggregateExecution(), analyzed)

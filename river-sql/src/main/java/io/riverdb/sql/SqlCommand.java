@@ -630,6 +630,7 @@ public final class SqlCommand {
     return orderColumnName;
   }
 
+
   public SqlCommandType type() {
     return type;
   }
@@ -696,26 +697,6 @@ public final class SqlCommand {
 
   public SqlJoinChain joinChain() {
     return joinChain != null && joinChain.stageCount() > 0 ? joinChain : null;
-  }
-
-  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
-  public SqlIdentifier joinTableName() {
-    return joinChain().tableName(1);
-  }
-
-  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
-  public SqlIdentifier joinTableAlias() {
-    return joinChain().alias(1);
-  }
-
-  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
-  public boolean isLeftJoin() {
-    return joinChain().isLeft(0);
-  }
-
-  /** J1 two-role execution view; removed when J2 consumes every chain stage. */
-  public SqlBooleanPredicateProgram onPredicates() {
-    return joinChain().onPredicates(0);
   }
 
   public SqlBooleanPredicateProgram booleanHavingPredicates() {
@@ -869,6 +850,7 @@ public final class SqlCommand {
   public SqlIdentifier orderColumnName() {
     return orderColumnName;
   }
+
 
   public boolean isOrdered() {
     return orderColumnName.length() > 0;

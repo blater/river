@@ -86,6 +86,10 @@ final class SqlBinder {
     return projections.bindOrder(command, bound);
   }
 
+  StatusCode bindJoinOrder(SqlCommand command, BoundSqlStatement bound) {
+    return projections.bindJoinOrder(command, bound);
+  }
+
   StatusCode bindGroupAggregate(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
     return projections.bindGroup(command, query, bound);

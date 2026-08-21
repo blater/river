@@ -12,10 +12,7 @@ final class SqlPlanDescription {
   private static final long GROUP = PackedText.pack("group");
   private static final long HAVING = PackedText.pack("having");
   private static final long INDEX = PackedText.pack("index");
-  private static final long JOIN = PackedText.pack("join");
-  private static final long LEFT = PackedText.pack("left");
   private static final long LIMIT = PackedText.pack("limit");
-  private static final long LOOKUP = PackedText.pack("lookup");
   private static final long NESTED = PackedText.pack("nested");
   private static final long PRIMARY = PackedText.pack("primary");
   private static final long SORT = PackedText.pack("sort");
@@ -68,9 +65,6 @@ final class SqlPlanDescription {
       status = plan.addStep(GROUP, plan.groupAggregateColumn());
     } else if (status.isOk() && plan.distinct()) {
       status = plan.addStep(DISTINCT, plan.groupColumn());
-    } else if (status.isOk() && plan.join()) {
-      status = plan.addStep(
-          plan.leftJoin() ? LEFT : JOIN, plan.joinPredicateCount());
     }
     return status;
   }
@@ -91,11 +85,6 @@ final class SqlPlanDescription {
           ? INDEX
           : plan.accessColumn() == 0 ? PRIMARY : TABLE,
       plan.accessColumn());
-    if (status.isOk() && plan.join()) {
-      status = plan.addStep(
-          plan.joinInnerIndexed() ? LOOKUP : TABLE,
-          plan.joinInnerColumn());
-    }
     return status;
   }
 }

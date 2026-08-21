@@ -121,23 +121,33 @@ final class SqlJoinBlockPipelineTest {
             "CREATE TABLE spill_right "
                 + "(id BIGINT PRIMARY KEY,label VARCHAR(20))",
             result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE spill_third (id BIGINT PRIMARY KEY,marker BIGINT)",
+            result));
     for (int start = 1; start <= 1_025; start += 64) {
       int end = Math.min(1_025, start + 63);
       StringBuilder left = new StringBuilder("INSERT INTO spill_left VALUES ");
       StringBuilder right = new StringBuilder("INSERT INTO spill_right VALUES ");
+      StringBuilder third = new StringBuilder("INSERT INTO spill_third VALUES ");
       for (int id = start; id <= end; id++) {
         if (id > start) {
           left.append(',');
           right.append(',');
+          third.append(',');
         }
         String label = id % 3 == 0 ? "猫" : id % 3 == 1 ? HIGH_BMP : "😀";
         left.append('(').append(id).append(',').append(id % 2)
             .append(",'left')");
+        third.append('(').append(id).append(',').append(id + 1).append(')');
         right.append('(').append(id).append(",'").append(label).append("')");
       }
       assertEquals(StatusCode.OK, session.execute(left.toString(), result));
       assertEquals(StatusCode.OK, session.execute(right.toString(), result));
+      assertEquals(StatusCode.OK, session.execute(third.toString(), result));
     }
+    assertDirectThreeRoleSpill(session, result);
     assertEquals(
         StatusCode.OK,
         session.execute(
@@ -165,6 +175,38 @@ final class SqlJoinBlockPipelineTest {
     assertEquals(StatusCode.OK, session.execute("DROP VIEW spill_join", result));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertDirectThreeRoleSpill(
+      SqlSession session, SqlExecutionResult result) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    char[] text = new char[4];
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT l.id AS lid,r.label AS label FROM spill_left l "
+                + "JOIN spill_right r ON l.id=r.id "
+                + "JOIN spill_third t ON r.id=t.id ORDER BY label",
+            cursor));
+    assertEquals(
+        io.riverdb.base.type.SqlTypeDescriptor.TYPE_ID_VARCHAR,
+        io.riverdb.base.type.SqlTypeDescriptor.typeId(
+            session.scanColumnTypeDescriptor(cursor, 1)));
+    for (int index = 0; index < 1_025; index++) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      String expected = index < 341 ? "猫" : index < 683 ? HIGH_BMP : "😀";
+      assertFalse(row.isNull(1), "NULL text at row " + index + " id " + row.valueAt(0));
+      int length = row.copyTextAt(1, text, 0);
+      assertTrue(length >= 0, "missing text at sorted row " + index);
+      assertEquals(expected, new String(text, 0, length));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT bucket FROM spill_left WHERE id=1", result));
+    assertEquals(1, result.valueAt(0));
   }
 
   private static void createFixture(
@@ -290,10 +332,19 @@ final class SqlJoinBlockPipelineTest {
             cursor));
     assertPlanRow(session, cursor, row, "block", 1, analyze ? 2 : -1);
     assertPlanRow(session, cursor, row, "block", 2, analyze ? 2 : -1);
-    assertPlanRow(session, cursor, row, "join", edge ? 2 : 1, -1);
-    if (edge) assertPlanRow(session, cursor, row, "filter", 1, -1);
-    assertPlanRow(session, cursor, row, edge ? "index" : "table", edge ? 1 : -1, -1);
-    assertPlanRow(session, cursor, row, edge ? "lookup" : "table", edge ? 1 : -1, -1);
+    assertPlanRow(
+        session, cursor, row, edge ? "index" : "table", edge ? 1 : -1,
+        analyze ? edge ? 2 : 4 : -1);
+    assertPlanRow(
+        session, cursor, row, edge ? "index" : "table", edge ? 1 : -1,
+        analyze ? edge ? 3 : 16 : -1);
+    assertPlanRow(
+        session, cursor, row, "on", edge ? 2 : 1,
+        analyze ? 2 : -1);
+    assertPlanRow(
+        session, cursor, row, "join", edge ? 2 : 1,
+        analyze ? 2 : -1);
+    if (edge) assertPlanRow(session, cursor, row, "filter", 1, analyze ? 2 : -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
@@ -320,9 +371,10 @@ final class SqlJoinBlockPipelineTest {
     SqlScanRowResult plan = new SqlScanRowResult();
     assertPlanRow(session, cursor, plan, "block", 1, -1);
     assertPlanRow(session, cursor, plan, "block", 2, -1);
-    assertPlanRow(session, cursor, plan, "join", 2, -1);
     assertPlanRow(session, cursor, plan, "table", -1, -1);
-    assertPlanRow(session, cursor, plan, "lookup", 1, -1);
+    assertPlanRow(session, cursor, plan, "index", 1, -1);
+    assertPlanRow(session, cursor, plan, "on", 2, -1);
+    assertPlanRow(session, cursor, plan, "join", 2, -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, plan));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, cursor.reset());

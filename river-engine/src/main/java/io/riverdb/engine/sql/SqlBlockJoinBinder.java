@@ -24,12 +24,22 @@ final class SqlBlockJoinBinder {
       SqlBooleanPredicateEvaluator predicates,
       SqlRowProjectionEvaluator projections) {
     StatusCode status = predicates == null ? StatusCode.OK
-        : predicates.prepare(bound.command, bound.onBoolean());
+        : prepareOn(bound, predicates);
     if (status.isOk() && predicates != null) {
       status = predicates.prepare(bound.command, bound.whereBoolean);
     }
     return status.isOk() && projections != null
         ? projections.prepare(bound) : status;
+  }
+
+  private static StatusCode prepareOn(
+      BoundSqlStatement bound, SqlBooleanPredicateEvaluator predicates) {
+    StatusCode status = StatusCode.OK;
+    for (int stage = 0;
+        status.isOk() && stage < bound.command.joinChain().stageCount(); stage++) {
+      status = predicates.prepare(bound.command, bound.onBoolean(stage));
+    }
+    return status;
   }
 
   StatusCode bind(
@@ -40,7 +50,7 @@ final class SqlBlockJoinBinder {
     if (block != plans.count() - 1) return StatusCode.FEATURE_NOT_SUPPORTED;
     StatusCode status = binder.bindJoin(bound.command, bound);
     if (!status.isOk()) return status;
-    if (bound.command.joinChain().stageCount() > 1) {
+    if (bound.command.isOrdered()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     output.set(bound.projectedColumnCount);
@@ -51,16 +61,7 @@ final class SqlBlockJoinBinder {
           bound.projectedTypeDescriptors[column],
           SqlJoinResultNullability.nullable(bound, column));
     }
-    int right = bound.joinInnerColumn;
-    int outerAccess = bound.accessPredicate >= 0
-        && (bound.predicateColumn == 0
-            || bound.table.hasIndexOn(bound.predicateColumn))
-        ? bound.predicateColumn : -1;
-    plans.setJoinAccess(
-        block,
-        right,
-        outerAccess,
-        right >= 0 && (right == 0 || bound.joinTable.hasIndexOn(right)));
+    plans.setJoinAccess(block, bound);
     return StatusCode.OK;
   }
 }

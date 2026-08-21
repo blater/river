@@ -41,21 +41,22 @@ final class SqlParserTest {
                 + "WHERE r.code>?",
             parameters,
             command));
-    assertTrue(command.isLeftJoin());
-    assertEquals(3, command.onPredicates().leafCount());
+    assertTrue(command.joinChain().isLeft(0));
+    assertEquals(3, command.joinChain().onPredicates(0).leafCount());
     assertEquals(7, predicateProgramValue(
-        command.onPredicates(), 0, SqlBooleanPredicateProgram.PROGRAM_LEFT));
-    assertEquals(1, command.onPredicates().programOperand(
+        command.joinChain().onPredicates(0), 0,
+        SqlBooleanPredicateProgram.PROGRAM_LEFT));
+    assertEquals(1, command.joinChain().onPredicates(0).programOperand(
         1, SqlBooleanPredicateProgram.PROGRAM_LEFT, 1));
     assertEquals(10, predicateValue(command, 0));
     copied.copyQueryFrom(command);
-    assertTrue(copied.isLeftJoin());
+    assertTrue(copied.joinChain().isLeft(0));
     assertName("accounts", copied.tableName());
-    assertName("regions", copied.joinTableName());
+    assertName("regions", copied.joinChain().tableName(1));
     assertName("a", copied.tableAlias());
-    assertName("r", copied.joinTableAlias());
-    assertEquals(3, copied.onPredicates().leafCount());
-    long text = copied.onPredicates().programOperand(
+    assertName("r", copied.joinChain().alias(1));
+    assertEquals(3, copied.joinChain().onPredicates(0).leafCount());
+    long text = copied.joinChain().onPredicates(0).programOperand(
         2, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
     assertText("Aé😀", copied, text);
     command.reset();
@@ -69,7 +70,7 @@ final class SqlParserTest {
                 + "a.key=1 AND a.region=2 AND r.id=3 AND r.code=4 "
                 + "AND a.key=5 AND a.region=6 AND r.id=7 AND r.code=8",
             command));
-    assertEquals(8, command.onPredicates().leafCount());
+    assertEquals(8, command.joinChain().onPredicates(0).leafCount());
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         parser.parse(
@@ -90,6 +91,12 @@ final class SqlParserTest {
             "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id",
             command));
     assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT a.key AS account_key FROM accounts a "
+                + "JOIN regions r ON a.key=r.id ORDER BY account_key",
+            command));
+    assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         parser.parse(
             "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id "
@@ -98,7 +105,8 @@ final class SqlParserTest {
     assertEquals(
         StatusCode.OK,
         parser.parse(
-            "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id",
+            "SELECT a.key AS account_key FROM accounts a "
+                + "JOIN regions r ON a.key=r.id ORDER BY account_key",
             command));
   }
 
@@ -2272,12 +2280,14 @@ final class SqlParserTest {
             command));
     assertEquals(SqlCommandType.JOIN_SCAN, command.type());
     assertName("accounts", command.tableName());
-    assertName("regions", command.joinTableName());
-    assertEquals(1, command.onPredicates().leafCount());
-    assertEquals(SqlComparison.EQUAL, command.onPredicates().comparison(0));
-    int onLeft = (int) command.onPredicates().programOperand(
+    assertName("regions", command.joinChain().tableName(1));
+    assertEquals(1, command.joinChain().onPredicates(0).leafCount());
+    assertEquals(
+        SqlComparison.EQUAL,
+        command.joinChain().onPredicates(0).comparison(0));
+    int onLeft = (int) command.joinChain().onPredicates(0).programOperand(
         0, SqlBooleanPredicateProgram.PROGRAM_LEFT, 0);
-    int onRight = (int) command.onPredicates().programOperand(
+    int onRight = (int) command.joinChain().onPredicates(0).programOperand(
         0, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0);
     assertName("accounts", command.predicateSymbolTable(onLeft));
     assertName("region", command.predicateSymbolName(onLeft));
@@ -2287,7 +2297,7 @@ final class SqlParserTest {
     assertName("key", command.columnName(0));
     assertName("regions", command.columnTableName(1));
     assertName("code", command.columnName(1));
-    assertFalse(command.isLeftJoin());
+    assertFalse(command.joinChain().isLeft(0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -2295,8 +2305,8 @@ final class SqlParserTest {
                 + "LEFT OUTER JOIN regions ON accounts.region=regions.id",
             command));
     assertEquals(SqlCommandType.JOIN_SCAN, command.type());
-    assertTrue(command.isLeftJoin());
-    assertName("regions", command.joinTableName());
+    assertTrue(command.joinChain().isLeft(0));
+    assertName("regions", command.joinChain().tableName(1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -2305,12 +2315,12 @@ final class SqlParserTest {
                 + "WHERE a.region=7 AND r.code>=7000",
             command));
     assertName("a", command.tableAlias());
-    assertName("r", command.joinTableAlias());
+    assertName("r", command.joinChain().alias(1));
     assertName("a", command.columnTableName(0));
     assertName("r", command.columnTableName(1));
     assertName("a", predicateTableName(command, 0));
     assertName("r", predicateTableName(command, 1));
-    assertEquals(1, command.onPredicates().leafCount());
+    assertEquals(1, command.joinChain().onPredicates(0).leafCount());
     assertEquals(2, command.wherePredicates().leafCount());
     assertEquals(
         StatusCode.OK,
@@ -2319,8 +2329,8 @@ final class SqlParserTest {
                 + "LEFT JOIN regions r ON NOT (a.region+1<>r.id OR r.code<0) "
                 + "WHERE a.key+r.id>2",
             command));
-    assertTrue(command.isLeftJoin());
-    assertEquals(2, command.onPredicates().leafCount());
+    assertTrue(command.joinChain().isLeft(0));
+    assertEquals(2, command.joinChain().onPredicates(0).leafCount());
     assertEquals(1, command.wherePredicates().leafCount());
     assertEquals(
         StatusCode.OK,

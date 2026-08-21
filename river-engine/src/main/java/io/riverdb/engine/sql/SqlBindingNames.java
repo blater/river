@@ -12,12 +12,6 @@ final class SqlBindingNames {
             && same(qualifier, command.tableAlias());
   }
 
-  static boolean matchesJoinTable(SqlCommand command, CharSequence qualifier) {
-    return same(qualifier, command.joinTableName())
-        || command.joinTableAlias().length() > 0
-            && same(qualifier, command.joinTableAlias());
-  }
-
   static boolean same(CharSequence left, CharSequence right) {
     if (left.length() != right.length()) {
       return false;

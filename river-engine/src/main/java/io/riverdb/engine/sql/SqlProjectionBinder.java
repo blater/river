@@ -88,6 +88,14 @@ final class SqlProjectionBinder {
     return StatusCode.OK;
   }
 
+  StatusCode bindJoinOrder(SqlCommand command, BoundSqlStatement bound) {
+    int projection = resolveOrderAlias(command);
+    if (projection < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    bound.orderColumn = SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+    bound.sortKeyProjection = projection;
+    return StatusCode.OK;
+  }
+
   StatusCode bindGroup(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
     return groups.bind(command, query, bound);

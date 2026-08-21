@@ -6,6 +6,7 @@ import io.riverdb.base.type.LocalTemporalCast;
 import io.riverdb.base.type.SqlDefaultKind;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlQuery;
 import io.riverdb.sql.SqlScalarExpression;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -64,6 +65,10 @@ final class SqlTemporalContext {
 
   static String timeZoneDatabaseVersion() {
     return SqlTemporalZoneNames.databaseVersion();
+  }
+
+  StatusCode validateZones(SqlCommand command, SqlQuery query) {
+    return SqlStoredViewZonePolicy.validate(command, query, zoneNames);
   }
 
   StatusCode resolveScalar(SqlCommand command) {

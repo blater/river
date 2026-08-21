@@ -21,12 +21,15 @@ final class SqlSortExecution {
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlRowProjectionEvaluator projections;
   private final SqlProjectedRow projected = new SqlProjectedRow();
+  private final SqlJoinChainSource joinSource;
   private final SqlSortWorkspace workspace = new SqlSortWorkspace();
+  private final SqlJoinSortInput joinInput;
   private final RelationalScanResult row = new RelationalScanResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final long[] values = new long[TableSchema.MAXIMUM_COLUMNS];
   private long outputNullMask;
   private HeapRowResult groupSource;
+  private boolean joinedRows;
 
   SqlSortExecution(
       RelationalSession relationalSession,
@@ -36,7 +39,8 @@ final class SqlSortExecution {
       SqlExpressionEvaluator evaluator,
       SqlNestedQueryExecution nestedExecution,
       SqlBoundPredicateEvaluator predicateEvaluator,
-      SqlRowProjectionEvaluator projectionEvaluator) {
+      SqlRowProjectionEvaluator projectionEvaluator,
+      SqlJoinChainSource chainSource) {
     session = relationalSession;
     bound = statement;
     plan = physicalPlan;
@@ -45,9 +49,29 @@ final class SqlSortExecution {
     nested = nestedExecution;
     predicates = predicateEvaluator;
     projections = projectionEvaluator;
+    joinSource = chainSource;
+    joinInput = new SqlJoinSortInput(
+        statement, projectionEvaluator, chainSource, workspace);
+  }
+
+  StatusCode materializeJoin() {
+    StatusCode status = joinInput.begin();
+    if (status.isOk()) joinedRows = true;
+    while (status.isOk()) {
+      status = joinSource.next();
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (!status.isOk()) break;
+      status = joinInput.append();
+    }
+    StatusCode closed = joinSource.close();
+    return finishAfterSource(status, closed);
   }
 
   StatusCode materialize(boolean valueIndex, int orderColumn) {
+    joinedRows = false;
     BoundSqlQuery.Block command = bound.executableQuery.root();
     boolean textKey = bound.sortKeyProjection < 0
         && bound.table.isVarchar(orderColumn);
@@ -101,14 +125,15 @@ final class SqlSortExecution {
         projectionTypes(cursor),
         cursor.projectedColumnCount());
     if (workspace.containsText()) {
-      status = setProjectedText(
-          result,
-          workspace.isSpilled() ? workspace.spilledRow() : workspace.rowAt(sortedRow),
-          bound.table,
-          cursor,
-          outputNullMask);
+      HeapRowResult source = workspace.isSpilled()
+          ? workspace.spilledRow() : workspace.rowAt(sortedRow);
+      status = joinedRows
+          ? joinInput.setText(result, source, cursor, outputNullMask)
+          : setProjectedText(
+              result, source, bound.table, cursor, outputNullMask);
     }
     if (status.isOk()) status = workspace.setGeneratedText(result, sortedRow);
+    if (!status.isOk()) result.reset();
     if (status.isOk()) {
       scan.advanceSortedRow();
       cursor.rowReturned();
@@ -155,7 +180,12 @@ final class SqlSortExecution {
   }
 
   StatusCode close() {
-    return workspace.close();
+    StatusCode status = workspace.close();
+    if (status.isOk()) {
+      joinedRows = false;
+      joinInput.clear();
+    }
+    return status;
   }
 
   private boolean containsText(boolean textKey) {
@@ -252,17 +282,23 @@ final class SqlSortExecution {
 
   private StatusCode finish(StatusCode status) {
     StatusCode close = session.closeScan(scan.relational());
-    if (!close.isOk()) {
-      status = close;
+    return finishAfterSource(status, close);
+  }
+
+  private StatusCode finishAfterSource(
+      StatusCode runtime, StatusCode sourceClose) {
+    if (!sourceClose.isOk()) {
+      return runtime.isOk() ? sourceClose : runtime;
     }
-    if (status.isOk()) {
-      status = workspace.finish();
-    }
-    if (status.isOk()) {
-      return StatusCode.OK;
-    }
-    StatusCode cleanup = workspace.close();
-    return cleanup.isOk() ? status : cleanup;
+    if (runtime.isOk()) runtime = workspace.finish();
+    if (runtime.isOk()) return StatusCode.OK;
+    if (workspace.close().isOk()) clearJoinMode();
+    return runtime;
+  }
+
+  private void clearJoinMode() {
+    joinedRows = false;
+    joinInput.clear();
   }
 
   private int[] projectionTypes(SqlScanCursor cursor) {
