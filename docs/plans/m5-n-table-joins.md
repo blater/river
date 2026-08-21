@@ -22,7 +22,10 @@ The completed slice supports:
 - optional indexed access at every stage with complete residual rechecking;
 - joined output feeding projection, aggregation, grouping/`HAVING`,
   `DISTINCT`, ordering, and bounded spill; and
-- direct or deepest-derived durable views with exact ordered role lineage.
+- direct or deepest-derived durable views with exact ordered role lineage;
+- bounded nested-loop, hash, and merge physical strategies behind the same
+  logical stage semantics; and
+- cost-based left-deep ordering and strategy selection for inner-join islands.
 
 This plan deliberately does not include P4C subqueries. It establishes the
 multi-role scope and row-provider boundary that P4C consumes next.
@@ -40,6 +43,10 @@ multi-role scope and row-provider boundary that P4C consumes next.
   `ON` program and to `WHERE`.
 - A ninth role returns `RESOURCE_EXHAUSTED`. Recognized but excluded join forms
   return `FEATURE_NOT_SUPPORTED`.
+- Hash execution is bounded to 65,536 in-memory build rows, 64 MiB of retained
+  hash state, 32 spill partitions, and 256 MiB of join spill per statement.
+- Cost enumeration uses fixed arrays for at most 256 role subsets; it does not
+  allocate plan candidates on the statement or row path.
 
 Excluded from this slice are `RIGHT`, `FULL`, `CROSS`, `NATURAL`, and `USING`
 joins; parenthesized/right-deep join trees; lateral relations; joined DML; and
@@ -119,17 +126,112 @@ rechecks it. Descriptor/precision normalization follows the existing exact,
 decimal, text, and temporal domains; if a physical bound cannot be represented
 without changing results, use a table scan.
 
+## Physical join strategies
+
+Every bound stage owns one physical strategy enum and compact strategy
+metadata. Strategy implementations consume the same role-aware row provider,
+evaluate the same complete `ON` residual, publish through the same composite
+row carrier, and use the same cleanup/status ladder. They are not separate SQL
+executors.
+
+### Nested loop
+
+Nested loop remains the correctness baseline and universal fallback. For each
+incoming composite it performs a primary/secondary-index lookup when the safe
+mandatory equality edge permits one, otherwise it scans the right relation.
+It supports every admitted predicate and join kind.
+
+### Bounded spillable hash join
+
+Hash join is eligible only when a mandatory raw equality edge relates one
+already-bound role to the current right role. NULL keys never match. Hashing
+must be consistent with River equality for exact decimal scale, temporal
+precision/instant semantics, Boolean, and Unicode-scalar text; the complete ON
+program still rechecks every hash candidate.
+
+Until River has a logical residual scheduler independent of candidate order,
+hash strategy is selected only when the remaining ON residual is proven total
+under its bound descriptors. A stage with arithmetic, casts, zone conversion,
+or another row-time error source keeps nested-loop candidate order.
+
+For `LEFT JOIN`, the right input is the build side and every left row tracks
+whether any residual-true pair was published. For `INNER JOIN`, J7 may choose
+the smaller estimated side as build when doing so does not violate an earlier
+outer-join barrier. Duplicate keys produce the complete Cartesian duplicate
+run. Residual-false candidates do not establish LEFT match state.
+
+When the in-memory row/byte bound is reached, partition both inputs into at
+most 32 existing spill-backed stores using the same stable hash. Process one
+partition at a time with the reusable hash workspace. A skewed partition that
+still exceeds the memory bound falls back to nested loop for that partition;
+it never allocates an unbounded table or silently drops rows. Total join spill
+above 256 MiB returns `RESOURCE_EXHAUSTED` and follows normal terminal cleanup.
+
+### Merge join
+
+Merge join is eligible for the same mandatory raw equality edge when both
+inputs are already ordered compatibly by an admitted index/order, or when the
+existing bounded sort/spill owner can provide that order at lower estimated
+cost. It initially supports equality only; range merge is later work.
+
+The same total-residual restriction as hash join applies. Strategy selection
+must not change whether or which deterministic row-time error River observes.
+
+Comparison uses the common typed comparator. NULL runs never match. Equal-key
+duplicate runs produce every pair and retain per-left-row residual match state
+so `LEFT JOIN` null extension occurs only after the entire equal run. Duplicate
+runs too large for the row scratch spill through the existing sort store. Merge
+join must not introduce another sorter, collation, text owner, or spill format.
+
+The query owns one reusable physical-strategy workspace and at most the two
+spill stores already required to materialize/sort one stage. Stages reuse it
+serially; no stage retains a second hash/sort arena after close.
+
+## Statistics and cost planning
+
+J7 adds one compact `SqlJoinPlanner`; it does not build a second logical query
+tree. Statistics are schema-epoch-owned catalog data produced by bounded
+`ANALYZE table` scans and contain, for each of at most eight columns: row count,
+NULL count, bounded distinct estimate, and typed min/max where representable.
+Index uniqueness/readiness remains authoritative. Stale or absent statistics
+select conservative SQL-order nested/index execution rather than guessed
+reordering.
+
+The planner splits a chain at every `LEFT JOIN`. Each maximal all-inner island
+is reordered independently with fixed-array dynamic programming over at most
+256 role subsets. A LEFT stage and everything to its left remain an order
+barrier; no role may move across it. For each legal extension, estimate and
+compare indexed nested-loop, table nested-loop, hash, and merge costs using one
+documented deterministic formula. Ties resolve by SQL role order, then nested
+loop, hash, and merge, so identical catalog state yields an identical plan.
+
+Reordering is also an error-semantics barrier. An inner island may be permuted
+only when every moved ON program and every downstream per-row program whose
+input order would change are proven total/non-throwing by the bound expression
+classifier. Otherwise retain SQL role order and only choose a strategy that
+preserves candidate/residual order. This conservative rule is removed only by
+a later explicit logical residual schedule with its own semantics and tests.
+
+The chosen plan retains original role IDs for name binding and result metadata
+while storing a separate physical stage order. `EXPLAIN` reports logical roles,
+physical order, selected strategy, statistics epoch, and whether each estimate
+was exact, sampled, or absent. `ANALYZE` adds estimated-versus-actual candidate
+and output rows without changing the plan during execution.
+
 `EXPLAIN` emits, in stage order:
 
 - one source row for role zero;
-- one `JOIN` or `LEFT JOIN` row per later role with its `ON` leaf count;
+- one `NESTED LOOP`, `HASH JOIN`, `MERGE JOIN`, or corresponding `LEFT` row per
+  later role with its `ON` leaf count;
 - the actual right physical access (`LOOKUP`, `INDEX`, or `TABLE`);
 - the post-join `FILTER`, if present; and
 - existing parent projection/cardinality/sort stages.
 
-`ANALYZE` records candidates visited, `ON`-accepted pairs, null-extended rows,
-post-`WHERE` accepted rows, and published stage rows. Plain `EXPLAIN` binds and
-prepares no runtime expression and opens no cursor.
+`ANALYZE` records access candidates visited, published stage composites,
+post-`WHERE` accepted rows, and adds explicit per-stage `ON` and
+`NULL-EXTENSION` counter rows for residual-true pairs and null-extended
+composites. Plain `EXPLAIN` binds and prepares no runtime expression and opens
+no cursor.
 
 ## Durable view format
 
@@ -172,6 +274,15 @@ dropped. Backup copies v4 bytes unchanged and restore revalidates them.
 4. **J4 — durability:** replace view v3 with v4, admit direct/deepest-derived
    n-role views, enforce every dependency, and prove checkpoint/WAL reopen,
    backup/restore, corruption, and allocation boundaries.
+5. **J5 — hash strategy:** add the shared bounded hash workspace, in-memory and
+   partitioned execution, skew fallback, all typed equality hashing, LEFT and
+   duplicate semantics, spill/resource cleanup, and truthful plans.
+6. **J6 — merge strategy:** reuse existing index/order and sort/spill owners,
+   add duplicate-run handling and LEFT residual match tracking, and prove merge
+   versus nested/hash result identity.
+7. **J7 — cost planning:** add bounded catalog statistics/`ANALYZE`, fixed-array
+   inner-island enumeration, LEFT barriers, deterministic strategy costs,
+   physical order/estimate reporting, invalidation, reopen, and backup evidence.
 
 Each slice is committed only when its newly admitted syntax has a real runtime
 consumer or remains explicitly fail-closed. No partial silent admission.
@@ -187,6 +298,15 @@ Promotion requires focused and full affected-module evidence for:
   typed NULL, and incompatible-family outcomes;
 - primary/unique/nonunique lookup and no-edge scans at multiple stages, with
   identical indexed/table results;
+- in-memory and spilled hash joins, skewed partition fallback, NULL and
+  duplicate keys, cross-scale decimal/temporal and Unicode hash equality, spill
+  exhaustion, and exact identity with nested loop;
+- index-ordered and explicitly sorted merge joins, duplicate runs crossing a
+  spill boundary, LEFT residual-false runs, NULL ordering, and exact identity
+  with nested loop/hash;
+- deterministic statistics capture and invalidation, absent/stale fallback,
+  eight-role inner-island reordering, multiple LEFT barriers, cost ties, and
+  estimated-versus-actual plan evidence;
 - direct projection/order and P3 aggregate/group/`HAVING`/`DISTINCT`/spill;
 - exact `EXPLAIN ANALYZE` stage order and counts;
 - runtime overflow/DST/text corruption after an earlier candidate, terminal
@@ -201,7 +321,9 @@ Promotion requires focused and full affected-module evidence for:
 ## Stop conditions
 
 - No per-row or per-pair allocation.
-- No second executor, predicate carrier, row store, or view compiler.
+- No second logical executor, predicate carrier, collation, row store, sorter,
+  spill format, or view compiler. Physical strategy owners remain subordinate
+  to the single join-chain source.
 - No touched owner may exceed its accepted design-debt baseline by more than
   five points, and no new owner may score above 100.
 - Cleanup failure retains enough ownership for an exact retry; runtime status
