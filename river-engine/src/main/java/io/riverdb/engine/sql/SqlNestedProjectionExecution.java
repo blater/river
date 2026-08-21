@@ -1,13 +1,11 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlQuery;
 import io.riverdb.sql.SqlScalarExpression;
-import io.riverdb.storage.heap.HeapRowResult;
 
-/** Preflights and evaluates one child-local result per subquery graph block. */
+/** Preflights and evaluates one scoped child result per subquery graph block. */
 final class SqlNestedProjectionExecution {
   private final BoundSqlStatement bound;
   private final SqlExpressionEvaluator expressions;
@@ -54,18 +52,12 @@ final class SqlNestedProjectionExecution {
   }
 
   StatusCode evaluate(
-      int block,
-      long key,
-      HeapRowResult row,
-      TableDefinition table,
-      SqlPredicateOperand result) {
-    return evaluators[block].evaluateOperand(
+      int block, SqlNestedRowProvider rows, SqlPredicateOperand result) {
+    return evaluators[block].evaluateNestedOperand(
         bound.query.block(block),
         bound.nestedProjection(block),
         zones[block],
-        key,
-        row,
-        table,
+        rows,
         result);
   }
 

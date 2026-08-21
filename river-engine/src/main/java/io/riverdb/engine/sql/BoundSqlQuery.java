@@ -214,8 +214,10 @@ final class BoundSqlQuery {
     private boolean selectAll;
     private boolean ordered;
     private boolean descending;
-    private TableDefinition table;
-    private boolean ownsTable;
+    private final TableDefinition[] roleTables =
+        new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
+    private final boolean[] ownsRoleTable =
+        new boolean[SqlJoinChain.MAXIMUM_JOIN_ROLES];
     private int projection = -1;
     private int projectionType;
     private long boundGeneration;
@@ -278,11 +280,11 @@ final class BoundSqlQuery {
     }
 
     void resetBinding() {
-      if (ownsTable && table != null) {
-        table.reset();
-      }
-      if (!ownsTable) {
-        table = null;
+      for (int role = 0; role < roleTables.length; role++) {
+        if (ownsRoleTable[role] && roleTables[role] != null) {
+          roleTables[role].reset();
+        }
+        if (!ownsRoleTable[role]) roleTables[role] = null;
       }
       projection = -1;
       projectionType = 0;
@@ -292,17 +294,26 @@ final class BoundSqlQuery {
     }
 
     void bindRootTable(TableDefinition rootTable) {
-      table = rootTable;
-      ownsTable = false;
+      bindRoleTable(0, rootTable);
     }
 
-    TableDefinition writableTable() {
-      if (table == null || !ownsTable) {
-        table = new TableDefinition();
-        ownsTable = true;
+    TableDefinition writableTable(int role) {
+      if (role < 0 || role >= roleTables.length) return null;
+      if (roleTables[role] == null || !ownsRoleTable[role]) {
+        roleTables[role] = new TableDefinition();
+        ownsRoleTable[role] = true;
       }
-      table.reset();
-      return table;
+      roleTables[role].reset();
+      return roleTables[role];
+    }
+
+    void bindRoleTable(int role, TableDefinition definition) {
+      if (role < 0 || role >= roleTables.length) return;
+      if (ownsRoleTable[role] && roleTables[role] != null) {
+        roleTables[role].reset();
+      }
+      roleTables[role] = definition;
+      ownsRoleTable[role] = false;
     }
 
     void setProjection(int column, int descriptor) {
@@ -317,7 +328,21 @@ final class BoundSqlQuery {
 
     void publishBinding(long generation) { boundGeneration = generation; }
     boolean isBound(long generation) { return generation != 0 && boundGeneration == generation; }
-    TableDefinition table() { return table; }
+    TableDefinition table() { return table(0); }
+    TableDefinition table(int role) {
+      return role >= 0 && role < roleCount() ? roleTables[role] : null;
+    }
+    int roleCount() { return joinChain() == null ? 1 : joinChain.roleCount(); }
+    CharSequence roleTableName(int role) {
+      return joinChain() == null ? role == 0 ? tableName : ""
+          : role >= 0 && role < joinChain.roleCount()
+              ? joinChain.tableName(role) : "";
+    }
+    CharSequence roleAlias(int role) {
+      return joinChain() == null ? role == 0 ? tableAlias : ""
+          : role >= 0 && role < joinChain.roleCount()
+              ? joinChain.alias(role) : "";
+    }
     int projection() { return projection; }
     int projectionType() { return projectionType; }
     int blockIndex() { return blockIndex; }

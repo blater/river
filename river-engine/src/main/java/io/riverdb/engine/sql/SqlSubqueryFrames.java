@@ -113,10 +113,15 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
     rows[block] = null;
   }
 
-  @Override public long key(int block) { return valid(block) ? keys[block] : 0; }
-  @Override public HeapRowResult row(int block) { return valid(block) ? rows[block] : null; }
-  @Override public TableDefinition table(int block) {
-    return valid(block) ? tables[block] : null;
+  @Override public long key(int block, int role) {
+    return valid(block) && role == 0 ? keys[block] : 0;
+  }
+  @Override public HeapRowResult row(int block, int role) {
+    return valid(block) && role == 0 ? rows[block] : null;
+  }
+  @Override public TableDefinition table(int block, int role) {
+    BoundSqlQuery.Block source = valid(block) ? query.block(block) : null;
+    return source == null ? null : source.table(role);
   }
 
   StatusCode close() {

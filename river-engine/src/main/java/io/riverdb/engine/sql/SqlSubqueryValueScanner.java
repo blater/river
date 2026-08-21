@@ -136,8 +136,7 @@ final class SqlSubqueryValueScanner {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     SqlPredicateOperand candidate = frames.projected(child);
-    StatusCode status = projections.evaluate(
-        child, frames.key(child), frames.row(child), frames.table(child), candidate);
+    StatusCode status = projections.evaluate(child, frames, candidate);
     if (!status.isOk()) return status;
     if (candidate.nullValue()) nullResults[child] = true;
     else if (left != null && !left.nullValue()

@@ -2,20 +2,21 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
 
-/** Binds the single child-local projection of one predicate subquery. */
+/** Binds the single lexically scoped projection of one predicate subquery. */
 final class SqlNestedProjectionBinder {
   private final int[] types = new int[SqlScalarExpression.MAXIMUM_NODES];
   private final boolean[] nulls = new boolean[SqlScalarExpression.MAXIMUM_NODES];
+  private final SqlNestedColumnResolver columns = new SqlNestedColumnResolver();
   private int size;
   private boolean generatedText;
 
   StatusCode bind(
       SqlCommand command,
-      TableDefinition table,
+      BoundSqlQuery query,
+      int blockIndex,
       SqlBoundProjectionPrograms target,
       BoundSqlQuery.Block block) {
     SqlScalarExpression expression = command.projectionExpression(0);
@@ -26,15 +27,19 @@ final class SqlNestedProjectionBinder {
     size = 0;
     generatedText = false;
     for (int node = 0; node < expression.nodeCount(); node++) {
-      StatusCode status = node(command, table, target, expression, node);
+      StatusCode status = node(
+          command, query, blockIndex, target, expression, node);
       if (!status.isOk()) {
         target.reset();
         return status;
       }
     }
     if (size != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int raw = expression.isDirectColumnReference() ? (int) target.operand(0, 0) : -1;
-    if (types[0] != 0 && raw < 0 && text(types[0]) && !generatedText) {
+    boolean direct = expression.isDirectColumnReference();
+    int raw = direct
+            && target.scope(0, 0) == SqlNestedRowProvider.scope(blockIndex, 0)
+        ? (int) target.operand(0, 0) : -1;
+    if (types[0] != 0 && !direct && raw < 0 && text(types[0]) && !generatedText) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     target.finish(0, types[0], raw);
@@ -45,13 +50,14 @@ final class SqlNestedProjectionBinder {
 
   private StatusCode node(
       SqlCommand command,
-      TableDefinition table,
+      BoundSqlQuery query,
+      int blockIndex,
       SqlBoundProjectionPrograms target,
       SqlScalarExpression expression,
       int node) {
     int operator = expression.operator(node);
     if (operator == SqlScalarExpression.COLUMN) {
-      return column(command, table, target, expression, node);
+      return column(command, query, blockIndex, target, expression, node);
     }
     if (operator == SqlScalarExpression.NULL) {
       return push(target, operator, 0, 0, true);
@@ -73,7 +79,8 @@ final class SqlNestedProjectionBinder {
 
   private StatusCode column(
       SqlCommand command,
-      TableDefinition table,
+      BoundSqlQuery query,
+      int blockIndex,
       SqlBoundProjectionPrograms target,
       SqlScalarExpression expression,
       int node) {
@@ -81,12 +88,20 @@ final class SqlNestedProjectionBinder {
     CharSequence qualifier = command.projectionSymbolTable(symbol);
     CharSequence name = command.projectionSymbolName(symbol);
     if (qualifier == null || name == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (qualifier.length() > 0 && !SqlBindingNames.matchesTable(command, qualifier)) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
+    StatusCode status = columns.resolve(query, blockIndex, qualifier, name);
+    if (!status.isOk()) return status;
+    if (columns.block() != blockIndex) {
+      query.markCorrelated(blockIndex, columns.block());
     }
-    int column = table.findColumn(name);
-    return column < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
-        : push(target, SqlScalarExpression.COLUMN, column, table.typeDescriptor(column), false);
+    int descriptor = query.block(columns.block()).table(columns.role())
+        .typeDescriptor(columns.column());
+    return push(
+        target,
+        SqlScalarExpression.COLUMN,
+        columns.column(),
+        descriptor,
+        false,
+        SqlNestedRowProvider.scope(columns.block(), columns.role()));
   }
 
   private StatusCode unary(
@@ -146,6 +161,20 @@ final class SqlNestedProjectionBinder {
     types[size] = descriptor;
     nulls[size++] = nullValue;
     target.append(0, operator, operand, descriptor);
+    return StatusCode.OK;
+  }
+
+  private StatusCode push(
+      SqlBoundProjectionPrograms target,
+      int operator,
+      long operand,
+      int descriptor,
+      boolean nullValue,
+      int scope) {
+    if (size >= types.length) return StatusCode.RESOURCE_EXHAUSTED;
+    types[size] = descriptor;
+    nulls[size++] = nullValue;
+    target.append(0, operator, operand, descriptor, scope);
     return StatusCode.OK;
   }
 

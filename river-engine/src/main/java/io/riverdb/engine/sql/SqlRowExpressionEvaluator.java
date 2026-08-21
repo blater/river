@@ -70,6 +70,41 @@ final class SqlRowExpressionEvaluator {
     return status;
   }
 
+  StatusCode evaluateNestedOperand(
+      SqlCommand command,
+      SqlBoundProjectionPrograms programs,
+      SqlTemporalZonePlan zone,
+      SqlNestedRowProvider rows,
+      SqlPredicateOperand result) {
+    beginPredicateOperand();
+    StatusCode status = StatusCode.OK;
+    for (int node = 0;
+        status.isOk() && node < programs.nodeCount(0); node++) {
+      int operator = programs.operator(0, node);
+      int scope = programs.scope(0, node);
+      int block = SqlNestedRowProvider.block(scope);
+      int role = SqlNestedRowProvider.role(scope);
+      HeapRowResult row = rows.row(block, role);
+      if (operator == SqlScalarExpression.COLUMN && row == null) {
+        status = predicateNullColumnNode(programs.descriptor(0, node));
+      } else {
+        status = predicateOperandNode(
+            command,
+            operator,
+            programs.operand(0, node),
+            programs.descriptor(0, node),
+            zone,
+            rows.key(block, role),
+            row,
+            rows.table(block, role),
+            null);
+      }
+    }
+    if (status.isOk()) return finishPredicateOperand(result);
+    reset();
+    return status;
+  }
+
   void beginPredicateOperand() {
     size = 0;
     text.clear();

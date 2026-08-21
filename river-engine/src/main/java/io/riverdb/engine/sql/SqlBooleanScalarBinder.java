@@ -13,6 +13,7 @@ final class SqlBooleanScalarBinder {
   private final boolean[] untyped =
       new boolean[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
   private final SqlJoinRoleResolver joinRoles = new SqlJoinRoleResolver();
+  private final SqlNestedColumnResolver nestedColumns = new SqlNestedColumnResolver();
   private int size;
 
   StatusCode bind(
@@ -109,34 +110,21 @@ final class SqlBooleanScalarBinder {
     CharSequence name = command.projectionSymbolName(symbol);
     CharSequence qualifier = command.projectionSymbolTable(symbol);
     if (name == null || qualifier == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int scope = qualifier.length() == 0 ? block : nestedScope(query, block, qualifier);
-    BoundSqlQuery.Block source = query.block(scope);
-    int column = source == null || source.table() == null
-        ? -1 : source.table().findColumn(name);
-    if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (scope != block) query.markCorrelated(block, scope);
+    StatusCode status = nestedColumns.resolve(query, block, qualifier, name);
+    if (!status.isOk()) return status;
+    int sourceBlock = nestedColumns.block();
+    int sourceRole = nestedColumns.role();
+    int column = nestedColumns.column();
+    if (sourceBlock != block) query.markCorrelated(block, sourceBlock);
     return push(
         target,
         leaf,
         program,
         operator,
         column,
-        source.table().typeDescriptor(column),
+        query.block(sourceBlock).table(sourceRole).typeDescriptor(column),
         false,
-        scope);
-  }
-
-  private static int nestedScope(
-      BoundSqlQuery query, int block, CharSequence qualifier) {
-    int scope = block;
-    while (scope >= 0) {
-      BoundSqlQuery.Block source = query.block(scope);
-      if (SqlBindingNames.same(qualifier, source.tableName())
-          || source.tableAlias().length() > 0
-              && SqlBindingNames.same(qualifier, source.tableAlias())) return scope;
-      scope = query.blockParent(scope);
-    }
-    return -1;
+        SqlNestedRowProvider.scope(sourceBlock, sourceRole));
   }
 
   private StatusCode aggregate(

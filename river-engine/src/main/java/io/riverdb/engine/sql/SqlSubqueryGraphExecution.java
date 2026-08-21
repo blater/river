@@ -87,7 +87,7 @@ final class SqlSubqueryGraphExecution
         bound.nestedBoolean(block),
         key,
         row,
-        frames.table(block),
+        frames.table(block, 0),
         this,
         frames,
         result);
@@ -108,9 +108,9 @@ final class SqlSubqueryGraphExecution
     return evaluators[child].matchesNested(
         bound.query.block(child),
         bound.nestedBoolean(child),
-        frames.key(child),
-        frames.row(child),
-        frames.table(child),
+        frames.key(child, 0),
+        frames.row(child, 0),
+        frames.table(child, 0),
         this,
         frames,
         matches[child]);
