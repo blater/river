@@ -66,7 +66,8 @@ final class SqlSortExecution {
       if (!status.isOk()) break;
       status = joinInput.append();
     }
-    StatusCode closed = joinSource.close();
+    StatusCode closed = subqueries.hasResources()
+        ? StatusCode.CONFLICT : joinSource.close();
     return finishAfterSource(status, closed);
   }
 

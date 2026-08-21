@@ -120,22 +120,30 @@ final class SqlNestedScopeTest {
   }
 
   @Test
-  void keepsJoinedGraphExecutionFailClosedUntilP4C4(@TempDir Path root) {
+  void executesJoinedParentsAndChildrenThroughPublicSession(@TempDir Path root) {
     Fixture fixture = open(root);
     createFixture(fixture.session, fixture.result);
 
-    assertExplain(
+    assertRows(
         fixture.session,
-        "EXPLAIN SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+        "SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
             + "ON a.id=b.id WHERE EXISTS "
-            + "(SELECT i.id FROM inner_scope i WHERE i.id=a.id)",
-        StatusCode.FEATURE_NOT_SUPPORTED);
+            + "(SELECT i.id FROM inner_scope i "
+            + "WHERE i.id=a.id AND i.value=b.b_only)",
+        1, 2);
+    assertRows(
+        fixture.session,
+        "SELECT o.id FROM outer_scope o WHERE EXISTS "
+            + "(SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
+            + "ON a.id=b.id AND b.b_only=o.nearest_only WHERE a.id=o.id)",
+        1, 2);
     assertExplain(
         fixture.session,
         "EXPLAIN SELECT o.id FROM outer_scope o WHERE EXISTS "
             + "(SELECT a.id FROM join_scope_a a JOIN join_scope_b b "
-            + "ON a.id=b.id WHERE a.id=o.id)",
-        StatusCode.FEATURE_NOT_SUPPORTED);
+            + "ON a.id=b.id AND c.c_only=b.b_only "
+            + "JOIN join_scope_c c ON b.id=c.id WHERE a.id=o.id)",
+        StatusCode.INVALID_EXTERNAL_INPUT);
     assertRows(fixture.session, "SELECT id FROM outer_scope", 1, 2);
 
     fixture.close();

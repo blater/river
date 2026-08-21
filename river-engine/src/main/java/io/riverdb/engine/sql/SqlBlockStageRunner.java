@@ -30,6 +30,7 @@ final class SqlBlockStageRunner {
       SqlJoinChainSource joinSource,
       SqlExpressionEvaluator expressions,
       SqlBoundPredicateEvaluator predicates,
+      SqlSubqueryGraphExecution subqueries,
       SqlRowProjectionEvaluator projectionEvaluator,
       SqlTemporalContext temporal,
       SqlBlockRowStore firstStore,
@@ -38,9 +39,9 @@ final class SqlBlockStageRunner {
     binder = planBinder;
     projections = projectionEvaluator;
     source = new SqlBlockSource(
-        session, statement, joinSource, predicates, projectionEvaluator);
+        session, statement, joinSource, predicates, subqueries, projectionEvaluator);
     joinStage = new SqlBlockJoinStage(
-        statement, source, predicates, projectionEvaluator);
+        statement, source, subqueries, projectionEvaluator);
     projector = new SqlBlockStageProjector(
         statement, expressions, projectionEvaluator, temporal);
     projectionStage = new SqlBlockProjectionStage(statement, source, projector);

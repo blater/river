@@ -24,6 +24,11 @@ final class SqlSessionAllocationTest {
       "CREATE VIEW allocated_join AS SELECT CAST(tv.observed AS VARCHAR(32)) "
           + "AS rendered,texts.label AS label FROM temporal_values tv "
           + "JOIN texts ON tv.id=texts.id JOIN t ON texts.id=t.id WHERE tv.id=1";
+  private static final String JOINED_SUBQUERY =
+      "SELECT t.id,texts.label FROM t JOIN texts ON t.id=texts.id "
+          + "WHERE EXISTS (SELECT r.id FROM raw_labels r "
+          + "JOIN nested_labels n ON r.id=n.id "
+          + "WHERE r.region=t.region AND n.region=t.region)";
   private static volatile long allocationGuard;
 
   @Test
@@ -358,6 +363,9 @@ final class SqlSessionAllocationTest {
       exerciseMutationExpressions(session, result);
       exerciseTypedPoint(session, pointParameters, result);
     }
+    for (int index = 0; index < 100; index++) {
+      exerciseJoinBlockPipeline(session, cursor, scanRow, result);
+    }
     long threadId = Thread.currentThread().threadId();
     long joinBefore = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
@@ -367,6 +375,18 @@ final class SqlSessionAllocationTest {
     assertTrue(
         joinAllocated <= 512,
         "warmed JOIN block pipeline allocated bytes: " + joinAllocated);
+    assertJoinedSubquery(session, cursor, scanRow, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseJoinedSubquery(session, cursor, scanRow, result);
+    }
+    long joinedBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseJoinedSubquery(session, cursor, scanRow, result);
+    }
+    long joinedAllocated = bean.getThreadAllocatedBytes(threadId) - joinedBefore;
+    assertTrue(
+        joinedAllocated <= 512,
+        "warmed joined parent/child subquery allocated bytes: " + joinedAllocated);
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
@@ -593,6 +613,34 @@ final class SqlSessionAllocationTest {
         "SELECT id FROM t WHERE region=?", parameters, cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void assertJoinedSubquery(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(JOINED_SUBQUERY, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(5, row.textLengthAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseJoinedSubquery(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(JOINED_SUBQUERY, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.textLengthAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }

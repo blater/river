@@ -8,6 +8,8 @@ import io.riverdb.sql.SqlJoinChain;
 final class SqlBoundJoinContext extends SqlBoundAccess {
   private final TableDefinition[] tables =
       new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
+  private final TableDefinition[] ownedRoleTables =
+      new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
   private final boolean[] ownedTables =
       new boolean[SqlJoinChain.MAXIMUM_JOIN_ROLES];
   private final TableStatistics[] statistics =
@@ -38,16 +40,25 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
     queryBlock = -1;
     roleCount = roles;
     for (int role = 0; role < roles; role++) {
-      if (role == 0 && borrowedRoot != null) {
-        if (ownedTables[role] && tables[role] != null) tables[role].reset();
-        tables[role] = borrowedRoot;
-        ownedTables[role] = false;
-      } else if (tables[role] == null || !ownedTables[role]) {
-        tables[role] = new TableDefinition();
-        ownedTables[role] = true;
-      }
+      activateRole(role, borrowedRoot);
       if (statistics[role] == null) statistics[role] = new TableStatistics();
     }
+  }
+
+  private void activateRole(int role, TableDefinition borrowedRoot) {
+    if (role == 0 && borrowedRoot != null) {
+      if (ownedTables[role] && tables[role] != null) tables[role].reset();
+      tables[role] = borrowedRoot;
+      ownedTables[role] = false;
+      return;
+    }
+    if (ownedRoleTables[role] == null) {
+      ownedRoleTables[role] = new TableDefinition();
+    } else if (!ownedTables[role]) {
+      ownedRoleTables[role].reset();
+    }
+    tables[role] = ownedRoleTables[role];
+    ownedTables[role] = true;
   }
 
   void borrowRoles(int block, BoundSqlQuery.Block schemas) {

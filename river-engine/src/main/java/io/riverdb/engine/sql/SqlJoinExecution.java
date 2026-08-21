@@ -7,6 +7,7 @@ final class SqlJoinExecution {
   private final BoundSqlStatement bound;
   private final SqlPhysicalPlan plan;
   private final SqlJoinChainSource source;
+  private final SqlJoinPredicateCallback defaultPredicates;
   private final SqlRowProjectionEvaluator projections;
   private final SqlJoinChainPlan stages;
   private SqlBoundJoinContext context;
@@ -16,21 +17,36 @@ final class SqlJoinExecution {
       BoundSqlStatement statement,
       SqlPhysicalPlan physicalPlan,
       SqlJoinChainSource rowSource,
+      SqlJoinPredicateCallback predicateEvaluator,
       SqlRowProjectionEvaluator projectionEvaluator,
       SqlJoinChainPlan joinPlan) {
     bound = statement;
     plan = physicalPlan;
     projections = projectionEvaluator;
     source = rowSource;
+    defaultPredicates = predicateEvaluator;
     stages = joinPlan;
   }
 
   StatusCode configure(
       SqlCommand canonicalCommand,
       SqlBoundJoinContext joinContext) {
+    return configure(
+        canonicalCommand, joinContext, bound.whereBoolean, null);
+  }
+
+  StatusCode configure(
+      SqlCommand canonicalCommand,
+      SqlBoundJoinContext joinContext,
+      SqlBoundBooleanPredicateProgram where,
+      SqlJoinPredicateCallback predicates) {
     command = canonicalCommand;
     context = joinContext;
-    return source.configure(context, command, bound.whereBoolean);
+    return source.configure(
+        context,
+        command,
+        where,
+        predicates == null ? defaultPredicates : predicates);
   }
 
   StatusCode begin() {

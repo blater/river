@@ -23,13 +23,16 @@ final class SqlBlockJoinBinder {
 
   StatusCode preflight(
       BoundSqlStatement bound,
+      int block,
       SqlCommand command,
       SqlBoundJoinContext context,
       SqlBooleanPredicateEvaluator predicates,
       SqlRowProjectionEvaluator projections) {
-    StatusCode status = predicates == null ? StatusCode.OK
+    boolean nestedSource = bound.executableQuery.edgeCount() > 0
+        && block == bound.executableQuery.sourceBlockCount() - 1;
+    StatusCode status = predicates == null || nestedSource ? StatusCode.OK
         : prepareOn(command, context, predicates);
-    if (status.isOk() && predicates != null) {
+    if (status.isOk() && predicates != null && !nestedSource) {
       status = predicates.prepare(command, bound.whereBoolean);
     }
     return status.isOk() && projections != null
@@ -57,7 +60,11 @@ final class SqlBlockJoinBinder {
     SqlCommand command = plans.command(block);
     SqlBoundJoinContext context = bound.existingJoinContext(block);
     if (context == null) return StatusCode.CORRUPTION;
-    StatusCode status = binder.bindJoin(command, bound, context);
+    boolean nestedSource = bound.executableQuery.edgeCount() > 0
+        && block == bound.executableQuery.sourceBlockCount() - 1;
+    StatusCode status = nestedSource
+        ? binder.bindJoinProjection(command, bound, context)
+        : binder.bindJoin(command, bound, context);
     if (!status.isOk()) return status;
     if (command.isOrdered()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
