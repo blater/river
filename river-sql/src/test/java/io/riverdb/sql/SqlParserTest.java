@@ -872,6 +872,7 @@ final class SqlParserTest {
   void carriesBoundedBooleanPredicatesAcrossAdmittedConsumers() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
+    SqlQuery query = new SqlQuery();
 
     assertEquals(
         StatusCode.OK,
@@ -1031,12 +1032,28 @@ final class SqlParserTest {
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IN (day)",
             command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IN "
                 + "(SELECT day FROM other_moments)",
-            new SqlQuery(),
+            query,
             command));
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertEquals(
+        2,
+        query.block(0).wherePredicates().programNodeCount(
+            0, SqlBooleanPredicateProgram.PROGRAM_LEFT));
+    assertEquals(
+        SqlScalarExpression.EXTRACT,
+        query.block(0).wherePredicates().programOperator(
+            0, SqlBooleanPredicateProgram.PROGRAM_LEFT, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -1367,12 +1384,24 @@ final class SqlParserTest {
             compiled));
 
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT id FROM moments WHERE id=(SELECT EXTRACT(DAY FROM day) "
                 + "FROM moments WHERE id=1)",
             query,
             compiled));
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_SCALAR,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    assertPostfix(
+        query.block(query.edgeChild(0)).projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
   }
 
   @Test
@@ -3041,14 +3070,22 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(2, query.blockCount());
-    assertTrue(query.hasScalarPredicate());
-    assertEquals(1, query.scalarPredicate());
+    assertEquals(1, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_SCALAR,
+        0,
+        1,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    assertEquals(SqlComparison.EQUAL, query.block(0).wherePredicates().comparison(1));
     assertName("accounts", command.tableName());
     assertName("region", predicateColumnName(command, 0));
     assertEquals(7, predicateValue(command, 0));
     assertName("balance", predicateColumnName(command, 1));
     assertEquals(0, predicateValue(command, 1));
-    SqlCommand scalar = query.scalarCommand();
+    SqlCommand scalar = query.block(query.edgeChild(0));
     assertName("lookup", scalar.tableName());
     assertName("balance", scalar.firstColumnName());
     assertName("id", predicateColumnName(scalar, 0));
@@ -3061,7 +3098,15 @@ final class SqlParserTest {
                 + "WHERE regions.id=accounts.region)",
             query,
             command));
-    scalar = query.scalarCommand();
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_SCALAR,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    scalar = query.block(query.edgeChild(0));
     assertTrue(isColumnPredicate(scalar, 0));
     assertName("regions", predicateTableName(scalar, 0));
     assertName("id", predicateColumnName(scalar, 0));
@@ -3071,17 +3116,19 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parseQuery(nestedScalarQuery(3), query, command));
     assertEquals(3, query.blockCount());
-    assertEquals(0, query.scalarPredicate(0));
-    assertEquals(0, query.scalarPredicate(1));
+    assertNestedSubqueryChain(query, 3, SqlQuery.SUBQUERY_SCALAR,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedScalarQuery(32), query, command));
     assertEquals(32, query.blockCount());
+    assertNestedSubqueryChain(query, 32, SqlQuery.SUBQUERY_SCALAR,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
     assertEquals(
         StatusCode.QUERY_TOO_COMPLEX,
         parser.parseQuery(nestedScalarQuery(33), query, command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.FEATURE_NOT_SUPPORTED,
         parser.parseQuery(
             "SELECT id FROM accounts WHERE balance = "
                 + "(SELECT id, balance FROM lookup WHERE id=7)",
@@ -3102,11 +3149,19 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(2, query.blockCount());
-    assertTrue(query.hasExistencePredicate());
-    assertFalse(query.existenceNegated());
+    assertEquals(1, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertFalse(query.block(0).wherePredicates().leafNegated(0));
     assertName("accounts", command.tableName());
     assertName("id", command.orderColumnName());
-    assertName("lookup", query.existenceCommand().tableName());
+    assertName("lookup", query.block(query.edgeChild(0)).tableName());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3114,7 +3169,15 @@ final class SqlParserTest {
                 + "(SELECT id FROM lookup WHERE lookup.region=7)",
             query,
             command));
-    assertTrue(query.existenceNegated());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertBooleanNotOverLeaf(query.block(0).wherePredicates(), 0);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3123,7 +3186,7 @@ final class SqlParserTest {
                 + "WHERE regions.id=accounts.region)",
             query,
             command));
-    SqlCommand correlated = query.existenceCommand();
+    SqlCommand correlated = query.block(query.edgeChild(0));
     assertTrue(isColumnPredicate(correlated, 0));
     assertName("regions", predicateTableName(correlated, 0));
     assertName("id", predicateColumnName(correlated, 0));
@@ -3139,7 +3202,7 @@ final class SqlParserTest {
             command));
     assertName("accounts", command.tableName());
     assertName("a", command.tableAlias());
-    correlated = query.existenceCommand();
+    correlated = query.block(query.edgeChild(0));
     assertName("accounts", correlated.tableName());
     assertName("b", correlated.tableAlias());
     assertName("b", predicateTableName(correlated, 0));
@@ -3148,12 +3211,14 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parseQuery(nestedExistenceQuery(3), query, command));
     assertEquals(3, query.blockCount());
-    assertFalse(query.existenceNegated(0));
-    assertFalse(query.existenceNegated(1));
+    assertNestedSubqueryChain(query, 3, SqlQuery.SUBQUERY_EXISTS,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedExistenceQuery(32), query, command));
     assertEquals(32, query.blockCount());
+    assertNestedSubqueryChain(query, 32, SqlQuery.SUBQUERY_EXISTS,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
     assertEquals(
         StatusCode.QUERY_TOO_COMPLEX,
         parser.parseQuery(nestedExistenceQuery(33), query, command));
@@ -3171,12 +3236,19 @@ final class SqlParserTest {
                 + "(SELECT balance FROM lookup WHERE lookup.id=9)",
             query,
             command));
-    assertTrue(query.hasMembershipPredicate());
-    assertFalse(query.membershipNegated());
-    assertEquals(1, query.membershipPredicate());
+    assertEquals(1, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        0,
+        1,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertFalse(query.block(0).wherePredicates().leafNegated(1));
     assertName("balance", predicateColumnName(command, 1));
-    assertName("lookup", query.membershipCommand().tableName());
-    assertName("balance", query.membershipCommand().firstColumnName());
+    assertName("lookup", query.block(query.edgeChild(0)).tableName());
+    assertName("balance", query.block(query.edgeChild(0)).firstColumnName());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3184,8 +3256,16 @@ final class SqlParserTest {
                 + "(SELECT NULL FROM lookup WHERE id=9)",
             query,
             command));
-    assertTrue(query.membershipNegated());
-    assertTrue(query.membershipCommand().isNullProjection(0));
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertTrue(query.block(0).wherePredicates().leafNegated(0));
+    assertTrue(query.block(query.edgeChild(0)).isNullProjection(0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3194,8 +3274,8 @@ final class SqlParserTest {
                 + "WHERE regions.id=accounts.region)",
             query,
             command));
-    SqlCommand correlated = query.membershipCommand();
-    assertTrue(query.membershipNegated());
+    SqlCommand correlated = query.block(query.edgeChild(0));
+    assertTrue(query.block(0).wherePredicates().leafNegated(query.edgeLeaf(0)));
     assertTrue(isColumnPredicate(correlated, 0));
     assertName("regions", predicateTableName(correlated, 0));
     assertName("id", predicateColumnName(correlated, 0));
@@ -3205,12 +3285,14 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parseQuery(nestedMembershipQuery(3), query, command));
     assertEquals(3, query.blockCount());
-    assertEquals(0, query.membershipPredicate(0));
-    assertEquals(0, query.membershipPredicate(1));
+    assertNestedSubqueryChain(query, 3, SqlQuery.SUBQUERY_MEMBERSHIP,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedMembershipQuery(32), query, command));
     assertEquals(32, query.blockCount());
+    assertNestedSubqueryChain(query, 32, SqlQuery.SUBQUERY_MEMBERSHIP,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
     assertEquals(
         StatusCode.QUERY_TOO_COMPLEX,
         parser.parseQuery(nestedMembershipQuery(33), query, command));
@@ -3231,12 +3313,32 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(4, query.blockCount());
-    assertTrue(query.hasExistencePredicate(0));
-    assertTrue(query.hasMembershipPredicate(1));
-    assertTrue(query.hasScalarPredicate(2));
-    assertFalse(query.hasScalarPredicate(0));
-    assertFalse(query.hasExistencePredicate(1));
-    assertFalse(query.hasMembershipPredicate(2));
+    assertEquals(3, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertSubqueryEdge(
+        query,
+        1,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        1,
+        0,
+        2,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertSubqueryEdge(
+        query,
+        2,
+        SqlQuery.SUBQUERY_SCALAR,
+        2,
+        0,
+        3,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    assertEquals(4, query.nestedPlanDepth());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3246,6 +3348,22 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(3, query.blockCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertSubqueryEdge(
+        query,
+        1,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        1,
+        0,
+        2,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
     assertName("a", command.tableAlias());
     assertName("b", query.block(1).tableAlias());
     assertName("c", query.block(2).tableAlias());
@@ -3474,6 +3592,51 @@ final class SqlParserTest {
 
   private static void assertName(String expected, SqlIdentifier actual) {
     assertText(expected, actual);
+  }
+
+  private static void assertSubqueryEdge(
+      SqlQuery query,
+      int edge,
+      int kind,
+      int parent,
+      int leaf,
+      int child,
+      int leafTest) {
+    assertEquals(kind, query.edgeKind(edge));
+    assertEquals(parent, query.edgeParent(edge));
+    assertEquals(leaf, query.edgeLeaf(edge));
+    assertEquals(child, query.edgeChild(edge));
+    assertEquals(parent, query.blockParent(child));
+    assertEquals(query.blockDepth(parent) + 1, query.blockDepth(child));
+    SqlBooleanPredicateProgram predicates = query.block(parent).wherePredicates();
+    assertEquals(leafTest, predicates.leafTest(leaf));
+    assertEquals(edge, predicates.subqueryEdge(leaf));
+  }
+
+  private static void assertNestedSubqueryChain(
+      SqlQuery query, int blocks, int kind, int leafTest) {
+    assertEquals(blocks - 1, query.edgeCount());
+    assertEquals(blocks, query.nestedPlanDepth());
+    assertEquals(1, query.blockDepth(0));
+    for (int edge = 0; edge < blocks - 1; edge++) {
+      assertSubqueryEdge(query, edge, kind, edge, 0, edge + 1, leafTest);
+      SqlBooleanPredicateProgram predicates = query.block(edge).wherePredicates();
+      assertFalse(predicates.leafNegated(0));
+      if (kind == SqlQuery.SUBQUERY_SCALAR) {
+        assertEquals(SqlComparison.EQUAL, predicates.comparison(0));
+      }
+    }
+  }
+
+  private static void assertBooleanNotOverLeaf(
+      SqlBooleanPredicateProgram predicates, int leaf) {
+    assertFalse(predicates.leafNegated(leaf));
+    int root = predicates.root();
+    assertEquals(SqlBooleanPredicateProgram.BOOLEAN_NOT, predicates.booleanOperator(root));
+    int leafNode = predicates.booleanLeft(root);
+    assertEquals(SqlBooleanPredicateProgram.BOOLEAN_LEAF,
+        predicates.booleanOperator(leafNode));
+    assertEquals(leaf, predicates.booleanLeft(leafNode));
   }
 
   private static void assertPostfix(

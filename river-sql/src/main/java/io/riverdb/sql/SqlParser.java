@@ -94,7 +94,10 @@ public final class SqlParser {
           sql, parameters, input, queryParser);
       if (status.isOk()) status = queryParser.parse(sql, query, result);
       status = SqlParameterAdmission.finish(status, input);
-      if (!status.isOk()) query.discardJoinChains();
+      if (!status.isOk()) {
+        query.discardJoinChains();
+        query.reset();
+      }
       return status;
     } finally {
       input.clearParameters();
@@ -115,7 +118,10 @@ public final class SqlParser {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = queryParser.parse(sql, query, result);
-    if (!status.isOk()) query.discardJoinChains();
+    if (!status.isOk()) {
+      query.discardJoinChains();
+      query.reset();
+    }
     return status;
   }
 
