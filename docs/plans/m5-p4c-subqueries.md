@@ -1,8 +1,8 @@
 # M5 P4C robust subquery delivery plan
 
-Status: Alpha 2 implementation contract approved. P4C-0 through P4C-6 are
-accepted on `feature/p4c-subqueries` at `f85c499`. Alpha 2 remains incomplete;
-the next production task is P4C-7.
+Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7A are
+accepted on `feature/p4c-subqueries` at `1378176`. Alpha 2 remains incomplete;
+the next production task is P4C-7B.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,7 +11,7 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `f85c499` contains accepted P4C-0 through P4C-6:
+- `feature/p4c-subqueries` at `1378176` contains accepted P4C-0 through P4C-7A:
   canonical graph tests, lexical marker ordering, `(block, role, column)` scope
   binding, computed child projection, contract-level semantics fixtures, and
   joined root/child graph execution through the common n-table join source.
@@ -27,11 +27,17 @@ allocation review is required before promotion.
   rechecks and conservative TABLE fallback, plus a deterministic six-row
   per-edge `EXPLAIN [ANALYZE]` shape and truthful cache/scan/result/parent
   counters.
-- The next implementation gate is P4C-7 below. The affected
-  focused suites and design-debt checks are green. The former grouped-HAVING
+- P4C-7A completes direct streaming, single-row point, and scalar-aggregate
+  graph consumers through the single graph evaluator. Graph-bearing point
+  execution may return the first accepted physical row when no safe point
+  route exists; ordinary non-unique point admission remains unchanged.
+  Terminal no-publication/reuse, Unicode ownership, warmed allocation, the
+  full 279-test engine suite, and independent semantics and
+  architecture/allocation reviews are green.
+- The next implementation gate is P4C-7B below. The former grouped-HAVING
   null-zone and `temporal_derived` parser/reopen regressions were repaired in
-  `1a51d8a`. Full-engine promotion still has one baseline non-JOIN point
-  subquery status-oracle mismatch, owned by P4C-7 consumer integration.
+  `1a51d8a`; the stale point, derived-parameter, and eager-cardinality status
+  oracles are now aligned with admitted execution semantics.
 - These checkpoints preserve work and integration intent; they are not P4C
   promotion evidence. Focused semantics/allocation tests, affected full suites,
   design-debt checks, and independent review remain required.
@@ -370,7 +376,7 @@ in parallel with disjoint ownership.
 
 | Checkpoint | Deliverable | Primary ownership | Completion gate | Estimate |
 | --- | --- | --- | --- | ---: |
-| **P4C-7A — route audit, direct and point** | Freeze the current consumer-route matrix, then route point select, direct streaming projection, and scalar aggregate inputs through the graph once. Replace the stale point-subquery rejection with successful execution on the admitted graph. | `SqlQueryExecution`, point select/aggregate execution, direct scan path | Every admitted execution route has one named graph-filter owner; point and streaming rows match table-scan semantics; rejected rows release owned snapshots; nested errors repeat, publish no row/result/count, close, and permit same-session reuse | 1–1.5 days |
+| **P4C-7A — route audit, direct and point (accepted at `1378176`)** | Freeze the current consumer-route matrix, then route point select, direct streaming projection, and scalar aggregate inputs through the graph once. Replace the stale point-subquery rejection with successful execution on the admitted graph. | `SqlQueryExecution`, point select/aggregate execution, direct scan path | Every admitted execution route has one named graph-filter owner; point and streaming rows match table-scan semantics; rejected rows release owned snapshots; nested errors repeat, publish no row/result/count, close, and permit same-session reuse | 1–1.5 days |
 | **P4C-7B — grouped consumers** | Filter before aggregate/group state mutation, then run ordinary `GROUP BY`, `HAVING`, and `DISTINCT` behavior over accepted rows. | grouped execution, aggregate/group accumulator, distinct adapter | No rejected/error row changes an accumulator, key, group, distinct set, or public result; Unicode and NULL keys remain owned through copying | 1–1.5 days |
 | **P4C-7C — ordering and spill** | Feed accepted owned rows into the existing sort workspace/spill path and release only after tuple encoding has copied every value. | `SqlSortExecution`, existing sort workspace/spill adapters | In-memory and spilled order are equivalent; Unicode survives source advancement; an error appends/publishes no partial sort row and cleanup remains child-before-sort | 1–1.5 days |
 | **P4C-7D — P3 pipeline** | Evaluate the graph at the deepest physical source, copy the accepted row into the block row, and skip the already-consumed deepest predicate in its projector. Parent P3 predicates remain ordinary. | `SqlBlockSource`, deepest join/table stage, block projector/pipeline cleanup | Direct and P3 results agree; aggregate/order consumers above P3 see one filtered stream; errors append no block/store row and graph resources close before the physical source/store | 1.5–2.5 days |
@@ -390,7 +396,12 @@ The following boundaries are fixed for every P4C-7 checkpoint:
   retains ownership for the existing cleanup path and publishes nothing.
 - The former point case `id IN (SELECT id ...)` is admitted P4C SQL and must
   execute successfully; neither `FEATURE_NOT_SUPPORTED` nor
-  `INVALID_EXTERNAL_INPUT` is its final contract.
+  `INVALID_EXTERNAL_INPUT` is its final contract. The single-row `execute()`
+  API may use a physical-order table scan only for a graph-bearing point
+  `SELECT` without an equality/unique route; it publishes the first fully
+  accepted row and stops, matching the existing text-point scan contract.
+  The streaming scan API remains the complete multi-row path, and ordinary
+  non-unique point `SELECT` admission is unchanged.
 - Normal runtime error repetition, no-publication, close, and reuse belong to
   P4C-7. Injected close failures, exhaustive erase/high-water checks, retained
   heap deltas, checkpoint/reopen, and the full allocation envelope remain the
