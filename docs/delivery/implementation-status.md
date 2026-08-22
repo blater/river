@@ -2,7 +2,7 @@
 
 <!-- markdownlint-disable MD013 -->
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 This ledger records promotion evidence against the deliverable IDs in the
 [implementation plan](../plans/river-project-implementation-plan.md). A source
@@ -26,12 +26,12 @@ maintained in the [alpha delivery roadmap](alpha-roadmap.md).
 
 | Field | Value |
 | --- | --- |
-| Integration branch | `master` |
-| Current wave | Alpha 2 / M5 robust SQL subqueries |
-| Current target | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md) |
-| Next product slice | [Alpha 3 functional TPC-C readiness](alpha-roadmap.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) and [durable subquery views](../plans/m5-durable-subquery-views.md) |
+| Integration branch | `release/0.1.0-alpha.2` |
+| Current wave | Alpha 3 capacity foundation |
+| Current target | [A3C TPC-C capacity](../plans/alpha3-tpcc-capacity.md); A3C-0 durable formats accepted, A3C-1 runtime wiring next |
+| Next product slice | A3C-1 wide-schema runtime, then A3C-2 bounded large-table storage and the remaining [Alpha 3 functional TPC-C readiness](alpha-roadmap.md) |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | `4de99ca` (2026-08-21) — durable bounded `ANALYZE` statistics and deterministic SQL-order nested/hash/merge costing, with canonical catalog trust checks, estimate-plan truth, 1,024/1,025 bounds, drop/recreate invalidation, checkpoint/WAL reopen, backup restore, full SQL/engine/backup, allocation, design-debt, and independent durability gates green |
+| Latest green functional checkpoint | `16ded83` (2026-08-22) — complete P4C direct, point, aggregate, grouped, distinct, ordered/spilled, joined, and P3 consumer integration with lifecycle, allocation, and topology-reuse gates green |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently

@@ -274,7 +274,9 @@ final class RiverDriverTest {
       try (ResultSet correlatedNull = statement.executeQuery(
           "SELECT id FROM nullable_values WHERE rank NOT IN "
               + "(SELECT id FROM regions "
-              + "WHERE regions.id=nullable_values.rank)")) {
+              + "WHERE regions.id=nullable_values.rank) ORDER BY id")) {
+        assertTrue(correlatedNull.next());
+        assertEquals(2, correlatedNull.getLong(1));
         assertTrue(correlatedNull.next());
         assertEquals(3, correlatedNull.getLong(1));
         assertFalse(correlatedNull.next());
@@ -376,9 +378,13 @@ final class RiverDriverTest {
       }
       SQLException cardinality = assertThrows(
           SQLException.class,
-          () -> statement.executeQuery(
-              "SELECT id FROM accounts WHERE balance="
-                  + "(SELECT region FROM accounts WHERE region=7)"));
+          () -> {
+            try (ResultSet rows = statement.executeQuery(
+                "SELECT id FROM accounts WHERE balance="
+                    + "(SELECT region FROM accounts WHERE region=7)")) {
+              rows.next();
+            }
+          });
       assertEquals("21000", cardinality.getSQLState());
       for (int depth : new int[] {3, 8, 32}) {
         try (ResultSet nestedScalar = statement.executeQuery(
@@ -465,10 +471,14 @@ final class RiverDriverTest {
       }
       SQLException mixedCardinalityFailure = assertThrows(
           SQLException.class,
-          () -> statement.executeQuery(
-              "SELECT id FROM accounts WHERE id="
-                  + "(SELECT id FROM accounts WHERE region IN "
-                  + "(SELECT id FROM regions))"));
+          () -> {
+            try (ResultSet rows = statement.executeQuery(
+                "SELECT id FROM accounts WHERE id="
+                    + "(SELECT id FROM accounts WHERE region IN "
+                    + "(SELECT id FROM regions))")) {
+              rows.next();
+            }
+          });
       assertEquals("21000", mixedCardinalityFailure.getSQLState());
       try (ResultSet nonImmediateExistence = statement.executeQuery(
           "SELECT a.id FROM accounts a WHERE EXISTS "
@@ -565,11 +575,15 @@ final class RiverDriverTest {
       }
       SQLException intermediateCardinalityFailure = assertThrows(
           SQLException.class,
-          () -> statement.executeQuery(
-              "SELECT a.id FROM accounts a WHERE a.id IN "
-                  + "(SELECT b.id FROM accounts b WHERE b.region="
-                  + "(SELECT c.region FROM accounts c "
-                  + "WHERE c.region=b.region))"));
+          () -> {
+            try (ResultSet rows = statement.executeQuery(
+                "SELECT a.id FROM accounts a WHERE a.id IN "
+                    + "(SELECT b.id FROM accounts b WHERE b.region="
+                    + "(SELECT c.region FROM accounts c "
+                    + "WHERE c.region=b.region))")) {
+              rows.next();
+            }
+          });
       assertEquals("21000", intermediateCardinalityFailure.getSQLState());
       try (ResultSet exists = statement.executeQuery(
           "SELECT id FROM accounts WHERE EXISTS "
@@ -1406,9 +1420,12 @@ final class RiverDriverTest {
               + "ON comparison_values.kind=comparison_kinds.id "
               + "WHERE comparison_values.value>0")) {
         assertTrue(rows.next());
-        assertEquals(4, rows.getLong(1));
+        long first = rows.getLong(1);
         assertTrue(rows.next());
-        assertEquals(5, rows.getLong(1));
+        long second = rows.getLong(1);
+        assertTrue(
+            (first == 4 && second == 5)
+                || (first == 5 && second == 4));
         assertFalse(rows.next());
       }
       try (ResultSet rows = statement.executeQuery(
@@ -1416,11 +1433,14 @@ final class RiverDriverTest {
               + "JOIN comparison_kinds AS ck ON cv.kind=ck.id "
               + "WHERE cv.value>0")) {
         assertTrue(rows.next());
-        assertEquals(4, rows.getLong(1));
+        long first = rows.getLong(1);
         assertEquals(20, rows.getLong(2));
         assertTrue(rows.next());
-        assertEquals(5, rows.getLong(1));
+        long second = rows.getLong(1);
         assertEquals(20, rows.getLong(2));
+        assertTrue(
+            (first == 4 && second == 5)
+                || (first == 5 && second == 4));
         assertFalse(rows.next());
       }
       SQLException ambiguousAlias = assertThrows(

@@ -308,20 +308,22 @@ final class M5TypeRecoveryBoundaryTest {
 
   private static void assertDisconnectRollsBackTypedMutation(
       LoopbackRiverServer server, RiverDataSource dataSource) throws Exception {
-    try (Connection connection = dataSource.getConnection();
-        PreparedStatement mutation = connection.prepareStatement(
-            "UPDATE m5_types SET amount=? WHERE id=1");
-        Statement probe = connection.createStatement()) {
+    try (Connection connection = dataSource.getConnection()) {
       connection.setAutoCommit(false);
-      mutation.setBigDecimal(1, new BigDecimal("99.999"));
-      assertEquals(1, mutation.executeUpdate());
-      assertEquals(StatusCode.OK, server.close());
-      awaitConnections(server, 0);
-      SQLException disconnected = assertThrows(
-          SQLException.class,
-          () -> probe.executeQuery(
-              "SELECT amount FROM m5_types WHERE id=1"));
-      assertEquals("08006", disconnected.getSQLState());
+      try (PreparedStatement mutation = connection.prepareStatement(
+          "UPDATE m5_types SET amount=? WHERE id=1")) {
+        mutation.setBigDecimal(1, new BigDecimal("99.999"));
+        assertEquals(1, mutation.executeUpdate());
+      }
+      try (Statement probe = connection.createStatement()) {
+        assertEquals(StatusCode.OK, server.close());
+        awaitConnections(server, 0);
+        SQLException disconnected = assertThrows(
+            SQLException.class,
+            () -> probe.executeQuery(
+                "SELECT amount FROM m5_types WHERE id=1"));
+        assertEquals("08006", disconnected.getSQLState());
+      }
       SQLException rollback = assertThrows(SQLException.class, connection::rollback);
       assertEquals("08006", rollback.getSQLState());
     }
