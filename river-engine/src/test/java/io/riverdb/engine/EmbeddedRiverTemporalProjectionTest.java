@@ -157,10 +157,11 @@ final class EmbeddedRiverTemporalProjectionTest {
                 + "(SELECT id FROM moments)",
             queryResult));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.execute(
             "SELECT id FROM moments WHERE id IN (SELECT id FROM moments)",
             result));
+    assertEquals(1, result.valueAt(0));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.execute(

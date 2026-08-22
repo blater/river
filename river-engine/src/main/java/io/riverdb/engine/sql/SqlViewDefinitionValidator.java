@@ -49,9 +49,12 @@ final class SqlViewDefinitionValidator {
         ? bound.query.block(bound.query.blockCount() - 1) : bound.command;
     tableCount = source.type() == SqlCommandType.JOIN_SCAN
         ? source.joinChain().roleCount() : 1;
+    int block = bound.query.isBlockPipeline()
+        ? bound.query.blockCount() - 1 : 0;
+    SqlBoundJoinContext context = bound.existingJoinContext(block);
     for (int index = 0; index < tableCount; index++) {
       tableIds[index] = source.type() == SqlCommandType.JOIN_SCAN
-          ? bound.joinRole(index).tableId() : bound.table.tableId();
+          ? context.table(index).tableId() : bound.table.tableId();
     }
   }
 

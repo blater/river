@@ -18,8 +18,8 @@ final class SqlPointSelectExecution {
   private final SqlProjectedRow projected = new SqlProjectedRow();
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
-  private final RelationalScanCursor textCursor = new RelationalScanCursor();
-  private final RelationalScanResult textRow = new RelationalScanResult();
+  private final RelationalScanCursor cursor = new RelationalScanCursor();
+  private final RelationalScanResult row = new RelationalScanResult();
 
   SqlPointSelectExecution(
       RelationalSession relationalSession,
@@ -34,15 +34,13 @@ final class SqlPointSelectExecution {
 
   StatusCode execute(SqlExecutionResult result) {
     BoundSqlQuery.Block command = bound.executableQuery.root();
-    if ((command.type() != SqlCommandType.SELECT
-            && command.type() != SqlCommandType.SCAN)
-        || !hasEqualityAccess(command)
-        || accessColumn() > 0
-            && !bound.table.hasUniqueIndexOn(accessColumn())) {
+    boolean safePointAccess = safePointAccess(command);
+    if (!selectCommand(command)
+        || !safePointAccess && bound.executableQuery.edgeCount() == 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (bound.pointTextColumn > 0) {
-      return executeText(result);
+    if (!safePointAccess || bound.pointTextColumn > 0) {
+      return executeScan(result);
     }
     long primaryKey;
     HeapRowResult source;
@@ -60,41 +58,48 @@ final class SqlPointSelectExecution {
     if (status.isOk()) status = validateRow(source);
     if (status.isOk()) status = predicates.evaluate(primaryKey, source);
     if (status.isOk() && !predicates.matched()) status = StatusCode.CONFLICT;
-    if (status.isOk()) status = project(result, primaryKey, source);
+    if (status.isOk()) {
+      source = predicates.evaluatedRow(source);
+      status = project(result, primaryKey, source);
+    }
+    if (status.isOk() || status == StatusCode.CONFLICT) predicates.releaseEvaluatedRow();
     return status;
   }
 
   boolean hasResources() {
-    return textCursor.isActive();
+    return cursor.isActive();
   }
 
   StatusCode closeResources() {
-    if (!textCursor.isActive()) return StatusCode.OK;
-    StatusCode status = session.closeScan(textCursor);
-    if (status.isOk()) textCursor.reset();
+    if (!cursor.isActive()) return StatusCode.OK;
+    StatusCode status = session.closeScan(cursor);
+    if (status.isOk()) cursor.reset();
     return status;
   }
 
-  private StatusCode executeText(SqlExecutionResult result) {
-    StatusCode status = session.beginScan(bound.table, textCursor);
+  private StatusCode executeScan(SqlExecutionResult result) {
+    StatusCode status = session.beginScan(bound.table, cursor);
     boolean active = status.isOk();
     boolean found = false;
     while (status.isOk()) {
-      status = session.nextScan(textCursor, textRow);
+      status = session.nextScan(cursor, row);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
-      HeapRowResult source = textRow.row();
+      HeapRowResult source = row.row();
       if (status.isOk()) status = validateRow(source);
-      if (status.isOk()) status = predicates.evaluate(textRow.key(), source);
+      if (status.isOk()) status = predicates.evaluate(row.key(), source);
       if (status.isOk() && predicates.matched()) {
-        status = project(result, textRow.key(), source);
+        source = predicates.evaluatedRow(source);
+        status = project(result, row.key(), source);
+        predicates.releaseEvaluatedRow();
         found = status.isOk();
         break;
       }
+      if (status.isOk()) predicates.releaseEvaluatedRow();
     }
-    status = finishText(active, status);
+    status = finishScan(active, status);
     return status.isOk() && !found ? StatusCode.CONFLICT : status;
   }
 
@@ -106,16 +111,30 @@ final class SqlPointSelectExecution {
         : status;
   }
 
-  private StatusCode finishText(boolean active, StatusCode bodyStatus) {
+  private StatusCode finishScan(boolean active, StatusCode bodyStatus) {
     if (!active) return bodyStatus;
-    StatusCode close = session.closeScan(textCursor);
-    if (close.isOk()) textCursor.reset();
+    if (predicates.hasResources()) {
+      return bodyStatus.isOk() ? StatusCode.CONFLICT : bodyStatus;
+    }
+    StatusCode close = session.closeScan(cursor);
+    if (close.isOk()) cursor.reset();
     return bodyStatus.isOk() ? close : bodyStatus;
   }
 
   private boolean hasEqualityAccess(BoundSqlQuery.Block command) {
     return bound.pointTextColumn > 0 || bound.accessPredicate >= 0
         && bound.accessComparison == io.riverdb.sql.SqlComparison.EQUAL;
+  }
+
+  private boolean safePointAccess(BoundSqlQuery.Block command) {
+    if (!hasEqualityAccess(command)) return false;
+    int column = accessColumn();
+    return column == 0 || bound.table.hasUniqueIndexOn(column);
+  }
+
+  private static boolean selectCommand(BoundSqlQuery.Block command) {
+    return command.type() == SqlCommandType.SELECT
+        || command.type() == SqlCommandType.SCAN;
   }
 
   private int accessColumn() {

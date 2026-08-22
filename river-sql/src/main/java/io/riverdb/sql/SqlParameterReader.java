@@ -28,11 +28,14 @@ final class SqlParameterReader {
   StatusCode read(
       SqlCommand command,
       char[] text,
-      SqlParser.LongResult result) {
+      SqlParser.LongResult result,
+      int ordinal) {
     if (source == null || index >= source.count()) {
       return StatusCode.PARAMETER_COUNT_MISMATCH;
     }
-    int parameter = index++;
+    int parameter = ordinal < 0 ? index : ordinal;
+    if (parameter >= source.count()) return StatusCode.PARAMETER_COUNT_MISMATCH;
+    index++;
     int descriptor = source.typeDescriptorAt(parameter);
     if (source.isNull(parameter)) {
       return readNull(descriptor, result);

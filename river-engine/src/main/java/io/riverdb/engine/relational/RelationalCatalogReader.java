@@ -56,6 +56,20 @@ final class RelationalCatalogReader {
         ? CatalogViewCodec.decode(row, scratch, name, result) : status;
   }
 
+  StatusCode resolveStatistics(
+      TableDefinition table, TableStatistics result) {
+    if (table == null || !table.isOwnedBy(schemaGate) || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
+    StatusCode status = transaction.fetchByKey(
+        RelationalKey.CATALOG_SEQUENCE_SPACE,
+        RelationalKey.tableStatisticsKey(table.tableId()),
+        row);
+    return status.isOk()
+        ? CatalogStatisticsCodec.decode(row, scratch, table, result) : status;
+  }
+
   StatusCode beginObjectScan(
       RelationalSession owner, CatalogObjectCursor cursor) {
     if (cursor == null) {

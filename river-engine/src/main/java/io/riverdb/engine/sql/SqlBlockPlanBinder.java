@@ -12,6 +12,7 @@ final class SqlBlockPlanBinder {
   private final SqlBlockProjectionBinder projections = new SqlBlockProjectionBinder(expressions);
   private final SqlBlockPredicateBinder predicates = new SqlBlockPredicateBinder();
   private final SqlBlockJoinBinder joins;
+  private final SqlBinder binder;
   private final SqlBooleanPredicateEvaluator predicatePreflight;
 
   SqlBlockPlanBinder(SqlTemporalContext temporal) {
@@ -19,6 +20,7 @@ final class SqlBlockPlanBinder {
   }
 
   SqlBlockPlanBinder(SqlTemporalContext temporal, SqlBinder sharedBinder) {
+    binder = sharedBinder;
     joins = sharedBinder == null ? null : new SqlBlockJoinBinder(sharedBinder);
     predicatePreflight = temporal == null ? null
         : new SqlBooleanPredicateEvaluator(new SqlExpressionEvaluator(), temporal);
@@ -36,9 +38,13 @@ final class SqlBlockPlanBinder {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     status = deepest.type() == SqlCommandType.JOIN_SCAN
-        ? joins.resolve(session, bound, deepest)
+        ? joins.resolve(session, bound, deepest, plans.count() - 1)
         : session.resolveTable(deepest.tableName(), bound.table);
-    if (status.isOk()) physicalSchema(bound);
+    if (status.isOk() && bound.executableQuery.edgeCount() > 0) {
+      status = binder == null
+          ? StatusCode.FEATURE_NOT_SUPPORTED : binder.bindQueryBlocks(session, bound);
+    }
+    if (status.isOk()) physicalSchema(bound, plans.count() - 1);
     SqlBlockSchema child = plans.baseSchema();
     for (int block = plans.count() - 1;
         status.isOk() && block >= 0; block--) {
@@ -46,12 +52,20 @@ final class SqlBlockPlanBinder {
       boolean join = status.isOk()
           && bound.command.type() == SqlCommandType.JOIN_SCAN;
       if (status.isOk() && join && evaluator != null) {
-        status = joins.preflight(bound, predicatePreflight, evaluator);
+        status = joins.preflight(
+            bound,
+            block,
+            plans.command(block),
+            bound.existingJoinContext(block),
+            predicatePreflight,
+            evaluator);
       } else if (status.isOk() && evaluator != null) {
         status = evaluator.prepare(bound);
       }
-      if (status.isOk() && evaluator != null
-          && !join && predicatePreflight != null) {
+      boolean nestedSource = bound.executableQuery.edgeCount() > 0
+          && block == bound.executableQuery.sourceBlockCount() - 1;
+      if (status.isOk() && evaluator != null && !join && !nestedSource
+          && predicatePreflight != null) {
         status = predicatePreflight.prepare(bound.command, bound.whereBoolean);
       }
       if (status.isOk() && evaluator != null && predicatePreflight != null) {
@@ -72,7 +86,7 @@ final class SqlBlockPlanBinder {
         || firstBlock >= plans.count()) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    physicalSchema(bound);
+    physicalSchema(bound, plans.count() - 1);
     SqlBlockSchema child = plans.baseSchema();
     for (int block = plans.count() - 1;
         status.isOk() && block >= firstBlock; block--) {
@@ -108,15 +122,19 @@ final class SqlBlockPlanBinder {
     return status.isOk() ? predicates.bind(bound.command, child, bound, block) : status;
   }
 
-  private void physicalSchema(BoundSqlStatement bound) {
+  private void physicalSchema(BoundSqlStatement bound, int deepest) {
     SqlBlockSchema physical = bound.blockPlans().baseSchema();
-    physical.set(bound.table.columnCount());
-    for (int column = 0; column < bound.table.columnCount(); column++) {
+    SqlBoundJoinContext context = bound.blockPlans().command(deepest).joinChain() == null
+        ? null : bound.existingJoinContext(deepest);
+    io.riverdb.engine.relational.TableDefinition table = context == null
+        ? bound.table : context.table(0);
+    physical.set(table.columnCount());
+    for (int column = 0; column < table.columnCount(); column++) {
       physical.setColumn(
           column,
-          bound.table.columnName(column),
-          bound.table.typeDescriptor(column),
-          bound.table.isNullable(column));
+          table.columnName(column),
+          table.typeDescriptor(column),
+          table.isNullable(column));
     }
   }
 
@@ -124,7 +142,6 @@ final class SqlBlockPlanBinder {
     bound.projectionPrograms.reset();
     bound.aggregates.reset();
     bound.whereBoolean.reset();
-    bound.resetOnBoolean();
     bound.havingBoolean.reset();
     bound.projectedColumnCount = 0;
     bound.predicateCount = 0;

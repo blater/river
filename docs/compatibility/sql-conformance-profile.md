@@ -96,8 +96,12 @@ bounded hash strategy, but every candidate receives the complete residual.
 Other admitted shapes use the common nested-loop fallback. Hashing covers the
 fixed, exact decimal, temporal, Boolean, and Unicode-scalar equality families;
 after the existing 1,024-row/4 MiB store spills, the alpha reports and uses a
-stable bounded nested fallback. Partitioned spill hash, merge join, and cost
-planning remain performance work. Selected scalar expressions may reference
+stable bounded nested fallback. Equality merge reuses an ordered index when
+available or the existing bounded row-store sorter, including compatible later
+stages. Bounded durable `ANALYZE` statistics cost the existing SQL-order
+nested/hash/merge alternatives and appear as exact-or-sampled estimates in
+`EXPLAIN [ANALYZE]`. Partitioned spill hash and physical inner-island join
+reordering remain performance work. Selected scalar expressions may reference
 any role, and generated/raw `VARCHAR` results are published from owned text.
 Direct joined `ORDER BY` accepts a selected output name; qualified physical
 role expressions remain `FEATURE_NOT_SUPPORTED`, and ambiguous unqualified

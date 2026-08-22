@@ -9,6 +9,9 @@ This ledger records promotion evidence against the deliverable IDs in the
 file or passing unit test is not, by itself, evidence that a broad deliverable
 or gate has passed.
 
+The release-level feature scope and hard limits for Alpha 1 through Alpha 3 are
+maintained in the [alpha delivery roadmap](alpha-roadmap.md).
+
 ## Status vocabulary
 
 | Status | Meaning |
@@ -24,11 +27,11 @@ or gate has passed.
 | Field | Value |
 | --- | --- |
 | Integration branch | `master` |
-| Current wave | M5 useful v1 SQL surface |
-| Current target | [Bounded n-table JOIN merge strategy and cost planning](../plans/m5-n-table-joins.md) |
-| Next product slice | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) |
+| Current wave | Alpha 2 / M5 robust SQL subqueries |
+| Current target | [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md) |
+| Next product slice | [Alpha 3 functional TPC-C readiness](alpha-roadmap.md), then [online schema evolution](../plans/m5-online-schema-evolution.md) and [durable subquery views](../plans/m5-durable-subquery-views.md) |
 | Lead integrator | Primary implementation agent |
-| Latest green functional checkpoint | `4c50133` (2026-08-21) — bounded two-to-eight-role INNER/LEFT chains through direct/P3/order/spill plans; UTF-8-v4 durable direct/deepest-derived and self-join views with exact 32-slot ordered lineage, checkpoint/WAL reopen, dependency enforcement and backup/restore; bounded typed hash execution with explicit stable spill fallback — full `river-sql`, `river-engine`, and `river-backup` suites plus allocation, design-debt, and independent semantic/durability reviews green; prior checkpoints retained |
+| Latest green functional checkpoint | `4de99ca` (2026-08-21) — durable bounded `ANALYZE` statistics and deterministic SQL-order nested/hash/merge costing, with canonical catalog trust checks, estimate-plan truth, 1,024/1,025 bounds, drop/recreate invalidation, checkpoint/WAL reopen, backup restore, full SQL/engine/backup, allocation, design-debt, and independent durability gates green |
 | Verified integration checkpoint | `a9c5a07` — detached offline/uncached 149-task check and reproducible 58-archive build |
 
 The bytecode-policy and clean-checkout gates are integrated, independently
@@ -38,29 +41,37 @@ reviewed, and verified together from the exact detached integration commit.
 
 | Purpose | Branch | Commit | Status |
 | --- | --- | --- | --- |
-| Shipped bounded-join alpha | `master`, `feature/n-table-joins` | `4c50133` | Clean, pushed, and accepted through J5; J6 merge and J7 costing remain planned |
+| Shipped bounded-join alpha | `release/0.1.0-alpha.1` | `e72967e` | Clean and pushed through accepted J7a durable statistics and deterministic SQL-order costing |
+| Join continuation | `feature/n-table-joins` | `e72967e` | Matches the Alpha 1 release checkpoint; J7b physical inner-island reordering is explicitly deferred beyond the alpha |
 | P4C recovery snapshot | `wip/p4c-subqueries-snapshot` | `794641e` | Clean and pushed immutable checkpoint of the pre-integration work |
-| P4C continuation | `feature/p4c-subqueries` | `19abbff` | Clean, pushed, rebased onto `4c50133`, and main-source compile green; not acceptance-ready |
+| P4C continuation | `feature/p4c-subqueries` | `6efa2b5` | P4C-0 through P4C-4 accepted: canonical graph/marker/scope semantics plus 2–8-role joined root and child execution; P4C-5 and P4C-6 are next |
 
-P4C resumes from `19abbff`. Its first gates are to migrate the stale parser and
-lifecycle tests away from the deleted singleton subquery API, then correct the
-null zone-state failure exposed by the joined P3 spill regression. The snapshot
-branch is recovery evidence only and must not be merged in place of the rebased
-continuation branch.
+P4C-0 through P4C-4 are accepted through `6efa2b5`. The branch now has
+canonical graph lifecycle coverage, scalar-subquery comparison
+normalization, statement-global lexical marker ordinals, packed lexical
+block/role scope binding, computed child projection, and active sibling,
+recursive, 3VL, laziness, cardinality, and failure-atomicity fixtures. Joined
+root and child graph blocks now execute through the common n-table join source
+with LEFT/null continuation, owned Unicode tuples, P3 atomicity, retry-safe
+cleanup, and warmed allocation evidence. P4C-5 value/cache semantics and P4C-6
+plan/access truth are next. Full-engine promotion retains one baseline
+non-JOIN point-subquery status-oracle mismatch for P4C-7. The snapshot branch
+remains recovery evidence only.
 
 Product work proceeds in this order:
 
 1. [Bounded n-table JOIN execution and durable views](../plans/m5-n-table-joins.md)
    with complete dependency lineage.
 2. [P4C robust computed/correlated subqueries](../plans/m5-p4c-subqueries.md).
-3. [Online schema evolution](../plans/m5-online-schema-evolution.md):
+3. [Alpha 3 functional TPC-C readiness](alpha-roadmap.md): composite relational keys, scale-appropriate bounded storage, composite DML/access, and the exact transaction SQL required by the independent driver.
+4. [Online schema evolution](../plans/m5-online-schema-evolution.md):
    `ALTER TABLE`, online index creation/removal, and transactional changes to
    foreign keys, views, constraints, defaults, and generated values.
-4. [Durable subquery views](../plans/m5-durable-subquery-views.md) over the
+5. [Durable subquery views](../plans/m5-durable-subquery-views.md) over the
    admitted P4C and n-table source graph.
-5. Broader CHECK expression semantics not required by the preceding slices.
-6. JDBC feature additions and known JDBC issues.
-7. Core crash/recovery, isolation, fault, bounded-growth, and soak promotion.
+6. Broader CHECK expression semantics not required by the preceding slices.
+7. JDBC feature additions and known JDBC issues.
+8. Core crash/recovery, isolation, fault, bounded-growth, and soak promotion.
 
 Lower-ranked work does not interrupt a higher-ranked slice unless it prevents
 that slice from executing through the embedded engine path.
@@ -108,7 +119,7 @@ SQL conformance profile.
 | U02c `BOOLEAN` and `DECIMAL(p,s)` | passed | Accepted exact representation/math/casts, predicate/aggregate/index/constraint, JDBC, recovery, and error evidence |
 | U02d local temporal types | passed | Accepted strict local temporal grammar/codec, catalog/row/default/check validation, DATE index, DML/predicates/update, corruption, and checkpoint/reopen evidence; TIME index admission was corrected in U02f after proving its full domain fits the existing key |
 | U02e time-zone semantics | passed | Accepted UTC instant storage, strict fixed/IANA area zones, DST gap/overlap behavior, session-state rollback semantics, tzdb reporting, statement-stable defaults, catalog v13, and checkpoint/reopen evidence |
-| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables, P4A's common bounded Boolean/3VL program, and bounded two-to-eight-role computed `INNER`/`LEFT JOIN` chains through direct/P3/order/spill execution. Durable views use strict UTF-8-v4 ordered lineage for up to 32 physical roles, including aliased self-joins, through checkpoint/reopen and backup/restore. Typed hash equality is admitted in memory with explicit bounded spill fallback; merge/cost planning, computed correlation, and broader CHECK/expression contexts remain separate work. |
+| U02f temporal durability/expressions | active | Accepted checkpoints cover direct-root expressions and mutations, generalized scalar/grouped `HAVING`, durable owner-column `CHECK`, projection composition, block-scoped aggregate/`DISTINCT` stages through derived tables, P4A's common bounded Boolean/3VL program, and bounded two-to-eight-role computed `INNER`/`LEFT JOIN` chains through direct/P3/order/spill execution. Durable views use strict UTF-8-v4 ordered lineage for up to 32 physical roles, including aliased self-joins, through checkpoint/reopen and backup/restore. Typed hash equality has bounded spill fallback; merge supports existing-index order plus right-sort-fed and proven later-stage order. Cost planning, computed correlation, and broader CHECK/expression contexts remain separate work. |
 | U03a JDBC/protocol types | passed | Accepted protocol v3 binary values/parameters, authenticated all-type JDBC/CLI, Java-time/decimal mappings, exact metadata, conversion matrix, warnings, generated keys, bounded batches, failure states, and ownership/erasure evidence |
 | U06a type/temporal gate | active | Unified embedded/authenticated-JDBC/CLI/checkpoint/backup/fault fixture and independent relational-semantics review remain |
 
@@ -151,14 +162,14 @@ the status explicitly says `passed`.
 | T07-T08 | implemented | Transactional durable catalog objects and the internal/embedded command path | Catalog upgrade/invalidation review and stable boundary evidence |
 | T09 | active | Focused concurrency, deadlock, rollback, index-visibility, and version-pressure tests exist | Complete G2 history, fault, bounded-growth, and independent review package |
 | Q01-Q02 | implemented | Bounded parser/query model, durable names, aliases, NULL semantics, and correlation across as many as 32 query blocks | Final Q01 conformance-profile acceptance and complete binder semantic fixtures |
-| Q03-Q05 | active | Executable plans and `EXPLAIN`, indexed/scan choices, reusable result carriers, bounded sort spill, joins, grouping, and aggregates | General cost/capability interfaces, plan-cache/invalidation proof, vector-batch execution, memory governor, and performance evidence |
+| Q03-Q05 | active | Executable plans and `EXPLAIN`, indexed/scan choices, durable bounded join statistics/`ANALYZE`, deterministic SQL-order nested/hash/merge costing, reusable result carriers, bounded sort spill, joins, grouping, and aggregates | Physical inner-island join ordering, plan-cache/invalidation proof, vector-batch execution, memory governor, and performance evidence |
 | Q06-Q08 | implemented | Transactional DDL/DML, indexes, immediate constraints, generated keys, embedded lifecycle/sessions, and streaming results | G1/G2 regression evidence, public API review, and G3A promotion |
 | N01-N05 | passed | Accepted bounded versioned protocol, client/server lifecycle, TLS, exporter-bound token authentication, deadlines, cancellation, and fuzz evidence for loopback scope | Non-loopback service exposure remains consumer-triggered |
 | N06 | passed | Accepted configured service-principal authorization, row filtering, bounded durable audit, admission, and fail-closed exhaustion/corruption behavior | SQL-managed roles/grants wait for a multi-principal consumer |
 | N07 | passed | Accepted G3B JDBC connection/statement/result-set, transaction/savepoint, batch, generated-key, metadata, and failure-state subset | U03 completes the broader v1 type/conversion/warning matrix |
 | N08 | passed | Authenticated TLS JDBC passes the real bounded loopback server path, slow-client/resource, fuzz, rollback, and audit gates | Non-loopback binding remains unavailable by design |
 | U00 | passed | SQL session is a small facade over owned binding, transaction, DML, query, nested-query, sort/spill, dispatch, and cursor-lifecycle components | Completed 2026-08-12; later deepening is consumer-triggered and must preserve SQL semantics and warmed allocation gates |
-| U01 | active | Inner/left joins, aggregates, grouping/HAVING, `DISTINCT`, ordering, spill/merge, comparisons, conjunction/disjunction, and nested/correlated query forms | N08/G3B, then typed expression/cast breadth, temporal predicates/functions, plan/performance budgets, and `EXPLAIN ANALYZE` gate evidence |
+| U01 | active | Two-to-eight-role inner/left joins, durable ordered-lineage JOIN views, SQL-order costed nested/hash/merge, aggregates, grouping/HAVING, `DISTINCT`, ordering/spill, comparisons, conjunction/disjunction, and bounded nested/correlated forms | P4C computed/generalized subqueries, then remaining typed expression/temporal breadth, physical join ordering, and performance evidence |
 | U02 | active | U02a-U02e are passed: canonical descriptors, variable UTF-8 rows, BOOLEAN/DECIMAL, local/zoned temporal types, session zones, and current defaults join the transactional SQL path | U02f wide temporal indexes, temporal functions/context-wide durability, and profile fixtures |
 | U03 | passed | Binary typed parameters/results, authenticated all-type JDBC/CLI, Java-time/decimal mappings, exact nullability, supported/rejected conversion matrix, warnings, generated keys, bounded batch failures, and ownership/erasure evidence are accepted | New conversions require an explicit matrix change and focused evidence |
 | U04 | passed | Authenticated typed CLI, quote-aware bounded scripts, SHOW TABLES/INDEXES/COLUMNS, and EXPLAIN diagnostics pass real-path tests | Later production observability/system relations remain O04 rather than hidden M5 debt |

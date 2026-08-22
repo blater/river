@@ -7,13 +7,15 @@ import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.sql.SqlComparison;
+import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Owns one physical cursor and borrowed result carrier for every JOIN role. */
 final class SqlJoinChainCursors {
   private final RelationalSession session;
-  private final BoundSqlStatement bound;
+  private SqlBoundJoinContext context;
+  private SqlCommand command;
   private final RelationalScanCursor[] cursors =
       new RelationalScanCursor[SqlJoinChain.MAXIMUM_JOIN_ROLES];
   private final RelationalScanResult[] scans =
@@ -32,9 +34,8 @@ final class SqlJoinChainCursors {
   private final boolean[] rightUnique =
       new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
 
-  SqlJoinChainCursors(RelationalSession relationalSession, BoundSqlStatement statement) {
+  SqlJoinChainCursors(RelationalSession relationalSession) {
     session = relationalSession;
-    bound = statement;
     for (int role = 0; role < cursors.length; role++) {
       cursors[role] = new RelationalScanCursor();
       scans[role] = new RelationalScanResult();
@@ -43,34 +44,47 @@ final class SqlJoinChainCursors {
     }
   }
 
+  void configure(SqlBoundJoinContext joinContext, SqlCommand canonicalCommand) {
+    context = joinContext;
+    command = canonicalCommand;
+  }
+
   StatusCode beginRoot() {
     configureRights();
-    activeRoleCount = bound.command.joinChain().roleCount();
-    boolean predicate = bound.accessPredicate >= 0;
-    boolean equality = predicate && bound.accessComparison == SqlComparison.EQUAL;
-    rootValueIndex = predicate && bound.predicateColumn > 0
-        && bound.table.hasIndexOn(bound.predicateColumn);
-    boolean primary = predicate && bound.predicateColumn == 0;
+    activeRoleCount = command.joinChain().roleCount();
+    TableDefinition root = context.table(0);
+    if (context.strategy(0) == SqlJoinStrategy.MERGE) {
+      int column = context.strategyOuterColumn(0);
+      rootValueIndex = column > 0;
+      return rootValueIndex
+          ? session.beginValueScan(root, column, cursors[0])
+          : session.beginScan(root, cursors[0]);
+    }
+    boolean predicate = context.accessPredicate >= 0;
+    boolean equality = predicate && context.accessComparison == SqlComparison.EQUAL;
+    rootValueIndex = predicate && context.predicateColumn > 0
+        && root.hasIndexOn(context.predicateColumn);
+    boolean primary = predicate && context.predicateColumn == 0;
     long lower = !predicate ? 0
-        : equality ? bound.accessValue : bound.accessLowerInclusive;
-    long upper = !predicate || equality ? 0 : bound.accessUpperExclusive;
+        : equality ? context.accessValue : context.accessLowerInclusive;
+    long upper = !predicate || equality ? 0 : context.accessUpperExclusive;
     if (rootValueIndex) {
       return equality
           ? session.beginExactValueScan(
-              bound.table, bound.predicateColumn, lower, cursors[0])
+              root, context.predicateColumn, lower, cursors[0])
           : session.beginValueScan(
-              bound.table, bound.predicateColumn, lower, upper, cursors[0]);
+              root, context.predicateColumn, lower, upper, cursors[0]);
     }
     return primary
         ? equality
-            ? session.beginExactScan(bound.table, lower, cursors[0])
-            : session.beginScan(bound.table, lower, upper, cursors[0])
-        : session.beginScan(bound.table, cursors[0]);
+            ? session.beginExactScan(root, lower, cursors[0])
+            : session.beginScan(root, lower, upper, cursors[0])
+        : session.beginScan(root, cursors[0]);
   }
 
   StatusCode nextRoot() {
     StatusCode status = rootValueIndex
-        ? session.nextValueScan(bound.table, cursors[0], scans[0], indexed[0])
+        ? session.nextValueScan(context.table(0), cursors[0], scans[0], indexed[0])
         : session.nextScan(cursors[0], scans[0]);
     if (!status.isOk()) return status;
     keys[0] = rootValueIndex ? indexed[0].key() : scans[0].key();
@@ -79,16 +93,16 @@ final class SqlJoinChainCursors {
   }
 
   StatusCode beginRole(int role, long value) {
-    TableDefinition table = bound.joinRole(role);
+    TableDefinition table = context.table(role);
     int stage = role - 1;
     return rightIndexed[stage]
         ? session.beginNonUniqueValueLookup(
-            table, bound.joinAccessInnerColumn(stage), value, cursors[role])
+            table, context.accessInnerColumn(stage), value, cursors[role])
         : session.beginScan(table, cursors[role]);
   }
 
   StatusCode nextRole(int role) {
-    TableDefinition table = bound.joinRole(role);
+    TableDefinition table = context.table(role);
     int stage = role - 1;
     StatusCode status = rightIndexed[stage]
         ? session.nextNonUniqueValueLookup(table, cursors[role], indexed[role])
@@ -103,8 +117,8 @@ final class SqlJoinChainCursors {
 
   StatusCode fetchRole(int role, long value) {
     int stage = role - 1;
-    int innerColumn = bound.joinAccessInnerColumn(stage);
-    TableDefinition table = bound.joinRole(role);
+    int innerColumn = context.accessInnerColumn(stage);
+    TableDefinition table = context.table(role);
     StatusCode status = innerColumn == 0
         ? session.fetch(table, value, fetched[role])
         : session.fetchByUniqueValue(
@@ -138,10 +152,10 @@ final class SqlJoinChainCursors {
   }
 
   private void configureRights() {
-    for (int stage = 0; stage < bound.command.joinChain().stageCount(); stage++) {
-      int right = bound.joinAccessInnerColumn(stage);
-      boolean access = bound.joinAccessOuterColumn(stage) >= 0 && right >= 0;
-      TableDefinition table = bound.joinRole(stage + 1);
+    for (int stage = 0; stage < command.joinChain().stageCount(); stage++) {
+      int right = context.accessInnerColumn(stage);
+      boolean access = context.accessOuterColumn(stage) >= 0 && right >= 0;
+      TableDefinition table = context.table(stage + 1);
       rightIndexed[stage] = access && (right == 0 || table.hasIndexOn(right));
       rightUnique[stage] = access && (right == 0 || table.hasUniqueIndexOn(right));
     }
@@ -162,7 +176,7 @@ final class SqlJoinChainCursors {
   HeapRowResult row(int role) { return rows[role]; }
 
   private StatusCode validate(int role) {
-    TableDefinition table = bound.joinRole(role);
+    TableDefinition table = context.table(role);
     HeapRowResult row = rows[role];
     return row.length() >= table.fixedRowBytes()
         && row.length() <= table.maximumRowBytes()

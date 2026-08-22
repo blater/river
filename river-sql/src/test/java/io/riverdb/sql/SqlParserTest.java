@@ -328,7 +328,7 @@ final class SqlParserTest {
   }
 
   @Test
-  void rejectsParameterCountAndUnsupportedTopologyWithoutConsumingTextMarkers() {
+  void appliesParameterCountsAcrossQueryTopologiesWithoutConsumingTextMarkers() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
     SqlQuery query = new SqlQuery();
@@ -349,19 +349,35 @@ final class SqlParserTest {
         parser.parse(
             "CREATE TABLE blocked(id BIGINT DEFAULT ?)", one, command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d.id FROM (SELECT id FROM notes WHERE id=?) d",
             one,
             query,
             command));
+    assertEquals(1, predicateValue(query.block(1), 0));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT id FROM notes WHERE id IN (SELECT id FROM notes WHERE id=?)",
             one,
             query,
             command));
+    assertEquals(1, predicateValue(query.block(1), 0));
+    TestParameters ordered = new TestParameters(
+        new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT},
+        new long[] {7, 9},
+        new boolean[] {false, false},
+        new String[] {null, null});
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT d.id FROM (SELECT id FROM notes WHERE id=?) d WHERE d.id=?",
+            ordered,
+            query,
+            command));
+    assertEquals(9, predicateValue(query.block(0), 0));
+    assertEquals(7, predicateValue(query.block(1), 0));
   }
 
   @Test
@@ -872,6 +888,7 @@ final class SqlParserTest {
   void carriesBoundedBooleanPredicatesAcrossAdmittedConsumers() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
+    SqlQuery query = new SqlQuery();
 
     assertEquals(
         StatusCode.OK,
@@ -1031,12 +1048,28 @@ final class SqlParserTest {
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IN (day)",
             command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT id FROM moments WHERE EXTRACT(DAY FROM observed) IN "
                 + "(SELECT day FROM other_moments)",
-            new SqlQuery(),
+            query,
             command));
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertEquals(
+        2,
+        query.block(0).wherePredicates().programNodeCount(
+            0, SqlBooleanPredicateProgram.PROGRAM_LEFT));
+    assertEquals(
+        SqlScalarExpression.EXTRACT,
+        query.block(0).wherePredicates().programOperator(
+            0, SqlBooleanPredicateProgram.PROGRAM_LEFT, 1));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -1367,12 +1400,24 @@ final class SqlParserTest {
             compiled));
 
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT id FROM moments WHERE id=(SELECT EXTRACT(DAY FROM day) "
                 + "FROM moments WHERE id=1)",
             query,
             compiled));
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_SCALAR,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    assertPostfix(
+        query.block(query.edgeChild(0)).projectionExpression(0),
+        SqlScalarExpression.COLUMN,
+        SqlScalarExpression.EXTRACT);
   }
 
   @Test
@@ -2594,6 +2639,23 @@ final class SqlParserTest {
   }
 
   @Test
+  void parsesAnalyzeTableAndRecoversFromMalformedInput() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(StatusCode.OK, parser.parse("ANALYZE accounts", command));
+    assertEquals(SqlCommandType.ANALYZE_TABLE, command.type());
+    assertName("accounts", command.tableName());
+    assertEquals(StatusCode.OK, parser.parse("ANALYZE TABLE regions", command));
+    assertEquals(SqlCommandType.ANALYZE_TABLE, command.type());
+    assertName("regions", command.tableName());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("ANALYZE", command));
+    assertEquals(StatusCode.OK, parser.parse("ANALYZE countries", command));
+    assertName("countries", command.tableName());
+  }
+
+  @Test
   void rejectsMalformedUnsupportedAndOverflowInput() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
@@ -2981,6 +3043,45 @@ final class SqlParserTest {
   }
 
   @Test
+  void measuresDerivedJoinDepthWithoutAdmittingPredicateSubqueries() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        2,
+        parser.queryBlockDepth(
+            "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+                + "JOIN right_rows r ON l.id=r.left_id) joined"));
+    assertEquals(
+        -1,
+        parser.queryBlockDepth(
+            "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+                + "WHERE EXISTS (SELECT id FROM right_rows)) joined"));
+    assertEquals(
+        -1,
+        parser.queryBlockDepth(
+            "SELECT lid FROM (SELECT id AS lid FROM left_rows) joined "
+                + "WHERE lid IN (SELECT left_id FROM right_rows)"));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery("SELECT id FROM outer_rows", query, command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQueryAppend(
+            "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+                + "JOIN right_rows r ON l.id=r.left_id) joined",
+            query,
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQueryAppend(
+            "SELECT lid FROM (SELECT id AS lid FROM left_rows) joined "
+                + "WHERE lid IN (SELECT left_id FROM right_rows)",
+            query,
+            command));
+  }
+
+  @Test
   void parsesExplainWithoutCopyingTheNestedQueryText() {
     SqlParser parser = new SqlParser();
     SqlQuery query = new SqlQuery();
@@ -3024,14 +3125,22 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(2, query.blockCount());
-    assertTrue(query.hasScalarPredicate());
-    assertEquals(1, query.scalarPredicate());
+    assertEquals(1, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_SCALAR,
+        0,
+        1,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    assertEquals(SqlComparison.EQUAL, query.block(0).wherePredicates().comparison(1));
     assertName("accounts", command.tableName());
     assertName("region", predicateColumnName(command, 0));
     assertEquals(7, predicateValue(command, 0));
     assertName("balance", predicateColumnName(command, 1));
     assertEquals(0, predicateValue(command, 1));
-    SqlCommand scalar = query.scalarCommand();
+    SqlCommand scalar = query.block(query.edgeChild(0));
     assertName("lookup", scalar.tableName());
     assertName("balance", scalar.firstColumnName());
     assertName("id", predicateColumnName(scalar, 0));
@@ -3044,7 +3153,15 @@ final class SqlParserTest {
                 + "WHERE regions.id=accounts.region)",
             query,
             command));
-    scalar = query.scalarCommand();
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_SCALAR,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    scalar = query.block(query.edgeChild(0));
     assertTrue(isColumnPredicate(scalar, 0));
     assertName("regions", predicateTableName(scalar, 0));
     assertName("id", predicateColumnName(scalar, 0));
@@ -3054,22 +3171,147 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parseQuery(nestedScalarQuery(3), query, command));
     assertEquals(3, query.blockCount());
-    assertEquals(0, query.scalarPredicate(0));
-    assertEquals(0, query.scalarPredicate(1));
+    assertNestedSubqueryChain(query, 3, SqlQuery.SUBQUERY_SCALAR,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedScalarQuery(32), query, command));
     assertEquals(32, query.blockCount());
+    assertNestedSubqueryChain(query, 32, SqlQuery.SUBQUERY_SCALAR,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
     assertEquals(
         StatusCode.QUERY_TOO_COMPLEX,
         parser.parseQuery(nestedScalarQuery(33), query, command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.FEATURE_NOT_SUPPORTED,
         parser.parseQuery(
             "SELECT id FROM accounts WHERE balance = "
                 + "(SELECT id, balance FROM lookup WHERE id=7)",
             query,
             command));
+  }
+
+  @Test
+  void parsesScalarSubqueryOnEitherComparisonOperand() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    String[] operators = {"=", "!=", "<", "<=", ">", ">="};
+    SqlComparison[] normalized = {
+        SqlComparison.EQUAL,
+        SqlComparison.NOT_EQUAL,
+        SqlComparison.GREATER_THAN,
+        SqlComparison.GREATER_OR_EQUAL,
+        SqlComparison.LESS_THAN,
+        SqlComparison.LESS_OR_EQUAL
+    };
+    for (int index = 0; index < operators.length; index++) {
+      assertEquals(
+          StatusCode.OK,
+          parser.parseQuery(
+              "SELECT id FROM accounts WHERE "
+                  + "(SELECT balance FROM lookup WHERE lookup.id=7) "
+                  + operators[index] + " balance+1",
+              query,
+              command));
+      assertSubqueryEdge(
+          query,
+          0,
+          SqlQuery.SUBQUERY_SCALAR,
+          0,
+          0,
+          1,
+          SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+      assertEquals(normalized[index], command.wherePredicates().comparison(0));
+      assertEquals(3, command.wherePredicates().programNodeCount(
+          0, SqlBooleanPredicateProgram.PROGRAM_LEFT));
+      assertEquals(SqlScalarExpression.ADD, command.wherePredicates().programOperator(
+          0, SqlBooleanPredicateProgram.PROGRAM_LEFT, 2));
+    }
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE (SELECT id FROM left_side)="
+                + "(SELECT id FROM right_side)",
+            query,
+            command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE balance>"
+                + "(SELECT balance FROM lookup WHERE lookup.id=7)",
+            query,
+            command));
+    assertEquals(SqlComparison.GREATER_THAN, command.wherePredicates().comparison(0));
+  }
+
+  @Test
+  void assignsNestedTypedMarkersInOriginalLexicalOrder() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    TestParameters parameters = new TestParameters(
+        new int[] {
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.varchar(8),
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.DATE,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT
+        },
+        new long[] {10, 0, 20, 0, 30, 40, 45, 50},
+        new boolean[] {false, false, false, true, false, false, false, false},
+        new String[] {null, "Aé😀", null, null, null, null, null, null});
+    String sql = "SELECT id FROM accounts WHERE region=? AND EXISTS "
+        + "(SELECT ? FROM lookup WHERE note=? AND label='?') "
+        + "AND day=? AND id IN (SELECT ? FROM other WHERE value=? AND EXISTS "
+        + "(SELECT ? FROM deep WHERE id=?))";
+
+    assertEquals(StatusCode.OK, parser.parseQuery(sql, parameters, query, command));
+    assertEquals(4, query.blockCount());
+    assertEquals(3, query.edgeCount());
+    assertEquals(10, predicateValue(query.block(0), 0));
+    assertEquals(
+        SqlScalarExpression.NULL,
+        query.block(0).wherePredicates().programOperator(
+            2, SqlBooleanPredicateProgram.PROGRAM_RIGHT, 0));
+    assertEquals(SqlTypeDescriptor.DATE, predicateProgramDescriptor(
+        query.block(0).wherePredicates(),
+        2,
+        SqlBooleanPredicateProgram.PROGRAM_RIGHT));
+    assertText("Aé😀", query.block(1), query.block(1).projectionExpression(0).operand(0));
+    assertEquals(
+        SqlTypeDescriptor.varchar(8),
+        query.block(1).projectionExpression(0).typeDescriptor(0));
+    assertEquals(20, predicateValue(query.block(1), 0));
+    assertEquals(30, query.block(2).projectionExpression(0).operand(0));
+    assertEquals(40, predicateValue(query.block(2), 0));
+    assertEquals(45, query.block(3).projectionExpression(0).operand(0));
+    assertEquals(50, predicateValue(query.block(3), 0));
+
+    assertEquals(
+        StatusCode.PARAMETER_COUNT_MISMATCH,
+        parser.parseQuery(sql, TestParameters.fixed(SqlTypeDescriptor.BIGINT, 1), query, command));
+    TestParameters extra = new TestParameters(
+        new int[] {
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.varchar(8),
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.DATE,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT,
+            SqlTypeDescriptor.BIGINT
+        },
+        new long[] {10, 0, 20, 0, 30, 40, 45, 50, 60},
+        new boolean[] {false, false, false, true, false, false, false, false, false},
+        new String[] {null, "Aé😀", null, null, null, null, null, null, null});
+    assertEquals(
+        StatusCode.PARAMETER_COUNT_MISMATCH,
+        parser.parseQuery(sql, extra, query, command));
   }
 
   @Test
@@ -3085,11 +3327,19 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(2, query.blockCount());
-    assertTrue(query.hasExistencePredicate());
-    assertFalse(query.existenceNegated());
+    assertEquals(1, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertFalse(query.block(0).wherePredicates().leafNegated(0));
     assertName("accounts", command.tableName());
     assertName("id", command.orderColumnName());
-    assertName("lookup", query.existenceCommand().tableName());
+    assertName("lookup", query.block(query.edgeChild(0)).tableName());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3097,7 +3347,15 @@ final class SqlParserTest {
                 + "(SELECT id FROM lookup WHERE lookup.region=7)",
             query,
             command));
-    assertTrue(query.existenceNegated());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertBooleanNotOverLeaf(query.block(0).wherePredicates(), 0);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3106,7 +3364,7 @@ final class SqlParserTest {
                 + "WHERE regions.id=accounts.region)",
             query,
             command));
-    SqlCommand correlated = query.existenceCommand();
+    SqlCommand correlated = query.block(query.edgeChild(0));
     assertTrue(isColumnPredicate(correlated, 0));
     assertName("regions", predicateTableName(correlated, 0));
     assertName("id", predicateColumnName(correlated, 0));
@@ -3122,7 +3380,7 @@ final class SqlParserTest {
             command));
     assertName("accounts", command.tableName());
     assertName("a", command.tableAlias());
-    correlated = query.existenceCommand();
+    correlated = query.block(query.edgeChild(0));
     assertName("accounts", correlated.tableName());
     assertName("b", correlated.tableAlias());
     assertName("b", predicateTableName(correlated, 0));
@@ -3131,15 +3389,31 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parseQuery(nestedExistenceQuery(3), query, command));
     assertEquals(3, query.blockCount());
-    assertFalse(query.existenceNegated(0));
-    assertFalse(query.existenceNegated(1));
+    assertNestedSubqueryChain(query, 3, SqlQuery.SUBQUERY_EXISTS,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedExistenceQuery(32), query, command));
     assertEquals(32, query.blockCount());
+    assertNestedSubqueryChain(query, 32, SqlQuery.SUBQUERY_EXISTS,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
     assertEquals(
         StatusCode.QUERY_TOO_COMPLEX,
         parser.parseQuery(nestedExistenceQuery(33), query, command));
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(siblingExistenceQuery(8), query, command));
+    assertEquals(8, query.edgeCount());
+    assertEquals(9, query.blockCount());
+    assertEquals(8, query.block(0).wherePredicates().leafCount());
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        parser.parseQuery(siblingExistenceQuery(9), query, command));
+    assertEquals(0, query.edgeCount());
+    assertEquals(0, query.blockCount());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(siblingExistenceQuery(1), query, command));
   }
 
   @Test
@@ -3154,12 +3428,19 @@ final class SqlParserTest {
                 + "(SELECT balance FROM lookup WHERE lookup.id=9)",
             query,
             command));
-    assertTrue(query.hasMembershipPredicate());
-    assertFalse(query.membershipNegated());
-    assertEquals(1, query.membershipPredicate());
+    assertEquals(1, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        0,
+        1,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertFalse(query.block(0).wherePredicates().leafNegated(1));
     assertName("balance", predicateColumnName(command, 1));
-    assertName("lookup", query.membershipCommand().tableName());
-    assertName("balance", query.membershipCommand().firstColumnName());
+    assertName("lookup", query.block(query.edgeChild(0)).tableName());
+    assertName("balance", query.block(query.edgeChild(0)).firstColumnName());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3167,8 +3448,16 @@ final class SqlParserTest {
                 + "(SELECT NULL FROM lookup WHERE id=9)",
             query,
             command));
-    assertTrue(query.membershipNegated());
-    assertTrue(query.membershipCommand().isNullProjection(0));
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertTrue(query.block(0).wherePredicates().leafNegated(0));
+    assertTrue(query.block(query.edgeChild(0)).isNullProjection(0));
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3177,8 +3466,8 @@ final class SqlParserTest {
                 + "WHERE regions.id=accounts.region)",
             query,
             command));
-    SqlCommand correlated = query.membershipCommand();
-    assertTrue(query.membershipNegated());
+    SqlCommand correlated = query.block(query.edgeChild(0));
+    assertTrue(query.block(0).wherePredicates().leafNegated(query.edgeLeaf(0)));
     assertTrue(isColumnPredicate(correlated, 0));
     assertName("regions", predicateTableName(correlated, 0));
     assertName("id", predicateColumnName(correlated, 0));
@@ -3188,12 +3477,14 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parseQuery(nestedMembershipQuery(3), query, command));
     assertEquals(3, query.blockCount());
-    assertEquals(0, query.membershipPredicate(0));
-    assertEquals(0, query.membershipPredicate(1));
+    assertNestedSubqueryChain(query, 3, SqlQuery.SUBQUERY_MEMBERSHIP,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(nestedMembershipQuery(32), query, command));
     assertEquals(32, query.blockCount());
+    assertNestedSubqueryChain(query, 32, SqlQuery.SUBQUERY_MEMBERSHIP,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
     assertEquals(
         StatusCode.QUERY_TOO_COMPLEX,
         parser.parseQuery(nestedMembershipQuery(33), query, command));
@@ -3214,12 +3505,32 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(4, query.blockCount());
-    assertTrue(query.hasExistencePredicate(0));
-    assertTrue(query.hasMembershipPredicate(1));
-    assertTrue(query.hasScalarPredicate(2));
-    assertFalse(query.hasScalarPredicate(0));
-    assertFalse(query.hasExistencePredicate(1));
-    assertFalse(query.hasMembershipPredicate(2));
+    assertEquals(3, query.edgeCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertSubqueryEdge(
+        query,
+        1,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        1,
+        0,
+        2,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
+    assertSubqueryEdge(
+        query,
+        2,
+        SqlQuery.SUBQUERY_SCALAR,
+        2,
+        0,
+        3,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON);
+    assertEquals(4, query.nestedPlanDepth());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -3229,12 +3540,101 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(3, query.blockCount());
+    assertSubqueryEdge(
+        query,
+        0,
+        SqlQuery.SUBQUERY_EXISTS,
+        0,
+        0,
+        1,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS);
+    assertSubqueryEdge(
+        query,
+        1,
+        SqlQuery.SUBQUERY_MEMBERSHIP,
+        1,
+        0,
+        2,
+        SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP);
     assertName("a", command.tableAlias());
     assertName("b", query.block(1).tableAlias());
     assertName("c", query.block(2).tableAlias());
     assertTrue(isColumnPredicate(query.block(2), 0));
     assertName("a", predicateValueTableName(query.block(2), 0));
     assertName("id", predicateValueColumnName(query.block(2), 0));
+  }
+
+  @Test
+  void keepsExcludedChildPipelinesFailClosed() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    String[] children = {
+        "SELECT COUNT(*) FROM lookup",
+        "SELECT id,COUNT(*) FROM lookup GROUP BY id",
+        "SELECT DISTINCT id FROM lookup",
+        "SELECT id FROM lookup ORDER BY id",
+        "SELECT d.id FROM (SELECT id FROM lookup) d"
+    };
+    for (String child : children) {
+      assertEquals(
+          StatusCode.FEATURE_NOT_SUPPORTED,
+          parser.parseQuery(
+              "SELECT id FROM accounts WHERE id=(" + child + ")",
+              query,
+              command));
+      assertEquals(0, query.blockCount());
+      assertEquals(0, query.edgeCount());
+    }
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE id=(SELECT id FROM lookup)",
+            query,
+            command));
+  }
+
+  @Test
+  void admitsJoinedPredicateBlocksButKeepsExcludedChildShapesFailClosed() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT a.id FROM accounts a JOIN lookup b ON a.id=b.id "
+                + "WHERE EXISTS (SELECT i.id FROM lookup i WHERE i.id=b.id)",
+            query,
+            command));
+    assertEquals(SqlCommandType.JOIN_SCAN, query.block(0).type());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT o.id FROM accounts o WHERE EXISTS "
+                + "(SELECT b.id FROM accounts a JOIN lookup b ON a.id=b.id "
+                + "WHERE b.id=o.id)",
+            query,
+            command));
+    assertEquals(SqlCommandType.JOIN_SCAN, query.block(1).type());
+
+    String[] excluded = {
+        "SELECT a.id FROM accounts a JOIN lookup b ON a.id=b.id ORDER BY a.id",
+        "SELECT a.id,b.id FROM accounts a JOIN lookup b ON a.id=b.id",
+        "SELECT * FROM accounts a JOIN lookup b ON a.id=b.id",
+        "SELECT x.id FROM (SELECT a.id FROM accounts a "
+            + "JOIN lookup b ON a.id=b.id) x"
+    };
+    for (String child : excluded) {
+      assertEquals(
+          StatusCode.FEATURE_NOT_SUPPORTED,
+          parser.parseQuery(
+              "SELECT id FROM accounts WHERE EXISTS (" + child + ")",
+              query,
+              command),
+          child);
+      assertEquals(0, query.blockCount());
+      assertEquals(0, query.edgeCount());
+    }
   }
 
   @Test
@@ -3279,6 +3679,11 @@ final class SqlParserTest {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
     SqlQuery query = new SqlQuery();
+    TestParameters nestedParameters = new TestParameters(
+        new int[] {SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.BIGINT},
+        new long[] {7, 9},
+        new boolean[] {false, false},
+        new String[] {null, null});
     for (int index = 0; index < 1_000; index++) {
       allocationGuard += parser.parse("SELECT 1.00/8.0", command).ordinal();
       allocationGuard += parser.parseQuery(
@@ -3345,6 +3750,16 @@ final class SqlParserTest {
           "SELECT id FROM accounts WHERE EXISTS (SELECT id FROM accounts "
               + "WHERE id IN (SELECT id FROM accounts WHERE id="
               + "(SELECT id FROM accounts WHERE id=1)))",
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM lookup WHERE id=?) AND region=?",
+          nestedParameters,
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE (SELECT id FROM lookup WHERE id=1)<id",
           query,
           command).ordinal();
     }
@@ -3418,6 +3833,16 @@ final class SqlParserTest {
               + "(SELECT id FROM accounts WHERE id=1)))",
           query,
           command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE EXISTS "
+              + "(SELECT id FROM lookup WHERE id=?) AND region=?",
+          nestedParameters,
+          query,
+          command).ordinal();
+      allocationGuard += parser.parseQuery(
+          "SELECT id FROM accounts WHERE (SELECT id FROM lookup WHERE id=1)<id",
+          query,
+          command).ordinal();
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 256, "warmed SQL parse allocated bytes: " + allocated);
@@ -3455,8 +3880,62 @@ final class SqlParserTest {
     return query;
   }
 
+  private static String siblingExistenceQuery(int edges) {
+    StringBuilder query = new StringBuilder("SELECT id FROM accounts WHERE ");
+    for (int edge = 0; edge < edges; edge++) {
+      if (edge > 0) query.append(" AND ");
+      query.append("EXISTS (SELECT id FROM lookup WHERE id=").append(edge).append(')');
+    }
+    return query.toString();
+  }
+
   private static void assertName(String expected, SqlIdentifier actual) {
     assertText(expected, actual);
+  }
+
+  private static void assertSubqueryEdge(
+      SqlQuery query,
+      int edge,
+      int kind,
+      int parent,
+      int leaf,
+      int child,
+      int leafTest) {
+    assertEquals(kind, query.edgeKind(edge));
+    assertEquals(parent, query.edgeParent(edge));
+    assertEquals(leaf, query.edgeLeaf(edge));
+    assertEquals(child, query.edgeChild(edge));
+    assertEquals(parent, query.blockParent(child));
+    assertEquals(query.blockDepth(parent) + 1, query.blockDepth(child));
+    SqlBooleanPredicateProgram predicates = query.block(parent).wherePredicates();
+    assertEquals(leafTest, predicates.leafTest(leaf));
+    assertEquals(edge, predicates.subqueryEdge(leaf));
+  }
+
+  private static void assertNestedSubqueryChain(
+      SqlQuery query, int blocks, int kind, int leafTest) {
+    assertEquals(blocks - 1, query.edgeCount());
+    assertEquals(blocks, query.nestedPlanDepth());
+    assertEquals(1, query.blockDepth(0));
+    for (int edge = 0; edge < blocks - 1; edge++) {
+      assertSubqueryEdge(query, edge, kind, edge, 0, edge + 1, leafTest);
+      SqlBooleanPredicateProgram predicates = query.block(edge).wherePredicates();
+      assertFalse(predicates.leafNegated(0));
+      if (kind == SqlQuery.SUBQUERY_SCALAR) {
+        assertEquals(SqlComparison.EQUAL, predicates.comparison(0));
+      }
+    }
+  }
+
+  private static void assertBooleanNotOverLeaf(
+      SqlBooleanPredicateProgram predicates, int leaf) {
+    assertFalse(predicates.leafNegated(leaf));
+    int root = predicates.root();
+    assertEquals(SqlBooleanPredicateProgram.BOOLEAN_NOT, predicates.booleanOperator(root));
+    int leafNode = predicates.booleanLeft(root);
+    assertEquals(SqlBooleanPredicateProgram.BOOLEAN_LEAF,
+        predicates.booleanOperator(leafNode));
+    assertEquals(leaf, predicates.booleanLeft(leafNode));
   }
 
   private static void assertPostfix(

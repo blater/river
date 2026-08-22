@@ -50,8 +50,9 @@ final class SqlViewDefinitionBinder {
       RelationalSession session,
       BoundSqlStatement bound,
       SqlCommand command) {
-    StatusCode status = resolveRight(session, bound, command);
-    if (status.isOk()) status = binder.bindJoin(command, bound);
+    SqlBoundJoinContext context = bound.joinContext(0);
+    StatusCode status = resolveRight(session, bound, command, context);
+    if (status.isOk()) status = binder.bindJoin(command, bound, context);
     return status;
   }
 
@@ -59,15 +60,19 @@ final class SqlViewDefinitionBinder {
       RelationalSession session,
       BoundSqlStatement bound,
       SqlCommand command) {
-    StatusCode status = binder.resolveJoinRoles(session, command, bound, true);
+    int block = Math.max(0, bound.query.blockCount() - 1);
+    StatusCode status = binder.resolveJoinRoles(
+        session, command, bound.joinContext(block), null, true);
     return status;
   }
 
   private StatusCode resolveRight(
       RelationalSession session,
       BoundSqlStatement bound,
-      SqlCommand command) {
-    StatusCode status = binder.resolveJoinRoles(session, command, bound, false);
+      SqlCommand command,
+      SqlBoundJoinContext context) {
+    StatusCode status = binder.resolveJoinRoles(
+        session, command, context, bound.table, false);
     return status;
   }
 }

@@ -11,7 +11,7 @@ final class SqlJoinRoleResolver {
 
   boolean resolve(
       SqlCommand command,
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
       int symbol,
       int visibleRoles) {
     role = -1;
@@ -22,7 +22,7 @@ final class SqlJoinRoleResolver {
     if (joins == null || name == null || qualifier == null
         || visibleRoles < 1 || visibleRoles > joins.roleCount()) return false;
     for (int candidate = 0; candidate < visibleRoles; candidate++) {
-      TableDefinition table = table(bound, candidate);
+      TableDefinition table = context.table(candidate);
       if (table == null || qualifier.length() > 0
           && !qualified(joins, candidate, qualifier)) continue;
       int resolved = table.findColumn(name);
@@ -36,10 +36,6 @@ final class SqlJoinRoleResolver {
 
   int role() { return role; }
   int column() { return column; }
-
-  static TableDefinition table(BoundSqlStatement bound, int role) {
-    return bound.joinRole(role);
-  }
 
   private static boolean qualified(
       SqlJoinChain joins, int role, CharSequence qualifier) {

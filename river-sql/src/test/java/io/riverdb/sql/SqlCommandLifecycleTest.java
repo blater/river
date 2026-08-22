@@ -80,22 +80,26 @@ final class SqlCommandLifecycleTest {
         parser,
         query,
         command,
+        StatusCode.INVALID_EXTERNAL_INPUT,
         "SELECT d.region FROM (SELECT id FROM accounts) d");
     assertFailureAfterSuccess(
         parser,
         query,
         command,
+        StatusCode.FEATURE_NOT_SUPPORTED,
         "SELECT id FROM accounts WHERE balance = "
             + "(SELECT id, balance FROM lookup WHERE id=7)");
     assertFailureAfterSuccess(
         parser,
         query,
         command,
+        StatusCode.FEATURE_NOT_SUPPORTED,
         "SELECT id FROM accounts WHERE EXISTS (SELECT id, balance FROM lookup)");
     assertFailureAfterSuccess(
         parser,
         query,
         command,
+        StatusCode.FEATURE_NOT_SUPPORTED,
         "SELECT id FROM accounts WHERE id IN (SELECT id, balance FROM lookup)");
   }
 
@@ -134,20 +138,52 @@ final class SqlCommandLifecycleTest {
     assertEquals(StatusCode.OK, parser.parse("COMMIT", command));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, query.compileDerived(command));
     assertFalse(command.isAvailable());
+  }
 
-    assertEquals(StatusCode.OK, parser.parse("COMMIT", command));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, query.compileScalarPredicate(command, 0));
-    assertFalse(command.isAvailable());
+  @Test
+  void nestedGraphParseFailureClearsTopologyAndAllowsReuse() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
 
-    assertEquals(StatusCode.OK, parser.parse("COMMIT", command));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
-        query.compileExistencePredicate(command, false));
-    assertFalse(command.isAvailable());
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE EXISTS "
+                + "(SELECT id FROM lookup WHERE lookup.id=accounts.id)",
+            query,
+            command));
+    assertTrue(command.isAvailable());
+    assertEquals(2, query.blockCount());
+    assertEquals(1, query.edgeCount());
 
-    assertEquals(StatusCode.OK, parser.parse("COMMIT", command));
-    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
-        query.compileMembershipPredicate(command, 0, false));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE EXISTS "
+                + "(SELECT id, region FROM lookup)",
+            query,
+            command));
     assertFalse(command.isAvailable());
+    assertEquals(0, query.blockCount());
+    assertEquals(0, query.edgeCount());
+    assertEquals(0, query.nestedPlanDepth());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT id FROM accounts WHERE id IN "
+                + "(SELECT id FROM lookup WHERE lookup.region=7)",
+            query,
+            command));
+    assertTrue(command.isAvailable());
+    assertEquals(2, query.blockCount());
+    assertEquals(1, query.edgeCount());
+    assertEquals(SqlQuery.SUBQUERY_MEMBERSHIP, query.edgeKind(0));
+    assertEquals(0, query.edgeParent(0));
+    assertEquals(1, query.edgeChild(0));
+    assertEquals(0, query.blockParent(1));
+    assertEquals(2, query.blockDepth(1));
   }
 
   @Test
@@ -189,11 +225,12 @@ final class SqlCommandLifecycleTest {
       SqlParser parser,
       SqlQuery query,
       SqlCommand command,
+      StatusCode expected,
       String invalidSql) {
     assertEquals(StatusCode.OK, parser.parseQuery("SELECT id FROM accounts", query, command));
     assertTrue(command.isAvailable());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        expected,
         parser.parseQuery(invalidSql, query, command));
     assertFalse(command.isAvailable());
   }

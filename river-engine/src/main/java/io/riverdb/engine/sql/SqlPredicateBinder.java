@@ -11,6 +11,8 @@ final class SqlPredicateBinder {
   private final SqlAccessEdgeSelector access = new SqlAccessEdgeSelector();
   private final SqlJoinAccessSelector joinAccess = new SqlJoinAccessSelector();
   private final SqlJoinHashSelector joinHash = new SqlJoinHashSelector();
+  private final SqlJoinMergeSelector joinMerge = new SqlJoinMergeSelector();
+  private final SqlJoinPlanner joinPlanner = new SqlJoinPlanner();
 
   StatusCode bind(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
@@ -19,10 +21,6 @@ final class SqlPredicateBinder {
     bound.predicateColumn = -1;
     bound.pointTextColumn = -1;
     bound.accessComparison = null;
-    if (query.hasNestedTopology()) {
-      bound.whereBoolean.reset();
-      return StatusCode.OK;
-    }
     StatusCode status = booleans.bindWhere(command, bound);
     if (status.isOk() && command.wherePredicates().isAvailable()) {
       access.select(command.wherePredicates(), bound.whereBoolean, bound);
@@ -30,43 +28,72 @@ final class SqlPredicateBinder {
     return status;
   }
 
-  StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
+  StatusCode bindJoin(
+      SqlCommand command,
+      BoundSqlStatement bound,
+      SqlBoundJoinContext context) {
     bound.predicateCount = command.wherePredicates().leafCount();
     for (int stage = 0; stage < command.joinChain().stageCount(); stage++) {
       bound.predicateCount += command.joinChain().onPredicates(stage).leafCount();
     }
-    bound.accessPredicate = -1;
-    bound.predicateColumn = -1;
-    bound.accessComparison = null;
-    bound.resetJoinAccess();
-    bound.resetJoinStrategies();
+    context.resetJoinAccess();
+    context.resetStrategies();
     StatusCode status = StatusCode.OK;
     for (int stage = 0;
         status.isOk() && stage < command.joinChain().stageCount(); stage++) {
-      status = booleans.bindJoinOn(command, bound, stage);
+      status = booleans.bindJoinOn(command, bound, context, stage);
     }
-    if (status.isOk()) status = booleans.bindJoinWhere(command, bound);
-    if (status.isOk() && command.wherePredicates().isAvailable()) {
-      access.select(command.wherePredicates(), bound.whereBoolean, bound);
-    }
+    if (status.isOk()) status = booleans.bindJoinWhere(command, bound, context);
+    return status.isOk()
+        ? selectJoin(command, bound.whereBoolean, context) : status;
+  }
+
+  StatusCode bindNestedJoin(
+      SqlCommand command,
+      BoundSqlStatement bound,
+      BoundSqlQuery query,
+      int block,
+      SqlBoundJoinContext context) {
+    context.resetJoinAccess();
+    context.resetStrategies();
+    StatusCode status = StatusCode.OK;
     for (int stage = 0;
         status.isOk() && stage < command.joinChain().stageCount(); stage++) {
+      status = booleans.bindNestedJoinOn(
+          command, bound, context, query, block, stage);
+    }
+    if (status.isOk()) status = booleans.bindNested(command, bound, query, block);
+    return status.isOk()
+        ? selectJoin(command, bound.nestedBoolean(block), context) : status;
+  }
+
+  private StatusCode selectJoin(
+      SqlCommand command,
+      SqlBoundBooleanPredicateProgram where,
+      SqlBoundJoinContext context) {
+    if (command.wherePredicates().isAvailable()) {
+      access.selectJoin(command.wherePredicates(), where, context);
+    }
+    for (int stage = 0;
+        stage < command.joinChain().stageCount(); stage++) {
       joinAccess.select(
           command.joinChain().onPredicates(stage),
-          bound.onBoolean(stage),
-          bound,
+          context.onBoolean(stage),
+          context,
           stage);
     }
     joinHash.begin();
     for (int stage = 0;
-        status.isOk() && stage < command.joinChain().stageCount(); stage++) {
+        stage < command.joinChain().stageCount(); stage++) {
       joinHash.select(
           command.joinChain().onPredicates(stage),
-          bound.onBoolean(stage),
-          bound,
+          context.onBoolean(stage),
+          context,
           stage);
     }
-    return status;
+    joinMerge.select(command, context);
+    joinPlanner.select(command, context);
+    return StatusCode.OK;
   }
 
 }

@@ -16,7 +16,7 @@ final class SqlBooleanPredicateBinder {
     having = false;
     return bind(
         command, command.wherePredicates(), statement.whereBoolean,
-        statement, null);
+        statement, null, null, null, -1);
   }
 
   StatusCode bindBlockWhere(
@@ -27,24 +27,30 @@ final class SqlBooleanPredicateBinder {
     having = false;
     return bind(
         command, command.wherePredicates(), statement.whereBoolean,
-        statement, schema);
+        statement, null, schema, null, -1);
   }
 
-  StatusCode bindJoinWhere(SqlCommand command, BoundSqlStatement statement) {
+  StatusCode bindJoinWhere(
+      SqlCommand command,
+      BoundSqlStatement statement,
+      SqlBoundJoinContext context) {
     joinRoles = command.joinChain().roleCount();
     having = false;
     return bind(
         command, command.wherePredicates(), statement.whereBoolean,
-        statement, null);
+        statement, context, null, null, -1);
   }
 
   StatusCode bindJoinOn(
-      SqlCommand command, BoundSqlStatement statement, int stage) {
+      SqlCommand command,
+      BoundSqlStatement statement,
+      SqlBoundJoinContext context,
+      int stage) {
     joinRoles = stage + 2;
     having = false;
     return bind(
-        command, command.joinChain().onPredicates(stage), statement.onBoolean(stage),
-        statement, null);
+        command, command.joinChain().onPredicates(stage), context.onBoolean(stage),
+        statement, context, null, null, -1);
   }
 
   StatusCode bindHaving(SqlCommand command, BoundSqlStatement statement) {
@@ -52,7 +58,34 @@ final class SqlBooleanPredicateBinder {
     having = true;
     return bind(
         command, command.booleanHavingPredicates(), statement.havingBoolean,
-        statement, null);
+        statement, null, null, null, -1);
+  }
+
+  StatusCode bindNested(
+      SqlCommand command,
+      BoundSqlStatement statement,
+      BoundSqlQuery query,
+      int block) {
+    BoundSqlQuery.Block current = query.block(block);
+    joinRoles = current == null ? 0 : current.roleCount();
+    having = false;
+    return bind(
+        command, command.wherePredicates(), statement.nestedBoolean(block),
+        statement, null, null, query, block);
+  }
+
+  StatusCode bindNestedJoinOn(
+      SqlCommand command,
+      BoundSqlStatement statement,
+      SqlBoundJoinContext context,
+      BoundSqlQuery query,
+      int block,
+      int stage) {
+    joinRoles = stage + 2;
+    having = false;
+    return bind(
+        command, command.joinChain().onPredicates(stage), context.onBoolean(stage),
+        statement, context, null, query, block);
   }
 
   private StatusCode bind(
@@ -60,7 +93,10 @@ final class SqlBooleanPredicateBinder {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram target,
       BoundSqlStatement statement,
-      SqlBlockSchema schema) {
+      SqlBoundJoinContext context,
+      SqlBlockSchema schema,
+      BoundSqlQuery nested,
+      int nestedBlock) {
     if (!source.isAvailable()) {
       target.reset();
       return StatusCode.OK;
@@ -70,8 +106,8 @@ final class SqlBooleanPredicateBinder {
       for (int program = 0; program < 4; program++) {
         if (source.programNodeCount(leaf, program) == 0) continue;
         StatusCode status = scalars.bind(
-            command, source, target, statement, schema,
-            leaf, program, joinRoles, having);
+            command, source, target, statement, context, schema,
+            leaf, program, joinRoles, having, nested, nestedBlock);
         if (!status.isOk()) return status;
       }
       StatusCode status = SqlBooleanPredicateTypes.validate(source, target, leaf);

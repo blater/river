@@ -20,6 +20,15 @@ final class SqlBoundBlockPlans {
       new byte[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final byte[] joinStrategies =
       new byte[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final long[] joinStatisticsEpochs =
+      new long[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_ROLES];
+  private final long[] joinStatisticsRows =
+      new long[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_ROLES];
+  private final boolean[] joinStatisticsSampled =
+      new boolean[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_ROLES];
+  private final long[] joinEstimatedRows =
+      new long[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private boolean joinEstimatesAvailable;
   private int count;
 
   SqlBoundBlockPlans() {
@@ -39,11 +48,12 @@ final class SqlBoundBlockPlans {
 
   private StatusCode capture(SqlQuery query, boolean requirePipeline) {
     reset();
+    int sourceBlocks = query == null ? 0 : query.sourceBlockCount();
     if (query == null || requirePipeline && !query.isBlockPipeline()
-        || query.blockCount() < 2 || query.blockCount() > commands.length) {
+        || sourceBlocks < 2 || sourceBlocks > commands.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    count = query.blockCount();
+    count = sourceBlocks;
     for (int index = 0; index < count; index++) {
       commands[index] = query.block(index);
     }
@@ -65,7 +75,14 @@ final class SqlBoundBlockPlans {
       joinRightColumns[stage] = -1;
       joinAccessKinds[stage] = 0;
       joinStrategies[stage] = 0;
+      joinEstimatedRows[stage] = 0;
     }
+    for (int role = 0; role < joinStatisticsEpochs.length; role++) {
+      joinStatisticsEpochs[role] = 0;
+      joinStatisticsRows[role] = 0;
+      joinStatisticsSampled[role] = false;
+    }
+    joinEstimatesAvailable = false;
   }
 
   int count() { return count; }
@@ -74,23 +91,41 @@ final class SqlBoundBlockPlans {
   SqlBlockSchema operandSchema(int block) { return operandSchemas[block]; }
   SqlBlockSchema baseSchema() { return baseSchema; }
 
-  void setJoinAccess(int block, BoundSqlStatement bound) {
+  void setJoinAccess(
+      int block,
+      SqlCommand command,
+      SqlBoundJoinContext context) {
     joinBlock = block;
-    joinRootAccessColumn = bound.accessPredicate >= 0
-        && (bound.predicateColumn == 0 || bound.table.hasIndexOn(bound.predicateColumn))
-        ? bound.predicateColumn : -1;
-    joinStageCount = bound.command.joinChain().stageCount();
+    joinRootAccessColumn = context.strategy(0) == SqlJoinStrategy.MERGE
+        ? context.strategyOuterColumn(0)
+        : context.accessPredicate >= 0
+            && (context.predicateColumn == 0
+                || context.table(0).hasIndexOn(context.predicateColumn))
+            ? context.predicateColumn : -1;
+    joinStageCount = command.joinChain().stageCount();
+    joinEstimatesAvailable = context.estimatesAvailable();
+    if (joinEstimatesAvailable) {
+      for (int role = 0; role <= joinStageCount; role++) {
+        joinStatisticsEpochs[role] = context.statistics(role).epoch();
+        joinStatisticsRows[role] = context.statistics(role).rowCount();
+        joinStatisticsSampled[role] = context.statistics(role).sampled();
+      }
+    }
     for (int stage = 0; stage < joinStageCount; stage++) {
-      int strategy = bound.joinStrategy(stage);
-      int right = strategy == SqlJoinStrategy.HASH
-          ? bound.joinHashInnerColumn(stage) : bound.joinAccessInnerColumn(stage);
+      int strategy = context.strategy(stage);
+      int right = strategy != SqlJoinStrategy.NESTED_LOOP
+          ? context.strategyInnerColumn(stage) : context.accessInnerColumn(stage);
       joinRightColumns[stage] = right;
       boolean indexed = strategy != SqlJoinStrategy.HASH && right >= 0
-          && (right == 0 || bound.joinRole(stage + 1).hasIndexOn(right));
-      boolean unique = indexed
-          && (right == 0 || bound.joinRole(stage + 1).hasUniqueIndexOn(right));
-      joinAccessKinds[stage] = (byte) (unique ? 2 : indexed ? 1 : 0);
+          && (right == 0 || context.table(stage + 1).hasIndexOn(right));
+      boolean unique = strategy != SqlJoinStrategy.MERGE && indexed
+          && (right == 0 || context.table(stage + 1).hasUniqueIndexOn(right));
+      int access = strategy == SqlJoinStrategy.MERGE && !indexed ? 3
+          : unique ? 2 : (indexed
+              && !(strategy == SqlJoinStrategy.MERGE && right == 0) ? 1 : 0);
+      joinAccessKinds[stage] = (byte) access;
       joinStrategies[stage] = (byte) strategy;
+      joinEstimatedRows[stage] = context.estimatedRows(stage);
     }
   }
 
@@ -107,5 +142,20 @@ final class SqlBoundBlockPlans {
   int joinStrategy(int block, int stage) {
     return block == joinBlock
         ? Byte.toUnsignedInt(joinStrategies[stage]) : SqlJoinStrategy.NESTED_LOOP;
+  }
+  boolean joinEstimatesAvailable(int block) {
+    return block == joinBlock && joinEstimatesAvailable;
+  }
+  long joinStatisticsEpoch(int block, int role) {
+    return block == joinBlock ? joinStatisticsEpochs[role] : 0;
+  }
+  long joinStatisticsRows(int block, int role) {
+    return block == joinBlock ? joinStatisticsRows[role] : 0;
+  }
+  boolean joinStatisticsSampled(int block, int role) {
+    return block == joinBlock && joinStatisticsSampled[role];
+  }
+  long joinEstimatedRows(int block, int stage) {
+    return block == joinBlock ? joinEstimatedRows[stage] : 0;
   }
 }

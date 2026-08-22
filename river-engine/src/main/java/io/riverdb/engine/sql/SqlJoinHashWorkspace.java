@@ -36,15 +36,17 @@ final class SqlJoinHashWorkspace {
 
   SqlJoinHashWorkspace(RelationalSession relationalSession) { session = relationalSession; }
 
-  StatusCode begin(BoundSqlStatement bound) {
+  StatusCode begin(
+      io.riverdb.sql.SqlCommand command,
+      SqlBoundJoinContext context) {
     StatusCode status = close();
     if (!status.isOk()) return status;
-    stage = selectedStage(bound);
+    stage = selectedStage(command, context);
     if (stage < 0) return StatusCode.OK;
-    table = bound.joinRole(stage + 1);
-    innerColumn = bound.joinHashInnerColumn(stage);
+    table = context.table(stage + 1);
+    innerColumn = context.strategyInnerColumn(stage);
     prepareSchema(table);
-    prepareRow(outerRow, bound.joinRole(bound.joinHashOuterRole(stage)));
+    prepareRow(outerRow, context.table(context.strategyOuterRole(stage)));
     writer.prepare();
     status = store.begin(schema, -1, false);
     if (!status.isOk()) return status;
@@ -57,18 +59,18 @@ final class SqlJoinHashWorkspace {
     return status;
   }
 
-  StatusCode beginProbe(SqlJoinRoleRows rows, BoundSqlStatement bound) {
+  StatusCode beginProbe(SqlJoinRoleRows rows, SqlBoundJoinContext context) {
     if (!active) return StatusCode.INVALID_EXTERNAL_INPUT;
     candidate = -1;
     if (!hashed) {
       store.rewind();
       return StatusCode.OK;
     }
-    int outerRole = bound.joinHashOuterRole(stage);
-    int outerColumn = bound.joinHashOuterColumn(stage);
+    int outerRole = context.strategyOuterRole(stage);
+    int outerColumn = context.strategyOuterColumn(stage);
     HeapRowResult row = rows.row(outerRole);
     if (row == null) return StatusCode.OK;
-    TableDefinition outerTable = bound.joinRole(outerRole);
+    TableDefinition outerTable = context.table(outerRole);
     StatusCode status = reader.read(rows.key(outerRole), row, outerTable, outerRow);
     if (!status.isOk()) return status;
     if (outerRow.nullValue(outerColumn)) return StatusCode.OK;
@@ -209,10 +211,12 @@ final class SqlJoinHashWorkspace {
     }
   }
 
-  static int selectedStage(BoundSqlStatement bound) {
-    SqlJoinChain chain = bound.command.joinChain();
+  static int selectedStage(
+      io.riverdb.sql.SqlCommand command,
+      SqlBoundJoinContext context) {
+    SqlJoinChain chain = command.joinChain();
     for (int stage = 0; stage < chain.stageCount(); stage++) {
-      if (bound.joinStrategy(stage) == SqlJoinStrategy.HASH) return stage;
+      if (context.strategy(stage) == SqlJoinStrategy.HASH) return stage;
     }
     return -1;
   }

@@ -1,8 +1,8 @@
 # M5 P4C robust subquery delivery plan
 
-Status: active WIP rebased onto bounded-join alpha `4c50133`. The continuation
-checkpoint is `19abbff` on `feature/p4c-subqueries`; no P4C slice is accepted
-yet.
+Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7E are
+accepted on `feature/p4c-subqueries`; accepted production is at `1e10f51`.
+Alpha 2 remains incomplete; the next production task is P4C-8.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,14 +11,93 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `19abbff` is the clean pushed continuation branch,
-  rebased onto `4c50133`; `river-sql` and `river-engine` main sources compile.
-- Before feature work resumes, migrate parser/lifecycle tests that still call
-  the deleted singleton subquery API and fix the null zone-state failure in the
-  joined P3 spill regression.
+- `feature/p4c-subqueries` production through `1e10f51` contains accepted P4C-0
+  through P4C-7E:
+  canonical graph tests, lexical marker ordering, `(block, role, column)` scope
+  binding, computed child projection, contract-level semantics fixtures, and
+  joined root/child graph execution through the common n-table join source.
+- P4C-4 covers 2/3/8-role joined blocks, LEFT null extension, later-role and
+  Unicode ownership, terminal failure/reuse, P3 atomicity, and warmed
+  allocation. Joined child aggregate/group/distinct/order/P3 shapes remain
+  fail-closed by design.
+- P4C-5 completes scalar zero/one/multiple-row and LIMIT semantics, discarded
+  `EXISTS` projections, full membership 3VL, per-edge 1,024/1,025 enforcement,
+  bounded uncorrelated replay/fallback, all-family values, Unicode erasure,
+  temporal failure/reuse, and warmed allocation.
+- P4C-6 adds prepare-stable safe primary/index child access with residual
+  rechecks and conservative TABLE fallback, plus a deterministic six-row
+  per-edge `EXPLAIN [ANALYZE]` shape and truthful cache/scan/result/parent
+  counters.
+- P4C-7A completes direct streaming, single-row point, and scalar-aggregate
+  graph consumers through the single graph evaluator. Graph-bearing point
+  execution may return the first accepted physical row when no safe point
+  route exists; ordinary non-unique point admission remains unchanged.
+  Terminal no-publication/reuse, Unicode ownership, warmed allocation, the
+  full 279-test engine suite, and independent semantics and
+  architecture/allocation reviews are green.
+- P4C-7B completes direct outer `GROUP BY`, post-group `HAVING`, and `DISTINCT`
+  consumers for ordered and materialized inputs. Filtering occurs exactly once
+  before key, accumulator, distinct-set, or sort-workspace mutation; NULL and
+  Unicode ownership, terminal no-publication/reuse, P3 SELECT preservation,
+  warmed allocation, the full 283-test engine suite, and independent semantics
+  and architecture/allocation reviews are green. Graph-bearing P3
+  GROUP/DISTINCT remains fail-closed until P4C-7D.
+- P4C-7C completes direct outer ordered consumers across indexed streaming,
+  materialized in-memory sort, existing spill/merge, and joined input. It
+  preserves exact NULL, Unicode, computed-key, ASC/DESC/LIMIT, failure/reuse,
+  and copy-before-release semantics. The full 290-test engine suite, exact
+  1,000/1,025/1,100-row sort and bounded allocation gates, and independent
+  semantics and architecture/allocation reviews are green. Graph-bearing P3
+  ORDER remains fail-closed until P4C-7D.
+- P4C-7D completes graph-bearing P3 SELECT, scalar aggregate, GROUP/HAVING,
+  DISTINCT, and ORDER consumers for table and joined deepest sources. The graph
+  filters exactly once before the private block store; every parent predicate
+  and consumer runs over the owned copied row. Successful-P3 topology reuse,
+  exact counters, terminal no-publication/reuse, Unicode/NULL ownership, the
+  full 298-test engine suite, warmed allocation, and independent semantics and
+  architecture/allocation reviews are green. Child cardinality/order/P3
+  stages remain fail-closed.
+- P4C-7E closes the consumer checkpoint without a production delta. The fresh
+  14-class cross-consumer matrix is 55/55, the forced full engine suite is
+  298/298 across 92 suites with zero skips, the warmed allocation and
+  design-debt gates are green, and independent relational-semantics and
+  architecture/lifecycle/allocation reviews issued GO. Source inventory proves
+  one graph runner and no legacy nested executor or predicate carrier.
+- The next implementation gate is P4C-8 below. The former grouped-HAVING
+  null-zone and `temporal_derived` parser/reopen regressions were repaired in
+  `1a51d8a`; the stale point, derived-parameter, and eager-cardinality status
+  oracles are now aligned with admitted execution semantics.
 - These checkpoints preserve work and integration intent; they are not P4C
   promotion evidence. Focused semantics/allocation tests, affected full suites,
   design-debt checks, and independent review remain required.
+
+## Alpha 2 scope decisions
+
+The following decisions are fixed for implementation and are not left to an
+individual builder:
+
+- A subquery block is a physical `SELECT`/`SCAN` over one table or one admitted
+  two-to-eight-role n-table join. It may have the canonical `WHERE`, one
+  computed scalar projection, and `LIMIT`.
+- Aggregate, `GROUP BY`, `HAVING`, `DISTINCT`, `ORDER BY`, and a P3 derived
+  pipeline inside a child subquery remain `FEATURE_NOT_SUPPORTED`. Those
+  operations remain admitted for consumers outside the nested-filtered source.
+- A scalar subquery may be either operand of one of the six comparisons.
+  `EXISTS` and subquery membership retain the grammar below.
+- Every column node in a child predicate or projected scalar expression uses
+  the same lexical resolver. It may reference local roles or any visible
+  ancestor role. An unqualified name resolves locally first, then at the
+  nearest ancestor scope containing exactly one match; qualification is
+  required to disambiguate multiple visible roles.
+- Typed parameter markers are admitted in parent and child blocks. Their
+  ordinals follow the original SQL text left to right across the complete
+  graph; the parser must not derive marker order from depth-first execution.
+- Joined ancestors and joined children are part of Alpha 2. Durable views over
+  any subquery graph remain fail-closed for the separately prioritized durable
+  subquery-view slice.
+- An `EXISTS` SELECT expression is resolved for names and basic shape only. It
+  is not type-prepared, temporally prepared, evaluated, or allowed to fail at
+  runtime because SQL discards that value.
 
 ## Outcome
 
@@ -50,7 +129,8 @@ The completed slice supports:
   depth 16, and 256 literal membership values.
 - At most eight relation roles per block and 32 physical relation roles across
   the whole query graph.
-- A scalar or membership child projects exactly one bounded scalar expression.
+- A scalar or membership child projects exactly one bounded scalar expression;
+  its column nodes use the lexical local/ancestor scope rules above.
 - A reached membership child accepts at most 1,024 result rows; row 1,025
   returns `RESOURCE_EXHAUSTED`, even if an earlier candidate matched. `LIMIT`
   applies before this bound.
@@ -78,7 +158,7 @@ root, exact edge/leaf agreement, and true parent-derived depth.
 Admitted predicate forms are:
 
 - `[NOT] EXISTS (query)`;
-- any of the six comparisons where one scalar operand is `(query)`; and
+- any of the six comparisons where exactly one scalar operand is `(query)`; and
 - `scalar [NOT] IN (query)`.
 
 Scalar subqueries inside arbitrary SELECT-list expressions, row-valued
@@ -86,12 +166,12 @@ subqueries, `ANY`/`ALL`, CTEs, recursive SQL, and lateral `FROM` items remain
 `FEATURE_NOT_SUPPORTED`. This plan concerns predicate subqueries and their
 one-value child projection.
 
-Typed parameters are admitted in all blocks. Marker ordinals follow lexical SQL
-order across parent and child text; binding is statement-global and preserves
-typed NULL. Durable views containing subqueries remain fail-closed during P4C
-and are admitted by the explicit next core-SQL slice. The n-table view v4
-format already owns up to 32 ordered physical lineage entries; P4C does not
-silently change catalog admission.
+Typed parameters are admitted in all blocks under the Alpha 2 ordering rule
+above; binding is statement-global and preserves typed NULL. Durable views
+containing subqueries remain fail-closed during P4C and are admitted by the
+explicit later core-SQL slice. The n-table view v4 format already owns up to 32
+ordered physical lineage entries; P4C does not silently change catalog
+admission.
 
 ## Scope and binding
 
@@ -216,6 +296,184 @@ accepted child rows, scalar/cardinality results, and parent rows accepted.
 Cache hits increment invocations but not physical child rows. Plain `EXPLAIN`
 never evaluates a child.
 
+## Prioritized implementation task list
+
+The rebased continuation already owns the canonical graph, graph executor,
+frame bank, primitive cache, value scanner, access selector, and plan carrier,
+and deletes the legacy singleton nested engine. Work proceeds through the
+following dependency graph; a higher-numbered task does not displace an open
+lower-numbered blocker.
+
+```text
+P4C-0 focused-test baseline
+  |
+  +--> P4C-1 parser/marker order --------+
+  +--> P4C-2 lexical scope/projection ---+--> P4C-4 n-table graph runtime --+
+  +--> P4C-3 acceptance fixtures --------+--> P4C-5 value/cache semantics --+--> P4C-7 consumers
+                                           P4C-6 plan/access carrier -------+       |
+                                                                                   v
+                                                                        P4C-8 hardening
+                                                                                   |
+                                                                                   v
+                                                                        P4C-9 promotion
+```
+
+### P4C-0 — restore a trustworthy focused-test baseline
+
+Status: accepted at `019fe86`.
+
+This is the only task that starts before feature implementation.
+
+- Migrate `SqlParserTest` and `SqlCommandLifecycleTest` from the deleted
+  scalar/existence/membership singleton methods to `SqlSubqueryGraph` edges.
+- Compile all SQL and engine tests, then migrate the existing
+  `SqlNestedQueryTest` and `SqlExecutionOwnershipTest` expectations that encode
+  the old bridge. Do not restore production compatibility methods, disable
+  tests, or turn an implemented semantic regression into an unsupported case.
+- Keep tests for already-supported behavior green. Add new Alpha 2 behavior as
+  an acceptance fixture alongside the production task that admits it.
+- Commit this test migration separately. Its gate is green SQL/engine test
+  compilation plus the four focused classes above. Production changes are
+  limited to a demonstrably necessary test seam or a proven regression in the
+  behavior already admitted at the starting checkpoint; P4C-0 does not admit
+  new syntax or semantics.
+
+### First parallel wave after P4C-0
+
+Status: accepted and integrated through `4a77011` (`ef64e4f` P4C-1,
+`8cc3676` P4C-2, and `26dc6c5` P4C-3). Independent relational-semantics review
+is GO; the joined-graph temporary rejection is pinned by a real session test.
+
+P4C-1 and P4C-2 may run in parallel in separate worktrees. P4C-3 may also run
+in parallel because it owns only new test fixtures and performs read-only
+contract review. One lead integrator owns the bound overlay contract and lands
+the streams in task-number order.
+
+| Task | Deliverable | Primary ownership | Completion gate |
+| --- | --- | --- | --- |
+| **P4C-1** | Parse scalar subqueries on either comparison side and assign typed-marker ordinals in original SQL lexical order across every graph block. Preserve exact graph bounds, copy/reset, and FNS classifications. | `river-sql`: `SqlNestedQueryParser`, `SqlNestedSubquerySource`, `SqlQueryParser`, `SqlSubqueryGraph`, `SqlSubqueryLeafRegistry`, parser tests | Sibling/descendant/quoted-source parsing, marker-order/type/null tests, 8/31/32 bounds plus one, parser allocation/reuse gate |
+| **P4C-2** | Generalize child predicate and projected scalar binding to `(block, role, column)` lexical scope. Resolve local roles first, then the nearest unique ancestor; support joined blocks and owned text without a second AST. | `river-engine`: `SqlQueryBlockBinder`, `SqlNestedProjectionBinder`, `SqlNestedProjectionExecution`, `SqlNestedRowProvider`, Boolean scalar binders | Three scopes, shadowing, local fallback, ambiguity/future/sibling rejection, joined-role projection, all-family typed NULL/text tests |
+| **P4C-3** | Build contract-level fixtures and an independent semantics oracle for sibling/recursive 3VL, correlation, n-table roles, consumer atomicity, and exact failure precedence. It must not edit production owners. | New focused test classes split by parser, scope/value semantics, consumers, and lifecycle | Tests compile against the canonical APIs; each future assertion is enabled only with its owning production task; no duplicated helper engine |
+
+P4C-1 and P4C-2 meet at one explicit handoff: the parser supplies stable graph
+block/edge IDs and lexical marker ordinals; the engine binds those IDs to the
+block/role/column overlay without reparsing SQL text.
+
+### Second parallel wave after P4C-1 and P4C-2
+
+P4C-4, P4C-5, and the structural portion of P4C-6 may proceed concurrently
+after the overlay handoff is frozen. Their production file ownership is
+disjoint. Runtime counter calls from P4C-4/P4C-5 into P4C-6 are agreed before
+editing; no stream creates another graph executor, row provider, cache, or
+plan framework.
+
+| Task | Deliverable | Primary ownership | Completion gate |
+| --- | --- | --- | --- |
+| **P4C-4 (accepted)** | Replace the temporary root/child JOIN rejection with the existing `SqlJoinChainSource` and role rows. Own every active ancestor composite before a child cursor opens; preserve INNER/LEFT semantics, stage-local ON, final WHERE, and retry-safe inner-to-outer close. | `SqlSubqueryFrames`, `SqlSubqueryCandidateEvaluator`, `SqlSubqueryGraphExecution`, n-table source adapters | Joined parent and joined child at 2/3/8 roles, later-role correlation, LEFT-null continuation, Unicode lifetime, terminal failure/reuse, no subquery-only join path |
+| **P4C-5 (accepted)** | Complete scalar/`EXISTS`/membership evaluation, child projection, lazy cache, LIMIT/cardinality, recursive continuation, and resource bounds using the common expression engine. | `SqlSubqueryLeafEvaluator`, `SqlSubqueryValueScanner`, `SqlSubqueryResultCache`, projection execution | Scalar 0/1/2, complete IN/NOT IN 3VL, sibling and descendant replay, 1,024/1,025, long/short text erase, eager-zone versus lazy-runtime precedence |
+| **P4C-6 (accepted)** | Stabilize child access and per-edge plan/counter carriers. Select only safe mandatory raw edges; otherwise use and report TABLE. Plain EXPLAIN binds but never executes. | `SqlSubqueryAccess`, `SqlSubqueryPlan`, plan description tests | Equality/range/extrema equivalence, computed fallback, identical EXPLAIN/ANALYZE shape, truthful invocation/cache/candidate/accepted/result counts |
+
+### Integration and promotion path
+
+These tasks are intentionally serialized through the lead integrator because
+they touch shared query lifecycle and consumer routing.
+
+1. **P4C-7 — consumer integration.** Apply graph filtering exactly once before
+   direct point/stream projection, scalar and grouped aggregation, `HAVING`,
+   `DISTINCT`, sort/spill, and deepest P3 publication. Consumers use the owned
+   evaluated row until all values are copied, then release it. A nested error
+   publishes no aggregate, group, sort/store row, or point result. Implement
+   this through the five serialized checkpoints below.
+2. **P4C-8 — lifecycle and allocation hardening.** Prove eager all-program
+   preflight before any scan; lazy row-time error/short-circuit behavior;
+   terminal status repetition; close-failure retry; text/cache/frame erasure;
+   checkpoint/reopen of base data; zero per-row allocation; and bounded idle,
+   scalar, membership, recursive, joined, spill, and P3 retained deltas.
+3. **P4C-9 — Alpha 2 promotion.** Run the full SQL and engine suites, focused
+   temporal/ownership/allocation/plan gates, `tools/designdebt.sh`, diff and
+   clean-checkout policy, then obtain independent relational-semantics and
+   performance/allocation verdicts on the exact commit. Update conformance,
+   status, roadmap, and limitations only after those gates are green.
+
+#### P4C-7 implementation checkpoints
+
+P4C-7 is complete with no open architecture decision or prerequisite fix
+before P4C-8. One lead integrator owned the shared lifecycle path; production
+checkpoints landed in order because they reuse `SqlQueryExecution`, the graph
+runner, and the same cleanup state. Independent test-fixture and read-only
+reviews used disjoint ownership.
+
+| Checkpoint | Deliverable | Primary ownership | Completion gate | Estimate |
+| --- | --- | --- | --- | ---: |
+| **P4C-7A — route audit, direct and point (accepted at `1378176`)** | Freeze the current consumer-route matrix, then route point select, direct streaming projection, and scalar aggregate inputs through the graph once. Replace the stale point-subquery rejection with successful execution on the admitted graph. | `SqlQueryExecution`, point select/aggregate execution, direct scan path | Every admitted execution route has one named graph-filter owner; point and streaming rows match table-scan semantics; rejected rows release owned snapshots; nested errors repeat, publish no row/result/count, close, and permit same-session reuse | 1–1.5 days |
+| **P4C-7B — grouped consumers (accepted at `0ac95ec`)** | Filter before aggregate/group state mutation, then run ordinary `GROUP BY`, `HAVING`, and `DISTINCT` behavior over accepted rows. | grouped execution, aggregate/group accumulator, distinct adapter | No rejected/error row changes an accumulator, key, group, distinct set, or public result; Unicode and NULL keys remain owned through copying | 1–1.5 days |
+| **P4C-7C — ordering and spill (accepted at `f172c7e`)** | Feed accepted owned rows into the existing sort workspace/spill path and release only after tuple encoding has copied every value. | `SqlSortExecution`, existing sort workspace/spill adapters | In-memory and spilled order are equivalent; Unicode survives source advancement; an error appends/publishes no partial sort row and cleanup remains child-before-sort | 1–1.5 days |
+| **P4C-7D — P3 pipeline (accepted at `1e10f51`)** | Evaluate the graph at the deepest physical source, copy the accepted row into the block row, and skip the already-consumed deepest predicate in its projector. Parent P3 predicates remain ordinary. | `SqlBlockSource`, deepest join/table stage, block projector/pipeline cleanup | Direct and P3 results agree; aggregate/order consumers above P3 see one filtered stream; errors append no block/store row and graph resources close before the physical source/store | 1.5–2.5 days |
+| **P4C-7E — consumer checkpoint (accepted; no production delta)** | Run the cross-consumer equivalence, failure atomicity, reuse, allocation, and design-debt matrix and remove stale status expectations. | focused consumer tests and lead integration | All P4C-7 routes use one graph runner with no duplicate predicate carrier or second executor; affected suites and independent review are green | 0.5–1 day |
+
+The following boundaries are fixed for every P4C-7 checkpoint:
+
+- The executable graph root is `sourceBlockCount() - 1`. Direct consumers
+  filter there; P3 filters at its deepest physical source. No later adapter
+  evaluates that root predicate again.
+- P4C predicate-subquery edges remain `WHERE` graph leaves. P4C-7B makes a
+  nested-filtered input feed the existing outer `HAVING`; it does not admit
+  subquery syntax inside `HAVING`.
+- P4C-7B admits the same raw or computed group key, aggregate operand,
+  post-group `HAVING`, and `DISTINCT` expressions already accepted for a
+  direct outer source. Temporary guards distinguish derived/P3 topology with
+  `sourceBlockCount() > 1`; predicate-child blocks alone do not make a direct
+  consumer P3. Child aggregate/group/distinct shapes remain fail-closed.
+- Ordered group/`DISTINCT` input filters in the grouped source and releases
+  the evaluated row immediately after key/aggregate state owns every value.
+  Materialized group/`DISTINCT` input filters only in the existing sort feeder
+  before workspace append; grouped advancement never filters stored tuples a
+  second time.
+- After a successful predicate evaluation, matched and rejected paths both
+  use/release the graph-owned evaluated row correctly. Consumers release only
+  after copying all fixed and text values. A terminal evaluation failure
+  retains ownership for the existing cleanup path and publishes nothing.
+- The former point case `id IN (SELECT id ...)` is admitted P4C SQL and must
+  execute successfully; neither `FEATURE_NOT_SUPPORTED` nor
+  `INVALID_EXTERNAL_INPUT` is its final contract. The single-row `execute()`
+  API may use a physical-order table scan only for a graph-bearing point
+  `SELECT` without an equality/unique route; it publishes the first fully
+  accepted row and stops, matching the existing text-point scan contract.
+  The streaming scan API remains the complete multi-row path, and ordinary
+  non-unique point `SELECT` admission is unchanged.
+- Normal runtime error repetition, no-publication, close, and reuse belong to
+  P4C-7. Injected close failures, exhaustive erase/high-water checks, retained
+  heap deltas, checkpoint/reopen, and the full allocation envelope remain the
+  explicit P4C-8 hardening boundary.
+- P4C-7D repairs and pins the successful graph-bearing P3 to subsequent
+  graph-consumer handoff. Predicate evaluator/workspace ownership is canonical
+  block-local, while cursor/source frames remain depth-local. Bound block role
+  tables retain lazy owned carriers separately from borrowed active schemas,
+  so P3/direct topology alternation is allocation-free after warmup.
+- P4C-8 retains persistent spill scratch and injected spill-cleanup fault
+  hardening. P4C-7C proves zero steady-state allocation for in-memory sort and
+  bounded per-statement file/channel setup with no object-per-row growth for
+  the existing spill path; it does not introduce a new scratch-file owner.
+
+The branch may be committed at the numbered internal waypoints, but Alpha 2 is
+promotable only as the complete C1-C4 vertical slice. Durable subquery views,
+child cardinality stages, TPC-C storage work, and unrelated JDBC work do not
+enter these workstreams.
+
+### Parallel-work operating rules
+
+- Parallel builders use separate Git worktrees, disjoint file ownership, and
+  separate `GRADLE_USER_HOME` plus `--project-cache-dir`. Only one Gradle build
+  runs in any shared checkout.
+- The lead integrator alone changes shared lifecycle owners such as
+  `SqlQueryExecution` and performs final consumer composition.
+- Test-fixture work does not modify production contracts. A read-only
+  semantics/allocation reviewer may run alongside every wave and reports
+  concrete blockers to the integrator.
+- Each waypoint lands as a small reviewed commit with focused success and the
+  material failure/reuse boundary. Parallel branches are rebased and integrated
+  one at a time; broad merge-conflict resolution is not an architecture step.
+
 ## Delivery slices
 
 1. **C1 — graph and binding:** land the canonical graph, sibling/recursive
@@ -226,8 +484,8 @@ never evaluates a child.
    point/stream consumers. Delete `SqlNestedQueryExecution`,
    `SqlNestedPredicatePlan`, `SqlMembershipValues`, and every bridge evaluator.
 3. **C3 — full consumers and n-table scopes:** admit joined children/ancestors,
-   aggregation, group/`HAVING`, `DISTINCT`, order/spill, and P3 sources through
-   the same graph runner. Add safe child access selection.
+   and feed outer aggregation, group/`HAVING`, `DISTINCT`, order/spill, and P3
+   consumers through the same graph runner. Add safe child access selection.
 4. **C4 — plans and hardening:** complete per-edge plans/counters, temporal and
    corruption precedence, allocation/retention evidence, checkpoint/reopen of
    base data followed by ad-hoc queries, and full compatibility migration.
@@ -241,6 +499,9 @@ Promotion requires:
 - parser precedence with sibling `EXISTS`/scalar/`IN`, descendants, quotes,
   escaped quotes, true depth, exact 8/31/32 bounds plus one, copy/reset/reuse,
   and every exclusion returning its documented status;
+- scalar-subquery placement on either comparison side, child-local and
+  ancestor-qualified projected expressions, global lexical marker order, and
+  exact FNS evidence for child aggregate/group/distinct/order/P3 forms;
 - three lexical depths, alias shadowing, unqualified fallback, ambiguity,
   sibling/future rejection, and correlation to multiple joined roles;
 - scalar zero/one/two-row results for all admitted families, typed NULL on

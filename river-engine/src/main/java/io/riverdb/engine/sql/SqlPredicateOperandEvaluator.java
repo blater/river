@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlScalarExpression;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Traverses one bound predicate operand through the shared scalar machine. */
@@ -43,6 +44,44 @@ final class SqlPredicateOperandEvaluator {
           source,
           table,
           block);
+    }
+    if (status.isOk()) return machine.finishPredicateOperand(result);
+    machine.reset();
+    return status;
+  }
+
+  StatusCode evaluateNested(
+      SqlCommand command,
+      SqlBoundBooleanPredicateProgram programs,
+      int leaf,
+      int program,
+      SqlTemporalZonePlan zone,
+      SqlNestedRowProvider rows,
+      SqlPredicateOperand result) {
+    machine.beginPredicateOperand();
+    StatusCode status = StatusCode.OK;
+    for (int node = 0;
+        status.isOk() && node < programs.nodeCount(leaf, program); node++) {
+      int scope = programs.scope(leaf, program, node);
+      int block = SqlNestedRowProvider.block(scope);
+      int role = SqlNestedRowProvider.role(scope);
+      int operator = programs.operator(leaf, program, node);
+      HeapRowResult row = rows.row(block, role);
+      if (operator == SqlScalarExpression.COLUMN && row == null) {
+        status = machine.predicateNullColumnNode(
+            programs.descriptor(leaf, program, node));
+      } else {
+        status = machine.predicateOperandNode(
+            command,
+            operator,
+            programs.operand(leaf, program, node),
+            programs.descriptor(leaf, program, node),
+            zone,
+            rows.key(block, role),
+            row,
+            rows.table(block, role),
+            null);
+      }
     }
     if (status.isOk()) return machine.finishPredicateOperand(result);
     machine.reset();

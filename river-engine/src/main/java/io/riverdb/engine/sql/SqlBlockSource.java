@@ -9,19 +9,25 @@ final class SqlBlockSource {
   private final io.riverdb.engine.relational.RelationalSession session;
   private final BoundSqlStatement bound;
   private final SqlRowProjectionEvaluator projections;
+  private final SqlBoundPredicateEvaluator predicates;
   private final SqlBlockPhysicalRowReader physical = new SqlBlockPhysicalRowReader();
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult result = new RelationalScanResult();
   private final SqlJoinChainSource join;
+  private final SqlSubqueryGraphExecution subqueries;
 
   SqlBlockSource(
       io.riverdb.engine.relational.RelationalSession relationalSession,
       BoundSqlStatement statement,
       SqlJoinChainSource joinSource,
+      SqlBoundPredicateEvaluator predicateEvaluator,
+      SqlSubqueryGraphExecution graph,
       SqlRowProjectionEvaluator projectionEvaluator) {
     session = relationalSession;
     bound = statement;
     join = joinSource;
+    subqueries = graph;
+    predicates = predicateEvaluator;
     projections = projectionEvaluator;
   }
 
@@ -31,12 +37,29 @@ final class SqlBlockSource {
 
   StatusCode next(SqlBlockRowStore input, SqlBlockRow row) {
     if (input != null) return input.next(row);
-    StatusCode status = session.nextScan(cursor, result);
-    return status.isOk()
-        ? physical.read(result.key(), result.row(), bound.table, row) : status;
+    while (true) {
+      StatusCode status = session.nextScan(cursor, result);
+      if (!status.isOk()) return status;
+      if (bound.executableQuery.edgeCount() == 0) {
+        return physical.read(result.key(), result.row(), bound.table, row);
+      }
+      status = predicates.evaluate(result.key(), result.row());
+      if (!status.isOk()) return status;
+      if (!predicates.matched()) {
+        predicates.releaseEvaluatedRow();
+        continue;
+      }
+      status = physical.read(
+          result.key(), predicates.evaluatedRow(result.row()), bound.table, row);
+      predicates.releaseEvaluatedRow();
+      return status;
+    }
   }
 
   StatusCode finish(SqlBlockRowStore input, StatusCode status) {
+    if (subqueries.hasResources()) {
+      return status.isOk() ? StatusCode.CONFLICT : status;
+    }
     StatusCode closed = input == null
         ? cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK
         : input.close();
@@ -45,6 +68,18 @@ final class SqlBlockSource {
 
   StatusCode beginJoin() {
     return join.begin();
+  }
+
+  StatusCode configureJoin(
+      SqlBoundJoinContext context,
+      io.riverdb.sql.SqlCommand command,
+      SqlBoundBooleanPredicateProgram where,
+      SqlJoinPredicateCallback predicates) {
+    return join.configure(
+        context,
+        command,
+        where,
+        predicates == null ? this.predicates : predicates);
   }
 
   void resetJoinMetrics() { join.resetMetrics(); }
@@ -71,6 +106,7 @@ final class SqlBlockSource {
   }
 
   StatusCode close() {
+    if (subqueries.hasResources()) return StatusCode.CONFLICT;
     StatusCode status = cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
     if (status.isOk()) status = cursor.reset();
     if (status.isOk()) status = join.close();

@@ -143,10 +143,12 @@ final class SqlGroupedExecution {
       if (scan.hasDistinctValue()
           && scan.distinctValueNull() == nullValue
           && (nullValue || sameDistinctKey(value))) {
+        finishValue();
         continue;
       }
       scan.setDistinctValue(value, nullValue);
       rememberDistinctKey();
+      finishValue();
       bound.projectedTypeDescriptors[0] = groupDescriptor();
       result.set(
           value,
@@ -190,10 +192,13 @@ final class SqlGroupedExecution {
             projected,
             currentSource,
             bound.table);
+        if (status.isOk()) {
+          scan.setGroupLookahead(
+              values, bound.projectionPrograms.count(), inputNullMask);
+          rememberLookaheadKey();
+        }
+        finishValue();
         if (!status.isOk()) return status;
-        scan.setGroupLookahead(
-            values, bound.projectionPrograms.count(), inputNullMask);
-        rememberLookaheadKey();
         break;
       }
       status = accumulators.accumulate(
@@ -202,6 +207,7 @@ final class SqlGroupedExecution {
           projected,
           currentSource,
           bound.table);
+      finishValue();
       if (!status.isOk()) {
         return status;
       }
@@ -234,12 +240,14 @@ final class SqlGroupedExecution {
     state.groupNull = (inputNullMask & 1) != 0;
     rememberGroupKey(currentKeyText, currentKeyLength);
     accumulators.reset(bound.aggregates);
-    return accumulators.accumulate(
+    StatusCode status = accumulators.accumulate(
         bound.aggregates,
         bound.projectionPrograms,
         projected,
         currentSource,
         bound.table);
+    finishValue();
+    return status;
   }
 
   private StatusCode publish(SqlScanRowResult result) {
@@ -306,10 +314,17 @@ final class SqlGroupedExecution {
         return status;
       }
       if (!predicates.matched()) {
+        predicates.releaseEvaluatedRow();
         continue;
       }
+      source = predicates.evaluatedRow(source);
       return captureValue(primaryKey, source);
     }
+  }
+
+  private void finishValue() {
+    if (!plan.sorts()) predicates.releaseEvaluatedRow();
+    currentSource = null;
   }
 
   private StatusCode nextSource() {

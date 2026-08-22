@@ -73,7 +73,10 @@ final class SqlLiteralReader {
   StatusCode literal(CharSequence sql, SqlParser.LongResult result) {
     result.nullValue = false;
     if (input.consumeCharacter(sql, '?')) {
-      return parameters.read(command, textCharacters, result);
+      int marker = input.position() - 1;
+      int ordinal = sql instanceof SqlParameterOrdinalSource source
+          ? source.parameterOrdinal(marker) : -1;
+      return parameters.read(command, textCharacters, result, ordinal);
     }
     if (temporal.starts(sql)) return temporal.literal(sql, result);
     if (startsText(sql)) return packedText(sql, result);

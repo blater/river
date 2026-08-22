@@ -17,12 +17,12 @@ final class SqlPredicateParser {
     booleans.beginStandard();
   }
 
-  void beginSynthetic(int replacementOffset) {
-    booleans.beginSynthetic(replacementOffset);
+  void beginSubqueries(int[] offsets, int[] kinds, int[] edges, int count) {
+    booleans.beginSubqueries(offsets, kinds, edges, count);
   }
 
-  int syntheticPredicateIndex() {
-    return booleans.syntheticLeaf();
+  int subqueryLeaf(int index) {
+    return booleans.subqueryLeaf(index);
   }
 
   StatusCode parse(

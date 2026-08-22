@@ -13,6 +13,7 @@ final class SqlBooleanScalarBinder {
   private final boolean[] untyped =
       new boolean[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
   private final SqlJoinRoleResolver joinRoles = new SqlJoinRoleResolver();
+  private final SqlNestedColumnResolver nestedColumns = new SqlNestedColumnResolver();
   private int size;
 
   StatusCode bind(
@@ -20,17 +21,20 @@ final class SqlBooleanScalarBinder {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram target,
       BoundSqlStatement statement,
+      SqlBoundJoinContext context,
       SqlBlockSchema schema,
       int leaf,
       int program,
       int visibleRoles,
-      boolean having) {
+      boolean having,
+      BoundSqlQuery nested,
+      int nestedBlock) {
     target.beginProgram(leaf, program);
     size = 0;
     for (int node = 0; node < source.programNodeCount(leaf, program); node++) {
       StatusCode status = bindNode(
-          command, source, target, statement, schema,
-          leaf, program, node, visibleRoles, having);
+          command, source, target, statement, context, schema,
+          leaf, program, node, visibleRoles, having, nested, nestedBlock);
       if (!status.isOk()) return status;
     }
     if (size != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -47,12 +51,15 @@ final class SqlBooleanScalarBinder {
       SqlBooleanPredicateProgram source,
       SqlBoundBooleanPredicateProgram target,
       BoundSqlStatement statement,
+      SqlBoundJoinContext context,
       SqlBlockSchema schema,
       int leaf,
       int program,
       int node,
       int visibleRoles,
-      boolean having) {
+      boolean having,
+      BoundSqlQuery nested,
+      int nestedBlock) {
     int operator = source.programOperator(leaf, program, node);
     long operand = source.programOperand(leaf, program, node);
     int descriptor = source.programDescriptor(leaf, program, node);
@@ -65,8 +72,13 @@ final class SqlBooleanScalarBinder {
       return group(source, target, statement, leaf, program, operator, having);
     }
     if (operator == SqlScalarExpression.COLUMN) {
+      if (nested != null) {
+        return nestedColumn(
+            command, target, nested, nestedBlock, visibleRoles,
+            leaf, program, operator, operand);
+      }
       return column(
-          command, target, statement, schema, leaf, program,
+          command, target, statement, context, schema, leaf, program,
           operator, operand, visibleRoles);
     }
     if (operator == SqlScalarExpression.NULL) {
@@ -86,6 +98,38 @@ final class SqlBooleanScalarBinder {
             && operator <= SqlScalarExpression.REMAINDER
         ? binary(target, leaf, program, operator, operand)
         : StatusCode.FEATURE_NOT_SUPPORTED;
+  }
+
+  private StatusCode nestedColumn(
+      SqlCommand command,
+      SqlBoundBooleanPredicateProgram target,
+      BoundSqlQuery query,
+      int block,
+      int visibleRoles,
+      int leaf,
+      int program,
+      int operator,
+      long operand) {
+    int symbol = (int) operand;
+    CharSequence name = command.projectionSymbolName(symbol);
+    CharSequence qualifier = command.projectionSymbolTable(symbol);
+    if (name == null || qualifier == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = nestedColumns.resolve(
+        query, block, visibleRoles, qualifier, name);
+    if (!status.isOk()) return status;
+    int sourceBlock = nestedColumns.block();
+    int sourceRole = nestedColumns.role();
+    int column = nestedColumns.column();
+    if (sourceBlock != block) query.markCorrelated(block, sourceBlock);
+    return push(
+        target,
+        leaf,
+        program,
+        operator,
+        column,
+        query.block(sourceBlock).table(sourceRole).typeDescriptor(column),
+        false,
+        SqlNestedRowProvider.scope(sourceBlock, sourceRole));
   }
 
   private StatusCode aggregate(
@@ -134,6 +178,7 @@ final class SqlBooleanScalarBinder {
       SqlCommand command,
       SqlBoundBooleanPredicateProgram target,
       BoundSqlStatement statement,
+      SqlBoundJoinContext context,
       SqlBlockSchema schema,
       int leaf,
       int program,
@@ -144,7 +189,7 @@ final class SqlBooleanScalarBinder {
     int column;
     if (visibleRoles > 0) {
       if (!joinRoles.resolve(
-          command, statement, (int) operand, visibleRoles)) {
+          command, context, (int) operand, visibleRoles)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       scope = joinRoles.role();
@@ -152,7 +197,7 @@ final class SqlBooleanScalarBinder {
     } else column = resolve(command, statement, schema, (int) operand);
     if (column < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     int descriptor = visibleRoles > 0
-        ? SqlJoinRoleResolver.table(statement, scope).typeDescriptor(column)
+        ? context.table(scope).typeDescriptor(column)
         : schema == null
             ? statement.table.typeDescriptor(column) : schema.descriptor(column);
     return push(

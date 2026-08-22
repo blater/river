@@ -15,6 +15,12 @@ final class SqlBooleanPredicateTypes {
       SqlBoundBooleanPredicateProgram target,
       int leaf) {
     int test = source.leafTest(leaf);
+    if (test == SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS) return StatusCode.OK;
+    if (test == SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON
+        || test == SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP) {
+      return target.resultDescriptor(leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT) != 0
+          ? StatusCode.OK : StatusCode.DATATYPE_MISMATCH;
+    }
     infer(target, leaf, test);
     int left = target.resultDescriptor(
         leaf, SqlBooleanPredicateProgram.PROGRAM_LEFT);

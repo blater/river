@@ -87,7 +87,7 @@ final class SqlDerivedProjectionCompiler {
         || !SqlDerivedColumnResolver.validQualifier(table, block)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (blockIndex + 1 < query.blockCount()) {
+    if (blockIndex + 1 < query.sourceBlockCount()) {
       SqlCommand inner = query.block(blockIndex + 1);
       int projection = SqlDerivedColumnResolver.outputIndex(inner, name);
       return projection < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
@@ -159,7 +159,7 @@ final class SqlDerivedProjectionCompiler {
         || !SqlDerivedColumnResolver.validQualifier(table, block)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (blockIndex + 1 < query.blockCount()) {
+    if (blockIndex + 1 < query.sourceBlockCount()) {
       SqlCommand inner = query.block(blockIndex + 1);
       int projection = SqlDerivedColumnResolver.outputIndex(inner, name);
       return projection < 0

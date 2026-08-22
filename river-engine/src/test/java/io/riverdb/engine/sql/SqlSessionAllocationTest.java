@@ -11,6 +11,7 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
+import io.riverdb.sql.SqlCommand;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Assumptions;
@@ -24,6 +25,24 @@ final class SqlSessionAllocationTest {
       "CREATE VIEW allocated_join AS SELECT CAST(tv.observed AS VARCHAR(32)) "
           + "AS rendered,texts.label AS label FROM temporal_values tv "
           + "JOIN texts ON tv.id=texts.id JOIN t ON texts.id=t.id WHERE tv.id=1";
+  private static final String JOINED_SUBQUERY =
+      "SELECT t.id,texts.label FROM t JOIN texts ON t.id=texts.id "
+          + "WHERE EXISTS (SELECT r.id FROM raw_labels r "
+          + "JOIN nested_labels n ON r.id=n.id "
+          + "WHERE r.region=t.region AND n.region=t.region)";
+  private static final String GRAPH_P3_SOURCE =
+      "SELECT t.id,t.balance FROM t WHERE EXISTS "
+          + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)";
+  private static final String GRAPH_P3_PROJECTION =
+      "SELECT d.id,d.balance FROM (" + GRAPH_P3_SOURCE + ") d";
+  private static final String GRAPH_P3_AGGREGATE =
+      "SELECT SUM(balance+1) FROM (" + GRAPH_P3_SOURCE + ") d";
+  private static final String GRAPH_P3_ORDER =
+      "SELECT d.id,d.balance+1 AS sorted FROM (" + GRAPH_P3_SOURCE
+          + ") d ORDER BY sorted";
+  private static final String GRAPH_DIRECT_AFTER_P3 =
+      "SELECT t.id FROM t WHERE EXISTS "
+          + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)";
   private static volatile long allocationGuard;
 
   @Test
@@ -107,7 +126,7 @@ final class SqlSessionAllocationTest {
             result));
     assertEquals(
         StatusCode.OK,
-        session.execute("INSERT INTO raw_texts VALUES (2, 'alpha')", result));
+        session.execute("INSERT INTO raw_texts VALUES (2, '多🙂')", result));
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX texts_label ON texts(label)", result));
@@ -227,6 +246,7 @@ final class SqlSessionAllocationTest {
     assertEquals(SqlTypeDescriptor.BIGINT, scanRow.typeDescriptorAt(0));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertTextMembershipCache(session, cursor, scanRow, result);
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
         StatusCode.OK,
@@ -358,6 +378,9 @@ final class SqlSessionAllocationTest {
       exerciseMutationExpressions(session, result);
       exerciseTypedPoint(session, pointParameters, result);
     }
+    for (int index = 0; index < 100; index++) {
+      exerciseJoinBlockPipeline(session, cursor, scanRow, result);
+    }
     long threadId = Thread.currentThread().threadId();
     long joinBefore = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
@@ -367,6 +390,94 @@ final class SqlSessionAllocationTest {
     assertTrue(
         joinAllocated <= 512,
         "warmed JOIN block pipeline allocated bytes: " + joinAllocated);
+    assertJoinedSubquery(session, cursor, scanRow, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseJoinedSubquery(session, cursor, scanRow, result);
+    }
+    long joinedBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseJoinedSubquery(session, cursor, scanRow, result);
+    }
+    long joinedAllocated = bean.getThreadAllocatedBytes(threadId) - joinedBefore;
+    assertTrue(
+        joinedAllocated <= 512,
+        "warmed joined parent/child subquery allocated bytes: " + joinedAllocated);
+    assertGraphPointAndScalarAggregate(session, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPoint(session, result);
+      exerciseGraphScalarAggregate(session, result);
+    }
+    long graphPointBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPoint(session, result);
+      exerciseGraphScalarAggregate(session, result);
+    }
+    long graphPointAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphPointBefore;
+    assertTrue(
+        graphPointAllocated <= 512,
+        "warmed graph point/scalar aggregate allocated bytes: "
+            + graphPointAllocated);
+    assertGraphGroupedConsumers(session, cursor, scanRow, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphGroupedConsumers(session, cursor, scanRow, result);
+    }
+    long graphGroupedBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphGroupedConsumers(session, cursor, scanRow, result);
+    }
+    long graphGroupedAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphGroupedBefore;
+    assertTrue(
+        graphGroupedAllocated <= 512,
+        "warmed graph group/distinct allocated bytes: "
+            + graphGroupedAllocated);
+    assertGraphPipelineConsumers(session, cursor, scanRow, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineProjection(session, cursor, scanRow, result);
+    }
+    long graphProjectionBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineProjection(session, cursor, scanRow, result);
+    }
+    long graphProjectionAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphProjectionBefore;
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineAggregate(session, result);
+    }
+    long graphAggregateBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineAggregate(session, result);
+    }
+    long graphAggregateAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphAggregateBefore;
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineOrder(session, cursor, scanRow, result);
+    }
+    long graphOrderBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineOrder(session, cursor, scanRow, result);
+    }
+    long graphOrderAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphOrderBefore;
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineHandoff(session, cursor, scanRow, result);
+    }
+    long graphHandoffBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineHandoff(session, cursor, scanRow, result);
+    }
+    long graphHandoffAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphHandoffBefore;
+    assertTrue(
+        graphProjectionAllocated <= 512
+            && graphAggregateAllocated <= 512
+            && graphOrderAllocated <= 512
+            && graphHandoffAllocated <= 512,
+        "warmed graph P3 bytes: projection=" + graphProjectionAllocated
+            + ", aggregate=" + graphAggregateAllocated
+            + ", order=" + graphOrderAllocated
+            + ", handoff=" + graphHandoffAllocated);
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
@@ -390,6 +501,7 @@ final class SqlSessionAllocationTest {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
+      exerciseTextMembershipCache(session, cursor, scanRow, result);
       exerciseExists(session, cursor, scanRow, result);
       exerciseCorrelatedMembership(session, cursor, scanRow, result);
       exerciseRecursiveExists(session, cursor, scanRow, result);
@@ -398,6 +510,7 @@ final class SqlSessionAllocationTest {
       exerciseBlockPipeline(session, cursor, scanRow, result);
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseMergeJoin(session, cursor, scanRow, result);
       exerciseNTableJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseComputedTextJoin(session, cursor, scanRow, result);
@@ -421,6 +534,7 @@ final class SqlSessionAllocationTest {
       exerciseScan(session, cursor, scanRow, result);
       exerciseSort(session, cursor, scanRow, result);
       exerciseScalar(session, cursor, scanRow, result);
+      exerciseTextMembershipCache(session, cursor, scanRow, result);
       exerciseExists(session, cursor, scanRow, result);
       exerciseCorrelatedMembership(session, cursor, scanRow, result);
       exerciseRecursiveExists(session, cursor, scanRow, result);
@@ -429,6 +543,7 @@ final class SqlSessionAllocationTest {
       exerciseBlockPipeline(session, cursor, scanRow, result);
       exerciseTextBlockPipeline(session, cursor, scanRow, result);
       exerciseJoin(session, cursor, scanRow, result);
+      exerciseMergeJoin(session, cursor, scanRow, result);
       exerciseNTableJoin(session, cursor, scanRow, result);
       exerciseUnindexedJoin(session, cursor, scanRow, result);
       exerciseComputedTextJoin(session, cursor, scanRow, result);
@@ -452,6 +567,168 @@ final class SqlSessionAllocationTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void warmedGraphSortReusesMemoryAndSpillState(@TempDir Path root) {
+    java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
+    Assumptions.assumeTrue(standard instanceof ThreadMXBean);
+    ThreadMXBean bean = (ThreadMXBean) standard;
+    Assumptions.assumeTrue(bean.isThreadAllocatedMemorySupported());
+    bean.setThreadAllocatedMemoryEnabled(true);
+    SqlSubqueryAcceptanceFixture fixture = SqlSubqueryAcceptanceFixture.create(root);
+    seedAllocationSort(fixture);
+    SqlSession session = fixture.session();
+    SqlExecutionResult result = fixture.result();
+    String memory = allocationSortQuery(1);
+    String smallSpill = allocationSortQuery(2);
+    String largeSpill = allocationSortQuery(3);
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertGraphSortRows(session, result, cursor, row, memory, 1_000);
+    assertGraphSortRows(session, result, cursor, row, smallSpill, 1_025);
+    assertGraphSortRows(session, result, cursor, row, largeSpill, 1_100);
+    int warmedRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      warmedRows += exerciseGraphSort(session, result, cursor, row, memory);
+      warmedRows += exerciseGraphSort(session, result, cursor, row, smallSpill);
+      warmedRows += exerciseGraphSort(session, result, cursor, row, largeSpill);
+    }
+    assertEquals(312_500, warmedRows);
+    long threadId = Thread.currentThread().threadId();
+    long before = bean.getThreadAllocatedBytes(threadId);
+    int memoryRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      memoryRows += exerciseGraphSort(session, result, cursor, row, memory);
+    }
+    long memoryAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(100_000, memoryRows);
+    assertTrue(
+        memoryAllocated <= 512,
+        "warmed graph in-memory sort allocated bytes: " + memoryAllocated);
+    before = bean.getThreadAllocatedBytes(threadId);
+    int smallSpillRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      smallSpillRows += exerciseGraphSort(
+          session, result, cursor, row, smallSpill);
+    }
+    long smallSpillAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(102_500, smallSpillRows);
+    assertTrue(
+        smallSpillAllocated <= 262_144,
+        "warmed 1025-row graph spill allocated bytes: " + smallSpillAllocated);
+    before = bean.getThreadAllocatedBytes(threadId);
+    int largeSpillRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      largeSpillRows += exerciseGraphSort(
+          session, result, cursor, row, largeSpill);
+    }
+    long largeSpillAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(110_000, largeSpillRows);
+    assertTrue(
+        largeSpillAllocated <= 262_144,
+        "warmed 1100-row graph spill allocated bytes: " + largeSpillAllocated);
+    long spillDelta = Math.abs(largeSpillAllocated - smallSpillAllocated);
+    assertTrue(
+        spillDelta <= 8_192,
+        "warmed graph spill allocation bytes: small=" + smallSpillAllocated
+            + ", large=" + largeSpillAllocated + ", delta=" + spillDelta
+            + ", extraRows=7500");
+    fixture.close();
+  }
+
+  private static void seedAllocationSort(SqlSubqueryAcceptanceFixture fixture) {
+    fixture.execute(
+        "CREATE TABLE allocation_sort_rows "
+            + "(id BIGINT PRIMARY KEY,rank BIGINT,label VARCHAR(32))");
+    fixture.execute(
+        "CREATE TABLE allocation_sort_accept "
+            + "(id BIGINT PRIMARY KEY,mode BIGINT)");
+    for (int first = 1; first <= 1_100; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
+      int end = Math.min(first + SqlCommand.MAXIMUM_INSERT_ROWS, 1_101);
+      StringBuilder rows = new StringBuilder("INSERT INTO allocation_sort_rows VALUES ");
+      StringBuilder accepted =
+          new StringBuilder("INSERT INTO allocation_sort_accept VALUES ");
+      for (int id = first; id < end; id++) {
+        if (id > first) {
+          rows.append(',');
+          accepted.append(',');
+        }
+        rows.append('(').append(id).append(',');
+        if (id == 1_000) rows.append("NULL");
+        else rows.append(id <= 1_000 ? 1_001L - id : 2_000L + id);
+        rows.append(",'").append(allocationSortLabel(id)).append("')");
+        accepted.append('(').append(id).append(',')
+            .append(id <= 1_000 ? 1 : id <= 1_025 ? 2 : 3).append(')');
+      }
+      fixture.execute(rows.toString());
+      fixture.execute(accepted.toString());
+    }
+  }
+
+  private static String allocationSortQuery(int mode) {
+    return "SELECT id,label,rank+0 AS sorted FROM allocation_sort_rows o WHERE EXISTS "
+        + "(SELECT c.id FROM allocation_sort_accept c "
+        + "WHERE c.id=o.id AND c.mode<=" + mode + ") ORDER BY sorted";
+  }
+
+  private static String allocationSortLabel(int id) {
+    return switch (id % 3) {
+      case 0 -> "東京";
+      case 1 -> "🌊-résumé";
+      default -> "多🙂";
+    };
+  }
+
+  private static void assertGraphSortRows(
+      SqlSession session,
+      SqlExecutionResult result,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      String sql,
+      int count) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor), sql);
+    char[] text = new char[32];
+    for (int ordinal = 0; ordinal < count; ordinal++) {
+      int expected = ordinal < 1_000 ? 1_000 - ordinal : ordinal + 1;
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row), sql);
+      assertEquals(expected, row.valueAt(0), sql);
+      String expectedText = allocationSortLabel(expected);
+      int length = row.copyTextAt(1, text, 0);
+      assertEquals(expectedText.length(), length, sql);
+      for (int index = 0; index < length; index++) {
+        assertEquals(expectedText.charAt(index), text[index], sql);
+      }
+      if (expected == 1_000) assertTrue(row.isNull(2), sql);
+      else {
+        assertEquals(
+            expected <= 1_000 ? 1_001L - expected : 2_000L + expected,
+            row.valueAt(2),
+            sql);
+      }
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row), sql);
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result), sql);
+  }
+
+  private static int exerciseGraphSort(
+      SqlSession session,
+      SqlExecutionResult result,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      String sql) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(sql, cursor).ordinal();
+    int count = 0;
+    StatusCode status;
+    while ((status = session.nextScan(cursor, row)).isOk()) {
+      allocationGuard += row.valueAt(0) + row.textLengthAt(1) + row.nullMask();
+      count++;
+    }
+    allocationGuard += status.ordinal() + count;
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+    return count;
+  }
+
   private static void exercise(SqlSession session, SqlExecutionResult result) {
     allocationGuard += session.execute(
         "SELECT region FROM t WHERE id=1 AND region=7", result).ordinal();
@@ -462,6 +739,197 @@ final class SqlSessionAllocationTest {
     allocationGuard += session.execute(
         "SELECT COUNT(*) FROM t WHERE region=7 AND balance=10", result).ordinal();
     allocationGuard += result.value();
+  }
+
+  private static void exerciseGraphPoint(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT t.id FROM t WHERE t.region IN "
+            + "(SELECT r.region FROM raw_labels r WHERE r.id=t.id)",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void assertGraphPointAndScalarAggregate(
+      SqlSession session, SqlExecutionResult result) {
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT t.id FROM t WHERE t.region IN "
+                + "(SELECT r.region FROM raw_labels r WHERE r.id=t.id)",
+            result));
+    assertEquals(1, result.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT COUNT(*) FROM t WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)",
+            result));
+    assertEquals(1, result.valueAt(0));
+  }
+
+  private static void assertGraphPipelineConsumers(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(GRAPH_P3_PROJECTION, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(10, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(GRAPH_P3_AGGREGATE, result));
+    assertEquals(11, result.valueAt(0));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(GRAPH_P3_ORDER, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(11, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(GRAPH_DIRECT_AFTER_P3, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseGraphPipelineProjection(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(GRAPH_P3_PROJECTION, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0) + row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseGraphPipelineAggregate(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(GRAPH_P3_AGGREGATE, result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void exerciseGraphPipelineOrder(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(GRAPH_P3_ORDER, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0) + row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseGraphPipelineHandoff(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    exerciseGraphPipelineProjection(session, cursor, row, result);
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(GRAPH_DIRECT_AFTER_P3, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseGraphScalarAggregate(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT COUNT(*) FROM t WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void assertGraphGroupedConsumers(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id,COUNT(*) FROM t WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region) "
+                + "GROUP BY id",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(1, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT DISTINCT label FROM raw_texts x WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.id=x.id)",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(3, row.textLengthAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT DISTINCT day FROM temporal_values v WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.id=v.id)",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(-1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseGraphGroupedConsumers(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id,COUNT(*) FROM t WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region) "
+            + "GROUP BY id",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT DISTINCT label FROM raw_texts x WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.id=x.id)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.textLengthAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT DISTINCT day FROM temporal_values v WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.id=v.id)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
   }
 
   private static void exerciseText(SqlSession session, SqlExecutionResult result) {
@@ -591,6 +1059,34 @@ final class SqlSessionAllocationTest {
         "SELECT id FROM t WHERE region=?", parameters, cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void assertJoinedSubquery(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(JOINED_SUBQUERY, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(5, row.textLengthAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseJoinedSubquery(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(JOINED_SUBQUERY, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.textLengthAt(1);
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }
@@ -877,6 +1373,44 @@ final class SqlSessionAllocationTest {
     allocationGuard += session.closeScan(cursor, result).ordinal();
   }
 
+  private static void assertTextMembershipCache(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT labels.id FROM labels WHERE '多🙂' IN "
+                + "(SELECT raw_texts.label FROM raw_texts WHERE raw_texts.id=2)",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseTextMembershipCache(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT labels.id FROM labels WHERE '多🙂' IN "
+            + "(SELECT raw_texts.label FROM raw_texts WHERE raw_texts.id=2)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
   private static void exerciseExists(
       SqlSession session,
       SqlScanCursor cursor,
@@ -937,6 +1471,24 @@ final class SqlSessionAllocationTest {
         "SELECT t.id, labels.code FROM t "
             + "JOIN labels ON t.region=labels.region "
             + "WHERE t.id=1 AND labels.code >= 70 AND labels.code < 72",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseMergeJoin(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT t.id,raw_labels.code FROM t "
+            + "JOIN raw_labels ON t.region=raw_labels.region",
         cursor).ordinal();
     allocationGuard += session.nextScan(cursor, row).ordinal();
     allocationGuard += row.valueAt(1);

@@ -6,22 +6,27 @@ import io.riverdb.base.error.StatusCode;
 final class SqlBlockJoinStage {
   private final BoundSqlStatement bound;
   private final SqlBlockSource source;
-  private final SqlBoundPredicateEvaluator predicates;
   private final SqlRowProjectionEvaluator projections;
+  private final SqlSubqueryGraphExecution subqueries;
 
   SqlBlockJoinStage(
       BoundSqlStatement statement,
       SqlBlockSource blockSource,
-      SqlBoundPredicateEvaluator predicateEvaluator,
+      SqlSubqueryGraphExecution graph,
       SqlRowProjectionEvaluator projectionEvaluator) {
     bound = statement;
     source = blockSource;
-    predicates = predicateEvaluator;
+    subqueries = graph;
     projections = projectionEvaluator;
   }
 
-  StatusCode prepare() {
-    StatusCode status = predicates.prepare();
+  StatusCode prepare(int block) {
+    boolean nested = bound.executableQuery.edgeCount() > 0;
+    StatusCode status = source.configureJoin(
+        bound.existingJoinContext(block),
+        bound.blockPlans().command(block),
+        nested ? bound.nestedBoolean(block) : bound.whereBoolean,
+        nested ? subqueries.joinPredicates(block) : null);
     return status.isOk() ? projections.prepare(bound) : status;
   }
 
@@ -47,7 +52,7 @@ final class SqlBlockJoinStage {
       if (status.isOk()) status = output.append(sourceRow);
       if (status.isOk()) accepted++;
     }
-    if (began) status = source.finishJoin(status);
+    if (began && !subqueries.hasResources()) status = source.finishJoin(status);
     sourceRow.reset(0);
     return status.isOk() ? output.finish() : status;
   }

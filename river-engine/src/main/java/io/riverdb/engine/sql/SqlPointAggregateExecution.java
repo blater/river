@@ -188,16 +188,23 @@ final class SqlPointAggregateExecution {
       return status;
     }
     status = predicates.evaluate(state.primaryKey, source);
-    if (!status.isOk() || !predicates.matched()) return status;
+    if (!status.isOk()) return status;
+    if (!predicates.matched()) {
+      predicates.releaseEvaluatedRow();
+      return StatusCode.OK;
+    }
+    source = predicates.evaluatedRow(source);
     status = projections.project(state.primaryKey, source, projected);
-    return status.isOk()
-        ? accumulators.accumulate(
-            bound.aggregates,
-            bound.projectionPrograms,
-            projected,
-            source,
-            bound.table)
-        : status;
+    if (status.isOk()) {
+      status = accumulators.accumulate(
+          bound.aggregates,
+          bound.projectionPrograms,
+          projected,
+          source,
+          bound.table);
+    }
+    predicates.releaseEvaluatedRow();
+    return status;
   }
 
   private StatusCode accumulateComputed(HeapRowResult source) {

@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlJoinChain;
@@ -100,26 +101,43 @@ final class SqlBinder {
     return projections.bindDistinct(command, query, bound);
   }
 
-  StatusCode bindJoin(SqlCommand command, BoundSqlStatement bound) {
+  StatusCode bindJoin(
+      SqlCommand command,
+      BoundSqlStatement bound,
+      SqlBoundJoinContext context) {
     SqlJoinChain joins = command.joinChain();
     if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
-    StatusCode status = predicates.bindJoin(command, bound);
-    if (status.isOk()) status = joinRows.bindJoin(command, bound);
-    return status;
+    StatusCode status = predicates.bindJoin(command, bound, context);
+    return status.isOk() ? bindJoinProjection(command, bound, context) : status;
+  }
+
+  StatusCode bindJoinProjection(
+      SqlCommand command,
+      BoundSqlStatement bound,
+      SqlBoundJoinContext context) {
+    return command.joinChain() == null
+        ? StatusCode.FEATURE_NOT_SUPPORTED
+        : joinRows.bindJoin(command, bound, context);
   }
 
   StatusCode resolveJoinRoles(
       RelationalSession session,
       SqlCommand command,
-      BoundSqlStatement bound,
+      SqlBoundJoinContext context,
+      TableDefinition root,
       boolean resolveLeft) {
     SqlJoinChain joins = command.joinChain();
     if (joins == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    bound.beginJoinRoles(joins.roleCount());
+    context.beginRoles(joins.roleCount(), resolveLeft ? null : root);
     int first = resolveLeft ? 0 : 1;
     StatusCode status = StatusCode.OK;
     for (int role = first; status.isOk() && role < joins.roleCount(); role++) {
-      status = session.resolveTable(joins.tableName(role), bound.joinRole(role));
+      status = session.resolveTable(joins.tableName(role), context.table(role));
+    }
+    for (int role = 0; status.isOk() && role < joins.roleCount(); role++) {
+      status = session.resolveStatistics(
+          context.table(role), context.statistics(role));
+      if (status == StatusCode.CONFLICT) status = StatusCode.OK;
     }
     return status;
   }

@@ -30,6 +30,7 @@ final class SqlBlockStageRunner {
       SqlJoinChainSource joinSource,
       SqlExpressionEvaluator expressions,
       SqlBoundPredicateEvaluator predicates,
+      SqlSubqueryGraphExecution subqueries,
       SqlRowProjectionEvaluator projectionEvaluator,
       SqlTemporalContext temporal,
       SqlBlockRowStore firstStore,
@@ -37,9 +38,10 @@ final class SqlBlockStageRunner {
     bound = statement;
     binder = planBinder;
     projections = projectionEvaluator;
-    source = new SqlBlockSource(session, statement, joinSource, projectionEvaluator);
+    source = new SqlBlockSource(
+        session, statement, joinSource, predicates, subqueries, projectionEvaluator);
     joinStage = new SqlBlockJoinStage(
-        statement, source, predicates, projectionEvaluator);
+        statement, source, subqueries, projectionEvaluator);
     projector = new SqlBlockStageProjector(
         statement, expressions, projectionEvaluator, temporal);
     projectionStage = new SqlBlockProjectionStage(statement, source, projector);
@@ -64,7 +66,7 @@ final class SqlBlockStageRunner {
       SqlBlockSchema child = block + 1 == plans.count()
           ? plans.baseSchema() : plans.schema(block + 1);
       status = binder.activate(bound, block, child);
-      if (status.isOk()) status = prepareActive();
+      if (status.isOk()) status = prepareActive(block);
       SqlBlockRowStore output = input == first ? second : first;
       if (status.isOk()) status = execute(block, input, output, sourceRow);
       input = status.isOk() ? finalStore : input;
@@ -74,13 +76,13 @@ final class SqlBlockStageRunner {
     return status;
   }
 
-  private StatusCode prepareActive() {
+  private StatusCode prepareActive(int block) {
     if (bound.command.type() == SqlCommandType.JOIN_SCAN) {
-      StatusCode status = joinStage.prepare();
+      StatusCode status = joinStage.prepare(block);
       return status.isOk() ? having.prepare(bound.command) : status;
     }
     StatusCode status = projections.prepare(bound);
-    if (status.isOk()) status = projector.prepare();
+    if (status.isOk()) status = projector.prepare(block);
     return status.isOk() ? having.prepare(bound.command) : status;
   }
 

@@ -13,8 +13,8 @@ final class SqlDerivedBlockValidator {
   }
 
   StatusCode validate(boolean allowUnusedComputed) {
-    if (query.blockCount() < 2) return StatusCode.INVALID_EXTERNAL_INPUT;
-    for (int index = 0; index < query.blockCount(); index++) {
+    if (query.sourceBlockCount() < 2) return StatusCode.INVALID_EXTERNAL_INPUT;
+    for (int index = 0; index < query.sourceBlockCount(); index++) {
       StatusCode status = shapeStatus(query.block(index), index);
       if (status.isOk()) status = references.validate(index, allowUnusedComputed);
       if (!status.isOk()) return status;

@@ -26,7 +26,7 @@ final class SqlDerivedQueryCompiler {
     StatusCode status = blocks.validate(allowUnusedComputed);
     if (!status.isOk()) return status;
     SqlCommand root = query.block(0);
-    SqlCommand base = query.block(query.blockCount() - 1);
+    SqlCommand base = query.block(query.sourceBlockCount() - 1);
     destination.writableTableName().copyFrom(base.tableName());
     status = projections.copy(root, destination);
     if (status.isOk()) status = predicates.copy(destination);
@@ -45,7 +45,7 @@ final class SqlDerivedQueryCompiler {
     StatusCode status = blocks.validatePipeline();
     if (!status.isOk()) return status;
     SqlCommand root = query.block(0);
-    SqlCommand base = query.block(query.blockCount() - 1);
+    SqlCommand base = query.block(query.sourceBlockCount() - 1);
     destination.copyQueryFrom(root);
     destination.writableTableName().copyFrom(base.tableName());
     return destination.finish();

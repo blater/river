@@ -426,7 +426,8 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode retryPendingCleanup() {
-    StatusCode status = pointCommands.closeResources();
+    StatusCode status = dispatcher.closeResources();
+    if (status.isOk()) status = pointCommands.closeResources();
     if (status.isOk() && atomic.isActive()) {
       status = atomic.retry();
     }
@@ -484,17 +485,21 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode prepareJoinQuery() {
+    SqlBoundJoinContext context = bound.joinContext(0);
     StatusCode status = binder.resolveJoinRoles(
-        session, bound.command, bound, false);
+        session, bound.command, context, bound.table, false);
     if (status.isOk()) {
       status = binder.bindQueryBlocks(session, bound);
     }
     if (status.isOk()) {
-      status = binder.bindJoin(bound.command, bound);
+      status = bound.executableQuery.edgeCount() == 0
+          ? binder.bindJoin(bound.command, bound, context)
+          : binder.bindJoinProjection(bound.command, bound, context);
     }
     if (status.isOk() && bound.command.isOrdered()) {
       status = binder.bindJoinOrder(bound.command, bound);
     }
+    if (status.isOk()) status = queries.configureJoin();
     if (status.isOk()) {
       status = queries.explainOnly()
           ? temporal.validateZones(bound.command, bound.query)
@@ -533,9 +538,6 @@ final class SqlSessionExecutionCoordinator {
     StatusCode status = resolveRootTableAndBlocks();
     if (status.isOk()) {
       status = binder.bindDataCommand(bound.command, bound.query, bound);
-    }
-    if (status.isOk()) {
-      status = queries.prepareNested();
     }
     if (status.isOk() && bound.command.isOrdered()) {
       status = binder.bindOrder(bound.command, bound);

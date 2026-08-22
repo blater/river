@@ -28,6 +28,10 @@ final class RelationalKey {
     return tableId;
   }
 
+  static long tableStatisticsKey(int tableId) {
+    return -tableId;
+  }
+
   static StatusCode tableRowKey(int tableId, long userKey, KeyResult result) {
     if (tableId <= 0
         || tableId > MAXIMUM_TABLE_ID

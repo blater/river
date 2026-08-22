@@ -58,24 +58,26 @@ final class SqlNestedQueryTest {
             explain));
     assertEquals(StatusCode.OK, session.closeScan(explain, result));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.CONFLICT,
         session.execute(
             "SELECT o.id FROM names o WHERE EXISTS "
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             result));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.CONFLICT,
         session.execute(
             "SELECT o.id FROM names o WHERE o.id="
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             result));
     assertEquals(StatusCode.OK, explain.reset());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.beginScan(
             "SELECT COUNT(*) FROM names o WHERE EXISTS "
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             explain));
+    assertEquals(StatusCode.OK, session.nextScan(explain, new SqlScanRowResult()));
+    assertEquals(StatusCode.OK, session.closeScan(explain, result));
     assertEquals(
         StatusCode.OK,
         session.execute(
@@ -168,7 +170,7 @@ final class SqlNestedQueryTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 1_024, opened));
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
@@ -207,12 +209,25 @@ final class SqlNestedQueryTest {
 
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
+    assertRows(
+        session,
+        "SELECT id FROM probes WHERE value IN "
+            + "(SELECT value FROM candidates WHERE id<=1024)",
+        new long[] {1});
+    assertRows(
+        session,
+        "SELECT id FROM probes WHERE value IN "
+            + "(SELECT value FROM candidates LIMIT 1024)",
+        new long[] {1});
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         session.beginScan(
             "SELECT id FROM probes WHERE value IN "
-                + "(SELECT value FROM candidates)",
+                + "(SELECT value FROM candidates LIMIT 1025)",
             cursor));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
         StatusCode.OK,

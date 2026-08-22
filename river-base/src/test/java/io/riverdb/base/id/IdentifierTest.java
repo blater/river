@@ -15,6 +15,8 @@ final class IdentifierTest {
     assertFalse(RelationId.NONE.isValid());
     assertFalse(IndexId.NONE.isValid());
     assertFalse(ColumnId.NONE.isValid());
+    assertFalse(RowVersionId.NONE.isValid());
+    assertFalse(LogicalRowId.NONE.isValid());
     assertFalse(TransactionId.NONE.isValid());
     assertFalse(CommitSequence.NONE.isValid());
     assertFalse(CheckpointId.NONE.isValid());
@@ -24,6 +26,8 @@ final class IdentifierTest {
     assertEquals(Integer.MAX_VALUE, RelationId.of(Integer.MAX_VALUE).value());
     assertEquals(Integer.MAX_VALUE, IndexId.of(Integer.MAX_VALUE).value());
     assertEquals(Integer.MAX_VALUE, ColumnId.of(Integer.MAX_VALUE).value());
+    assertEquals(Long.MAX_VALUE, RowVersionId.of(Long.MAX_VALUE).value());
+    assertEquals(Long.MAX_VALUE, LogicalRowId.of(Long.MAX_VALUE).value());
     assertEquals(Long.MAX_VALUE, DatabaseId.of(Long.MAX_VALUE).value());
     assertEquals(Long.MAX_VALUE, TransactionId.of(Long.MAX_VALUE).value());
     assertEquals(Long.MAX_VALUE, CommitSequence.of(Long.MAX_VALUE).value());
@@ -34,6 +38,8 @@ final class IdentifierTest {
     assertThrows(IllegalArgumentException.class, () -> RelationId.of(0));
     assertThrows(IllegalArgumentException.class, () -> IndexId.of(0));
     assertThrows(IllegalArgumentException.class, () -> ColumnId.of(0));
+    assertThrows(IllegalArgumentException.class, () -> RowVersionId.of(0));
+    assertThrows(IllegalArgumentException.class, () -> LogicalRowId.of(0));
     assertThrows(IllegalArgumentException.class, () -> DatabaseId.of(0));
     assertThrows(IllegalArgumentException.class, () -> TransactionId.of(0));
     assertThrows(IllegalArgumentException.class, () -> CommitSequence.of(0));
@@ -44,6 +50,8 @@ final class IdentifierTest {
     assertThrows(IllegalArgumentException.class, () -> new RelationId(-1));
     assertThrows(IllegalArgumentException.class, () -> new IndexId(-1));
     assertThrows(IllegalArgumentException.class, () -> new ColumnId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new RowVersionId(-1));
+    assertThrows(IllegalArgumentException.class, () -> new LogicalRowId(-1));
     assertThrows(IllegalArgumentException.class, () -> new DatabaseId(-1));
     assertThrows(IllegalArgumentException.class, () -> new TransactionId(-1));
     assertThrows(IllegalArgumentException.class, () -> new CommitSequence(-1));
