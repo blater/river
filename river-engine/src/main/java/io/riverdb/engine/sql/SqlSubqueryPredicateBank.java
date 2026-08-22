@@ -18,6 +18,7 @@ final class SqlSubqueryPredicateBank {
   private final SqlTemporalContext temporal;
   private final SqlSubqueryLeafEvaluator leaves;
   private final SqlNestedRowProvider rows;
+  private final SqlSubqueryPlan plan;
   private SqlJoinedPredicateBank joined;
 
   SqlSubqueryPredicateBank(
@@ -25,13 +26,15 @@ final class SqlSubqueryPredicateBank {
       SqlExpressionEvaluator evaluator,
       SqlTemporalContext temporalContext,
       SqlSubqueryLeafEvaluator leafEvaluator,
-      SqlNestedRowProvider rowProvider) {
+      SqlNestedRowProvider rowProvider,
+      SqlSubqueryPlan subqueryPlan) {
     bound = statement;
     query = statement.executableQuery;
     expressions = evaluator;
     temporal = temporalContext;
     leaves = leafEvaluator;
     rows = rowProvider;
+    plan = subqueryPlan;
   }
 
   StatusCode prepare(int block) {
@@ -98,7 +101,7 @@ final class SqlSubqueryPredicateBank {
   private StatusCode prepareJoin(int block) {
     if (joined == null) {
       joined = new SqlJoinedPredicateBank(
-          bound, expressions, temporal, leaves, rows);
+          bound, expressions, temporal, leaves, rows, plan);
     }
     return joined.prepare(block);
   }

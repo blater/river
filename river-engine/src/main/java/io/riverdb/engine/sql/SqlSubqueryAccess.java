@@ -26,8 +26,6 @@ final class SqlSubqueryAccess {
   private final SqlComparison[] comparisons =
       new SqlComparison[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] valueIndexes = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final boolean[] activeValueIndexes =
-      new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] empty = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
 
   SqlSubqueryAccess(
@@ -55,7 +53,6 @@ final class SqlSubqueryAccess {
       SqlNestedRowProvider rows,
       RelationalScanCursor cursor) {
     empty[block] = false;
-    activeValueIndexes[block] = valueIndexes[block];
     int column = columns[block];
     TableDefinition table = query.block(block).table();
     if (column < 0) return session.beginScan(table, cursor);
@@ -80,22 +77,6 @@ final class SqlSubqueryAccess {
           : session.beginExactValueScan(table, column, candidate, cursor);
     }
     int descriptor = table.typeDescriptor(column);
-    if (unboundedUpper(descriptor)
-        && (comparison == SqlComparison.GREATER_THAN
-            || comparison == SqlComparison.GREATER_OR_EQUAL)) {
-      if (comparison == SqlComparison.GREATER_THAN && candidate == Long.MAX_VALUE) {
-        empty[block] = true;
-        return StatusCode.OK;
-      }
-      activeValueIndexes[block] = false;
-      return session.beginScan(table, cursor);
-    }
-    if ((comparison == SqlComparison.LESS_OR_EQUAL
-            || comparison == SqlComparison.GREATER_THAN)
-        && !hasSuccessor(candidate, descriptor)) {
-      activeValueIndexes[block] = false;
-      return session.beginScan(table, cursor);
-    }
     long lower = lower(comparison, candidate, table.typeDescriptor(column));
     long upper = upper(comparison, candidate, table.typeDescriptor(column));
     if (lower >= upper) {
@@ -113,17 +94,18 @@ final class SqlSubqueryAccess {
       RelationalScanResult scan,
       ValueIndexLookupResult indexed) {
     if (empty[block]) return StatusCode.CONFLICT;
-    return activeValueIndexes[block]
+    return valueIndexes[block]
         ? session.nextValueScan(query.block(block).table(), cursor, scan, indexed)
         : session.nextScan(cursor, scan);
   }
 
   boolean indexed(int block) { return columns[block] >= 0; }
-  boolean valueIndex(int block) { return activeValueIndexes[block]; }
+  boolean valueIndex(int block) { return valueIndexes[block]; }
   int column(int block) { return columns[block]; }
 
   private void select(int block, SqlBoundBooleanPredicateProgram predicates) {
-    if (predicates == null || !predicates.available()) return;
+    if (query.block(block).joinChain() != null
+        || predicates == null || !predicates.available()) return;
     collect(block, predicates, predicates.root());
   }
 
@@ -140,9 +122,9 @@ final class SqlSubqueryAccess {
 
   private void candidate(
       int block, SqlBoundBooleanPredicateProgram predicates, int leaf) {
-    if (predicates.leafTest(leaf) != SqlBooleanPredicateProgram.TEST_COMPARISON) return;
+    if (predicates.leafTest(leaf) != SqlBooleanPredicateProgram.TEST_COMPARISON
+        || predicates.negated(leaf)) return;
     SqlComparison comparison = predicates.comparison(leaf);
-    if (comparison == SqlComparison.NOT_EQUAL) return;
     int local = SqlBooleanPredicateProgram.PROGRAM_LEFT;
     int source = SqlBooleanPredicateProgram.PROGRAM_RIGHT;
     int column = predicates.rawColumn(leaf, local);
@@ -152,8 +134,9 @@ final class SqlSubqueryAccess {
       column = predicates.rawColumn(leaf, local);
       comparison = reverse(comparison);
     }
+    if (!stable(comparison)) return;
     if (!usable(block, predicates, leaf, local, source, column)) return;
-    if (comparison != SqlComparison.EQUAL
+    if (comparison == SqlComparison.GREATER_OR_EQUAL
         && unboundedUpper(query.block(block).table().typeDescriptor(column))) return;
     int score = score(query.block(block).table(), column, comparison);
     int previous = columns[block] < 0 ? -1
@@ -173,17 +156,30 @@ final class SqlSubqueryAccess {
       int local,
       int source,
       int column) {
-    if (column < 0 || predicates.nodeCount(leaf, source) != 1) return false;
+    if (column < 0
+        || predicates.nodeCount(leaf, local) != 1
+        || predicates.nodeCount(leaf, source) != 1
+        || predicates.operator(leaf, local, 0) != SqlScalarExpression.COLUMN
+        || predicates.operator(leaf, source, 0) != SqlScalarExpression.COLUMN) {
+      return false;
+    }
+    int localScope = predicates.scope(leaf, local, 0);
+    if (SqlNestedRowProvider.block(localScope) != block
+        || SqlNestedRowProvider.role(localScope) != 0) return false;
     TableDefinition table = query.block(block).table();
     if (column > 0 && !table.hasIndexOn(column)) return false;
     int descriptor = table.typeDescriptor(column);
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
         || predicates.resultDescriptor(leaf, local) != descriptor
         || predicates.resultDescriptor(leaf, source) != descriptor) return false;
-    int operator = predicates.operator(leaf, source, 0);
-    if (operator != SqlScalarExpression.COLUMN) return SqlRowExpressionTypes.leaf(operator);
     int scope = predicates.scope(leaf, source, 0);
-    return scope >= 0 && scope < block;
+    return ancestor(block, SqlNestedRowProvider.block(scope));
+  }
+
+  private boolean ancestor(int block, int candidate) {
+    int parent = query.blockParent(block);
+    while (parent >= 0 && parent != candidate) parent = query.blockParent(parent);
+    return parent == candidate;
   }
 
   private static int score(
@@ -194,27 +190,22 @@ final class SqlSubqueryAccess {
 
   private static long lower(SqlComparison comparison, long value, int descriptor) {
     if (comparison == SqlComparison.GREATER_OR_EQUAL) return value;
-    if (comparison == SqlComparison.GREATER_THAN) return successor(value, descriptor);
     return SqlValueDomain.minimumFixed(descriptor);
   }
 
   private static long upper(SqlComparison comparison, long value, int descriptor) {
     if (comparison == SqlComparison.LESS_THAN) return value;
-    if (comparison == SqlComparison.LESS_OR_EQUAL) return successor(value, descriptor);
     return SqlValueDomain.exclusiveMaximumFixed(descriptor);
-  }
-
-  private static long successor(long value, int descriptor) {
-    return !hasSuccessor(value, descriptor)
-        ? value : value + 1;
-  }
-
-  private static boolean hasSuccessor(long value, int descriptor) {
-    return value != Long.MAX_VALUE && SqlValueDomain.validFixed(descriptor, value + 1);
   }
 
   private static boolean unboundedUpper(int descriptor) {
     return SqlValueDomain.exclusiveMaximumFixed(descriptor) == Long.MIN_VALUE;
+  }
+
+  private static boolean stable(SqlComparison comparison) {
+    return comparison == SqlComparison.EQUAL
+        || comparison == SqlComparison.LESS_THAN
+        || comparison == SqlComparison.GREATER_OR_EQUAL;
   }
 
   private static SqlComparison reverse(SqlComparison comparison) {
@@ -236,7 +227,6 @@ final class SqlSubqueryAccess {
       programs[block] = 0;
       comparisons[block] = null;
       valueIndexes[block] = false;
-      activeValueIndexes[block] = false;
       empty[block] = false;
     }
   }

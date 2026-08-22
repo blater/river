@@ -15,6 +15,8 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
   private final SqlJoinedRowProvider rows;
   private final SqlTemporalContext temporal;
   private final SqlSubqueryLeafEvaluator subqueries;
+  private final SqlSubqueryPlan plan;
+  private final int block;
   private SqlCommand command;
   private SqlBoundJoinContext context;
   private SqlBoundBooleanPredicateProgram whereProgram;
@@ -25,9 +27,12 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
       SqlExpressionEvaluator expressions,
       SqlTemporalContext temporalContext,
       SqlSubqueryLeafEvaluator leafEvaluator,
-      SqlNestedRowProvider ancestors) {
+      SqlNestedRowProvider ancestors,
+      SqlSubqueryPlan subqueryPlan) {
+    this.block = block;
     temporal = temporalContext;
     subqueries = leafEvaluator;
+    plan = subqueryPlan;
     workspace = new SqlBooleanPredicateWorkspace(expressions, temporalContext);
     where = new SqlBooleanPredicateEvaluator(workspace, temporalContext);
     rows = new SqlJoinedRowProvider(block, ancestors);
@@ -86,7 +91,9 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
         rows,
         match);
     rows.clear();
-    return status.isOk() && match.matched();
+    boolean accepted = status.isOk() && match.matched();
+    if (accepted) plan.parentAccepted(block);
+    return accepted;
   }
 
   @Override

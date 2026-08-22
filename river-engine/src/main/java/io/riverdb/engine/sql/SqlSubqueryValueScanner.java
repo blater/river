@@ -38,16 +38,20 @@ final class SqlSubqueryValueScanner {
 
   StatusCode evaluate(
       int edge, SqlPredicateOperand left, SqlSubqueryLeafEvaluator.Truth truth) {
-    plan.execute(edge);
+    plan.invoke(edge);
     if (cache.enabled(edge) && cache.available(edge)) {
       truth.set(cache.truth(edge, left));
+      plan.result(edge);
       return StatusCode.OK;
     }
+    plan.execute(edge);
     StatusCode status = frames.own(query.edgeParent(edge));
     if (!status.isOk()) return status;
     int child = query.edgeChild(edge);
-    return query.edgeKind(edge) == SqlQuery.SUBQUERY_EXISTS
+    status = query.edgeKind(edge) == SqlQuery.SUBQUERY_EXISTS
         ? existence(edge, child, truth) : values(edge, child, left, truth);
+    if (status.isOk()) plan.result(edge);
+    return status;
   }
 
   private StatusCode existence(
@@ -63,7 +67,7 @@ final class SqlSubqueryValueScanner {
       status = frames.next(child);
       if (status == StatusCode.CONFLICT) break;
       if (!status.isOk()) return frames.finish(child, status);
-      plan.visit(edge);
+      plan.candidate(edge);
       status = candidates.accept(child);
       if (!status.isOk()) return frames.finish(child, status);
       if (candidates.accepted(child)) {
@@ -107,7 +111,7 @@ final class SqlSubqueryValueScanner {
       status = frames.next(child);
       if (status == StatusCode.CONFLICT) break;
       if (!status.isOk()) return abort(child, status);
-      plan.visit(edge);
+      plan.candidate(edge);
       status = candidates.accept(child);
       if (!status.isOk()) return abort(child, status);
       if (!candidates.accepted(child)) {

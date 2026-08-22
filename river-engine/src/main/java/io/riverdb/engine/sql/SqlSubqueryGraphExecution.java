@@ -32,9 +32,9 @@ final class SqlSubqueryGraphExecution
         relationalSession, statement, evaluator);
     frames = new SqlSubqueryFrames(
         relationalSession, statement, evaluator, temporalContext, joined);
+    plan = new SqlSubqueryPlan(statement, frames.access(), cache);
     predicates = new SqlSubqueryPredicateBank(
-        statement, evaluator, temporalContext, this, frames);
-    plan = new SqlSubqueryPlan(statement, frames.access());
+        statement, evaluator, temporalContext, this, frames, plan);
     scanner = new SqlSubqueryValueScanner(
         query, frames, projections, cache, evaluator, this, plan);
   }
@@ -71,7 +71,9 @@ final class SqlSubqueryGraphExecution
       HeapRowResult row,
       SqlBooleanPredicateEvaluator.Match result) {
     frames.activate(block, key, row);
-    return predicates.matches(block, key, row, result);
+    StatusCode status = predicates.matches(block, key, row, result);
+    if (status.isOk() && result.matched()) plan.parentAccepted(block);
+    return status;
   }
 
   @Override
@@ -85,7 +87,10 @@ final class SqlSubqueryGraphExecution
 
   @Override
   public StatusCode accept(int child) {
-    return joined(child) ? StatusCode.OK : predicates.accept(child);
+    if (joined(child)) return StatusCode.OK;
+    StatusCode status = predicates.accept(child);
+    if (status.isOk() && predicates.accepted(child)) plan.parentAccepted(child);
+    return status;
   }
 
   @Override public boolean accepted(int child) {

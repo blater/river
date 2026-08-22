@@ -240,7 +240,7 @@ final class SqlSubqueryResultCache {
   }
 
 
-  private boolean correlated(int edge) {
+  boolean correlated(int edge) {
     int child = query.edgeChild(edge);
     for (int block = child; block < query.blockCount(); block++) {
       if (!descendant(block, child)) continue;
