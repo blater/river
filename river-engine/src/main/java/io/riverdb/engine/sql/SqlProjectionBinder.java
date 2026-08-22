@@ -104,7 +104,7 @@ final class SqlProjectionBinder {
   StatusCode bindDistinct(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
     boolean computed = SqlRowProjectionBinder.hasComputed(command);
-    if (computed && bound.query.blockCount() > 1) {
+    if (computed && query.sourceBlockCount() > 1) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     StatusCode status = rows.bind(command, bound);

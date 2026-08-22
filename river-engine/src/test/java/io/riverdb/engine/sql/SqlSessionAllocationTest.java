@@ -404,6 +404,20 @@ final class SqlSessionAllocationTest {
         graphPointAllocated <= 512,
         "warmed graph point/scalar aggregate allocated bytes: "
             + graphPointAllocated);
+    assertGraphGroupedConsumers(session, cursor, scanRow, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphGroupedConsumers(session, cursor, scanRow, result);
+    }
+    long graphGroupedBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphGroupedConsumers(session, cursor, scanRow, result);
+    }
+    long graphGroupedAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphGroupedBefore;
+    assertTrue(
+        graphGroupedAllocated <= 512,
+        "warmed graph group/distinct allocated bytes: "
+            + graphGroupedAllocated);
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
@@ -539,6 +553,84 @@ final class SqlSessionAllocationTest {
             + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)",
         result).ordinal();
     allocationGuard += result.valueAt(0);
+  }
+
+  private static void assertGraphGroupedConsumers(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT id,COUNT(*) FROM t WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region) "
+                + "GROUP BY id",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(1, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT DISTINCT label FROM raw_texts x WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.id=x.id)",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(3, row.textLengthAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(
+        StatusCode.OK,
+        session.beginScan(
+            "SELECT DISTINCT day FROM temporal_values v WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.id=v.id)",
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(-1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseGraphGroupedConsumers(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT id,COUNT(*) FROM t WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region) "
+            + "GROUP BY id",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT DISTINCT label FROM raw_texts x WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.id=x.id)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.textLengthAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(
+        "SELECT DISTINCT day FROM temporal_values v WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.id=v.id)",
+        cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
   }
 
   private static void exerciseText(SqlSession session, SqlExecutionResult result) {

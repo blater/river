@@ -279,8 +279,17 @@ final class SqlSortExecution {
   }
 
   private StatusCode finish(StatusCode status) {
+    if (groupedInput() && subqueries.hasResources()) {
+      return status.isOk() ? StatusCode.CONFLICT : status;
+    }
     StatusCode close = session.closeScan(scan.relational());
     return finishAfterSource(status, close);
+  }
+
+  private boolean groupedInput() {
+    io.riverdb.sql.SqlCommandType type = bound.executableQuery.root().type();
+    return SqlBinder.isGroupAggregate(type)
+        || type == io.riverdb.sql.SqlCommandType.DISTINCT_SCAN;
   }
 
   private StatusCode finishAfterSource(

@@ -44,8 +44,8 @@ final class SqlGroupedAggregateBinder {
       boolean computedKey,
       boolean computedAggregate,
       boolean computedHaving) {
-    return (computedKey || computedAggregate || computedHaving)
-            && query.blockCount() > 1
+    return query.sourceBlockCount() > 1
+            && (computedKey || computedAggregate || computedHaving)
         ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
   }
 

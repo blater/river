@@ -33,6 +33,12 @@ final class SqlBlockPlanBinder {
     SqlBoundBlockPlans plans = bound.blockPlans();
     StatusCode status = plans.capture(bound.query);
     if (!status.isOk()) return status;
+    SqlCommandType outerType = plans.command(0).type();
+    if (bound.executableQuery.edgeCount() > 0
+        && (SqlBinder.isGroupAggregate(outerType)
+            || outerType == SqlCommandType.DISTINCT_SCAN)) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     SqlCommand deepest = plans.command(plans.count() - 1);
     if (deepest.type() == SqlCommandType.JOIN_SCAN && joins == null) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
