@@ -1,8 +1,8 @@
 # M5 P4C robust subquery delivery plan
 
-Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7D are
-accepted on `feature/p4c-subqueries` at `1e10f51`. Alpha 2 remains incomplete;
-the next production task is P4C-7E.
+Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7E are
+accepted on `feature/p4c-subqueries`; accepted production is at `1e10f51`.
+Alpha 2 remains incomplete; the next production task is P4C-8.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,7 +11,8 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `1e10f51` contains accepted P4C-0 through P4C-7D:
+- `feature/p4c-subqueries` production through `1e10f51` contains accepted P4C-0
+  through P4C-7E:
   canonical graph tests, lexical marker ordering, `(block, role, column)` scope
   binding, computed child projection, contract-level semantics fixtures, and
   joined root/child graph execution through the common n-table join source.
@@ -56,7 +57,13 @@ allocation review is required before promotion.
   full 298-test engine suite, warmed allocation, and independent semantics and
   architecture/allocation reviews are green. Child cardinality/order/P3
   stages remain fail-closed.
-- The next implementation gate is P4C-7E below. The former grouped-HAVING
+- P4C-7E closes the consumer checkpoint without a production delta. The fresh
+  14-class cross-consumer matrix is 55/55, the forced full engine suite is
+  298/298 across 92 suites with zero skips, the warmed allocation and
+  design-debt gates are green, and independent relational-semantics and
+  architecture/lifecycle/allocation reviews issued GO. Source inventory proves
+  one graph runner and no legacy nested executor or predicate carrier.
+- The next implementation gate is P4C-8 below. The former grouped-HAVING
   null-zone and `temporal_derived` parser/reopen regressions were repaired in
   `1a51d8a`; the stale point, derived-parameter, and eager-cardinality status
   oracles are now aligned with admitted execution semantics.
@@ -390,11 +397,11 @@ they touch shared query lifecycle and consumer routing.
 
 #### P4C-7 implementation checkpoints
 
-P4C-7 has no open architecture decision and is ready to start. One lead
-integrator owns the shared lifecycle path; production checkpoints land in
-order because they reuse `SqlQueryExecution`, the graph runner, and the same
-cleanup state. Independent test-fixture and read-only review work may proceed
-in parallel with disjoint ownership.
+P4C-7 is complete with no open architecture decision or prerequisite fix
+before P4C-8. One lead integrator owned the shared lifecycle path; production
+checkpoints landed in order because they reuse `SqlQueryExecution`, the graph
+runner, and the same cleanup state. Independent test-fixture and read-only
+reviews used disjoint ownership.
 
 | Checkpoint | Deliverable | Primary ownership | Completion gate | Estimate |
 | --- | --- | --- | --- | ---: |
@@ -402,7 +409,7 @@ in parallel with disjoint ownership.
 | **P4C-7B — grouped consumers (accepted at `0ac95ec`)** | Filter before aggregate/group state mutation, then run ordinary `GROUP BY`, `HAVING`, and `DISTINCT` behavior over accepted rows. | grouped execution, aggregate/group accumulator, distinct adapter | No rejected/error row changes an accumulator, key, group, distinct set, or public result; Unicode and NULL keys remain owned through copying | 1–1.5 days |
 | **P4C-7C — ordering and spill (accepted at `f172c7e`)** | Feed accepted owned rows into the existing sort workspace/spill path and release only after tuple encoding has copied every value. | `SqlSortExecution`, existing sort workspace/spill adapters | In-memory and spilled order are equivalent; Unicode survives source advancement; an error appends/publishes no partial sort row and cleanup remains child-before-sort | 1–1.5 days |
 | **P4C-7D — P3 pipeline (accepted at `1e10f51`)** | Evaluate the graph at the deepest physical source, copy the accepted row into the block row, and skip the already-consumed deepest predicate in its projector. Parent P3 predicates remain ordinary. | `SqlBlockSource`, deepest join/table stage, block projector/pipeline cleanup | Direct and P3 results agree; aggregate/order consumers above P3 see one filtered stream; errors append no block/store row and graph resources close before the physical source/store | 1.5–2.5 days |
-| **P4C-7E — consumer checkpoint** | Run the cross-consumer equivalence, failure atomicity, reuse, allocation, and design-debt matrix and remove stale status expectations. | focused consumer tests and lead integration | All P4C-7 routes use one graph runner with no duplicate predicate carrier or second executor; affected suites and independent review are green | 0.5–1 day |
+| **P4C-7E — consumer checkpoint (accepted; no production delta)** | Run the cross-consumer equivalence, failure atomicity, reuse, allocation, and design-debt matrix and remove stale status expectations. | focused consumer tests and lead integration | All P4C-7 routes use one graph runner with no duplicate predicate carrier or second executor; affected suites and independent review are green | 0.5–1 day |
 
 The following boundaries are fixed for every P4C-7 checkpoint:
 
