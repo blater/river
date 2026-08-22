@@ -347,7 +347,8 @@ they touch shared query lifecycle and consumer routing.
    direct point/stream projection, scalar and grouped aggregation, `HAVING`,
    `DISTINCT`, sort/spill, and deepest P3 publication. Consumers use the owned
    evaluated row until all values are copied, then release it. A nested error
-   publishes no aggregate, group, sort/store row, or point result.
+   publishes no aggregate, group, sort/store row, or point result. Implement
+   this through the five serialized checkpoints below.
 2. **P4C-8 — lifecycle and allocation hardening.** Prove eager all-program
    preflight before any scan; lazy row-time error/short-circuit behavior;
    terminal status repetition; close-failure retry; text/cache/frame erasure;
@@ -358,6 +359,42 @@ they touch shared query lifecycle and consumer routing.
    clean-checkout policy, then obtain independent relational-semantics and
    performance/allocation verdicts on the exact commit. Update conformance,
    status, roadmap, and limitations only after those gates are green.
+
+#### P4C-7 implementation checkpoints
+
+P4C-7 has no open architecture decision and is ready to start. One lead
+integrator owns the shared lifecycle path; production checkpoints land in
+order because they reuse `SqlQueryExecution`, the graph runner, and the same
+cleanup state. Independent test-fixture and read-only review work may proceed
+in parallel with disjoint ownership.
+
+| Checkpoint | Deliverable | Primary ownership | Completion gate | Estimate |
+| --- | --- | --- | --- | ---: |
+| **P4C-7A — route audit, direct and point** | Freeze the current consumer-route matrix, then route point select, direct streaming projection, and scalar aggregate inputs through the graph once. Replace the stale point-subquery rejection with successful execution on the admitted graph. | `SqlQueryExecution`, point select/aggregate execution, direct scan path | Every admitted execution route has one named graph-filter owner; point and streaming rows match table-scan semantics; rejected rows release owned snapshots; nested errors repeat, publish no row/result/count, close, and permit same-session reuse | 1–1.5 days |
+| **P4C-7B — grouped consumers** | Filter before aggregate/group state mutation, then run ordinary `GROUP BY`, `HAVING`, and `DISTINCT` behavior over accepted rows. | grouped execution, aggregate/group accumulator, distinct adapter | No rejected/error row changes an accumulator, key, group, distinct set, or public result; Unicode and NULL keys remain owned through copying | 1–1.5 days |
+| **P4C-7C — ordering and spill** | Feed accepted owned rows into the existing sort workspace/spill path and release only after tuple encoding has copied every value. | `SqlSortExecution`, existing sort workspace/spill adapters | In-memory and spilled order are equivalent; Unicode survives source advancement; an error appends/publishes no partial sort row and cleanup remains child-before-sort | 1–1.5 days |
+| **P4C-7D — P3 pipeline** | Evaluate the graph at the deepest physical source, copy the accepted row into the block row, and skip the already-consumed deepest predicate in its projector. Parent P3 predicates remain ordinary. | `SqlBlockSource`, deepest join/table stage, block projector/pipeline cleanup | Direct and P3 results agree; aggregate/order consumers above P3 see one filtered stream; errors append no block/store row and graph resources close before the physical source/store | 1.5–2.5 days |
+| **P4C-7E — consumer checkpoint** | Run the cross-consumer equivalence, failure atomicity, reuse, allocation, and design-debt matrix and remove stale status expectations. | focused consumer tests and lead integration | All P4C-7 routes use one graph runner with no duplicate predicate carrier or second executor; affected suites and independent review are green | 0.5–1 day |
+
+The following boundaries are fixed for every P4C-7 checkpoint:
+
+- The executable graph root is `sourceBlockCount() - 1`. Direct consumers
+  filter there; P3 filters at its deepest physical source. No later adapter
+  evaluates that root predicate again.
+- P4C predicate-subquery edges remain `WHERE` graph leaves. P4C-7B makes a
+  nested-filtered input feed the existing outer `HAVING`; it does not admit
+  subquery syntax inside `HAVING`.
+- After a successful predicate evaluation, matched and rejected paths both
+  use/release the graph-owned evaluated row correctly. Consumers release only
+  after copying all fixed and text values. A terminal evaluation failure
+  retains ownership for the existing cleanup path and publishes nothing.
+- The former point case `id IN (SELECT id ...)` is admitted P4C SQL and must
+  execute successfully; neither `FEATURE_NOT_SUPPORTED` nor
+  `INVALID_EXTERNAL_INPUT` is its final contract.
+- Normal runtime error repetition, no-publication, close, and reuse belong to
+  P4C-7. Injected close failures, exhaustive erase/high-water checks, retained
+  heap deltas, checkpoint/reopen, and the full allocation envelope remain the
+  explicit P4C-8 hardening boundary.
 
 The branch may be committed at the numbered internal waypoints, but Alpha 2 is
 promotable only as the complete C1-C4 vertical slice. Durable subquery views,
