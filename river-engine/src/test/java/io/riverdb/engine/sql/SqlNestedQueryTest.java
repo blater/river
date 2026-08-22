@@ -58,13 +58,13 @@ final class SqlNestedQueryTest {
             explain));
     assertEquals(StatusCode.OK, session.closeScan(explain, result));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.CONFLICT,
         session.execute(
             "SELECT o.id FROM names o WHERE EXISTS "
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",
             result));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.CONFLICT,
         session.execute(
             "SELECT o.id FROM names o WHERE o.id="
                 + "(SELECT i.id FROM names i WHERE i.id=o.id)",

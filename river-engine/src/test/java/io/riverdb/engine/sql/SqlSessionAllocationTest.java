@@ -388,6 +388,22 @@ final class SqlSessionAllocationTest {
     assertTrue(
         joinedAllocated <= 512,
         "warmed joined parent/child subquery allocated bytes: " + joinedAllocated);
+    assertGraphPointAndScalarAggregate(session, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPoint(session, result);
+      exerciseGraphScalarAggregate(session, result);
+    }
+    long graphPointBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPoint(session, result);
+      exerciseGraphScalarAggregate(session, result);
+    }
+    long graphPointAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphPointBefore;
+    assertTrue(
+        graphPointAllocated <= 512,
+        "warmed graph point/scalar aggregate allocated bytes: "
+            + graphPointAllocated);
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
@@ -487,6 +503,42 @@ final class SqlSessionAllocationTest {
     allocationGuard += session.execute(
         "SELECT COUNT(*) FROM t WHERE region=7 AND balance=10", result).ordinal();
     allocationGuard += result.value();
+  }
+
+  private static void exerciseGraphPoint(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT t.id FROM t WHERE t.region IN "
+            + "(SELECT r.region FROM raw_labels r WHERE r.id=t.id)",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void assertGraphPointAndScalarAggregate(
+      SqlSession session, SqlExecutionResult result) {
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT t.id FROM t WHERE t.region IN "
+                + "(SELECT r.region FROM raw_labels r WHERE r.id=t.id)",
+            result));
+    assertEquals(1, result.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT COUNT(*) FROM t WHERE EXISTS "
+                + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)",
+            result));
+    assertEquals(1, result.valueAt(0));
+  }
+
+  private static void exerciseGraphScalarAggregate(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(
+        "SELECT COUNT(*) FROM t WHERE EXISTS "
+            + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)",
+        result).ordinal();
+    allocationGuard += result.valueAt(0);
   }
 
   private static void exerciseText(SqlSession session, SqlExecutionResult result) {

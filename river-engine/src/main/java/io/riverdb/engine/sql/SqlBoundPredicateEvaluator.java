@@ -118,6 +118,10 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
     subqueries.releaseRow(query.sourceBlockCount() - 1);
   }
 
+  boolean hasResources() {
+    return subqueries.hasResources();
+  }
+
   boolean matchesJoinWhere(SqlJoinRoleRows rows) {
     joinStatus = booleans.matchesJoin(
         joinCommand,

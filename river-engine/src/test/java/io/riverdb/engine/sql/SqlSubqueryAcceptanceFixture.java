@@ -60,7 +60,8 @@ final class SqlSubqueryAcceptanceFixture {
   private void seed() {
     execute(
         "CREATE TABLE outer_rows "
-            + "(id BIGINT PRIMARY KEY,value BIGINT,region BIGINT)");
+            + "(id BIGINT PRIMARY KEY,value BIGINT,region BIGINT,"
+            + "label VARCHAR(32))");
     execute(
         "CREATE TABLE inner_rows "
             + "(id BIGINT PRIMARY KEY,value BIGINT,region BIGINT)");
@@ -69,7 +70,8 @@ final class SqlSubqueryAcceptanceFixture {
             + "(id BIGINT PRIMARY KEY,owner BIGINT,value BIGINT)");
     execute(
         "INSERT INTO outer_rows VALUES "
-            + "(1,10,1),(2,20,1),(3,NULL,2),(4,40,3)");
+            + "(1,10,1,'first'),(2,20,1,'second'),"
+            + "(3,NULL,2,'unknown'),(4,40,3,'東京-🌊-résumé')");
     execute(
         "INSERT INTO inner_rows VALUES "
             + "(10,NULL,1),(11,10,1),(12,30,2),(13,10,2)");

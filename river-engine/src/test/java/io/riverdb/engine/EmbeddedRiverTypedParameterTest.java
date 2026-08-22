@@ -197,7 +197,7 @@ final class EmbeddedRiverTypedParameterTest {
         StatusCode.PARAMETER_COUNT_MISMATCH,
         session.execute("SELECT id FROM typed_values WHERE id=?", none, command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.CONFLICT,
         session.execute(
             "SELECT d.id FROM (SELECT id FROM typed_values WHERE id=?) d",
             key,

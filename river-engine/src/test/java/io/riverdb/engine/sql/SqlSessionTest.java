@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -1784,11 +1785,20 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
     assertEquals(StatusCode.OK, unindexedOrder.reset());
     assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
+        StatusCode.OK,
         session.beginScan(
             "SELECT id FROM events WHERE amount="
                 + "(SELECT category FROM events WHERE category=10)",
             unindexedOrder));
+    assertEquals(
+        StatusCode.CARDINALITY_VIOLATION,
+        session.nextScan(unindexedOrder, orderedRow));
+    assertFalse(orderedRow.isAvailable());
+    assertEquals(
+        StatusCode.CARDINALITY_VIOLATION,
+        session.nextScan(unindexedOrder, orderedRow));
+    assertFalse(orderedRow.isAvailable());
+    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
     assertEquals(StatusCode.OK, unindexedOrder.reset());
     assertUnindexedRows(
         session,
