@@ -1,8 +1,8 @@
 # M5 P4C robust subquery delivery plan
 
-Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7B are
-accepted on `feature/p4c-subqueries` at `0ac95ec`. Alpha 2 remains incomplete;
-the next production task is P4C-7C.
+Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7C are
+accepted on `feature/p4c-subqueries` at `f172c7e`. Alpha 2 remains incomplete;
+the next production task is P4C-7D.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,7 +11,7 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `0ac95ec` contains accepted P4C-0 through P4C-7B:
+- `feature/p4c-subqueries` at `f172c7e` contains accepted P4C-0 through P4C-7C:
   canonical graph tests, lexical marker ordering, `(block, role, column)` scope
   binding, computed child projection, contract-level semantics fixtures, and
   joined root/child graph execution through the common n-table join source.
@@ -41,7 +41,14 @@ allocation review is required before promotion.
   warmed allocation, the full 283-test engine suite, and independent semantics
   and architecture/allocation reviews are green. Graph-bearing P3
   GROUP/DISTINCT remains fail-closed until P4C-7D.
-- The next implementation gate is P4C-7C below. The former grouped-HAVING
+- P4C-7C completes direct outer ordered consumers across indexed streaming,
+  materialized in-memory sort, existing spill/merge, and joined input. It
+  preserves exact NULL, Unicode, computed-key, ASC/DESC/LIMIT, failure/reuse,
+  and copy-before-release semantics. The full 290-test engine suite, exact
+  1,000/1,025/1,100-row sort and bounded allocation gates, and independent
+  semantics and architecture/allocation reviews are green. Graph-bearing P3
+  ORDER remains fail-closed until P4C-7D.
+- The next implementation gate is P4C-7D below. The former grouped-HAVING
   null-zone and `temporal_derived` parser/reopen regressions were repaired in
   `1a51d8a`; the stale point, derived-parameter, and eager-cardinality status
   oracles are now aligned with admitted execution semantics.
@@ -385,7 +392,7 @@ in parallel with disjoint ownership.
 | --- | --- | --- | --- | ---: |
 | **P4C-7A — route audit, direct and point (accepted at `1378176`)** | Freeze the current consumer-route matrix, then route point select, direct streaming projection, and scalar aggregate inputs through the graph once. Replace the stale point-subquery rejection with successful execution on the admitted graph. | `SqlQueryExecution`, point select/aggregate execution, direct scan path | Every admitted execution route has one named graph-filter owner; point and streaming rows match table-scan semantics; rejected rows release owned snapshots; nested errors repeat, publish no row/result/count, close, and permit same-session reuse | 1–1.5 days |
 | **P4C-7B — grouped consumers (accepted at `0ac95ec`)** | Filter before aggregate/group state mutation, then run ordinary `GROUP BY`, `HAVING`, and `DISTINCT` behavior over accepted rows. | grouped execution, aggregate/group accumulator, distinct adapter | No rejected/error row changes an accumulator, key, group, distinct set, or public result; Unicode and NULL keys remain owned through copying | 1–1.5 days |
-| **P4C-7C — ordering and spill** | Feed accepted owned rows into the existing sort workspace/spill path and release only after tuple encoding has copied every value. | `SqlSortExecution`, existing sort workspace/spill adapters | In-memory and spilled order are equivalent; Unicode survives source advancement; an error appends/publishes no partial sort row and cleanup remains child-before-sort | 1–1.5 days |
+| **P4C-7C — ordering and spill (accepted at `f172c7e`)** | Feed accepted owned rows into the existing sort workspace/spill path and release only after tuple encoding has copied every value. | `SqlSortExecution`, existing sort workspace/spill adapters | In-memory and spilled order are equivalent; Unicode survives source advancement; an error appends/publishes no partial sort row and cleanup remains child-before-sort | 1–1.5 days |
 | **P4C-7D — P3 pipeline** | Evaluate the graph at the deepest physical source, copy the accepted row into the block row, and skip the already-consumed deepest predicate in its projector. Parent P3 predicates remain ordinary. | `SqlBlockSource`, deepest join/table stage, block projector/pipeline cleanup | Direct and P3 results agree; aggregate/order consumers above P3 see one filtered stream; errors append no block/store row and graph resources close before the physical source/store | 1.5–2.5 days |
 | **P4C-7E — consumer checkpoint** | Run the cross-consumer equivalence, failure atomicity, reuse, allocation, and design-debt matrix and remove stale status expectations. | focused consumer tests and lead integration | All P4C-7 routes use one graph runner with no duplicate predicate carrier or second executor; affected suites and independent review are green | 0.5–1 day |
 
@@ -423,6 +430,13 @@ The following boundaries are fixed for every P4C-7 checkpoint:
   P4C-7. Injected close failures, exhaustive erase/high-water checks, retained
   heap deltas, checkpoint/reopen, and the full allocation envelope remain the
   explicit P4C-8 hardening boundary.
+- P4C-7D must repair and pin the successful graph-bearing P3 to subsequent
+  graph-consumer handoff. The current empty-result reuse defect reproduces on
+  the clean pre-P4C-7C base, so it is not an ordering/spill regression.
+- P4C-8 retains persistent spill scratch and injected spill-cleanup fault
+  hardening. P4C-7C proves zero steady-state allocation for in-memory sort and
+  bounded per-statement file/channel setup with no object-per-row growth for
+  the existing spill path; it does not introduce a new scratch-file owner.
 
 The branch may be committed at the numbered internal waypoints, but Alpha 2 is
 promotable only as the complete C1-C4 vertical slice. Durable subquery views,
