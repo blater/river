@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlQuery;
 import io.riverdb.storage.heap.HeapRowResult;
 
-/** Owns the independent Boolean evaluator and workspace for each graph block. */
+/** Owns one independent Boolean evaluator and workspace per graph block. */
 final class SqlSubqueryPredicateBank {
   private final SqlBooleanPredicateWorkspace[] workspaces =
       new SqlBooleanPredicateWorkspace[SqlQuery.MAXIMUM_QUERY_BLOCKS];
@@ -85,13 +85,12 @@ final class SqlSubqueryPredicateBank {
   }
 
   private StatusCode prepareTable(int block) {
-    int frame = query.blockDepth(block) - 1;
-    if (workspaces[frame] == null) {
-      workspaces[frame] = new SqlBooleanPredicateWorkspace(expressions, temporal);
+    if (workspaces[block] == null) {
+      workspaces[block] = new SqlBooleanPredicateWorkspace(expressions, temporal);
     }
     if (evaluators[block] == null) {
       evaluators[block] = new SqlBooleanPredicateEvaluator(
-          workspaces[frame], temporal);
+          workspaces[block], temporal);
       matches[block] = new SqlBooleanPredicateEvaluator.Match();
     }
     return evaluators[block].prepare(

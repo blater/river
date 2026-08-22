@@ -160,7 +160,7 @@ final class SqlSubqueryOrderedConsumerTest {
   }
 
   @Test
-  void keepsChildAndP3OrderClosedWhilePreservingUnorderedP3(
+  void admitsP3ConsumersWhileKeepingChildOrderClosed(
       @TempDir Path root) {
     SqlSubqueryAcceptanceFixture fixture = smallFixture(root);
 
@@ -169,30 +169,32 @@ final class SqlSubqueryOrderedConsumerTest {
         "SELECT o.id FROM order_rows o WHERE EXISTS "
             + "(SELECT c.id FROM order_child c WHERE c.owner=o.id ORDER BY c.id)",
         StatusCode.FEATURE_NOT_SUPPORTED);
-    assertBegin(
+    assertFixedRows(
         fixture,
         "SELECT rank,COUNT(*) FROM "
             + "(SELECT o.rank FROM order_rows o WHERE " + SMALL_GRAPH + ") d "
             + "GROUP BY rank",
-        StatusCode.FEATURE_NOT_SUPPORTED);
+        new long[] {10, 30, 50, 60},
+        new long[] {1, 1, 1, 1});
     assertIds(
         fixture,
         "SELECT id FROM order_rows o WHERE " + SMALL_GRAPH + " ORDER BY rank",
         2, 1, 5, 6);
-    assertBegin(
+    assertIds(
         fixture,
         "SELECT DISTINCT rank FROM "
             + "(SELECT o.rank FROM order_rows o WHERE " + SMALL_GRAPH + ") d",
-        StatusCode.FEATURE_NOT_SUPPORTED);
+        10, 30, 50, 60);
     assertIds(
         fixture,
         "SELECT id FROM order_rows o WHERE " + SMALL_GRAPH + " ORDER BY rank",
         2, 1, 5, 6);
-    assertBegin(
+    assertFixedRows(
         fixture,
-        "SELECT d.id FROM (SELECT o.id,o.rank FROM order_rows o WHERE "
+        "SELECT d.id,d.rank FROM (SELECT o.id,o.rank FROM order_rows o WHERE "
             + SMALL_GRAPH + ") d ORDER BY rank",
-        StatusCode.FEATURE_NOT_SUPPORTED);
+        new long[] {2, 1, 5, 6},
+        new long[] {10, 30, 50, 60});
     assertIds(
         fixture,
         "SELECT id FROM order_rows o WHERE " + SMALL_GRAPH + " ORDER BY rank",
@@ -207,7 +209,20 @@ final class SqlSubqueryOrderedConsumerTest {
         "SELECT d.id FROM (SELECT o.id FROM order_rows o WHERE "
             + SMALL_GRAPH + ") d",
         1, 2, 5, 6);
-    // P4C-7D owns successful graph-P3 to graph-consumer topology handoff.
+    long[] counters = edgeCounters(
+        fixture,
+        "EXPLAIN ANALYZE SELECT id FROM order_rows o WHERE "
+            + SMALL_GRAPH + " ORDER BY rank");
+    assertEquals(6, counters[0], "all physical parent candidates reached the graph");
+    assertEquals(6, counters[1], "the correlated child executed for every candidate");
+    assertEquals(30, counters[2], "six full child scans reached every candidate");
+    assertEquals(5, counters[3], "five child rows passed their residual filter");
+    assertEquals(6, counters[4], "all predicate results completed");
+    assertEquals(4, counters[5], "four accepted rows reached the direct consumer");
+    assertIds(
+        fixture,
+        "SELECT id FROM order_rows o WHERE " + SMALL_GRAPH + " ORDER BY rank",
+        2, 1, 5, 6);
     fixture.close();
   }
 

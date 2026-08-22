@@ -30,6 +30,19 @@ final class SqlSessionAllocationTest {
           + "WHERE EXISTS (SELECT r.id FROM raw_labels r "
           + "JOIN nested_labels n ON r.id=n.id "
           + "WHERE r.region=t.region AND n.region=t.region)";
+  private static final String GRAPH_P3_SOURCE =
+      "SELECT t.id,t.balance FROM t WHERE EXISTS "
+          + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)";
+  private static final String GRAPH_P3_PROJECTION =
+      "SELECT d.id,d.balance FROM (" + GRAPH_P3_SOURCE + ") d";
+  private static final String GRAPH_P3_AGGREGATE =
+      "SELECT SUM(balance+1) FROM (" + GRAPH_P3_SOURCE + ") d";
+  private static final String GRAPH_P3_ORDER =
+      "SELECT d.id,d.balance+1 AS sorted FROM (" + GRAPH_P3_SOURCE
+          + ") d ORDER BY sorted";
+  private static final String GRAPH_DIRECT_AFTER_P3 =
+      "SELECT t.id FROM t WHERE EXISTS "
+          + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)";
   private static volatile long allocationGuard;
 
   @Test
@@ -419,6 +432,52 @@ final class SqlSessionAllocationTest {
         graphGroupedAllocated <= 512,
         "warmed graph group/distinct allocated bytes: "
             + graphGroupedAllocated);
+    assertGraphPipelineConsumers(session, cursor, scanRow, result);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineProjection(session, cursor, scanRow, result);
+    }
+    long graphProjectionBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineProjection(session, cursor, scanRow, result);
+    }
+    long graphProjectionAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphProjectionBefore;
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineAggregate(session, result);
+    }
+    long graphAggregateBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineAggregate(session, result);
+    }
+    long graphAggregateAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphAggregateBefore;
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineOrder(session, cursor, scanRow, result);
+    }
+    long graphOrderBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineOrder(session, cursor, scanRow, result);
+    }
+    long graphOrderAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphOrderBefore;
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineHandoff(session, cursor, scanRow, result);
+    }
+    long graphHandoffBefore = bean.getThreadAllocatedBytes(threadId);
+    for (int index = 0; index < 100; index++) {
+      exerciseGraphPipelineHandoff(session, cursor, scanRow, result);
+    }
+    long graphHandoffAllocated =
+        bean.getThreadAllocatedBytes(threadId) - graphHandoffBefore;
+    assertTrue(
+        graphProjectionAllocated <= 512
+            && graphAggregateAllocated <= 512
+            && graphOrderAllocated <= 512
+            && graphHandoffAllocated <= 512,
+        "warmed graph P3 bytes: projection=" + graphProjectionAllocated
+            + ", aggregate=" + graphAggregateAllocated
+            + ", order=" + graphOrderAllocated
+            + ", handoff=" + graphHandoffAllocated);
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 0; index < 100; index++) {
       exercise(session, result);
@@ -707,6 +766,83 @@ final class SqlSessionAllocationTest {
                 + "(SELECT r.id FROM raw_labels r WHERE r.region=t.region)",
             result));
     assertEquals(1, result.valueAt(0));
+  }
+
+  private static void assertGraphPipelineConsumers(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(GRAPH_P3_PROJECTION, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(10, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(GRAPH_P3_AGGREGATE, result));
+    assertEquals(11, result.valueAt(0));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(GRAPH_P3_ORDER, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(11, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(GRAPH_DIRECT_AFTER_P3, cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
+  private static void exerciseGraphPipelineProjection(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(GRAPH_P3_PROJECTION, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0) + row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseGraphPipelineAggregate(
+      SqlSession session, SqlExecutionResult result) {
+    allocationGuard += session.execute(GRAPH_P3_AGGREGATE, result).ordinal();
+    allocationGuard += result.valueAt(0);
+  }
+
+  private static void exerciseGraphPipelineOrder(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(GRAPH_P3_ORDER, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0) + row.valueAt(1);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+  }
+
+  private static void exerciseGraphPipelineHandoff(
+      SqlSession session,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      SqlExecutionResult result) {
+    exerciseGraphPipelineProjection(session, cursor, row, result);
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(GRAPH_DIRECT_AFTER_P3, cursor).ordinal();
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += row.valueAt(0);
+    allocationGuard += session.nextScan(cursor, row).ordinal();
+    allocationGuard += session.closeScan(cursor, result).ordinal();
   }
 
   private static void exerciseGraphScalarAggregate(

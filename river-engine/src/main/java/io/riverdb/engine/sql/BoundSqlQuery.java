@@ -216,6 +216,8 @@ final class BoundSqlQuery {
     private boolean descending;
     private final TableDefinition[] roleTables =
         new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
+    private final TableDefinition[] ownedRoleTables =
+        new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
     private final boolean[] ownsRoleTable =
         new boolean[SqlJoinChain.MAXIMUM_JOIN_ROLES];
     private int projection = -1;
@@ -284,7 +286,8 @@ final class BoundSqlQuery {
         if (ownsRoleTable[role] && roleTables[role] != null) {
           roleTables[role].reset();
         }
-        if (!ownsRoleTable[role]) roleTables[role] = null;
+        roleTables[role] = null;
+        ownsRoleTable[role] = false;
       }
       projection = -1;
       projectionType = 0;
@@ -299,12 +302,13 @@ final class BoundSqlQuery {
 
     TableDefinition writableTable(int role) {
       if (role < 0 || role >= roleTables.length) return null;
-      if (roleTables[role] == null || !ownsRoleTable[role]) {
-        roleTables[role] = new TableDefinition();
-        ownsRoleTable[role] = true;
+      if (ownedRoleTables[role] == null) {
+        ownedRoleTables[role] = new TableDefinition();
       }
-      roleTables[role].reset();
-      return roleTables[role];
+      ownedRoleTables[role].reset();
+      roleTables[role] = ownedRoleTables[role];
+      ownsRoleTable[role] = true;
+      return ownedRoleTables[role];
     }
 
     void bindRoleTable(int role, TableDefinition definition) {

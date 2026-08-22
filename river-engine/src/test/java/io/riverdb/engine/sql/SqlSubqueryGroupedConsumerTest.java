@@ -121,7 +121,7 @@ final class SqlSubqueryGroupedConsumerTest {
   }
 
   @Test
-  void admitsDirectComputedConsumersButKeepsP3AndChildShapesClosed(
+  void admitsDirectAndP3ComputedConsumersButKeepsChildShapesClosed(
       @TempDir Path root) {
     SqlSubqueryAcceptanceFixture fixture = groupedFixture(root);
 
@@ -178,17 +178,19 @@ final class SqlSubqueryGroupedConsumerTest {
         "SELECT o.id FROM group_rows o WHERE EXISTS "
             + "(SELECT c.id FROM group_child c ORDER BY c.id)",
         StatusCode.FEATURE_NOT_SUPPORTED);
-    assertBegin(
+    assertGroups(
         fixture,
         "SELECT d.bucket+1, COUNT(*) FROM "
             + "(SELECT o.bucket FROM group_rows o WHERE " + GRAPH + ") d "
             + "GROUP BY d.bucket+1",
-        StatusCode.FEATURE_NOT_SUPPORTED);
-    assertBegin(
+        new long[] {11, 21},
+        new long[] {2, 3});
+    assertDistinctLongs(
         fixture,
         "SELECT DISTINCT d.bucket+1 FROM "
             + "(SELECT o.bucket FROM group_rows o WHERE " + GRAPH + ") d",
-        StatusCode.FEATURE_NOT_SUPPORTED);
+        new long[] {11, 21},
+        0);
 
     fixture.close();
   }
