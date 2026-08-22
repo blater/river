@@ -1,8 +1,8 @@
 # M5 P4C robust subquery delivery plan
 
-Status: Alpha 2 implementation contract approved. P4C-0 through P4C-5 are
-accepted on `feature/p4c-subqueries` at `75105de`. Alpha 2 remains incomplete;
-the next production task is P4C-6.
+Status: Alpha 2 implementation contract approved. P4C-0 through P4C-6 are
+accepted on `feature/p4c-subqueries` at `f85c499`. Alpha 2 remains incomplete;
+the next production task is P4C-7.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,7 +11,7 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `75105de` contains accepted P4C-0 through P4C-5:
+- `feature/p4c-subqueries` at `f85c499` contains accepted P4C-0 through P4C-6:
   canonical graph tests, lexical marker ordering, `(block, role, column)` scope
   binding, computed child projection, contract-level semantics fixtures, and
   joined root/child graph execution through the common n-table join source.
@@ -23,7 +23,11 @@ allocation review is required before promotion.
   `EXISTS` projections, full membership 3VL, per-edge 1,024/1,025 enforcement,
   bounded uncorrelated replay/fallback, all-family values, Unicode erasure,
   temporal failure/reuse, and warmed allocation.
-- The next implementation gate is P4C-6 below. The affected
+- P4C-6 adds prepare-stable safe primary/index child access with residual
+  rechecks and conservative TABLE fallback, plus a deterministic six-row
+  per-edge `EXPLAIN [ANALYZE]` shape and truthful cache/scan/result/parent
+  counters.
+- The next implementation gate is P4C-7 below. The affected
   focused suites and design-debt checks are green. The former grouped-HAVING
   null-zone and `temporal_derived` parser/reopen regressions were repaired in
   `1a51d8a`. Full-engine promotion still has one baseline non-JOIN point
@@ -332,7 +336,7 @@ plan framework.
 | --- | --- | --- | --- |
 | **P4C-4 (accepted)** | Replace the temporary root/child JOIN rejection with the existing `SqlJoinChainSource` and role rows. Own every active ancestor composite before a child cursor opens; preserve INNER/LEFT semantics, stage-local ON, final WHERE, and retry-safe inner-to-outer close. | `SqlSubqueryFrames`, `SqlSubqueryCandidateEvaluator`, `SqlSubqueryGraphExecution`, n-table source adapters | Joined parent and joined child at 2/3/8 roles, later-role correlation, LEFT-null continuation, Unicode lifetime, terminal failure/reuse, no subquery-only join path |
 | **P4C-5 (accepted)** | Complete scalar/`EXISTS`/membership evaluation, child projection, lazy cache, LIMIT/cardinality, recursive continuation, and resource bounds using the common expression engine. | `SqlSubqueryLeafEvaluator`, `SqlSubqueryValueScanner`, `SqlSubqueryResultCache`, projection execution | Scalar 0/1/2, complete IN/NOT IN 3VL, sibling and descendant replay, 1,024/1,025, long/short text erase, eager-zone versus lazy-runtime precedence |
-| **P4C-6** | Stabilize child access and per-edge plan/counter carriers. Select only safe mandatory raw edges; otherwise use and report TABLE. Plain EXPLAIN binds but never executes. | `SqlSubqueryAccess`, `SqlSubqueryPlan`, plan description tests | Equality/range/extrema equivalence, computed fallback, identical EXPLAIN/ANALYZE shape, truthful invocation/cache/candidate/accepted/result counts |
+| **P4C-6 (accepted)** | Stabilize child access and per-edge plan/counter carriers. Select only safe mandatory raw edges; otherwise use and report TABLE. Plain EXPLAIN binds but never executes. | `SqlSubqueryAccess`, `SqlSubqueryPlan`, plan description tests | Equality/range/extrema equivalence, computed fallback, identical EXPLAIN/ANALYZE shape, truthful invocation/cache/candidate/accepted/result counts |
 
 ### Integration and promotion path
 
