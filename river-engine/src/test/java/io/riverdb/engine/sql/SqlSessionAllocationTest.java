@@ -11,6 +11,7 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
+import io.riverdb.sql.SqlCommand;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Assumptions;
@@ -505,6 +506,168 @@ final class SqlSessionAllocationTest {
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL scan allocated bytes: " + allocated);
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void warmedGraphSortReusesMemoryAndSpillState(@TempDir Path root) {
+    java.lang.management.ThreadMXBean standard = ManagementFactory.getThreadMXBean();
+    Assumptions.assumeTrue(standard instanceof ThreadMXBean);
+    ThreadMXBean bean = (ThreadMXBean) standard;
+    Assumptions.assumeTrue(bean.isThreadAllocatedMemorySupported());
+    bean.setThreadAllocatedMemoryEnabled(true);
+    SqlSubqueryAcceptanceFixture fixture = SqlSubqueryAcceptanceFixture.create(root);
+    seedAllocationSort(fixture);
+    SqlSession session = fixture.session();
+    SqlExecutionResult result = fixture.result();
+    String memory = allocationSortQuery(1);
+    String smallSpill = allocationSortQuery(2);
+    String largeSpill = allocationSortQuery(3);
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertGraphSortRows(session, result, cursor, row, memory, 1_000);
+    assertGraphSortRows(session, result, cursor, row, smallSpill, 1_025);
+    assertGraphSortRows(session, result, cursor, row, largeSpill, 1_100);
+    int warmedRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      warmedRows += exerciseGraphSort(session, result, cursor, row, memory);
+      warmedRows += exerciseGraphSort(session, result, cursor, row, smallSpill);
+      warmedRows += exerciseGraphSort(session, result, cursor, row, largeSpill);
+    }
+    assertEquals(312_500, warmedRows);
+    long threadId = Thread.currentThread().threadId();
+    long before = bean.getThreadAllocatedBytes(threadId);
+    int memoryRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      memoryRows += exerciseGraphSort(session, result, cursor, row, memory);
+    }
+    long memoryAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(100_000, memoryRows);
+    assertTrue(
+        memoryAllocated <= 512,
+        "warmed graph in-memory sort allocated bytes: " + memoryAllocated);
+    before = bean.getThreadAllocatedBytes(threadId);
+    int smallSpillRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      smallSpillRows += exerciseGraphSort(
+          session, result, cursor, row, smallSpill);
+    }
+    long smallSpillAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(102_500, smallSpillRows);
+    assertTrue(
+        smallSpillAllocated <= 262_144,
+        "warmed 1025-row graph spill allocated bytes: " + smallSpillAllocated);
+    before = bean.getThreadAllocatedBytes(threadId);
+    int largeSpillRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      largeSpillRows += exerciseGraphSort(
+          session, result, cursor, row, largeSpill);
+    }
+    long largeSpillAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    assertEquals(110_000, largeSpillRows);
+    assertTrue(
+        largeSpillAllocated <= 262_144,
+        "warmed 1100-row graph spill allocated bytes: " + largeSpillAllocated);
+    long spillDelta = Math.abs(largeSpillAllocated - smallSpillAllocated);
+    assertTrue(
+        spillDelta <= 8_192,
+        "warmed graph spill allocation bytes: small=" + smallSpillAllocated
+            + ", large=" + largeSpillAllocated + ", delta=" + spillDelta
+            + ", extraRows=7500");
+    fixture.close();
+  }
+
+  private static void seedAllocationSort(SqlSubqueryAcceptanceFixture fixture) {
+    fixture.execute(
+        "CREATE TABLE allocation_sort_rows "
+            + "(id BIGINT PRIMARY KEY,rank BIGINT,label VARCHAR(32))");
+    fixture.execute(
+        "CREATE TABLE allocation_sort_accept "
+            + "(id BIGINT PRIMARY KEY,mode BIGINT)");
+    for (int first = 1; first <= 1_100; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
+      int end = Math.min(first + SqlCommand.MAXIMUM_INSERT_ROWS, 1_101);
+      StringBuilder rows = new StringBuilder("INSERT INTO allocation_sort_rows VALUES ");
+      StringBuilder accepted =
+          new StringBuilder("INSERT INTO allocation_sort_accept VALUES ");
+      for (int id = first; id < end; id++) {
+        if (id > first) {
+          rows.append(',');
+          accepted.append(',');
+        }
+        rows.append('(').append(id).append(',');
+        if (id == 1_000) rows.append("NULL");
+        else rows.append(id <= 1_000 ? 1_001L - id : 2_000L + id);
+        rows.append(",'").append(allocationSortLabel(id)).append("')");
+        accepted.append('(').append(id).append(',')
+            .append(id <= 1_000 ? 1 : id <= 1_025 ? 2 : 3).append(')');
+      }
+      fixture.execute(rows.toString());
+      fixture.execute(accepted.toString());
+    }
+  }
+
+  private static String allocationSortQuery(int mode) {
+    return "SELECT id,label,rank+0 AS sorted FROM allocation_sort_rows o WHERE EXISTS "
+        + "(SELECT c.id FROM allocation_sort_accept c "
+        + "WHERE c.id=o.id AND c.mode<=" + mode + ") ORDER BY sorted";
+  }
+
+  private static String allocationSortLabel(int id) {
+    return switch (id % 3) {
+      case 0 -> "東京";
+      case 1 -> "🌊-résumé";
+      default -> "多🙂";
+    };
+  }
+
+  private static void assertGraphSortRows(
+      SqlSession session,
+      SqlExecutionResult result,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      String sql,
+      int count) {
+    assertEquals(StatusCode.OK, cursor.reset());
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor), sql);
+    char[] text = new char[32];
+    for (int ordinal = 0; ordinal < count; ordinal++) {
+      int expected = ordinal < 1_000 ? 1_000 - ordinal : ordinal + 1;
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row), sql);
+      assertEquals(expected, row.valueAt(0), sql);
+      String expectedText = allocationSortLabel(expected);
+      int length = row.copyTextAt(1, text, 0);
+      assertEquals(expectedText.length(), length, sql);
+      for (int index = 0; index < length; index++) {
+        assertEquals(expectedText.charAt(index), text[index], sql);
+      }
+      if (expected == 1_000) assertTrue(row.isNull(2), sql);
+      else {
+        assertEquals(
+            expected <= 1_000 ? 1_001L - expected : 2_000L + expected,
+            row.valueAt(2),
+            sql);
+      }
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row), sql);
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result), sql);
+  }
+
+  private static int exerciseGraphSort(
+      SqlSession session,
+      SqlExecutionResult result,
+      SqlScanCursor cursor,
+      SqlScanRowResult row,
+      String sql) {
+    allocationGuard += cursor.reset().ordinal();
+    allocationGuard += session.beginScan(sql, cursor).ordinal();
+    int count = 0;
+    StatusCode status;
+    while ((status = session.nextScan(cursor, row)).isOk()) {
+      allocationGuard += row.valueAt(0) + row.textLengthAt(1) + row.nullMask();
+      count++;
+    }
+    allocationGuard += status.ordinal() + count;
+    allocationGuard += session.closeScan(cursor, result).ordinal();
+    return count;
   }
 
   private static void exercise(SqlSession session, SqlExecutionResult result) {

@@ -27,7 +27,7 @@ final class SqlProjectionBinder {
       return bindLegacy(command, bound);
     }
     if (SqlRowProjectionBinder.hasComputed(command)
-        && bound.executableQuery.blockCount() > 1) {
+        && bound.executableQuery.sourceBlockCount() > 1) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     return rows.bind(command, bound);
