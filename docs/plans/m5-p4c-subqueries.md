@@ -1,8 +1,8 @@
 # M5 P4C robust subquery delivery plan
 
-Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7A are
-accepted on `feature/p4c-subqueries` at `1378176`. Alpha 2 remains incomplete;
-the next production task is P4C-7B.
+Status: Alpha 2 implementation contract approved. P4C-0 through P4C-7B are
+accepted on `feature/p4c-subqueries` at `0ac95ec`. Alpha 2 remains incomplete;
+the next production task is P4C-7C.
 
 Owner: SQL semantics/execution lead. An independent relational-semantics and
 allocation review is required before promotion.
@@ -11,7 +11,7 @@ allocation review is required before promotion.
 
 - `wip/p4c-subqueries-snapshot` at `794641e` is the immutable pushed recovery
   point for the original P4C work.
-- `feature/p4c-subqueries` at `1378176` contains accepted P4C-0 through P4C-7A:
+- `feature/p4c-subqueries` at `0ac95ec` contains accepted P4C-0 through P4C-7B:
   canonical graph tests, lexical marker ordering, `(block, role, column)` scope
   binding, computed child projection, contract-level semantics fixtures, and
   joined root/child graph execution through the common n-table join source.
@@ -34,7 +34,14 @@ allocation review is required before promotion.
   Terminal no-publication/reuse, Unicode ownership, warmed allocation, the
   full 279-test engine suite, and independent semantics and
   architecture/allocation reviews are green.
-- The next implementation gate is P4C-7B below. The former grouped-HAVING
+- P4C-7B completes direct outer `GROUP BY`, post-group `HAVING`, and `DISTINCT`
+  consumers for ordered and materialized inputs. Filtering occurs exactly once
+  before key, accumulator, distinct-set, or sort-workspace mutation; NULL and
+  Unicode ownership, terminal no-publication/reuse, P3 SELECT preservation,
+  warmed allocation, the full 283-test engine suite, and independent semantics
+  and architecture/allocation reviews are green. Graph-bearing P3
+  GROUP/DISTINCT remains fail-closed until P4C-7D.
+- The next implementation gate is P4C-7C below. The former grouped-HAVING
   null-zone and `temporal_derived` parser/reopen regressions were repaired in
   `1a51d8a`; the stale point, derived-parameter, and eager-cardinality status
   oracles are now aligned with admitted execution semantics.
@@ -377,7 +384,7 @@ in parallel with disjoint ownership.
 | Checkpoint | Deliverable | Primary ownership | Completion gate | Estimate |
 | --- | --- | --- | --- | ---: |
 | **P4C-7A — route audit, direct and point (accepted at `1378176`)** | Freeze the current consumer-route matrix, then route point select, direct streaming projection, and scalar aggregate inputs through the graph once. Replace the stale point-subquery rejection with successful execution on the admitted graph. | `SqlQueryExecution`, point select/aggregate execution, direct scan path | Every admitted execution route has one named graph-filter owner; point and streaming rows match table-scan semantics; rejected rows release owned snapshots; nested errors repeat, publish no row/result/count, close, and permit same-session reuse | 1–1.5 days |
-| **P4C-7B — grouped consumers** | Filter before aggregate/group state mutation, then run ordinary `GROUP BY`, `HAVING`, and `DISTINCT` behavior over accepted rows. | grouped execution, aggregate/group accumulator, distinct adapter | No rejected/error row changes an accumulator, key, group, distinct set, or public result; Unicode and NULL keys remain owned through copying | 1–1.5 days |
+| **P4C-7B — grouped consumers (accepted at `0ac95ec`)** | Filter before aggregate/group state mutation, then run ordinary `GROUP BY`, `HAVING`, and `DISTINCT` behavior over accepted rows. | grouped execution, aggregate/group accumulator, distinct adapter | No rejected/error row changes an accumulator, key, group, distinct set, or public result; Unicode and NULL keys remain owned through copying | 1–1.5 days |
 | **P4C-7C — ordering and spill** | Feed accepted owned rows into the existing sort workspace/spill path and release only after tuple encoding has copied every value. | `SqlSortExecution`, existing sort workspace/spill adapters | In-memory and spilled order are equivalent; Unicode survives source advancement; an error appends/publishes no partial sort row and cleanup remains child-before-sort | 1–1.5 days |
 | **P4C-7D — P3 pipeline** | Evaluate the graph at the deepest physical source, copy the accepted row into the block row, and skip the already-consumed deepest predicate in its projector. Parent P3 predicates remain ordinary. | `SqlBlockSource`, deepest join/table stage, block projector/pipeline cleanup | Direct and P3 results agree; aggregate/order consumers above P3 see one filtered stream; errors append no block/store row and graph resources close before the physical source/store | 1.5–2.5 days |
 | **P4C-7E — consumer checkpoint** | Run the cross-consumer equivalence, failure atomicity, reuse, allocation, and design-debt matrix and remove stale status expectations. | focused consumer tests and lead integration | All P4C-7 routes use one graph runner with no duplicate predicate carrier or second executor; affected suites and independent review are green | 0.5–1 day |
@@ -390,6 +397,16 @@ The following boundaries are fixed for every P4C-7 checkpoint:
 - P4C predicate-subquery edges remain `WHERE` graph leaves. P4C-7B makes a
   nested-filtered input feed the existing outer `HAVING`; it does not admit
   subquery syntax inside `HAVING`.
+- P4C-7B admits the same raw or computed group key, aggregate operand,
+  post-group `HAVING`, and `DISTINCT` expressions already accepted for a
+  direct outer source. Temporary guards distinguish derived/P3 topology with
+  `sourceBlockCount() > 1`; predicate-child blocks alone do not make a direct
+  consumer P3. Child aggregate/group/distinct shapes remain fail-closed.
+- Ordered group/`DISTINCT` input filters in the grouped source and releases
+  the evaluated row immediately after key/aggregate state owns every value.
+  Materialized group/`DISTINCT` input filters only in the existing sort feeder
+  before workspace append; grouped advancement never filters stored tuples a
+  second time.
 - After a successful predicate evaluation, matched and rejected paths both
   use/release the graph-owned evaluated row correctly. Consumers release only
   after copying all fixed and text values. A terminal evaluation failure
