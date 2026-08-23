@@ -1,59 +1,114 @@
 # River
 
-River is a relational database implemented in Java. Its target is a
-high-performance, crash-safe single-node database with SQL and JDBC access,
-followed by a replicated journal and operational failover.
+River is a single-node relational database written in Java. It provides an
+embedded Java API, JDBC access, and a command-line client. Its storage engine
+uses MVCC, heap pages, B+trees, a write-ahead log, and checkpoints.
 
-> **Alpha:** River 0.1.0-alpha.2 is an early, pre-V1 release for evaluation.
-> Its APIs and durable formats may change without compatibility adapters. Read
-> the [known limitations](docs/delivery/alpha-2-known-limitations.md) before
+> River 0.1.0-alpha.2 is an evaluation release. It is incomplete and may break.
+> Read the [release limits](docs/delivery/alpha-2-known-limitations.md) before
 > using it with important data.
 
-For the current embedded lifecycle, SQL client, and essential administration
-rules, see the [River database how-to](HOWTO.md).
+## What works
 
-### Current capabilities
+### Storage and recovery
 
- Storage and recovery:
+- Durable heap and B+tree storage with unique, non-unique, and nullable
+  indexes.
+- Write-ahead logging, group commit, checkpoints, WAL rotation, committed-WAL
+  recovery, and torn checkpoint-page repair.
+- Quiescent backup and restore, and offline physical inspection.
 
-  - Durable control files, Write-Ahead-Log (WAL), group commit, checkpoints and WAL rotation.
-  - Multi-page heap storage and multi-level B+trees.
-  - Unique, duplicate-secondary and nullable indexes.
-  - Recovery of committed operations before page flush.
-  - Torn-checkpoint-page repair and corruption rejection.
-  - Quiescent backup/restore and offline physical inspection.
+### Transactions
 
-  Transactions:
+- Concurrent MVCC sessions with read-committed, repeatable-read, and
+  serializable isolation.
+- Statements and explicit transactions publish DML and catalog changes
+  atomically.
+- Key and range locks, deadlock resolution, statement rollback, and nested
+  named savepoints.
 
-  - Concurrent MVCC sessions.
-  - Read committed, repeatable read and serializable isolation.
-  - Atomic multi-row writes and index/catalog visibility.
-  - Key and range locks, deadlock resolution and conflict handling.
-  - Statement rollback and nested named savepoints.
-  - Version reclamation, vacuum and bounded version-pressure admission.
+### SQL and clients
 
-  Relational and SQL:
+- Tables, indexes, views, sequences, identities, defaults, `NOT NULL`,
+  `CHECK`, `UNIQUE`, and foreign keys.
+- `BIGINT`, `BOOLEAN`, `DECIMAL(p,s)`, `VARCHAR(n)`, `DATE`, `TIME(p)`, local
+  `TIMESTAMP(p)`, and `TIMESTAMP(p) WITH TIME ZONE`.
+- Multi-row `INSERT`, `UPDATE`, and `DELETE`; indexed and scanned predicates;
+  scalar expressions; and SQL three-valued logic.
+- Two-to-eight-role `INNER` and `LEFT` joins with bounded nested-loop, hash,
+  and merge strategies.
+- Aggregation, `GROUP BY`, `HAVING`, `DISTINCT`, ordering, limits, and bounded
+  disk spill.
+- Derived tables and bounded scalar, `EXISTS`, `IN`, `NOT IN`, and correlated
+  subqueries. They can feed projections, aggregates, grouping, ordering,
+  joins, and outer derived-table stages.
+- `ANALYZE`, `EXPLAIN`, and `EXPLAIN ANALYZE` with durable statistics and
+  execution counters.
+- Streaming JDBC 4.3 results and prepared parameters. Loopback clients may use
+  plain transport or TLS 1.3 with token authentication.
 
-  - Transactional tables, columns, indexes, views, sequences and identities.
-  - BIGINT, BOOLEAN, DECIMAL, local and zoned temporal types, nullable values,
-    and bounded UTF-8 VARCHAR.
-  - Defaults, generated identities, NOT NULL, CHECK, UNIQUE and foreign keys.
-  - Multi-row insert, update and delete.
-  - Indexed and unindexed predicates, ranges, IN, OR and conjunctions.
-  - Inner and left joins.
-  - Sorting, disk spill/merge, DISTINCT, grouping, HAVING, counts, sums and extrema.
-  - Derived tables, scalar subqueries, EXISTS, membership and correlated nested queries.
-  - EXPLAIN and EXPLAIN ANALYZE.
+The [SQL conformance profile](docs/compatibility/sql-conformance-profile.md)
+defines the exact SQL grammar and semantics. The
+[JDBC support matrix](docs/compatibility/jdbc-support-matrix.md) lists supported
+conversions, metadata, SQLSTATEs, and deliberate omissions.
 
+## Current limitations in alpha.2
 
-## Build and validation
+| Area | Current limit |
+| --- | --- |
+| Table and result columns | 8 |
+| Encoded table row | 4,096 bytes |
+| Indexed-table capacity | 65,536 physical row/version slots per table |
+| Text | `VARCHAR(n)`, `1 <= n <= 255`; at most 1,020 encoded bytes per value |
+| Join shape | 2–8 left-associative roles |
+| Materialized query stores | 65,536 rows and 256 MiB per bounded store |
+| Network | Loopback only; authenticated access uses TLS 1.3 and a token |
+| JDBC | One live statement per connection; forward-only, read-only results |
+| Operations | Offline backup; no replication, failover, or online migration |
 
-JDK 25 is required. Run the complete initial-phase validation locally:
+## Build and run
+
+River requires JDK 25. Gradle verifies dependency checksums.
+
+Build all module JARs and the CLI distribution:
+
+```sh
+./gradlew assemble
+```
+
+River does not yet ship a standalone server service. A host application opens
+the database through `EmbeddedRiver` and starts `LoopbackRiverServer`. The
+[database how-to](HOWTO.md) gives the lifecycle code and shutdown rules.
+
+After starting a plain loopback server, install and run the SQL client:
+
+```sh
+./gradlew :river-cli:installDist
+river-cli/build/install/river-cli/bin/river-cli 9191 < setup.sql
+```
+
+The CLI reads semicolon-terminated SQL, emits tab-separated rows, and stops at
+the first error. See the [CLI reference](river-cli/README.md) for TLS and token
+authentication.
+
+## Validate a checkout
+
+Run the ordinary test matrix while developing:
+
+```sh
+./gradlew test
+```
+
+Run the clean, reproducible release check at an integration checkpoint:
 
 ```sh
 ./verify
 ```
 
-The command uses the checksum-pinned Gradle wrapper and an isolated
-repository-local Gradle home, then runs a clean compile, static source policy,
-module dependency checks, and all tests. 
+`./verify` rebuilds reproducible archives, runs `clean check`, enforces source
+and dependency policies, and uses an isolated repository-local Gradle home by
+default.
+
+## License
+
+River uses the [GNU Affero General Public License v3](LICENSE).
