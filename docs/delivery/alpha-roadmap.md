@@ -49,7 +49,7 @@ its normative SQL surface is in the
 
 | Area | Limit or restriction |
 | --- | --- |
-| Indexed-table capacity | **65,536 physical row/version slots per table.** Updates consume versions until reclamation, so the live-row envelope can be lower. Exhaustion is explicit rather than unbounded growth. |
+| Indexed-table capacity | The legacy 65,536 physical row/version ceiling is removed in the current capacity slice. The transitional runtime remains bounded by page-address and integer-identity limits and is not yet qualified for billion-row tables. |
 | Table shape | At most 8 columns and a 4,096-byte encoded row. |
 | Join shape | 2–8 left-associative roles; `RIGHT`, `FULL`, `CROSS`, `NATURAL`, `USING`, right-deep trees, multiple joined blocks, and nondeepest joined blocks are unsupported. |
 | Durable view lineage | At most 32 ordered physical role IDs. Durable subquery graphs are unsupported. |

@@ -30,11 +30,12 @@ The complete Alpha 1–Alpha 3 sequence and numeric limits are maintained in the
 
 - This is pre-V1 software. Public APIs and durable formats may change
   incompatibly. River does not provide upgrade adapters for this alpha.
-- A3C-0 freezes capacity formats; it does not yet wire those formats into the
-  runtime. Public SQL tables and results remain limited to 8 columns, indexed
-  tables remain limited to 65,536 physical row/version slots, and a standard
-  one-warehouse TPC-C load is not yet admitted. Those runtime changes begin at
-  A3C-1 and A3C-2.
+- A3C-0 freezes capacity formats; the runtime now removes the legacy 65,536
+  physical row/version ceiling and has audited coverage through 65,537 rows,
+  checkpoint, and reopen. The transitional runtime remains bounded by its
+  page-address and integer-identity paths and is not yet qualified for
+  billion-row tables or a standard one-warehouse TPC-C load. A3C-1 and A3C-2
+  complete the wide-schema and disk-backed scale path.
 - The network service is restricted to authenticated TLS loopback use.
   Non-loopback deployment is unsupported.
 - The complete crash, recovery, isolation-history, fault-injection,
