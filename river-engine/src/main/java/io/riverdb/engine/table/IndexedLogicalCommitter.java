@@ -48,7 +48,7 @@ final class IndexedLogicalCommitter {
     if (!kernel.canAppendRow(rowBytes)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    int rowId = kernel.rowCount() + 1;
+    long rowId = kernel.rowCount() + 1;
     int operationBytes = IndexedWalCodec.INSERT_OPERATION_HEADER_BYTES + rowBytes;
     status = wal.reserve(operationBytes, reservation);
     if (!status.isOk()) {
@@ -86,7 +86,7 @@ final class IndexedLogicalCommitter {
       return status;
     }
     ByteBuffer payload = reservation.writablePayload();
-    int firstRowId = kernel.rowCount() + 1;
+    long firstRowId = kernel.rowCount() + 1;
     encodePendingInserts(mutations, payload, operationBytes, firstRowId);
     status = publishInsert(transactionId, commitSequence, payload, mutations.count() == 1);
     if (status.isOk()) {
@@ -142,7 +142,7 @@ final class IndexedLogicalCommitter {
       PendingMutationBuffer mutations,
       ByteBuffer payload,
       int operationBytes,
-      int firstRowId) {
+      long firstRowId) {
     if (mutations.count() == 1) {
       IndexedWalCodec.encodeInsertHeader(
           payload, mutations.spaceAt(0), mutations.keyAt(0),
@@ -193,7 +193,7 @@ final class IndexedLogicalCommitter {
       return status;
     }
     ByteBuffer payload = reservation.writablePayload();
-    int firstRowId = kernel.rowCount() + 1;
+    long firstRowId = kernel.rowCount() + 1;
     encodeRawInserts(
         payload, spaces, keys, rows, rowStride, rowLengths,
         insertCount, firstRowId, operationBytes);
@@ -265,7 +265,7 @@ final class IndexedLogicalCommitter {
       int rowStride,
       int[] rowLengths,
       int insertCount,
-      int firstRowId,
+      long firstRowId,
       int operationBytes) {
     IndexedWalCodec.encodeInsertBatchHeader(payload, insertCount);
     int outputOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
@@ -301,7 +301,7 @@ final class IndexedLogicalCommitter {
       return status;
     }
     ByteBuffer payload = reservation.writablePayload();
-    int firstRowId = kernel.rowCount() + 1;
+    long firstRowId = kernel.rowCount() + 1;
     encodePendingMutations(mutations, payload, firstRowId, operationBytes);
     status = publishMutations(transactionId, commitSequence, payload);
     if (status.isOk()) {
@@ -324,7 +324,7 @@ final class IndexedLogicalCommitter {
     int operation = mutations.operationAt(index);
     int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
-    int previousRowId = mutations.previousRowIdAt(index);
+    long previousRowId = mutations.previousRowIdAt(index);
     int rowBytes = mutations.rowLengthAt(index);
     if (!validMutation(operation)
         || !OrderedKey.isFiniteSpace(space)
@@ -347,7 +347,7 @@ final class IndexedLogicalCommitter {
   private int earlierPendingInserts(
       PendingMutationBuffer mutations,
       int operation,
-      int previousRowId,
+      long previousRowId,
       int leafPageId,
       int index) {
     if (operation != IndexedWalCodec.MUTATION_INSERT || previousRowId != 0) {
@@ -376,7 +376,7 @@ final class IndexedLogicalCommitter {
   private void encodePendingMutations(
       PendingMutationBuffer mutations,
       ByteBuffer payload,
-      int firstRowId,
+      long firstRowId,
       int operationBytes) {
     IndexedWalCodec.encodeMutationBatchHeader(payload, mutations.count());
     int outputOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
@@ -429,7 +429,7 @@ final class IndexedLogicalCommitter {
       return status;
     }
     ByteBuffer payload = reservation.writablePayload();
-    int firstRowId = kernel.rowCount() + 1;
+    long firstRowId = kernel.rowCount() + 1;
     encodeRawMutations(
         payload,
         operations,
@@ -550,7 +550,7 @@ final class IndexedLogicalCommitter {
       int rowStride,
       int[] rowLengths,
       int mutationCount,
-      int firstRowId,
+      long firstRowId,
       int operationBytes) {
     IndexedWalCodec.encodeMutationBatchHeader(payload, mutationCount);
     int outputOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;

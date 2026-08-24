@@ -28,7 +28,7 @@ final class IndexedTableWalApplier {
     }
     long key = IndexedWalCodec.insertKey(payload);
     int space = IndexedWalCodec.insertSpace(payload);
-    int rowId = IndexedWalCodec.insertRowId(payload);
+    long rowId = IndexedWalCodec.insertRowId(payload);
     int rowBytes = IndexedWalCodec.insertRowBytes(payload);
     if (!OrderedKey.isFiniteSpace(space)
         || !pages.isPresent(IndexedTableKernel.HEAP_PAGE_ID)) {
@@ -69,7 +69,7 @@ final class IndexedTableWalApplier {
       long recordEnd,
       long commitSequence) {
     StatusCode structural = IndexedWalCodec.validateInsertBatch(
-        payload, IndexedTableLimits.MAX_ROWS);
+        payload, IndexedTableLimits.MAX_OPERATION_ROWS);
     if (!structural.isOk()) {
       return structural;
     }
@@ -77,7 +77,7 @@ final class IndexedTableWalApplier {
       return StatusCode.CORRUPTION;
     }
     int insertCount = IndexedWalCodec.batchEntryCount(payload);
-    int firstRowId = table.rowCount() + 1;
+    long firstRowId = table.rowCount() + 1;
     int entryOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
     for (int index = 0; index < insertCount; index++) {
       StatusCode status = validateInsertEntry(
@@ -109,7 +109,7 @@ final class IndexedTableWalApplier {
   }
 
   private StatusCode validateInsertEntry(
-      ByteBuffer payload, int entryOffset, int expectedRowId) {
+      ByteBuffer payload, int entryOffset, long expectedRowId) {
     if (!IndexedWalCodec.validInsertBatchEntry(payload, entryOffset)) {
       return StatusCode.CORRUPTION;
     }
@@ -135,7 +135,7 @@ final class IndexedTableWalApplier {
       long commitSequence) {
     long key = IndexedWalCodec.insertBatchKey(payload, entryOffset);
     int space = IndexedWalCodec.insertBatchSpace(payload, entryOffset);
-    int rowId = IndexedWalCodec.insertBatchRowId(payload, entryOffset);
+    long rowId = IndexedWalCodec.insertBatchRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.insertBatchRowBytes(payload, entryOffset);
     int rowOffset = entryOffset + IndexedWalCodec.INSERT_BATCH_ENTRY_BYTES;
     int leafPageId = table.findLeafPageId(space, key);
@@ -155,7 +155,7 @@ final class IndexedTableWalApplier {
       long recordEnd,
       long commitSequence) {
     StatusCode structural = IndexedWalCodec.validateMutationBatch(
-        payload, IndexedTableLimits.MAX_ROWS);
+        payload, IndexedTableLimits.MAX_OPERATION_ROWS);
     if (!structural.isOk()) {
       return structural;
     }
@@ -163,7 +163,7 @@ final class IndexedTableWalApplier {
       return StatusCode.CORRUPTION;
     }
     int mutationCount = IndexedWalCodec.batchEntryCount(payload);
-    int firstRowId = table.rowCount() + 1;
+    long firstRowId = table.rowCount() + 1;
     int entryOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
     for (int index = 0; index < mutationCount; index++) {
       StatusCode status = validateMutationEntry(
@@ -195,14 +195,14 @@ final class IndexedTableWalApplier {
   }
 
   private StatusCode validateMutationEntry(
-      ByteBuffer payload, int entryOffset, int expectedRowId) {
+      ByteBuffer payload, int entryOffset, long expectedRowId) {
     if (!IndexedWalCodec.validMutationBatchEntry(payload, entryOffset)) {
       return StatusCode.CORRUPTION;
     }
     int operation = IndexedWalCodec.mutationOperation(payload, entryOffset);
     int space = IndexedWalCodec.mutationSpace(payload, entryOffset);
     long key = IndexedWalCodec.mutationKey(payload, entryOffset);
-    int previousRowId = IndexedWalCodec.mutationPreviousRowId(payload, entryOffset);
+    long previousRowId = IndexedWalCodec.mutationPreviousRowId(payload, entryOffset);
     if (!OrderedKey.isFiniteSpace(space)
         || IndexedWalCodec.mutationRowId(payload, entryOffset) != expectedRowId
         || containsEarlierMutationKey(payload, entryOffset, space, key)) {
@@ -225,8 +225,8 @@ final class IndexedTableWalApplier {
     int operation = IndexedWalCodec.mutationOperation(payload, entryOffset);
     int space = IndexedWalCodec.mutationSpace(payload, entryOffset);
     long key = IndexedWalCodec.mutationKey(payload, entryOffset);
-    int rowId = IndexedWalCodec.mutationRowId(payload, entryOffset);
-    int previousRowId = IndexedWalCodec.mutationPreviousRowId(payload, entryOffset);
+    long rowId = IndexedWalCodec.mutationRowId(payload, entryOffset);
+    long previousRowId = IndexedWalCodec.mutationPreviousRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.mutationRowBytes(payload, entryOffset);
     int rowOffset = entryOffset + IndexedWalCodec.MUTATION_BATCH_ENTRY_BYTES;
     int leafPageId = table.findLeafPageId(space, key);

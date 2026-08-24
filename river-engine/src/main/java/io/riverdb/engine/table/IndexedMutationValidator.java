@@ -50,7 +50,7 @@ final class IndexedMutationValidator {
       int operation,
       int space,
       long key,
-      int previousRowId,
+      long previousRowId,
       int earlierEntries,
       boolean previousDeleted) {
     if (operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0) {
@@ -75,7 +75,7 @@ final class IndexedMutationValidator {
       int operation,
       int space,
       long key,
-      int previousRowId,
+      long previousRowId,
       int earlierEntries,
       boolean previousDeleted) {
     if (operation == IndexedWalCodec.MUTATION_INSERT && previousRowId == 0) {
@@ -94,7 +94,7 @@ final class IndexedMutationValidator {
   }
 
   StatusCode validateVacuumAt(
-      int candidateLeafPageId, int space, long key, int rowId) {
+      int candidateLeafPageId, int space, long key, long rowId) {
     leafPageId = candidateLeafPageId;
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;

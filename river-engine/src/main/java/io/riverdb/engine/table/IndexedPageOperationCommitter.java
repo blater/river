@@ -123,7 +123,7 @@ final class IndexedPageOperationCommitter {
     if (!status.isOk()) {
       return status;
     }
-    int previousRowCount = kernel.rowCount();
+    long previousRowCount = kernel.rowCount();
     pages.publish(appendResult.startOffset(), appendResult.endOffset());
     status = kernel.rebuildRowLocations();
     if (!status.isOk()

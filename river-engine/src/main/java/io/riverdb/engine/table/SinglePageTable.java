@@ -100,11 +100,18 @@ public final class SinglePageTable {
   }
 
   public StatusCode fetch(int rowId, HeapRowResult result) {
+    return fetch((long) rowId, result);
+  }
+
+  public StatusCode fetch(long rowId, HeapRowResult result) {
+    if (rowId <= 0 || rowId > Integer.MAX_VALUE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     StatusCode status = pageStore.read(pageRead);
     if (!status.isOk()) {
       return status;
     }
-    return HeapPage.fetch(pageRead.payload(), rowId, result);
+    return HeapPage.fetch(pageRead.payload(), (int) rowId, result);
   }
 
   public StatusCode next(HeapScanCursor cursor, HeapRowResult result) {

@@ -74,7 +74,7 @@ final class IndexedTableMutationStager {
   }
 
   private StatusCode stageMutationEntry(
-      int operation, int space, long key, int previousRowId, ByteBuffer rows,
+      int operation, int space, long key, long previousRowId, ByteBuffer rows,
       int rowOffset, int rowBytes, int rowStride) {
     if (!validMutation(operation) || !OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0 || rowBytes > rowStride
@@ -120,7 +120,7 @@ final class IndexedTableMutationStager {
     int operation = mutations.operationAt(index);
     int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
-    int previousRowId = mutations.previousRowIdAt(index);
+    long previousRowId = mutations.previousRowIdAt(index);
     int rowBytes = mutations.rowLengthAt(index);
     if (!validMutation(operation) || !OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0 || rowBytes > mutations.rowStride()) {
@@ -184,7 +184,7 @@ final class IndexedTableMutationStager {
 
   private StatusCode applyIndexEntry(
       int leafPageId, ByteBuffer leaf, int space, long key,
-      boolean newIndexEntry, int rowId) {
+      boolean newIndexEntry, long rowId) {
     StatusCode status = newIndexEntry
         ? BTreePage.insertLeaf(leaf, space, key, rowId)
         : BTreePage.updateLeaf(leaf, space, key, rowId);

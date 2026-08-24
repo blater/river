@@ -2,10 +2,10 @@ package io.riverdb.engine.table;
 
 /** Caller-owned row identity and commit CSN from one indexed transaction write. */
 public final class IndexedCommitResult {
-  private int rowId;
+  private long rowId;
   private long commitSequence;
 
-  public int rowId() {
+  public long rowId() {
     return rowId;
   }
 
@@ -13,7 +13,7 @@ public final class IndexedCommitResult {
     return commitSequence;
   }
 
-  public void set(int insertedRowId, long committedAt) {
+  public void set(long insertedRowId, long committedAt) {
     rowId = insertedRowId;
     commitSequence = committedAt;
   }

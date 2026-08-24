@@ -38,8 +38,8 @@ final class IndexedVacuumWriter {
       WalGeneration generation,
       IndexedVacuumResult result) {
     failureFences = false;
-    int rowsBefore = kernel.rowCount();
-    int retainedRows = kernel.indexedEntryCount();
+    long rowsBefore = kernel.rowCount();
+    long retainedRows = kernel.indexedEntryCount();
     if (retainedRows < 0 || retainedRows > rowsBefore) {
       return StatusCode.CORRUPTION;
     }
@@ -86,9 +86,9 @@ final class IndexedVacuumWriter {
 
   private StatusCode appendChunks(
       long transactionId,
-      int retainedRows,
+      long retainedRows,
       int chunkCount) {
-    int firstRow = 0;
+    long firstRow = 0;
     for (int chunk = 0; chunk < chunkCount; chunk++) {
       int chunkRows = kernel.vacuumChunkRowCount(firstRow);
       int chunkBytes = kernel.vacuumChunkPayloadBytes(firstRow, chunkRows);
@@ -107,8 +107,8 @@ final class IndexedVacuumWriter {
 
   private StatusCode appendChunk(
       long transactionId,
-      int retainedRows,
-      int firstRow,
+      long retainedRows,
+      long firstRow,
       int chunkRows,
       int chunk,
       int chunkCount,
@@ -146,8 +146,8 @@ final class IndexedVacuumWriter {
   private StatusCode appendCommit(
       long transactionId,
       long commitSequence,
-      int retainedRows,
-      int rowsBefore,
+      long retainedRows,
+      long rowsBefore,
       int chunkCount) {
     StatusCode status = wal.reserve(
         IndexedTableStore.VACUUM_COMMIT_PAYLOAD_BYTES, reservation);
@@ -202,8 +202,8 @@ final class IndexedVacuumWriter {
 
   private StatusCode encodeChunk(
       ByteBuffer payload,
-      int retainedRows,
-      int firstRow,
+      long retainedRows,
+      long firstRow,
       int rowLimit,
       int chunk,
       int chunkCount,

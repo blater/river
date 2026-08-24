@@ -53,7 +53,7 @@ final class IndexedPreparedWriteEncoder {
       return status;
     }
     ByteBuffer payload = reservation.writablePayload();
-    int firstRowId = kernel.rowCount() + rowCount + 1;
+    long firstRowId = kernel.rowCount() + rowCount + 1;
     if (mutations.count() == 1) {
       encodeSingleInsert(payload, mutations, firstRowId);
     } else {
@@ -75,7 +75,7 @@ final class IndexedPreparedWriteEncoder {
   }
 
   private void encodeSingleInsert(
-      ByteBuffer payload, PendingMutationBuffer mutations, int firstRowId) {
+      ByteBuffer payload, PendingMutationBuffer mutations, long firstRowId) {
     int rowBytes = mutations.rowLengthAt(0);
     IndexedWalCodec.encodeInsertHeader(
         payload, mutations.spaceAt(0), mutations.keyAt(0), firstRowId, rowBytes);
@@ -84,7 +84,7 @@ final class IndexedPreparedWriteEncoder {
   }
 
   private void encodeInsertBatch(
-      ByteBuffer payload, PendingMutationBuffer mutations, int firstRowId) {
+      ByteBuffer payload, PendingMutationBuffer mutations, long firstRowId) {
     IndexedWalCodec.encodeInsertBatchHeader(payload, mutations.count());
     int outputOffset = IndexedWalCodec.INSERT_BATCH_HEADER_BYTES;
     for (int index = 0; index < mutations.count(); index++) {
@@ -117,7 +117,7 @@ final class IndexedPreparedWriteEncoder {
     ByteBuffer payload = reservation.writablePayload();
     IndexedWalCodec.encodeMutationBatchHeader(payload, mutations.count());
     int outputOffset = IndexedWalCodec.MUTATION_BATCH_HEADER_BYTES;
-    int firstRowId = kernel.rowCount() + rowCount + 1;
+    long firstRowId = kernel.rowCount() + rowCount + 1;
     for (int index = 0; index < mutations.count(); index++) {
       int rowBytes = mutations.rowLengthAt(index);
       IndexedWalCodec.encodeMutationBatchEntry(
@@ -165,7 +165,7 @@ final class IndexedPreparedWriteEncoder {
       long commitSequence,
       int operationBytes,
       int mutationCount,
-      int firstRowId,
+      long firstRowId,
       HeapInsertResult result) {
     ByteBuffer payload = reservation.writablePayload();
     payload.position(operationBytes);

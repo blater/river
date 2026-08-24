@@ -242,7 +242,7 @@ public final class IndexedTable
     return store.prepareInsert(visibleCommitSequence, space, key, result);
   }
 
-  public synchronized int rowCount() {
+  public synchronized long rowCount() {
     return store.rowCount();
   }
 
@@ -250,7 +250,7 @@ public final class IndexedTable
     return store.obsoleteVersionCount();
   }
 
-  public synchronized int remainingVersionCapacity() {
+  public synchronized long remainingVersionCapacity() {
     return store.remainingVersionCapacity();
   }
 

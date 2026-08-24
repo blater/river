@@ -15,7 +15,7 @@ final class IndexedWalRecovery {
   private static final int HEAP_PAGE_ID = IndexedTableKernel.HEAP_PAGE_ID;
   private static final int MAX_CHANGED_PAGES = IndexedTableLimits.MAX_CHANGED_PAGES;
   private static final int MAX_OPERATION_ROWS = IndexedTableLimits.MAX_OPERATION_ROWS;
-  private static final int MAX_ROWS = IndexedTableLimits.MAX_ROWS;
+  private static final long MAX_ROWS = IndexedTableLimits.MAX_ROWS;
 
   private final LocalWal wal;
   private final IndexedPageSet pages;
@@ -26,8 +26,8 @@ final class IndexedWalRecovery {
   private final CRC32C checksum = new CRC32C();
   private final PageHeader pageHeader = new PageHeader();
   private final LocalWalReadResult walReadResult = new LocalWalReadResult();
-  private int vacuumExpectedRows;
-  private int vacuumAppliedRows;
+  private long vacuumExpectedRows;
+  private long vacuumAppliedRows;
   private int vacuumExpectedChunks;
   private int vacuumAppliedChunks;
   private long vacuumTransactionId;
@@ -201,7 +201,7 @@ final class IndexedWalRecovery {
     }
     int pageCount = IndexedWalCodec.pageOperationPageCount(payload);
     int versionCount = IndexedWalCodec.pageOperationVersionCount(payload);
-    int previousRowCount = kernel.rowCount();
+    long previousRowCount = kernel.rowCount();
     for (int index = 0; index < pageCount; index++) {
       int pageOffset = IndexedWalCodec.pageOperationPageOffset(index);
       StatusCode status = pages.validateRecord(payload, pageOffset, pageHeader, checksum);
@@ -253,8 +253,8 @@ final class IndexedWalRecovery {
     if (transactionId <= 0 || !pages.isPresent(HEAP_PAGE_ID)) {
       return StatusCode.CORRUPTION;
     }
-    int retainedRows = IndexedWalCodec.vacuumRetainedRows(payload);
-    int firstRow = IndexedWalCodec.vacuumFirstRow(payload);
+    long retainedRows = IndexedWalCodec.vacuumRetainedRows(payload);
+    long firstRow = IndexedWalCodec.vacuumFirstRow(payload);
     int chunkRows = IndexedWalCodec.vacuumRowCount(payload);
     int chunk = IndexedWalCodec.vacuumChunk(payload);
     int chunkCount = IndexedWalCodec.vacuumChunkCount(payload);
@@ -263,7 +263,7 @@ final class IndexedWalRecovery {
     int entryOffset = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
     for (int index = 0; status.isOk() && index < chunkRows; index++) {
       int rowBytes = IndexedWalCodec.vacuumEntryRowBytes(payload, entryOffset);
-      status = kernel.applyVacuumEntry(payload, entryOffset, vacuumAppliedRows + 1);
+      status = kernel.applyVacuumEntry(payload, entryOffset, vacuumAppliedRows + 1L);
       if (status.isOk()) {
         vacuumAppliedRows++;
       }
@@ -282,8 +282,8 @@ final class IndexedWalRecovery {
 
   private StatusCode admitVacuumChunk(
       int chunk,
-      int firstRow,
-      int retainedRows,
+      long firstRow,
+      long retainedRows,
       int chunkCount,
       long transactionId,
       long recordStart) {
@@ -306,7 +306,7 @@ final class IndexedWalRecovery {
   }
 
   private StatusCode beginVacuumOperation(
-      int retainedRows,
+      long retainedRows,
       int chunkCount,
       long transactionId,
       long recordStart) {
@@ -340,9 +340,9 @@ final class IndexedWalRecovery {
       cancelVacuumOperation();
       return structural;
     }
-    int retainedRows = IndexedWalCodec.vacuumRetainedRows(payload);
+    long retainedRows = IndexedWalCodec.vacuumRetainedRows(payload);
     int chunkCount = IndexedWalCodec.vacuumCommitChunkCount(payload);
-    int rowsBefore = IndexedWalCodec.vacuumCommitRowsBefore(payload);
+    long rowsBefore = IndexedWalCodec.vacuumCommitRowsBefore(payload);
     if (!phase.vacuumOperationActive()
         || transactionId != vacuumTransactionId
         || commitSequence <= publishedCommitSequence

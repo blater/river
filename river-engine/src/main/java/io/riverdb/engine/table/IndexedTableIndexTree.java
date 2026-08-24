@@ -33,7 +33,7 @@ final class IndexedTableIndexTree {
       ByteBuffer left,
       int space,
       long key,
-      int rowId) {
+      long rowId) {
     ByteBuffer metadata = pages.stageExisting(
         IndexedTableKernel.ROOT_META_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES);
     if (metadata == null) return StatusCode.RESOURCE_EXHAUSTED;

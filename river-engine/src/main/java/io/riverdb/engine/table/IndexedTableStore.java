@@ -18,7 +18,10 @@ public final class IndexedTableStore {
   public static final int WAL_FORMAT_VERSION = IndexedWalCodec.FORMAT_VERSION;
   public static final int MAX_PAGES = IndexedTableLimits.MAX_PAGES;
   public static final int MAX_CHANGED_PAGES = IndexedTableLimits.MAX_CHANGED_PAGES;
-  public static final int MAX_ROWS = IndexedTableLimits.MAX_ROWS;
+  /** Legacy int-typed admission hint retained for source compatibility. */
+  public static final int MAX_ROWS = Integer.MAX_VALUE - 1;
+  /** Full logical row identity domain supported by indexed tables. */
+  public static final long MAX_LOGICAL_ROWS = IndexedTableLimits.MAX_ROWS;
   public static final int VACUUM_COMMIT_PAYLOAD_BYTES =
       IndexedWalCodec.VACUUM_COMMIT_PAYLOAD_BYTES;
 
@@ -283,19 +286,19 @@ public final class IndexedTableStore {
     return status.isOk() ? pageCommitter.begin() : status;
   }
 
-  StatusCode fetchRow(int rowId, io.riverdb.storage.heap.HeapRowResult result) {
+  StatusCode fetchRow(long rowId, io.riverdb.storage.heap.HeapRowResult result) {
     return kernel.fetchRow(rowId, result);
   }
 
-  int rowLength(int rowId) {
+  int rowLength(long rowId) {
     return kernel.rowLength(rowId);
   }
 
-  StatusCode copyRowTo(int rowId, ByteBuffer destination, int destinationOffset) {
+  StatusCode copyRowTo(long rowId, ByteBuffer destination, int destinationOffset) {
     return kernel.copyRowTo(rowId, destination, destinationOffset);
   }
 
-  int rowCount() {
+  long rowCount() {
     return kernel.rowCount();
   }
 
@@ -304,8 +307,8 @@ public final class IndexedTableStore {
     return kernel.obsoleteVersionCount();
   }
 
-  int remainingVersionCapacity() {
-    return MAX_ROWS - kernel.rowCount();
+  long remainingVersionCapacity() {
+    return MAX_LOGICAL_ROWS - kernel.rowCount();
   }
 
   StatusCode commit(long transactionId, long commitSequence) {
@@ -623,7 +626,7 @@ public final class IndexedTableStore {
     return kernel.rowCommitSequence(rowId);
   }
 
-  int previousRowId(int rowId) {
+  long previousRowId(long rowId) {
     return kernel.previousRowId(rowId);
   }
 

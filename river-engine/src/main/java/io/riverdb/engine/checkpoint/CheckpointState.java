@@ -7,30 +7,34 @@ import io.riverdb.base.id.WalGeneration;
 /** Caller-owned checkpoint authority with the MVCC metadata needed by its stable page base. */
 public final class CheckpointState {
   public static final int MAXIMUM_ROWS = 64 * 1024;
-  public static final int MAXIMUM_RUNTIME_ROWS = Integer.MAX_VALUE - 1;
+  /** Positive logical row ids are encoded in an unsigned 32-bit domain. */
+  public static final long MAXIMUM_RUNTIME_ROWS = 0xFFFF_FFFEL;
   private static final int PAGE_SHIFT = 12;
   private static final int PAGE_SIZE = 1 << PAGE_SHIFT;
   private static final int PAGE_MASK = PAGE_SIZE - 1;
 
   private final PagedLongs deletedWords = new PagedLongs(MAXIMUM_RUNTIME_ROWS / Long.SIZE + 1);
   private final PagedLongs rowCommitSequences = new PagedLongs(MAXIMUM_RUNTIME_ROWS);
-  private final PagedInts previousRowIds = new PagedInts(MAXIMUM_RUNTIME_ROWS);
+  private final PagedLongs previousRowIds = new PagedLongs(MAXIMUM_RUNTIME_ROWS);
   private DatabaseIncarnation database;
   private WalGeneration walGeneration;
   private long checkpointId;
   private long commitSequence;
   private long maximumTransactionId;
+  private long defaultRowCommitSequence;
+  private long obsoleteVersionCount;
   private int pageCount;
-  private int rowCount;
+  private long rowCount;
   private boolean available;
 
   public void reset() {
-    int previousRows = rowCount;
     database = null;
     walGeneration = null;
     checkpointId = 0;
     commitSequence = 0;
     maximumTransactionId = 0;
+    defaultRowCommitSequence = 0;
+    obsoleteVersionCount = 0;
     pageCount = 0;
     rowCount = 0;
     available = false;
@@ -46,7 +50,7 @@ public final class CheckpointState {
       long committedAt,
       long maximumTx,
       int pages,
-      int rows) {
+      long rows) {
     if (incarnation == null
         || !incarnation.isValid()
         || generation == null
@@ -71,7 +75,7 @@ public final class CheckpointState {
       long committedAt,
       long maximumTx,
       int pages,
-      int rows) {
+      long rows) {
     if (rows < 0 || rows > MAXIMUM_RUNTIME_ROWS) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -86,7 +90,7 @@ public final class CheckpointState {
       long committedAt,
       long maximumTx,
       int pages,
-      int rows,
+      long rows,
       boolean large) {
     if (incarnation == null
         || !incarnation.isValid()
@@ -107,20 +111,17 @@ public final class CheckpointState {
     checkpointId = id;
     commitSequence = committedAt;
     maximumTransactionId = maximumTx;
+    defaultRowCommitSequence = committedAt;
     pageCount = pages;
     rowCount = rows;
     available = true;
-    for (int rowId = 1; rowId <= rows; rowId++) {
-      rowCommitSequences.set(rowId, committedAt);
-      previousRowIds.set(rowId, 0);
-    }
     return StatusCode.OK;
   }
 
   public StatusCode setRowVersion(
-      int rowId,
+      long rowId,
       long committedAt,
-      int previousRowId,
+      long previousRowId,
       boolean deleted) {
     if (!available
         || rowId <= 0
@@ -133,7 +134,8 @@ public final class CheckpointState {
     }
     rowCommitSequences.set(rowId, committedAt);
     previousRowIds.set(rowId, previousRowId);
-    int bit = rowId - 1;
+    if (previousRowId > 0) obsoleteVersionCount++;
+    long bit = rowId - 1;
     long mask = 1L << (bit & 63);
     if (deleted) {
       deletedWords.set(bit >>> 6, deletedWords.get(bit >>> 6) | mask);
@@ -143,29 +145,31 @@ public final class CheckpointState {
     return StatusCode.OK;
   }
 
-  public StatusCode setDeleted(int rowId) {
+  public StatusCode setDeleted(long rowId) {
     if (rowId <= 0 || rowId > rowCount) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int bit = rowId - 1;
+    long bit = rowId - 1;
     deletedWords.set(
         bit >>> 6, deletedWords.get(bit >>> 6) | 1L << (bit & 63));
     return StatusCode.OK;
   }
 
-  public boolean isDeleted(int rowId) {
+  public boolean isDeleted(long rowId) {
     if (rowId <= 0 || rowId > rowCount) {
       return false;
     }
-    int bit = rowId - 1;
+    long bit = rowId - 1;
     return (deletedWords.get(bit >>> 6) & 1L << (bit & 63)) != 0;
   }
 
-  public long rowCommitSequence(int rowId) {
-    return rowId > 0 && rowId <= rowCount ? rowCommitSequences.get(rowId) : 0;
+  public long rowCommitSequence(long rowId) {
+    if (rowId <= 0 || rowId > rowCount) return 0;
+    long value = rowCommitSequences.get(rowId);
+    return value == 0 ? defaultRowCommitSequence : value;
   }
 
-  public int previousRowId(int rowId) {
+  public long previousRowId(long rowId) {
     return rowId > 0 && rowId <= rowCount ? previousRowIds.get(rowId) : 0;
   }
 
@@ -193,7 +197,7 @@ public final class CheckpointState {
     return pageCount;
   }
 
-  public int rowCount() {
+  public long rowCount() {
     return rowCount;
   }
 
@@ -201,25 +205,33 @@ public final class CheckpointState {
     return available;
   }
 
+  public long obsoleteVersionCount() {
+    return obsoleteVersionCount;
+  }
+
   private static final class PagedLongs {
     private final long[][] pages;
 
-    PagedLongs(int maximumElements) {
-      pages = new long[(int) (((long) maximumElements + PAGE_SIZE) >>> PAGE_SHIFT)][];
+    PagedLongs(long maximumElements) {
+      long pageCount = (maximumElements + PAGE_SIZE - 1) >>> PAGE_SHIFT;
+      if (pageCount > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("logical row address space is too large");
+      }
+      pages = new long[(int) pageCount][];
     }
 
-    long get(int index) {
-      int page = index >>> PAGE_SHIFT;
-      return page < pages.length && pages[page] != null
-          ? pages[page][index & PAGE_MASK] : 0;
+    long get(long index) {
+      if (index < 0 || (index >>> PAGE_SHIFT) >= pages.length) return 0;
+      int page = (int) (index >>> PAGE_SHIFT);
+      return pages[page] != null ? pages[page][(int) index & PAGE_MASK] : 0;
     }
 
-    void set(int index, long value) {
-      int page = index >>> PAGE_SHIFT;
-      if (page >= pages.length) return;
+    void set(long index, long value) {
+      if (index < 0 || (index >>> PAGE_SHIFT) >= pages.length) return;
+      int page = (int) (index >>> PAGE_SHIFT);
       long[] values = pages[page];
       if (values == null) values = pages[page] = new long[PAGE_SIZE];
-      values[index & PAGE_MASK] = value;
+      values[(int) index & PAGE_MASK] = value;
     }
 
     void clear() {
@@ -229,31 +241,4 @@ public final class CheckpointState {
     }
   }
 
-  private static final class PagedInts {
-    private final int[][] pages;
-
-    PagedInts(int maximumElements) {
-      pages = new int[(int) (((long) maximumElements + PAGE_SIZE) >>> PAGE_SHIFT)][];
-    }
-
-    int get(int index) {
-      int page = index >>> PAGE_SHIFT;
-      return page < pages.length && pages[page] != null
-          ? pages[page][index & PAGE_MASK] : 0;
-    }
-
-    void set(int index, int value) {
-      int page = index >>> PAGE_SHIFT;
-      if (page >= pages.length) return;
-      int[] values = pages[page];
-      if (values == null) values = pages[page] = new int[PAGE_SIZE];
-      values[index & PAGE_MASK] = value;
-    }
-
-    void clear() {
-      for (int[] page : pages) {
-        if (page != null) java.util.Arrays.fill(page, 0);
-      }
-    }
-  }
 }

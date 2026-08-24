@@ -8,7 +8,8 @@ import java.nio.ByteBuffer;
 /** Byte-exact indexed-table WAL layout without WAL publication or table-state semantics. */
 final class IndexedWalCodec {
   static final int FORMAT_ID = 1002;
-  static final int FORMAT_VERSION = 4;
+  static final int FORMAT_VERSION = 5;
+  static final long MAX_LOGICAL_ROW_ID = 0xFFFF_FFFEL;
 
   static final long OPERATION_MAGIC = 0x5249564552494458L; // RIVERIDX
   static final int OPERATION_TYPE_PAGE_IMAGES = 1;
@@ -33,22 +34,66 @@ final class IndexedWalCodec {
   static final int VACUUM_ENTRY_BYTES = 24;
   static final int VACUUM_COMMIT_PAYLOAD_BYTES = 32;
 
-  private static final int MAGIC_OFFSET = 0;
-  private static final int VERSION_OFFSET = 8;
-  private static final int TYPE_OFFSET = 12;
+  private static final int COMMON_MAGIC_OFFSET = 0;
+  private static final int COMMON_VERSION_OFFSET = 8;
+  private static final int COMMON_TYPE_OFFSET = 12;
+  private static final int COMMON_HEADER_BYTES = 16;
+  private static final int LONG_HIGH_WORD_OFFSET = 4;
+
+  private static final int PAGE_COUNT_OFFSET = COMMON_HEADER_BYTES;
+  private static final int PAGE_VERSION_COUNT_OFFSET = 20;
+  private static final int PAGE_VERSION_PREVIOUS_ROW_ID_OFFSET = 0;
+  private static final int PAGE_VERSION_DELETED_OFFSET = 4;
+
+  private static final int INSERT_KEY_OFFSET = COMMON_HEADER_BYTES;
+  private static final int INSERT_ROW_ID_OFFSET = 24;
+  private static final int INSERT_ROW_BYTES_OFFSET = 28;
+  private static final int INSERT_SPACE_OFFSET = 32;
+  private static final int INSERT_RESERVED_OFFSET = 36;
+
+  private static final int BATCH_ENTRY_COUNT_OFFSET = COMMON_HEADER_BYTES;
+  private static final int BATCH_RESERVED_OFFSET = 20;
+  private static final int INSERT_BATCH_KEY_OFFSET = 0;
+  private static final int INSERT_BATCH_ROW_ID_OFFSET = 8;
+  private static final int INSERT_BATCH_ROW_BYTES_OFFSET = 12;
+  private static final int INSERT_BATCH_SPACE_OFFSET = 16;
+
+  private static final int MUTATION_OPERATION_OFFSET = 0;
+  private static final int MUTATION_KEY_OFFSET = 4;
+  private static final int MUTATION_ROW_ID_OFFSET = 12;
+  private static final int MUTATION_PREVIOUS_ROW_ID_OFFSET = 16;
+  private static final int MUTATION_ROW_BYTES_OFFSET = 20;
+  private static final int MUTATION_SPACE_OFFSET = 24;
+
+  private static final int VACUUM_RETAINED_ROWS_OFFSET = COMMON_HEADER_BYTES;
+  private static final int VACUUM_FIRST_ROW_OFFSET = 20;
+  private static final int VACUUM_ROW_COUNT_OFFSET = 24;
+  private static final int VACUUM_CHUNK_OFFSET = 28;
+  private static final int VACUUM_CHUNK_COUNT_OFFSET = 32;
+  private static final int VACUUM_RESERVED_OFFSET = 36;
+  private static final int VACUUM_ENTRY_KEY_OFFSET = 0;
+  private static final int VACUUM_ENTRY_ROW_ID_OFFSET = 8;
+  private static final int VACUUM_ENTRY_ROW_BYTES_OFFSET = 12;
+  private static final int VACUUM_ENTRY_DELETED_OFFSET = 16;
+  private static final int VACUUM_ENTRY_SPACE_OFFSET = 20;
+
+  private static final int VACUUM_COMMIT_RETAINED_ROWS_OFFSET = COMMON_HEADER_BYTES;
+  private static final int VACUUM_COMMIT_CHUNK_COUNT_OFFSET = 20;
+  private static final int VACUUM_COMMIT_ROWS_BEFORE_OFFSET = 24;
+  private static final int VACUUM_COMMIT_RESERVED_OFFSET = 28;
 
   private IndexedWalCodec() {
   }
 
   static int operationType(ByteBuffer payload) {
-    return hasCommonHeader(payload) ? getInt(payload, TYPE_OFFSET) : 0;
+    return hasCommonHeader(payload) ? getInt(payload, COMMON_TYPE_OFFSET) : 0;
   }
 
   static boolean hasCommonHeader(ByteBuffer payload) {
     return payload != null
         && payload.limit() >= PAGE_OPERATION_HEADER_BYTES
-        && getLong(payload, MAGIC_OFFSET) == OPERATION_MAGIC
-        && getInt(payload, VERSION_OFFSET) == FORMAT_VERSION;
+        && getLong(payload, COMMON_MAGIC_OFFSET) == OPERATION_MAGIC
+        && getInt(payload, COMMON_VERSION_OFFSET) == FORMAT_VERSION;
   }
 
   static int pageOperationBytes(int pageCount, int versionCount) {
@@ -82,37 +127,37 @@ final class IndexedWalCodec {
       int pageCount,
       int versionCount) {
     encodeCommonHeader(target, OPERATION_TYPE_PAGE_IMAGES);
-    putInt(target, 16, pageCount);
-    putInt(target, 20, versionCount);
+    putInt(target, PAGE_COUNT_OFFSET, pageCount);
+    putInt(target, PAGE_VERSION_COUNT_OFFSET, versionCount);
   }
 
   static void encodePageOperationVersion(
       ByteBuffer target,
       int offset,
-      int previousRowId,
+      long previousRowId,
       boolean deleted) {
-    putInt(target, offset, previousRowId);
-    putInt(target, offset + 4, deleted ? 1 : 0);
+    putInt(target, offset + PAGE_VERSION_PREVIOUS_ROW_ID_OFFSET, (int) previousRowId);
+    putInt(target, offset + PAGE_VERSION_DELETED_OFFSET, deleted ? 1 : 0);
   }
 
   static void encodeInsertHeader(
       ByteBuffer target,
       int space,
       long key,
-      int rowId,
+      long rowId,
       int rowBytes) {
     encodeCommonHeader(target, OPERATION_TYPE_INSERT);
-    putLong(target, 16, key);
-    putInt(target, 24, rowId);
-    putInt(target, 28, rowBytes);
-    putInt(target, 32, space);
-    putInt(target, 36, 0);
+    putLong(target, INSERT_KEY_OFFSET, key);
+    putInt(target, INSERT_ROW_ID_OFFSET, (int) rowId);
+    putInt(target, INSERT_ROW_BYTES_OFFSET, rowBytes);
+    putInt(target, INSERT_SPACE_OFFSET, space);
+    putInt(target, INSERT_RESERVED_OFFSET, 0);
   }
 
   static void encodeInsertBatchHeader(ByteBuffer target, int entryCount) {
     encodeCommonHeader(target, OPERATION_TYPE_INSERT_BATCH);
-    putInt(target, 16, entryCount);
-    putInt(target, 20, 0);
+    putInt(target, BATCH_ENTRY_COUNT_OFFSET, entryCount);
+    putInt(target, BATCH_RESERVED_OFFSET, 0);
   }
 
   static void encodeInsertBatchEntry(
@@ -120,18 +165,18 @@ final class IndexedWalCodec {
       int offset,
       int space,
       long key,
-      int rowId,
+      long rowId,
       int rowBytes) {
-    putLong(target, offset, key);
-    putInt(target, offset + 8, rowId);
-    putInt(target, offset + 12, rowBytes);
-    putInt(target, offset + 16, space);
+    putLong(target, offset + INSERT_BATCH_KEY_OFFSET, key);
+    putInt(target, offset + INSERT_BATCH_ROW_ID_OFFSET, (int) rowId);
+    putInt(target, offset + INSERT_BATCH_ROW_BYTES_OFFSET, rowBytes);
+    putInt(target, offset + INSERT_BATCH_SPACE_OFFSET, space);
   }
 
   static void encodeMutationBatchHeader(ByteBuffer target, int entryCount) {
     encodeCommonHeader(target, OPERATION_TYPE_MUTATION_BATCH);
-    putInt(target, 16, entryCount);
-    putInt(target, 20, 0);
+    putInt(target, BATCH_ENTRY_COUNT_OFFSET, entryCount);
+    putInt(target, BATCH_RESERVED_OFFSET, 0);
   }
 
   static void encodeMutationBatchEntry(
@@ -140,31 +185,31 @@ final class IndexedWalCodec {
       int operation,
       int space,
       long key,
-      int rowId,
-      int previousRowId,
+      long rowId,
+      long previousRowId,
       int rowBytes) {
-    putInt(target, offset, operation);
-    putLong(target, offset + 4, key);
-    putInt(target, offset + 12, rowId);
-    putInt(target, offset + 16, previousRowId);
-    putInt(target, offset + 20, rowBytes);
-    putInt(target, offset + 24, space);
+    putInt(target, offset + MUTATION_OPERATION_OFFSET, operation);
+    putLong(target, offset + MUTATION_KEY_OFFSET, key);
+    putInt(target, offset + MUTATION_ROW_ID_OFFSET, (int) rowId);
+    putInt(target, offset + MUTATION_PREVIOUS_ROW_ID_OFFSET, (int) previousRowId);
+    putInt(target, offset + MUTATION_ROW_BYTES_OFFSET, rowBytes);
+    putInt(target, offset + MUTATION_SPACE_OFFSET, space);
   }
 
   static void encodeVacuumChunkHeader(
       ByteBuffer target,
-      int retainedRows,
-      int firstRow,
+      long retainedRows,
+      long firstRow,
       int rowCount,
       int chunk,
       int chunkCount) {
     encodeCommonHeader(target, OPERATION_TYPE_VACUUM_CHUNK);
-    putInt(target, 16, retainedRows);
-    putInt(target, 20, firstRow);
-    putInt(target, 24, rowCount);
-    putInt(target, 28, chunk);
-    putInt(target, 32, chunkCount);
-    putInt(target, 36, 0);
+    putInt(target, VACUUM_RETAINED_ROWS_OFFSET, (int) retainedRows);
+    putInt(target, VACUUM_FIRST_ROW_OFFSET, (int) firstRow);
+    putInt(target, VACUUM_ROW_COUNT_OFFSET, rowCount);
+    putInt(target, VACUUM_CHUNK_OFFSET, chunk);
+    putInt(target, VACUUM_CHUNK_COUNT_OFFSET, chunkCount);
+    putInt(target, VACUUM_RESERVED_OFFSET, 0);
   }
 
   static void encodeVacuumEntry(
@@ -172,26 +217,26 @@ final class IndexedWalCodec {
       int offset,
       int space,
       long key,
-      int rowId,
+      long rowId,
       int rowBytes,
       boolean deleted) {
-    putLong(target, offset, key);
-    putInt(target, offset + 8, rowId);
-    putInt(target, offset + 12, rowBytes);
-    putInt(target, offset + 16, deleted ? 1 : 0);
-    putInt(target, offset + 20, space);
+    putLong(target, offset + VACUUM_ENTRY_KEY_OFFSET, key);
+    putInt(target, offset + VACUUM_ENTRY_ROW_ID_OFFSET, (int) rowId);
+    putInt(target, offset + VACUUM_ENTRY_ROW_BYTES_OFFSET, rowBytes);
+    putInt(target, offset + VACUUM_ENTRY_DELETED_OFFSET, deleted ? 1 : 0);
+    putInt(target, offset + VACUUM_ENTRY_SPACE_OFFSET, space);
   }
 
   static void encodeVacuumCommit(
       ByteBuffer target,
-      int retainedRows,
+      long retainedRows,
       int chunkCount,
-      int rowsBefore) {
+      long rowsBefore) {
     encodeCommonHeader(target, OPERATION_TYPE_VACUUM_COMMIT);
-    putInt(target, 16, retainedRows);
-    putInt(target, 20, chunkCount);
-    putInt(target, 24, rowsBefore);
-    putInt(target, 28, 0);
+    putInt(target, VACUUM_COMMIT_RETAINED_ROWS_OFFSET, (int) retainedRows);
+    putInt(target, VACUUM_COMMIT_CHUNK_COUNT_OFFSET, chunkCount);
+    putInt(target, VACUUM_COMMIT_ROWS_BEFORE_OFFSET, (int) rowsBefore);
+    putInt(target, VACUUM_COMMIT_RESERVED_OFFSET, 0);
   }
 
   static StatusCode validatePageOperation(
@@ -201,8 +246,8 @@ final class IndexedWalCodec {
     if (!hasOperationType(payload, OPERATION_TYPE_PAGE_IMAGES)) {
       return StatusCode.CORRUPTION;
     }
-    int pageCount = getInt(payload, 16);
-    int versionCount = getInt(payload, 20);
+    int pageCount = getInt(payload, PAGE_COUNT_OFFSET);
+    int versionCount = getInt(payload, PAGE_VERSION_COUNT_OFFSET);
     int expectedBytes = pageOperationBytes(pageCount, versionCount);
     if (pageCount > maximumPageCount
         || versionCount > maximumVersionCount
@@ -216,11 +261,11 @@ final class IndexedWalCodec {
   static StatusCode validateInsert(ByteBuffer payload) {
     if (!hasOperationType(payload, OPERATION_TYPE_INSERT)
         || payload.limit() < INSERT_OPERATION_HEADER_BYTES
-        || getInt(payload, 24) <= 0
-        || getInt(payload, 28) <= 0
-        || !OrderedKey.isFiniteSpace(getInt(payload, 32))
-        || getInt(payload, 36) != 0
-        || payload.limit() != insertOperationBytes(getInt(payload, 28))) {
+        || !validLogicalRowId(unsignedInt(payload, INSERT_ROW_ID_OFFSET), false)
+        || getInt(payload, INSERT_ROW_BYTES_OFFSET) <= 0
+        || !OrderedKey.isFiniteSpace(getInt(payload, INSERT_SPACE_OFFSET))
+        || getInt(payload, INSERT_RESERVED_OFFSET) != 0
+        || payload.limit() != insertOperationBytes(getInt(payload, INSERT_ROW_BYTES_OFFSET))) {
       return StatusCode.CORRUPTION;
     }
     return StatusCode.OK;
@@ -229,10 +274,10 @@ final class IndexedWalCodec {
   static StatusCode validateInsertBatch(ByteBuffer payload, int maximumEntries) {
     if (!hasOperationType(payload, OPERATION_TYPE_INSERT_BATCH)
         || payload.limit() < INSERT_BATCH_HEADER_BYTES
-        || getInt(payload, 20) != 0) {
+        || getInt(payload, BATCH_RESERVED_OFFSET) != 0) {
       return StatusCode.CORRUPTION;
     }
-    int entryCount = getInt(payload, 16);
+    int entryCount = getInt(payload, BATCH_ENTRY_COUNT_OFFSET);
     if (entryCount <= 1 || entryCount > maximumEntries) {
       return StatusCode.CORRUPTION;
     }
@@ -242,10 +287,10 @@ final class IndexedWalCodec {
   static StatusCode validateMutationBatch(ByteBuffer payload, int maximumEntries) {
     if (!hasOperationType(payload, OPERATION_TYPE_MUTATION_BATCH)
         || payload.limit() < MUTATION_BATCH_HEADER_BYTES
-        || getInt(payload, 20) != 0) {
+        || getInt(payload, BATCH_RESERVED_OFFSET) != 0) {
       return StatusCode.CORRUPTION;
     }
-    int entryCount = getInt(payload, 16);
+    int entryCount = getInt(payload, BATCH_ENTRY_COUNT_OFFSET);
     if (entryCount <= 0 || entryCount > maximumEntries) {
       return StatusCode.CORRUPTION;
     }
@@ -254,18 +299,18 @@ final class IndexedWalCodec {
 
   static StatusCode validateVacuumChunk(
       ByteBuffer payload,
-      int maximumRows,
+      long maximumRows,
       int maximumChunks) {
     if (!hasOperationType(payload, OPERATION_TYPE_VACUUM_CHUNK)
         || payload.limit() < VACUUM_CHUNK_HEADER_BYTES
-        || getInt(payload, 36) != 0) {
+        || getInt(payload, VACUUM_RESERVED_OFFSET) != 0) {
       return StatusCode.CORRUPTION;
     }
-    int retainedRows = getInt(payload, 16);
-    int firstRow = getInt(payload, 20);
-    int rowCount = getInt(payload, 24);
-    int chunk = getInt(payload, 28);
-    int chunkCount = getInt(payload, 32);
+    long retainedRows = unsignedInt(payload, VACUUM_RETAINED_ROWS_OFFSET);
+    long firstRow = unsignedInt(payload, VACUUM_FIRST_ROW_OFFSET);
+    int rowCount = getInt(payload, VACUUM_ROW_COUNT_OFFSET);
+    int chunk = getInt(payload, VACUUM_CHUNK_OFFSET);
+    int chunkCount = getInt(payload, VACUUM_CHUNK_COUNT_OFFSET);
     if (retainedRows <= 0
         || retainedRows > maximumRows
         || firstRow < 0
@@ -283,10 +328,11 @@ final class IndexedWalCodec {
     if (payload == null || offset < 0 || payload.limit() - offset < INSERT_BATCH_ENTRY_BYTES) {
       return false;
     }
-    int rowBytes = getInt(payload, offset + 12);
+    int rowBytes = getInt(payload, offset + INSERT_BATCH_ROW_BYTES_OFFSET);
     int entryBytes = insertBatchEntryBytes(rowBytes);
-    return getInt(payload, offset + 8) > 0
-        && OrderedKey.isFiniteSpace(getInt(payload, offset + 16))
+    return validLogicalRowId(
+            unsignedInt(payload, offset + INSERT_BATCH_ROW_ID_OFFSET), false)
+        && OrderedKey.isFiniteSpace(getInt(payload, offset + INSERT_BATCH_SPACE_OFFSET))
         && entryBytes > 0
         && payload.limit() - offset >= entryBytes;
   }
@@ -295,12 +341,13 @@ final class IndexedWalCodec {
     if (payload == null || offset < 0 || payload.limit() - offset < MUTATION_BATCH_ENTRY_BYTES) {
       return false;
     }
-    int rowBytes = getInt(payload, offset + 20);
+    int rowBytes = getInt(payload, offset + MUTATION_ROW_BYTES_OFFSET);
     int entryBytes = mutationBatchEntryBytes(rowBytes);
-    return isMutation(getInt(payload, offset))
-        && getInt(payload, offset + 12) > 0
-        && getInt(payload, offset + 16) >= 0
-        && OrderedKey.isFiniteSpace(getInt(payload, offset + 24))
+    return isMutation(getInt(payload, offset + MUTATION_OPERATION_OFFSET))
+        && validLogicalRowId(unsignedInt(payload, offset + MUTATION_ROW_ID_OFFSET), false)
+        && validLogicalRowId(
+            unsignedInt(payload, offset + MUTATION_PREVIOUS_ROW_ID_OFFSET), true)
+        && OrderedKey.isFiniteSpace(getInt(payload, offset + MUTATION_SPACE_OFFSET))
         && entryBytes > 0
         && payload.limit() - offset >= entryBytes;
   }
@@ -309,12 +356,13 @@ final class IndexedWalCodec {
     if (payload == null || offset < 0 || payload.limit() - offset < VACUUM_ENTRY_BYTES) {
       return false;
     }
-    int rowBytes = getInt(payload, offset + 12);
-    int deleted = getInt(payload, offset + 16);
+    int rowBytes = getInt(payload, offset + VACUUM_ENTRY_ROW_BYTES_OFFSET);
+    int deleted = getInt(payload, offset + VACUUM_ENTRY_DELETED_OFFSET);
     int entryBytes = vacuumEntryBytes(rowBytes);
-    return getInt(payload, offset + 8) > 0
+    return validLogicalRowId(
+            unsignedInt(payload, offset + VACUUM_ENTRY_ROW_ID_OFFSET), false)
         && (deleted == 0 || deleted == 1)
-        && OrderedKey.isFiniteSpace(getInt(payload, offset + 20))
+        && OrderedKey.isFiniteSpace(getInt(payload, offset + VACUUM_ENTRY_SPACE_OFFSET))
         && entryBytes > 0
         && payload.limit() - offset >= entryBytes;
   }
@@ -325,16 +373,18 @@ final class IndexedWalCodec {
         || payload.limit() - offset < PAGE_OPERATION_VERSION_BYTES) {
       return false;
     }
-    int deleted = getInt(payload, offset + 4);
-    return getInt(payload, offset) >= 0 && (deleted == 0 || deleted == 1);
+    int deleted = getInt(payload, offset + PAGE_VERSION_DELETED_OFFSET);
+    return validLogicalRowId(
+            unsignedInt(payload, offset + PAGE_VERSION_PREVIOUS_ROW_ID_OFFSET), true)
+        && (deleted == 0 || deleted == 1);
   }
 
   static int pageOperationPageCount(ByteBuffer payload) {
-    return getInt(payload, 16);
+    return getInt(payload, BATCH_ENTRY_COUNT_OFFSET);
   }
 
   static int pageOperationVersionCount(ByteBuffer payload) {
-    return getInt(payload, 20);
+    return getInt(payload, PAGE_VERSION_COUNT_OFFSET);
   }
 
   static int pageOperationPageOffset(int index) {
@@ -346,137 +396,136 @@ final class IndexedWalCodec {
   }
 
   static long insertKey(ByteBuffer payload) {
-    return getLong(payload, 16);
+    return getLong(payload, INSERT_KEY_OFFSET);
   }
 
   static int insertSpace(ByteBuffer payload) {
-    return getInt(payload, 32);
+    return getInt(payload, INSERT_SPACE_OFFSET);
   }
 
-  static int insertRowId(ByteBuffer payload) {
-    return getInt(payload, 24);
+  static long insertRowId(ByteBuffer payload) {
+    return unsignedInt(payload, 24);
   }
 
   static int insertRowBytes(ByteBuffer payload) {
-    return getInt(payload, 28);
+    return getInt(payload, INSERT_ROW_BYTES_OFFSET);
   }
 
   static int batchEntryCount(ByteBuffer payload) {
-    return getInt(payload, 16);
+    return getInt(payload, BATCH_ENTRY_COUNT_OFFSET);
   }
 
   static long insertBatchKey(ByteBuffer payload, int offset) {
-    return getLong(payload, offset);
+    return getLong(payload, offset + INSERT_BATCH_KEY_OFFSET);
   }
 
   static int insertBatchSpace(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 16);
+    return getInt(payload, offset + INSERT_BATCH_SPACE_OFFSET);
   }
 
-  static int insertBatchRowId(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 8);
+  static long insertBatchRowId(ByteBuffer payload, int offset) {
+    return unsignedInt(payload, offset + INSERT_BATCH_ROW_ID_OFFSET);
   }
 
   static int insertBatchRowBytes(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 12);
+    return getInt(payload, offset + INSERT_BATCH_ROW_BYTES_OFFSET);
   }
 
   static int mutationOperation(ByteBuffer payload, int offset) {
-    return getInt(payload, offset);
+    return getInt(payload, offset + MUTATION_OPERATION_OFFSET);
   }
 
   static long mutationKey(ByteBuffer payload, int offset) {
-    return getLong(payload, offset + 4);
+    return getLong(payload, offset + MUTATION_KEY_OFFSET);
   }
 
   static int mutationSpace(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 24);
+    return getInt(payload, offset + MUTATION_SPACE_OFFSET);
   }
 
-  static int mutationRowId(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 12);
+  static long mutationRowId(ByteBuffer payload, int offset) {
+    return unsignedInt(payload, offset + MUTATION_ROW_ID_OFFSET);
   }
 
-  static int mutationPreviousRowId(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 16);
+  static long mutationPreviousRowId(ByteBuffer payload, int offset) {
+    return unsignedInt(payload, offset + MUTATION_PREVIOUS_ROW_ID_OFFSET);
   }
 
   static int mutationRowBytes(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 20);
+    return getInt(payload, offset + MUTATION_ROW_BYTES_OFFSET);
   }
 
   static int encodedRowBytes(ByteBuffer payload, int entryOffset, int rowLengthOffset) {
     return getInt(payload, entryOffset + rowLengthOffset);
   }
 
-  static int pageVersionPreviousRowId(ByteBuffer payload, int offset) {
-    return getInt(payload, offset);
+  static long pageVersionPreviousRowId(ByteBuffer payload, int offset) {
+    return unsignedInt(payload, offset);
   }
 
   static boolean pageVersionDeleted(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 4) == 1;
+    return getInt(payload, offset + PAGE_VERSION_DELETED_OFFSET) == 1;
   }
 
-  static int vacuumRetainedRows(ByteBuffer payload) {
-    return getInt(payload, 16);
+  static long vacuumRetainedRows(ByteBuffer payload) {
+    return unsignedInt(payload, 16);
   }
 
-  static int vacuumFirstRow(ByteBuffer payload) {
-    return getInt(payload, 20);
+  static long vacuumFirstRow(ByteBuffer payload) {
+    return unsignedInt(payload, 20);
   }
 
   static int vacuumRowCount(ByteBuffer payload) {
-    return getInt(payload, 24);
+    return getInt(payload, VACUUM_ROW_COUNT_OFFSET);
   }
 
   static int vacuumChunk(ByteBuffer payload) {
-    return getInt(payload, 28);
+    return getInt(payload, VACUUM_CHUNK_OFFSET);
   }
 
   static int vacuumChunkCount(ByteBuffer payload) {
-    return getInt(payload, 32);
+    return getInt(payload, VACUUM_CHUNK_COUNT_OFFSET);
   }
 
   static long vacuumEntryKey(ByteBuffer payload, int offset) {
-    return getLong(payload, offset);
+    return getLong(payload, offset + VACUUM_ENTRY_KEY_OFFSET);
   }
 
   static int vacuumEntrySpace(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 20);
+    return getInt(payload, offset + VACUUM_ENTRY_SPACE_OFFSET);
   }
 
-  static int vacuumEntryRowId(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 8);
+  static long vacuumEntryRowId(ByteBuffer payload, int offset) {
+    return unsignedInt(payload, offset + VACUUM_ENTRY_ROW_ID_OFFSET);
   }
 
   static int vacuumEntryRowBytes(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 12);
+    return getInt(payload, offset + VACUUM_ENTRY_ROW_BYTES_OFFSET);
   }
 
   static boolean vacuumEntryDeleted(ByteBuffer payload, int offset) {
-    return getInt(payload, offset + 16) == 1;
+    return getInt(payload, offset + VACUUM_ENTRY_DELETED_OFFSET) == 1;
   }
 
-  static int vacuumCommitRowsBefore(ByteBuffer payload) {
-    return getInt(payload, 24);
+  static long vacuumCommitRowsBefore(ByteBuffer payload) {
+    return unsignedInt(payload, 24);
   }
 
   static int vacuumCommitChunkCount(ByteBuffer payload) {
-    return getInt(payload, 20);
+    return getInt(payload, VACUUM_COMMIT_CHUNK_COUNT_OFFSET);
   }
 
   static StatusCode validateVacuumCommit(
       ByteBuffer payload,
-      int maximumRows,
+      long maximumRows,
       int maximumChunks) {
     if (!hasOperationType(payload, OPERATION_TYPE_VACUUM_COMMIT)
         || payload.limit() != VACUUM_COMMIT_PAYLOAD_BYTES
-        || getInt(payload, 16) < 0
-        || getInt(payload, 16) > maximumRows
-        || getInt(payload, 20) <= 0
-        || getInt(payload, 20) > maximumChunks
-        || getInt(payload, 24) < getInt(payload, 16)
-        || getInt(payload, 28) != 0) {
+        || unsignedInt(payload, 16) > maximumRows
+        || getInt(payload, VACUUM_COMMIT_CHUNK_COUNT_OFFSET) <= 0
+        || getInt(payload, VACUUM_COMMIT_CHUNK_COUNT_OFFSET) > maximumChunks
+        || unsignedInt(payload, 24) < unsignedInt(payload, 16)
+        || getInt(payload, VACUUM_COMMIT_RESERVED_OFFSET) != 0) {
       return StatusCode.CORRUPTION;
     }
     return StatusCode.OK;
@@ -505,30 +554,38 @@ final class IndexedWalCodec {
         | Byte.toUnsignedInt(source.get(offset + 3)) << 24;
   }
 
+  private static long unsignedInt(ByteBuffer source, int offset) {
+    return Integer.toUnsignedLong(getInt(source, offset));
+  }
+
   static void putLong(ByteBuffer target, int offset, long value) {
     putInt(target, offset, (int) value);
-    putInt(target, offset + 4, (int) (value >>> 32));
+    putInt(target, offset + LONG_HIGH_WORD_OFFSET, (int) (value >>> 32));
   }
 
   private static long getLong(ByteBuffer source, int offset) {
     return Integer.toUnsignedLong(getInt(source, offset))
-        | Integer.toUnsignedLong(getInt(source, offset + 4)) << 32;
+        | Integer.toUnsignedLong(getInt(source, offset + LONG_HIGH_WORD_OFFSET)) << 32;
   }
 
   private static void encodeCommonHeader(ByteBuffer target, int operationType) {
-    putLong(target, MAGIC_OFFSET, OPERATION_MAGIC);
-    putInt(target, VERSION_OFFSET, FORMAT_VERSION);
-    putInt(target, TYPE_OFFSET, operationType);
+    putLong(target, COMMON_MAGIC_OFFSET, OPERATION_MAGIC);
+    putInt(target, COMMON_VERSION_OFFSET, FORMAT_VERSION);
+    putInt(target, COMMON_TYPE_OFFSET, operationType);
   }
 
   private static boolean hasOperationType(ByteBuffer payload, int operationType) {
-    return hasCommonHeader(payload) && getInt(payload, TYPE_OFFSET) == operationType;
+    return hasCommonHeader(payload) && getInt(payload, COMMON_TYPE_OFFSET) == operationType;
   }
 
   private static boolean isMutation(int operation) {
     return operation == MUTATION_INSERT
         || operation == MUTATION_UPDATE
         || operation == MUTATION_DELETE;
+  }
+
+  private static boolean validLogicalRowId(long rowId, boolean allowZero) {
+    return (allowZero ? rowId >= 0 : rowId > 0) && rowId <= MAX_LOGICAL_ROW_ID;
   }
 
   private static int checkedVariableBytes(int fixedBytes, int variableBytes) {

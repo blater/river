@@ -22,8 +22,10 @@ final class IndexedTableKernel {
   private final IndexedPageSet pages;
   private final HeapInsertResult heapInsert = new HeapInsertResult();
   private final IndexedVersionState versions = new IndexedVersionState();
-  private final PagedIntArray rowPageIds = new PagedIntArray(IndexedTableLimits.MAX_ROWS);
-  private final PagedIntArray rowSlots = new PagedIntArray(IndexedTableLimits.MAX_ROWS);
+  private final LongPagedIntArray rowPageIds =
+      new LongPagedIntArray(IndexedTableLimits.MAX_ROWS);
+  private final LongPagedIntArray rowSlots =
+      new LongPagedIntArray(IndexedTableLimits.MAX_ROWS);
   private final BTreeLookupResult indexLookup = new BTreeLookupResult();
   private final IndexedTableValidator validator;
   private final IndexedMutationValidator mutationValidator;
@@ -32,20 +34,20 @@ final class IndexedTableKernel {
   private final IndexedTableIndexTree indexTree;
   private final IndexedTableMutationStager mutationStager;
   private StatusCode stageOperationHeapStatus = StatusCode.OK;
-  private int rowCount;
+  private long rowCount;
   private int lastHeapPageId = HEAP_PAGE_ID;
-  private int operationRowCount;
+  private long operationRowCount;
   private int operationLastHeapPageId = HEAP_PAGE_ID;
 
   int operationVersionCount() {
     return versions.operationCount();
   }
 
-  int operationRowCount() {
+  long operationRowCount() {
     return operationRowCount;
   }
 
-  int operationPreviousRowId(int index) {
+  long operationPreviousRowId(int index) {
     return versions.operationPreviousRow(index);
   }
 
@@ -61,11 +63,11 @@ final class IndexedTableKernel {
     return heapInsert;
   }
 
-  void recordVacuumDeleted(int rowId, boolean deleted) {
+  void recordVacuumDeleted(long rowId, boolean deleted) {
     versions.recordVacuumDeleted(rowId, deleted);
   }
 
-  StatusCode fetchRow(int rowId, HeapRowResult result) {
+  StatusCode fetchRow(long rowId, HeapRowResult result) {
     if (result == null || rowId <= 0 || rowId > rowCount) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -73,13 +75,13 @@ final class IndexedTableKernel {
         pages.currentPayloadUnchecked(rowPageIds.get(rowId)), rowSlots.get(rowId), result);
   }
 
-  int rowLength(int rowId) {
+  int rowLength(long rowId) {
     return rowId > 0 && rowId <= rowCount
         ? HeapPage.rowLength(
             pages.currentPayloadUnchecked(rowPageIds.get(rowId)), rowSlots.get(rowId)) : 0;
   }
 
-  StatusCode copyRowTo(int rowId, ByteBuffer destination, int destinationOffset) {
+  StatusCode copyRowTo(long rowId, ByteBuffer destination, int destinationOffset) {
     if (rowId <= 0 || rowId > rowCount) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -90,15 +92,15 @@ final class IndexedTableKernel {
         destinationOffset);
   }
 
-  long rowCommitSequence(int rowId) {
+  long rowCommitSequence(long rowId) {
     return versions.commitSequence(rowId, rowCount);
   }
 
-  int previousRowId(int rowId) {
+  long previousRowId(long rowId) {
     return versions.previousRow(rowId, rowCount);
   }
 
-  boolean isDeletedRow(int rowId) {
+  boolean isDeletedRow(long rowId) {
     return versions.isDeleted(rowId, rowCount);
   }
 
@@ -112,7 +114,7 @@ final class IndexedTableKernel {
       ByteBuffer source,
       int sourceOffset,
       int rowBytes,
-      int previousRowId,
+      long previousRowId,
       boolean deleted,
       HeapInsertResult result) {
     if (source == null
@@ -159,11 +161,11 @@ final class IndexedTableKernel {
       ByteBuffer source,
       int sourceOffset,
       int rowBytes,
-      int expectedRowId,
+      long expectedRowId,
       long recordStart,
       long recordEnd,
       long commitSequence,
-      int previousRowId,
+      long previousRowId,
       boolean deleted) {
     if (expectedRowId != rowCount + 1 || expectedRowId > IndexedTableLimits.MAX_ROWS) {
       return StatusCode.CORRUPTION;
@@ -194,14 +196,14 @@ final class IndexedTableKernel {
     }
     rowCount++;
     rowPageIds.set(rowCount, lastHeapPageId);
-    rowSlots.set(rowCount, heapInsert.rowId());
+    rowSlots.set(rowCount, (int) heapInsert.rowId());
     versions.recordCommitted(rowCount, commitSequence, previousRowId, deleted);
     pages.markCurrentChanged(lastHeapPageId, recordStart, recordEnd);
     return StatusCode.OK;
   }
 
   StatusCode rebuildRowLocations() {
-    int rebuiltRows = 0;
+    long rebuiltRows = 0;
     int rebuiltLastHeap = 0;
     for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
       if (!pages.isPresent(pageId) || !HeapPage.isHeap(pages.currentPayloadUnchecked(pageId))) {
@@ -221,7 +223,7 @@ final class IndexedTableKernel {
     if (rebuiltLastHeap == 0) {
       return StatusCode.CORRUPTION;
     }
-    for (int rowId = rebuiltRows + 1; rowId <= rowCount; rowId++) {
+    for (long rowId = rebuiltRows + 1; rowId <= rowCount; rowId++) {
       rowPageIds.set(rowId, 0);
       rowSlots.set(rowId, 0);
     }
@@ -230,14 +232,14 @@ final class IndexedTableKernel {
     return StatusCode.OK;
   }
 
-  void recordNewRowCommits(int previousRowCount, long commitSequence) {
+  void recordNewRowCommits(long previousRowCount, long commitSequence) {
     if (!pages.isPresent(HEAP_PAGE_ID)) {
       return;
     }
     versions.recordNewRows(previousRowCount, rowCount, commitSequence);
   }
 
-  void recordOperationVersions(int previousRowCount, long commitSequence) {
+  void recordOperationVersions(long previousRowCount, long commitSequence) {
     versions.recordOperation(previousRowCount, commitSequence);
   }
 
@@ -252,18 +254,18 @@ final class IndexedTableKernel {
   StatusCode applyRecoveredVersions(
       ByteBuffer payload,
       int versionOffset,
-      int previousRowCount,
+      long previousRowCount,
       int versionCount,
       long commitSequence) {
     return versions.applyRecovered(
         payload, versionOffset, previousRowCount, versionCount, commitSequence);
   }
 
-  void publishVacuumVersions(int retainedRows, long commitSequence) {
+  void publishVacuumVersions(long retainedRows, long commitSequence) {
     versions.publishVacuum(retainedRows, commitSequence);
   }
 
-  void cancelVacuumVersions(int appliedRows) {
+  void cancelVacuumVersions(long appliedRows) {
     versions.cancelVacuum(appliedRows);
   }
 
@@ -291,18 +293,18 @@ final class IndexedTableKernel {
     return vacuum.chunkCount();
   }
 
-  int vacuumChunkRowCount(int firstRow) {
+  int vacuumChunkRowCount(long firstRow) {
     return vacuum.chunkRowCount(firstRow);
   }
 
-  int vacuumChunkPayloadBytes(int firstRow, int rowLimit) {
+  int vacuumChunkPayloadBytes(long firstRow, int rowLimit) {
     return vacuum.chunkPayloadBytes(firstRow, rowLimit);
   }
 
   StatusCode encodeVacuumChunk(
       ByteBuffer payload,
-      int retainedRows,
-      int firstRow,
+      long retainedRows,
+      long firstRow,
       int rowLimit,
       int chunk,
       int chunkCount,
@@ -315,7 +317,7 @@ final class IndexedTableKernel {
     return vacuum.beginApply();
   }
 
-  StatusCode applyVacuumEntry(ByteBuffer payload, int entryOffset, int compactedRowId) {
+  StatusCode applyVacuumEntry(ByteBuffer payload, int entryOffset, long compactedRowId) {
     return vacuum.applyEntry(payload, entryOffset, compactedRowId);
   }
 
@@ -469,7 +471,7 @@ final class IndexedTableKernel {
   StatusCode stageVersionRow(
       PendingMutationBuffer mutations,
       int index,
-      int previousRowId,
+      long previousRowId,
       boolean deleted,
       HeapInsertResult result) {
     int rowBytes = mutations.rowLengthAt(index);
@@ -571,7 +573,7 @@ final class IndexedTableKernel {
     if (!status.isOk()) {
       return status;
     }
-    int rowId = (int) indexLookup.rowId();
+    long rowId = indexLookup.rowId();
     while (rowId > 0) {
       long rowCommitSequence = rowCommitSequence(rowId);
       if (rowCommitSequence <= 0) {
@@ -619,8 +621,8 @@ final class IndexedTableKernel {
         cursor.advanceLeaf(0);
         return StatusCode.CONFLICT;
       }
-      int rowId = visibleRowId(
-          (int) BTreePage.leafValueAt(leaf, entry), cursor.visibleCommitSequence());
+      long rowId = visibleRowId(
+          BTreePage.leafValueAt(leaf, entry), cursor.visibleCommitSequence());
       if (rowId <= 0 || isDeletedRow(rowId)) continue;
       StatusCode status = fetchRow(rowId, result.row());
       if (!status.isOk()) return status;
@@ -630,7 +632,7 @@ final class IndexedTableKernel {
     return StatusCode.CONFLICT;
   }
 
-  private int visibleRowId(int rowId, long visibleCommitSequence) {
+  private long visibleRowId(long rowId, long visibleCommitSequence) {
     return versions.visibleRow(rowId, visibleCommitSequence, rowCount);
   }
 
@@ -648,7 +650,7 @@ final class IndexedTableKernel {
     if (!status.isOk()) {
       return status;
     }
-    int latestRowId = (int) indexLookup.rowId();
+    long latestRowId = indexLookup.rowId();
     long latestCommitSequence = rowCommitSequence(latestRowId);
     if (latestCommitSequence <= 0) {
       return StatusCode.CORRUPTION;
@@ -677,7 +679,7 @@ final class IndexedTableKernel {
     if (!status.isOk()) {
       return status;
     }
-    int latestRowId = (int) indexLookup.rowId();
+    long latestRowId = indexLookup.rowId();
     long latestCommitSequence = rowCommitSequence(latestRowId);
     if (latestCommitSequence <= 0) {
       return StatusCode.CORRUPTION;
@@ -690,7 +692,7 @@ final class IndexedTableKernel {
     return StatusCode.OK;
   }
 
-  int rowCount() {
+  long rowCount() {
     return rowCount;
   }
 
@@ -698,7 +700,7 @@ final class IndexedTableKernel {
     return versions.obsoleteCount();
   }
 
-  int remainingVersionCapacity() {
+  long remainingVersionCapacity() {
     return IndexedTableLimits.MAX_ROWS - rowCount;
   }
 
@@ -757,7 +759,7 @@ final class IndexedTableKernel {
       int operation,
       int space,
       long key,
-      int previousRowId,
+      long previousRowId,
       int earlierNewEntriesInLeaf) {
     return validateMutationTargetAt(
         findLeafPageId(space, key), operation, space, key,
@@ -769,7 +771,7 @@ final class IndexedTableKernel {
       int operation,
       int space,
       long key,
-      int previousRowId,
+      long previousRowId,
       int earlierNewEntriesInLeaf) {
     return mutationValidator.validateMutationAt(
         leafPageId,
@@ -786,7 +788,7 @@ final class IndexedTableKernel {
       int operation,
       int space,
       long key,
-      int previousRowId,
+      long previousRowId,
       int earlierNewEntriesInLeaf) {
     return mutationValidator.validateMutationIn(
         leaf,
@@ -798,7 +800,7 @@ final class IndexedTableKernel {
         isDeletedRow(previousRowId));
   }
 
-  StatusCode validateVacuumHead(int space, long key, int rowId) {
+  StatusCode validateVacuumHead(int space, long key, long rowId) {
     return mutationValidator.validateVacuumAt(
         findLeafPageId(space, key), space, key, rowId);
   }
@@ -847,7 +849,7 @@ final class IndexedTableKernel {
   }
 
   StatusCode splitIndexLeaf(
-      int leafPageId, ByteBuffer leaf, int space, long key, int rowId) {
+      int leafPageId, ByteBuffer leaf, int space, long key, long rowId) {
     return indexTree.splitAndInsert(leafPageId, leaf, space, key, rowId);
   }
 

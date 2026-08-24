@@ -2,8 +2,8 @@ package io.riverdb.engine.table;
 
 /** Caller-owned result for one quiescent indexed-table vacuum. */
 public final class IndexedVacuumResult {
-  private int rowsBefore;
-  private int rowsAfter;
+  private long rowsBefore;
+  private long rowsAfter;
   private long commitSequence;
 
   public void reset() {
@@ -12,21 +12,21 @@ public final class IndexedVacuumResult {
     commitSequence = 0;
   }
 
-  public void set(int before, int after, long committedAt) {
+  public void set(long before, long after, long committedAt) {
     rowsBefore = before;
     rowsAfter = after;
     commitSequence = committedAt;
   }
 
-  public int rowsBefore() {
+  public long rowsBefore() {
     return rowsBefore;
   }
 
-  public int rowsAfter() {
+  public long rowsAfter() {
     return rowsAfter;
   }
 
-  public int rowsReclaimed() {
+  public long rowsReclaimed() {
     return rowsBefore - rowsAfter;
   }
 

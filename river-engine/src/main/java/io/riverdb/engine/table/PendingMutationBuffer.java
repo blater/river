@@ -18,7 +18,7 @@ final class PendingMutationBuffer {
   private final int[] operations;
   private final long[] keys;
   private final int[] spaces;
-  private final int[] previousRowIds;
+  private final long[] previousRowIds;
   private final int[] rowLengths;
   private final boolean[] retained;
   private final int rowStride;
@@ -29,7 +29,7 @@ final class PendingMutationBuffer {
     operations = new int[capacity];
     keys = new long[capacity];
     spaces = new int[capacity];
-    previousRowIds = new int[capacity];
+    previousRowIds = new long[capacity];
     rowLengths = new int[capacity];
     retained = new boolean[capacity];
     rowStride = maximumRowBytes;
@@ -59,7 +59,7 @@ final class PendingMutationBuffer {
     return spaces[index];
   }
 
-  int previousRowIdAt(int index) {
+  long previousRowIdAt(int index) {
     return previousRowIds[index];
   }
 
@@ -67,7 +67,7 @@ final class PendingMutationBuffer {
     return rowLengths[index];
   }
 
-  void appendDeletion(int operation, int space, long key, int previousRowId) {
+  void appendDeletion(int operation, int space, long key, long previousRowId) {
     int destinationStart = count * rowStride;
     rows.limit(rows.capacity());
     rows.put(destinationStart, (byte) 0);
@@ -83,7 +83,7 @@ final class PendingMutationBuffer {
       int operation,
       int space,
       long key,
-      int previousRowId,
+      long previousRowId,
       ByteBuffer source,
       int sourceStart,
       int rowBytes) {

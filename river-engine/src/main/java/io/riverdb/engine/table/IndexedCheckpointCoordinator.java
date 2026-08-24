@@ -128,7 +128,7 @@ final class IndexedCheckpointCoordinator {
         || pages.hasDirtyPages()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int checkpointRows = kernel.rowCount();
+    long checkpointRows = kernel.rowCount();
     state.reset();
     StatusCode status = state.setLarge(
         database,
@@ -138,7 +138,7 @@ final class IndexedCheckpointCoordinator {
         maximumTransactionId,
         pages.highestPageId(),
         checkpointRows);
-    for (int rowId = 1; status.isOk() && rowId <= checkpointRows; rowId++) {
+    for (long rowId = 1; status.isOk() && rowId <= checkpointRows; rowId++) {
       status = state.setRowVersion(
           rowId,
           kernel.rowCommitSequence(rowId),

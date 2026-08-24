@@ -2,13 +2,13 @@ package io.riverdb.engine.table;
 
 /** Caller-owned resolved row-version target for a deferred update or delete. */
 public final class IndexedMutationTarget {
-  private int rowId;
+  private long rowId;
 
-  public int rowId() {
+  public long rowId() {
     return rowId;
   }
 
-  public void set(int value) {
+  public void set(long value) {
     rowId = value;
   }
 

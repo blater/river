@@ -70,7 +70,7 @@ final class IndexedPreparedPreflight {
     int operation = mutations.operationAt(index);
     int space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
-    int previousRowId = mutations.previousRowIdAt(index);
+    long previousRowId = mutations.previousRowIdAt(index);
     int rowBytes = mutations.rowLengthAt(index);
     StatusCode status = validMutation(operation)
         ? validateInput(space, key, rowBytes, mutations.rowStride())
@@ -114,7 +114,7 @@ final class IndexedPreparedPreflight {
         && !phase.preparedInsertEncoding()
         && mutations.count() > 0
         && keyCount + mutations.count() <= keys.length
-        && kernel.rowCount() + keyCount + mutations.count() <= IndexedTableStore.MAX_ROWS;
+        && kernel.rowCount() + keyCount + mutations.count() <= IndexedTableStore.MAX_LOGICAL_ROWS;
   }
 
   private StatusCode validateInput(

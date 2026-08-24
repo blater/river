@@ -141,11 +141,13 @@ public final class CheckpointControlStore {
     putLong(48, state.commitSequence());
     putLong(56, state.maximumTransactionId());
     putInt(64, state.pageCount());
-    putInt(68, state.rowCount());
-    for (int rowId = 1; rowId <= state.rowCount(); rowId++) {
-      int offset = ROWS_OFFSET + (rowId - 1) * ROW_ENTRY_BYTES;
+    putInt(68, (int) state.rowCount());
+    for (long rowId = 1; rowId <= state.rowCount(); rowId++) {
+      long offsetLong = ROWS_OFFSET + (rowId - 1) * ROW_ENTRY_BYTES;
+      if (offsetLong > Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
+      int offset = (int) offsetLong;
       putLong(offset, state.rowCommitSequence(rowId));
-      putInt(offset + 8, state.previousRowId(rowId));
+      putInt(offset + 8, (int) state.previousRowId(rowId));
       putInt(offset + 12, state.isDeleted(rowId) ? 1 : 0);
     }
     int checksumOffset = recordBytes - 8;
@@ -178,21 +180,31 @@ public final class CheckpointControlStore {
       result.reset();
       return StatusCode.CORRUPTION;
     }
-    for (int rowId = 1; rowId <= result.rowCount(); rowId++) {
-      int offset = ROWS_OFFSET + (rowId - 1) * ROW_ENTRY_BYTES;
+    for (long rowId = 1; rowId <= result.rowCount(); rowId++) {
+      long offsetLong = ROWS_OFFSET + (rowId - 1) * ROW_ENTRY_BYTES;
+      if (offsetLong > Integer.MAX_VALUE) {
+        result.reset();
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      int offset = (int) offsetLong;
       int flags = getInt(offset + 12);
       if ((flags & ~1) != 0) {
         result.reset();
         return StatusCode.CORRUPTION;
       }
       status = result.setRowVersion(
-          rowId, getLong(offset), getInt(offset + 8), flags == 1);
+        rowId, getLong(offset), Integer.toUnsignedLong(getInt(offset + 8)), flags == 1);
       if (!status.isOk()) {
         result.reset();
         return StatusCode.CORRUPTION;
       }
     }
-    int unusedOffset = ROWS_OFFSET + result.rowCount() * ROW_ENTRY_BYTES;
+    long unusedOffsetLong = ROWS_OFFSET + result.rowCount() * ROW_ENTRY_BYTES;
+    if (unusedOffsetLong > Integer.MAX_VALUE) {
+      result.reset();
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int unusedOffset = (int) unusedOffsetLong;
     if (!zeroRange(unusedOffset, checksumOffset)) {
       result.reset();
       return StatusCode.CORRUPTION;

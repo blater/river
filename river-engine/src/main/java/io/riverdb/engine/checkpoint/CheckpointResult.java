@@ -9,8 +9,8 @@ public final class CheckpointResult {
   private long walBytes;
   private long commitSequence;
   private int pageCount;
-  private int rowCount;
-  private int rowsReclaimed;
+  private long rowCount;
+  private long rowsReclaimed;
   private boolean obsoleteFilesRetained;
 
   public void reset() {
@@ -34,8 +34,8 @@ public final class CheckpointResult {
       long nextBytes,
       long committedAt,
       int pages,
-      int rows,
-      int reclaimed,
+      long rows,
+      long reclaimed,
       boolean retained) {
     checkpointId = id;
     previousWalGeneration = previousGeneration;
@@ -77,11 +77,11 @@ public final class CheckpointResult {
     return pageCount;
   }
 
-  public int rowCount() {
+  public long rowCount() {
     return rowCount;
   }
 
-  public int rowsReclaimed() {
+  public long rowsReclaimed() {
     return rowsReclaimed;
   }
 

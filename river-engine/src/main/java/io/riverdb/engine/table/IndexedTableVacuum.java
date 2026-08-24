@@ -13,7 +13,7 @@ final class IndexedTableVacuum {
   private final IndexedPageSet pages;
   private final IndexedVersionState versions;
   private final io.riverdb.storage.heap.HeapInsertResult heapInsert;
-  private int encodeOrdinal;
+  private long encodeOrdinal;
   private int encodedRows;
   private int outputOffset;
   private int heapPageId;
@@ -40,7 +40,7 @@ final class IndexedTableVacuum {
       if (leaf == null) continue;
       int entryCount = BTreePage.entryCount(leaf);
       for (int entry = 0; entry < entryCount; entry++) {
-        int rowBytes = table.rowLength((int) BTreePage.leafValueAt(leaf, entry));
+        int rowBytes = table.rowLength(BTreePage.leafValueAt(leaf, entry));
         int required = IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
         if (rowBytes <= 0
             || required > WalRecordCodec.MAX_PAYLOAD_BYTES
@@ -59,8 +59,8 @@ final class IndexedTableVacuum {
     return rows == table.indexedEntryCount() ? chunks : -1;
   }
 
-  int chunkRowCount(int firstRow) {
-    int ordinal = 0;
+  int chunkRowCount(long firstRow) {
+    long ordinal = 0;
     int rows = 0;
     int bytes = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
     for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
@@ -69,7 +69,7 @@ final class IndexedTableVacuum {
       int entryCount = BTreePage.entryCount(leaf);
       for (int entry = 0; entry < entryCount; entry++) {
         if (ordinal++ < firstRow) continue;
-        int rowBytes = table.rowLength((int) BTreePage.leafValueAt(leaf, entry));
+        int rowBytes = table.rowLength(BTreePage.leafValueAt(leaf, entry));
         int required = IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
         if (rowBytes <= 0 || bytes > WalRecordCodec.MAX_PAYLOAD_BYTES - required) {
           return rows;
@@ -81,8 +81,8 @@ final class IndexedTableVacuum {
     return rows;
   }
 
-  int chunkPayloadBytes(int firstRow, int rowLimit) {
-    int ordinal = 0;
+  int chunkPayloadBytes(long firstRow, int rowLimit) {
+    long ordinal = 0;
     int rows = 0;
     int bytes = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
     for (int pageId = 1;
@@ -93,7 +93,7 @@ final class IndexedTableVacuum {
       int entryCount = BTreePage.entryCount(leaf);
       for (int entry = 0; rows < rowLimit && entry < entryCount; entry++) {
         if (ordinal++ < firstRow) continue;
-        int rowBytes = table.rowLength((int) BTreePage.leafValueAt(leaf, entry));
+        int rowBytes = table.rowLength(BTreePage.leafValueAt(leaf, entry));
         if (rowBytes <= 0) return -1;
         bytes += IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
         rows++;
@@ -104,8 +104,8 @@ final class IndexedTableVacuum {
 
   StatusCode encodeChunk(
       ByteBuffer payload,
-      int retainedRows,
-      int firstRow,
+      long retainedRows,
+      long firstRow,
       int rowLimit,
       int chunk,
       int chunkCount,
@@ -142,11 +142,11 @@ final class IndexedTableVacuum {
   }
 
   private StatusCode encodeLeaf(
-      ByteBuffer payload, ByteBuffer leaf, int firstRow, int rowLimit) {
+      ByteBuffer payload, ByteBuffer leaf, long firstRow, int rowLimit) {
     int entryCount = BTreePage.entryCount(leaf);
     for (int entry = 0; encodedRows < rowLimit && entry < entryCount; entry++) {
       if (encodeOrdinal++ < firstRow) continue;
-      int rowId = (int) BTreePage.leafValueAt(leaf, entry);
+      long rowId = BTreePage.leafValueAt(leaf, entry);
       int rowBytes = table.rowLength(rowId);
       IndexedWalCodec.encodeVacuumEntry(
           payload,
@@ -181,13 +181,13 @@ final class IndexedTableVacuum {
     return status;
   }
 
-  StatusCode applyEntry(ByteBuffer payload, int entryOffset, int compactedRowId) {
+  StatusCode applyEntry(ByteBuffer payload, int entryOffset, long compactedRowId) {
     if (!IndexedWalCodec.validVacuumEntry(payload, entryOffset)) {
       return StatusCode.CORRUPTION;
     }
     long key = IndexedWalCodec.vacuumEntryKey(payload, entryOffset);
     int space = IndexedWalCodec.vacuumEntrySpace(payload, entryOffset);
-    int oldRowId = IndexedWalCodec.vacuumEntryRowId(payload, entryOffset);
+    long oldRowId = IndexedWalCodec.vacuumEntryRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.vacuumEntryRowBytes(payload, entryOffset);
     boolean deleted = IndexedWalCodec.vacuumEntryDeleted(payload, entryOffset);
     if (!OrderedKey.isFiniteSpace(space)

@@ -207,7 +207,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   void appendPendingDeletion(
-      int operation, int space, long key, int previousRowId) {
+      int operation, int space, long key, long previousRowId) {
     pendingMutations.appendDeletion(operation, space, key, previousRowId);
   }
 
@@ -215,7 +215,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       int operation,
       int space,
       long key,
-      int previousRowId,
+      long previousRowId,
       ByteBuffer source,
       int sourceStart,
       int rowBytes,
@@ -438,7 +438,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return preparedInsertResult;
   }
 
-  void recordPreparedAppend(int rowId, long commitSequence) {
+  void recordPreparedAppend(long rowId, long commitSequence) {
     commitResult.set(rowId, commitSequence);
     committedSequence = commitSequence;
   }

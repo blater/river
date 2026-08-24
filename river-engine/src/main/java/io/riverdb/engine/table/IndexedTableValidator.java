@@ -15,8 +15,8 @@ final class IndexedTableValidator {
   private final IndexedVersionState versions;
   private final PagedBooleanArray visited = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
   private int previousLeafPageId;
-  private int versionRows;
-  private int rowCount;
+  private long versionRows;
+  private long rowCount;
 
   IndexedTableValidator(
       IndexedPageSet pageSet,
@@ -25,7 +25,7 @@ final class IndexedTableValidator {
     versions = versionState;
   }
 
-  StatusCode validate(int rows) {
+  StatusCode validate(long rows) {
     rowCount = rows;
     ByteBuffer heap = pages.currentPayload(IndexedTableKernel.HEAP_PAGE_ID);
     ByteBuffer metadata = pages.currentPayload(IndexedTableKernel.ROOT_META_PAGE_ID);
@@ -220,7 +220,7 @@ final class IndexedTableValidator {
     int rows = 0;
     int entryCount = BTreePage.entryCount(leaf);
     for (int entry = 0; entry < entryCount; entry++) {
-      int chainRows = versionChainRows((int) BTreePage.leafValueAt(leaf, entry));
+      int chainRows = versionChainRows(BTreePage.leafValueAt(leaf, entry));
       if (chainRows < 0 || rows > rowCount - chainRows) {
         return -1;
       }
@@ -229,7 +229,7 @@ final class IndexedTableValidator {
     return rows;
   }
 
-  private int versionChainRows(int rowId) {
+  private int versionChainRows(long rowId) {
     int rows = 0;
     long newerCommitSequence = 0;
     while (rowId > 0) {
@@ -239,7 +239,7 @@ final class IndexedTableValidator {
           || newerCommitSequence != 0 && commitSequence >= newerCommitSequence) {
         return -1;
       }
-      int previousRowId = versions.previousRow(rowId, rowCount);
+      long previousRowId = versions.previousRow(rowId, rowCount);
       if (previousRowId < 0 || previousRowId >= rowId) {
         return -1;
       }
