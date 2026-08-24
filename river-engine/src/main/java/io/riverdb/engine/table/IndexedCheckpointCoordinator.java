@@ -130,7 +130,7 @@ final class IndexedCheckpointCoordinator {
     }
     int checkpointRows = kernel.rowCount();
     state.reset();
-    StatusCode status = state.set(
+    StatusCode status = state.setLarge(
         database,
         generation,
         checkpointId,

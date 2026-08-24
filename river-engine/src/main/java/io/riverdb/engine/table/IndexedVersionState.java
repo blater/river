@@ -6,10 +6,10 @@ import java.nio.ByteBuffer;
 
 /** Owns bounded row-version metadata and operation/vacuum publication state. */
 final class IndexedVersionState {
-  private final long[] commitSequences = new long[IndexedTableLimits.MAX_ROWS + 1];
-  private final int[] previousRows = new int[IndexedTableLimits.MAX_ROWS + 1];
-  private final boolean[] deleted = new boolean[IndexedTableLimits.MAX_ROWS + 1];
-  private final boolean[] vacuumDeleted = new boolean[IndexedTableLimits.MAX_ROWS + 1];
+  private final PagedLongArray commitSequences = new PagedLongArray(IndexedTableLimits.MAX_ROWS);
+  private final PagedIntArray previousRows = new PagedIntArray(IndexedTableLimits.MAX_ROWS);
+  private final PagedBooleanArray deleted = new PagedBooleanArray(IndexedTableLimits.MAX_ROWS);
+  private final PagedBooleanArray vacuumDeleted = new PagedBooleanArray(IndexedTableLimits.MAX_ROWS);
   private final int[] operationPreviousRows =
       new int[IndexedTableLimits.MAX_OPERATION_ROWS];
   private final boolean[] operationDeleted =
@@ -34,15 +34,15 @@ final class IndexedVersionState {
   }
 
   long commitSequence(int rowId, int rowCount) {
-    return rowId > 0 && rowId <= rowCount ? commitSequences[rowId] : 0;
+    return rowId > 0 && rowId <= rowCount ? commitSequences.get(rowId) : 0;
   }
 
   int previousRow(int rowId, int rowCount) {
-    return rowId > 0 && rowId <= rowCount ? previousRows[rowId] : 0;
+    return rowId > 0 && rowId <= rowCount ? previousRows.get(rowId) : 0;
   }
 
   boolean isDeleted(int rowId, int rowCount) {
-    return rowId > 0 && rowId <= rowCount && deleted[rowId];
+    return rowId > 0 && rowId <= rowCount && deleted.get(rowId);
   }
 
   void beginOperation() {
@@ -67,9 +67,9 @@ final class IndexedVersionState {
       long commitSequence,
       int previousRowId,
       boolean delete) {
-    commitSequences[rowId] = commitSequence;
-    previousRows[rowId] = previousRowId;
-    deleted[rowId] = delete;
+    commitSequences.set(rowId, commitSequence);
+    previousRows.set(rowId, previousRowId);
+    deleted.set(rowId, delete);
     if (previousRowId > 0) {
       obsoleteCount++;
     }
@@ -77,9 +77,9 @@ final class IndexedVersionState {
 
   void recordNewRows(int previousRowCount, int rowCount, long commitSequence) {
     for (int rowId = previousRowCount + 1; rowId <= rowCount; rowId++) {
-      commitSequences[rowId] = commitSequence;
-      previousRows[rowId] = 0;
-      deleted[rowId] = false;
+      commitSequences.set(rowId, commitSequence);
+      previousRows.set(rowId, 0);
+      deleted.set(rowId, false);
     }
   }
 
@@ -104,10 +104,10 @@ final class IndexedVersionState {
   void load(CheckpointState checkpoint) {
     obsoleteCount = 0;
     for (int rowId = 1; rowId <= checkpoint.rowCount(); rowId++) {
-      commitSequences[rowId] = checkpoint.rowCommitSequence(rowId);
-      previousRows[rowId] = checkpoint.previousRowId(rowId);
-      deleted[rowId] = checkpoint.isDeleted(rowId);
-      if (previousRows[rowId] > 0) {
+      commitSequences.set(rowId, checkpoint.rowCommitSequence(rowId));
+      previousRows.set(rowId, checkpoint.previousRowId(rowId));
+      deleted.set(rowId, checkpoint.isDeleted(rowId));
+      if (previousRows.get(rowId) > 0) {
         obsoleteCount++;
       }
     }
@@ -130,9 +130,9 @@ final class IndexedVersionState {
       if (previousRowId >= rowId || (delete && previousRowId == 0)) {
         return StatusCode.CORRUPTION;
       }
-      commitSequences[rowId] = commitSequence;
-      previousRows[rowId] = previousRowId;
-      deleted[rowId] = delete;
+      commitSequences.set(rowId, commitSequence);
+      previousRows.set(rowId, previousRowId);
+      deleted.set(rowId, delete);
       if (previousRowId > 0) {
         recoveredObsolete++;
       }
@@ -143,26 +143,24 @@ final class IndexedVersionState {
   }
 
   void recordVacuumDeleted(int rowId, boolean delete) {
-    vacuumDeleted[rowId] = delete;
+    vacuumDeleted.set(rowId, delete);
   }
 
   void publishVacuum(int retainedRows, long commitSequence) {
-    for (int rowId = 1; rowId <= IndexedTableLimits.MAX_ROWS; rowId++) {
-      commitSequences[rowId] = 0;
-      previousRows[rowId] = 0;
-      deleted[rowId] = false;
-    }
+    commitSequences.clear();
+    previousRows.clear();
+    deleted.clear();
     for (int rowId = 1; rowId <= retainedRows; rowId++) {
-      commitSequences[rowId] = commitSequence;
-      deleted[rowId] = vacuumDeleted[rowId];
-      vacuumDeleted[rowId] = false;
+      commitSequences.set(rowId, commitSequence);
+      deleted.set(rowId, vacuumDeleted.get(rowId));
+      vacuumDeleted.set(rowId, false);
     }
     obsoleteCount = 0;
   }
 
   void cancelVacuum(int appliedRows) {
     for (int rowId = 1; rowId <= appliedRows; rowId++) {
-      vacuumDeleted[rowId] = false;
+      vacuumDeleted.set(rowId, false);
     }
   }
 

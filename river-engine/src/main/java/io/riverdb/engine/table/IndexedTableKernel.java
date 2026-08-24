@@ -22,8 +22,8 @@ final class IndexedTableKernel {
   private final IndexedPageSet pages;
   private final HeapInsertResult heapInsert = new HeapInsertResult();
   private final IndexedVersionState versions = new IndexedVersionState();
-  private final int[] rowPageIds = new int[IndexedTableLimits.MAX_ROWS + 1];
-  private final int[] rowSlots = new int[IndexedTableLimits.MAX_ROWS + 1];
+  private final PagedIntArray rowPageIds = new PagedIntArray(IndexedTableLimits.MAX_ROWS);
+  private final PagedIntArray rowSlots = new PagedIntArray(IndexedTableLimits.MAX_ROWS);
   private final BTreeLookupResult indexLookup = new BTreeLookupResult();
   private final IndexedTableValidator validator;
   private final IndexedMutationValidator mutationValidator;
@@ -70,12 +70,13 @@ final class IndexedTableKernel {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return HeapPage.fetch(
-        pages.currentPayloadUnchecked(rowPageIds[rowId]), rowSlots[rowId], result);
+        pages.currentPayloadUnchecked(rowPageIds.get(rowId)), rowSlots.get(rowId), result);
   }
 
   int rowLength(int rowId) {
     return rowId > 0 && rowId <= rowCount
-        ? HeapPage.rowLength(pages.currentPayloadUnchecked(rowPageIds[rowId]), rowSlots[rowId]) : 0;
+        ? HeapPage.rowLength(
+            pages.currentPayloadUnchecked(rowPageIds.get(rowId)), rowSlots.get(rowId)) : 0;
   }
 
   StatusCode copyRowTo(int rowId, ByteBuffer destination, int destinationOffset) {
@@ -83,8 +84,8 @@ final class IndexedTableKernel {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return HeapPage.copyRowTo(
-        pages.currentPayloadUnchecked(rowPageIds[rowId]),
-        rowSlots[rowId],
+        pages.currentPayloadUnchecked(rowPageIds.get(rowId)),
+        rowSlots.get(rowId),
         destination,
         destinationOffset);
   }
@@ -192,8 +193,8 @@ final class IndexedTableKernel {
       return status;
     }
     rowCount++;
-    rowPageIds[rowCount] = lastHeapPageId;
-    rowSlots[rowCount] = heapInsert.rowId();
+    rowPageIds.set(rowCount, lastHeapPageId);
+    rowSlots.set(rowCount, heapInsert.rowId());
     versions.recordCommitted(rowCount, commitSequence, previousRowId, deleted);
     pages.markCurrentChanged(lastHeapPageId, recordStart, recordEnd);
     return StatusCode.OK;
@@ -212,8 +213,8 @@ final class IndexedTableKernel {
       }
       for (int slot = 1; slot <= pageRows; slot++) {
         rebuiltRows++;
-        rowPageIds[rebuiltRows] = pageId;
-        rowSlots[rebuiltRows] = slot;
+        rowPageIds.set(rebuiltRows, pageId);
+        rowSlots.set(rebuiltRows, slot);
       }
       rebuiltLastHeap = pageId;
     }
@@ -221,8 +222,8 @@ final class IndexedTableKernel {
       return StatusCode.CORRUPTION;
     }
     for (int rowId = rebuiltRows + 1; rowId <= rowCount; rowId++) {
-      rowPageIds[rowId] = 0;
-      rowSlots[rowId] = 0;
+      rowPageIds.set(rowId, 0);
+      rowSlots.set(rowId, 0);
     }
     rowCount = rebuiltRows;
     lastHeapPageId = rebuiltLastHeap;

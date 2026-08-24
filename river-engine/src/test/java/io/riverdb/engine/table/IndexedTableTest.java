@@ -252,6 +252,66 @@ final class IndexedTableTest {
   }
 
   @Test
+  void crossesFormer65536RowCeilingThroughRealInsertIndexScanAndRecovery(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    int rows = 65_537;
+    int batchSize = 64;
+    long[] keys = new long[batchSize];
+    int[] spaces = new int[batchSize];
+    int[] rowLengths = new int[batchSize];
+    ByteBuffer values = ByteBuffer.allocateDirect(batchSize * Long.BYTES);
+    IndexedCommitResult committed = new IndexedCommitResult();
+    long transactionId = 2;
+    for (int first = 0; first < rows; first += batchSize) {
+      int count = Math.min(batchSize, rows - first);
+      values.clear();
+      for (int index = 0; index < count; index++) {
+        long key = first + index;
+        keys[index] = key;
+        spaces[index] = 0;
+        rowLengths[index] = Long.BYTES;
+        values.putLong(index * Long.BYTES, key);
+      }
+      values.position(0);
+      values.limit(count * Long.BYTES);
+      assertEquals(
+          StatusCode.OK,
+          table.commitInserts(
+              transactionId++, spaces, keys, values, Long.BYTES, rowLengths, count, committed),
+          "first=" + first + " pageCount=" + table.pageCount());
+    }
+
+    assertEquals(rows, table.rowCount());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 65_536, fetched));
+    assertEquals(65_536, rowValue(fetched));
+
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult result = new IndexedScanResult();
+    assertEquals(StatusCode.OK, table.beginScan(table.visibleCommitSequence(), 0, 0, 0, rows, cursor));
+    int scanned = 0;
+    while (table.nextScan(cursor, result).isOk()) {
+      scanned++;
+    }
+    assertEquals(rows, scanned);
+    assertEquals(StatusCode.OK, table.closeScan(cursor));
+    assertEquals(StatusCode.OK, table.flush());
+    assertEquals(StatusCode.OK, table.close());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+
+    directory = openDirectory(root);
+    wal = openWal(directory);
+    table = openTable(openStore(directory, wal));
+    assertEquals(rows, table.rowCount());
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 65_536, fetched));
+    assertEquals(65_536, rowValue(fetched));
+    close(table, wal, directory);
+  }
+
+  @Test
   void snapshotHidesRowsCommittedAfterItsBoundary(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);

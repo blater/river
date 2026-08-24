@@ -30,7 +30,7 @@ public final class CheckpointControlStore {
   private static final int VERSION_ONE_DELETED_OFFSET = 72;
   private static final int VERSION_ONE_CHECKSUM_OFFSET = 504;
 
-  private final ByteBuffer bytes = ByteBuffer.allocateDirect(BYTES);
+  private ByteBuffer bytes = ByteBuffer.allocateDirect(BYTES);
   private final IoResult ioResult = new IoResult();
   private final FileSizeResult sizeResult = new FileSizeResult();
   private final CRC32C checksum = new CRC32C();
@@ -48,10 +48,13 @@ public final class CheckpointControlStore {
     DurableFile file = operation.file();
     status = file.size(sizeResult);
     long fileBytes = sizeResult.sizeBytes();
-    if (!status.isOk() || (fileBytes != BYTES && fileBytes != VERSION_ONE_BYTES)) {
+    if (!status.isOk()
+        || fileBytes < VERSION_ONE_BYTES
+        || fileBytes > Integer.MAX_VALUE) {
       file.close();
       return status.isOk() ? StatusCode.CORRUPTION : status;
     }
+    ensureCapacity((int) fileBytes);
     bytes.clear();
     bytes.limit((int) fileBytes);
     status = file.read(0, bytes, ioResult);
@@ -74,7 +77,10 @@ public final class CheckpointControlStore {
     if (directory == null || state == null || !state.isAvailable()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    encode(state);
+    StatusCode encodeStatus = encode(state);
+    if (!encodeStatus.isOk()) {
+      return encodeStatus;
+    }
     StatusCode status = directory.createTemporary(TEMPORARY_FILE_NAME, operation);
     if (status == StatusCode.CONFLICT) {
       status = directory.remove(TEMPORARY_FILE_NAME, operation);
@@ -90,9 +96,11 @@ public final class CheckpointControlStore {
     }
     DurableFile temporary = operation.file();
     bytes.position(0);
-    bytes.limit(BYTES);
+    int recordBytes = bytes.limit();
+    bytes.position(0);
+    bytes.limit(recordBytes);
     status = temporary.write(0, bytes, ioResult);
-    if (status.isOk() && ioResult.bytesTransferred() != BYTES) {
+    if (status.isOk() && ioResult.bytesTransferred() != recordBytes) {
       status = StatusCode.IO_FAILURE;
     }
     if (status.isOk()) {
@@ -111,14 +119,21 @@ public final class CheckpointControlStore {
     return status;
   }
 
-  private void encode(CheckpointState state) {
+  private StatusCode encode(CheckpointState state) {
+    long recordBytesLong = Math.max(
+        BYTES, (long) ROWS_OFFSET + state.rowCount() * ROW_ENTRY_BYTES + 8);
+    if (recordBytesLong > Integer.MAX_VALUE) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    int recordBytes = (int) recordBytesLong;
+    ensureCapacity(recordBytes);
     bytes.clear();
-    for (int index = 0; index < BYTES; index++) {
+    for (int index = 0; index < recordBytes; index++) {
       bytes.put(index, (byte) 0);
     }
     putLong(0, MAGIC);
     putInt(8, VERSION);
-    putInt(12, BYTES);
+    putInt(12, recordBytes);
     putLong(16, state.database().high());
     putLong(24, state.database().low());
     putLong(32, state.walGeneration().value());
@@ -133,14 +148,15 @@ public final class CheckpointControlStore {
       putInt(offset + 8, state.previousRowId(rowId));
       putInt(offset + 12, state.isDeleted(rowId) ? 1 : 0);
     }
-    int checksumOffset = BYTES - 8;
+    int checksumOffset = recordBytes - 8;
     putInt(checksumOffset, 0);
     putInt(checksumOffset + 4, 0);
-    int value = checksum(BYTES);
+    int value = checksum(recordBytes);
     putInt(checksumOffset, value);
     putInt(checksumOffset + 4, ~value);
     bytes.position(0);
-    bytes.limit(BYTES);
+    bytes.limit(recordBytes);
+    return StatusCode.OK;
   }
 
   private StatusCode decode(CheckpointState result) {
@@ -149,16 +165,16 @@ public final class CheckpointControlStore {
     if (version == VERSION_ONE && recordBytes == VERSION_ONE_BYTES) {
       return decodeVersionOne(result);
     }
-    if (version != VERSION || recordBytes != BYTES) {
+    if (version != VERSION || recordBytes != bytes.limit() || recordBytes < BYTES) {
       return StatusCode.CORRUPTION;
     }
-    StatusCode status = decodeHeader(result, VERSION, BYTES);
+    StatusCode status = decodeHeader(result, VERSION, recordBytes);
     if (!status.isOk()) {
       return status;
     }
-    int checksumOffset = BYTES - 8;
+    int checksumOffset = recordBytes - 8;
     int stored = getInt(checksumOffset);
-    if (getInt(checksumOffset + 4) != ~stored || checksum(BYTES) != stored) {
+    if (getInt(checksumOffset + 4) != ~stored || checksum(recordBytes) != stored) {
       result.reset();
       return StatusCode.CORRUPTION;
     }
@@ -242,10 +258,19 @@ public final class CheckpointControlStore {
         || maximumTransactionId <= 0
         || pageCount <= 0
         || rowCount < 0
-        || rowCount > CheckpointState.MAXIMUM_ROWS) {
+        || rowCount > CheckpointState.MAXIMUM_RUNTIME_ROWS) {
       return StatusCode.CORRUPTION;
     }
-    StatusCode status = result.set(
+    StatusCode status = rowCount <= CheckpointState.MAXIMUM_ROWS
+        ? result.set(
+            DatabaseIncarnation.of(databaseHigh, databaseLow),
+            WalGeneration.of(generation),
+            checkpointId,
+            commitSequence,
+            maximumTransactionId,
+            pageCount,
+            rowCount)
+        : result.setLarge(
         DatabaseIncarnation.of(databaseHigh, databaseLow),
         WalGeneration.of(generation),
         checkpointId,
@@ -278,6 +303,11 @@ public final class CheckpointControlStore {
       checksum.update(0);
     }
     return (int) checksum.getValue();
+  }
+
+  private void ensureCapacity(int required) {
+    if (bytes.capacity() >= required) return;
+    bytes = ByteBuffer.allocateDirect(required);
   }
 
   private void putInt(int offset, int value) {

@@ -350,10 +350,12 @@ final class EmbeddedDatabaseTest {
     IndexedTransactionSession session = sessionResult.session();
     TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer wideRow = ByteBuffer.allocateDirect(128);
-    int rows = 35 * 64;
-    for (int batch = 0; batch < 35; batch++) {
+    int rows = 65_537;
+    int batches = (rows + 63) / 64;
+    for (int batch = 0; batch < batches; batch++) {
       assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-      for (int index = 0; index < 64; index++) {
+      int batchRows = Math.min(64, rows - batch * 64);
+      for (int index = 0; index < batchRows; index++) {
         int key = batch * 64 + index;
         prepareWideRow(wideRow, key + 10_000L);
         assertEquals(StatusCode.OK, session.insert(0, key, wideRow));
