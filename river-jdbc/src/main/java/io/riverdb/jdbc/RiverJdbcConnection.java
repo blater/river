@@ -22,18 +22,18 @@ final class RiverJdbcConnection extends AbstractConnection {
   private static final int MAXIMUM_SAVEPOINT_NAME_LENGTH = 64;
   private static final int MAXIMUM_SAVEPOINTS = 3;
 
-  private final RiverClientConnection client;
-  private final RiverSession session;
+  final RiverClientConnection client;
+  final RiverSession session;
   private final RiverDatabaseMetaData metadata;
   private final CommandResult transactionResult = new CommandResult();
   private final QueryOpenResult metadataQuery = new QueryOpenResult();
   private final RiverJdbcSavepoint[] savepoints =
       new RiverJdbcSavepoint[MAXIMUM_SAVEPOINTS];
-  private RiverJdbcStatement statement;
-  private AbstractResultSet metadataResult;
+  RiverJdbcStatement statement;
+  AbstractResultSet metadataResult;
   private boolean autoCommit = true;
   private boolean transactionActive;
-  private volatile boolean closed;
+  volatile boolean closed;
   private int isolation = Connection.TRANSACTION_REPEATABLE_READ;
   private int nextSavepointId = 1;
   private int savepointCount;
@@ -184,35 +184,7 @@ final class RiverJdbcConnection extends AbstractConnection {
     if (closed) {
       return;
     }
-    SQLException closeFailure = null;
-    AbstractResultSet currentMetadata = metadataResult;
-    if (currentMetadata != null) {
-      try {
-        currentMetadata.close();
-      } catch (SQLException failure) {
-        closeFailure = failure;
-      }
-    }
-    if (statement != null) {
-      try {
-        statement.close();
-      } catch (SQLException failure) {
-        if (closeFailure == null) {
-          closeFailure = failure;
-        }
-      }
-    }
-    StatusCode sessionStatus = session.close();
-    StatusCode connectionStatus = client.close();
-    completeSavepointsFrom(0);
-    closed = true;
-    if (closeFailure != null) {
-      throw closeFailure;
-    } else if (!sessionStatus.isOk() && sessionStatus != StatusCode.CLOSED) {
-      throw JdbcExceptions.failure(sessionStatus, "close session");
-    } else if (!connectionStatus.isOk() && connectionStatus != StatusCode.CLOSED) {
-      throw JdbcExceptions.failure(connectionStatus, "close connection");
-    }
+    RiverJdbcConnectionCloser.close(this);
   }
 
   @Override
@@ -268,11 +240,7 @@ final class RiverJdbcConnection extends AbstractConnection {
     if (transactionActive) {
       throw JdbcExceptions.failure(StatusCode.CONFLICT, "change transaction isolation");
     }
-    if (level != Connection.TRANSACTION_READ_COMMITTED
-        && level != Connection.TRANSACTION_REPEATABLE_READ
-        && level != Connection.TRANSACTION_SERIALIZABLE) {
-      throw JdbcExceptions.unsupported();
-    }
+    RiverJdbcIsolation.requireSupported(level);
     isolation = level;
   }
 
@@ -356,15 +324,12 @@ final class RiverJdbcConnection extends AbstractConnection {
 
   void beforeExecution() throws SQLException {
     requireOpen();
-    if (!autoCommit && !transactionActive) {
-      String begin = isolation == Connection.TRANSACTION_READ_COMMITTED
-          ? "BEGIN READ COMMITTED"
-          : isolation == Connection.TRANSACTION_SERIALIZABLE
-              ? "BEGIN SERIALIZABLE" : "BEGIN";
-      transactionResult.reset();
-      JdbcExceptions.require(session.execute(begin, transactionResult), "begin transaction");
-      transactionActive = true;
-    }
+    transactionActive = RiverJdbcTransactionStarter.ensure(
+        session,
+        transactionResult,
+        autoCommit,
+        transactionActive,
+        isolation);
   }
 
   void commandCompleted(CommandResult result) {
@@ -572,7 +537,7 @@ final class RiverJdbcConnection extends AbstractConnection {
     transactionActive = transactionResult.transactionActive();
   }
 
-  private void completeSavepointsFrom(int first) {
+  void completeSavepointsFrom(int first) {
     for (int index = savepointCount - 1; index >= first; index--) {
       savepoints[index].complete();
       savepoints[index] = null;

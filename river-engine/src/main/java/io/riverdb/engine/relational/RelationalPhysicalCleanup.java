@@ -12,21 +12,21 @@ final class RelationalPhysicalCleanup {
   private static final int BATCH_ROWS = 48;
 
   private final RelationalSchemaGate schemaGate;
-  private final IndexedScanCursor scanCursor = new IndexedScanCursor();
-  private final IndexedScanResult scanRow = new IndexedScanResult();
-  private final int[] rowSpaces = new int[BATCH_ROWS];
-  private final long[] rowKeys = new long[BATCH_ROWS];
-  private final long[] indexCatalogKeys =
+  final IndexedScanCursor scanCursor = new IndexedScanCursor();
+  final IndexedScanResult scanRow = new IndexedScanResult();
+  final int[] rowSpaces = new int[BATCH_ROWS];
+  final long[] rowKeys = new long[BATCH_ROWS];
+  final long[] indexCatalogKeys =
       new long[TableDefinition.MAXIMUM_INDEXES];
-  private final IndexedScanCursor catalogCursor = new IndexedScanCursor();
-  private final IndexedScanResult catalogRow = new IndexedScanResult();
-  private final ByteBuffer catalogScratch =
+  final IndexedScanCursor catalogCursor = new IndexedScanCursor();
+  final IndexedScanResult catalogRow = new IndexedScanResult();
+  final ByteBuffer catalogScratch =
       ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
-  private final CatalogIndexCodec.Result indexRecord = new CatalogIndexCodec.Result();
-  private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
-  private StatusCode collectStatus;
-  private boolean scanExhausted;
-  private boolean batchComplete;
+  final CatalogIndexCodec.Result indexRecord = new CatalogIndexCodec.Result();
+  final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
+  StatusCode collectStatus;
+  boolean scanExhausted;
+  boolean batchComplete;
 
   RelationalPhysicalCleanup(RelationalSchemaGate gate) {
     schemaGate = gate;
@@ -85,63 +85,7 @@ final class RelationalPhysicalCleanup {
       RelationalSession session,
       int tableId,
       TransactionOutcome outcome) {
-    batchComplete = false;
-    StatusCode status = session.begin(io.riverdb.tx.api.IsolationLevel.REPEATABLE_READ);
-    if (status.isOk()) {
-      int dataSpace = RelationalKey.dataSpace(tableId);
-      status = session.indexedSession().beginScan(
-          dataSpace,
-          Long.MIN_VALUE,
-          RelationalKey.auxiliarySpace(tableId) + 1,
-          Long.MIN_VALUE,
-          scanCursor);
-    }
-    int count = 0;
-    if (status.isOk()) {
-      count = collectKeys(session);
-      status = collectStatus;
-    }
-    if (scanCursor.isActive()) {
-      StatusCode close = session.indexedSession().closeScan(scanCursor);
-      if (status.isOk()) {
-        status = close;
-      }
-    }
-    scanCursor.reset();
-    for (int index = 0; status.isOk() && index < count; index++) {
-      status = session.indexedSession().delete(rowSpaces[index], rowKeys[index]);
-      rowSpaces[index] = 0;
-      rowKeys[index] = 0;
-    }
-    if (status.isOk()) {
-      status = session.commitBuildPhase(outcome);
-    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode abort = session.abortBuildPhase(outcome);
-      if (!abort.isOk()) {
-        status = abort;
-      }
-    }
-    batchComplete = status.isOk() && scanExhausted;
-    return status;
-  }
-
-  private int collectKeys(RelationalSession session) {
-    int count = 0;
-    collectStatus = StatusCode.OK;
-    scanExhausted = false;
-    while (collectStatus.isOk() && count < rowKeys.length) {
-      collectStatus = session.indexedSession().nextScan(scanCursor, scanRow);
-      if (collectStatus == StatusCode.CONFLICT) {
-        collectStatus = StatusCode.OK;
-        scanExhausted = true;
-        break;
-      }
-      if (collectStatus.isOk()) {
-        rowSpaces[count] = scanRow.keySpace();
-        rowKeys[count++] = scanRow.key();
-      }
-    }
-    return count;
+    return RelationalPhysicalBatchCleanup.run(this, session, tableId, outcome);
   }
 
   private StatusCode removeCatalog(
@@ -149,44 +93,10 @@ final class RelationalPhysicalCleanup {
       TableDefinition table,
       CharSequence tableName,
       TransactionOutcome outcome) {
-    StatusCode status = session.begin(io.riverdb.tx.api.IsolationLevel.SERIALIZABLE);
-    boolean scanActive = false;
-    if (status.isOk()) {
-      status = session.indexedSession().beginScan(
-          RelationalKey.CATALOG_OBJECT_SPACE,
-          Long.MIN_VALUE,
-          RelationalKey.CATALOG_SEQUENCE_SPACE,
-          Long.MIN_VALUE,
-          catalogCursor);
-      scanActive = status.isOk();
-    }
-    int count = status.isOk() ? collectIndexCatalogKeys(session, table) : 0;
-    if (status.isOk()) {
-      status = collectStatus;
-    }
-    if (scanActive) {
-      StatusCode close = session.indexedSession().closeScan(catalogCursor);
-      if (status.isOk()) {
-        status = close;
-      }
-    }
-    catalogCursor.reset();
-    for (int index = 0; status.isOk() && index < count; index++) {
-      status = session.indexedSession().delete(
-          RelationalKey.CATALOG_OBJECT_SPACE, indexCatalogKeys[index]);
-      indexCatalogKeys[index] = 0;
-    }
-    if (status.isOk()) {
-      status = RelationalKey.catalogTableKey(tableName, catalogKey);
-    }
-    if (status.isOk()) {
-      status = session.indexedSession().delete(catalogKey.space(), catalogKey.key());
-    }
-    if (status.isOk()) status = deleteStatistics(session, table.tableId());
-    return finishTransaction(session, outcome, status);
+    return RelationalCatalogCleanup.remove(this, session, table, tableName, outcome);
   }
 
-  private StatusCode deleteStatistics(RelationalSession session, int tableId) {
+  StatusCode deleteStatistics(RelationalSession session, int tableId) {
     long key = RelationalKey.tableStatisticsKey(tableId);
     StatusCode status = session.indexedSession().fetchByKey(
         RelationalKey.CATALOG_SEQUENCE_SPACE, key, catalogRow.row());
@@ -196,7 +106,7 @@ final class RelationalPhysicalCleanup {
         : status;
   }
 
-  private int collectIndexCatalogKeys(
+  int collectIndexCatalogKeys(
       RelationalSession session, TableDefinition table) {
     int count = 0;
     collectStatus = StatusCode.OK;
@@ -223,7 +133,7 @@ final class RelationalPhysicalCleanup {
     return count;
   }
 
-  private static StatusCode finishTransaction(
+  static StatusCode finishTransaction(
       RelationalSession session,
       TransactionOutcome outcome,
       StatusCode bodyStatus) {

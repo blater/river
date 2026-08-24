@@ -6,7 +6,6 @@ import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
-import io.riverdb.sql.SqlScalarExpression;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** One lazy, short-circuiting SQL-3VL evaluator for canonical predicates. */
@@ -14,19 +13,15 @@ final class SqlBooleanPredicateEvaluator {
   static final int FALSE = 0;
   static final int TRUE = 1;
   static final int UNKNOWN = 2;
-  private static final int PROGRAMS_PER_LEAF = 4;
 
   private final SqlBooleanPredicateWorkspace workspace;
   private final SqlPredicateOperandEvaluator expressions;
   private final SqlExpressionEvaluator exact;
-  private final SqlTemporalContext temporal;
+  private final SqlBooleanPredicatePreparation preparation;
   private final SqlPredicateOperand left;
   private final SqlPredicateOperand right;
   private final SqlPredicateOperand lower;
   private final SqlPredicateOperand upper;
-  private final SqlTemporalContext.LongResult current =
-      new SqlTemporalContext.LongResult();
-  private SqlTemporalZonePlan[] zones;
   private SqlCommand command;
   private SqlBoundBooleanPredicateProgram programs;
   private long primaryKey;
@@ -56,7 +51,7 @@ final class SqlBooleanPredicateEvaluator {
       SqlBooleanPredicateWorkspace shared,
       SqlTemporalContext temporalContext) {
     exact = shared.columns;
-    temporal = temporalContext;
+    preparation = new SqlBooleanPredicatePreparation(temporalContext);
     workspace = shared;
     expressions = shared.expressions;
     left = shared.left;
@@ -68,44 +63,7 @@ final class SqlBooleanPredicateEvaluator {
   StatusCode prepare(
       SqlCommand source, SqlBoundBooleanPredicateProgram bound) {
     resetOperands();
-    resetZones();
-    if (!bound.available()) return StatusCode.OK;
-    for (int leaf = 0; leaf < bound.leafCount(); leaf++) {
-      for (int program = 0; program < PROGRAMS_PER_LEAF; program++) {
-        StatusCode status = prepareProgram(source, bound, leaf, program);
-        if (!status.isOk()) return status;
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private StatusCode prepareProgram(
-      SqlCommand source,
-      SqlBoundBooleanPredicateProgram bound,
-      int leaf,
-      int program) {
-    int zoneNodes = 0;
-    int slot = programSlot(leaf, program);
-    for (int node = 0; node < bound.nodeCount(leaf, program); node++) {
-      int operator = bound.operator(leaf, program, node);
-      if (operator >= SqlScalarExpression.CURRENT_DATE
-          && operator <= SqlScalarExpression.LOCALTIMESTAMP) {
-        StatusCode status = temporal.currentValue(
-            operator, bound.descriptor(leaf, program, node), current);
-        if (!status.isOk()) return status;
-      }
-      if (operator != SqlScalarExpression.AT_TIME_ZONE) continue;
-      if (++zoneNodes > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
-      if (zones == null) {
-        zones = new SqlTemporalZonePlan[
-            SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
-      }
-      if (zones[slot] == null) zones[slot] = new SqlTemporalZonePlan();
-      StatusCode status = temporal.prepareZone(
-          source, bound.operand(leaf, program, node), zones[slot]);
-      if (!status.isOk()) return status;
-    }
-    return StatusCode.OK;
+    return preparation.prepare(source, bound);
   }
 
   StatusCode matches(
@@ -361,7 +319,7 @@ final class SqlBooleanPredicateEvaluator {
   }
 
   private StatusCode operand(int leaf, int program, SqlPredicateOperand result) {
-    SqlTemporalZonePlan zone = zones == null ? null : zones[programSlot(leaf, program)];
+    SqlTemporalZonePlan zone = preparation.zone(leaf, program);
     if (havingAggregates != null) {
       return expressions.evaluateHaving(
           command,
@@ -433,10 +391,6 @@ final class SqlBooleanPredicateEvaluator {
     return first == FALSE && second == FALSE ? FALSE : UNKNOWN;
   }
 
-  private static int programSlot(int leaf, int program) {
-    return leaf * PROGRAMS_PER_LEAF + program;
-  }
-
   private void clearEvaluation() {
     command = null;
     programs = null;
@@ -465,18 +419,7 @@ final class SqlBooleanPredicateEvaluator {
   void reset() {
     clearEvaluation();
     workspace.reset();
-    resetZones();
-  }
-
-  private void resetZones() {
-    if (zones == null) return;
-    for (int index = 0; index < zones.length; index++) {
-      if (zones[index] != null) {
-        zones[index].reset();
-        zones[index] = null;
-      }
-    }
-    zones = null;
+    preparation.reset();
   }
 
   static final class Match {

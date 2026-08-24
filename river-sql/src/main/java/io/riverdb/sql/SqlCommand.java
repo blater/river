@@ -20,76 +20,76 @@ public final class SqlCommand {
 
   static final long INVALID_TEXT_HANDLE = Long.MIN_VALUE;
 
-  private final SqlIdentifier tableName = new SqlIdentifier();
-  private final SqlIdentifier renamedTableName = new SqlIdentifier();
-  private final SqlIdentifier tableAlias = new SqlIdentifier();
-  private final SqlIdentifier indexName = new SqlIdentifier();
-  private final SqlIdentifier renamedIndexName = new SqlIdentifier();
-  private final SqlIdentifier sequenceName = new SqlIdentifier();
-  private final SqlIdentifier savepointName = new SqlIdentifier();
-  private final ViewQuery viewQuery = new ViewQuery();
-  private final SqlScalarExpression scalarExpression = new SqlScalarExpression();
-  private final SqlProjectionList projections = new SqlProjectionList();
-  private final SqlMutationExpressions mutationExpressions =
+  final SqlIdentifier tableName = new SqlIdentifier();
+  final SqlIdentifier renamedTableName = new SqlIdentifier();
+  final SqlIdentifier tableAlias = new SqlIdentifier();
+  final SqlIdentifier indexName = new SqlIdentifier();
+  final SqlIdentifier renamedIndexName = new SqlIdentifier();
+  final SqlIdentifier sequenceName = new SqlIdentifier();
+  final SqlIdentifier savepointName = new SqlIdentifier();
+  final SqlViewQuery viewQuery = new SqlViewQuery();
+  final SqlScalarExpression scalarExpression = new SqlScalarExpression();
+  final SqlProjectionList projections = new SqlProjectionList();
+  final SqlMutationExpressions mutationExpressions =
       new SqlMutationExpressions();
-  private final SqlAggregateSet aggregates = new SqlAggregateSet();
-  private final SqlBooleanPredicateProgram wherePredicates =
+  final SqlAggregateSet aggregates = new SqlAggregateSet();
+  final SqlBooleanPredicateProgram wherePredicates =
       new SqlBooleanPredicateProgram();
-  private SqlJoinChain joinChain;
-  private final SqlBooleanPredicateProgram booleanHavingPredicates =
+  SqlJoinChain joinChain;
+  final SqlBooleanPredicateProgram booleanHavingPredicates =
       new SqlBooleanPredicateProgram();
-  private final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
-  private final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
-  private final SqlIdentifier[] columnAliases = new SqlIdentifier[MAXIMUM_COLUMNS];
-  private final SqlIdentifier[] columnReferenceTableNames =
+  final SqlIdentifier[] columnNames = new SqlIdentifier[MAXIMUM_COLUMNS];
+  final SqlIdentifier[] columnTableNames = new SqlIdentifier[MAXIMUM_COLUMNS];
+  final SqlIdentifier[] columnAliases = new SqlIdentifier[MAXIMUM_COLUMNS];
+  final SqlIdentifier[] columnReferenceTableNames =
       new SqlIdentifier[MAXIMUM_COLUMNS];
-  private final SqlIdentifier[] columnReferenceColumnNames =
+  final SqlIdentifier[] columnReferenceColumnNames =
       new SqlIdentifier[MAXIMUM_COLUMNS];
-  private final SqlIdentifier orderColumnName = new SqlIdentifier();
-  private final long[] insertValues =
+  final SqlIdentifier orderColumnName = new SqlIdentifier();
+  final long[] insertValues =
       new long[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
-  private final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
-  private final long[] insertDefaultMasks = new long[MAXIMUM_INSERT_ROWS];
-  private final int[] insertTypeDescriptors =
+  final long[] insertNullMasks = new long[MAXIMUM_INSERT_ROWS];
+  final long[] insertDefaultMasks = new long[MAXIMUM_INSERT_ROWS];
+  final int[] insertTypeDescriptors =
       new int[MAXIMUM_INSERT_ROWS * MAXIMUM_COLUMNS];
-  private final long[] updateValues = new long[MAXIMUM_COLUMNS];
-  private final long[] columnDefaultValues = new long[MAXIMUM_COLUMNS];
-  private final byte[] columnDefaultKinds = new byte[MAXIMUM_COLUMNS];
-  private final int[] columnTypeDescriptors = new int[MAXIMUM_COLUMNS];
-  private final long[] columnCheckValues = new long[MAXIMUM_COLUMNS];
-  private final int[] columnCheckTypeDescriptors = new int[MAXIMUM_COLUMNS];
-  private final SqlComparison[] columnCheckComparisons =
+  final long[] updateValues = new long[MAXIMUM_COLUMNS];
+  final long[] columnDefaultValues = new long[MAXIMUM_COLUMNS];
+  final byte[] columnDefaultKinds = new byte[MAXIMUM_COLUMNS];
+  final int[] columnTypeDescriptors = new int[MAXIMUM_COLUMNS];
+  final long[] columnCheckValues = new long[MAXIMUM_COLUMNS];
+  final int[] columnCheckTypeDescriptors = new int[MAXIMUM_COLUMNS];
+  final SqlComparison[] columnCheckComparisons =
       new SqlComparison[MAXIMUM_COLUMNS];
-  private final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
-  private final boolean[] defaultUpdates = new boolean[MAXIMUM_COLUMNS];
-  private final int[] updateTypeDescriptors = new int[MAXIMUM_COLUMNS];
-  private final int[] updateOperators = new int[MAXIMUM_COLUMNS];
-  private final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
-  private final byte[] textBytes = new byte[MAXIMUM_TEXT_BYTES];
-  private SqlCommandType type;
-  private long key;
-  private long value;
-  private long scanLowerInclusive;
-  private long scanUpperExclusive;
-  private long columnNotNullMask;
-  private long columnDefaultMask;
-  private long columnUniqueMask;
-  private long columnReferenceMask;
-  private long rowLimit = Long.MAX_VALUE;
-  private long sequenceStart = 1;
-  private long sequenceIncrement = 1;
-  private boolean boundedScan;
-  private boolean selectAll;
-  private boolean readCommittedTransaction;
-  private boolean serializableTransaction;
-  private boolean descendingOrder;
-  private boolean primaryKeyIdentity;
-  private int insertRowCount;
-  private int insertColumnCount;
-  private int updateColumnCount;
-  private int columnCount;
-  private boolean available;
-  private int textBytesUsed;
+  final boolean[] nullUpdates = new boolean[MAXIMUM_COLUMNS];
+  final boolean[] defaultUpdates = new boolean[MAXIMUM_COLUMNS];
+  final int[] updateTypeDescriptors = new int[MAXIMUM_COLUMNS];
+  final int[] updateOperators = new int[MAXIMUM_COLUMNS];
+  final boolean[] nullProjections = new boolean[MAXIMUM_COLUMNS];
+  final byte[] textBytes = new byte[MAXIMUM_TEXT_BYTES];
+  SqlCommandType type;
+  long key;
+  long value;
+  long scanLowerInclusive;
+  long scanUpperExclusive;
+  long columnNotNullMask;
+  long columnDefaultMask;
+  long columnUniqueMask;
+  long columnReferenceMask;
+  long rowLimit = Long.MAX_VALUE;
+  long sequenceStart = 1;
+  long sequenceIncrement = 1;
+  boolean boundedScan;
+  boolean selectAll;
+  boolean readCommittedTransaction;
+  boolean serializableTransaction;
+  boolean descendingOrder;
+  boolean primaryKeyIdentity;
+  int insertRowCount;
+  int insertColumnCount;
+  int updateColumnCount;
+  int columnCount;
+  boolean available;
+  int textBytesUsed;
 
   public SqlCommand() {
     for (int index = 0; index < columnNames.length; index++) {
@@ -102,79 +102,7 @@ public final class SqlCommand {
   }
 
   public void reset() {
-    tableName.reset();
-    renamedTableName.reset();
-    tableAlias.reset();
-    indexName.reset();
-    renamedIndexName.reset();
-    sequenceName.reset();
-    savepointName.reset();
-    viewQuery.reset();
-    scalarExpression.reset();
-    projections.reset();
-    mutationExpressions.reset();
-    aggregates.reset();
-    wherePredicates.reset();
-    if (joinChain != null) joinChain.reset();
-    booleanHavingPredicates.reset();
-    for (SqlIdentifier columnName : columnNames) {
-      columnName.reset();
-    }
-    for (int index = 0; index < nullProjections.length; index++) {
-      nullProjections[index] = false;
-      columnCheckValues[index] = 0;
-      columnCheckTypeDescriptors[index] = 0;
-      columnCheckComparisons[index] = null;
-      columnTypeDescriptors[index] = 0;
-      columnDefaultKinds[index] = 0;
-      columnReferenceTableNames[index].reset();
-      columnReferenceColumnNames[index].reset();
-    }
-    for (SqlIdentifier columnTableName : columnTableNames) {
-      columnTableName.reset();
-    }
-    for (SqlIdentifier columnAlias : columnAliases) {
-      columnAlias.reset();
-    }
-    orderColumnName.reset();
-    type = null;
-    key = 0;
-    value = 0;
-    scanLowerInclusive = 0;
-    scanUpperExclusive = 0;
-    columnNotNullMask = 0;
-    columnDefaultMask = 0;
-    columnUniqueMask = 0;
-    columnReferenceMask = 0;
-    rowLimit = Long.MAX_VALUE;
-    sequenceStart = 1;
-    sequenceIncrement = 1;
-    boundedScan = false;
-    selectAll = false;
-    readCommittedTransaction = false;
-    serializableTransaction = false;
-    descendingOrder = false;
-    primaryKeyIdentity = false;
-    insertRowCount = 0;
-    insertColumnCount = 0;
-    updateColumnCount = 0;
-    columnCount = 0;
-    available = false;
-    textBytesUsed = 0;
-    for (int index = 0; index < insertNullMasks.length; index++) {
-      insertNullMasks[index] = 0;
-      insertDefaultMasks[index] = 0;
-      int valueOffset = index * MAXIMUM_COLUMNS;
-      for (int column = 0; column < MAXIMUM_COLUMNS; column++) {
-        insertTypeDescriptors[valueOffset + column] = 0;
-      }
-    }
-    for (int index = 0; index < nullUpdates.length; index++) {
-      nullUpdates[index] = false;
-      defaultUpdates[index] = false;
-      updateTypeDescriptors[index] = 0;
-      updateOperators[index] = UPDATE_LITERAL;
-    }
+    SqlCommandReset.reset(this);
   }
 
   void discardJoinChain() {
@@ -212,22 +140,7 @@ public final class SqlCommand {
   }
 
   StatusCode expandSelectAllFrom(SqlCommand source) {
-    if (!selectAll || columnCount != 0 || source == null || source.columnCount <= 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    selectAll = false;
-    for (int index = 0; index < source.columnCount; index++) {
-      SqlIdentifier column = writableNextColumnName();
-      if (column == null) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      column.copyFrom(source.columnOutputName(index));
-      StatusCode status = setProjectionColumn(index, "", column);
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    return StatusCode.OK;
+    return SqlCommandQueryState.expandSelectAll(this, source);
   }
 
   void setRowLimit(long maximumRows) {
@@ -235,38 +148,7 @@ public final class SqlCommand {
   }
 
   void copyQueryFrom(SqlCommand source) {
-    reset();
-    scalarExpression.copyFrom(source.scalarExpression);
-    projections.copyFrom(source.projections);
-    aggregates.copyFrom(source.aggregates);
-    wherePredicates.copyFrom(source.wherePredicates);
-    boolean joined = source.joinChain != null && source.joinChain.stageCount() > 0;
-    if (joined) {
-      writableJoinChain().copyFrom(source.joinChain);
-    } else {
-      tableName.copyFrom(source.tableName);
-      tableAlias.copyFrom(source.tableAlias);
-    }
-    booleanHavingPredicates.copyFrom(source.booleanHavingPredicates);
-    System.arraycopy(source.textBytes, 0, textBytes, 0, source.textBytesUsed);
-    textBytesUsed = source.textBytesUsed;
-    for (int index = 0; index < source.columnCount; index++) {
-      writableNextColumnName().copyFrom(source.columnNames[index]);
-      writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
-      writableColumnAlias(index).copyFrom(source.columnAliases[index]);
-      nullProjections[index] = source.nullProjections[index];
-    }
-    orderColumnName.copyFrom(source.orderColumnName);
-    descendingOrder = source.descendingOrder;
-    if (source.selectAll) {
-      setSelectAll();
-    }
-    setRowLimit(source.rowLimit);
-    if (source.type == SqlCommandType.SCAN) {
-      setScan(source.scanLowerInclusive, source.scanUpperExclusive, source.boundedScan);
-    } else {
-      set(source.type, source.key, source.value);
-    }
+    SqlCommandQueryState.copy(this, source);
   }
 
   void setBegin(boolean readCommitted, boolean serializable) {
@@ -281,21 +163,11 @@ public final class SqlCommand {
       long defaultMask,
       int[] typeDescriptors,
       int count) {
-    int destination = insertRowCount * MAXIMUM_COLUMNS;
-    for (int index = 0; index < count; index++) {
-      insertValues[destination + index] = values[index];
-      insertTypeDescriptors[destination + index] = typeDescriptors[index];
-    }
-    insertColumnCount = count;
-    insertNullMasks[insertRowCount] = nullMask;
-    insertDefaultMasks[insertRowCount] = defaultMask;
-    insertRowCount++;
+    SqlCommandInsertView.append(this, values, nullMask, defaultMask, typeDescriptors, count);
   }
 
   void setInsert() {
-    type = SqlCommandType.INSERT;
-    key = insertValues[0];
-    value = insertValues[1];
+    SqlCommandInsertView.setInsert(this);
   }
 
   StatusCode finish() {
@@ -314,12 +186,8 @@ public final class SqlCommand {
       boolean isDefault,
       int typeDescriptor,
       int operator) {
-    updateValues[updateColumnCount] = updateValue;
-    nullUpdates[updateColumnCount] = isNull;
-    defaultUpdates[updateColumnCount] = isDefault;
-    updateTypeDescriptors[updateColumnCount] = typeDescriptor;
-    updateOperators[updateColumnCount] = operator;
-    updateColumnCount++;
+    SqlCommandUpdateView.append(
+        this, updateValue, isNull, isDefault, typeDescriptor, operator);
   }
 
   SqlIdentifier writableTableName() {
@@ -381,7 +249,7 @@ public final class SqlCommand {
   }
 
   SqlScalarExpression writableProjectionExpression(int index) {
-    return index >= 0 && index < columnCount ? projections.expression(index) : null;
+    return SqlCommandProjectionView.expression(this, index);
   }
 
   int appendMutationExpression(SqlScalarExpression expression) {
@@ -389,7 +257,7 @@ public final class SqlCommand {
   }
 
   int registerProjectionSymbol(CharSequence table, CharSequence name) {
-    return projections.registerSymbol(table, name);
+    return SqlCommandProjectionView.register(this, table, name);
   }
 
   SqlBooleanPredicateProgram writableWherePredicates() {
@@ -401,221 +269,96 @@ public final class SqlCommand {
   }
 
   int registerPredicateSymbol(CharSequence table, CharSequence name) {
-    return projections.registerSymbol(table, name);
+    return SqlCommandProjectionView.register(this, table, name);
   }
 
   void adoptDirectProjectionName(int index) {
-    SqlScalarExpression expression = projectionExpression(index);
-    int symbol = expression != null && expression.isDirectColumnReference()
-        ? (int) expression.operand(0) : -1;
-    SqlIdentifier name = projections.symbolName(symbol);
-    SqlIdentifier table = projections.symbolTable(symbol);
-    if (name != null && table != null && index >= 0 && index < columnCount) {
-      columnNames[index].copyFrom(name);
-      columnTableNames[index].copyFrom(table);
-    }
+    SqlCommandProjectionView.adoptName(this, index);
   }
 
   StatusCode setProjectionColumn(
       int index, CharSequence table, CharSequence name) {
-    SqlScalarExpression expression = writableProjectionExpression(index);
-    int symbol = registerProjectionSymbol(table, name);
-    if (expression == null || symbol < 0) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    expression.reset();
-    if (!expression.append(SqlScalarExpression.COLUMN, symbol, 0)) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    expression.finishUnresolved();
-    adoptDirectProjectionName(index);
-    return StatusCode.OK;
+    return SqlCommandProjectionView.setColumn(this, index, table, name);
   }
 
   StatusCode setProjectionNull(int index) {
-    SqlScalarExpression expression = writableProjectionExpression(index);
-    if (expression == null) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    expression.reset();
-    if (!expression.append(SqlScalarExpression.NULL, 0, 0)) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    expression.finishUnresolved();
-    markLastProjectionNull();
-    return StatusCode.OK;
+    return SqlCommandProjectionView.setNull(this, index);
   }
 
   void markLastColumnNotNull() {
-    if (columnCount > 0) {
-      columnNotNullMask |= 1L << columnCount - 1;
-    }
+    SqlCommandColumnConstraints.markNotNull(this);
   }
 
   void markPrimaryKeyIdentity() {
-    primaryKeyIdentity = true;
+    SqlCommandColumnConstraints.markIdentity(this);
   }
 
   void markLastColumnDefault(long value) {
-    if (columnCount > 1) {
-      int column = columnCount - 1;
-      columnDefaultMask |= 1L << column;
-      columnDefaultValues[column] = value;
-      columnDefaultKinds[column] = io.riverdb.base.type.SqlDefaultKind.LITERAL;
-    }
+    SqlCommandColumnConstraints.markDefault(this, value);
   }
 
   void markLastColumnCurrentDefault(int kind) {
-    if (columnCount > 1) {
-      int column = columnCount - 1;
-      columnDefaultMask |= 1L << column;
-      columnDefaultValues[column] = 0;
-      columnDefaultKinds[column] = (byte) kind;
-    }
+    SqlCommandColumnConstraints.markCurrentDefault(this, kind);
   }
 
   void markLastColumnVarchar(int maximumScalars) {
-    markLastColumnType(SqlTypeDescriptor.varchar(maximumScalars));
+    SqlCommandColumnConstraints.markVarchar(this, maximumScalars);
   }
 
   void markLastColumnType(int descriptor) {
-    if (columnCount > 0 && SqlTypeDescriptor.isValid(descriptor)) {
-      columnTypeDescriptors[columnCount - 1] = descriptor;
-    }
+    SqlCommandColumnConstraints.markType(this, descriptor);
   }
 
   StatusCode markLastColumnUnique() {
-    long bit = columnCount <= 0 ? 0 : 1L << columnCount - 1;
-    if (columnCount <= 1
-        || Long.bitCount(columnUniqueMask | columnReferenceMask | bit)
-            > MAXIMUM_CONSTRAINT_INDEXES
-        || (columnUniqueMask & bit) != 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    columnUniqueMask |= bit;
-    return StatusCode.OK;
+    return SqlCommandColumnConstraints.markUnique(this);
   }
 
   SqlIdentifier writableLastColumnReferenceTableName() {
-    return columnCount > 1 ? columnReferenceTableNames[columnCount - 1] : null;
+    return SqlCommandColumnConstraints.referenceTable(this);
   }
 
   SqlIdentifier writableLastColumnReferenceColumnName() {
-    return columnCount > 1 ? columnReferenceColumnNames[columnCount - 1] : null;
+    return SqlCommandColumnConstraints.referenceColumn(this);
   }
 
   StatusCode markLastColumnReference() {
-    long bit = columnCount <= 0 ? 0 : 1L << columnCount - 1;
-    if (columnCount <= 1
-        || columnIsVarchar(columnCount - 1)
-        || Long.bitCount(columnUniqueMask | columnReferenceMask | bit)
-            > MAXIMUM_CONSTRAINT_INDEXES
-        || (columnReferenceMask & bit) != 0
-        || columnReferenceTableNames[columnCount - 1].length() == 0
-        || columnReferenceColumnNames[columnCount - 1].length() == 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    columnReferenceMask |= bit;
-    return StatusCode.OK;
+    return SqlCommandColumnConstraints.markReference(this);
   }
 
   void markLastColumnCheck(SqlComparison comparison, long value, int descriptor) {
-    if (columnCount > 0) {
-      int column = columnCount - 1;
-      columnCheckComparisons[column] = comparison;
-      columnCheckValues[column] = value;
-      columnCheckTypeDescriptors[column] = descriptor;
-    }
+    SqlCommandColumnConstraints.markCheck(this, comparison, value, descriptor);
   }
 
   long storeText(char[] source, int offset, int length) {
-    int bytes = Utf8Text.encode(
-        source,
-        offset,
-        length,
-        Utf8Text.MAXIMUM_SCALARS,
-        textBytes,
-        textBytesUsed);
-    if (bytes < 0) {
-      return INVALID_TEXT_HANDLE;
-    }
-    long handle = (long) textBytesUsed << 32 | Integer.toUnsignedLong(bytes);
-    textBytesUsed += bytes;
-    return handle;
+    return SqlCommandTextStore.store(this, source, offset, length);
   }
 
   long copyTextFrom(SqlCommand source, long handle) {
-    int length = source == null ? -1 : source.textByteLength(handle);
-    if (length < 0 || length > textBytes.length - textBytesUsed) {
-      return INVALID_TEXT_HANDLE;
-    }
-    int sourceOffset = (int) (handle >>> 32);
-    int destinationOffset = textBytesUsed;
-    System.arraycopy(
-        source.textBytes, sourceOffset, textBytes, destinationOffset, length);
-    textBytesUsed += length;
-    return (long) destinationOffset << 32 | Integer.toUnsignedLong(length);
+    return SqlCommandTextStore.copyFrom(this, source, handle);
   }
 
   long textSuccessor(long handle) {
-    int length = textByteLength(handle);
-    if (length < 0 || length >= textBytes.length - textBytesUsed) {
-      return INVALID_TEXT_HANDLE;
-    }
-    int sourceOffset = (int) (handle >>> 32);
-    int destinationOffset = textBytesUsed;
-    System.arraycopy(
-        textBytes, sourceOffset, textBytes, destinationOffset, length);
-    textBytes[destinationOffset + length] = 0;
-    textBytesUsed += length + 1;
-    return (long) destinationOffset << 32
-        | Integer.toUnsignedLong(length + 1);
+    return SqlCommandTextStore.successor(this, handle);
   }
 
   int compareText(long left, long right) {
-    int leftLength = textByteLength(left);
-    int rightLength = textByteLength(right);
-    if (leftLength < 0 || rightLength < 0) return Integer.MIN_VALUE;
-    int leftOffset = (int) (left >>> 32);
-    int rightOffset = (int) (right >>> 32);
-    int common = Math.min(leftLength, rightLength);
-    for (int index = 0; index < common; index++) {
-      int compared = Byte.toUnsignedInt(textBytes[leftOffset + index])
-          - Byte.toUnsignedInt(textBytes[rightOffset + index]);
-      if (compared != 0) return compared;
-    }
-    return leftLength - rightLength;
+    return SqlCommandTextStore.compare(this, left, right);
   }
 
   public int textByteLength(long handle) {
-    int textOffset = (int) (handle >>> 32);
-    int length = (int) handle;
-    return textOffset >= 0
-            && length >= 0
-            && textOffset <= textBytesUsed - length
-        ? length : -1;
+    return SqlCommandTextStore.length(this, handle);
   }
 
   public int copyText(long handle, ByteBuffer target) {
-    int textOffset = (int) (handle >>> 32);
-    int length = textByteLength(handle);
-    if (length < 0 || target == null || target.remaining() < length) {
-      return -1;
-    }
-    target.put(textBytes, textOffset, length);
-    return length;
+    return SqlCommandTextStore.copy(this, handle, target);
   }
 
   public byte textByteAt(long handle, int index) {
-    int textOffset = (int) (handle >>> 32);
-    int length = textByteLength(handle);
-    return index >= 0 && index < length ? textBytes[textOffset + index] : 0;
+    return SqlCommandTextStore.byteAt(this, handle, index);
   }
 
   void markLastProjectionNull() {
-    if (columnCount > 0) {
-      nullProjections[columnCount - 1] = true;
-    }
+    SqlCommandProjectionView.markNull(this);
   }
 
   SqlIdentifier writableColumnTableName(int index) {
@@ -682,13 +425,12 @@ public final class SqlCommand {
   }
 
   public SqlScalarExpression projectionExpression(int index) {
-    return index >= 0 && index < columnCount ? projections.expression(index) : null;
+    return SqlCommandProjectionView.expression(this, index);
   }
 
   /** Returns a physical aggregate operand lane, including hidden HAVING operands. */
   public SqlScalarExpression aggregateOperandExpression(int index) {
-    return index >= 0 && index < MAXIMUM_COLUMNS
-        ? projections.expression(index) : null;
+    return SqlCommandProjectionView.aggregateExpression(this, index);
   }
 
   public SqlBooleanPredicateProgram wherePredicates() {
@@ -704,29 +446,27 @@ public final class SqlCommand {
   }
 
   public SqlIdentifier predicateSymbolTable(int index) {
-    return projections.symbolTable(index);
+    return SqlCommandProjectionView.symbolTable(this, index);
   }
 
   public SqlIdentifier predicateSymbolName(int index) {
-    return projections.symbolName(index);
+    return SqlCommandProjectionView.symbolName(this, index);
   }
 
   public int projectionSymbolCount() {
-    return projections.symbolCount();
+    return SqlCommandProjectionView.symbolCount(this);
   }
 
   public SqlIdentifier projectionSymbolTable(int index) {
-    return projections.symbolTable(index);
+    return SqlCommandProjectionView.symbolTable(this, index);
   }
 
   public SqlIdentifier projectionSymbolName(int index) {
-    return projections.symbolName(index);
+    return SqlCommandProjectionView.symbolName(this, index);
   }
 
   public int directProjectionSymbol(int index) {
-    SqlScalarExpression expression = projectionExpression(index);
-    return expression != null && expression.isDirectColumnReference()
-        ? (int) expression.operand(0) : -1;
+    return SqlCommandProjectionView.directSymbol(this, index);
   }
 
   public SqlIdentifier firstColumnName() {
@@ -844,7 +584,7 @@ public final class SqlCommand {
   }
 
   public boolean isNullProjection(int index) {
-    return index >= 0 && index < columnCount && nullProjections[index];
+    return SqlCommandProjectionView.isNull(this, index);
   }
 
   public SqlIdentifier orderColumnName() {
@@ -870,7 +610,7 @@ public final class SqlCommand {
 
   public long value() {
     return type == SqlCommandType.UPDATE && updateColumnCount > 0
-        ? updateValues[0] : value;
+        ? SqlCommandUpdateView.value(this, 0) : value;
   }
 
   public int updateColumnCount() {
@@ -878,7 +618,7 @@ public final class SqlCommand {
   }
 
   public long updateValue(int index) {
-    return index >= 0 && index < updateColumnCount ? updateValues[index] : 0;
+    return SqlCommandUpdateView.value(this, index);
   }
 
   public boolean updateHasExpression(int index) {
@@ -890,28 +630,27 @@ public final class SqlCommand {
   }
 
   public int mutationExpressionCount() {
-    return mutationExpressions.programCount();
+    return SqlCommandExpressionView.mutationCount(this);
   }
 
   public int mutationExpressionNodeCount(int expression) {
-    return mutationExpressions.nodeCount(expression);
+    return SqlCommandExpressionView.mutationNodes(this, expression);
   }
 
   public int mutationExpressionOperator(int expression, int node) {
-    return mutationExpressions.operator(expression, node);
+    return SqlCommandExpressionView.mutationOperator(this, expression, node);
   }
 
   public long mutationExpressionOperand(int expression, int node) {
-    return mutationExpressions.operand(expression, node);
+    return SqlCommandExpressionView.mutationOperand(this, expression, node);
   }
 
   public int mutationExpressionTypeDescriptor(int expression, int node) {
-    return mutationExpressions.descriptor(expression, node);
+    return SqlCommandExpressionView.mutationDescriptor(this, expression, node);
   }
 
   public int updateOperator(int index) {
-    return index >= 0 && index < updateColumnCount
-        ? updateOperators[index] : UPDATE_LITERAL;
+    return SqlCommandUpdateView.operator(this, index);
   }
 
   public int insertRowCount() {
@@ -931,35 +670,19 @@ public final class SqlCommand {
   }
 
   public long insertValue(int rowIndex, int columnIndex) {
-    return rowIndex >= 0
-            && rowIndex < insertRowCount
-            && columnIndex >= 0
-            && columnIndex < insertColumnCount
-        ? insertValues[rowIndex * MAXIMUM_COLUMNS + columnIndex] : 0;
+    return SqlCommandInsertView.value(this, rowIndex, columnIndex);
   }
 
   public boolean insertIsNull(int rowIndex, int columnIndex) {
-    return rowIndex >= 0
-        && rowIndex < insertRowCount
-        && columnIndex >= 0
-        && columnIndex < insertColumnCount
-        && (insertNullMasks[rowIndex] & 1L << columnIndex) != 0;
+    return SqlCommandInsertView.isNull(this, rowIndex, columnIndex);
   }
 
   public boolean insertIsDefault(int rowIndex, int columnIndex) {
-    return rowIndex >= 0
-        && rowIndex < insertRowCount
-        && columnIndex >= 0
-        && columnIndex < insertColumnCount
-        && (insertDefaultMasks[rowIndex] & 1L << columnIndex) != 0;
+    return SqlCommandInsertView.isDefault(this, rowIndex, columnIndex);
   }
 
   public int insertTypeDescriptor(int rowIndex, int columnIndex) {
-    return rowIndex >= 0
-            && rowIndex < insertRowCount
-            && columnIndex >= 0
-            && columnIndex < insertColumnCount
-        ? insertTypeDescriptors[rowIndex * MAXIMUM_COLUMNS + columnIndex] : 0;
+    return SqlCommandInsertView.typeDescriptor(this, rowIndex, columnIndex);
   }
 
   public boolean insertHasExpression(int rowIndex, int columnIndex) {
@@ -977,15 +700,15 @@ public final class SqlCommand {
   }
 
   public boolean updateIsNull(int index) {
-    return index >= 0 && index < updateColumnCount && nullUpdates[index];
+    return SqlCommandUpdateView.isNull(this, index);
   }
 
   public boolean updateIsDefault(int index) {
-    return index >= 0 && index < updateColumnCount && defaultUpdates[index];
+    return SqlCommandUpdateView.isDefault(this, index);
   }
 
   public int updateTypeDescriptor(int index) {
-    return index >= 0 && index < updateColumnCount ? updateTypeDescriptors[index] : 0;
+    return SqlCommandUpdateView.typeDescriptor(this, index);
   }
 
   public long scanLowerInclusive() {
@@ -1017,26 +740,23 @@ public final class SqlCommand {
   }
 
   public int aggregateInvocationCount() {
-    return aggregates.invocationCount();
+    return SqlCommandExpressionView.aggregateCount(this);
   }
 
   public int aggregateOutputCount() {
-    return aggregates.outputCount();
+    return SqlCommandExpressionView.aggregateOutputs(this);
   }
 
   public int aggregateKind(int invocation) {
-    return invocation >= 0 && invocation < aggregates.invocationCount()
-        ? aggregates.kind(invocation) : 0;
+    return SqlCommandExpressionView.aggregateKind(this, invocation);
   }
 
   public int aggregateOperandProjection(int invocation) {
-    return invocation >= 0 && invocation < aggregates.invocationCount()
-        ? aggregates.operandProjection(invocation) : -1;
+    return SqlCommandExpressionView.aggregateOperand(this, invocation);
   }
 
   public int aggregateOutputInvocation(int output) {
-    return output >= 0 && output < aggregates.outputCount()
-        ? aggregates.outputInvocation(output) : -1;
+    return SqlCommandExpressionView.aggregateOutput(this, output);
   }
 
   public boolean isSerializableTransaction() {
@@ -1055,56 +775,4 @@ public final class SqlCommand {
     return available;
   }
 
-  private static final class ViewQuery implements CharSequence {
-    private final char[] characters = new char[MAXIMUM_VIEW_QUERY_LENGTH];
-    private int length;
-
-    StatusCode set(CharSequence source, int start, int end) {
-      if (source == null
-          || start < 0
-          || end <= start
-          || end > source.length()
-          || end - start > characters.length) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      for (int index = start; index < end; index++) {
-        char character = source.charAt(index);
-        if (Character.isHighSurrogate(character)) {
-          if (++index >= end || !Character.isLowSurrogate(source.charAt(index))) {
-            return StatusCode.INVALID_EXTERNAL_INPUT;
-          }
-          characters[index - start - 1] = character;
-          characters[index - start] = source.charAt(index);
-        } else if (Character.isLowSurrogate(character)) {
-          return StatusCode.INVALID_EXTERNAL_INPUT;
-        } else {
-          characters[index - start] = character;
-        }
-      }
-      length = end - start;
-      return StatusCode.OK;
-    }
-
-    void reset() {
-      length = 0;
-    }
-
-    @Override
-    public int length() {
-      return length;
-    }
-
-    @Override
-    public char charAt(int index) {
-      if (index < 0 || index >= length) {
-        throw new IndexOutOfBoundsException(index);
-      }
-      return characters[index];
-    }
-
-    @Override
-    public CharSequence subSequence(int start, int end) {
-      throw new UnsupportedOperationException();
-    }
-  }
 }

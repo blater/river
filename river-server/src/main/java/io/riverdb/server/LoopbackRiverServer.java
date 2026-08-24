@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolFrameHeader;
-import io.riverdb.protocol.auth.TlsChannelBinding;
 import io.riverdb.protocol.auth.TokenAuthenticator;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,17 +30,15 @@ public final class LoopbackRiverServer {
   public static final int DEFAULT_MAXIMUM_CONNECTIONS = 16;
   public static final int MAXIMUM_CONNECTION_LIMIT = 1_024;
 
-  private static final int SHUTDOWN_TIMEOUT_MILLIS = 5_000;
-
   private final RiverDatabase database;
-  private final ServerSocket listener;
+  final ServerSocket listener;
   private final TokenAuthenticator authenticator;
   private final SecureRandom random;
-  private final SecurityAuditLog audit;
+  final SecurityAuditLog audit;
   private final int authenticationTimeoutMillis;
   private final int idleTimeoutMillis;
   private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
-  private final ConnectionSlot[] slots;
+  final ConnectionSlot[] slots;
   private final AtomicInteger activeConnections = new AtomicInteger();
   private final AtomicLong acceptedConnections = new AtomicLong();
   private final AtomicLong completedRequests = new AtomicLong();
@@ -49,9 +46,9 @@ public final class LoopbackRiverServer {
   private final AtomicLong rejectedFrames = new AtomicLong();
   private final AtomicLong authenticationFailures = new AtomicLong();
   private final AtomicLong authorizationFailures = new AtomicLong();
-  private volatile StatusCode lastStatus = StatusCode.OK;
-  private volatile boolean running = true;
-  private Thread acceptor;
+  volatile StatusCode lastStatus = StatusCode.OK;
+  volatile boolean running = true;
+  Thread acceptor;
 
   private LoopbackRiverServer(
       RiverDatabase engineDatabase,
@@ -198,46 +195,7 @@ public final class LoopbackRiverServer {
     if (!running) {
       return StatusCode.CLOSED;
     }
-    running = false;
-    StatusCode status = closeListener();
-    long deadline = System.nanoTime() + SHUTDOWN_TIMEOUT_MILLIS * 1_000_000L;
-    status = joinUntil(acceptor, deadline, status);
-    Thread[] workers = new Thread[slots.length];
-    synchronized (this) {
-      for (int index = 0; index < slots.length; index++) {
-        ConnectionSlot slot = slots[index];
-        workers[index] = slot.worker;
-        if (slot.socket != null) {
-          try {
-            slot.socket.close();
-          } catch (IOException failure) {
-            status = StatusCode.IO_FAILURE;
-          }
-        }
-      }
-    }
-    for (Thread worker : workers) {
-      status = joinUntil(worker, deadline, status);
-    }
-    if (audit != null) {
-      StatusCode auditStatus = audit.close();
-      if (status.isOk() && auditStatus != StatusCode.CLOSED) {
-        status = auditStatus;
-      }
-    }
-    if (!status.isOk()) {
-      lastStatus = status;
-    }
-    return status;
-  }
-
-  private StatusCode closeListener() {
-    try {
-      listener.close();
-      return StatusCode.OK;
-    } catch (IOException failure) {
-      return StatusCode.IO_FAILURE;
-    }
+    return LoopbackServerShutdown.close(this);
   }
 
   private void runAccepts() {
@@ -296,38 +254,21 @@ public final class LoopbackRiverServer {
         OutputStream output = connection.getOutputStream()) {
       connection.setSoTimeout(
           authenticator == null ? idleTimeoutMillis : authenticationTimeoutMillis);
-      if (authenticator == null) {
-        endpoint = new SessionEndpoint(database);
-      } else {
-        if (!(connection instanceof SSLSocket secure)) {
-          lastStatus = StatusCode.INVARIANT_BROKEN;
-          return;
-        }
-        secure.setEnabledProtocols(new String[] {"TLSv1.3"});
-        secure.startHandshake();
-        byte[] binding = new byte[TlsChannelBinding.BINDING_BYTES];
-        StatusCode bindingStatus = TlsChannelBinding.export(
-            secure.getSession(), binding);
-        if (!bindingStatus.isOk()) {
-          lastStatus = bindingStatus;
-          return;
-        }
-        long challengeHigh;
-        long challengeLow;
-        do {
-          challengeHigh = random.nextLong();
-          challengeLow = random.nextLong();
-        } while (challengeHigh == 0 && challengeLow == 0);
-        endpoint = new SessionEndpoint(
-            database,
-            authenticator,
-            challengeHigh,
-            challengeLow,
-            binding,
-            audit);
-        authenticationDeadline = System.nanoTime()
-            + authenticationTimeoutMillis * 1_000_000L;
+      LoopbackEndpointOpenResult opened = new LoopbackEndpointOpenResult();
+      LoopbackEndpointOpener.open(
+          connection,
+          database,
+          authenticator,
+          random,
+          audit,
+          authenticationTimeoutMillis,
+          opened);
+      if (!opened.status().isOk()) {
+        lastStatus = opened.status();
+        return;
       }
+      endpoint = opened.endpoint();
+      authenticationDeadline = opened.authenticationDeadline();
       serveRequests(
           slot,
           connection,
@@ -475,26 +416,6 @@ public final class LoopbackRiverServer {
     return StatusCode.OK;
   }
 
-  private static StatusCode joinUntil(
-      Thread thread,
-      long deadline,
-      StatusCode current) {
-    if (thread == null) {
-      return current;
-    }
-    long remaining = deadline - System.nanoTime();
-    if (remaining <= 0) {
-      return thread.isAlive() ? StatusCode.TIMEOUT : current;
-    }
-    try {
-      thread.join((remaining + 999_999L) / 1_000_000L);
-      return thread.isAlive() ? StatusCode.TIMEOUT : current;
-    } catch (InterruptedException interrupted) {
-      Thread.currentThread().interrupt();
-      return StatusCode.CANCELLED;
-    }
-  }
-
   private static int readExact(
       InputStream input,
       byte[] target,
@@ -521,15 +442,15 @@ public final class LoopbackRiverServer {
     return read;
   }
 
-  private final class ConnectionSlot implements Runnable {
-    private final int index;
+  final class ConnectionSlot implements Runnable {
+    final int index;
     private final ProtocolFrameHeader requestHeader = new ProtocolFrameHeader();
     private final byte[] requestBytes = new byte[ProtocolFrameCodec.MAXIMUM_FRAME_BYTES];
     private final byte[] responseBytes = new byte[ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES];
     private final ByteBuffer request = ByteBuffer.wrap(requestBytes);
     private final ByteBuffer response = ByteBuffer.wrap(responseBytes);
-    private Socket socket;
-    private Thread worker;
+    Socket socket;
+    Thread worker;
 
     private ConnectionSlot(int slotIndex) {
       index = slotIndex;

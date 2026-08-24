@@ -11,15 +11,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Arrays;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.openjdk.jol.info.ClassLayout;
 import org.openjdk.jol.vm.VM;
 
 /** Short local P09 run which emits explicitly non-gating JSON evidence. */
 public final class PrototypeSmoke {
-  private static final int HOT_ITERATIONS = 10_000;
-  private static final int IO_ITERATIONS = 32;
+  static final int HOT_ITERATIONS = 10_000;
+  static final int IO_ITERATIONS = 32;
 
   private PrototypeSmoke() {
   }
@@ -92,481 +90,34 @@ public final class PrototypeSmoke {
   }
 
   private static Measurement measureWal(AllocationMeter allocation) {
-    warmWal();
-    var ring = new PreallocatedWalRing(1_024);
-    var reservation = new WalReservation();
-    var record = new WalRecord();
-    long[] samples = new long[HOT_ITERATIONS];
-    long allocationBefore = allocation.currentThreadBytes();
-    long started = System.nanoTime();
-    StatusCode status = StatusCode.OK;
-    for (int iteration = 0; iteration < HOT_ITERATIONS; iteration++) {
-      long operationStarted = System.nanoTime();
-      status = ring.tryReserve(reservation);
-      if (status.isOk()) {
-        status = ring.encode(reservation, iteration, iteration * 17L);
-      }
-      if (status.isOk()) {
-        status = ring.publish(reservation);
-      }
-      if (status.isOk()) {
-        status = ring.poll(record);
-      }
-      samples[iteration] = System.nanoTime() - operationStarted;
-      if (!status.isOk()) {
-        break;
-      }
-    }
-    long elapsed = System.nanoTime() - started;
-    long allocated = allocation.delta(allocationBefore);
-
-    var pressureRing = new PreallocatedWalRing(8);
-    var claims = new WalReservation[9];
-    for (int index = 0; index < claims.length; index++) {
-      claims[index] = new WalReservation();
-    }
-    for (int index = 0; index < 8; index++) {
-      pressureRing.tryReserve(claims[index]);
-    }
-    pressureRing.tryReserve(claims[8]);
-
-    Measurement measurement = summarize("wal_ring", status, samples, elapsed, allocated);
-    measurement.operations = ring.counters().consumed();
-    measurement.bytes = ring.counters().encodedBytes();
-    measurement.copiedBytes = ring.counters().copiedBytes();
-    measurement.maximumOccupancy = pressureRing.counters().maximumOccupancy();
-    measurement.backpressureEvents = pressureRing.counters().backpressureEvents();
-    return measurement;
+    return PrototypeHotMeasurements.wal(allocation, HOT_ITERATIONS);
   }
 
   private static Measurement measureVector(AllocationMeter allocation) {
-    var batch = new PrimitiveVectorBatch(4_096);
-    for (int row = 0; row < batch.capacity(); row++) {
-      batch.setRow(row, row + 1L, row * 37L & 65_535L);
-    }
-    for (int iteration = 0; iteration < 1_000; iteration++) {
-      batch.scanBalanceAtLeast(iteration & 65_535L);
-      batch.sumSelectedAccountIds();
-    }
-    long[] samples = new long[HOT_ITERATIONS];
-    long allocationBefore = allocation.currentThreadBytes();
-    long started = System.nanoTime();
-    long rows = 0L;
-    long sink = 0L;
-    for (int iteration = 0; iteration < HOT_ITERATIONS; iteration++) {
-      long operationStarted = System.nanoTime();
-      batch.scanBalanceAtLeast(iteration & 65_535L);
-      sink ^= batch.sumSelectedAccountIds();
-      samples[iteration] = System.nanoTime() - operationStarted;
-      rows += batch.rowCount();
-    }
-    long elapsed = System.nanoTime() - started;
-    Measurement measurement = summarize(
-      "primitive_vector_scan",
-      StatusCode.OK,
-      samples,
-      elapsed,
-      allocation.delta(allocationBefore)
-    );
-    measurement.operations = rows;
-    measurement.checkValue = sink;
-    return measurement;
+    return PrototypeHotMeasurements.vector(allocation, HOT_ITERATIONS);
   }
 
   private static Measurement measureWalMpsc(AllocationMeter allocation) {
-    int producerIterations = HOT_ITERATIONS / 2;
-    var ring = new PreallocatedWalRing(128);
-    var start = new CountDownLatch(1);
-    var holeReserved = new CountDownLatch(1);
-    var secondPublished = new CountDownLatch(1);
-    var releaseHole = new CountDownLatch(1);
-    long[][] samples = new long[][] {
-      new long[producerIterations], new long[producerIterations]
-    };
-    long[] allocated = new long[2];
-    StatusCode[] producerStatuses = new StatusCode[] {StatusCode.OK, StatusCode.OK};
-    Thread first = Thread.ofPlatform().unstarted(() -> runWalProducer(
-      0,
-      producerIterations,
-      ring,
-      start,
-      holeReserved,
-      secondPublished,
-      releaseHole,
-      samples[0],
-      allocated,
-      producerStatuses,
-      allocation
-    ));
-    Thread second = Thread.ofPlatform().unstarted(() -> runWalProducer(
-      1,
-      producerIterations,
-      ring,
-      start,
-      holeReserved,
-      secondPublished,
-      releaseHole,
-      samples[1],
-      allocated,
-      producerStatuses,
-      allocation
-    ));
-    first.start();
-    second.start();
-    long started = System.nanoTime();
-    start.countDown();
-    StatusCode status = StatusCode.OK;
-    long delayedPublicationObserved = 0L;
-    long consumed = 0L;
-    var record = new WalRecord();
-    try {
-      if (!holeReserved.await(5L, TimeUnit.SECONDS)
-          || !secondPublished.await(5L, TimeUnit.SECONDS)) {
-        status = StatusCode.TIMEOUT;
-      } else if (ring.publishedSequence() == -1L) {
-        delayedPublicationObserved = 1L;
-      } else {
-        status = StatusCode.INVARIANT_BROKEN;
-      }
-      releaseHole.countDown();
-      long expected = (long) producerIterations * 2L;
-      while (status.isOk() && consumed < expected) {
-        StatusCode pollStatus = ring.poll(record);
-        if (pollStatus.isOk()) {
-          consumed++;
-        } else if (pollStatus == StatusCode.RETRY) {
-          Thread.onSpinWait();
-        } else {
-          status = pollStatus;
-        }
-      }
-      first.join(TimeUnit.SECONDS.toMillis(5L));
-      second.join(TimeUnit.SECONDS.toMillis(5L));
-      if (first.isAlive() || second.isAlive()) {
-        status = StatusCode.TIMEOUT;
-      } else if (!producerStatuses[0].isOk()) {
-        status = producerStatuses[0];
-      } else if (!producerStatuses[1].isOk()) {
-        status = producerStatuses[1];
-      }
-    } catch (InterruptedException failure) {
-      Thread.currentThread().interrupt();
-      status = StatusCode.CANCELLED;
-    } finally {
-      releaseHole.countDown();
-    }
-    long elapsed = System.nanoTime() - started;
-    long[] mergedSamples = new long[producerIterations * 2];
-    System.arraycopy(samples[0], 0, mergedSamples, 0, producerIterations);
-    System.arraycopy(
-      samples[1],
-      0,
-      mergedSamples,
-      producerIterations,
-      producerIterations
-    );
-    Measurement measurement = summarize(
-      "wal_ring_mpsc_delayed_hole",
-      status,
-      mergedSamples,
-      elapsed,
-      allocated[0] < 0L || allocated[1] < 0L ? -1L : allocated[0] + allocated[1]
-    );
-    measurement.operations = consumed;
-    measurement.bytes = ring.counters().encodedBytes();
-    measurement.copiedBytes = ring.counters().copiedBytes();
-    measurement.maximumOccupancy = ring.counters().maximumOccupancy();
-    measurement.backpressureEvents = ring.counters().backpressureEvents();
-    measurement.delayedPublicationObserved = delayedPublicationObserved;
-    measurement.saturationRecovered = verifySaturationRecovery();
-    if (measurement.saturationRecovered == 0L && status.isOk()) {
-      measurement.status = StatusCode.INVARIANT_BROKEN;
-    }
-    return measurement;
-  }
-
-  private static void runWalProducer(
-      int producer,
-      int iterations,
-      PreallocatedWalRing ring,
-      CountDownLatch start,
-      CountDownLatch holeReserved,
-      CountDownLatch secondPublished,
-      CountDownLatch releaseHole,
-      long[] samples,
-      long[] allocated,
-      StatusCode[] producerStatuses,
-      AllocationMeter allocation
-  ) {
-    var reservation = new WalReservation();
-    try {
-      start.await();
-      if (producer == 1) {
-        holeReserved.await();
-      }
-      long allocationBefore = allocation.currentThreadBytes();
-      for (int iteration = 0; iteration < iterations; iteration++) {
-        long operationStarted = System.nanoTime();
-        StatusCode status;
-        do {
-          status = ring.tryReserve(reservation);
-          if (status == StatusCode.RESOURCE_EXHAUSTED) {
-            Thread.onSpinWait();
-          }
-        } while (status == StatusCode.RESOURCE_EXHAUSTED);
-        if (status.isOk()) {
-          long transaction = ((long) producer << 32) | iteration;
-          status = ring.encode(reservation, transaction, transaction * 17L);
-        }
-        if (status.isOk() && producer == 0 && iteration == 0) {
-          holeReserved.countDown();
-          releaseHole.await();
-        }
-        if (status.isOk()) {
-          status = ring.publish(reservation);
-        }
-        if (status.isOk() && producer == 1 && iteration == 0) {
-          secondPublished.countDown();
-        }
-        samples[iteration] = System.nanoTime() - operationStarted;
-        if (!status.isOk()) {
-          producerStatuses[producer] = status;
-          break;
-        }
-      }
-      allocated[producer] = allocation.delta(allocationBefore);
-    } catch (InterruptedException failure) {
-      Thread.currentThread().interrupt();
-      producerStatuses[producer] = StatusCode.CANCELLED;
-    }
-  }
-
-  private static long verifySaturationRecovery() {
-    var ring = new PreallocatedWalRing(2);
-    var first = new WalReservation();
-    var second = new WalReservation();
-    var third = new WalReservation();
-    var record = new WalRecord();
-    if (!reserveEncodePublish(ring, first, 1L).isOk()
-        || !reserveEncodePublish(ring, second, 2L).isOk()
-        || ring.tryReserve(third) != StatusCode.RESOURCE_EXHAUSTED
-        || !ring.poll(record).isOk()
-        || record.transactionId() != 1L
-        || !ring.tryReserve(third).isOk()
-        || !ring.encode(third, 3L, 3L).isOk()
-        || !ring.publish(third).isOk()
-        || !ring.poll(record).isOk()
-        || record.transactionId() != 2L
-        || !ring.poll(record).isOk()
-        || record.transactionId() != 3L
-        || ring.occupancy() != 0L) {
-      return 0L;
-    }
-    return 1L;
-  }
-
-  private static StatusCode reserveEncodePublish(
-      PreallocatedWalRing ring,
-      WalReservation reservation,
-      long value
-  ) {
-    StatusCode status = ring.tryReserve(reservation);
-    if (status.isOk()) {
-      status = ring.encode(reservation, value, value);
-    }
-    if (status.isOk()) {
-      status = ring.publish(reservation);
-    }
-    return status;
+    return PrototypeWalMpsc.measure(allocation, HOT_ITERATIONS);
   }
 
   private static Measurement measureVersions(AllocationMeter allocation) {
-    var store = new FixedVersionStore(8_192);
-    for (int record = 0; record < 8_192; record++) {
-      long begin = record & 511L;
-      long end = (record & 7) == 0 ? 0L : begin + 96L;
-      store.append(record, begin, end, record * 13L, 0L);
-    }
-    for (int iteration = 0; iteration < 1_000; iteration++) {
-      store.scanVisible(iteration & 511L);
-      store.sumVisibleValues();
-    }
-    long[] samples = new long[HOT_ITERATIONS];
-    long allocationBefore = allocation.currentThreadBytes();
-    long started = System.nanoTime();
-    long sink = 0L;
-    for (int iteration = 0; iteration < HOT_ITERATIONS; iteration++) {
-      long operationStarted = System.nanoTime();
-      store.scanVisible(iteration & 511L);
-      sink ^= store.sumVisibleValues();
-      samples[iteration] = System.nanoTime() - operationStarted;
-    }
-    long elapsed = System.nanoTime() - started;
-    Measurement measurement = summarize(
-      "fixed_version_scan",
-      StatusCode.OK,
-      samples,
-      elapsed,
-      allocation.delta(allocationBefore)
-    );
-    measurement.operations = (long) HOT_ITERATIONS * store.size();
-    measurement.bytes = store.encodedBytes();
-    measurement.copiedBytes = store.copiedBytes();
-    measurement.checkValue = sink;
-    return measurement;
+    return PrototypeStorageMeasurements.versions(allocation, HOT_ITERATIONS);
   }
 
   private static Measurement measureVersionAppendRead(AllocationMeter allocation) {
-    var store = new FixedVersionStore(1_024);
-    var record = new VersionRecord();
-    for (int iteration = 0; iteration < 1_024; iteration++) {
-      store.append(iteration, iteration, 0L, iteration * 13L, 0L);
-      store.read(iteration, record);
-    }
-    store.clear();
-    long[] samples = new long[HOT_ITERATIONS];
-    long allocationBefore = allocation.currentThreadBytes();
-    long started = System.nanoTime();
-    long sink = 0L;
-    StatusCode status = StatusCode.OK;
-    for (int iteration = 0; iteration < HOT_ITERATIONS; iteration++) {
-      if (store.size() == 1_024) {
-        store.clear();
-      }
-      long operationStarted = System.nanoTime();
-      status = store.append(iteration, iteration, 0L, iteration * 13L, 0L);
-      if (status.isOk()) {
-        status = store.read(store.size() - 1, record);
-      }
-      samples[iteration] = System.nanoTime() - operationStarted;
-      sink ^= record.value();
-      if (!status.isOk()) {
-        break;
-      }
-    }
-    long elapsed = System.nanoTime() - started;
-    Measurement measurement = summarize(
-      "fixed_version_append_read",
-      status,
-      samples,
-      elapsed,
-      allocation.delta(allocationBefore)
-    );
-    measurement.operations = HOT_ITERATIONS;
-    measurement.bytes = (long) HOT_ITERATIONS * FixedVersionStore.RECORD_BYTES;
-    measurement.copiedBytes = store.copiedBytes();
-    measurement.checkValue = sink;
-    return measurement;
+    return PrototypeStorageMeasurements.appendRead(allocation, HOT_ITERATIONS);
   }
 
   private static Measurement measureProtectionModel(AllocationMeter allocation) {
-    var model = new PageProtectionModel(4_096, 16 * 1_024, 128, 64);
-    var result = new PageProtectionResult();
-    for (int iteration = 0; iteration < 50; iteration++) {
-      model.firstPageImageEpochs(4, 1_024, iteration, result);
-      model.doubleWriteEpochs(4, 1_024, iteration, result);
-    }
-    long[] samples = new long[2_000];
-    long allocationBefore = allocation.currentThreadBytes();
-    long started = System.nanoTime();
-    long sink = 0L;
-    for (int iteration = 0; iteration < samples.length; iteration++) {
-      long operationStarted = System.nanoTime();
-      if ((iteration & 1) == 0) {
-        model.firstPageImageEpochs(4, 1_024, iteration, result);
-      } else {
-        model.doubleWriteEpochs(4, 1_024, iteration, result);
-      }
-      samples[iteration] = System.nanoTime() - operationStarted;
-      sink ^= result.totalBytes();
-    }
-    long elapsed = System.nanoTime() - started;
-    Measurement measurement = summarize(
-      "page_protection_model",
-      StatusCode.OK,
-      samples,
-      elapsed,
-      allocation.delta(allocationBefore)
-    );
-    measurement.operations = (long) samples.length * 4_096L;
-    measurement.checkValue = sink;
-    model.firstPageImageEpochs(4, 1_024, 17L, result);
-    measurement.firstPageImageBytes = result.totalBytes();
-    measurement.firstPageImageWalBytes = result.walBytes();
-    measurement.firstPageImageStagingBytes = result.stagingBytes();
-    measurement.firstPageImageDataBytes = result.dataBytes();
-    measurement.firstPageImageWalForces = result.walForceCalls();
-    measurement.firstPageImageStagingForces = result.stagingForceCalls();
-    measurement.firstPageImageDataForces = result.dataForceCalls();
-    measurement.firstPageImageCopiedBytes = result.copiedBytes();
-    measurement.firstPageImageCopies = result.immutableImageCopies();
-    measurement.checkpointEpochs = result.checkpointEpochs();
-    model.doubleWriteEpochs(4, 1_024, 17L, result);
-    measurement.doubleWriteBytes = result.totalBytes();
-    measurement.doubleWriteWalBytes = result.walBytes();
-    measurement.doubleWriteStagingBytes = result.stagingBytes();
-    measurement.doubleWriteDataBytes = result.dataBytes();
-    measurement.doubleWriteWalForces = result.walForceCalls();
-    measurement.doubleWriteStagingForces = result.stagingForceCalls();
-    measurement.doubleWriteDataForces = result.dataForceCalls();
-    measurement.doubleWriteCopiedBytes = result.copiedBytes();
-    measurement.doubleWriteCopies = result.stagingCopies();
-    return measurement;
+    return PrototypeStorageMeasurements.protection(allocation);
   }
 
   private static Measurement measurePageIo(int pageSize, AllocationMeter allocation) {
-    StatusCode warmStatus = warmPageIo(pageSize);
-    if (!warmStatus.isOk()) {
-      return summarize(
-        "page_io_" + pageSize,
-        warmStatus,
-        new long[IO_ITERATIONS],
-        1L,
-        -1L
-      );
-    }
-    var opened = new PageIoOpenResult();
-    StatusCode status = PageIoPrototype.openTemp(pageSize, opened);
-    long[] samples = new long[IO_ITERATIONS];
-    if (!status.isOk()) {
-      return summarize("page_io_" + pageSize, status, samples, 1L, -1L);
-    }
-    try (PageIoPrototype io = opened.value()) {
-      io.prepare(0x51A7L);
-      long allocationBefore = allocation.currentThreadBytes();
-      long started = System.nanoTime();
-      for (int iteration = 0; iteration < IO_ITERATIONS; iteration++) {
-        long operationStarted = System.nanoTime();
-        status = io.writePage(iteration & 7L);
-        if (status.isOk()) {
-          status = io.force();
-        }
-        if (status.isOk()) {
-          status = io.readPage(iteration & 7L);
-        }
-        samples[iteration] = System.nanoTime() - operationStarted;
-        if (!status.isOk()) {
-          break;
-        }
-      }
-      long elapsed = System.nanoTime() - started;
-      Measurement measurement = summarize(
-        "page_io_" + pageSize,
-        status,
-        samples,
-        elapsed,
-        allocation.delta(allocationBefore)
-      );
-      measurement.operations = IO_ITERATIONS;
-      measurement.bytes = io.counters().readBytes() + io.counters().writtenBytes();
-      measurement.copiedBytes = io.counters().copiedBytes();
-      measurement.forceCalls = io.counters().forceCalls();
-      measurement.pageSize = pageSize;
-      return measurement;
-    }
+    return PrototypeStorageMeasurements.pageIo(pageSize, allocation);
   }
 
-  private static Measurement summarize(
+  static Measurement summarize(
       String name,
       StatusCode status,
       long[] samples,
@@ -584,7 +135,7 @@ public final class PrototypeSmoke {
     return measurement;
   }
 
-  private static void warmWal() {
+  static void warmWal() {
     var ring = new PreallocatedWalRing(1_024);
     var reservation = new WalReservation();
     var record = new WalRecord();
@@ -596,7 +147,7 @@ public final class PrototypeSmoke {
     }
   }
 
-  private static StatusCode warmPageIo(int pageSize) {
+  static StatusCode warmPageIo(int pageSize) {
     var opened = new PageIoOpenResult();
     StatusCode status = PageIoPrototype.openTemp(pageSize, opened);
     if (!status.isOk()) {
@@ -847,7 +398,7 @@ public final class PrototypeSmoke {
     return argument;
   }
 
-  private static final class AllocationMeter {
+  static final class AllocationMeter {
     private final ThreadMXBean bean;
     private final boolean available;
 
@@ -875,7 +426,7 @@ public final class PrototypeSmoke {
     }
   }
 
-  private static final class Measurement {
+  static final class Measurement {
     String name;
     StatusCode status;
     long operations;

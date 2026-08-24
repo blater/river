@@ -23,6 +23,8 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   private final char[] textCharacters =
       new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final RiverResultSetMetaData metadata;
+  private final RiverJdbcObjectConversion objectConversion =
+      new RiverJdbcObjectConversion(this);
   private int rowNumber;
   private boolean rowAvailable;
   private boolean completed;
@@ -186,49 +188,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public <T> T getObject(int column, Class<T> type) throws SQLException {
-    if (type == null) {
-      throw JdbcExceptions.invalid("target type must not be null");
-    }
-    long value = value(column);
-    requireObjectConversion(column, type);
-    if (lastWasNull) {
-      return null;
-    }
-    Object converted;
-    if (metadata.isVarchar(column)) {
-      if (type != String.class) {
-        throw JdbcExceptions.unsupported();
-      }
-      converted = getString(column);
-    } else if (RiverJdbcTemporalValues.isTemporal(
-        metadata.typeDescriptor(column))) {
-      converted = RiverJdbcTemporalValues.convert(
-          value, metadata.typeDescriptor(column), type, textCharacters);
-    } else if (metadata.isBoolean(column)
-        && (type == Boolean.class || type == Boolean.TYPE)) {
-      converted = Boolean.valueOf(value != 0);
-    } else if (type == Long.class || type == Long.TYPE) {
-      converted = Long.valueOf(value);
-    } else if (type == Integer.class || type == Integer.TYPE) {
-      if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
-        throw numericOverflow();
-      }
-      converted = Integer.valueOf((int) value);
-    } else if (type == String.class) {
-      if (metadata.isBoolean(column)) converted = Boolean.toString(value != 0);
-      else if (metadata.isDecimal(column)) {
-        converted = BigDecimal.valueOf(
-            value, metadata.decimalScale(column)).toPlainString();
-      } else converted = Long.toString(value);
-    } else if (type == BigDecimal.class) {
-      converted = BigDecimal.valueOf(
-          value, metadata.isDecimal(column) ? metadata.decimalScale(column) : 0);
-    } else {
-      throw JdbcExceptions.unsupported();
-    }
-    @SuppressWarnings("unchecked")
-    T result = (T) converted;
-    return result;
+    return objectConversion.getObject(column, type);
   }
 
   @Override
@@ -448,7 +408,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     return type != null && type.isInstance(this);
   }
 
-  private long value(int column) throws SQLException {
+  long value(int column) throws SQLException {
     requireRow();
     if (column <= 0 || column > metadata.getColumnCount()) {
       throw JdbcExceptions.invalid("column index is out of range");
@@ -473,28 +433,21 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     return result;
   }
 
-  private void requireObjectConversion(int column, Class<?> type)
-      throws SQLException {
-    int descriptor = metadata.typeDescriptor(column);
-    boolean supported = switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> type == Long.class
-          || type == Long.TYPE || type == Integer.class || type == Integer.TYPE
-          || type == BigDecimal.class || type == String.class;
-      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> type == Boolean.class
-          || type == Boolean.TYPE || type == Long.class || type == Long.TYPE
-          || type == Integer.class || type == Integer.TYPE
-          || type == BigDecimal.class || type == String.class;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL ->
-          type == BigDecimal.class || type == String.class;
-      case SqlTypeDescriptor.TYPE_ID_VARCHAR -> type == String.class;
-      default -> RiverJdbcTemporalValues.supportsObjectClass(descriptor, type);
-    };
-    if (!supported) throw JdbcExceptions.unsupported();
-  }
-
-  private static SQLException numericOverflow() {
+  SQLException numericOverflow() {
     return JdbcExceptions.failure(
         StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, "convert numeric result");
+  }
+
+  RiverResultSetMetaData metadata() {
+    return metadata;
+  }
+
+  char[] textCharacters() {
+    return textCharacters;
+  }
+
+  boolean lastWasNull() {
+    return lastWasNull;
   }
 
   private void completeQuery() throws SQLException {

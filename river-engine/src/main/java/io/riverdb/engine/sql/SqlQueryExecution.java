@@ -576,24 +576,19 @@ final class SqlQueryExecution {
   }
 
   private StatusCode closePhysicalResources() {
-    StatusCode status = StatusCode.OK;
-    status = catalogs.close();
-    if (status.isOk()) status = subqueries.reset();
-    status = joins.closeAfter(status);
-    if (status.isOk() && pointQueries.hasResources()) {
-      status = pointQueries.closeResources();
+    StatusCode status = SqlQueryExecutionResourceCleanup.close(
+        session,
+        catalogs,
+        subqueries,
+        joins,
+        pointQueries,
+        activeScan,
+        sorts,
+        blockPipeline,
+        groups);
+    if (status.isOk()) {
+      pointBlockPipeline = false;
     }
-    if (status.isOk() && activeScan.relational().isActive()) {
-      status = session.closeScan(activeScan.relational());
-    }
-    if (status.isOk() && sorts.hasResources()) {
-      status = sorts.close();
-    }
-    if (status.isOk() && blockPipeline != null && blockPipeline.hasResources()) {
-      status = blockPipeline.close();
-    }
-    if (status.isOk()) pointBlockPipeline = false;
-    groups.resetText();
     if (status.isOk()) {
       subqueriesPrepared = false;
       predicates.reset();

@@ -136,12 +136,14 @@ public final class SqlParser {
       int[] edges,
       int count,
       SqlCommand result) {
-    if (offsets == null || kinds == null || edges == null || result == null
-        || count < 0 || count > SqlBooleanPredicateProgram.MAXIMUM_LEAVES
-        || count > offsets.length || count > kinds.length || count > edges.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
+    return SqlParserSubqueryBlock.parse(this, sql, offsets, kinds, edges, count, result);
+  }
+
+  void beginSubqueries(int[] offsets, int[] kinds, int[] edges, int count) {
     predicateParser.beginSubqueries(offsets, kinds, edges, count);
+  }
+
+  StatusCode parseTextBlock(CharSequence sql, SqlCommand result) {
     return parseText(sql, result);
   }
 
@@ -376,24 +378,10 @@ public final class SqlParser {
   }
 
   private boolean joinAliasReserved(CharSequence sql) {
-    return nextKeyword(sql, "ON")
-        || nextKeyword(sql, "USING")
-        || nextKeyword(sql, "JOIN")
-        || nextKeyword(sql, "INNER")
-        || nextKeyword(sql, "LEFT")
-        || nextKeyword(sql, "RIGHT")
-        || nextKeyword(sql, "FULL")
-        || nextKeyword(sql, "CROSS")
-        || nextKeyword(sql, "NATURAL")
-        || nextKeyword(sql, "OUTER")
-        || nextKeyword(sql, "WHERE")
-        || nextKeyword(sql, "HAVING")
-        || nextKeyword(sql, "GROUP")
-        || nextKeyword(sql, "ORDER")
-        || nextKeyword(sql, "LIMIT");
+    return SqlParserJoinAliasRules.isReserved(this, sql);
   }
 
-  private boolean nextKeyword(CharSequence sql, String keyword) {
+  boolean nextKeyword(CharSequence sql, String keyword) {
     int start = input.position();
     boolean matches = consumeKeyword(sql, keyword);
     input.position(start);

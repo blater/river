@@ -13,19 +13,19 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Bounded in-memory logical lock table with authenticated caller-owned tokens. */
 public final class LockManager implements LockService {
   private static final AtomicLong PROVIDER_IDENTITIES = new AtomicLong(1);
-  private static final long OWNER_HIGH = 0x52495645524c4f43L; // RIVERLOC
-  private static final LockScope[] LOCK_SCOPES = LockScope.values();
+  static final long OWNER_HIGH = 0x52495645524c4f43L; // RIVERLOC
+  static final LockScope[] LOCK_SCOPES = LockScope.values();
 
-  private final long ownerLow = PROVIDER_IDENTITIES.getAndIncrement();
-  private final long[] transactionIds;
-  private final int[] lowerSpaces;
-  private final long[] lowerKeys;
-  private final int[] upperSpaces;
-  private final long[] upperKeys;
-  private final long[] capabilityTokens;
-  private final byte[] scopes;
-  private final byte[] modes;
-  private final boolean[] occupied;
+  final long ownerLow = PROVIDER_IDENTITIES.getAndIncrement();
+  final long[] transactionIds;
+  final int[] lowerSpaces;
+  final long[] lowerKeys;
+  final int[] upperSpaces;
+  final long[] upperKeys;
+  final long[] capabilityTokens;
+  final byte[] scopes;
+  final byte[] modes;
+  final boolean[] occupied;
   private final long[] waitingTransactionIds;
   private final int[] waitingLowerSpaces;
   private final long[] waitingLowerKeys;
@@ -38,9 +38,9 @@ public final class LockManager implements LockService {
   private final boolean[] waiting;
   private final long[] deadlockVictims;
   private final long[] cyclePath;
-  private long nextCapabilityToken = 1;
+  long nextCapabilityToken = 1;
   private long nextWaitOrder = 1;
-  private int activeLockCount;
+  int activeLockCount;
   private int waitingCount;
   private long deadlockVictimSelections;
 
@@ -122,117 +122,8 @@ public final class LockManager implements LockService {
       long deadlineNanos,
       long nowNanos,
       LockToken token) {
-    if (transactionId <= 0
-        || scope == null
-        || mode == null
-        || token == null
-        || !LockResourceOverlap.isValid(
-            scope, lowerSpace, lowerKey, upperSpace, upperKey)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (isDeadlockVictim(transactionId)) {
-      removeWait(transactionId);
-      return StatusCode.CONFLICT;
-    }
-    if (token.isActive()) {
-      return StatusCode.CONFLICT;
-    }
-    int freeSlot = -1;
-    boolean blocked = false;
-    for (int slot = 0; slot < occupied.length; slot++) {
-      if (!occupied[slot]) {
-        if (freeSlot < 0) {
-          freeSlot = slot;
-        }
-        continue;
-      }
-      if (!LockResourceOverlap.overlaps(
-          (byte) scope.ordinal(),
-          lowerSpace,
-          lowerKey,
-          upperSpace,
-          upperKey,
-          scopes[slot],
-          lowerSpaces[slot],
-          lowerKeys[slot],
-          upperSpaces[slot],
-          upperKeys[slot])) {
-        continue;
-      }
-      if (transactionIds[slot] == transactionId) {
-        if (LockResourceOverlap.same(
-            (byte) scope.ordinal(),
-            lowerSpace,
-            lowerKey,
-            upperSpace,
-            upperKey,
-            scopes[slot],
-            lowerSpaces[slot],
-            lowerKeys[slot],
-            upperSpaces[slot],
-            upperKeys[slot])) {
-          return StatusCode.CONFLICT;
-        }
-        continue;
-      }
-      int requestedMode = mode.ordinal();
-      int heldMode = modes[slot];
-      if (conflicts(requestedMode, heldMode) || conflicts(heldMode, requestedMode)) {
-        blocked = true;
-      }
-    }
-    if (!blocked) {
-      blocked = hasEarlierWaiter(
-          transactionId, scope, lowerSpace, lowerKey, upperSpace, upperKey);
-    }
-    if (blocked) {
-      if (deadlineNanos > 0 && nowNanos >= deadlineNanos) {
-        removeWait(transactionId);
-        return StatusCode.TIMEOUT;
-      }
-      StatusCode status = registerWait(
-          transactionId,
-          scope,
-          lowerSpace,
-          lowerKey,
-          upperSpace,
-          upperKey,
-          mode,
-          deadlineNanos);
-      if (!status.isOk()) {
-        return status;
-      }
-      long victim = cycleVictim(transactionId);
-      if (victim > 0) {
-        markDeadlockVictim(victim);
-        removeWait(victim);
-        if (victim == transactionId) {
-          return StatusCode.CONFLICT;
-        }
-      }
-      return StatusCode.RETRY;
-    }
-    if (freeSlot < 0 || nextCapabilityToken <= 0) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    removeWait(transactionId);
-    long capabilityToken = nextCapabilityToken++;
-    StatusCode status = token.claim(
-        OWNER_HIGH, ownerLow, 1, capabilityToken, transactionId, freeSlot);
-    if (!status.isOk()) {
-      return status;
-    }
-    occupied[freeSlot] = true;
-    transactionIds[freeSlot] = transactionId;
-    lowerSpaces[freeSlot] = lowerSpace;
-    lowerKeys[freeSlot] = lowerKey;
-    upperSpaces[freeSlot] = upperSpace;
-    upperKeys[freeSlot] = upperKey;
-    capabilityTokens[freeSlot] = capabilityToken;
-    scopes[freeSlot] = (byte) scope.ordinal();
-    modes[freeSlot] = (byte) mode.ordinal();
-    activeLockCount++;
-    return StatusCode.OK;
+    return LockAcquisition.acquire(this, transactionId, scope, lowerSpace, lowerKey,
+        upperSpace, upperKey, mode, deadlineNanos, nowNanos, token);
   }
 
   @Override
@@ -274,85 +165,7 @@ public final class LockManager implements LockService {
       LockMode requestedMode,
       long deadlineNanos,
       long nowNanos) {
-    if (token == null || requestedMode == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (isDeadlockVictim(token.transactionId())) {
-      removeWait(token.transactionId());
-      return StatusCode.CONFLICT;
-    }
-    int slot = token.slot();
-    if (!validToken(token, slot)) {
-      return StatusCode.NOT_OWNER;
-    }
-    int requested = requestedMode.ordinal();
-    int held = modes[slot];
-    if (held >= requested) {
-      removeWait(token.transactionId());
-      return StatusCode.OK;
-    }
-    boolean blocked = false;
-    for (int other = 0; other < occupied.length; other++) {
-      if (other == slot
-          || !occupied[other]
-          || transactionIds[other] == token.transactionId()
-          || !LockResourceOverlap.overlaps(
-              scopes[slot],
-              lowerSpaces[slot],
-              lowerKeys[slot],
-              upperSpaces[slot],
-              upperKeys[slot],
-              scopes[other],
-              lowerSpaces[other],
-              lowerKeys[other],
-              upperSpaces[other],
-              upperKeys[other])) {
-        continue;
-      }
-      if (conflicts(requested, modes[other]) || conflicts(modes[other], requested)) {
-        blocked = true;
-      }
-    }
-    LockScope scope = LOCK_SCOPES[scopes[slot]];
-    if (!blocked) {
-      blocked = hasEarlierWaiter(
-          token.transactionId(),
-          scope,
-          lowerSpaces[slot],
-          lowerKeys[slot],
-          upperSpaces[slot],
-          upperKeys[slot]);
-    }
-    if (blocked) {
-      if (deadlineNanos > 0 && nowNanos >= deadlineNanos) {
-        removeWait(token.transactionId());
-        return StatusCode.TIMEOUT;
-      }
-      StatusCode status = registerWait(
-          token.transactionId(),
-          scope,
-          lowerSpaces[slot],
-          lowerKeys[slot],
-          upperSpaces[slot],
-          upperKeys[slot],
-          requestedMode,
-          deadlineNanos);
-      if (!status.isOk()) {
-        return status;
-      }
-      long victim = cycleVictim(token.transactionId());
-      if (victim > 0) {
-        markDeadlockVictim(victim);
-        removeWait(victim);
-        if (victim == token.transactionId()) {
-          return StatusCode.CONFLICT;
-        }
-      }
-      return StatusCode.RETRY;
-    }
-    removeWait(token.transactionId());
-    modes[slot] = (byte) requested;
-    return StatusCode.OK;
+    return LockUpgrade.apply(this, token, requestedMode, deadlineNanos, nowNanos);
   }
 
   synchronized boolean isDeadlockVictim(long transactionId) {
@@ -382,7 +195,7 @@ public final class LockManager implements LockService {
     }
   }
 
-  private StatusCode registerWait(
+  StatusCode registerWait(
       long transactionId,
       LockScope scope,
       int lowerSpace,
@@ -430,7 +243,7 @@ public final class LockManager implements LockService {
     return StatusCode.OK;
   }
 
-  private boolean hasEarlierWaiter(
+  boolean hasEarlierWaiter(
       long transactionId,
       LockScope scope,
       int lowerSpace,
@@ -469,7 +282,7 @@ public final class LockManager implements LockService {
     return -1;
   }
 
-  private void removeWait(long transactionId) {
+  void removeWait(long transactionId) {
     int slot = findWait(transactionId);
     if (slot < 0) {
       return;
@@ -487,7 +300,7 @@ public final class LockManager implements LockService {
     waitingCount--;
   }
 
-  private long cycleVictim(long transactionId) {
+  long cycleVictim(long transactionId) {
     return findCycleVictim(transactionId, transactionId, 0);
   }
 
@@ -580,11 +393,11 @@ public final class LockManager implements LockService {
         upperKey);
   }
 
-  private static boolean conflictingModes(byte left, byte right) {
+  static boolean conflictingModes(byte left, byte right) {
     return conflicts(left, right) || conflicts(right, left);
   }
 
-  private void markDeadlockVictim(long transactionId) {
+  void markDeadlockVictim(long transactionId) {
     if (isDeadlockVictim(transactionId)) {
       return;
     }
@@ -597,7 +410,7 @@ public final class LockManager implements LockService {
     }
   }
 
-  private boolean validToken(LockToken token, int slot) {
+  boolean validToken(LockToken token, int slot) {
     return token.isActive()
         && token.isOwnedBy(OWNER_HIGH, ownerLow)
         && token.providerGeneration() == 1

@@ -90,24 +90,7 @@ public final class LocalTemporal {
 
   public static StatusCode parseDateStatus(
       CharSequence text, int start, int end, Value result) {
-    if (text == null || result == null || end - start != 10
-        || character(text, start + 4) != '-'
-        || character(text, start + 7) != '-') {
-      return StatusCode.INVALID_DATETIME_FORMAT;
-    }
-    int year = digits(text, start, 4);
-    int month = digits(text, start + 5, 2);
-    int day = digits(text, start + 8, 2);
-    if (year < 0 || month < 0 || day < 0) {
-      return StatusCode.INVALID_DATETIME_FORMAT;
-    }
-    if (!validDateParts(year, month, day)) {
-      return StatusCode.DATETIME_FIELD_OVERFLOW;
-    }
-    result.value = epochDay(year, month, day);
-    result.precision = 0;
-    result.offsetMinutes = 0;
-    return StatusCode.OK;
+    return LocalTemporalParser.date(text, start, end, result);
   }
 
   public static boolean parseTime(
@@ -117,41 +100,7 @@ public final class LocalTemporal {
 
   public static StatusCode parseTimeStatus(
       CharSequence text, int start, int end, Value result) {
-    if (text == null || result == null || end - start < 8
-        || character(text, start + 2) != ':'
-        || character(text, start + 5) != ':') {
-      return StatusCode.INVALID_DATETIME_FORMAT;
-    }
-    int hour = digits(text, start, 2);
-    int minute = digits(text, start + 3, 2);
-    int second = digits(text, start + 6, 2);
-    if (hour < 0 || minute < 0 || second < 0) {
-      return StatusCode.INVALID_DATETIME_FORMAT;
-    }
-    if (hour > 23 || minute > 59 || second > 59) {
-      return StatusCode.DATETIME_FIELD_OVERFLOW;
-    }
-    int precision = 0;
-    int fraction = 0;
-    if (end != start + 8) {
-      if (character(text, start + 8) != '.') {
-        return StatusCode.INVALID_DATETIME_FORMAT;
-      }
-      precision = end - start - 9;
-      if (!validPrecision(precision) || precision == 0) {
-        return StatusCode.INVALID_DATETIME_FORMAT;
-      }
-      fraction = digits(text, start + 9, precision);
-      if (fraction < 0) {
-        return StatusCode.INVALID_DATETIME_FORMAT;
-      }
-    }
-    result.value = ((hour * 60L + minute) * 60L + second)
-        * MICROSECONDS_PER_SECOND
-        + fraction * PRECISION_QUANTA[precision];
-    result.precision = precision;
-    result.offsetMinutes = 0;
-    return StatusCode.OK;
+    return LocalTemporalParser.time(text, start, end, result);
   }
 
   public static boolean parseTimestamp(
@@ -161,21 +110,7 @@ public final class LocalTemporal {
 
   public static StatusCode parseTimestampStatus(
       CharSequence text, int start, int end, Value result) {
-    if (text == null || result == null || end - start < 19
-        || character(text, start + 10) != ' ') {
-      return StatusCode.INVALID_DATETIME_FORMAT;
-    }
-    StatusCode status = parseDateStatus(text, start, start + 10, result);
-    if (!status.isOk()) {
-      return status;
-    }
-    long day = result.value;
-    status = parseTimeStatus(text, start + 11, end, result);
-    if (!status.isOk()) {
-      return status;
-    }
-    result.value += day * MICROSECONDS_PER_DAY;
-    return StatusCode.OK;
+    return LocalTemporalParser.timestamp(text, start, end, result);
   }
 
   public static boolean parseTimestampWithOffset(
@@ -185,35 +120,7 @@ public final class LocalTemporal {
 
   public static StatusCode parseTimestampWithOffsetStatus(
       CharSequence text, int start, int end, Value result) {
-    int offsetStart = end - 6;
-    if (text == null || result == null || offsetStart - start < 19) {
-      return StatusCode.INVALID_DATETIME_FORMAT;
-    }
-    StatusCode localStatus = parseTimestampStatus(text, start, offsetStart, result);
-    if (!localStatus.isOk()) {
-      return localStatus;
-    }
-    char sign = character(text, offsetStart);
-    int hours = digits(text, offsetStart + 1, 2);
-    int minutes = digits(text, offsetStart + 4, 2);
-    if ((sign != '+' && sign != '-')
-        || character(text, offsetStart + 3) != ':'
-        || hours < 0 || minutes < 0) {
-      return StatusCode.INVALID_DATETIME_FORMAT;
-    }
-    if (hours > 14
-        || minutes > 59
-        || hours == 14 && minutes != 0) {
-      return StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
-    }
-    int offsetMinutes = hours * 60 + minutes;
-    if (sign == '-') {
-      offsetMinutes = -offsetMinutes;
-    }
-    result.value -= offsetMinutes * 60L * MICROSECONDS_PER_SECOND;
-    result.offsetMinutes = offsetMinutes;
-    return validInstant(result.value, result.precision)
-        ? StatusCode.OK : StatusCode.DATETIME_FIELD_OVERFLOW;
+    return LocalTemporalParser.timestampWithOffset(text, start, end, result);
   }
 
   public static int formatDate(long epochDay, char[] target, int offset) {
@@ -250,6 +157,18 @@ public final class LocalTemporal {
 
   static long precisionQuantum(int precision) {
     return validPrecision(precision) ? PRECISION_QUANTA[precision] : 0;
+  }
+
+  static long epochDayForParser(int year, int month, int day) {
+    return epochDay(year, month, day);
+  }
+
+  static boolean validDatePartsForParser(int year, int month, int day) {
+    return validDateParts(year, month, day);
+  }
+
+  static boolean validPrecisionForParser(int precision) {
+    return validPrecision(precision);
   }
 
   public static int formatTime(

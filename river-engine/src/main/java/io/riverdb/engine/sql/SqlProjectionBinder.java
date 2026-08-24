@@ -144,47 +144,10 @@ final class SqlProjectionBinder {
   }
 
   static int aggregateResultDescriptor(SqlCommandType type, int inputDescriptor) {
-    if (type == SqlCommandType.COUNT
-        || type == SqlCommandType.COUNT_VALUE
-        || type == SqlCommandType.GROUP_COUNT
-        || type == SqlCommandType.GROUP_COUNT_VALUE) {
-      return SqlTypeDescriptor.BIGINT;
-    }
-    if (type == SqlCommandType.GROUP_MIN || type == SqlCommandType.GROUP_MAX
-        || type == SqlCommandType.MIN || type == SqlCommandType.MAX) {
-      return inputDescriptor;
-    }
-    if (type == SqlCommandType.AVG || type == SqlCommandType.GROUP_AVG) {
-      int inputScale = SqlTypeDescriptor.typeId(inputDescriptor)
-              == SqlTypeDescriptor.TYPE_ID_DECIMAL
-          ? SqlTypeDescriptor.parameterTwo(inputDescriptor) : 0;
-      int integerDigits = SqlTypeDescriptor.typeId(inputDescriptor)
-              == SqlTypeDescriptor.TYPE_ID_DECIMAL
-          ? SqlTypeDescriptor.parameterOne(inputDescriptor) - inputScale : 19;
-      int scale = Math.min(
-          Math.max(inputScale, 6),
-          Math.max(0, SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION - integerDigits));
-      return SqlTypeDescriptor.decimal(
-          SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, scale);
-    }
-    return SqlTypeDescriptor.typeId(inputDescriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.decimal(
-            SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION,
-            SqlTypeDescriptor.parameterTwo(inputDescriptor))
-        : SqlTypeDescriptor.BIGINT;
+    return SqlAggregateDescriptor.command(type, inputDescriptor);
   }
 
   static int aggregateResultDescriptor(int kind, int inputDescriptor) {
-    return switch (kind) {
-      case io.riverdb.sql.SqlAggregateKind.COUNT,
-          io.riverdb.sql.SqlAggregateKind.COUNT_VALUE -> SqlTypeDescriptor.BIGINT;
-      case io.riverdb.sql.SqlAggregateKind.MIN,
-          io.riverdb.sql.SqlAggregateKind.MAX -> inputDescriptor;
-      case io.riverdb.sql.SqlAggregateKind.AVG -> aggregateResultDescriptor(
-          SqlCommandType.AVG, inputDescriptor);
-      case io.riverdb.sql.SqlAggregateKind.SUM -> aggregateResultDescriptor(
-          SqlCommandType.SUM, inputDescriptor);
-      default -> 0;
-    };
+    return SqlAggregateDescriptor.kind(kind, inputDescriptor);
   }
 }

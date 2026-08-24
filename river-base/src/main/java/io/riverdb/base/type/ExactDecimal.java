@@ -244,36 +244,14 @@ public final class ExactDecimal {
       boolean requireExact,
       LongValue result,
       WideScratch scratch) {
-    if (result == null || scratch == null || !exactNumeric(sourceDescriptor)
-        || !exactNumeric(targetDescriptor)) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
-    int sourceScale = scale(sourceDescriptor);
-    int targetScale = scale(targetDescriptor);
-    if (targetScale >= sourceScale) {
-      signedScaled(value, targetScale - sourceScale, scratch);
-      return finishPair(
-          scratch.high, scratch.low, 0, false, targetDescriptor, result, scratch);
-    }
-    long divisor = POWERS_OF_TEN[sourceScale - targetScale];
-    long remainder = value % divisor;
-    if (requireExact && remainder != 0) {
-      return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-    }
-    long converted = value / divisor;
-    if (halfEven && remainder != 0
-        && shouldRound(Math.abs(remainder), divisor, converted)) {
-      if (value < 0 && converted == Long.MIN_VALUE
-          || value >= 0 && converted == Long.MAX_VALUE) {
-        return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-      }
-      converted += value < 0 ? -1 : 1;
-    }
-    if (!valueFitsDescriptor(converted, targetDescriptor)) {
-      return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-    }
-    result.value = converted;
-    return StatusCode.OK;
+    return ExactDecimalQuantize.apply(
+        value,
+        sourceDescriptor,
+        targetDescriptor,
+        halfEven,
+        requireExact,
+        result,
+        scratch);
   }
 
   /** Converts an ordered lower or exclusive-upper bound to the least target-scale value. */
@@ -380,7 +358,6 @@ public final class ExactDecimal {
     return compareDifferentScale(left, leftScale, right, rightScale);
   }
 
-  /** Divides a signed 128-bit sum by a positive count and rounds half-even. */
   public static boolean average(
       long sumHigh,
       long sumLow,
@@ -389,46 +366,14 @@ public final class ExactDecimal {
       int targetDescriptor,
       LongValue result,
       WideScratch scratch) {
-    if (count <= 0
-        || result == null
-        || scratch == null
-        || SqlTypeDescriptor.typeId(targetDescriptor)
-            != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
-      return false;
-    }
-    int targetScale = SqlTypeDescriptor.parameterTwo(targetDescriptor);
-    if (targetScale < inputScale
-        || !divideSigned(sumHigh, sumLow, count, scratch)) {
-      return false;
-    }
-    long factor = POWERS_OF_TEN[targetScale - inputScale];
-    long whole = scratch.quotient * factor;
-    if (Math.multiplyHigh(scratch.quotient, factor) != whole >> 63) {
-      return false;
-    }
-    long remainderLow = scratch.remainder * factor;
-    long remainderHigh = Math.multiplyHigh(scratch.remainder, factor);
-    boolean negative = scratch.negative;
-    if (!divideUnsigned(remainderHigh, remainderLow, count, scratch)) {
-      return false;
-    }
-    long fraction = scratch.quotient;
-    boolean aboveHalf = scratch.remainder > count - scratch.remainder;
-    boolean tie = scratch.remainder == count - scratch.remainder;
-    if (aboveHalf || tie && ((whole ^ fraction) & 1) != 0) {
-      fraction++;
-    }
-    long value = negative ? whole - fraction : whole + fraction;
-    if (negative
-        ? ((whole ^ fraction) & (whole ^ value)) < 0
-        : ((whole ^ value) & (fraction ^ value)) < 0) {
-      return false;
-    }
-    if (!fits(value, SqlTypeDescriptor.parameterOne(targetDescriptor))) {
-      return false;
-    }
-    result.value = value;
-    return true;
+    return ExactDecimalAverage.compute(
+        sumHigh,
+        sumLow,
+        count,
+        inputScale,
+        targetDescriptor,
+        result,
+        scratch);
   }
 
   private static int compareDifferentScale(
@@ -443,7 +388,7 @@ public final class ExactDecimal {
         ? comparison : Long.compare(0, higherScaleValue % factor);
   }
 
-  private static void signedScaled(long value, int exponent, WideScratch result) {
+  static void signedScaled(long value, int exponent, WideScratch result) {
     long factor = POWERS_OF_TEN[exponent];
     result.high = Math.multiplyHigh(value, factor);
     result.low = value * factor;
@@ -478,7 +423,7 @@ public final class ExactDecimal {
     value.high = ~value.high + (value.low == 0 ? 1 : 0);
   }
 
-  private static StatusCode finishPair(
+  static StatusCode finishPair(
       long high,
       long low,
       int scaleReduction,
@@ -529,7 +474,7 @@ public final class ExactDecimal {
     return true;
   }
 
-  private static boolean shouldRound(long magnitudeRemainder, long divisor, long whole) {
+  static boolean shouldRound(long magnitudeRemainder, long divisor, long whole) {
     long complement = divisor - magnitudeRemainder;
     return magnitudeRemainder > complement
         || magnitudeRemainder == complement && (whole & 1) != 0;
@@ -659,7 +604,7 @@ public final class ExactDecimal {
     return high != 0 ? high : Long.compareUnsigned(leftLow, rightLow);
   }
 
-  private static boolean divideSigned(
+  static boolean divideSigned(
       long high, long low, long divisor, WideScratch result) {
     boolean negative = high < 0;
     long magnitudeHigh = high;
@@ -682,7 +627,7 @@ public final class ExactDecimal {
     return true;
   }
 
-  private static boolean divideUnsigned(
+  static boolean divideUnsigned(
       long high, long low, long divisor, WideScratch result) {
     long quotient = 0;
     long remainder = 0;
@@ -711,10 +656,10 @@ public final class ExactDecimal {
 
   /** Caller-owned scratch for signed-wide decimal division. */
   public static final class WideScratch {
-    private long high;
-    private long low;
-    private long quotient;
-    private long remainder;
-    private boolean negative;
+    long high;
+    long low;
+    long quotient;
+    long remainder;
+    boolean negative;
   }
 }

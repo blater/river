@@ -6,11 +6,9 @@ import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
-import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Arrays;
 
 /** One forward-only statement on the connection's ordered River session. */
 class RiverJdbcStatement extends AbstractStatement {
@@ -20,8 +18,8 @@ class RiverJdbcStatement extends AbstractStatement {
   private final RiverSession session;
   private final CommandResult command = new CommandResult();
   private final QueryOpenResult openedQuery = new QueryOpenResult();
-  private final String[] batch = new String[MAXIMUM_BATCH_STATEMENTS];
-  private ParameterSet[] batchParameters;
+  final String[] batch = new String[MAXIMUM_BATCH_STATEMENTS];
+  ParameterSet[] batchParameters;
   private RiverJdbcResultSet resultSet;
   private RiverGeneratedKeysResultSet generatedKeysResultSet;
   private long generatedKey;
@@ -29,7 +27,7 @@ class RiverJdbcStatement extends AbstractStatement {
   private int updateCount = -1;
   private boolean closeOnCompletion;
   private boolean closed;
-  private int batchCount;
+  int batchCount;
 
   RiverJdbcStatement(RiverJdbcConnection owner, RiverSession remoteSession) {
     connection = owner;
@@ -269,35 +267,7 @@ class RiverJdbcStatement extends AbstractStatement {
   public int[] executeBatch() throws SQLException {
     requireOpen();
     closeCurrentResult();
-    int entries = batchCount;
-    int[] updates = new int[entries];
-    batchCount = 0;
-    for (int index = 0; index < entries; index++) {
-      String sql = batch[index];
-      batch[index] = null;
-      try {
-        ParameterSet parameters = batchParameters == null
-            ? null : batchParameters[index];
-        if (batchParameters != null) batchParameters[index] = null;
-        try {
-          updates[index] = executeUpdateSql(sql, parameters, false);
-        } finally {
-          if (parameters != null) parameters.reset();
-        }
-      } catch (SQLException failure) {
-        for (int remaining = index + 1; remaining < entries; remaining++) {
-          batch[remaining] = null;
-          releaseBatchParameters(remaining);
-        }
-        throw new BatchUpdateException(
-            "River batch failed at entry " + index,
-            failure.getSQLState(),
-            failure.getErrorCode(),
-            Arrays.copyOf(updates, index),
-            failure);
-      }
-    }
-    return updates;
+    return RiverJdbcBatchExecutor.execute(this);
   }
 
   @Override
@@ -463,7 +433,7 @@ class RiverJdbcStatement extends AbstractStatement {
     batchCount = 0;
   }
 
-  private void releaseBatchParameters(int index) {
+  void releaseBatchParameters(int index) {
     if (batchParameters == null) return;
     ParameterSet parameters = batchParameters[index];
     batchParameters[index] = null;

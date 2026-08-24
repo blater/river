@@ -67,29 +67,29 @@ final class RiverCatalogResultSet extends AbstractResultSet {
           TYPE_COLUMN_WIDTHS);
 
   private final RiverJdbcConnection connection;
-  private final RiverQuery query;
-  private final RowResult source = new RowResult();
+  final RiverQuery query;
+  final RowResult source = new RowResult();
   private final CommandResult completion = new CommandResult();
-  private final char[] tableNameCharacters =
+  final char[] tableNameCharacters =
       new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
-  private final char[] tableType = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
-  private final String pattern;
-  private final boolean includeTables;
-  private final boolean includeViews;
+  final char[] tableType = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  final String pattern;
+  final boolean includeTables;
+  final boolean includeViews;
   private final int mode;
   private String[] tableNames;
   private byte[] tableTypes;
   private String currentTableName;
-  private int tableNameLength;
-  private int tableTypeLength;
+  int tableNameLength;
+  int tableTypeLength;
   private String currentTableType;
-  private int tableCount;
+  int tableCount;
   private int tableIndex;
   private int rowNumber;
   private int typeIndex;
   private boolean rowAvailable;
-  private boolean tablesLoaded;
-  private boolean queryClosed;
+  boolean tablesLoaded;
+  boolean queryClosed;
   private boolean completed;
   private boolean closed;
   private boolean lastValueRead;
@@ -176,32 +176,7 @@ final class RiverCatalogResultSet extends AbstractResultSet {
   }
 
   private void loadTables() throws SQLException {
-    while (query != null && !queryClosed) {
-      source.reset();
-      JdbcExceptions.require(query.next(source), "fetch table metadata");
-      if (!source.isAvailable()) {
-        closeQuery(false);
-        break;
-      }
-      tableNameLength = source.copyTextAt(0, tableNameCharacters, 0);
-      tableTypeLength = source.copyTextAt(1, tableType, 0);
-      if (tableNameLength < 0 || tableTypeLength < 0) {
-        throw JdbcExceptions.failure(
-            StatusCode.INVARIANT_BROKEN,
-            "decode table metadata");
-      }
-      boolean table = equals(tableType, tableTypeLength, TABLE);
-      boolean view = equals(tableType, tableTypeLength, VIEW);
-      if ((table && includeTables || view && includeViews)
-          && matches(tableNameCharacters, tableNameLength, pattern)) {
-        appendTable(table ? (byte) 0 : (byte) 1);
-      }
-    }
-    sortTables();
-    tablesLoaded = true;
-    if (tableCount == 0) {
-      finishLocal();
-    }
+    RiverCatalogTableLoader.load(this);
   }
 
   @Override
@@ -390,7 +365,7 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     return mode == TABLES ? TABLE_METADATA : TYPE_METADATA;
   }
 
-  private void closeQuery(boolean completeResult) throws SQLException {
+  void closeQuery(boolean completeResult) throws SQLException {
     completion.reset();
     JdbcExceptions.require(query.close(completion), "close table metadata");
     queryClosed = true;
@@ -403,14 +378,14 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     }
   }
 
-  private void finishLocal() {
+  void finishLocal() {
     completed = true;
     rowAvailable = false;
     releaseTables();
     connection.metadataResultClosed(this);
   }
 
-  private void appendTable(byte type) throws SQLException {
+  void appendTable(byte type) throws SQLException {
     if (tableCount >= MAXIMUM_TABLES) {
       throw JdbcExceptions.failure(
           StatusCode.RESOURCE_EXHAUSTED,
@@ -430,7 +405,7 @@ final class RiverCatalogResultSet extends AbstractResultSet {
     tableCount++;
   }
 
-  private void sortTables() {
+  void sortTables() {
     for (int start = tableCount / 2 - 1; start >= 0; start--) {
       siftDown(start, tableCount);
     }

@@ -5,7 +5,6 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.page.PageHeader;
-import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
@@ -27,26 +26,26 @@ public final class SinglePageStore {
   public static final long PAGE_ID = 1;
   public static final long PAGE_GENERATION = 1;
 
-  private final DurableFile file;
-  private final LocalWal wal;
-  private final DatabaseIncarnation database;
-  private final WalGeneration walGeneration;
-  private final CRC32C checksum = new CRC32C();
-  private final IoResult ioResult = new IoResult();
-  private final FileSizeResult fileSizeResult = new FileSizeResult();
-  private final PageHeader pageHeader = new PageHeader();
+  final DurableFile file;
+  final LocalWal wal;
+  final DatabaseIncarnation database;
+  final WalGeneration walGeneration;
+  final CRC32C checksum = new CRC32C();
+  final IoResult ioResult = new IoResult();
+  final FileSizeResult fileSizeResult = new FileSizeResult();
+  final PageHeader pageHeader = new PageHeader();
   private final LocalWalReservation walReservation = new LocalWalReservation();
   private final LocalWalAppendResult walAppendResult = new LocalWalAppendResult();
-  private final LocalWalReadResult walReadResult = new LocalWalReadResult();
-  private ByteBuffer currentPage = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
+  final LocalWalReadResult walReadResult = new LocalWalReadResult();
+  ByteBuffer currentPage = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
   private ByteBuffer currentPayload = payloadView(currentPage);
   private ByteBuffer stagingPage = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
   private ByteBuffer stagingPayload = payloadView(stagingPage);
   private long nextUpdateToken = 1;
   private long activeUpdateToken;
-  private long recordEnd;
-  private long copiedPayloadBytes;
-  private int payloadBytes;
+  long recordEnd;
+  long copiedPayloadBytes;
+  int payloadBytes;
   private boolean dirty;
   private boolean closed;
 
@@ -326,99 +325,7 @@ public final class SinglePageStore {
   }
 
   private StatusCode loadOrRecover() {
-    StatusCode status = file.size(fileSizeResult);
-    if (!status.isOk()) {
-      return status;
-    }
-    boolean valid = fileSizeResult.sizeBytes() == PageCodec.PAGE_BYTES;
-    if (valid) {
-      currentPage.clear();
-      status = file.read(0, currentPage, ioResult);
-      if (!status.isOk()) {
-        return status;
-      }
-      valid = ioResult.bytesTransferred() == PageCodec.PAGE_BYTES;
-    }
-    if (valid) {
-      currentPage.flip();
-      status = PageCodec.validate(currentPage, pageHeader, checksum);
-      valid = status.isOk();
-      if (valid && (pageHeader.databaseHigh() != database.high()
-          || pageHeader.databaseLow() != database.low()
-          || pageHeader.walGeneration() != walGeneration.value()
-          || pageHeader.pageId() != PAGE_ID
-          || pageHeader.pageGeneration() != PAGE_GENERATION)) {
-        return StatusCode.FENCED;
-      }
-      valid = valid && pageHeader.recordEnd() <= wal.durableEnd();
-    }
-    if (valid) {
-      payloadBytes = pageHeader.payloadBytes();
-      recordEnd = pageHeader.recordEnd();
-      return recoverFromWal(recordEnd, false);
-    }
-    return recoverFromWal(0, true);
-  }
-
-  private StatusCode recoverFromWal(long minimumRecordEnd, boolean recoveryRequired) {
-    long offset = WalFileHeaderCodec.HEADER_BYTES;
-    long latestPageOffset = 0;
-    while (offset < wal.tailEnd()) {
-      StatusCode status = wal.read(offset, walReadResult);
-      if (!status.isOk()) {
-        return status;
-      }
-      if (walReadResult.header().formatId() == WAL_FORMAT_ID
-          && walReadResult.header().formatVersion() == WAL_FORMAT_VERSION
-          && walReadResult.header().decisionCode() != 2
-          && walReadResult.header().payloadBytes() == PageCodec.PAGE_BYTES) {
-        StatusCode pageStatus = PageCodec.validate(
-            walReadResult.payload(), pageHeader, checksum);
-        if (!pageStatus.isOk()) {
-          return pageStatus;
-        }
-        if (pageHeader.databaseHigh() == database.high()
-            && pageHeader.databaseLow() == database.low()
-            && pageHeader.walGeneration() == walGeneration.value()
-            && pageHeader.pageId() == PAGE_ID
-            && pageHeader.pageGeneration() == PAGE_GENERATION
-            && pageHeader.recordStart() == offset
-            && pageHeader.recordEnd() == walReadResult.nextOffset()
-            && pageHeader.recordEnd() > minimumRecordEnd) {
-          latestPageOffset = offset;
-        }
-      }
-      offset = walReadResult.nextOffset();
-    }
-    if (latestPageOffset == 0) {
-      return recoveryRequired ? StatusCode.CORRUPTION : StatusCode.OK;
-    }
-    StatusCode status = wal.read(latestPageOffset, walReadResult);
-    if (!status.isOk()) {
-      return status;
-    }
-    status = PageCodec.validate(walReadResult.payload(), pageHeader, checksum);
-    if (!status.isOk()) {
-      return status;
-    }
-    currentPage.clear();
-    currentPage.put(walReadResult.payload());
-    copiedPayloadBytes += PageCodec.PAGE_BYTES;
-    payloadBytes = pageHeader.payloadBytes();
-    recordEnd = pageHeader.recordEnd();
-    currentPage.position(0);
-    currentPage.limit(PageCodec.PAGE_BYTES);
-    status = file.truncate(PageCodec.PAGE_BYTES);
-    if (status.isOk()) {
-      status = file.write(0, currentPage, ioResult);
-    }
-    if (status.isOk() && ioResult.bytesTransferred() != PageCodec.PAGE_BYTES) {
-      status = StatusCode.IO_FAILURE;
-    }
-    if (status.isOk()) {
-      status = file.force(ForceMode.CONTENT_AND_METADATA);
-    }
-    return status;
+    return SinglePageStoreRecovery.load(this);
   }
 
   private StatusCode admission() {
