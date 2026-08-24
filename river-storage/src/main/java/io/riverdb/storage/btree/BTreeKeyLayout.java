@@ -32,19 +32,20 @@ final class BTreeKeyLayout {
         || getInt(page, 36) != 0) {
       return StatusCode.CORRUPTION;
     }
-    return validateEntries(page, count, highSpace, highKey);
+    return validateEntries(page, type, count, highSpace, highKey);
   }
 
   private static StatusCode validateEntries(
-      ByteBuffer page, int count, int highSpace, long highKey) {
+      ByteBuffer page, int type, int count, int highSpace, long highKey) {
     int previousSpace = 0;
     long previousKey = 0;
     boolean hasPrevious = false;
     for (int index = 0; index < count; index++) {
       int offset = entryOffset(index);
       long key = getLong(page, offset);
-      int space = getInt(page, offset + 12);
-      int value = getInt(page, offset + 8);
+      int space = getInt(page, offset + 16);
+      long value = type == BTreePage.TYPE_LEAF
+          ? getLong(page, offset + 8) : Integer.toUnsignedLong(getInt(page, offset + 8));
       if (!OrderedKey.isFiniteSpace(space)
           || hasPrevious
               && !OrderedKey.lessThan(previousSpace, previousKey, space, key)
@@ -71,7 +72,7 @@ final class BTreeKeyLayout {
       ByteBuffer page, int index, int space, long key) {
     int offset = entryOffset(index);
     return OrderedKey.equal(
-        getInt(page, offset + 12), getLong(page, offset), space, key);
+        getInt(page, offset + 16), getLong(page, offset), space, key);
   }
 
   static int insertionPoint(
@@ -82,7 +83,7 @@ final class BTreeKeyLayout {
       int middle = (low + high) >>> 1;
       int offset = entryOffset(middle);
       if (OrderedKey.lessThan(
-          getInt(page, offset + 12), getLong(page, offset), space, key)) {
+          getInt(page, offset + 16), getLong(page, offset), space, key)) {
         low = middle + 1;
       } else {
         high = middle;
@@ -96,16 +97,16 @@ final class BTreeKeyLayout {
     int sourceOffset = entryOffset(sourceIndex);
     int targetOffset = entryOffset(targetIndex);
     putLong(target, targetOffset, getLong(source, sourceOffset));
-    putInt(target, targetOffset + 8, getInt(source, sourceOffset + 8));
-    putInt(target, targetOffset + 12, getInt(source, sourceOffset + 12));
+    putLong(target, targetOffset + 8, getLong(source, sourceOffset + 8));
+    putInt(target, targetOffset + 16, getInt(source, sourceOffset + 16));
   }
 
   static void putEntry(
-      ByteBuffer page, int index, int space, long key, int value) {
+      ByteBuffer page, int index, int space, long key, long value) {
     int offset = entryOffset(index);
     putLong(page, offset, key);
-    putInt(page, offset + 8, value);
-    putInt(page, offset + 12, space);
+    putLong(page, offset + 8, value);
+    putInt(page, offset + 16, space);
   }
 
   static void putHighKey(ByteBuffer page, int space, long key) {

@@ -7,7 +7,7 @@ import java.nio.ByteBuffer;
 /** Fixed-layout single-version B+tree leaf/internal page operations. */
 public final class BTreePage {
   public static final int HEADER_BYTES = 40;
-  public static final int ENTRY_BYTES = 16;
+  public static final int ENTRY_BYTES = 24;
   public static final int MAX_ENTRIES = 256;
   public static final int TYPE_LEAF = 1;
   public static final int TYPE_INTERNAL = 2;
@@ -73,11 +73,15 @@ public final class BTreePage {
   }
 
   public static int spaceAt(ByteBuffer page, int index) {
-    return getInt(page, entryOffset(index) + 12);
+    return getInt(page, entryOffset(index) + 16);
   }
 
   public static int valueAt(ByteBuffer page, int index) {
     return getInt(page, entryOffset(index) + 8);
+  }
+
+  public static long leafValueAt(ByteBuffer page, int index) {
+    return getLong(page, entryOffset(index) + 8);
   }
 
   public static StatusCode lookupLeaf(
@@ -98,14 +102,14 @@ public final class BTreePage {
       int middle = (low + high) >>> 1;
       int offset = entryOffset(middle);
       long candidate = getLong(page, offset);
-      int candidateSpace = getInt(page, offset + 12);
+      int candidateSpace = getInt(page, offset + 16);
       int comparison = OrderedKey.compare(candidateSpace, candidate, space, key);
       if (comparison < 0) {
         low = middle + 1;
       } else if (comparison > 0) {
         high = middle - 1;
       } else {
-        result.setRowId(getInt(page, entryOffset(middle) + 8));
+        result.setRowId(getLong(page, entryOffset(middle) + 8));
         return StatusCode.OK;
       }
     }
@@ -118,7 +122,7 @@ public final class BTreePage {
     for (int index = 0; index < count; index++) {
       int offset = entryOffset(index);
       if (OrderedKey.lessThan(
-          space, key, getInt(page, offset + 12), getLong(page, offset))) {
+          space, key, getInt(page, offset + 16), getLong(page, offset))) {
         return child;
       }
       child = getInt(page, offset + 8);
@@ -127,7 +131,7 @@ public final class BTreePage {
   }
 
   public static StatusCode insertLeaf(
-      ByteBuffer page, int space, long key, int rowId) {
+      ByteBuffer page, int space, long key, long rowId) {
     if (!hasCapacity(page)
         || !OrderedKey.isFiniteSpace(space)
         || rowId <= 0
@@ -150,7 +154,7 @@ public final class BTreePage {
   }
 
   public static StatusCode updateLeaf(
-      ByteBuffer page, int space, long key, int rowId) {
+      ByteBuffer page, int space, long key, long rowId) {
     if (!hasCapacity(page)
         || !OrderedKey.isFiniteSpace(space)
         || rowId <= 0
@@ -162,7 +166,7 @@ public final class BTreePage {
     if (index >= count || !BTreeKeyLayout.entryEquals(page, index, space, key)) {
       return StatusCode.CONFLICT;
     }
-    putInt(page, entryOffset(index) + 8, rowId);
+    putLong(page, entryOffset(index) + 8, rowId);
     return StatusCode.OK;
   }
 
@@ -172,7 +176,7 @@ public final class BTreePage {
       int rightPageId,
       int space,
       long key,
-      int rowId,
+      long rowId,
       BTreeSplitResult result) {
     if (!hasCapacity(left)
         || !hasCapacity(right)
@@ -209,7 +213,7 @@ public final class BTreePage {
     putInt(left, 16, splitAt);
     putInt(right, 16, rightCount);
     long separator = getLong(right, entryOffset(0));
-    int separatorSpace = getInt(right, entryOffset(0) + 12);
+    int separatorSpace = getInt(right, entryOffset(0) + 16);
     putInt(left, 20, rightPageId);
     BTreeKeyLayout.putHighKey(left, separatorSpace, separator);
     BTreeKeyLayout.putHighKey(right, previousHighSpace, previousHigh);
@@ -220,7 +224,7 @@ public final class BTreePage {
       return status;
     }
     separator = getLong(right, entryOffset(0));
-    separatorSpace = getInt(right, entryOffset(0) + 12);
+    separatorSpace = getInt(right, entryOffset(0) + 16);
     BTreeKeyLayout.putHighKey(left, separatorSpace, separator);
     clearUnusedEntries(left);
     result.setSeparator(separatorSpace, separator);
@@ -294,7 +298,7 @@ public final class BTreePage {
     int total = count + 1;
     int promotedIndex = total / 2;
     long promoted = getLong(left, entryOffset(promotedIndex));
-    int promotedSpace = getInt(left, entryOffset(promotedIndex) + 12);
+    int promotedSpace = getInt(left, entryOffset(promotedIndex) + 16);
     int rightFirstChild = getInt(left, entryOffset(promotedIndex) + 8);
     long previousHigh = getLong(left, 24);
     int previousHighSpace = getInt(left, 32);
@@ -340,8 +344,8 @@ public final class BTreePage {
     for (int index = count; index < MAX_ENTRIES; index++) {
       int offset = entryOffset(index);
       putLong(page, offset, 0);
-      putInt(page, offset + 8, 0);
-      putInt(page, offset + 12, 0);
+      putLong(page, offset + 8, 0);
+      putInt(page, offset + 16, 0);
     }
   }
 
@@ -349,8 +353,8 @@ public final class BTreePage {
     for (int index = from; index <= MAX_ENTRIES; index++) {
       int offset = entryOffset(index);
       putLong(page, offset, 0);
-      putInt(page, offset + 8, 0);
-      putInt(page, offset + 12, 0);
+      putLong(page, offset + 8, 0);
+      putInt(page, offset + 16, 0);
     }
   }
 

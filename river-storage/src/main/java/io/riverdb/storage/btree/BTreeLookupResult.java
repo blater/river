@@ -2,13 +2,13 @@ package io.riverdb.storage.btree;
 
 /** Caller-owned result for a B+tree point lookup. */
 public final class BTreeLookupResult {
-  private int rowId;
+  private long rowId;
 
-  public int rowId() {
+  public long rowId() {
     return rowId;
   }
 
-  public void setRowId(int value) {
+  public void setRowId(long value) {
     rowId = value;
   }
 

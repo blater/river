@@ -40,7 +40,7 @@ final class IndexedTableVacuum {
       if (leaf == null) continue;
       int entryCount = BTreePage.entryCount(leaf);
       for (int entry = 0; entry < entryCount; entry++) {
-        int rowBytes = table.rowLength(BTreePage.valueAt(leaf, entry));
+        int rowBytes = table.rowLength((int) BTreePage.leafValueAt(leaf, entry));
         int required = IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
         if (rowBytes <= 0
             || required > WalRecordCodec.MAX_PAYLOAD_BYTES
@@ -69,7 +69,7 @@ final class IndexedTableVacuum {
       int entryCount = BTreePage.entryCount(leaf);
       for (int entry = 0; entry < entryCount; entry++) {
         if (ordinal++ < firstRow) continue;
-        int rowBytes = table.rowLength(BTreePage.valueAt(leaf, entry));
+        int rowBytes = table.rowLength((int) BTreePage.leafValueAt(leaf, entry));
         int required = IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
         if (rowBytes <= 0 || bytes > WalRecordCodec.MAX_PAYLOAD_BYTES - required) {
           return rows;
@@ -93,7 +93,7 @@ final class IndexedTableVacuum {
       int entryCount = BTreePage.entryCount(leaf);
       for (int entry = 0; rows < rowLimit && entry < entryCount; entry++) {
         if (ordinal++ < firstRow) continue;
-        int rowBytes = table.rowLength(BTreePage.valueAt(leaf, entry));
+        int rowBytes = table.rowLength((int) BTreePage.leafValueAt(leaf, entry));
         if (rowBytes <= 0) return -1;
         bytes += IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
         rows++;
@@ -146,7 +146,7 @@ final class IndexedTableVacuum {
     int entryCount = BTreePage.entryCount(leaf);
     for (int entry = 0; encodedRows < rowLimit && entry < entryCount; entry++) {
       if (encodeOrdinal++ < firstRow) continue;
-      int rowId = BTreePage.valueAt(leaf, entry);
+      int rowId = (int) BTreePage.leafValueAt(leaf, entry);
       int rowBytes = table.rowLength(rowId);
       IndexedWalCodec.encodeVacuumEntry(
           payload,

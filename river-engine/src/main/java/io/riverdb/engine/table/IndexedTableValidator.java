@@ -222,7 +222,7 @@ final class IndexedTableValidator {
     int rows = 0;
     int entryCount = BTreePage.entryCount(leaf);
     for (int entry = 0; entry < entryCount; entry++) {
-      int chainRows = versionChainRows(BTreePage.valueAt(leaf, entry));
+      int chainRows = versionChainRows((int) BTreePage.leafValueAt(leaf, entry));
       if (chainRows < 0 || rows > rowCount - chainRows) {
         return -1;
       }

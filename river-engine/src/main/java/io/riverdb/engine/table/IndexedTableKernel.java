@@ -571,7 +571,7 @@ final class IndexedTableKernel {
     if (!status.isOk()) {
       return status;
     }
-    int rowId = indexLookup.rowId();
+    int rowId = (int) indexLookup.rowId();
     while (rowId > 0) {
       long rowCommitSequence = rowCommitSequence(rowId);
       if (rowCommitSequence <= 0) {
@@ -620,7 +620,7 @@ final class IndexedTableKernel {
         return StatusCode.CONFLICT;
       }
       int rowId = visibleRowId(
-          BTreePage.valueAt(leaf, entry), cursor.visibleCommitSequence());
+          (int) BTreePage.leafValueAt(leaf, entry), cursor.visibleCommitSequence());
       if (rowId <= 0 || isDeletedRow(rowId)) continue;
       StatusCode status = fetchRow(rowId, result.row());
       if (!status.isOk()) return status;
@@ -648,7 +648,7 @@ final class IndexedTableKernel {
     if (!status.isOk()) {
       return status;
     }
-    int latestRowId = indexLookup.rowId();
+    int latestRowId = (int) indexLookup.rowId();
     long latestCommitSequence = rowCommitSequence(latestRowId);
     if (latestCommitSequence <= 0) {
       return StatusCode.CORRUPTION;
@@ -677,7 +677,7 @@ final class IndexedTableKernel {
     if (!status.isOk()) {
       return status;
     }
-    int latestRowId = indexLookup.rowId();
+    int latestRowId = (int) indexLookup.rowId();
     long latestCommitSequence = rowCommitSequence(latestRowId);
     if (latestCommitSequence <= 0) {
       return StatusCode.CORRUPTION;
