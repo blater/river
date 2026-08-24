@@ -13,7 +13,7 @@ final class IndexedTableValidator {
 
   private final IndexedPageSet pages;
   private final IndexedVersionState versions;
-  private final boolean[] visited = new boolean[IndexedTableLimits.MAX_PAGES + 1];
+  private final PagedBooleanArray visited = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
   private int previousLeafPageId;
   private int versionRows;
   private int rowCount;
@@ -99,9 +99,7 @@ final class IndexedTableValidator {
   }
 
   private void resetTraversal() {
-    for (int pageId = 0; pageId < visited.length; pageId++) {
-      visited[pageId] = false;
-    }
+    visited.clear();
     previousLeafPageId = 0;
     versionRows = 0;
   }
@@ -117,14 +115,14 @@ final class IndexedTableValidator {
     if (pageId <= 0
         || pageId > IndexedTableLimits.MAX_PAGES
         || depth >= MAXIMUM_TREE_HEIGHT
-        || visited[pageId]) {
+        || visited.get(pageId)) {
       return StatusCode.CORRUPTION;
     }
     ByteBuffer page = pages.currentPayload(pageId);
     if (page == null || HeapPage.isHeap(page)) {
       return StatusCode.CORRUPTION;
     }
-    visited[pageId] = true;
+    visited.set(pageId, true);
     int type = BTreePage.type(page);
     int entryCount = BTreePage.entryCount(page);
     if (!OrderedKey.equal(
@@ -271,7 +269,7 @@ final class IndexedTableValidator {
         pageId < nextPageId;
         pageId++) {
       ByteBuffer page = pages.currentPayload(pageId);
-      if (!HeapPage.isHeap(page) && !visited[pageId]) {
+      if (!HeapPage.isHeap(page) && !visited.get(pageId)) {
         return StatusCode.CORRUPTION;
       }
     }

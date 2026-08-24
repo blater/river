@@ -4,8 +4,8 @@ import io.riverdb.wal.local.LocalWal;
 
 /** Shared fixed bounds for the indexed-table Store/PageSet/Kernel collaboration. */
 final class IndexedTableLimits {
-  /** Maximum addressable page ids in the transitional page-array store. */
-  static final int MAX_PAGES = 1 << 20;
+  /** Positive int page ids remain the transitional on-disk page reference domain. */
+  static final int MAX_PAGES = Integer.MAX_VALUE - 1;
   /**
    * Row ids remain positive int values in this first runtime slice. Metadata is paged lazily, so
    * constructing a table no longer allocates arrays for this theoretical upper bound.

@@ -12,42 +12,46 @@ import java.util.zip.CRC32C;
 
 /** Owns the indexed table's bounded current and staged page frames. */
 final class IndexedPageSet {
-  private final ByteBuffer[] currentPages = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
-  private final ByteBuffer[] currentPayloads = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
-  private final ByteBuffer[] stagingPages = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
-  private final ByteBuffer[] stagingPayloads = new ByteBuffer[IndexedTableLimits.MAX_PAGES + 1];
-  private final boolean[] present = new boolean[IndexedTableLimits.MAX_PAGES + 1];
-  private final boolean[] staged = new boolean[IndexedTableLimits.MAX_PAGES + 1];
-  private final boolean[] dirty = new boolean[IndexedTableLimits.MAX_PAGES + 1];
-  private final long[] recordStarts = new long[IndexedTableLimits.MAX_PAGES + 1];
-  private final long[] recordEnds = new long[IndexedTableLimits.MAX_PAGES + 1];
-  private final int[] changedPageIds = new int[IndexedTableLimits.MAX_PAGES];
+  private final PagedObjectArray<ByteBuffer> currentPages =
+      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
+  private final PagedObjectArray<ByteBuffer> currentPayloads =
+      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
+  private final PagedObjectArray<ByteBuffer> stagingPages =
+      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
+  private final PagedObjectArray<ByteBuffer> stagingPayloads =
+      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
+  private final PagedBooleanArray present = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
+  private final PagedBooleanArray staged = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
+  private final PagedBooleanArray dirty = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
+  private final PagedLongArray recordStarts = new PagedLongArray(IndexedTableLimits.MAX_PAGES);
+  private final PagedLongArray recordEnds = new PagedLongArray(IndexedTableLimits.MAX_PAGES);
+  private final PagedIntArray changedPageIds = new PagedIntArray(IndexedTableLimits.MAX_PAGES);
   private int changedPageCount;
   private int highestPageId;
   private long stagedCopyBytes;
 
   ByteBuffer currentPayloadUnchecked(int pageId) {
-    return currentPayloads[pageId];
+    return currentPayloads.get(pageId);
   }
 
   boolean isPresent(int pageId) {
-    return present[pageId];
+    return present.get(pageId);
   }
 
   boolean isStaged(int pageId) {
-    return staged[pageId];
+    return staged.get(pageId);
   }
 
   boolean isDirty(int pageId) {
-    return dirty[pageId];
+    return dirty.get(pageId);
   }
 
   long recordStart(int pageId) {
-    return recordStarts[pageId];
+    return recordStarts.get(pageId);
   }
 
   long recordEnd(int pageId) {
-    return recordEnds[pageId];
+    return recordEnds.get(pageId);
   }
 
   int changedPageCount() {
@@ -55,7 +59,7 @@ final class IndexedPageSet {
   }
 
   int changedPageId(int index) {
-    return changedPageIds[index];
+    return changedPageIds.get(index);
   }
 
   int highestPageId() {
@@ -71,13 +75,13 @@ final class IndexedPageSet {
   }
 
   void markCurrentChanged(int pageId, long recordStart, long recordEnd) {
-    recordStarts[pageId] = recordStart;
-    recordEnds[pageId] = recordEnd;
-    dirty[pageId] = true;
+    recordStarts.set(pageId, recordStart);
+    recordEnds.set(pageId, recordEnd);
+    dirty.set(pageId, true);
   }
 
   void installPresent(int pageId) {
-    present[pageId] = true;
+    present.set(pageId, true);
     highestPageId = Math.max(highestPageId, pageId);
   }
 
@@ -87,13 +91,13 @@ final class IndexedPageSet {
   }
 
   void markClean(int pageId) {
-    dirty[pageId] = false;
+    dirty.set(pageId, false);
   }
 
   void markRebased(int pageId) {
-    recordStarts[pageId] = 0;
-    recordEnds[pageId] = 0;
-    dirty[pageId] = false;
+    recordStarts.set(pageId, 0);
+    recordEnds.set(pageId, 0);
+    dirty.set(pageId, false);
   }
 
   StatusCode encodeCurrent(
@@ -111,7 +115,7 @@ final class IndexedPageSet {
         recordStart,
         recordEnd,
         PageCodec.MAX_PAYLOAD_BYTES,
-        currentPages[pageId],
+        currentPages.get(pageId),
         checksum);
   }
 
@@ -130,7 +134,7 @@ final class IndexedPageSet {
         recordStart,
         recordEnd,
         PageCodec.MAX_PAYLOAD_BYTES,
-        stagingPages[pageId],
+        stagingPages.get(pageId),
         checksum);
   }
 
@@ -139,7 +143,7 @@ final class IndexedPageSet {
       int pageId,
       long offset,
       IoResult result) {
-    ByteBuffer page = currentPages[pageId];
+    ByteBuffer page = currentPages.get(pageId);
     page.clear();
     StatusCode status = file.read(offset, page, result);
     if (status.isOk() && result.bytesTransferred() == PageCodec.PAGE_BYTES) {
@@ -154,14 +158,14 @@ final class IndexedPageSet {
       int pageId,
       long offset,
       IoResult result) {
-    ByteBuffer page = currentPages[pageId];
+    ByteBuffer page = currentPages.get(pageId);
     page.position(0);
     page.limit(PageCodec.PAGE_BYTES);
     return file.write(offset, page, result);
   }
 
   StatusCode validateCurrent(int pageId, PageHeader header, CRC32C checksum) {
-    return PageCodec.validate(currentPages[pageId], header, checksum);
+    return PageCodec.validate(currentPages.get(pageId), header, checksum);
   }
 
   StatusCode validateRecord(
@@ -173,7 +177,7 @@ final class IndexedPageSet {
   }
 
   void copyStagedToRecord(int pageId, ByteBuffer target, int targetOffset) {
-    ByteBuffer source = stagingPages[pageId];
+    ByteBuffer source = stagingPages.get(pageId);
     for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
       target.put(targetOffset + index, source.get(index));
     }
@@ -186,7 +190,7 @@ final class IndexedPageSet {
       long recordStart,
       long recordEnd) {
     ensureBuffers(pageId);
-    copyFromRecord(source, sourceOffset, currentPages[pageId]);
+    copyFromRecord(source, sourceOffset, currentPages.get(pageId));
     installChanged(pageId, recordStart, recordEnd);
   }
 
@@ -195,7 +199,7 @@ final class IndexedPageSet {
    * valid until publication, checkpoint rebase, or close.
    */
   ByteBuffer currentPayload(int pageId) {
-    return validPresentPage(pageId) ? currentPayloads[pageId] : null;
+    return validPresentPage(pageId) ? currentPayloads.get(pageId) : null;
   }
 
   /**
@@ -206,15 +210,15 @@ final class IndexedPageSet {
     if (!validPageId(pageId)) {
       return null;
     }
-    if (staged[pageId]) {
-      return stagingPayloads[pageId];
+    if (staged.get(pageId)) {
+      return stagingPayloads.get(pageId);
     }
-    if (!present[pageId] || !addChangedPage(pageId, maximumChangedPages)) {
+    if (!present.get(pageId) || !addChangedPage(pageId, maximumChangedPages)) {
       return null;
     }
-    copyPage(currentPages[pageId], stagingPages[pageId]);
+    copyPage(currentPages.get(pageId), stagingPages.get(pageId));
     stagedCopyBytes += PageCodec.PAGE_BYTES;
-    return stagingPayloads[pageId];
+    return stagingPayloads.get(pageId);
   }
 
   /** Returns the active operation's staged view when present, otherwise its committed view. */
@@ -222,49 +226,49 @@ final class IndexedPageSet {
     if (!validPageId(pageId)) {
       return null;
     }
-    return staged[pageId] ? stagingPayloads[pageId]
-        : present[pageId] ? currentPayloads[pageId] : null;
+    return staged.get(pageId) ? stagingPayloads.get(pageId)
+        : present.get(pageId) ? currentPayloads.get(pageId) : null;
   }
 
   /** Returns a zeroed mutable payload for a new page in the current operation. */
   ByteBuffer stageNew(int pageId, int maximumChangedPages) {
-    if (!validPageId(pageId) || present[pageId]) {
+    if (!validPageId(pageId) || present.get(pageId)) {
       return null;
     }
-    if (staged[pageId]) {
-      return stagingPayloads[pageId];
+    if (staged.get(pageId)) {
+      return stagingPayloads.get(pageId);
     }
     if (!addChangedPage(pageId, maximumChangedPages)) {
       return null;
     }
     ensureBuffers(pageId);
-    ByteBuffer page = stagingPages[pageId];
+    ByteBuffer page = stagingPages.get(pageId);
     page.clear();
     for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
       page.put(index, (byte) 0);
     }
-    ByteBuffer payload = stagingPayloads[pageId];
+    ByteBuffer payload = stagingPayloads.get(pageId);
     payload.clear();
     return payload;
   }
 
   void ensureBuffers(int pageId) {
-    if (currentPages[pageId] != null) {
+    if (currentPages.get(pageId) != null) {
       return;
     }
-    currentPages[pageId] = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
-    currentPayloads[pageId] = payloadView(currentPages[pageId]);
-    stagingPages[pageId] = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
-    stagingPayloads[pageId] = payloadView(stagingPages[pageId]);
+    currentPages.set(pageId, ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES));
+    currentPayloads.set(pageId, payloadView(currentPages.get(pageId)));
+    stagingPages.set(pageId, ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES));
+    stagingPayloads.set(pageId, payloadView(stagingPages.get(pageId)));
   }
 
   boolean validPresentPage(int pageId) {
-    return validPageId(pageId) && present[pageId];
+    return validPageId(pageId) && present.get(pageId);
   }
 
   boolean hasDirtyPages() {
     for (int pageId = 1; pageId <= highestPageId; pageId++) {
-      if (dirty[pageId]) {
+      if (dirty.get(pageId)) {
         return true;
       }
     }
@@ -275,31 +279,31 @@ final class IndexedPageSet {
     if (changedPageCount >= maximumChangedPages) {
       return false;
     }
-    changedPageIds[changedPageCount++] = pageId;
-    staged[pageId] = true;
+    changedPageIds.set(changedPageCount++, pageId);
+    staged.set(pageId, true);
     return true;
   }
 
   void clearStagedFlags() {
     for (int index = 0; index < changedPageCount; index++) {
-      staged[changedPageIds[index]] = false;
+      staged.set(changedPageIds.get(index), false);
     }
   }
 
   void publish(long recordStart, long recordEnd) {
     for (int index = 0; index < changedPageCount; index++) {
-      int pageId = changedPageIds[index];
-      ByteBuffer page = currentPages[pageId];
-      currentPages[pageId] = stagingPages[pageId];
-      stagingPages[pageId] = page;
-      ByteBuffer payload = currentPayloads[pageId];
-      currentPayloads[pageId] = stagingPayloads[pageId];
-      stagingPayloads[pageId] = payload;
-      present[pageId] = true;
-      dirty[pageId] = true;
-      staged[pageId] = false;
-      recordStarts[pageId] = recordStart;
-      recordEnds[pageId] = recordEnd;
+      int pageId = changedPageIds.get(index);
+      ByteBuffer page = currentPages.get(pageId);
+      currentPages.set(pageId, stagingPages.get(pageId));
+      stagingPages.set(pageId, page);
+      ByteBuffer payload = currentPayloads.get(pageId);
+      currentPayloads.set(pageId, stagingPayloads.get(pageId));
+      stagingPayloads.set(pageId, payload);
+      present.set(pageId, true);
+      dirty.set(pageId, true);
+      staged.set(pageId, false);
+      recordStarts.set(pageId, recordStart);
+      recordEnds.set(pageId, recordEnd);
       highestPageId = Math.max(highestPageId, pageId);
     }
   }
