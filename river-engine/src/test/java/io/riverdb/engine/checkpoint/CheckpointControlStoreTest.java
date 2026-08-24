@@ -92,6 +92,54 @@ final class CheckpointControlStoreTest {
   }
 
   @Test
+  void roundTripsThreeBillionRowAppendOnlyManifestWithoutRowMetadataScan(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    CheckpointState state = new CheckpointState();
+    long rowCount = 3_000_000_000L;
+    assertEquals(
+        StatusCode.OK,
+        state.setLarge(DATABASE, WalGeneration.of(7), 4, 101, 103, 900_000, rowCount));
+    assertEquals(false, state.versionDirectoryRequired());
+    CheckpointControlStore control = new CheckpointControlStore();
+    assertEquals(StatusCode.OK, control.install(directory, state));
+
+    CheckpointState decoded = new CheckpointState();
+    assertEquals(StatusCode.OK, control.read(directory, decoded));
+    assertEquals(rowCount, decoded.rowCount());
+    assertEquals(900_000, decoded.pageCount());
+    assertEquals(101, decoded.rowCommitSequence(rowCount));
+    assertEquals(0, decoded.previousRowId(rowCount));
+    assertEquals(false, decoded.isDeleted(rowCount));
+    decoded.close();
+    state.close();
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void roundTripsHistoricalRowsThroughLazyVersionDirectory(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    CheckpointState state = new CheckpointState();
+    long rowCount = CheckpointState.MAXIMUM_ROWS + 1L;
+    assertEquals(
+        StatusCode.OK,
+        state.setLarge(DATABASE, WalGeneration.of(8), 5, 101, 103, 900_001, rowCount));
+    assertEquals(StatusCode.OK, state.setRowVersion(rowCount, 100, rowCount - 1, true));
+    assertEquals(true, state.versionDirectoryRequired());
+    CheckpointControlStore control = new CheckpointControlStore();
+    assertEquals(StatusCode.OK, control.install(directory, state));
+
+    CheckpointState decoded = new CheckpointState();
+    assertEquals(StatusCode.OK, control.read(directory, decoded));
+    assertEquals(rowCount, decoded.rowCount());
+    assertEquals(100, decoded.rowCommitSequence(rowCount));
+    assertEquals(rowCount - 1, decoded.previousRowId(rowCount));
+    assertEquals(true, decoded.isDeleted(rowCount));
+    decoded.close();
+    state.close();
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
   void readsVersionOneVacuumedCheckpoint(@TempDir Path root) throws Exception {
     ByteBuffer legacy = ByteBuffer.allocate(512).order(ByteOrder.LITTLE_ENDIAN);
     legacy.putLong(0, 0x5249564552434b50L);

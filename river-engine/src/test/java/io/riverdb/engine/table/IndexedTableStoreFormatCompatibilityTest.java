@@ -32,7 +32,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static final long OPERATION_MAGIC = 0x5249564552494458L;
 
   @Test
-  void compactLogicalWalPayloadsRetainExactVersionFourLayout(@TempDir Path root) {
+  void compactLogicalWalPayloadsRetainExactPayloadLayout(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTableStore store = createStore(directory, wal);
@@ -171,7 +171,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static byte[] expectedSingleInsert() {
     byte[] expected = new byte[48];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 4);
+    putInt(expected, 8, IndexedWalCodec.FORMAT_VERSION);
     putInt(expected, 12, 2);
     putLong(expected, 16, 17);
     putInt(expected, 24, 1);
@@ -185,7 +185,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static byte[] expectedPageImageHeader() {
     byte[] expected = new byte[24];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 4);
+    putInt(expected, 8, IndexedWalCodec.FORMAT_VERSION);
     putInt(expected, 12, 1);
     putInt(expected, 16, 3);
     putInt(expected, 20, 0);
@@ -195,7 +195,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static byte[] expectedInsertBatch() {
     byte[] expected = new byte[80];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 4);
+    putInt(expected, 8, IndexedWalCodec.FORMAT_VERSION);
     putInt(expected, 12, 3);
     putInt(expected, 16, 2);
     putInt(expected, 20, 0);
@@ -215,7 +215,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
   private static byte[] expectedMutationBatch() {
     byte[] expected = new byte[89];
     putLong(expected, 0, OPERATION_MAGIC);
-    putInt(expected, 8, 4);
+    putInt(expected, 8, IndexedWalCodec.FORMAT_VERSION);
     putInt(expected, 12, 4);
     putInt(expected, 16, 2);
     putInt(expected, 20, 0);
@@ -244,7 +244,7 @@ final class IndexedTableStoreFormatCompatibilityTest {
     assertEquals(commitSequence, record.header().commitSequence());
     assertEquals(1, record.header().decisionCode());
     assertEquals(1002, record.header().formatId());
-    assertEquals(4, record.header().formatVersion());
+    assertEquals(IndexedWalCodec.FORMAT_VERSION, record.header().formatVersion());
   }
 
   private static void assertCheckpointHeaders(byte[] encoded, int pageCount) {

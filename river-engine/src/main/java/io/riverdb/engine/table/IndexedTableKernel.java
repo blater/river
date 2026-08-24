@@ -104,6 +104,10 @@ final class IndexedTableKernel {
     return versions.isDeleted(rowId, rowCount);
   }
 
+  boolean hasHistoricalVersions() {
+    return versions.hasHistoricalVersions();
+  }
+
   void beginOperationState() {
     operationRowCount = rowCount;
     versions.beginOperation();
@@ -249,6 +253,10 @@ final class IndexedTableKernel {
 
   void loadCheckpointVersions(io.riverdb.engine.checkpoint.CheckpointState checkpoint) {
     versions.load(checkpoint);
+  }
+
+  void closeCheckpointVersions() {
+    versions.close();
   }
 
   StatusCode applyRecoveredVersions(
@@ -701,7 +709,7 @@ final class IndexedTableKernel {
   }
 
   long remainingVersionCapacity() {
-    return IndexedTableLimits.MAX_ROWS - rowCount;
+    return (long) IndexedTableStore.MAX_ROWS - rowCount;
   }
 
   int rootPageId() {

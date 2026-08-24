@@ -49,7 +49,7 @@ its normative SQL surface is in the
 
 | Area | Limit or restriction |
 | --- | --- |
-| Indexed-table capacity | The legacy 65,536 physical row/version ceiling is removed in the current capacity slice. The transitional runtime remains bounded by page-address and integer-identity limits and is not yet qualified for billion-row tables. |
+| Indexed-table capacity | The legacy 65,536 physical row/version ceiling is removed. WAL and checkpoint metadata support positive logical row IDs through 4,294,967,294, but the transitional runtime remains bounded by positive-int page IDs and resident page frames and is not yet qualified for billion-row tables. |
 | Table shape | At most 8 columns and a 4,096-byte encoded row. |
 | Join shape | 2–8 left-associative roles; `RIGHT`, `FULL`, `CROSS`, `NATURAL`, `USING`, right-deep trees, multiple joined blocks, and nondeepest joined blocks are unsupported. |
 | Durable view lineage | At most 32 ordered physical role IDs. Durable subquery graphs are unsupported. |
@@ -59,9 +59,10 @@ its normative SQL surface is in the
 | Backup/operations | Backup is quiescent/offline. No online migration, repair automation, production packaging, replication, or failover. |
 | Network | Authenticated TLS loopback only; non-loopback deployment is unsupported. |
 
-The 65,536-slot table ceiling alone prevents a standard one-warehouse TPC-C
-load: its initial `ORDER_LINE` relation is roughly 300,000 rows before workload
-growth.
+The legacy 65,536-slot table ceiling no longer blocks a standard one-warehouse
+TPC-C load, but the current resident-page runtime is not yet a qualified or
+performance-tuned TPC-C implementation. Its initial `ORDER_LINE` relation is
+roughly 300,000 rows before workload growth.
 
 ## Alpha 2 — robust P4C subqueries
 

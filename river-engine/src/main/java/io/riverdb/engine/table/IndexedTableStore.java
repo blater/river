@@ -308,7 +308,7 @@ public final class IndexedTableStore {
   }
 
   long remainingVersionCapacity() {
-    return MAX_LOGICAL_ROWS - kernel.rowCount();
+    return (long) MAX_ROWS - kernel.rowCount();
   }
 
   StatusCode commit(long transactionId, long commitSequence) {
@@ -642,6 +642,7 @@ public final class IndexedTableStore {
       return StatusCode.CONFLICT;
     }
     closed = true;
+    kernel.closeCheckpointVersions();
     return file.close();
   }
 

@@ -138,12 +138,14 @@ final class IndexedCheckpointCoordinator {
         maximumTransactionId,
         pages.highestPageId(),
         checkpointRows);
-    for (long rowId = 1; status.isOk() && rowId <= checkpointRows; rowId++) {
-      status = state.setRowVersion(
-          rowId,
-          kernel.rowCommitSequence(rowId),
-          kernel.previousRowId(rowId),
-          kernel.isDeletedRow(rowId));
+    if (checkpointRows <= CheckpointState.MAXIMUM_ROWS || kernel.hasHistoricalVersions()) {
+      for (long rowId = 1; status.isOk() && rowId <= checkpointRows; rowId++) {
+        status = state.setRowVersion(
+            rowId,
+            kernel.rowCommitSequence(rowId),
+            kernel.previousRowId(rowId),
+            kernel.isDeletedRow(rowId));
+      }
     }
     return status;
   }

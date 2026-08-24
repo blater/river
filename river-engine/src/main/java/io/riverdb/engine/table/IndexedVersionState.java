@@ -22,6 +22,7 @@ final class IndexedVersionState {
       new boolean[IndexedTableLimits.MAX_OPERATION_ROWS];
   private int operationCount;
   private int obsoleteCount;
+  private int deletedCount;
   private CheckpointState checkpointBase;
 
   int operationCount() {
@@ -38,6 +39,10 @@ final class IndexedVersionState {
 
   int obsoleteCount() {
     return obsoleteCount;
+  }
+
+  boolean hasHistoricalVersions() {
+    return obsoleteCount > 0 || deletedCount > 0;
   }
 
   long commitSequence(long rowId, long rowCount) {
@@ -90,6 +95,9 @@ final class IndexedVersionState {
     if (previousRowId > 0) {
       obsoleteCount++;
     }
+    if (delete) {
+      deletedCount++;
+    }
   }
 
   void recordNewRows(long previousRowCount, long rowCount, long commitSequence) {
@@ -122,6 +130,14 @@ final class IndexedVersionState {
   void load(CheckpointState checkpoint) {
     checkpointBase = checkpoint;
     obsoleteCount = (int) Math.min(Integer.MAX_VALUE, checkpoint.obsoleteVersionCount());
+    deletedCount = checkpoint.versionDirectoryRequired() ? 1 : 0;
+  }
+
+  void close() {
+    if (checkpointBase != null) {
+      checkpointBase.close();
+      checkpointBase = null;
+    }
   }
 
   StatusCode applyRecovered(
@@ -148,6 +164,9 @@ final class IndexedVersionState {
       if (previousRowId > 0) {
         recoveredObsolete++;
       }
+      if (delete) {
+        deletedCount++;
+      }
       versionOffset += IndexedWalCodec.PAGE_OPERATION_VERSION_BYTES;
     }
     obsoleteCount += recoveredObsolete;
@@ -164,9 +183,13 @@ final class IndexedVersionState {
     deleted.clear();
     overrides.clear();
     checkpointBase = null;
+    deletedCount = 0;
     for (long rowId = 1; rowId <= retainedRows; rowId++) {
       commitSequences.set(rowId, commitSequence);
-      deleted.set(rowId, vacuumDeleted.get(rowId));
+      boolean rowDeleted = vacuumDeleted.get(rowId);
+      deleted.set(rowId, rowDeleted);
+      overrides.set(rowId, true);
+      if (rowDeleted) deletedCount++;
       vacuumDeleted.set(rowId, false);
     }
     obsoleteCount = 0;

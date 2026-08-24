@@ -3,12 +3,17 @@ package io.riverdb.engine.checkpoint;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.platform.file.DurableFile;
+import io.riverdb.platform.file.IoResult;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 
 /** Caller-owned checkpoint authority with the MVCC metadata needed by its stable page base. */
 public final class CheckpointState {
   public static final int MAXIMUM_ROWS = 64 * 1024;
   /** Positive logical row ids are encoded in an unsigned 32-bit domain. */
   public static final long MAXIMUM_RUNTIME_ROWS = 0xFFFF_FFFEL;
+  public static final int VERSION_DIRECTORY_RECORD_BYTES = 24;
   private static final int PAGE_SHIFT = 12;
   private static final int PAGE_SIZE = 1 << PAGE_SHIFT;
   private static final int PAGE_MASK = PAGE_SIZE - 1;
@@ -23,6 +28,17 @@ public final class CheckpointState {
   private long maximumTransactionId;
   private long defaultRowCommitSequence;
   private long obsoleteVersionCount;
+  private boolean versionDirectoryRequired;
+  private DurableFile versionDirectory;
+  private final IoResult versionDirectoryIo = new IoResult();
+  private final ByteBuffer versionRecord = ByteBuffer
+      .allocateDirect(VERSION_DIRECTORY_RECORD_BYTES)
+      .order(ByteOrder.LITTLE_ENDIAN);
+  private long cachedVersionRowId;
+  private long cachedVersionCommitSequence;
+  private long cachedVersionPreviousRowId;
+  private boolean cachedVersionDeleted;
+  private boolean cachedVersionValid;
   private int pageCount;
   private long rowCount;
   private boolean available;
@@ -35,6 +51,10 @@ public final class CheckpointState {
     maximumTransactionId = 0;
     defaultRowCommitSequence = 0;
     obsoleteVersionCount = 0;
+    versionDirectoryRequired = false;
+    closeVersionDirectory();
+    cachedVersionRowId = 0;
+    cachedVersionValid = false;
     pageCount = 0;
     rowCount = 0;
     available = false;
@@ -135,6 +155,9 @@ public final class CheckpointState {
     rowCommitSequences.set(rowId, committedAt);
     previousRowIds.set(rowId, previousRowId);
     if (previousRowId > 0) obsoleteVersionCount++;
+    if (previousRowId > 0 || deleted || committedAt != defaultRowCommitSequence) {
+      versionDirectoryRequired = true;
+    }
     long bit = rowId - 1;
     long mask = 1L << (bit & 63);
     if (deleted) {
@@ -152,6 +175,7 @@ public final class CheckpointState {
     long bit = rowId - 1;
     deletedWords.set(
         bit >>> 6, deletedWords.get(bit >>> 6) | 1L << (bit & 63));
+    versionDirectoryRequired = true;
     return StatusCode.OK;
   }
 
@@ -160,17 +184,21 @@ public final class CheckpointState {
       return false;
     }
     long bit = rowId - 1;
-    return (deletedWords.get(bit >>> 6) & 1L << (bit & 63)) != 0;
+    if ((deletedWords.get(bit >>> 6) & 1L << (bit & 63)) != 0) return true;
+    return loadVersionRecord(rowId) && cachedVersionDeleted;
   }
 
   public long rowCommitSequence(long rowId) {
     if (rowId <= 0 || rowId > rowCount) return 0;
     long value = rowCommitSequences.get(rowId);
-    return value == 0 ? defaultRowCommitSequence : value;
+    if (value != 0) return value;
+    return loadVersionRecord(rowId) ? cachedVersionCommitSequence : defaultRowCommitSequence;
   }
 
   public long previousRowId(long rowId) {
-    return rowId > 0 && rowId <= rowCount ? previousRowIds.get(rowId) : 0;
+    if (rowId <= 0 || rowId > rowCount) return 0;
+    if (previousRowIds.get(rowId) != 0) return previousRowIds.get(rowId);
+    return loadVersionRecord(rowId) ? cachedVersionPreviousRowId : 0;
   }
 
   public DatabaseIncarnation database() {
@@ -207,6 +235,57 @@ public final class CheckpointState {
 
   public long obsoleteVersionCount() {
     return obsoleteVersionCount;
+  }
+
+  public boolean versionDirectoryRequired() {
+    return versionDirectoryRequired;
+  }
+
+  void setObsoleteVersionCount(long value) {
+    obsoleteVersionCount = value;
+  }
+
+  public void attachVersionDirectory(DurableFile file) {
+    closeVersionDirectory();
+    versionDirectory = file;
+    versionDirectoryRequired = true;
+    cachedVersionRowId = 0;
+    cachedVersionValid = false;
+  }
+
+  public void close() {
+    closeVersionDirectory();
+  }
+
+  private boolean loadVersionRecord(long rowId) {
+    if (versionDirectory == null) return false;
+    if (cachedVersionRowId == rowId) return cachedVersionValid;
+    versionRecord.clear();
+    StatusCode status = versionDirectory.read(
+        (rowId - 1) * VERSION_DIRECTORY_RECORD_BYTES,
+        versionRecord,
+        versionDirectoryIo);
+    if (!status.isOk()
+        || versionDirectoryIo.bytesTransferred() != VERSION_DIRECTORY_RECORD_BYTES) {
+      return false;
+    }
+    versionRecord.position(0);
+    cachedVersionRowId = rowId;
+    cachedVersionCommitSequence = versionRecord.getLong();
+    cachedVersionPreviousRowId = versionRecord.getLong();
+    cachedVersionDeleted = versionRecord.getLong() == 1;
+    cachedVersionValid = cachedVersionCommitSequence > 0
+        && cachedVersionPreviousRowId >= 0
+        && cachedVersionPreviousRowId < rowId
+        && (!cachedVersionDeleted || cachedVersionPreviousRowId > 0);
+    return cachedVersionValid;
+  }
+
+  private void closeVersionDirectory() {
+    if (versionDirectory != null) {
+      versionDirectory.close();
+      versionDirectory = null;
+    }
   }
 
   private static final class PagedLongs {

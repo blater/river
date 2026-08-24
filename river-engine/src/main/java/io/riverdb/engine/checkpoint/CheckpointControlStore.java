@@ -10,6 +10,7 @@ import io.riverdb.platform.file.ForceMode;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.IoResult;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.zip.CRC32C;
 
 /** Atomically installed versioned checkpoint authority file. */
@@ -21,8 +22,19 @@ public final class CheckpointControlStore {
       + CheckpointState.MAXIMUM_ROWS * ROW_ENTRY_BYTES + 8;
 
   private static final String TEMPORARY_FILE_NAME = "river.checkpoint.tmp";
+  private static final String VERSION_DIRECTORY_TEMPORARY_FILE_NAME =
+      "river.checkpoint.rows.tmp";
+  private static final String VERSION_DIRECTORY_FILE_PREFIX = "river.checkpoint.rows.";
   private static final long MAGIC = 0x5249564552434b50L; // RIVERCKP
   private static final int VERSION = 2;
+  private static final int SCALABLE_VERSION = 3;
+  private static final int SCALABLE_ROW_COUNT_OFFSET = 68;
+  private static final int SCALABLE_OBSOLETE_COUNT_OFFSET = 76;
+  private static final int SCALABLE_FLAGS_OFFSET = 84;
+  private static final long SCALABLE_HAS_VERSION_DIRECTORY = 1;
+  private static final int VERSION_DIRECTORY_CHUNK_ROWS = 2048;
+  private static final int VERSION_DIRECTORY_CHUNK_BYTES =
+      VERSION_DIRECTORY_CHUNK_ROWS * CheckpointState.VERSION_DIRECTORY_RECORD_BYTES;
   private static final int VERSION_ONE = 1;
   private static final int VERSION_ONE_BYTES = 512;
   private static final int VERSION_ONE_MAXIMUM_ROWS = 2048;
@@ -35,6 +47,12 @@ public final class CheckpointControlStore {
   private final FileSizeResult sizeResult = new FileSizeResult();
   private final CRC32C checksum = new CRC32C();
   private final DirectoryOperationResult operation = new DirectoryOperationResult();
+  private final DirectoryOperationResult versionDirectoryOperation =
+      new DirectoryOperationResult();
+  private final IoResult versionDirectoryIo = new IoResult();
+  private final ByteBuffer versionDirectoryBuffer = ByteBuffer
+      .allocateDirect(VERSION_DIRECTORY_CHUNK_BYTES)
+      .order(ByteOrder.LITTLE_ENDIAN);
 
   public StatusCode read(DurableDirectory directory, CheckpointState result) {
     if (directory == null || result == null) {
@@ -70,7 +88,7 @@ public final class CheckpointControlStore {
     }
     bytes.position(0);
     bytes.limit((int) fileBytes);
-    return decode(result);
+    return decode(directory, result);
   }
 
   public StatusCode install(DurableDirectory directory, CheckpointState state) {
@@ -80,6 +98,13 @@ public final class CheckpointControlStore {
     StatusCode encodeStatus = encode(state);
     if (!encodeStatus.isOk()) {
       return encodeStatus;
+    }
+    if (state.rowCount() > CheckpointState.MAXIMUM_ROWS
+        && state.versionDirectoryRequired()) {
+      StatusCode versionStatus = installVersionDirectory(directory, state);
+      if (!versionStatus.isOk()) {
+        return versionStatus;
+      }
     }
     StatusCode status = directory.createTemporary(TEMPORARY_FILE_NAME, operation);
     if (status == StatusCode.CONFLICT) {
@@ -120,6 +145,9 @@ public final class CheckpointControlStore {
   }
 
   private StatusCode encode(CheckpointState state) {
+    if (state.rowCount() > CheckpointState.MAXIMUM_ROWS) {
+      return encodeScalableManifest(state);
+    }
     long recordBytesLong = Math.max(
         BYTES, (long) ROWS_OFFSET + state.rowCount() * ROW_ENTRY_BYTES + 8);
     if (recordBytesLong > Integer.MAX_VALUE) {
@@ -161,11 +189,98 @@ public final class CheckpointControlStore {
     return StatusCode.OK;
   }
 
-  private StatusCode decode(CheckpointState result) {
+  private StatusCode encodeScalableManifest(CheckpointState state) {
+    ensureCapacity(BYTES);
+    bytes.clear();
+    for (int index = 0; index < BYTES; index++) {
+      bytes.put(index, (byte) 0);
+    }
+    putLong(0, MAGIC);
+    putInt(8, SCALABLE_VERSION);
+    putInt(12, BYTES);
+    putLong(16, state.database().high());
+    putLong(24, state.database().low());
+    putLong(32, state.walGeneration().value());
+    putLong(40, state.checkpointId());
+    putLong(48, state.commitSequence());
+    putLong(56, state.maximumTransactionId());
+    putInt(64, state.pageCount());
+    putLong(SCALABLE_ROW_COUNT_OFFSET, state.rowCount());
+    putLong(SCALABLE_OBSOLETE_COUNT_OFFSET, state.obsoleteVersionCount());
+    putLong(
+        SCALABLE_FLAGS_OFFSET,
+        state.versionDirectoryRequired() ? SCALABLE_HAS_VERSION_DIRECTORY : 0);
+    int checksumOffset = BYTES - 8;
+    putInt(checksumOffset, 0);
+    putInt(checksumOffset + 4, 0);
+    int value = checksum(BYTES);
+    putInt(checksumOffset, value);
+    putInt(checksumOffset + 4, ~value);
+    bytes.position(0);
+    bytes.limit(BYTES);
+    return StatusCode.OK;
+  }
+
+  private StatusCode installVersionDirectory(
+      DurableDirectory directory,
+      CheckpointState state) {
+    String destinationName = VERSION_DIRECTORY_FILE_PREFIX + state.checkpointId();
+    StatusCode status = directory.createTemporary(
+        VERSION_DIRECTORY_TEMPORARY_FILE_NAME, versionDirectoryOperation);
+    if (status == StatusCode.CONFLICT) {
+      status = directory.remove(
+          VERSION_DIRECTORY_TEMPORARY_FILE_NAME, versionDirectoryOperation);
+      if (status.isOk()) {
+        status = directory.force(versionDirectoryOperation);
+      }
+      if (status.isOk()) {
+        status = directory.createTemporary(
+            VERSION_DIRECTORY_TEMPORARY_FILE_NAME, versionDirectoryOperation);
+      }
+    }
+    if (!status.isOk()) return status;
+    DurableFile file = versionDirectoryOperation.file();
+    long rowId = 1;
+    long offset = 0;
+    while (status.isOk() && rowId <= state.rowCount()) {
+      int rows = (int) Math.min(
+          VERSION_DIRECTORY_CHUNK_ROWS, state.rowCount() - rowId + 1);
+      versionDirectoryBuffer.clear();
+      for (int index = 0; index < rows; index++) {
+        long currentRowId = rowId + index;
+        versionDirectoryBuffer.putLong(state.rowCommitSequence(currentRowId));
+        versionDirectoryBuffer.putLong(state.previousRowId(currentRowId));
+        versionDirectoryBuffer.putLong(state.isDeleted(currentRowId) ? 1 : 0);
+      }
+      versionDirectoryBuffer.flip();
+      status = file.write(offset, versionDirectoryBuffer, versionDirectoryIo);
+      if (status.isOk()
+          && versionDirectoryIo.bytesTransferred() != versionDirectoryBuffer.limit()) {
+        status = StatusCode.IO_FAILURE;
+      }
+      offset += versionDirectoryBuffer.limit();
+      rowId += rows;
+    }
+    if (status.isOk()) status = file.force(ForceMode.CONTENT_AND_METADATA);
+    StatusCode close = file.close();
+    if (status.isOk()) status = close;
+    if (!status.isOk()) return status;
+    status = directory.replace(
+        VERSION_DIRECTORY_TEMPORARY_FILE_NAME,
+        destinationName,
+        versionDirectoryOperation);
+    if (status.isOk()) status = directory.force(versionDirectoryOperation);
+    return status;
+  }
+
+  private StatusCode decode(DurableDirectory directory, CheckpointState result) {
     int version = getInt(8);
     int recordBytes = getInt(12);
     if (version == VERSION_ONE && recordBytes == VERSION_ONE_BYTES) {
       return decodeVersionOne(result);
+    }
+    if (version == SCALABLE_VERSION && recordBytes == BYTES) {
+      return decodeScalable(directory, result);
     }
     if (version != VERSION || recordBytes != bytes.limit() || recordBytes < BYTES) {
       return StatusCode.CORRUPTION;
@@ -208,6 +323,73 @@ public final class CheckpointControlStore {
     if (!zeroRange(unusedOffset, checksumOffset)) {
       result.reset();
       return StatusCode.CORRUPTION;
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode decodeScalable(
+      DurableDirectory directory,
+      CheckpointState result) {
+    int checksumOffset = BYTES - 8;
+    int stored = getInt(checksumOffset);
+    if (getInt(checksumOffset + 4) != ~stored || checksum(BYTES) != stored) {
+      result.reset();
+      return StatusCode.CORRUPTION;
+    }
+    long databaseHigh = getLong(16);
+    long databaseLow = getLong(24);
+    long generation = getLong(32);
+    long checkpointId = getLong(40);
+    long commitSequence = getLong(48);
+    long maximumTransactionId = getLong(56);
+    int pageCount = getInt(64);
+    long rowCount = getLong(SCALABLE_ROW_COUNT_OFFSET);
+    long obsoleteVersionCount = getLong(SCALABLE_OBSOLETE_COUNT_OFFSET);
+    long flags = getLong(SCALABLE_FLAGS_OFFSET);
+    if (getLong(0) != MAGIC
+        || (databaseHigh == 0 && databaseLow == 0)
+        || generation <= 0
+        || checkpointId <= 0
+        || commitSequence <= 0
+        || maximumTransactionId <= 0
+        || pageCount <= 0
+        || rowCount < 0
+        || rowCount > CheckpointState.MAXIMUM_RUNTIME_ROWS
+        || obsoleteVersionCount < 0
+        || flags != 0 && flags != SCALABLE_HAS_VERSION_DIRECTORY
+        || !zeroRange(92, checksumOffset)) {
+      result.reset();
+      return StatusCode.CORRUPTION;
+    }
+    StatusCode status = result.setLarge(
+        DatabaseIncarnation.of(databaseHigh, databaseLow),
+        WalGeneration.of(generation),
+        checkpointId,
+        commitSequence,
+        maximumTransactionId,
+        pageCount,
+        rowCount);
+    if (!status.isOk()) {
+      result.reset();
+      return StatusCode.CORRUPTION;
+    }
+    result.setObsoleteVersionCount(obsoleteVersionCount);
+    if (flags == SCALABLE_HAS_VERSION_DIRECTORY) {
+      String fileName = VERSION_DIRECTORY_FILE_PREFIX + checkpointId;
+      status = directory.reopen(fileName, versionDirectoryOperation);
+      if (!status.isOk()) {
+        result.reset();
+        return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
+      }
+      DurableFile versionFile = versionDirectoryOperation.file();
+      status = versionFile.size(sizeResult);
+      long expectedBytes = rowCount * CheckpointState.VERSION_DIRECTORY_RECORD_BYTES;
+      if (!status.isOk() || sizeResult.sizeBytes() != expectedBytes) {
+        versionFile.close();
+        result.reset();
+        return status.isOk() ? StatusCode.CORRUPTION : status;
+      }
+      result.attachVersionDirectory(versionFile);
     }
     return StatusCode.OK;
   }

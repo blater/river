@@ -330,6 +330,7 @@ final class EmbeddedDatabaseOpener {
     } else if (storeResult.store() != null) {
       storeResult.store().close();
     }
+    checkpointState.close();
     closeFollowers();
     if (wal != null) {
       wal.close();
