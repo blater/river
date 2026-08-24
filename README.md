@@ -58,7 +58,7 @@ conversions, metadata, SQLSTATEs, and deliberate omissions.
 | --- | --- |
 | Table and result columns | 8 |
 | Encoded table row | 4,096 bytes |
-| Indexed-table capacity | The legacy 65,536 row/version ceiling is removed; the current transitional runtime is bounded by 1,048,576 resident-addressable pages and has not yet been qualified for billion-row tables |
+| Indexed-table capacity | The legacy 65,536 row/version ceiling is removed; the current transitional runtime still uses positive-int page and row/version identities with resident page frames and has not yet been qualified for billion-row tables |
 | Text | `VARCHAR(n)`, `1 <= n <= 255`; at most 1,020 encoded bytes per value |
 | Join shape | 2–8 left-associative roles |
 | Materialized query stores | 65,536 rows and 256 MiB per bounded store |
