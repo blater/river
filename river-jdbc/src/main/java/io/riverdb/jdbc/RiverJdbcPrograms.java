@@ -52,7 +52,8 @@ final class RiverJdbcPrograms implements RiverTransactionPrograms {
       TransactionProgramArguments arguments,
       TransactionProgramResult result) throws SQLException {
     connection.requireProgramBoundary("execute transaction program");
-    StatusCode status = session.executeProgram(handle, arguments, result);
+    StatusCode status = session.executeProgram(
+        handle, connection.programIsolationLevel(), arguments, result);
     if (!status.isOk()) throw JdbcExceptions.failure(status, "execute transaction program");
   }
 

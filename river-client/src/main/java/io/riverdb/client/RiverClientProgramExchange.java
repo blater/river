@@ -1,6 +1,7 @@
 package io.riverdb.client;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ProgramOpenResult;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramArguments;
@@ -28,13 +29,14 @@ final class RiverClientProgramExchange {
 
   static StatusCode execute(
       RiverClientConnection connection, long handle,
-      TransactionProgramArguments arguments, TransactionProgramResult result) {
+      IsolationLevel isolationLevel, TransactionProgramArguments arguments,
+      TransactionProgramResult result) {
     long requestId = requestId(connection);
     if (requestId == 0) return connection.lastStatus;
     StatusCode status;
     do {
       status = connection.codec.encodeProgramExecuteRequest(
-          connection.request, requestId, handle, arguments);
+          connection.request, requestId, handle, isolationLevel, arguments);
     } while (status == StatusCode.RESOURCE_EXHAUSTED
         && connection.growRequestBytes().isOk());
     return status.isOk()

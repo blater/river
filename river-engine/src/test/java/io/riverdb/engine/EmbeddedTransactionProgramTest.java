@@ -8,6 +8,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.ProgramOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
@@ -46,7 +47,8 @@ final class EmbeddedTransactionProgramTest {
     long programHandle = fixture.prepareProgram(program);
 
     assertEquals(StatusCode.OK,
-        fixture.session.executeProgram(programHandle, arguments, result));
+        fixture.session.executeProgram(
+            programHandle, IsolationLevel.SERIALIZABLE, arguments, result));
     assertEquals(4, result.stepCount());
     assertEquals(100, result.valueAt(result.firstRow(1), 0));
     assertEquals(125, result.valueAt(result.firstRow(3), 0));
@@ -69,7 +71,8 @@ final class EmbeddedTransactionProgramTest {
     long programHandle = fixture.prepareProgram(program);
 
     assertEquals(StatusCode.UNIQUE_VIOLATION,
-        fixture.session.executeProgram(programHandle, arguments, result));
+        fixture.session.executeProgram(
+            programHandle, IsolationLevel.SERIALIZABLE, arguments, result));
     assertEquals(1, result.failingStep());
     assertEquals(StatusCode.UNIQUE_VIOLATION, result.primaryStatus());
     CommandResult count = new CommandResult();
@@ -95,7 +98,8 @@ final class EmbeddedTransactionProgramTest {
         ignored -> StatusCode.RESOURCE_EXHAUSTED);
 
     assertEquals(StatusCode.RESOURCE_EXHAUSTED,
-        fixture.session.executeProgram(programHandle, arguments, result));
+        fixture.session.executeProgram(
+            programHandle, IsolationLevel.SERIALIZABLE, arguments, result));
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, result.primaryStatus());
     assertEquals(StatusCode.OK, result.rollbackStatus());
     CommandResult count = new CommandResult();
@@ -131,7 +135,7 @@ final class EmbeddedTransactionProgramTest {
         });
 
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.session.executeProgram(
-        fixture.prepareProgram(program), arguments, result));
+        fixture.prepareProgram(program), IsolationLevel.SERIALIZABLE, arguments, result));
     assertTrue(publishedCharacters[0] > 1_024);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, result.primaryStatus());
     assertEquals(StatusCode.OK, result.rollbackStatus());
@@ -168,7 +172,7 @@ final class EmbeddedTransactionProgramTest {
         });
 
     assertEquals(StatusCode.OK, fixture.session.executeProgram(
-        fixture.prepareProgram(program), arguments, result));
+        fixture.prepareProgram(program), IsolationLevel.SERIALIZABLE, arguments, result));
     assertEquals(1, admissions[0]);
     assertTrue(result.commitSequence() > 0);
     assertEquals(1_800, result.textLengthAt(result.firstRow(1), 0));
@@ -197,7 +201,7 @@ final class EmbeddedTransactionProgramTest {
     TransactionProgramResult result = new TransactionProgramResult();
 
     assertEquals(StatusCode.CARDINALITY_VIOLATION, fixture.session.executeProgram(
-        fixture.prepareProgram(program), arguments, result));
+        fixture.prepareProgram(program), IsolationLevel.SERIALIZABLE, arguments, result));
     assertEquals(0, result.failingStep());
     assertEquals(StatusCode.CARDINALITY_VIOLATION, result.primaryStatus());
     CommandResult count = new CommandResult();
@@ -225,7 +229,7 @@ final class EmbeddedTransactionProgramTest {
     TransactionProgramResult result = new TransactionProgramResult();
 
     assertEquals(StatusCode.CARDINALITY_VIOLATION, fixture.session.executeProgram(
-        fixture.prepareProgram(program), arguments, result));
+        fixture.prepareProgram(program), IsolationLevel.SERIALIZABLE, arguments, result));
     assertEquals(1, result.failingStep());
     assertEquals(StatusCode.OK, result.rollbackStatus());
     assertTrue(!result.sessionFenced());
@@ -252,9 +256,9 @@ final class EmbeddedTransactionProgramTest {
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, fixture.session.executePrepared(
         program, new io.riverdb.engine.api.ParameterSet(0, 0), new CommandResult()));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, fixture.session.executeProgram(
-        insert, arguments, new TransactionProgramResult()));
+        insert, IsolationLevel.SERIALIZABLE, arguments, new TransactionProgramResult()));
     assertEquals(StatusCode.OK, fixture.session.executeProgram(
-        program, arguments, new TransactionProgramResult()));
+        program, IsolationLevel.SERIALIZABLE, arguments, new TransactionProgramResult()));
     assertEquals(StatusCode.OK, fixture.session.closeProgram(program));
     assertEquals(StatusCode.OK, fixture.session.closePrepared(insert));
     fixture.close();
@@ -277,7 +281,8 @@ final class EmbeddedTransactionProgramTest {
     TransactionProgramResult result = new TransactionProgramResult();
 
     assertEquals(StatusCode.PROGRAM_STALE,
-        fixture.session.executeProgram(programHandle, arguments, result));
+        fixture.session.executeProgram(
+            programHandle, IsolationLevel.SERIALIZABLE, arguments, result));
     assertEquals(StatusCode.PROGRAM_STALE, result.primaryStatus());
     assertEquals(StatusCode.OK, result.rollbackStatus());
     assertEquals(StatusCode.OK, fixture.session.execute(

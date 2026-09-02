@@ -428,7 +428,8 @@ public final class SessionEndpoint {
     try {
       if (status.isOk()) {
         status = session.executeProgram(
-            programRequest.handle(), programRequest.arguments(), programResult);
+            programRequest.handle(), programRequest.isolationLevel(),
+            programRequest.arguments(), programResult);
       }
     } finally {
       programRequest.reset();

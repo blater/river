@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.ProgramOpenResult;
@@ -87,7 +88,8 @@ final class SessionEndpointTerminalCleanupTest {
       return StatusCode.CLOSED;
     }
     @Override
-    public StatusCode executeProgram(long handle, TransactionProgramArguments arguments,
+    public StatusCode executeProgram(long handle, IsolationLevel isolationLevel,
+        TransactionProgramArguments arguments,
         TransactionProgramResult result) { return StatusCode.CLOSED; }
     @Override
     public StatusCode closeProgram(long handle) { return StatusCode.CLOSED; }

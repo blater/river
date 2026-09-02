@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.ProgramOpenResult;
@@ -306,10 +307,11 @@ public final class RiverClientConnection implements RiverDatabase {
 
     @Override
     public StatusCode executeProgram(
-        long programHandle, TransactionProgramArguments arguments,
+        long programHandle, IsolationLevel isolationLevel,
+        TransactionProgramArguments arguments,
         TransactionProgramResult result) {
       return programs.execute(
-          programHandle, arguments, result, active, query.active);
+          programHandle, isolationLevel, arguments, result, active, query.active);
     }
 
     @Override

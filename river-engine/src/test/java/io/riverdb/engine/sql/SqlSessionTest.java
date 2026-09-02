@@ -9,6 +9,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.sql.SqlCommand;
@@ -26,6 +27,60 @@ import org.junit.jupiter.api.io.TempDir;
 final class SqlSessionTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(757, 761);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void programTransactionsUseTheirRequestedIsolation(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession reader = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession writer = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, reader.execute(
+        "CREATE TABLE program_isolation (id BIGINT PRIMARY KEY,value BIGINT)", result));
+    assertEquals(StatusCode.OK, reader.execute(
+        "INSERT INTO program_isolation VALUES (1,10)", result));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        reader.beginProgram(null, result));
+
+    assertEquals(
+        StatusCode.OK,
+        reader.beginProgram(IsolationLevel.REPEATABLE_READ, result));
+    assertEquals(StatusCode.OK, reader.execute(
+        "SELECT value FROM program_isolation WHERE id=1", result));
+    assertEquals(10, result.valueAt(0));
+    assertEquals(StatusCode.OK, writer.execute(
+        "UPDATE program_isolation SET value=20 WHERE id=1", result));
+    assertEquals(StatusCode.OK, reader.execute(
+        "SELECT value FROM program_isolation WHERE id=1", result));
+    assertEquals(10, result.valueAt(0));
+    assertEquals(StatusCode.OK, reader.abortProgram(result));
+
+    assertEquals(
+        StatusCode.OK,
+        reader.beginProgram(IsolationLevel.READ_COMMITTED, result));
+    assertEquals(StatusCode.OK, reader.execute(
+        "SELECT value FROM program_isolation WHERE id=1", result));
+    assertEquals(20, result.valueAt(0));
+    assertEquals(StatusCode.OK, writer.execute(
+        "UPDATE program_isolation SET value=30 WHERE id=1", result));
+    assertEquals(StatusCode.OK, reader.execute(
+        "SELECT value FROM program_isolation WHERE id=1", result));
+    assertEquals(30, result.valueAt(0));
+    assertEquals(StatusCode.OK, reader.abortProgram(result));
+
+    assertEquals(
+        StatusCode.OK,
+        reader.beginProgram(IsolationLevel.SERIALIZABLE, result));
+    assertEquals(StatusCode.OK, reader.abortProgram(result));
+    close(database, reader, writer);
+  }
 
   @Test
   void streamingForUpdateWaitIsGrantedAndLeavesExplicitTransactionUsable(

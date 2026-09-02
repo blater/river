@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.ProgramOpenResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramAction;
 import io.riverdb.engine.api.TransactionProgramArguments;
@@ -35,12 +36,43 @@ final class ProtocolTransactionProgramCodecTest {
     assertEquals(StatusCode.OK, arguments.setDecimal128(
         0, SqlTypeDescriptor.decimal(38, 18), 0, 17));
     assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
-        request, 42, 77, arguments));
+        request, 42, 77, IsolationLevel.REPEATABLE_READ, arguments));
     assertEquals(StatusCode.OK, codec.decode(request, frame));
     assertEquals(StatusCode.OK, prepared.decode(frame));
     assertEquals(77, prepared.handle());
+    assertEquals(IsolationLevel.REPEATABLE_READ, prepared.isolationLevel());
     assertEquals(1, prepared.arguments().typeDescriptorAt(0) == 0 ? 0 : 1);
     assertEquals(17, prepared.arguments().valueAt(0));
+  }
+
+  @Test
+  void roundTripsEveryStableProgramIsolationCode() {
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ProtocolProgramRequestDecoder decoder = new ProtocolProgramRequestDecoder();
+    long requestId = 80;
+    for (IsolationLevel isolationLevel : IsolationLevel.values()) {
+      assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
+          request, requestId++, 77, isolationLevel, new TransactionProgramArguments()));
+      assertEquals(StatusCode.OK, codec.decode(request, frame));
+      assertEquals(StatusCode.OK, decoder.decode(frame));
+      assertEquals(isolationLevel, decoder.isolationLevel());
+    }
+  }
+
+  @Test
+  void rejectsUnknownProgramIsolationCodeAndErasesPayload() {
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
+        request, 90, 77, IsolationLevel.SERIALIZABLE,
+        new TransactionProgramArguments()));
+    request.putInt(
+        ProtocolFrameCodec.HEADER_BYTES + Long.BYTES + Integer.BYTES, 99);
+    assertEquals(StatusCode.OK, codec.decode(request, frame));
+    ProtocolProgramRequestDecoder decoder = new ProtocolProgramRequestDecoder();
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, decoder.decode(frame));
+    for (int index = ProtocolFrameCodec.HEADER_BYTES; index < request.limit(); index++) {
+      assertEquals(0, request.get(index));
+    }
   }
 
   @Test

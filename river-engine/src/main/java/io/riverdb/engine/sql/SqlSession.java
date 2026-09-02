@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.relational.RelationalDatabase;
@@ -97,8 +98,9 @@ public final class SqlSession implements SqlRetainedBudget {
     return coordinator.closeScan(cursor, result);
   }
 
-  public StatusCode beginProgram(SqlExecutionResult result) {
-    return coordinator.beginProgram(result);
+  public StatusCode beginProgram(
+      IsolationLevel isolationLevel, SqlExecutionResult result) {
+    return coordinator.beginProgram(isolationLevel, result);
   }
 
   public StatusCode commitProgram(SqlExecutionResult result) {

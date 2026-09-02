@@ -3,6 +3,7 @@ package io.riverdb.jdbc;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.client.RiverClientConnection;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.QueryOpenResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
@@ -256,6 +257,10 @@ final class RiverJdbcConnection extends AbstractConnection implements RiverConne
   public int getTransactionIsolation() throws SQLException {
     requireOpen();
     return isolation;
+  }
+
+  IsolationLevel programIsolationLevel() {
+    return RiverJdbcIsolation.toRiver(isolation);
   }
 
   @Override

@@ -12,6 +12,7 @@ import io.riverdb.base.type.SqlApproximateNumeric;
 import io.riverdb.engine.EmbeddedRiver;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.ProgramOpenResult;
@@ -150,7 +151,7 @@ final class RiverClientConnectionTest {
     TransactionProgramResult result = new TransactionProgramResult();
     long requests = client.completedRequests();
     assertEquals(StatusCode.OK, session.executeProgram(
-        programOpen.handle(), arguments, result));
+        programOpen.handle(), IsolationLevel.REPEATABLE_READ, arguments, result));
     assertEquals(requests + 1, client.completedRequests());
     assertEquals(2, result.stepCount());
     assertEquals(1, result.affectedRows(0));
@@ -200,7 +201,7 @@ final class RiverClientConnectionTest {
     long requests = client.completedRequests();
 
     assertEquals(StatusCode.UNIQUE_VIOLATION, session.executeProgram(
-        openedProgram.handle(), arguments, result));
+        openedProgram.handle(), IsolationLevel.REPEATABLE_READ, arguments, result));
     assertEquals(requests + 1, client.completedRequests());
     assertEquals(0, result.stepCount());
     assertEquals(1, result.failingStep());
@@ -254,7 +255,8 @@ final class RiverClientConnectionTest {
     TransactionProgramResult result = new TransactionProgramResult();
 
     assertEquals(StatusCode.OK, session.executeProgram(
-        programOpen.handle(), new TransactionProgramArguments(), result));
+        programOpen.handle(), IsolationLevel.REPEATABLE_READ,
+        new TransactionProgramArguments(), result));
     assertEquals(requests + 1, client.completedRequests());
     assertEquals(300, result.rowCount());
     assertEquals(299, result.valueAt(299, 0));
@@ -296,7 +298,8 @@ final class RiverClientConnectionTest {
     long requests = client.completedRequests();
 
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.executeProgram(
-        programOpen.handle(), new TransactionProgramArguments(),
+        programOpen.handle(), IsolationLevel.REPEATABLE_READ,
+        new TransactionProgramArguments(),
         new TransactionProgramResult(new DenyingLease())));
     assertEquals(requests + 1, client.completedRequests());
     assertEquals(StatusCode.OK,

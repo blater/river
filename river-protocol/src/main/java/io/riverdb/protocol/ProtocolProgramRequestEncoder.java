@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import java.nio.ByteBuffer;
@@ -15,8 +16,9 @@ final class ProtocolProgramRequestEncoder {
 
   StatusCode execute(
       ByteBuffer target, long requestId, long handle,
-      TransactionProgramArguments arguments) {
-    if (target == null || requestId <= 0 || handle <= 0 || arguments == null) {
+      IsolationLevel isolationLevel, TransactionProgramArguments arguments) {
+    if (target == null || requestId <= 0 || handle <= 0
+        || isolationLevel == null || arguments == null) {
       return ProtocolFrameWire.invalidTarget(target);
     }
     int argumentCount = arguments.slotCount();
@@ -51,7 +53,9 @@ final class ProtocolProgramRequestEncoder {
     int output = ProtocolFrameCodec.HEADER_BYTES;
     target.putLong(output, handle);
     target.putInt(output + Long.BYTES, argumentCount);
-    target.putInt(output + Long.BYTES + Integer.BYTES, 0);
+    target.putInt(
+        output + Long.BYTES + Integer.BYTES,
+        ProtocolIsolationLevelCodec.encode(isolationLevel));
     output += EXECUTE_HEADER_BYTES;
     for (int index = 0; index < argumentCount; index++) {
       output = ProtocolSqlRequestEncoder.writeParameter(target, output, arguments, index);

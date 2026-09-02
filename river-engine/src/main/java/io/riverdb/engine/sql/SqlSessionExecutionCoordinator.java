@@ -626,16 +626,29 @@ final class SqlSessionExecutionCoordinator {
     return status;
   }
 
-  StatusCode beginProgram(SqlExecutionResult result) {
-    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+  StatusCode beginProgram(
+      io.riverdb.engine.api.IsolationLevel isolationLevel,
+      SqlExecutionResult result) {
+    if (isolationLevel == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     result.reset();
     if (closes.unavailable()) return StatusCode.CLOSED;
     StatusCode status = retryPendingCleanup();
     if (!status.isOk()) return status;
     if (queries.hasActiveScan() || transactions.isExplicit()) return StatusCode.CONFLICT;
-    status = transactions.beginExplicit(IsolationLevel.SERIALIZABLE);
+    status = transactions.beginExplicit(transactionIsolation(isolationLevel));
     if (status.isOk()) result.setTransaction(true, session.visibleCommitSequence());
     return status;
+  }
+
+  private static IsolationLevel transactionIsolation(
+      io.riverdb.engine.api.IsolationLevel isolationLevel) {
+    return switch (isolationLevel) {
+      case READ_COMMITTED -> IsolationLevel.READ_COMMITTED;
+      case REPEATABLE_READ -> IsolationLevel.REPEATABLE_READ;
+      case SERIALIZABLE -> IsolationLevel.SERIALIZABLE;
+    };
   }
 
   StatusCode commitProgram(SqlExecutionResult result) {

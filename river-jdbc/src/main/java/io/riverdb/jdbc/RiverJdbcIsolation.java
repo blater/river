@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.engine.api.IsolationLevel;
 import java.sql.Connection;
 import java.sql.SQLException;
 
@@ -13,5 +14,14 @@ final class RiverJdbcIsolation {
         && level != Connection.TRANSACTION_SERIALIZABLE) {
       throw JdbcExceptions.unsupported();
     }
+  }
+
+  static IsolationLevel toRiver(int level) {
+    return switch (level) {
+      case Connection.TRANSACTION_READ_COMMITTED -> IsolationLevel.READ_COMMITTED;
+      case Connection.TRANSACTION_REPEATABLE_READ -> IsolationLevel.REPEATABLE_READ;
+      case Connection.TRANSACTION_SERIALIZABLE -> IsolationLevel.SERIALIZABLE;
+      default -> null;
+    };
   }
 }

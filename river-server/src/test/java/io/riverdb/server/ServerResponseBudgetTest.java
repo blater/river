@@ -7,6 +7,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.ProgramOpenResult;
@@ -59,9 +60,11 @@ final class ServerResponseBudgetTest {
         request, 3, commandProgram()));
     assertEquals(StatusCode.OK, responses.process(endpoint, request));
     assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
-        request, 4, 44, new TransactionProgramArguments()));
+        request, 4, 44, IsolationLevel.REPEATABLE_READ,
+        new TransactionProgramArguments()));
     assertEquals(StatusCode.OK, responses.process(endpoint, request));
     TransactionProgramResult published = database.session.programResult;
+    assertEquals(IsolationLevel.REPEATABLE_READ, database.session.programIsolation);
     long warmBytes = published.retainedBytes();
     assertEquals(1, published.stepCount());
     assertFalse(warmBytes == 0);
@@ -193,6 +196,7 @@ final class ServerResponseBudgetTest {
         (SqlShapeLimits.MAX_RESULT_COLUMNS + Long.SIZE - 1) / Long.SIZE];
     private int executions;
     private TransactionProgramResult programResult;
+    private IsolationLevel programIsolation;
 
     private WideSession() {
       for (int index = 0; index < descriptors.length; index++) {
@@ -228,8 +232,10 @@ final class ServerResponseBudgetTest {
       return result.complete(44, 0);
     }
     @Override
-    public StatusCode executeProgram(long handle, TransactionProgramArguments arguments,
+    public StatusCode executeProgram(long handle, IsolationLevel isolationLevel,
+        TransactionProgramArguments arguments,
         TransactionProgramResult result) {
+      programIsolation = isolationLevel;
       programResult = result;
       assertEquals(StatusCode.OK,
           result.beginStepResult(0, TransactionProgramAction.COMMAND, 1));

@@ -3,6 +3,7 @@ package io.riverdb.protocol;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.api.CommandResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.ProgramOpenResult;
@@ -150,8 +151,10 @@ public final class ProtocolFrameCodec {
 
   public StatusCode encodeProgramExecuteRequest(
       ByteBuffer target, long requestId, long handle,
+      IsolationLevel isolationLevel,
       TransactionProgramArguments arguments) {
-    return programRequests.execute(target, requestId, handle, arguments);
+    return programRequests.execute(
+        target, requestId, handle, isolationLevel, arguments);
   }
 
   public StatusCode encodeProgramCloseRequest(

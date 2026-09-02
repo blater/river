@@ -1,6 +1,7 @@
 package io.riverdb.engine;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.TransactionProgramResult;
@@ -22,9 +23,10 @@ final class TransactionProgramExecutor {
 
   StatusCode execute(
       RetainedTransactionProgram retained,
+      IsolationLevel isolationLevel,
       TransactionProgramArguments arguments,
       TransactionProgramResult result) {
-    if (retained == null || arguments == null || result == null) {
+    if (retained == null || isolationLevel == null || arguments == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     TransactionProgram program = retained.program();
@@ -35,7 +37,7 @@ final class TransactionProgramExecutor {
     if (!session.matchesCatalogGeneration(retained.catalogGeneration())) {
       return rejected(StatusCode.PROGRAM_STALE, result);
     }
-    status = session.beginProgram(execution);
+    status = session.beginProgram(isolationLevel, execution);
     if (!status.isOk()) return rejected(status, result);
     int step = 0;
     while (status.isOk() && step < program.stepCount()) {

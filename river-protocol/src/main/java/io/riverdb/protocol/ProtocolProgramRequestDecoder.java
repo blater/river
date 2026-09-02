@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.RetainedMemoryLease;
@@ -15,6 +16,7 @@ public final class ProtocolProgramRequestDecoder {
   private final TransactionProgramArguments arguments;
   private final ProtocolProgramTextDecoder text;
   private long handle;
+  private IsolationLevel isolationLevel;
 
   public ProtocolProgramRequestDecoder() {
     this(RetainedMemoryLease.unbounded());
@@ -57,9 +59,11 @@ public final class ProtocolProgramRequestDecoder {
   public TransactionProgram program() { return program; }
   public TransactionProgramArguments arguments() { return arguments; }
   public long handle() { return handle; }
+  public IsolationLevel isolationLevel() { return isolationLevel; }
 
   public void reset() {
     handle = 0;
+    isolationLevel = null;
     program.reset();
     arguments.reset();
     text.reset();
@@ -73,6 +77,7 @@ public final class ProtocolProgramRequestDecoder {
 
   public StatusCode release() {
     handle = 0;
+    isolationLevel = null;
     StatusCode programStatus = program.release();
     StatusCode argumentStatus = arguments.release();
     StatusCode textStatus = text.release();
@@ -85,8 +90,9 @@ public final class ProtocolProgramRequestDecoder {
     if (end - input < EXECUTE_HEADER_BYTES) return StatusCode.INVALID_EXTERNAL_INPUT;
     handle = source.getLong(input);
     int count = source.getInt(input + Long.BYTES);
-    int reserved = source.getInt(input + Long.BYTES + Integer.BYTES);
-    if (handle <= 0 || reserved != 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    int isolationCode = source.getInt(input + Long.BYTES + Integer.BYTES);
+    isolationLevel = ProtocolIsolationLevelCodec.decode(isolationCode);
+    if (handle <= 0 || isolationLevel == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     return ProtocolParameterDecoder.decodeProgram(
         source, input + EXECUTE_HEADER_BYTES, end, count, arguments, text);
   }
@@ -100,6 +106,7 @@ public final class ProtocolProgramRequestDecoder {
   private StatusCode failure(ProtocolFrame frame, StatusCode status) {
     if (frame != null) frame.erasePayload();
     handle = 0;
+    isolationLevel = null;
     program.reset();
     arguments.reset();
     text.reset();

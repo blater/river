@@ -5,6 +5,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.ProgramOpenResult;
@@ -303,16 +304,19 @@ public final class EmbeddedRiver {
     @Override
     public StatusCode executeProgram(
         long programHandle,
+        IsolationLevel isolationLevel,
         TransactionProgramArguments arguments,
         TransactionProgramResult result) {
-      if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      if (isolationLevel == null || result == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
       result.reset();
       if (closed) return StatusCode.CLOSED;
       if (query.active) return StatusCode.CONFLICT;
       RetainedTransactionProgram program = transactionPrograms.resolve(programHandle);
       return program == null
           ? StatusCode.INVALID_EXTERNAL_INPUT
-          : programExecutor.execute(program, arguments, result);
+          : programExecutor.execute(program, isolationLevel, arguments, result);
     }
 
     @Override

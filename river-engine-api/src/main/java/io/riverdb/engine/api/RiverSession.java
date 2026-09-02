@@ -21,6 +21,7 @@ public interface RiverSession {
 
   StatusCode executeProgram(
       long programHandle,
+      IsolationLevel isolationLevel,
       TransactionProgramArguments arguments,
       TransactionProgramResult result);
 

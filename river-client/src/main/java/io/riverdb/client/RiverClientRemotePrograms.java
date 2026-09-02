@@ -1,6 +1,7 @@
 package io.riverdb.client;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.api.IsolationLevel;
 import io.riverdb.engine.api.ProgramOpenResult;
 import io.riverdb.engine.api.TransactionProgram;
 import io.riverdb.engine.api.TransactionProgramArguments;
@@ -30,9 +31,10 @@ final class RiverClientRemotePrograms {
   }
 
   StatusCode execute(
-      long handle, TransactionProgramArguments arguments,
+      long handle, IsolationLevel isolationLevel,
+      TransactionProgramArguments arguments,
       TransactionProgramResult result, boolean active, boolean queryActive) {
-    if (handle <= 0 || arguments == null || result == null) {
+    if (handle <= 0 || isolationLevel == null || arguments == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -40,7 +42,8 @@ final class RiverClientRemotePrograms {
     if (queryActive) return StatusCode.CONFLICT;
     StatusCode status;
     synchronized (connection) {
-      status = RiverClientProgramExchange.execute(connection, handle, arguments, result);
+      status = RiverClientProgramExchange.execute(
+          connection, handle, isolationLevel, arguments, result);
       if (status.isOk()) status = connection.codec.decodedProgramResultStatus();
     }
     if (result.sessionFenced()) connection.fail(StatusCode.FENCED);
