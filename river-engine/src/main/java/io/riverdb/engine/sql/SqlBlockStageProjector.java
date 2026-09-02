@@ -14,10 +14,12 @@ final class SqlBlockStageProjector {
       BoundSqlStatement statement,
       SqlExpressionEvaluator expressions,
       SqlRowProjectionEvaluator projectionEvaluator,
-      SqlTemporalContext temporal) {
+      SqlTemporalContext temporal,
+      SqlSessionShapeBudget shapeBudget) {
     bound = statement;
     projections = projectionEvaluator;
-    predicates = new SqlBlockPredicateEvaluator(statement, expressions, temporal);
+    predicates = new SqlBlockPredicateEvaluator(
+        statement, expressions, temporal, shapeBudget);
   }
 
   StatusCode prepare(int block) {
@@ -38,7 +40,7 @@ final class SqlBlockStageProjector {
     if (!status.isOk()) return status;
     result.available = nestedSource || match.matched;
     return result.available
-        ? projections.projectBlock(source, destination) : StatusCode.OK;
+        ? projections.projectBlock(source, destination, block) : StatusCode.OK;
   }
 
   void reset() { predicates.reset(); }

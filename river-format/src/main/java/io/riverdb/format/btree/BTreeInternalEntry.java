@@ -2,11 +2,11 @@ package io.riverdb.format.btree;
 
 /** Caller-owned decoded B-tree internal entry. */
 public final class BTreeInternalEntry {
-  private int space;
+  private long space;
   private long key;
   private int rightChildPageId;
 
-  void set(int keySpace, long orderedKey, int childPageId) {
+  void set(long keySpace, long orderedKey, int childPageId) {
     space = keySpace;
     key = orderedKey;
     rightChildPageId = childPageId;
@@ -16,7 +16,7 @@ public final class BTreeInternalEntry {
     set(0, 0, 0);
   }
 
-  public int space() {
+  public long space() {
     return space;
   }
 

@@ -82,7 +82,10 @@ final class SqlExecutionOwnershipTest {
           SqlStreamingStatementLifecycle.class.isAssignableFrom(type), field.getName());
       assertFalse(SqlSession.class.isAssignableFrom(type), field.getName());
       if (type.isArray()) {
-        assertEquals("projectedValues", field.getName());
+        assertTrue(
+            field.getName().equals("projectedValues")
+                || field.getName().equals("explainTypeDescriptors"),
+            field.getName());
       }
       physicalPlans += type == SqlPhysicalPlan.class ? 1 : 0;
       nestedExecutions += type == SqlSubqueryGraphExecution.class ? 1 : 0;

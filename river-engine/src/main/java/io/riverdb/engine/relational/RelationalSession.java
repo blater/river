@@ -2,12 +2,13 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.table.IndexedTransactionSession;
+import io.riverdb.engine.schema.TableDescriptor;
+import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
-import io.riverdb.tx.api.TransactionState;
 import java.nio.ByteBuffer;
 
 /** Transaction session over catalog-resolved logical tables in one physical keyspace. */
@@ -25,6 +26,13 @@ public final class RelationalSession {
   private final RelationalCatalogReader catalogReader;
   private final RelationalReferentialIntegrity referentialIntegrity;
   private final RelationalRowMutation rowMutations;
+  private final RelationalDescriptorSession descriptors;
+  private final RelationalDatabaseServices services;
+  private final CatalogStatisticsCleanup statisticsCleanup = new CatalogStatisticsCleanup();
+  private final SchemaPin descriptorNamespace = new SchemaPin();
+  private final SchemaPin bindingTablePin = new SchemaPin();
+  private final RelationalDescriptorJoinTableView bindingTableView =
+      new RelationalDescriptorJoinTableView();
   private final TableSchema.ColumnName pendingDropIndexName =
       new TableSchema.ColumnName();
   private final TableSchema.ColumnName pendingDropTableName =
@@ -32,33 +40,135 @@ public final class RelationalSession {
   private final TransactionOutcome schemaCleanupOutcome = new TransactionOutcome();
   private boolean registeredTransaction;
   private boolean schemaChangeActive;
+  private boolean nonDescriptorSchemaPublication;
   private int schemaChangeMutationStart;
   private int pendingDropMutationStart;
   private int pendingDropType;
+  private boolean closed;
 
   RelationalSession(
       RelationalSchemaLifecycle lifecycle,
       RelationalSchemaGate gate,
-      IndexedTransactionSession indexedSession) {
+      IndexedTransactionSession indexedSession,
+      RelationalDatabaseServices services) {
     schemaLifecycle = lifecycle;
     schemaGate = gate;
     session = indexedSession;
+    this.services = services;
     secondaryIndexes = new RelationalSecondaryIndexStore(gate, indexedSession);
     indexLookup = new RelationalIndexLookup(gate, indexedSession);
     catalogDdl = new RelationalCatalogDdl(gate);
     catalogReader = new RelationalCatalogReader(gate, indexedSession);
     referentialIntegrity = new RelationalReferentialIntegrity(gate);
     rowMutations = new RelationalRowMutation(gate, indexedSession, secondaryIndexes);
+    descriptors = new RelationalDescriptorSession(
+        this, indexedSession, services);
+  }
+
+  RelationalSession(
+      RelationalSchemaLifecycle lifecycle,
+      RelationalSchemaGate gate,
+      IndexedTransactionSession indexedSession) {
+    this(lifecycle, gate, indexedSession, null);
+  }
+
+  /** Catalog-v2 row operations bound to this session and its active transaction. */
+  public RelationalDescriptorTableAccess descriptorRows() {
+    return descriptors.rows();
+  }
+
+  public StatusCode prepareDescriptorTable(
+      CharSequence name,
+      TableDescriptor descriptor,
+      io.riverdb.base.error.StatusDetail detail) {
+    return descriptors.prepare(name, descriptor, detail);
+  }
+
+  public StatusCode prepareDescriptorSuccessor(
+      CharSequence name,
+      SchemaPin current,
+      TableDescriptor proposed,
+      io.riverdb.base.error.StatusDetail detail) {
+    return descriptors.prepareSuccessor(name, current, proposed, detail);
+  }
+
+  public StatusCode prepareDescriptorSuccessorBuild(
+      CharSequence name,
+      SchemaPin current,
+      TableDescriptor proposed,
+      io.riverdb.base.error.StatusDetail detail) {
+    return descriptors.prepareSuccessorBuild(name, current, proposed, detail);
+  }
+
+  public StatusCode stagePreparedDescriptorSuccessor(
+      CharSequence name,
+      io.riverdb.base.error.StatusDetail detail) {
+    return descriptors.stagePreparedSuccessor(name, detail);
+  }
+
+  public StatusCode resolveDescriptor(
+      CharSequence name, SchemaPin pin, io.riverdb.base.error.StatusDetail detail) {
+    return descriptors.resolve(name, pin, detail);
+  }
+
+  StatusCode ensureLegacyNameAbsent(CharSequence name) {
+    return catalogDdl.availableName(this, name);
+  }
+
+  public StatusCode dropDescriptorTable(
+      CharSequence name,
+      SchemaPin current,
+      io.riverdb.base.error.StatusDetail detail) {
+    StatusCode status = descriptors.drop(name, current, detail);
+    return status.isOk()
+        ? statisticsCleanup.delete(session, (int) current.tableId()) : status;
+  }
+
+  public StatusCode renameDescriptorTable(
+      CharSequence currentName,
+      CharSequence renamedName,
+      SchemaPin current,
+      io.riverdb.base.error.StatusDetail detail) {
+    return descriptors.rename(currentName, renamedName, current, detail);
+  }
+
+  public StatusCode checkViewReferences(long tableId) {
+    if (!registeredTransaction
+        || tableId <= 0
+        || tableId > RelationalKey.MAXIMUM_TABLE_ID) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return schemaLifecycle.checkViewReferences(this, (int) tableId);
+  }
+
+  int pendingMutationCount() {
+    return session.pendingMutationCount();
+  }
+
+  StatusCode preflightDescriptorDrop() {
+    return session.preflightPendingMutations(
+        RelationalDescriptorDropPublications.MUTATION_ROW_LENGTHS, 0, 2);
+  }
+
+  StatusCode validateDescriptorNames() {
+    return descriptors.validateNames();
   }
 
   public boolean isTransactionActive() {
     return registeredTransaction;
   }
 
+  /** Current global catalog publication token for conservative plan invalidation. */
+  public long catalogGeneration() { return schemaGate.version(); }
+
+  public boolean matchesCatalogGeneration(long expected) {
+    return schemaGate.matchesVersion(expected);
+  }
+
   public StatusCode begin(IsolationLevel isolationLevel) {
-    if (registeredTransaction) {
-      return StatusCode.CONFLICT;
-    }
+    if (registeredTransaction) return StatusCode.CONFLICT;
+    StatusCode cleanup = descriptors.prepareBegin();
+    if (!cleanup.isOk()) return cleanup;
     StatusCode status = schemaGate.enterTransaction(this);
     boolean entered = status.isOk();
     if (status.isOk()) {
@@ -84,6 +194,17 @@ public final class RelationalSession {
     return catalogReader.resolveTable(name, result);
   }
 
+  /** Resolves the current descriptor catalog directly into the binder's primitive view. */
+  public StatusCode resolveBindingTable(CharSequence name, TableDefinition result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
+    StatusCode status = resolveDescriptor(name, bindingTablePin, null);
+    if (status.isOk()) status = bindingTableView.prepare(bindingTablePin.descriptor(), result);
+    StatusCode released = bindingTablePin.isActive()
+        ? bindingTablePin.release() : StatusCode.OK;
+    return status.isOk() ? released : status;
+  }
+
   public StatusCode resolveView(
       CharSequence name,
       ViewDefinition result) {
@@ -99,6 +220,13 @@ public final class RelationalSession {
       TableDefinition table, TableStatistics statistics) {
     if (!registeredTransaction) return StatusCode.INVALID_EXTERNAL_INPUT;
     return catalogDdl.writeStatistics(this, table, statistics);
+  }
+
+  StatusCode reserveCatalogRecords(
+      int count, io.riverdb.engine.schema.catalog.CatalogRecordRange result) {
+    return services == null
+        ? StatusCode.INVALID_EXTERNAL_INPUT
+        : services.reserveCatalogRecords(session, count, result);
   }
 
   public StatusCode beginCatalogObjectScan(CatalogObjectCursor cursor) {
@@ -157,6 +285,7 @@ public final class RelationalSession {
     }
     boolean acquired = !schemaChangeActive;
     StatusCode status = acquireSchemaChange();
+    if (status.isOk()) status = descriptors.ensureNameAbsent(name);
     if (status.isOk()) {
       status = catalogDdl.createTable(
           this, name, keyColumnName, valueColumnName, result);
@@ -184,6 +313,7 @@ public final class RelationalSession {
     }
     boolean acquired = !schemaChangeActive;
     StatusCode status = acquireSchemaChange();
+    if (status.isOk()) status = descriptors.ensureNameAbsent(name);
     if (status.isOk()) {
       status = catalogDdl.createTable(this, name, schema, result);
     }
@@ -191,7 +321,7 @@ public final class RelationalSession {
     return status;
   }
 
-  private StatusCode acquireSchemaChange() {
+  StatusCode acquireSchemaChange() {
     if (schemaChangeActive) {
       return StatusCode.OK;
     }
@@ -199,13 +329,26 @@ public final class RelationalSession {
     if (status.isOk()) {
       schemaChangeMutationStart = session.pendingMutationCount();
       schemaChangeActive = true;
+      nonDescriptorSchemaPublication = false;
     }
     return status;
+  }
+
+  boolean schemaChangeActive() {
+    return schemaChangeActive;
+  }
+
+  void cancelSchemaChange() {
+    schemaGate.completeSchemaChange(this, false);
+    schemaChangeActive = false;
+    schemaChangeMutationStart = 0;
+    nonDescriptorSchemaPublication = false;
   }
 
   private void finishFailedSchemaCreation(
       StatusCode status, boolean acquired, TableDefinition result) {
     if (status.isOk()) {
+      nonDescriptorSchemaPublication = true;
       return;
     }
     result.reset();
@@ -213,12 +356,17 @@ public final class RelationalSession {
   }
 
   private void finishFailedSchemaChange(StatusCode status, boolean acquired) {
-    if (status.isOk() || !acquired) {
+    if (status.isOk()) {
+      nonDescriptorSchemaPublication = true;
+      return;
+    }
+    if (!acquired) {
       return;
     }
     schemaGate.completeSchemaChange(this, false);
     schemaChangeActive = false;
     schemaChangeMutationStart = 0;
+    nonDescriptorSchemaPublication = false;
   }
 
   public StatusCode createSequence(
@@ -235,6 +383,7 @@ public final class RelationalSession {
     }
     boolean acquired = !schemaChangeActive;
     StatusCode status = acquireSchemaChange();
+    if (status.isOk()) status = descriptorNameAvailable(name);
     if (status.isOk()) {
       status = catalogDdl.createSequence(this, name, start, increment);
     }
@@ -252,7 +401,7 @@ public final class RelationalSession {
         || query == null
         || query.length() <= 0
         || query.length() > ViewDefinition.MAXIMUM_QUERY_LENGTH
-        || !validViewLineage(tableIds, tableCount)) {
+        || !RelationalViewLineage.valid(tableIds, tableCount)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (pendingDropType != PENDING_DROP_NONE) {
@@ -260,6 +409,7 @@ public final class RelationalSession {
     }
     boolean acquired = !schemaChangeActive;
     StatusCode status = acquireSchemaChange();
+    if (status.isOk()) status = descriptorNameAvailable(name);
     if (status.isOk()) {
       status = catalogDdl.createView(
           this, name, query, tableIds, tableCount);
@@ -268,18 +418,12 @@ public final class RelationalSession {
     return status;
   }
 
-  private static boolean validViewLineage(int[] tableIds, int tableCount) {
-    if (tableIds == null
-        || tableCount < 1
-        || tableCount > ViewDefinition.MAXIMUM_LINEAGE_TABLES
-        || tableCount > tableIds.length) {
-      return false;
-    }
-    for (int index = 0; index < tableCount; index++) {
-      if (tableIds[index] <= 0
-          || tableIds[index] > RelationalKey.MAXIMUM_TABLE_ID) return false;
-    }
-    return true;
+  private StatusCode descriptorNameAvailable(CharSequence name) {
+    StatusCode status = resolveDescriptor(name, descriptorNamespace, null);
+    if (status == StatusCode.CONFLICT) return StatusCode.OK;
+    if (!status.isOk()) return status;
+    StatusCode released = descriptorNamespace.release();
+    return released.isOk() ? StatusCode.CONFLICT : released;
   }
 
   public StatusCode dropView(CharSequence name) {
@@ -606,7 +750,7 @@ public final class RelationalSession {
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int dataSpace = RelationalKey.dataSpace(table.tableId());
+    long dataSpace = RelationalKey.dataSpace(table.tableId());
     StatusCode status = session.beginScan(
         dataSpace,
         Long.MIN_VALUE,
@@ -627,7 +771,7 @@ public final class RelationalSession {
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int dataSpace = RelationalKey.dataSpace(table.tableId());
+    long dataSpace = RelationalKey.dataSpace(table.tableId());
     StatusCode status = session.beginScan(
         dataSpace,
         lowerInclusive,
@@ -644,8 +788,8 @@ public final class RelationalSession {
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int dataSpace = RelationalKey.dataSpace(table.tableId());
-    int upperSpace = key == Long.MAX_VALUE ? dataSpace + 1 : dataSpace;
+    long dataSpace = RelationalKey.dataSpace(table.tableId());
+    long upperSpace = key == Long.MAX_VALUE ? dataSpace + 1 : dataSpace;
     long upperKey = key == Long.MAX_VALUE ? Long.MIN_VALUE : key + 1;
     StatusCode status = session.beginScan(
         dataSpace, key, upperSpace, upperKey, cursor.indexed());
@@ -659,7 +803,7 @@ public final class RelationalSession {
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int dataSpace = RelationalKey.dataSpace(table.tableId());
+    long dataSpace = RelationalKey.dataSpace(table.tableId());
     StatusCode status = session.beginScan(
         dataSpace,
         lowerInclusive,
@@ -683,6 +827,29 @@ public final class RelationalSession {
     return status;
   }
 
+  /** Borrows the current uninterrupted successor of one legacy snapshot candidate. */
+  public StatusCode lockCurrentRow(
+      TableDefinition table, long key, HeapRowResult result) {
+    if (table == null || !table.isOwnedBy(schemaGate) || !registeredTransaction
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long space = RelationalKey.dataSpace(table.tableId());
+    return session.lockCurrentKey(space, key, result);
+  }
+
+  /** Retains the current-row claim through transaction completion. */
+  public StatusCode retainCurrentRow() {
+    return registeredTransaction
+        ? session.retainCurrentKey() : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  /** Releases a current-row claim rejected by predicate evaluation or projection. */
+  public StatusCode releaseCurrentRow() {
+    return registeredTransaction
+        ? session.releaseCurrentKey() : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
   public StatusCode closeScan(RelationalScanCursor cursor) {
     if (cursor == null || !cursor.isOwnedBy(this)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -701,6 +868,7 @@ public final class RelationalSession {
 
   public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
     StatusCode status = session.rollbackToSavepoint(savepoint);
+    if (status.isOk()) descriptors.rollbackTo(session.pendingMutationCount());
     if (status.isOk()
         && pendingDropType != PENDING_DROP_NONE
         && session.pendingMutationCount() <= pendingDropMutationStart) {
@@ -708,10 +876,12 @@ public final class RelationalSession {
     }
     if (status.isOk()
         && schemaChangeActive
-        && session.pendingMutationCount() <= schemaChangeMutationStart) {
+        && session.pendingMutationCount() <= schemaChangeMutationStart
+        && !descriptors.hasVisible()) {
       schemaGate.completeSchemaChange(this, false);
       schemaChangeActive = false;
       schemaChangeMutationStart = 0;
+      nonDescriptorSchemaPublication = false;
     }
     return status;
   }
@@ -725,10 +895,11 @@ public final class RelationalSession {
   }
 
   public StatusCode commit(TransactionOutcome result) {
-    StatusCode status = session.commit(result);
-    boolean committed = status.isOk()
-        && result.isAvailable()
-        && result.state() == TransactionState.COMMITTED;
+    StatusCode status = descriptors.closeActiveScan();
+    if (!status.isOk()) return status;
+    status = session.commit(result);
+    status = descriptors.finish(session, result, status);
+    boolean committed = descriptors.committed();
     releaseTerminalTransaction();
     int cleanupType = pendingDropType;
     if (committed && cleanupType != PENDING_DROP_NONE) {
@@ -746,14 +917,22 @@ public final class RelationalSession {
               schemaCleanupOutcome);
     }
     clearPendingDrop();
-    completeTerminalSchemaChange(committed);
+    if (descriptors.determinate()) {
+      completeTerminalSchemaChange(
+          descriptors.publishSchemaChange() || nonDescriptorSchemaPublication);
+    }
     return status;
   }
 
   public StatusCode abort(TransactionOutcome result) {
-    StatusCode status = session.abort(result);
+    StatusCode status = descriptors.closeActiveScan();
+    if (!status.isOk()) return status;
+    status = session.abort(result);
+    status = descriptors.finish(session, result, status);
     clearPendingDrop();
-    completeTerminalSchemaChange(false);
+    if (descriptors.determinate()) {
+      completeTerminalSchemaChange(false);
+    }
     releaseTerminalTransaction();
     return status;
   }
@@ -762,8 +941,32 @@ public final class RelationalSession {
     return session.transaction().snapshot().visibleCommitSequence();
   }
 
+  /** True while the kernel can still accept a terminal commit or abort retry. */
+  public boolean transactionActive() {
+    return session.transactionLifecycleActive();
+  }
+
+  public StatusCode close() {
+    if (closed) return StatusCode.CLOSED;
+    if (registeredTransaction || schemaChangeActive) return StatusCode.CONFLICT;
+    StatusCode status = descriptors.closeSession();
+    if (status.isOk()) status = session.close();
+    if (status.isOk()) closed = true;
+    return status;
+  }
+
   IndexedTransactionSession indexedSession() {
     return session;
+  }
+
+  StatusCode reserveDescriptorLogicalRowId(
+      long objectId, int count,
+      io.riverdb.engine.table.IndexedLogicalRowIdReservation result) {
+    return descriptors.reserveLogicalRowIds(objectId, count, result);
+  }
+
+  boolean authorizesDescriptorPin(SchemaPin pin) {
+    return descriptors.authorizes(pin);
   }
 
   StatusCode commitBuildPhase(TransactionOutcome result) {
@@ -786,6 +989,7 @@ public final class RelationalSession {
     if (status.isOk()) {
       schemaChangeMutationStart = session.pendingMutationCount();
       schemaChangeActive = true;
+      nonDescriptorSchemaPublication = false;
     }
     return status;
   }
@@ -795,6 +999,7 @@ public final class RelationalSession {
       schemaGate.completeSchemaChange(this, false);
       schemaChangeActive = false;
       schemaChangeMutationStart = 0;
+      nonDescriptorSchemaPublication = false;
     }
   }
 
@@ -859,17 +1064,18 @@ public final class RelationalSession {
   }
 
   private void releaseTerminalTransaction() {
-    if (registeredTransaction && !session.transaction().isActiveHandle()) {
+    if (registeredTransaction && !session.transactionLifecycleActive()) {
       registeredTransaction = false;
       schemaGate.leaveTransaction();
     }
   }
 
   private void completeTerminalSchemaChange(boolean committed) {
-    if (schemaChangeActive && !session.transaction().isActiveHandle()) {
+    if (schemaChangeActive && !session.transactionLifecycleActive()) {
       schemaGate.completeSchemaChange(this, committed);
       schemaChangeActive = false;
       schemaChangeMutationStart = 0;
+      nonDescriptorSchemaPublication = false;
     }
   }
 

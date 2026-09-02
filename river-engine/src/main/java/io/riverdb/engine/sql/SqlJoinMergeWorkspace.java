@@ -8,41 +8,57 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Ordered outer probes over one indexed or sort-fed merge right input. */
 final class SqlJoinMergeWorkspace {
   private final SqlJoinMergeRightRows rightRows;
-  private final SqlBlockRow outer = new SqlBlockRow();
-  private final SqlBlockPhysicalRowReader reader = new SqlBlockPhysicalRowReader();
+  private final SqlBlockRow outer;
+  private final SqlBlockPhysicalRowReader reader;
+  private final SqlBlockRowValueComparator comparator = new SqlBlockRowValueComparator();
+  private final SqlJoinMergeKey lastOuter;
   private TableDefinition outerTable;
   private int stage = -1;
   private int outerRole = -1;
   private int outerColumn = -1;
   private int outerDescriptor;
-  private long lastOuterValue;
   private boolean active;
-  private boolean lastOuterAvailable;
 
-  SqlJoinMergeWorkspace(RelationalSession relationalSession) {
-    rightRows = new SqlJoinMergeRightRows(relationalSession);
+  SqlJoinMergeWorkspace(
+      RelationalSession relationalSession, SqlSessionShapeBudget budget) {
+    this(relationalSession, SqlRetainedArrayAllocator.STANDARD, budget);
+  }
+
+  SqlJoinMergeWorkspace(
+      RelationalSession relationalSession, SqlRetainedArrayAllocator allocator,
+      SqlSessionShapeBudget budget) {
+    rightRows = new SqlJoinMergeRightRows(relationalSession, allocator, budget);
+    outer = new SqlBlockRow(allocator);
+    reader = new SqlBlockPhysicalRowReader(allocator);
+    lastOuter = new SqlJoinMergeKey(budget);
   }
 
   StatusCode begin(SqlBoundJoinContext context) {
     StatusCode status = close();
     if (!status.isOk()) return status;
-    stage = context.physicalStrategyStage();
-    if (stage < 0 || context.strategy(stage) != SqlJoinStrategy.MERGE) {
+    int selected = context.physicalStrategyStage();
+    if (selected < 0 || context.strategy(selected) != SqlJoinStrategy.MERGE) {
       return StatusCode.OK;
     }
-    outerRole = context.strategyOuterRole(stage);
-    outerTable = context.table(outerRole);
-    outerColumn = context.strategyOuterColumn(stage);
+    int role = context.strategyOuterRole(selected);
+    TableDefinition definition = context.table(role);
+    int keyColumn = context.strategyOuterColumn(selected);
+    status = reader.prepare(definition, outer);
+    if (!status.isOk()) return status;
+    stage = selected;
+    outerRole = role;
+    outerTable = definition;
+    outerColumn = keyColumn;
     outerDescriptor = outerTable.typeDescriptor(outerColumn);
-    prepareOuter();
+    status = lastOuter.prepare(outerDescriptor);
+    if (!status.isOk()) return failBegin(status);
     status = rightRows.begin(
-        context.table(stage + 1), context.strategyInnerColumn(stage));
+        context.table(stage + 1), context.strategyInnerColumn(stage), outerDescriptor);
     active = status.isOk();
-    return status;
+    return status.isOk() ? status : failBegin(status);
   }
 
-  StatusCode beginProbe(
-      SqlJoinRoleRows rows, SqlExpressionEvaluator expressions) {
+  StatusCode beginProbe(SqlJoinRoleRows rows) {
     if (!active) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (rows.nullRole(outerRole)) {
       rightRows.emptyProbe();
@@ -57,15 +73,13 @@ final class SqlJoinMergeWorkspace {
       rightRows.emptyProbe();
       return StatusCode.OK;
     }
-    long value = outer.value(outerColumn);
-    if (lastOuterAvailable
-        && expressions.compareExact(
-            value, outerDescriptor, lastOuterValue, outerDescriptor) < 0) {
+    if (lastOuter.available()
+        && lastOuter.compare(outer, outerColumn, outerDescriptor, comparator) > 0) {
       return StatusCode.INVARIANT_BROKEN;
     }
-    lastOuterValue = value;
-    lastOuterAvailable = true;
-    return rightRows.beginProbe(value, outerDescriptor, expressions);
+    status = lastOuter.capture(outer, outerColumn);
+    return status.isOk()
+        ? rightRows.beginProbe(outer, outerColumn, outerDescriptor) : status;
   }
 
   StatusCode nextCandidate() { return rightRows.next(); }
@@ -83,16 +97,13 @@ final class SqlJoinMergeWorkspace {
     outerRole = -1;
     outerColumn = -1;
     outerDescriptor = 0;
-    lastOuterValue = 0;
+    lastOuter.reset();
     active = false;
-    lastOuterAvailable = false;
     return StatusCode.OK;
   }
 
-  private void prepareOuter() {
-    outer.reset(outerTable.columnCount());
-    for (int column = 0; column < outerTable.columnCount(); column++) {
-      if (outerTable.isVarchar(column)) outer.prepareText(column);
-    }
+  private StatusCode failBegin(StatusCode failure) {
+    StatusCode closed = close();
+    return failure.isOk() ? closed : failure;
   }
 }

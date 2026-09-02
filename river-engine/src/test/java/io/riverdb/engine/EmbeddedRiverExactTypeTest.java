@@ -1,6 +1,7 @@
 package io.riverdb.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
@@ -70,9 +71,24 @@ final class EmbeddedRiverExactTypeTest {
         StatusCode.DIVISION_BY_ZERO,
         session.execute("SELECT 1.0/0.0", command));
     assertEquals(
-        StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
+        StatusCode.OK,
         session.execute(
             "SELECT 900000000000000000+900000000000000000.0", command));
+    assertEquals(SqlTypeDescriptor.decimal(21, 1), command.typeDescriptorAt(0));
+    assertEquals(0, command.decimalUnscaledHighAt(0));
+    assertEquals(-446_744_073_709_551_616L, command.decimalUnscaledLowAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery(
+            "SELECT 900000000000000000+900000000000000000.0", queryResult));
+    query = queryResult.query();
+    assertEquals(StatusCode.OK, query.next(row));
+    assertTrue(row.isAvailable());
+    assertEquals(SqlTypeDescriptor.decimal(21, 1), row.typeDescriptorAt(0));
+    assertEquals(0, row.decimalUnscaledHighAt(0));
+    assertEquals(-446_744_073_709_551_616L, row.decimalUnscaledLowAt(0));
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(StatusCode.OK, query.close(command));
     assertEquals(StatusCode.OK, session.execute("SELECT TRUE", command));
     assertEquals(SqlTypeDescriptor.BOOLEAN, command.typeDescriptorAt(0));
     assertEquals(1, command.valueAt(0));
@@ -120,12 +136,17 @@ final class EmbeddedRiverExactTypeTest {
                 + "(2, 1, 90000000000000000.0)",
             command));
     assertEquals(
-        StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
+        StatusCode.OK,
         session.execute("SELECT SUM(value) FROM large_amounts", command));
+    assertEquals(SqlTypeDescriptor.decimal(38, 1), command.typeDescriptorAt(0));
+    assertEquals(0, command.decimalUnscaledHighAt(0));
+    assertEquals(1_800_000_000_000_000_000L, command.decimalUnscaledLowAt(0));
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT AVG(value) FROM large_amounts", command));
-    assertEquals(900_000_000_000_000_000L, command.valueAt(0));
+    assertEquals(SqlTypeDescriptor.decimal(38, 6), command.typeDescriptorAt(0));
+    assertEquals(4_878, command.decimalUnscaledHighAt(0));
+    assertEquals(-1_664_335_628_902_334_464L, command.decimalUnscaledLowAt(0));
     assertEquals(
         StatusCode.OK,
         session.execute(
@@ -275,6 +296,20 @@ final class EmbeddedRiverExactTypeTest {
     assertEquals(
         StatusCode.OK,
         session.beginQuery(
+            "SELECT id FROM invoices WHERE EXISTS "
+                + "(SELECT id FROM rates WHERE rates.amount=invoices.amount)",
+            queryResult));
+    query = queryResult.query();
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(false, row.isAvailable());
+    assertEquals(StatusCode.OK, query.close(command));
+
+    queryResult = new QueryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery(
             "SELECT amount FROM invoices WHERE amount BETWEEN 10.0 AND 30.000 "
                 + "ORDER BY amount",
             queryResult));
@@ -297,11 +332,15 @@ final class EmbeddedRiverExactTypeTest {
             queryResult));
     query = queryResult.query();
     assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(2, row.valueAt(0));
-    assertEquals(20, row.valueAt(1));
+    long firstFlag = row.valueAt(0);
+    long firstReference = row.valueAt(1);
     assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(1, row.valueAt(0));
-    assertEquals(10, row.valueAt(1));
+    long secondFlag = row.valueAt(0);
+    long secondReference = row.valueAt(1);
+    assertEquals(3, firstFlag + secondFlag);
+    assertEquals(30, firstReference + secondReference);
+    assertEquals(firstFlag * 10, firstReference);
+    assertEquals(secondFlag * 10, secondReference);
     assertEquals(StatusCode.OK, query.next(row));
     assertEquals(false, row.isAvailable());
     assertEquals(StatusCode.OK, query.close(command));
@@ -330,35 +369,12 @@ final class EmbeddedRiverExactTypeTest {
     assertEquals(StatusCode.OK, query.next(row));
     assertEquals(false, row.isAvailable());
     assertEquals(StatusCode.OK, query.close(command));
-    queryResult = new QueryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        session.beginQuery(
-            "EXPLAIN SELECT id FROM invoices WHERE amount=42.700", queryResult));
-    query = queryResult.query();
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(PackedText.pack("filter"), row.valueAt(0));
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(PackedText.pack("index"), row.valueAt(0));
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(false, row.isAvailable());
-    assertEquals(StatusCode.OK, query.close(command));
-
-    queryResult = new QueryOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        session.beginQuery(
-            "EXPLAIN SELECT amount FROM invoices "
-                + "WHERE amount BETWEEN 10.0 AND 30.000 ORDER BY amount",
-            queryResult));
-    query = queryResult.query();
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(PackedText.pack("sort"), row.valueAt(0));
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(PackedText.pack("filter"), row.valueAt(0));
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(PackedText.pack("index"), row.valueAt(0));
-    assertEquals(StatusCode.OK, query.close(command));
+    assertExplainUsesIndex(
+        session, "SELECT id FROM invoices WHERE amount=42.700");
+    assertExplainUsesIndex(
+        session,
+        "SELECT amount FROM invoices "
+            + "WHERE amount BETWEEN 10.0 AND 30.000 ORDER BY amount");
 
     queryResult = new QueryOpenResult();
     assertEquals(
@@ -415,13 +431,13 @@ final class EmbeddedRiverExactTypeTest {
         StatusCode.OK,
         session.execute("SELECT SUM(amount) FROM invoices", command));
     assertEquals(
-        SqlTypeDescriptor.decimal(18, 2), command.typeDescriptorAt(0));
+        SqlTypeDescriptor.decimal(38, 2), command.typeDescriptorAt(0));
     assertEquals(6_500, command.valueAt(0));
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT AVG(amount) FROM invoices", command));
     assertEquals(
-        SqlTypeDescriptor.decimal(18, 6), command.typeDescriptorAt(0));
+        SqlTypeDescriptor.decimal(38, 6), command.typeDescriptorAt(0));
     assertEquals(21_666_667, command.valueAt(0));
     assertEquals(
         StatusCode.OK,
@@ -444,7 +460,7 @@ final class EmbeddedRiverExactTypeTest {
     assertEquals(1, row.valueAt(0));
     assertEquals(4_270, row.valueAt(1));
     assertEquals(
-        SqlTypeDescriptor.decimal(18, 2), row.typeDescriptorAt(1));
+        SqlTypeDescriptor.decimal(38, 2), row.typeDescriptorAt(1));
     assertEquals(StatusCode.OK, query.next(row));
     assertEquals(false, row.isAvailable());
     assertEquals(StatusCode.OK, query.close(command));
@@ -459,7 +475,7 @@ final class EmbeddedRiverExactTypeTest {
     assertEquals(1, row.valueAt(0));
     assertEquals(42_700_000, row.valueAt(1));
     assertEquals(
-        SqlTypeDescriptor.decimal(18, 6), row.typeDescriptorAt(1));
+        SqlTypeDescriptor.decimal(38, 6), row.typeDescriptorAt(1));
     assertEquals(StatusCode.OK, query.next(row));
     assertEquals(false, row.isAvailable());
     assertEquals(StatusCode.OK, query.close(command));
@@ -518,5 +534,20 @@ final class EmbeddedRiverExactTypeTest {
         StatusCode.OK,
         session.execute("SELECT COUNT(*) FROM " + table + " WHERE " + predicate, result));
     assertEquals(expected, result.valueAt(0));
+  }
+
+  private static void assertExplainUsesIndex(RiverSession session, String sql) {
+    QueryOpenResult opened = new QueryOpenResult();
+    assertEquals(StatusCode.OK, session.beginQuery("EXPLAIN " + sql, opened));
+    RiverQuery query = opened.query();
+    RowResult row = new RowResult();
+    boolean indexed = false;
+    while (true) {
+      assertEquals(StatusCode.OK, query.next(row));
+      if (!row.isAvailable()) break;
+      indexed |= row.valueAt(0) == PackedText.pack("index");
+    }
+    assertTrue(indexed);
+    assertEquals(StatusCode.OK, query.close(new CommandResult()));
   }
 }

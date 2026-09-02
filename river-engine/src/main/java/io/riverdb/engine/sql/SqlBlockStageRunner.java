@@ -15,13 +15,14 @@ final class SqlBlockStageRunner {
   private final SqlBlockProjectionStage projectionStage;
   private final SqlBlockRowStore first;
   private final SqlBlockRowStore second;
-  private final SqlAggregateAccumulatorSet accumulator =
-      new SqlAggregateAccumulatorSet();
+  private final SqlAggregateAccumulatorSet accumulator;
   private final SqlHavingEvaluator having;
   private final SqlBlockAggregatePublisher publisher;
   private final SqlBlockScalarAggregateStage scalarStage;
   private final SqlBlockGroupedAggregateStage groupedStage;
   private SqlBlockRowStore finalStore;
+  private boolean fusedScalarJoin;
+  private int fusedJoinBlock = -1;
 
   SqlBlockStageRunner(
       RelationalSession session,
@@ -33,6 +34,7 @@ final class SqlBlockStageRunner {
       SqlSubqueryGraphExecution subqueries,
       SqlRowProjectionEvaluator projectionEvaluator,
       SqlTemporalContext temporal,
+      SqlSessionShapeBudget shapeBudget,
       SqlBlockRowStore firstStore,
       SqlBlockRowStore secondStore) {
     bound = statement;
@@ -40,19 +42,30 @@ final class SqlBlockStageRunner {
     projections = projectionEvaluator;
     source = new SqlBlockSource(
         session, statement, joinSource, predicates, subqueries, projectionEvaluator);
+    SqlBlockOutputOrder outputOrder = new SqlBlockOutputOrder();
     joinStage = new SqlBlockJoinStage(
-        statement, source, subqueries, projectionEvaluator);
+        statement,
+        source,
+        subqueries,
+        projectionEvaluator,
+        session,
+        expressions,
+        temporal,
+        shapeBudget,
+        outputOrder);
     projector = new SqlBlockStageProjector(
-        statement, expressions, projectionEvaluator, temporal);
-    projectionStage = new SqlBlockProjectionStage(statement, source, projector);
+        statement, expressions, projectionEvaluator, temporal, shapeBudget);
+    projectionStage = new SqlBlockProjectionStage(
+        statement, source, projector, outputOrder);
     first = firstStore;
     second = secondStore;
-    having = new SqlHavingEvaluator(statement, expressions, temporal);
+    accumulator = new SqlAggregateAccumulatorSet(shapeBudget);
+    having = new SqlHavingEvaluator(statement, expressions, temporal, shapeBudget);
     publisher = new SqlBlockAggregatePublisher(statement);
     scalarStage = new SqlBlockScalarAggregateStage(
-        statement, source, projector, having, accumulator, publisher);
+        statement, source, projector, having, accumulator, publisher, outputOrder);
     groupedStage = new SqlBlockGroupedAggregateStage(
-        statement, having, accumulator, publisher);
+        statement, having, accumulator, publisher, outputOrder);
   }
 
   StatusCode run(
@@ -60,7 +73,7 @@ final class SqlBlockStageRunner {
       SqlBlockStagePlan plan) {
     SqlBoundBlockPlans plans = bound.blockPlans();
     SqlBlockRowStore input = null;
-    StatusCode status = StatusCode.OK;
+    StatusCode status = prepareFusedScalarJoin(plans);
     for (int block = plans.count() - 1;
         status.isOk() && block >= 0; block--) {
       SqlBlockSchema child = block + 1 == plans.count()
@@ -69,6 +82,13 @@ final class SqlBlockStageRunner {
       if (status.isOk()) status = prepareActive(block);
       SqlBlockRowStore output = input == first ? second : first;
       if (status.isOk()) status = execute(block, input, output, sourceRow);
+      if (status.isOk() && finalStore != null) {
+        status = finalStore.limit(plans.command(block).rowLimit());
+      }
+      if (status.isOk() && block == plans.count() - 1
+          && bound.command.type() != SqlCommandType.JOIN_SCAN) {
+        plan.setRootAccess(source.accessColumn());
+      }
       input = status.isOk() ? finalStore : input;
       if (status.isOk()) plan.setRows(block, stageRows(block));
     }
@@ -79,11 +99,17 @@ final class SqlBlockStageRunner {
   private StatusCode prepareActive(int block) {
     if (bound.command.type() == SqlCommandType.JOIN_SCAN) {
       StatusCode status = joinStage.prepare(block);
-      return status.isOk() ? having.prepare(bound.command) : status;
+      if (!status.isOk()) return status;
+      return fusedScalarJoin && block == fusedJoinBlock
+          ? having.prepare(bound.command)
+          : having.prepare(bound.command, accumulator, bound.aggregates);
     }
     StatusCode status = projections.prepare(bound);
     if (status.isOk()) status = projector.prepare(block);
-    return status.isOk() ? having.prepare(bound.command) : status;
+    if (!status.isOk()) return status;
+    return fusedScalarJoin && block == fusedJoinBlock - 1
+        ? having.prepare(bound.command)
+        : having.prepare(bound.command, accumulator, bound.aggregates);
   }
 
   private StatusCode execute(
@@ -93,26 +119,24 @@ final class SqlBlockStageRunner {
       SqlBlockRow sourceRow) {
     SqlCommandType type = bound.command.type();
     if (type == SqlCommandType.JOIN_SCAN) {
-      StatusCode status = joinStage.materialize(block, output, sourceRow);
-      finalStore = status.isOk() ? output : null;
-      return status;
+      return executeJoin(block, input, output, sourceRow);
     }
     if (SqlBinder.isScalarAggregate(type)) {
-      StatusCode status = scalarStage.execute(
-          block, input, output, outputSortKey(block));
+      StatusCode status = fusedScalarJoin && block == fusedJoinBlock - 1
+          ? scalarStage.publishAccumulated(block, output)
+          : scalarStage.execute(block, input, output);
       finalStore = status.isOk() ? output : null;
       return status;
     }
     if (SqlBinder.isGroupAggregate(type)) {
-      StatusCode status = projectionStage.materialize(block, input, output, 0);
+      StatusCode status = projectionStage.materialize(block, input, output);
       if (!status.isOk()) return status;
       SqlBlockRowStore grouped = alternate(input, output);
-      status = groupedStage.execute(block, output, grouped, outputSortKey(block));
+      status = groupedStage.execute(block, output, grouped);
       finalStore = status.isOk() ? grouped : null;
       return status;
     }
-    StatusCode status = projectionStage.materialize(block, input, output,
-        type == SqlCommandType.DISTINCT_SCAN ? 0 : outputSortKey(block));
+    StatusCode status = projectionStage.materialize(block, input, output);
     if (!status.isOk()) return status;
     if (type != SqlCommandType.DISTINCT_SCAN) {
       finalStore = output;
@@ -124,9 +148,33 @@ final class SqlBlockStageRunner {
     return status;
   }
 
-  private int outputSortKey(int block) {
-    return block == 0 && bound.command.isOrdered()
-        ? bound.blockPlans().schema(block).find(bound.command.orderColumnName()) : -1;
+  private StatusCode executeJoin(
+      int block,
+      SqlBlockRowStore input,
+      SqlBlockRowStore output,
+      SqlBlockRow sourceRow) {
+    if (fusedScalarJoin && block == fusedJoinBlock) {
+      StatusCode status = joinStage.accumulateScalar(
+          accumulator, bound.joinedAggregates, sourceRow);
+      finalStore = null;
+      return status;
+    }
+    StatusCode status = joinStage.materialize(block, output, sourceRow);
+    if (!status.isOk() || bound.command.aggregateInvocationCount() == 0) {
+      finalStore = status.isOk() ? output : null;
+      return status;
+    }
+    return aggregateJoin(block, input, output);
+  }
+
+  private StatusCode aggregateJoin(
+      int block, SqlBlockRowStore input, SqlBlockRowStore operands) {
+    SqlBlockRowStore output = alternate(input, operands);
+    StatusCode status = bound.command.groupExpressionCount() > 0
+        ? groupedStage.execute(block, operands, output)
+        : scalarStage.executeJoined(block, operands, output);
+    finalStore = status.isOk() ? output : null;
+    return status;
   }
 
   private SqlBlockRowStore alternate(
@@ -136,17 +184,39 @@ final class SqlBlockStageRunner {
   }
 
   private long stageRows(int block) {
+    if (fusedScalarJoin && block == fusedJoinBlock) return joinStage.acceptedRows();
     if (finalStore == null) return 0;
     long count = finalStore.rowCount();
     return block == 0
         ? Math.min(count, bound.blockPlans().command(0).rowLimit()) : count;
   }
 
+  private StatusCode prepareFusedScalarJoin(SqlBoundBlockPlans plans) {
+    fusedScalarJoin = false;
+    fusedJoinBlock = -1;
+    if (!SqlScalarJoinFusionPolicy.admits(bound, plans)) return StatusCode.OK;
+    StatusCode status = bound.joinedAggregates.copyDirectFrom(
+        bound.aggregates, bound.projectionPrograms);
+    if (status.isOk()) {
+      status = SqlAggregateAccumulatorCapacity.reserve(
+          accumulator, bound.joinedAggregates);
+    }
+    if (status.isOk()) {
+      fusedScalarJoin = true;
+      fusedJoinBlock = 1;
+    }
+    return status;
+  }
+
   SqlBlockRowStore finalStore() { return finalStore; }
   boolean hasResources() { return source.hasResources(); }
 
   StatusCode close() {
-    StatusCode status = source.close();
+    StatusCode status = joinStage.close();
+    StatusCode sourceStatus = source.close();
+    if (status.isOk()) status = sourceStatus;
+    StatusCode distinct = accumulator.closeDistinct();
+    if (status.isOk()) status = distinct;
     accumulator.clearAll();
     projector.reset();
     having.reset();
@@ -155,6 +225,8 @@ final class SqlBlockStageRunner {
     groupedStage.reset();
     publisher.reset();
     finalStore = null;
+    fusedScalarJoin = false;
+    fusedJoinBlock = -1;
     return status;
   }
 }

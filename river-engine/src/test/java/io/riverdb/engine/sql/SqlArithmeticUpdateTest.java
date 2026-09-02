@@ -55,6 +55,7 @@ final class SqlArithmeticUpdateTest {
             "UPDATE accounts SET balance=adjustment+25 WHERE region=7",
             result));
     assertValue(session, result, "SELECT balance FROM accounts WHERE id=1", 100);
+    assertValue(session, result, "SELECT id FROM accounts WHERE balance=100", 1);
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("SELECT id FROM accounts WHERE balance=125", result));

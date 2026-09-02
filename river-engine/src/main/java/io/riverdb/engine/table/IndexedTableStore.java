@@ -6,27 +6,21 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
-import io.riverdb.storage.btree.BTreeLookupResult;
-import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.wal.local.LocalWal;
 import java.nio.ByteBuffer;
 
 /** Single-owner bounded page store whose WAL operations atomically cover heap and index state. */
-public final class IndexedTableStore {
+public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   public static final String FILE_NAME = "river.indexed.pages";
+  public static final String ROW_DIRECTORY_FILE_NAME = IndexedRowDirectory.FILE_NAME;
+  public static final String VERSION_DIRECTORY_FILE_NAME = IndexedVersionDirectory.FILE_NAME;
   public static final int WAL_FORMAT_ID = IndexedWalCodec.FORMAT_ID;
   public static final int WAL_FORMAT_VERSION = IndexedWalCodec.FORMAT_VERSION;
   public static final int MAX_PAGES = IndexedTableLimits.MAX_PAGES;
   public static final int MAX_CHANGED_PAGES = IndexedTableLimits.MAX_CHANGED_PAGES;
-  /** Legacy int-typed admission hint retained for source compatibility. */
-  public static final int MAX_ROWS = Integer.MAX_VALUE - 1;
-  /** Full logical row identity domain supported by indexed tables. */
-  public static final long MAX_LOGICAL_ROWS = IndexedTableLimits.MAX_ROWS;
   public static final int VACUUM_COMMIT_PAYLOAD_BYTES =
       IndexedWalCodec.VACUUM_COMMIT_PAYLOAD_BYTES;
 
-  private static final int HEAP_PAGE_ID = IndexedTableKernel.HEAP_PAGE_ID;
-  private static final int ROOT_META_PAGE_ID = IndexedTableKernel.ROOT_META_PAGE_ID;
   private static final long BOOTSTRAP_TRANSACTION_ID = 1;
   static final int MAX_OPERATION_ROWS = IndexedTableLimits.MAX_OPERATION_ROWS;
 
@@ -36,46 +30,60 @@ public final class IndexedTableStore {
   private final IndexedTableKernel kernel;
   private final IndexedCheckpointCoordinator checkpoints;
   private final IndexedWalRecovery recovery;
-  private final IndexedTableCommitCoordinator commits;
   private final IndexedPageOperationCommitter pageCommitter;
-  private final IndexedLogicalCommitter logicalCommitter;
-  private final IndexedPreparedCommitGroup preparedGroup;
-  private final IndexedVacuumCoordinator vacuumCoordinator;
-  private final IndexedPageSet pages = new IndexedPageSet();
-  private final IndexedStorePhase phase = new IndexedStorePhase();
-  private boolean failed;
+  private final IndexedPageSet pages;
+  private final IndexedLogicalRowIdRegistry logicalRowIds = new IndexedLogicalRowIdRegistry();
+  final IndexedStorePhase phase = new IndexedStorePhase();
+  boolean failed;
   private boolean closed;
   private boolean baseLoaded;
-  private volatile long lastCommitSequence;
+  volatile long lastCommitSequence;
 
   IndexedTableStore(
       DurableDirectory durableDirectory,
       DurableFile durableFile,
+      DurableFile rowDirectoryFile,
+      DurableFile versionDirectoryFile,
       LocalWal localWal,
       DatabaseIncarnation databaseIncarnation,
       WalGeneration generation) {
+    this(
+        durableDirectory, durableFile, rowDirectoryFile, versionDirectoryFile,
+        localWal, databaseIncarnation, generation, IndexedPageCacheConfig.DEFAULT);
+  }
+
+  IndexedTableStore(
+      DurableDirectory durableDirectory,
+      DurableFile durableFile,
+      DurableFile rowDirectoryFile,
+      DurableFile versionDirectoryFile,
+      LocalWal localWal,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration generation,
+      IndexedPageCacheConfig pageCacheConfig) {
     file = durableFile;
     wal = localWal;
     database = databaseIncarnation;
-    kernel = new IndexedTableKernel(pages);
+    pages = new IndexedPageSet(
+        file, versionDirectoryFile, database, generation, pageCacheConfig);
+    kernel = pages.createKernel(rowDirectoryFile, versionDirectoryFile);
     checkpoints = new IndexedCheckpointCoordinator(
-        durableDirectory, file, wal, kernel, pages, database, phase, generation);
-    recovery = new IndexedWalRecovery(wal, pages, kernel, database, phase);
-    commits = new IndexedTableCommitCoordinator(this, kernel);
+        durableDirectory, file, wal, kernel, pages,
+        kernel.versionState(), database, phase, generation, logicalRowIds);
+    recovery = new IndexedWalRecovery(wal, pages, kernel, database, phase, logicalRowIds);
+    initializeRelationalServices(
+        this, kernel, wal, pages, phase, recovery, logicalRowIds);
     pageCommitter = new IndexedPageOperationCommitter(wal, kernel, pages, phase, database);
-    logicalCommitter = new IndexedLogicalCommitter(wal, kernel, pages, phase);
-    preparedGroup = new IndexedPreparedCommitGroup(wal, kernel, recovery, phase);
-    vacuumCoordinator = new IndexedVacuumCoordinator(wal, kernel, pages, phase, recovery);
   }
 
   StatusCode initialize() {
-    StatusCode status = beginOperation();
+    StatusCode status = beginBootstrap();
     if (!status.isOk()) {
       return status;
     }
     status = kernel.initializePages();
     if (status.isOk()) {
-      status = commit(BOOTSTRAP_TRANSACTION_ID, nextCommitSequence());
+      status = commitBootstrap();
     }
     if (status.isOk()) {
       status = flush();
@@ -90,119 +98,86 @@ public final class IndexedTableStore {
     return kernel.validate();
   }
 
-  StatusCode insert(
-      long transactionId,
-      int space,
-      long key,
-      ByteBuffer row,
-      HeapInsertResult result) {
-    return commits.insert(transactionId, space, key, row, result);
+  StatusCode admitLogicalRowIds(long objectId, long publishedFloor) {
+    return logicalRowIds.admit(objectId, publishedFloor);
   }
 
-  StatusCode commitInsert(
-      long transactionId,
-      int space,
-      long key,
-      ByteBuffer row,
-      IndexedCommitResult result) {
-    return commits.commitInsert(transactionId, space, key, row, result);
+  StatusCode reserveLogicalRowIds(
+      long objectId, int count, IndexedLogicalRowIdReservation result) {
+    return logicalRowIds.reserve(objectId, count, result);
   }
 
-  StatusCode commitInserts(
-      long transactionId,
-      int[] spaces,
-      long[] keys,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int insertCount,
-      IndexedCommitResult result) {
-    return commits.commitInserts(
-        transactionId, spaces, keys, rows, rowStride, rowLengths, insertCount, result);
+  StatusCode preflightHybridGroup(
+      IndexedTransactionSession[] sessions, int count,
+      long oldestVisibleCommitSequence) {
+    return relationalServices().preflightHybridGroup(
+        sessions, count, oldestVisibleCommitSequence);
   }
 
-  StatusCode commitMutations(
-      long transactionId,
-      int[] operations,
-      int[] spaces,
-      long[] keys,
-      int[] previousRowIds,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int mutationCount,
-      IndexedCommitResult result) {
-    return commits.commitMutations(
-        transactionId,
-        operations,
-        spaces,
-        keys,
-        previousRowIds,
-        rows,
-        rowStride,
-        rowLengths,
-        mutationCount,
-        result);
+  StatusCode appendHybridGroup(
+      IndexedTransactionSession[] sessions, long[] commitSequences, int count) {
+    return relationalServices().appendHybridGroup(sessions, commitSequences, count);
   }
 
-  StatusCode commitMutations(
-      long transactionId,
-      PendingMutationBuffer mutations,
-      IndexedCommitResult result) {
-    return commits.commitMutations(transactionId, mutations, result);
+  StatusCode forceHybridGroup() {
+    return relationalServices().forceHybridGroup();
   }
 
-
-
-  StatusCode appendPreparedWrites(
-      long transactionId,
-      long commitSequence,
-      PendingMutationBuffer mutations,
-      HeapInsertResult result) {
-    return preparedGroup.append(transactionId, commitSequence, mutations, result);
+  StatusCode cancelCommitGroup() {
+    return relationalServices().cancelHybridGroup();
   }
 
-  StatusCode cancelPreparedInsertGroup() {
-    return cancelPreparedInsertPreflight();
+  boolean commitGroupDecisionAppended() {
+    return relationalServices().hybridDecisionAppended();
   }
 
-  StatusCode publishForcedGroup() {
-    return publishForcedInserts();
+  StatusCode prepareForcedGroupPublication() {
+    return relationalServices().prepareHybridGroupPublication();
   }
+
+  StatusCode installPreparedGroupPublication() {
+    return relationalServices().installHybridGroupPublication();
+  }
+
 
   StatusCode vacuum(long transactionId, IndexedVacuumResult result) {
-    return commits.vacuum(transactionId, result);
-  }
-
-  StatusCode insertCommitted(
-      long transactionId,
-      long commitSequence,
-      int space,
-      long key,
-      ByteBuffer row,
-      HeapInsertResult result) {
-    return commits.insertCommitted(
-        transactionId, commitSequence, space, key, row, result);
+    if (transactionId <= BOOTSTRAP_TRANSACTION_ID || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return commitVacuum(transactionId, nextCommitSequence(), result);
   }
 
 
 
   StatusCode fetchByKey(
-      int space, long key, io.riverdb.storage.heap.HeapRowResult result) {
+      long space, long key, io.riverdb.storage.heap.HeapRowResult result) {
     return kernel.fetchByKeyAt(lastCommitSequence, space, key, result);
   }
 
   StatusCode fetchByKeyAt(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       io.riverdb.storage.heap.HeapRowResult result) {
     return kernel.fetchByKeyAt(visibleCommitSequence, space, key, result);
   }
 
-  int firstLeafPageId(int space, long lowerKey) {
-    return kernel.findLeafPageId(space, lowerKey);
+  StatusCode fetchVersionedByKeyAt(
+      long visibleCommitSequence, long space, long key,
+      IndexedVersionedRowResult result) {
+    return kernel.fetchVersionedByKeyAt(visibleCommitSequence, space, key, result);
   }
+
+  StatusCode fetchCurrentSuccessor(
+      long space, long key, long candidateRowId, IndexedVersionedRowResult result) {
+    return kernel.fetchCurrentSuccessor(space, key, candidateRowId, result);
+  }
+
+  int firstLeafPageIdAt(long visibleCommitSequence, long space, long lowerKey) {
+    return kernel.findLeafPageIdAt(visibleCommitSequence, space, lowerKey);
+  }
+
+  StatusCode snapshotLookupStatus() { return kernel.snapshotLookupStatus(); }
 
   StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
     return kernel.nextScan(cursor, result);
@@ -210,7 +185,7 @@ public final class IndexedTableStore {
 
   StatusCode prepareMutation(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       IndexedMutationTarget result) {
     return kernel.prepareMutation(visibleCommitSequence, space, key, result);
@@ -218,7 +193,7 @@ public final class IndexedTableStore {
 
   StatusCode prepareInsert(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       IndexedMutationTarget result) {
     return kernel.prepareInsert(visibleCommitSequence, space, key, result);
@@ -226,6 +201,10 @@ public final class IndexedTableStore {
 
   int rootPageId() {
     return kernel.rootPageId();
+  }
+
+  int nextPageId() {
+    return kernel.nextPageId();
   }
 
   int pageCount() {
@@ -281,9 +260,9 @@ public final class IndexedTableStore {
         ? "" : FILE_NAME + ".checkpoint." + generation.value();
   }
 
-  StatusCode beginOperation() {
+  private StatusCode beginBootstrap() {
     StatusCode status = admission();
-    return status.isOk() ? pageCommitter.begin() : status;
+    return status.isOk() ? pageCommitter.beginBootstrap() : status;
   }
 
   StatusCode fetchRow(long rowId, io.riverdb.storage.heap.HeapRowResult result) {
@@ -308,215 +287,19 @@ public final class IndexedTableStore {
   }
 
   long remainingVersionCapacity() {
-    return (long) MAX_ROWS - kernel.rowCount();
+    return kernel.remainingVersionCapacity();
   }
 
-  StatusCode commit(long transactionId, long commitSequence) {
-    StatusCode status = pageCommitter.commit(
-        transactionId, commitSequence, lastCommitSequence, checkpoints.generation());
-    if (status.isOk()) {
-      lastCommitSequence = commitSequence;
-    }
-    return status;
+  private StatusCode commitBootstrap() {
+    long commitSequence = nextCommitSequence();
+    StatusCode status = pageCommitter.commitBootstrap(
+        commitSequence, checkpoints.generation());
+    if (!status.isOk()) return cancelSafePageFailure(status);
+    return published(status, commitSequence);
   }
 
-  /** Commits the common no-split heap/index insert as a compact logical operation. */
-  StatusCode commitInsert(
-      long transactionId,
-      long commitSequence,
-      int space,
-      long key,
-      ByteBuffer row,
-      HeapInsertResult result) {
-    if (!IndexedLogicalRequestValidator.validInsert(
-        transactionId, commitSequence, lastCommitSequence,
-        space, key, row, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = admission();
-    if (!status.isOk()) {
-      return status;
-    }
-    status = logicalCommitter.commitInsert(
-        transactionId, commitSequence, space, key, row, result);
-    if (status.isOk()) {
-      lastCommitSequence = commitSequence;
-    }
-    return status;
-  }
-
-  /** Commits multiple non-splitting inserts as one compact logical WAL record. */
-  StatusCode commitInsertBatch(
-      long transactionId,
-      long commitSequence,
-      PendingMutationBuffer mutations,
-      HeapInsertResult result) {
-    if (!IndexedLogicalRequestValidator.validPending(
-        transactionId, commitSequence, lastCommitSequence, mutations, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = admission();
-    if (!status.isOk()) {
-      return status;
-    }
-    status = logicalCommitter.commitInsertBatch(
-        transactionId, commitSequence, mutations, result);
-    if (status.isOk()) {
-      lastCommitSequence = commitSequence;
-    }
-    return status;
-  }
-
-  /** Commits multiple non-splitting inserts as one compact logical WAL record. */
-  StatusCode commitInsertBatch(
-      long transactionId,
-      long commitSequence,
-      int[] spaces,
-      long[] keys,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int insertCount,
-      HeapInsertResult result) {
-    if (!IndexedLogicalRequestValidator.validRawInsert(
-        transactionId,
-        commitSequence,
-        lastCommitSequence,
-        spaces,
-        keys,
-        rows,
-        rowStride,
-        rowLengths,
-        insertCount,
-        result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = admission();
-    if (!status.isOk()) {
-      return status;
-    }
-    status = logicalCommitter.commitInsertBatch(
-        transactionId,
-        commitSequence,
-        spaces,
-        keys,
-        rows,
-        rowStride,
-        rowLengths,
-        insertCount,
-        result);
-    if (status.isOk()) {
-      lastCommitSequence = commitSequence;
-    }
-    return status;
-  }
-
-  /** Starts bounded validation for a group of independent insert-only transactions. */
-  StatusCode beginPreparedInsertGroup() {
-    StatusCode status = admission();
-    return status.isOk() ? preparedGroup.begin() : status;
-  }
-
-  StatusCode preflightPreparedWrites(PendingMutationBuffer mutations) {
-    return preparedGroup.preflight(mutations);
-  }
-
-  StatusCode finishPreparedInsertPreflight(int transactionCount) {
-    return preparedGroup.finishPreflight(transactionCount);
-  }
-
-  /** Forces every prepared insert transaction without publishing any page or index state. */
-  StatusCode forcePreparedInserts() {
-    return preparedGroup.force();
-  }
-
-  /** Publishes an already-forced insert group in commit order. */
-  StatusCode publishForcedInserts() {
-    StatusCode status = preparedGroup.publish(checkpoints.generation(), lastCommitSequence);
-    if (status.isOk()) {
-      lastCommitSequence = preparedGroup.publishedCommitSequence();
-    }
-    return status;
-  }
-
-  StatusCode cancelPreparedInsertPreflight() {
-    return preparedGroup.cancel();
-  }
-
-  /** Commits a compact atomic mix of inserts, updates, and tombstone deletes. */
-  StatusCode commitMutationBatch(
-      long transactionId,
-      long commitSequence,
-      PendingMutationBuffer mutations,
-      HeapInsertResult result) {
-    if (!IndexedLogicalRequestValidator.validPending(
-        transactionId, commitSequence, lastCommitSequence, mutations, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = admission();
-    if (!status.isOk()) {
-      return status;
-    }
-    status = logicalCommitter.commitMutations(
-        transactionId, commitSequence, mutations, result);
-    if (status.isOk()) {
-      lastCommitSequence = commitSequence;
-    }
-    return status;
-  }
-
-  /** Commits a compact atomic mix of inserts, updates, and tombstone deletes. */
-  StatusCode commitMutationBatch(
-      long transactionId,
-      long commitSequence,
-      int[] operations,
-      int[] spaces,
-      long[] keys,
-      int[] expectedPreviousRowIds,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int mutationCount,
-      HeapInsertResult result) {
-    if (!IndexedLogicalRequestValidator.validRawMutation(
-        transactionId,
-        commitSequence,
-        lastCommitSequence,
-        operations,
-        spaces,
-        keys,
-        expectedPreviousRowIds,
-        rows,
-        rowStride,
-        rowLengths,
-        mutationCount,
-        result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = admission();
-    if (!status.isOk()) {
-      return status;
-    }
-    status = logicalCommitter.commitMutations(
-        transactionId,
-        commitSequence,
-        operations,
-        spaces,
-        keys,
-        expectedPreviousRowIds,
-        rows,
-        rowStride,
-        rowLengths,
-        mutationCount,
-        result);
-    if (status.isOk()) {
-      lastCommitSequence = commitSequence;
-    }
+  private StatusCode cancelSafePageFailure(StatusCode status) {
+    if (!pageCommitter.failed() && phase.operationActive()) cancelOperation();
     return status;
   }
 
@@ -531,19 +314,21 @@ public final class IndexedTableStore {
     result.reset();
     StatusCode status = admission();
     if (status.isOk()) {
-      status = vacuumCoordinator.commit(
+      status = relationalServices().commitVacuum(
           transactionId,
           commitSequence,
           lastCommitSequence,
           checkpoints.generation(),
           result);
     }
-    if (!status.isOk() && vacuumCoordinator.failureFences()) {
+    if (!status.isOk() && relationalServices().vacuumFailureFences()) {
       failed = true;
     }
-    if (status.isOk()) {
-      lastCommitSequence = commitSequence;
-    }
+    return published(status, commitSequence);
+  }
+
+  private StatusCode published(StatusCode status, long commitSequence) {
+    if (status.isOk()) lastCommitSequence = commitSequence;
     return status;
   }
 
@@ -559,7 +344,7 @@ public final class IndexedTableStore {
   /** Checks whether the current quiescent compaction fits one bounded WAL append batch. */
   StatusCode vacuumPreflight() {
     StatusCode status = admission();
-    return status.isOk() ? vacuumCoordinator.status() : status;
+    return status.isOk() ? relationalServices().vacuumStatus() : status;
   }
 
   StatusCode cancelOperation() {
@@ -567,10 +352,10 @@ public final class IndexedTableStore {
       return StatusCode.CONFLICT;
     }
     if (phase.vacuumOperationActive()) {
-      recovery.cancelVacuumOperation();
-      return StatusCode.OK;
+      return recovery.cancelVacuumOperation();
     }
     clearStagedFlags();
+    pages.cancelPreparedBatch();
     phase.reset();
     pages.resetChanges();
     kernel.clearOperationVersions();
@@ -578,13 +363,13 @@ public final class IndexedTableStore {
   }
 
   StatusCode flush() {
-    StatusCode status = admission();
+    StatusCode status = validatedAdmission();
     return status.isOk() ? checkpoints.flush() : status;
   }
 
   /** Forces an immutable zero-suffix page base in the next WAL lineage. */
   public StatusCode rebaseForCheckpoint(WalGeneration nextGeneration) {
-    StatusCode status = admission();
+    StatusCode status = validatedAdmission();
     return status.isOk() ? checkpoints.rebase(nextGeneration) : status;
   }
 
@@ -592,7 +377,9 @@ public final class IndexedTableStore {
       CheckpointState state,
       long checkpointId,
       long maximumTransactionId) {
-    return checkpoints.capture(state, checkpointId, maximumTransactionId);
+    StatusCode status = validatedAdmission();
+    return status.isOk()
+        ? checkpoints.capture(state, checkpointId, maximumTransactionId) : status;
   }
 
   long stagedCopyBytes() {
@@ -601,9 +388,12 @@ public final class IndexedTableStore {
 
   long walCopyBytes() {
     return pageCommitter.copiedBytes()
-        + logicalCommitter.walCopyBytes()
-        + preparedGroup.walCopyBytes()
-        + vacuumCoordinator.copiedBytes();
+        + relationalServices().walCopiedPayloadBytes()
+        + relationalServices().vacuumCopiedBytes();
+  }
+
+  long relationalCompilationCopyBytes() {
+    return relationalServices().compilationCopiedPayloadBytes();
   }
 
   int highestPageId() {
@@ -622,41 +412,39 @@ public final class IndexedTableStore {
     return wal.nextTransactionId();
   }
 
-  long rowCommitSequence(int rowId) {
-    return kernel.rowCommitSequence(rowId);
-  }
-
-  long previousRowId(long rowId) {
-    return kernel.previousRowId(rowId);
-  }
-
-  boolean isDeletedRow(int rowId) {
-    return kernel.isDeletedRow(rowId);
+  StatusCode readVersion(long rowId, IndexedVersionRecord result) {
+    return kernel.readVersion(rowId, result);
   }
 
   public StatusCode close() {
     if (closed) {
       return StatusCode.CLOSED;
     }
-    if (phase.operationActive() || phase.preparedInsertGroupActive() || hasDirtyPages()) {
+    if (phase.operationActive() || phase.commitGroupActive() || hasDirtyPages()) {
       return StatusCode.CONFLICT;
     }
     closed = true;
     kernel.closeCheckpointVersions();
-    return file.close();
+    StatusCode sidecarClose = kernel.closeSidecars();
+    StatusCode fileClose = file.close();
+    return sidecarClose.isOk() ? fileClose : sidecarClose;
   }
 
   StatusCode recoverFromWal() {
     StatusCode status = recovery.recover(
         checkpoints.generation(), baseLoaded, lastCommitSequence);
+    if (status.isOk()) status = kernel.validate();
     if (status.isOk()) {
       lastCommitSequence = recovery.recoveredCommitSequence();
     }
     return status;
   }
 
+  WalGeneration walGeneration() { return checkpoints.generation(); }
+
   StatusCode loadCheckpoint(CheckpointState checkpoint) {
-    StatusCode status = checkpoints.load(checkpoint);
+    StatusCode status = loadLogicalRowIdFloors(checkpoint);
+    if (status.isOk()) status = checkpoints.load(checkpoint);
     if (!status.isOk()) {
       return status;
     }
@@ -665,45 +453,52 @@ public final class IndexedTableStore {
     return StatusCode.OK;
   }
 
-  boolean canAppendEncodedRows(
-      ByteBuffer payload,
-      int firstEntryOffset,
-      int count,
-      int rowLengthOffset,
-      int entryBytes) {
-    return kernel.canAppendEncodedRows(
-        payload, firstEntryOffset, count, rowLengthOffset, entryBytes);
-  }
-
-  private boolean addChangedPage(int pageId) {
-    int maximumChangedPages = phase.vacuumOperationActive() ? MAX_PAGES : MAX_CHANGED_PAGES;
-    return pages.addChangedPage(pageId, maximumChangedPages);
+  private StatusCode loadLogicalRowIdFloors(CheckpointState checkpoint) {
+    if (checkpoint == null || checkpoint.logicalRowIdSource() == null) {
+      return StatusCode.CORRUPTION;
+    }
+    io.riverdb.engine.checkpoint.CheckpointLogicalRowIdSource source =
+        checkpoint.logicalRowIdSource();
+    source.rewind();
+    for (int index = 0; index < source.floorCount(); index++) {
+      long objectId = source.nextObjectId();
+      long floor = source.nextExclusive();
+      StatusCode status = logicalRowIds.load(objectId, floor);
+      if (!status.isOk()) return status == StatusCode.INVALID_EXTERNAL_INPUT
+          ? StatusCode.CORRUPTION : status;
+    }
+    return source.nextObjectId() == -1 ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 
   private void clearStagedFlags() {
     pages.clearStagedFlags();
   }
 
-  private boolean validPresentPage(int pageId) {
-    return pages.validPresentPage(pageId);
-  }
-
   private boolean hasDirtyPages() {
-    return pages.hasDirtyPages();
+    return pages.hasDirtyPages() || kernel.sidecarsDirty();
   }
 
-  private StatusCode admission() {
-    if (failed
-        || pageCommitter.failed()
-        || logicalCommitter.failed()
-        || checkpoints.failed()
-        || preparedGroup.failed()) {
-      return StatusCode.FENCED;
-    }
-    return closed ? StatusCode.CLOSED : StatusCode.OK;
+  StatusCode admission() {
+    return IndexedTableAdmission.status(
+        kernel.rowDirectoryStatus(),
+        kernel.versionDirectoryStatus(),
+        failed,
+        pageCommitter.failed(),
+        checkpoints.failed(),
+        closed);
+  }
+
+  @Override
+  StatusCode relationalAdmission() { return admission(); }
+
+  private StatusCode validatedAdmission() {
+    StatusCode status = admission();
+    return status.isOk() ? kernel.validate() : status;
   }
 
   void closeOpenFile() {
+    kernel.closeSidecars();
+    pages.closeStagingFile();
     file.close();
   }
 

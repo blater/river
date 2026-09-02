@@ -12,14 +12,8 @@ import io.riverdb.sql.SqlQuery;
 final class BoundSqlQuery {
   static final int MAXIMUM_BLOCKS = SqlQuery.MAXIMUM_QUERY_BLOCKS;
   static final int MAXIMUM_PREDICATES = SqlCommand.MAXIMUM_PREDICATES;
-  private final Block[] blocks = new Block[MAXIMUM_BLOCKS];
-  private final byte[] edgeKinds = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] edgeParents = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] edgeLeaves = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] edgeChildren = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final boolean[] edgeNegated = new boolean[SqlQuery.MAXIMUM_EDGES];
-  private final SqlComparison[] edgeComparisons = new SqlComparison[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] blockDepths = new byte[MAXIMUM_BLOCKS];
+  private final SqlBoundQueryBlocks blocks;
+  private final SqlBoundQueryTopology topology;
   private int blockCount;
   private int sourceBlockCount;
   private int edgeCount;
@@ -30,15 +24,17 @@ final class BoundSqlQuery {
   private boolean analyze;
 
   BoundSqlQuery() {
-    for (int index = 0; index < blocks.length; index++) {
-      blocks[index] = new Block();
-    }
+    this(new SqlSessionShapeBudget(null));
+  }
+
+  BoundSqlQuery(SqlSessionShapeBudget shapeBudget) {
+    blocks = new SqlBoundQueryBlocks(shapeBudget);
+    topology = new SqlBoundQueryTopology(shapeBudget);
   }
 
   void reset() {
     for (int index = 0; index < blockCount; index++) {
-      blocks[index].resetCaptured();
-      blockDepths[index] = 0;
+      blocks.get(index).resetCaptured();
     }
     blockCount = 0;
     sourceBlockCount = 0;
@@ -46,14 +42,7 @@ final class BoundSqlQuery {
     executableGeneration = 0;
     explain = false;
     analyze = false;
-    for (int edge = 0; edge < edgeCount; edge++) {
-      edgeKinds[edge] = 0;
-      edgeParents[edge] = 0;
-      edgeLeaves[edge] = 0;
-      edgeChildren[edge] = 0;
-      edgeNegated[edge] = false;
-      edgeComparisons[edge] = null;
-    }
+    topology.reset(edgeCount);
     edgeCount = 0;
   }
 
@@ -64,10 +53,10 @@ final class BoundSqlQuery {
   void beginBinding(TableDefinition rootTable, int rootBlock) {
     executableGeneration = 0;
     for (int index = 0; index < blockCount; index++) {
-      blocks[index].resetBinding();
+      blocks.get(index).resetBinding();
     }
     if (rootBlock >= 0 && rootBlock < blockCount) {
-      blocks[rootBlock].bindRootTable(rootTable);
+      blocks.get(rootBlock).bindRootTable(rootTable);
     }
   }
 
@@ -75,7 +64,7 @@ final class BoundSqlQuery {
     long generation = nextGeneration == Long.MAX_VALUE ? 1 : nextGeneration + 1;
     nextGeneration = generation;
     for (int index = 0; index < blockCount; index++) {
-      blocks[index].publishBinding(generation);
+      blocks.get(index).publishBinding(generation);
     }
     executableGeneration = generation;
   }
@@ -98,51 +87,46 @@ final class BoundSqlQuery {
     int parserBlockCount = query.blockCount();
     sourcePlanDepth = query.sourcePlanDepth();
     boolean nestedTopology = query.hasNestedTopology();
-    blockCount = nestedTopology ? Math.max(1, parserBlockCount) : 1;
-    sourceBlockCount = nestedTopology ? query.sourceBlockCount() : 1;
-    captureEdges(query);
-    StatusCode status = blocks[0].capture(root);
-    if (nestedTopology && status.isOk()) {
+    boolean capturedPipeline = nestedTopology || query.isBlockPipeline();
+    int capturedBlocks = capturedPipeline ? Math.max(1, parserBlockCount) : 1;
+    StatusCode status = reserveBlocks(capturedBlocks);
+    if (!status.isOk()) return status;
+    status = topology.capture(query, capturedBlocks);
+    if (!status.isOk()) return status;
+    if (capturedPipeline) {
       status = captureNestedBlocks(query, parserBlockCount);
     }
     // The compiled root can differ from query block zero after view/derived
     // expansion; it is the authoritative executable root.
-    if (status.isOk()) {
-      blocks[0].blockIndex = 0;
-    }
-    return status.isOk() ? blocks[0].capture(root) : status;
+    if (status.isOk()) status = blocks.get(0).capture(root);
+    if (!status.isOk()) return status;
+    blocks.get(0).blockIndex = 0;
+    blockCount = capturedBlocks;
+    sourceBlockCount = capturedPipeline ? query.sourceBlockCount() : 1;
+    edgeCount = query.edgeCount();
+    return StatusCode.OK;
   }
 
   private StatusCode captureNestedBlocks(SqlQuery query, int parserBlockCount) {
     for (int index = 0; index < parserBlockCount; index++) {
-      StatusCode status = blocks[index].capture(query.block(index));
+      StatusCode status = blocks.get(index).capture(query.block(index));
       if (!status.isOk()) return status;
-      blocks[index].blockIndex = index;
-      blockDepths[index] = (byte) query.blockDepth(index);
+      blocks.get(index).blockIndex = index;
+      topology.depth(index, query.blockDepth(index));
     }
     return StatusCode.OK;
   }
 
-  private void captureEdges(SqlQuery query) {
-    edgeCount = query.edgeCount();
-    for (int edge = 0; edge < edgeCount; edge++) {
-      edgeKinds[edge] = (byte) query.edgeKind(edge);
-      edgeParents[edge] = (byte) query.edgeParent(edge);
-      edgeLeaves[edge] = (byte) query.edgeLeaf(edge);
-      edgeChildren[edge] = (byte) query.edgeChild(edge);
-      edgeNegated[edge] = query.block(query.edgeParent(edge))
-          .wherePredicates().leafNegated(query.edgeLeaf(edge));
-      edgeComparisons[edge] = query.block(query.edgeParent(edge))
-          .wherePredicates().comparison(query.edgeLeaf(edge));
-    }
+  private StatusCode reserveBlocks(int required) {
+    return blocks.reserve(required);
   }
 
   Block root() {
-    return blocks[0];
+    return blocks.get(0);
   }
 
   Block block(int index) {
-    return index >= 0 && index < blockCount ? blocks[index] : null;
+    return index >= 0 && index < blockCount ? blocks.get(index) : null;
   }
 
   int blockCount() {
@@ -151,29 +135,29 @@ final class BoundSqlQuery {
 
   int sourceBlockCount() { return sourceBlockCount; }
   int edgeCount() { return edgeCount; }
-  int edgeKind(int edge) { return validEdge(edge) ? Byte.toUnsignedInt(edgeKinds[edge]) : 0; }
-  int edgeParent(int edge) { return validEdge(edge) ? Byte.toUnsignedInt(edgeParents[edge]) : -1; }
-  int edgeLeaf(int edge) { return validEdge(edge) ? edgeLeaves[edge] : -1; }
-  int edgeChild(int edge) { return validEdge(edge) ? edgeChildren[edge] : -1; }
+  int edgeKind(int edge) { return validEdge(edge) ? topology.kind(edge) : 0; }
+  int edgeParent(int edge) { return validEdge(edge) ? topology.parent(edge) : -1; }
+  int edgeLeaf(int edge) { return validEdge(edge) ? topology.leaf(edge) : -1; }
+  int edgeChild(int edge) { return validEdge(edge) ? topology.child(edge) : -1; }
   SqlComparison edgeComparison(int edge) {
-    return validEdge(edge) ? edgeComparisons[edge] : null;
+    return validEdge(edge) ? topology.comparison(edge) : null;
   }
   boolean edgeNegated(int edge) {
-    return validEdge(edge) && edgeNegated[edge];
+    return validEdge(edge) && topology.negated(edge);
   }
   int blockParent(int block) {
     for (int edge = 0; edge < edgeCount; edge++) {
-      if (Byte.toUnsignedInt(edgeChildren[edge]) == block) {
-        return Byte.toUnsignedInt(edgeParents[edge]);
+      if (topology.child(edge) == block) {
+        return topology.parent(edge);
       }
     }
     return -1;
   }
   int blockDepth(int block) {
-    return block >= 0 && block < blockCount ? Byte.toUnsignedInt(blockDepths[block]) : 0;
+    return block >= 0 && block < blockCount ? topology.depth(block) : 0;
   }
   void markCorrelated(int block, int scope) {
-    if (block >= 0 && block < blockCount) blocks[block].markCorrelated(scope);
+    if (block >= 0 && block < blockCount) blocks.get(block).markCorrelated(scope);
   }
 
   int sourcePlanDepth() {
@@ -183,7 +167,7 @@ final class BoundSqlQuery {
   int planDepth() {
     int nested = 0;
     for (int block = 0; block < blockCount; block++) {
-      nested = Math.max(nested, Byte.toUnsignedInt(blockDepths[block]));
+      nested = Math.max(nested, topology.depth(block));
     }
     return sourcePlanDepth + Math.max(0, nested - 1);
   }
@@ -199,27 +183,17 @@ final class BoundSqlQuery {
   private boolean validEdge(int edge) { return edge >= 0 && edge < edgeCount; }
 
   static final class Block {
-    private final SqlBoundName[] columnNames = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
-    private final SqlBoundName[] columnTables = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
-    private final SqlBoundName[] columnOutputs = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
-    private final SqlBoundName[] columnAliases = new SqlBoundName[SqlCommand.MAXIMUM_COLUMNS];
-    private final boolean[] nullProjections = new boolean[SqlCommand.MAXIMUM_COLUMNS];
+    private final SqlBoundQueryBlockSnapshot snapshot;
     private SqlCommandType type;
     private final SqlBoundName tableName = new SqlBoundName();
     private final SqlBoundName tableAlias = new SqlBoundName();
-    private SqlJoinChain joinChain;
     private final SqlBoundName orderColumnName = new SqlBoundName();
     private int columnCount;
     private long rowLimit;
     private boolean selectAll;
     private boolean ordered;
     private boolean descending;
-    private final TableDefinition[] roleTables =
-        new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-    private final TableDefinition[] ownedRoleTables =
-        new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-    private final boolean[] ownsRoleTable =
-        new boolean[SqlJoinChain.MAXIMUM_JOIN_ROLES];
+    private final SqlBoundRoleTables roleTables;
     private int projection = -1;
     private int projectionType;
     private long boundGeneration;
@@ -227,28 +201,22 @@ final class BoundSqlQuery {
     private boolean correlated;
     private int correlationScope = -1;
 
-    Block() {
-      for (int index = 0; index < SqlCommand.MAXIMUM_COLUMNS; index++) {
-        columnNames[index] = new SqlBoundName();
-        columnTables[index] = new SqlBoundName();
-        columnOutputs[index] = new SqlBoundName();
-        columnAliases[index] = new SqlBoundName();
-      }
+    Block(SqlSessionShapeBudget budget) {
+      snapshot = new SqlBoundQueryBlockSnapshot(budget);
+      roleTables = new SqlBoundRoleTables(budget);
     }
 
     StatusCode capture(SqlCommand source) {
       if (source == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      for (int index = 0; index < SqlCommand.MAXIMUM_COLUMNS; index++) {
-        columnNames[index].copyFrom("");
-        columnTables[index].copyFrom("");
-        columnOutputs[index].copyFrom("");
-        columnAliases[index].copyFrom("");
-        nullProjections[index] = false;
-      }
-      type = source.type();
+      SqlJoinChain joins = source.joinChain();
+      int roles = joins == null || joins.stageCount() == 0 ? 1 : joins.roleCount();
+      StatusCode status = roleTables.reserve(roles);
+      if (status.isOk()) status = snapshot.capture(source);
+      if (!status.isOk()) return status;
       boolean joined = source.joinChain() != null;
+      type = source.type();
       if (joined) {
         tableName.copyFrom("");
         tableAlias.copyFrom("");
@@ -256,39 +224,22 @@ final class BoundSqlQuery {
         tableName.copyFrom(source.tableName());
         tableAlias.copyFrom(source.tableAlias());
       }
-      if (source.joinChain() != null) {
-        if (joinChain == null) joinChain = new SqlJoinChain();
-        joinChain.copyFrom(source.joinChain());
-      } else if (joinChain != null) joinChain.reset();
       orderColumnName.copyFrom(source.orderColumnName());
       columnCount = source.columnCount();
       rowLimit = source.rowLimit();
       selectAll = source.isSelectAll();
       ordered = source.isOrdered();
       descending = source.isDescendingOrder();
-      for (int index = 0; index < columnCount; index++) {
-        columnNames[index].copyFrom(source.columnName(index));
-        columnTables[index].copyFrom(source.columnTableName(index));
-        columnOutputs[index].copyFrom(source.columnOutputName(index));
-        columnAliases[index].copyFrom(source.columnAlias(index));
-        nullProjections[index] = source.isNullProjection(index);
-      }
       return StatusCode.OK;
     }
 
     private void resetCaptured() {
-      if (joinChain != null) joinChain.reset();
+      snapshot.reset();
       resetBinding();
     }
 
     void resetBinding() {
-      for (int role = 0; role < roleTables.length; role++) {
-        if (ownsRoleTable[role] && roleTables[role] != null) {
-          roleTables[role].reset();
-        }
-        roleTables[role] = null;
-        ownsRoleTable[role] = false;
-      }
+      roleTables.reset();
       projection = -1;
       projectionType = 0;
       boundGeneration = 0;
@@ -301,24 +252,15 @@ final class BoundSqlQuery {
     }
 
     TableDefinition writableTable(int role) {
-      if (role < 0 || role >= roleTables.length) return null;
-      if (ownedRoleTables[role] == null) {
-        ownedRoleTables[role] = new TableDefinition();
-      }
-      ownedRoleTables[role].reset();
-      roleTables[role] = ownedRoleTables[role];
-      ownsRoleTable[role] = true;
-      return ownedRoleTables[role];
+      return roleTables.writable(role);
     }
 
     void bindRoleTable(int role, TableDefinition definition) {
-      if (role < 0 || role >= roleTables.length) return;
-      if (ownsRoleTable[role] && roleTables[role] != null) {
-        roleTables[role].reset();
-      }
-      roleTables[role] = definition;
-      ownsRoleTable[role] = false;
+      roleTables.bind(role, definition);
     }
+
+    void markDescriptorRole(int role) { roleTables.markDescriptor(role); }
+    boolean descriptorRole(int role) { return roleTables.descriptor(role, roleCount()); }
 
     void setProjection(int column, int descriptor) {
       projection = column;
@@ -334,18 +276,21 @@ final class BoundSqlQuery {
     boolean isBound(long generation) { return generation != 0 && boundGeneration == generation; }
     TableDefinition table() { return table(0); }
     TableDefinition table(int role) {
-      return role >= 0 && role < roleCount() ? roleTables[role] : null;
+      return roleTables.get(role, roleCount());
     }
-    int roleCount() { return joinChain() == null ? 1 : joinChain.roleCount(); }
+    int roleCount() {
+      SqlJoinChain join = joinChain();
+      return join == null ? 1 : join.roleCount();
+    }
     CharSequence roleTableName(int role) {
-      return joinChain() == null ? role == 0 ? tableName : ""
-          : role >= 0 && role < joinChain.roleCount()
-              ? joinChain.tableName(role) : "";
+      SqlJoinChain join = joinChain();
+      return join == null ? role == 0 ? tableName : ""
+          : role >= 0 && role < join.roleCount() ? join.tableName(role) : "";
     }
     CharSequence roleAlias(int role) {
-      return joinChain() == null ? role == 0 ? tableAlias : ""
-          : role >= 0 && role < joinChain.roleCount()
-              ? joinChain.alias(role) : "";
+      SqlJoinChain join = joinChain();
+      return join == null ? role == 0 ? tableAlias : ""
+          : role >= 0 && role < join.roleCount() ? join.alias(role) : "";
     }
     int projection() { return projection; }
     int projectionType() { return projectionType; }
@@ -355,22 +300,25 @@ final class BoundSqlQuery {
 
     SqlCommandType type() { return type; }
     CharSequence tableName() {
-      return joinChain() == null ? tableName : joinChain.tableName(0);
+      SqlJoinChain join = joinChain();
+      return join == null ? tableName : join.tableName(0);
     }
     CharSequence tableAlias() {
-      return joinChain() == null ? tableAlias : joinChain.alias(0);
+      SqlJoinChain join = joinChain();
+      return join == null ? tableAlias : join.alias(0);
     }
     SqlJoinChain joinChain() {
-      return joinChain != null && joinChain.stageCount() > 0 ? joinChain : null;
+      SqlJoinChain join = snapshot.join();
+      return join != null && join.stageCount() > 0 ? join : null;
     }
     CharSequence orderColumnName() { return orderColumnName; }
     int columnCount() { return columnCount; }
     CharSequence firstColumnName() { return columnName(0); }
-    CharSequence columnName(int index) { return columnNames[index]; }
-    CharSequence columnTableName(int index) { return columnTables[index]; }
-    CharSequence columnOutputName(int index) { return columnOutputs[index]; }
-    CharSequence columnAlias(int index) { return columnAliases[index]; }
-    boolean isNullProjection(int index) { return nullProjections[index]; }
+    CharSequence columnName(int index) { return snapshot.name(index); }
+    CharSequence columnTableName(int index) { return snapshot.table(index); }
+    CharSequence columnOutputName(int index) { return snapshot.output(index); }
+    CharSequence columnAlias(int index) { return snapshot.alias(index); }
+    boolean isNullProjection(int index) { return snapshot.isNull(index); }
     boolean isSelectAll() { return selectAll; }
     boolean isOrdered() { return ordered; }
     boolean isDescendingOrder() { return descending; }

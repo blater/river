@@ -4,24 +4,30 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.LocalTemporal;
 import io.riverdb.base.type.LocalTemporalCast;
+import io.riverdb.base.type.SqlNumericTypeRules;
+import io.riverdb.base.type.SqlNumericValue;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 
 /** Evaluates persisted deterministic CHECK programs against a candidate row. */
 final class TableCheckEvaluator {
-  private final long[] values = new long[TableSchema.MAXIMUM_CHECK_NODES];
-  private final int[] descriptors = new int[TableSchema.MAXIMUM_CHECK_NODES];
-  private final boolean[] nulls = new boolean[TableSchema.MAXIMUM_CHECK_NODES];
+  private final TableCheckStack stack = new TableCheckStack();
   private final LocalTemporal.Value temporal = new LocalTemporal.Value();
   private int size;
 
   StatusCode evaluate(TableDefinition table, long primaryKey, ByteBuffer row) {
+    StatusCode status = stack.reserve(table.checkNodeCount());
+    return status.isOk() ? evaluatePrepared(table, primaryKey, row) : status;
+  }
+
+  private StatusCode evaluatePrepared(
+      TableDefinition table, long primaryKey, ByteBuffer row) {
     for (int column = 0; column < table.columnCount(); column++) {
       if (!table.hasCheck(column)) continue;
       StatusCode status = program(table, column, primaryKey, row);
       if (!status.isOk()) return status;
-      if (!nulls[0] && !matches(
-          values[0], descriptors[0], table.checkComparison(column),
+      if (!stack.nulls[0] && !matches(
+          stack.values[0], stack.descriptors[0], table.checkComparison(column),
           table.checkValue(column), table.checkTypeDescriptor(column))) {
         return StatusCode.CHECK_VIOLATION;
       }
@@ -57,17 +63,17 @@ final class TableCheckEvaluator {
       int node,
       long primaryKey,
       ByteBuffer row) {
-    if (size >= values.length) return StatusCode.CORRUPTION;
+    if (size >= stack.values.length) return StatusCode.CORRUPTION;
     int operator = table.checkOperator(column, node);
     int descriptor = table.checkNodeDescriptor(column, node);
-    nulls[size] = operator == TableSchema.CHECK_COLUMN
+    stack.nulls[size] = operator == TableSchema.CHECK_COLUMN
         && column > 0 && table.isNull(row, column);
-    descriptors[size] = descriptor;
-    values[size] = operator == TableSchema.CHECK_LITERAL
+    stack.descriptors[size] = descriptor;
+    stack.values[size] = operator == TableSchema.CHECK_LITERAL
         ? table.checkOperand(column, node)
-        : nulls[size] ? 0 : column == 0
+        : stack.nulls[size] ? 0 : column == 0
             ? primaryKey
-            : row.getLong(row.position() + (column - 1) * Long.BYTES);
+            : row.getLong(row.position() + table.valueOffset(column));
     size++;
     return StatusCode.OK;
   }
@@ -76,20 +82,20 @@ final class TableCheckEvaluator {
     if (size < 2) return StatusCode.CORRUPTION;
     int right = --size;
     int left = size - 1;
-    if (nulls[left] || nulls[right]) {
-      nulls[left] = true;
-      descriptors[left] = target;
+    if (stack.nulls[left] || stack.nulls[right]) {
+      stack.nulls[left] = true;
+      stack.descriptors[left] = target;
       return StatusCode.OK;
     }
     StatusCode status = operator == TableSchema.CHECK_ADD
-        ? LocalTemporal.addDateDays(values[left], values[right], temporal)
-        : SqlTypeDescriptor.typeId(descriptors[right])
+        ? LocalTemporal.addDateDays(stack.values[left], stack.values[right], temporal)
+        : SqlTypeDescriptor.typeId(stack.descriptors[right])
                 == SqlTypeDescriptor.TYPE_ID_DATE
-            ? LocalTemporal.subtractDates(values[left], values[right], temporal)
-            : LocalTemporal.subtractDateDays(values[left], values[right], temporal);
+            ? LocalTemporal.subtractDates(stack.values[left], stack.values[right], temporal)
+            : LocalTemporal.subtractDateDays(stack.values[left], stack.values[right], temporal);
     if (status.isOk()) {
-      values[left] = temporal.value;
-      descriptors[left] = target;
+      stack.values[left] = temporal.value;
+      stack.descriptors[left] = target;
     }
     return status;
   }
@@ -97,18 +103,20 @@ final class TableCheckEvaluator {
   private StatusCode unary(int operator, long operand, int target) {
     if (size < 1) return StatusCode.CORRUPTION;
     int slot = size - 1;
-    if (nulls[slot]) {
-      descriptors[slot] = target;
+    if (stack.nulls[slot]) {
+      stack.descriptors[slot] = target;
       return StatusCode.OK;
     }
     StatusCode status = operator == TableSchema.CHECK_CAST
-        ? LocalTemporalCast.castFixed(values[slot], descriptors[slot], target, temporal)
+        ? LocalTemporalCast.castFixed(
+            stack.values[slot], stack.descriptors[slot], target, temporal)
         : operator == TableSchema.CHECK_EXTRACT
-            ? LocalTemporal.extract(values[slot], descriptors[slot], (int) operand, temporal)
+            ? LocalTemporal.extract(
+                stack.values[slot], stack.descriptors[slot], (int) operand, temporal)
             : StatusCode.CORRUPTION;
     if (status.isOk()) {
-      values[slot] = temporal.value;
-      descriptors[slot] = target;
+      stack.values[slot] = temporal.value;
+      stack.descriptors[slot] = target;
     }
     return status;
   }
@@ -124,6 +132,10 @@ final class TableCheckEvaluator {
             || SqlTypeDescriptor.typeId(requiredDescriptor)
                 == SqlTypeDescriptor.TYPE_ID_DECIMAL
         ? ExactDecimal.compare(actual, actualDescriptor, required, requiredDescriptor)
+        : SqlNumericTypeRules.isNumeric(actualDescriptor)
+            && SqlNumericTypeRules.isNumeric(requiredDescriptor)
+            ? SqlNumericValue.compare(
+                actual, actualDescriptor, required, requiredDescriptor)
         : Long.compare(actual, required);
     return switch (comparison) {
       case TableSchema.CHECK_EQUAL -> compared == 0;

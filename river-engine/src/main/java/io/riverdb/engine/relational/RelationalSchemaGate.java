@@ -110,4 +110,8 @@ final class RelationalSchemaGate {
   long version() {
     return schemaVersion;
   }
+
+  boolean matchesVersion(long expected) {
+    return expected > 0 && schemaVersion == expected;
+  }
 }

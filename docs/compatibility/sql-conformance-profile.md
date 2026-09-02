@@ -18,16 +18,17 @@ and error behavior satisfy the applicable fixtures.
 
 ## Current and target type surface
 
-The current implementation supports `BIGINT`, `BOOLEAN`, `DECIMAL(p,s)`,
-`VARCHAR(n)`, `DATE`, `TIME(p)`, local `TIMESTAMP(p)`, and
+The current implementation supports `SMALLINT`, `INTEGER`, `BIGINT`,
+`DECIMAL(p,s)`, `REAL`, `DOUBLE PRECISION`, `BOOLEAN`, `VARCHAR(n)`, `DATE`,
+`TIME(p)`, local `TIMESTAMP(p)`, and
 `TIMESTAMP(p) WITH TIME ZONE`, including session zones and statement-stable
 current values. U02f has accepted raw temporal values through projection,
 joins, grouping, `HAVING`, distinct/order, sort spill, view/derived/nested
 queries, checkpoint-base/WAL replay, backup/restore, and warmed allocation
 paths. The accepted P4A contract uses one bounded Boolean predicate program at
 the direct root and at every cardinality-changing derived-table or durable-view
-stage. Each program admits at most eight leaves, 32 shared scalar postfix
-nodes, 32 Boolean control nodes, depth 16, and 256 shared membership values.
+stage. Each program admits at most 4,096 leaves, 16,384 shared scalar postfix
+nodes, 16,384 Boolean control nodes, depth 64, and 256 shared membership values.
 It implements `NOT`, parentheses, SQL `AND`-before-`OR` three-valued logic,
 bare Boolean truth, `IS [NOT] TRUE`/`FALSE`/`UNKNOWN`/`NULL`, and all six
 comparisons with scalar expressions on both sides. Inclusive `BETWEEN` bounds
@@ -38,10 +39,9 @@ Computed scalar-aggregate operands and filtering, plus filtering before raw
 direct-root grouping key may
 also feed one column-bearing primitive computed aggregate operand. Direct-root
 scalar and grouped aggregates may apply a bounded post-aggregate `HAVING`
-clause. Up to eight structurally deduplicated aggregate invocations feed at
-most eight predicate leaves sharing 32 postfix nodes and 256 membership values;
-grouped execution reserves its first physical lane for the key and therefore
-admits seven operand-bearing invocations plus lane-free `COUNT(*)`. Predicates
+clause. Up to 1,664 structurally deduplicated aggregate invocations and 1,664
+grouping/result lanes use the same dynamically reserved, session-owned shape;
+`COUNT(*)` remains lane-free until result publication. Predicates
 use SQL `AND`-before-`OR` three-valued logic and admit the six comparisons,
 `IS [NOT] NULL`, inclusive `BETWEEN`, and `IN`/`NOT IN`. Unique selected
 aliases, the raw group key or its alias, and exact repeated or hidden aggregate
@@ -69,15 +69,15 @@ all fixed-width and UTF-8 results are copied into an owned stage row before
 the child advances. Execution accumulates each stage once from the deepest
 source outward and publishes no outer row until every intermediate stage has
 succeeded. Two lazy spill-backed stores alternate between stages; each store
-admits at most 65,536 rows and 256 MiB of encoded rows, sort keys, and retained
+admits at most 65,536 rows and 256 MB of encoded rows, sort keys, and retained
 index arenas, returning `RESOURCE_EXHAUSTED` at either bound. `EXPLAIN
 [ANALYZE]` reports each cardinality stage, logical operation, physical sort,
 and analyzed stage row count. `ORDER BY` is admitted only at the outer stage
 and must resolve to one selected output; inner-stage ordering is explicitly
 deferred rather than silently discarded.
 
-Durable view records use strict UTF-8 catalog format v4. The fixed header owns
-an ordered lineage count and 32 physical-table ID slots; used IDs are in SQL
+Durable view records use strict UTF-8 catalog format v5. The fixed header owns
+an ordered lineage count and 64 physical-table ID slots; used IDs are in SQL
 role order and every unused slot is zero. Repeated physical IDs are valid only
 for distinctly aliased self-join roles. Older versions, malformed or
 noncanonical counts/IDs, nonzero unused slots, truncated or trailing records,
@@ -85,7 +85,7 @@ lineage mismatches, malformed UTF-8, and unpaired UTF-16 input are rejected
 rather than adapted during this pre-V1 format replacement.
 Projection-only stored
 views retain their flattened point/index fast path; only a real cardinality
-barrier selects staged execution. A joined block contains two through eight
+barrier selects staged execution. A joined block contains two through 64
 left-associative `INNER`/`LEFT` relation roles, with one bounded canonical `ON`
 program per stage and one post-chain `WHERE` program. Each `ON` sees the roles
 already introduced plus its current right role; `WHERE` and projection see all
@@ -95,7 +95,7 @@ publishes one current-right NULL extension only after no candidate made its
 bounded hash strategy, but every candidate receives the complete residual.
 Other admitted shapes use the common nested-loop fallback. Hashing covers the
 fixed, exact decimal, temporal, Boolean, and Unicode-scalar equality families;
-after the existing 1,024-row/4 MiB store spills, the alpha reports and uses a
+after the existing 1,024-row/4 MB store spills, the alpha reports and uses a
 stable bounded nested fallback. Equality merge reuses an ordered index when
 available or the existing bounded row-store sorter, including compatible later
 stages. Bounded durable `ANALYZE` statistics cost the existing SQL-order
@@ -145,25 +145,30 @@ the existing gap-on-failure sequence policy while statement failure rolls back
 row, index, WAL, check, unique, and foreign-key effects. The final
 cross-boundary fault gate also remains before this M5 profile is accepted. The
 ordered-scalar format now carries a primitive namespace plus the
-complete signed 64-bit value, so `BIGINT`, `DECIMAL`, `DATE`, `TIME`, and both
-timestamp families support their full admitted domains without lossy packing.
+complete primitive value. Integral, exact-decimal, approximate-numeric,
+`DATE`, `TIME`, and both timestamp families therefore support their full
+admitted domains without lossy packing.
 
 M5 admits the following scalar types:
 
 | Type | Parameters | Representation and ordering |
 | --- | --- | --- |
+| `SMALLINT` | none | Signed 16-bit integer, signed numeric order. |
+| `INTEGER` | none | Signed 32-bit integer, signed numeric order. |
 | `BIGINT` | none | Signed 64-bit integer, signed numeric order. |
 | `BOOLEAN` | none | Boolean value; `NULL` remains separate. |
-| `DECIMAL(p,s)` | `1 <= p <= 18`, `0 <= s <= p` | Signed scaled 64-bit integer; exact numeric order and checked arithmetic. |
+| `DECIMAL(p,s)` | `1 <= p <= 38`, `0 <= s <= p` | Signed scaled 64-bit value through precision 18 and signed two-lane 128-bit value thereafter; exact numeric order and checked allocation-free arithmetic. |
+| `REAL` | none | Finite IEEE-754 binary32 value stored as canonical raw bits; SQL numeric order. |
+| `DOUBLE PRECISION` | none | Finite IEEE-754 binary64 value stored as canonical raw bits; SQL numeric order. |
 | `VARCHAR(n)` | `1 <= n <= 255` | Strict UTF-8; `n` Unicode scalar values maximum; deterministic Unicode-code-point order. |
 | `DATE` | none | Proleptic-Gregorian epoch day, years 0001-9999. |
 | `TIME(p)` | `0 <= p <= 6`, default 6 | Microseconds since midnight; no time zone. |
 | `TIMESTAMP(p)` | `0 <= p <= 6`, default 6 | Local date-time on a zone-free microsecond timeline. |
 | `TIMESTAMP(p) WITH TIME ZONE` | `0 <= p <= 6`, default 6 | UTC epoch-microsecond instant; input zone identity is not retained. |
 
-Floating point, `INTERVAL`, `TIME WITH TIME ZONE`, binary/LOB, UUID, JSON,
-arrays, locale-sensitive collations, and retained per-value IANA zone identity
-are outside M5.
+Non-finite approximate values, `INTERVAL`, `TIME WITH TIME ZONE`, binary/LOB,
+UUID, JSON, arrays, locale-sensitive collations, and retained per-value IANA
+zone identity are outside M5.
 
 ## Text
 
@@ -171,7 +176,7 @@ are outside M5.
 - Declared length counts Unicode scalar values, not UTF-16 code units or UTF-8
   bytes.
 - One value is bounded to 1,020 encoded bytes. The declared worst-case table
-  row, including row metadata, must fit River's 4 KiB row bound.
+  row, including row metadata, must fit River's 4 KB row bound.
 - V1 comparison is case-sensitive Unicode-code-point order.
 - River performs no implicit Unicode normalization or locale-sensitive case
   folding. Canonically equivalent but differently encoded scalar sequences are
@@ -211,7 +216,7 @@ JDBC/public-boundary object mapping, not River's per-row execution object.
 
 For operands `DECIMAL(p1,s1)` and `DECIMAL(p2,s2)`, let `i1 = p1 - s1` and
 `i2 = p2 - s2`. River derives decimal result descriptors as follows before
-applying the precision-18 bound:
+applying the precision-38 bound:
 
 | Operation | Natural integer digits | Natural scale |
 | --- | ---: | ---: |
@@ -220,10 +225,10 @@ applying the precision-18 bound:
 | `/` | `i1 + s2` | `max(6,s1 + p2 + 1)` |
 | `%` | `min(i1,i2)` | `max(s1,s2)` |
 
-If natural precision exceeds 18, River retains the natural integer capacity
+If natural precision exceeds 38, River retains the natural integer capacity
 first and reduces fractional scale to fit; discarded fractional digits are
-rounded half-even. If the natural integer capacity itself exceeds 18, the
-descriptor is `DECIMAL(18,0)` and a runtime value outside that range fails with
+rounded half-even. If the natural integer capacity itself exceeds 38, the
+descriptor is `DECIMAL(38,0)` and a runtime value outside that range fails with
 `22003`. `ROUND` and `TRUNCATE` require a constant target scale in the bounded
 range. `AVG` uses the division rule; `SUM` accumulates exactly in reusable wide
 scratch and converts once to its declared result.
@@ -365,9 +370,13 @@ functions. SQL-standard `CURRENT_TIME` waits for `TIME WITH TIME ZONE`;
 
 | SQL type | Preferred JDBC 4.2 object |
 | --- | --- |
+| `SMALLINT` | `Short` |
+| `INTEGER` | `Integer` |
 | `BIGINT` | `Long` |
 | `BOOLEAN` | `Boolean` |
 | `DECIMAL` | `BigDecimal` |
+| `REAL` | `Float` |
+| `DOUBLE PRECISION` | `Double` |
 | `VARCHAR` | `String` |
 | `DATE` | `LocalDate` |
 | `TIME` | `LocalTime` |
@@ -396,7 +405,7 @@ and membership lists; scalar comparison, range, and projection uses remain
 fail-closed until their explicit three-valued literal carrier exists. JDBC
 prepared bindings and bounded batch
 snapshots use the typed carrier without SQL rendering. Authenticated all-type
-JDBC and CLI fixtures exercise all eight admitted families through TLS and
+JDBC and CLI fixtures exercise every admitted family through TLS and
 token authentication. The combined checkpoint/reopen, backup/restore, and
 injected-fault fixture remains U06-owned.
 

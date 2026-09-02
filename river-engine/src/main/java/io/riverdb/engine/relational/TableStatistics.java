@@ -1,50 +1,49 @@
 package io.riverdb.engine.relational;
 
-/** Caller-owned bounded statistics for one analyzed physical table. */
+import io.riverdb.base.error.StatusCode;
+
+/** Caller-owned retained statistics with actual-count column storage. */
 public final class TableStatistics {
-  private final long[] nullCounts = new long[TableSchema.MAXIMUM_COLUMNS];
-  private final long[] distinctCounts = new long[TableSchema.MAXIMUM_COLUMNS];
-  private final long[] minimumValues = new long[TableSchema.MAXIMUM_COLUMNS];
-  private final long[] maximumValues = new long[TableSchema.MAXIMUM_COLUMNS];
+  private final TableStatisticsStorage storage = new TableStatisticsStorage();
   private int tableId;
   private int columnCount;
   private long rowCount;
   private long epoch;
-  private long minMaxMask;
-  private long sampledMask;
 
   public void reset() {
-    for (int column = 0; column < columnCount; column++) {
-      nullCounts[column] = 0;
-      distinctCounts[column] = 0;
-      minimumValues[column] = 0;
-      maximumValues[column] = 0;
-    }
+    storage.reset(columnCount);
     tableId = 0;
     columnCount = 0;
     rowCount = 0;
     epoch = 0;
-    minMaxMask = 0;
-    sampledMask = 0;
   }
 
   public int tableId() { return tableId; }
   public int columnCount() { return columnCount; }
   public long rowCount() { return rowCount; }
   public long epoch() { return epoch; }
-  public long nullCount(int column) { return nullCounts[column]; }
-  public long distinctCount(int column) { return distinctCounts[column]; }
-  public boolean hasMinMax(int column) { return (minMaxMask & 1L << column) != 0; }
-  public long minimumValue(int column) { return minimumValues[column]; }
-  public long maximumValue(int column) { return maximumValues[column]; }
-  public boolean sampled(int column) { return (sampledMask & 1L << column) != 0; }
-  public boolean sampled() { return sampledMask != 0; }
+  public long nullCount(int column) { return storage.nullCounts[column]; }
+  public long distinctCount(int column) { return storage.distinctCounts[column]; }
+  public boolean hasMinMax(int column) { return storage.minMaxColumns.get(column); }
+  public long minimumValue(int column) { return storage.minimumValues[column]; }
+  public long maximumValue(int column) { return storage.maximumValues[column]; }
+  public boolean sampled(int column) { return storage.sampledColumns.get(column); }
+  public boolean sampled() { return !storage.sampledColumns.isEmpty(); }
 
-  public void begin(int id, int columns, long analyzedEpoch) {
+  /** Atomically admits retained capacity and begins a new statistics snapshot. */
+  public StatusCode begin(int id, int columns, long analyzedEpoch) {
+    StatusCode status = storage.reserve(columns, columnCount);
     reset();
+    if (!status.isOk()) return status;
+    if (id <= 0 || columns < 0 || analyzedEpoch < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    storage.minMaxColumns.clearForSize(columns);
+    storage.sampledColumns.clearForSize(columns);
     tableId = id;
     columnCount = columns;
     epoch = analyzedEpoch;
+    return StatusCode.OK;
   }
 
   public void setRowCount(long rows) { rowCount = rows; }
@@ -57,39 +56,22 @@ public final class TableStatistics {
       boolean hasRange,
       long minimum,
       long maximum) {
-    nullCounts[column] = nulls;
-    distinctCounts[column] = distinct;
-    minimumValues[column] = hasRange ? minimum : 0;
-    maximumValues[column] = hasRange ? maximum : 0;
-    if (sampled) sampledMask |= 1L << column;
-    if (hasRange) minMaxMask |= 1L << column;
+    if (column < 0 || column >= columnCount) return;
+    storage.nullCounts[column] = nulls;
+    storage.distinctCounts[column] = distinct;
+    storage.minimumValues[column] = hasRange ? minimum : 0;
+    storage.maximumValues[column] = hasRange ? maximum : 0;
+    if (sampled) storage.sampledColumns.set(column);
+    if (hasRange) storage.minMaxColumns.set(column);
   }
 
   public boolean availableFor(TableDefinition table) {
-    return table != null
-        && tableId == table.tableId()
-        && columnCount == table.columnCount()
-        && epoch >= 0;
+    return table != null && tableId == table.tableId()
+        && columnCount == table.columnCount() && epoch >= 0;
   }
 
   boolean canonicalFor(TableDefinition table) {
-    if (!availableFor(table) || rowCount < 0) return false;
-    long columnsMask = (1L << columnCount) - 1;
-    if ((minMaxMask & ~columnsMask) != 0 || (sampledMask & ~columnsMask) != 0) {
-      return false;
-    }
-    for (int column = 0; column < columnCount; column++) {
-      long nulls = nullCounts[column];
-      long distinct = distinctCounts[column];
-      long nonNull = rowCount - nulls;
-      if (nulls < 0 || nulls > rowCount
-          || distinct < 0 || distinct > nonNull
-          || (distinct == 0) != (nonNull == 0)
-          || nonNull == 0 && hasMinMax(column)) return false;
-    }
-    return true;
+    return availableFor(table) && rowCount >= 0 && storage.canonical(columnCount, rowCount);
   }
 
-  long minMaxMask() { return minMaxMask; }
-  long sampledMask() { return sampledMask; }
 }

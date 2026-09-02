@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlCommand;
-import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Evaluates the predicates of the currently bound statement without allocating. */
@@ -13,9 +12,7 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
   private final BoundSqlQuery query;
   private final SqlSubqueryGraphExecution subqueries;
   private final SqlBooleanPredicateEvaluator booleans;
-  private final SqlBooleanPredicateEvaluator[] joinOn =
-      new SqlBooleanPredicateEvaluator[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final SqlBooleanPredicateWorkspace joinWorkspace;
+  private final SqlJoinPredicateEvaluators joinOn;
   private final SqlTemporalContext temporal;
   private SqlCommand joinCommand;
   private SqlBoundJoinContext joinContext;
@@ -29,15 +26,16 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
       BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
       SqlSubqueryGraphExecution graph,
-      SqlTemporalContext temporal) {
+      SqlTemporalContext temporal,
+      SqlSessionShapeBudget shapeBudget) {
     bound = statement;
     query = statement.executableQuery;
     subqueries = graph;
     this.temporal = temporal;
     SqlBooleanPredicateWorkspace workspace =
         new SqlBooleanPredicateWorkspace(evaluator, temporal);
-    joinWorkspace = workspace;
-    booleans = new SqlBooleanPredicateEvaluator(workspace, temporal);
+    joinOn = new SqlJoinPredicateEvaluators(workspace, temporal, shapeBudget);
+    booleans = new SqlBooleanPredicateEvaluator(workspace, temporal, shapeBudget);
   }
 
   StatusCode prepare() {
@@ -53,12 +51,10 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
     joinWhere = where;
     StatusCode status = StatusCode.OK;
     int stages = command.joinChain().stageCount();
+    status = joinOn.prepare(stages);
     for (int stage = 0; status.isOk() && stage < stages; stage++) {
-      if (joinOn[stage] == null) {
-        joinOn[stage] = new SqlBooleanPredicateEvaluator(joinWorkspace, temporal);
-      }
       status = context.hasOnBoolean(stage)
-          ? joinOn[stage].prepare(command, context.onBoolean(stage))
+          ? joinOn.get(stage).prepare(command, context.onBoolean(stage))
           : StatusCode.OK;
     }
     return status.isOk()
@@ -67,9 +63,7 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
 
   void reset() {
     booleans.reset();
-    for (SqlBooleanPredicateEvaluator evaluator : joinOn) {
-      if (evaluator != null) evaluator.reset();
-    }
+    joinOn.reset();
     matched = false;
     joinStatus = StatusCode.OK;
     joinCommand = null;
@@ -99,10 +93,20 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
     return status;
   }
 
+  StatusCode evaluateBlock(SqlBlockRow source) {
+    matched = false;
+    StatusCode status = booleans.matchesBlock(
+        bound.command, bound.whereBoolean, source, booleanMatch);
+    if (status.isOk()) matched = booleanMatch.matched();
+    return status;
+  }
+
   boolean matched() { return matched; }
 
+  SqlBoundBooleanPredicateProgram program() { return bound.whereBoolean; }
+
   boolean matchesJoinOn(int stage, SqlJoinRoleRows rows) {
-    joinStatus = joinOn[stage].matchesJoin(
+    joinStatus = joinOn.get(stage).matchesJoin(
         joinCommand,
         joinContext.onBoolean(stage),
         rows,
@@ -121,6 +125,9 @@ final class SqlBoundPredicateEvaluator extends SqlJoinPredicateCallback {
   boolean hasResources() {
     return subqueries.hasResources();
   }
+
+  SqlSubqueryPlan subqueryPlan() { return subqueries.plan(); }
+  SqlSubqueryResultCache subqueryCache() { return subqueries.resultCache(); }
 
   boolean matchesJoinWhere(SqlJoinRoleRows rows) {
     joinStatus = booleans.matchesJoin(

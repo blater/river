@@ -1,12 +1,15 @@
 package io.riverdb.sql;
 
+import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
+
 /** Command-owned selected-output mapping for a deduplicated aggregate set. */
 final class SqlAggregateSet {
-  static final int MAXIMUM_INVOCATIONS = 8;
+  static final int MAXIMUM_INVOCATIONS = SqlShapeLimits.MAX_AGGREGATES;
 
-  private final byte[] kinds = new byte[MAXIMUM_INVOCATIONS];
-  private final byte[] operandProjections = new byte[MAXIMUM_INVOCATIONS];
-  private final byte[] outputInvocations = new byte[MAXIMUM_INVOCATIONS];
+  int[] kinds = new int[8];
+  int[] operandProjections = new int[8];
+  int[] outputInvocations = new int[8];
   private int invocationCount;
   private int outputCount;
 
@@ -20,38 +23,45 @@ final class SqlAggregateSet {
     outputCount = 0;
   }
 
-  void copyFrom(SqlAggregateSet source) {
+  StatusCode copyFrom(SqlAggregateSet source) {
     reset();
+    if (source == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!SqlAggregateCapacity.ensure(this, source.invocationCount, source.outputCount)) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     invocationCount = source.invocationCount;
     outputCount = source.outputCount;
     System.arraycopy(source.kinds, 0, kinds, 0, invocationCount);
     System.arraycopy(
         source.operandProjections, 0, operandProjections, 0, invocationCount);
     System.arraycopy(source.outputInvocations, 0, outputInvocations, 0, outputCount);
+    return StatusCode.OK;
   }
 
   int appendInvocation(int kind, int operandProjection) {
-    if (invocationCount >= kinds.length) return -1;
+    if (invocationCount >= MAXIMUM_INVOCATIONS
+        || !SqlAggregateCapacity.ensure(this, invocationCount + 1, outputCount)) return -1;
     int invocation = invocationCount++;
-    kinds[invocation] = (byte) kind;
-    operandProjections[invocation] = (byte) operandProjection;
+    kinds[invocation] = kind;
+    operandProjections[invocation] = operandProjection;
     return invocation;
   }
 
   boolean appendOutput(int invocation) {
-    if (outputCount >= outputInvocations.length
+    if (outputCount >= MAXIMUM_INVOCATIONS
+        || !SqlAggregateCapacity.ensure(this, invocationCount, outputCount + 1)
         || invocation < 0 || invocation >= invocationCount) {
       return false;
     }
-    outputInvocations[outputCount++] = (byte) invocation;
+    outputInvocations[outputCount++] = invocation;
     return true;
   }
 
   int invocationCount() { return invocationCount; }
   int outputCount() { return outputCount; }
-  int kind(int invocation) { return Byte.toUnsignedInt(kinds[invocation]); }
+  int kind(int invocation) { return kinds[invocation]; }
   int operandProjection(int invocation) { return operandProjections[invocation]; }
   int outputInvocation(int output) {
-    return Byte.toUnsignedInt(outputInvocations[output]);
+    return outputInvocations[output];
   }
 }

@@ -1,37 +1,38 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.relational.TableDefinition;
-import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.storage.heap.HeapRowResult;
-import java.nio.ByteBuffer;
 
 /** Reusable bounded sort storage and spill lifecycle for one SQL session. */
-final class SqlSortWorkspace {
-  private static final int MAXIMUM_ROWS = 1_024;
-  private final SqlSortSpill spill = new SqlSortSpill();
-  private final HeapRowResult rowView = new HeapRowResult();
-  private long[] keys;
-  private long[] primaryKeys;
-  private long[] values;
-  private long[] nullMasks;
-  private boolean[] keyNulls;
-  private int[] rowSlots;
-  private int[] rowLengths;
-  private byte[] generatedTextLengths;
-  private char[] generatedText;
-  private ByteBuffer rows;
+final class SqlSortWorkspace implements SqlNullWords {
+  private final SqlSortSpill spill;
+  private final SqlSortRunStorage storage;
+  private final SqlSortHeap heap = new SqlSortHeap();
+  private final SqlLegacyGroupTupleComparator groupComparator =
+      new SqlLegacyGroupTupleComparator();
   private TableDefinition table;
   private boolean spilled;
-  private boolean containsText;
-  private boolean containsGeneratedText;
   private boolean textKey;
   private boolean descending;
-  private int projectedColumnCount;
+  private int keyDescriptor;
+  private int groupKeyCount;
   private int rowCount;
-  private int totalRows;
+  private long totalRows;
   private long outputPrimaryKey;
-  private long outputNullMask;
+
+  SqlSortWorkspace() { this(SqlRetainedArrayAllocator.STANDARD); }
+
+  SqlSortWorkspace(SqlRetainedArrayAllocator retainedAllocator) {
+    this(retainedAllocator, new SqlSessionShapeBudget(null));
+  }
+
+  SqlSortWorkspace(
+      SqlRetainedArrayAllocator retainedAllocator, SqlSessionShapeBudget budget) {
+    spill = new SqlSortSpill(retainedAllocator, budget);
+    storage = new SqlSortRunStorage(retainedAllocator, budget);
+  }
 
   StatusCode begin(
       TableDefinition definition,
@@ -39,83 +40,97 @@ final class SqlSortWorkspace {
       int projectionCount,
       boolean textRows,
       boolean generatedTextRows,
-      boolean textualKey) {
+      boolean textualKey,
+      int sortKeyDescriptor) {
+    return begin(
+        definition, descendingOrder, projectionCount, textRows,
+        generatedTextRows, textualKey, sortKeyDescriptor, null, null, 0, false);
+  }
+
+  StatusCode begin(
+      TableDefinition definition,
+      boolean descendingOrder,
+      int projectionCount,
+      boolean textRows,
+      boolean generatedTextRows,
+      boolean textualKey,
+      int sortKeyDescriptor,
+      io.riverdb.sql.SqlCommand command,
+      BoundSqlStatement bound,
+      int tupleKeys,
+      boolean groupTuple) {
     if (definition == null
         || projectionCount <= 0
-        || projectionCount > TableSchema.MAXIMUM_COLUMNS) {
+        || projectionCount > SqlShapeLimits.MAX_RESULT_COLUMNS) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = close();
     if (!status.isOk()) {
       return status;
     }
-    ensureStorage();
-    table = definition;
-    descending = descendingOrder;
-    projectedColumnCount = projectionCount;
-    containsText = textRows;
-    containsGeneratedText = generatedTextRows;
-    textKey = textualKey;
-    ensureTextStorage();
-    ensureGeneratedTextStorage();
-    rowCount = 0;
-    totalRows = 0;
-    spilled = false;
-    return spill.begin(
+    status = storage.prepare(
+        projectionCount, textRows, generatedTextRows, spill.sortRunPayloadBytes());
+    if (!status.isOk()) return status;
+    if (status.isOk() && tupleKeys > 1) {
+      status = groupComparator.configure(
+          command, bound, tupleKeys, projectionCount, groupTuple);
+    }
+    if (!status.isOk()) return status;
+    status = spill.begin(
         definition,
         descendingOrder,
         textRows,
         generatedTextRows,
         textualKey,
-        projectionCount);
+        projectionCount,
+        sortKeyDescriptor,
+        tupleKeys > 1 ? groupComparator : null,
+        tupleKeys,
+        storage.runRows());
+    if (!status.isOk()) return status;
+    table = definition;
+    descending = descendingOrder;
+    textKey = textualKey;
+    keyDescriptor = sortKeyDescriptor;
+    groupKeyCount = tupleKeys;
+    rowCount = 0;
+    totalRows = 0;
+    spilled = false;
+    return status;
   }
 
   StatusCode append(
+      long keyHigh,
       long key,
       boolean keyNull,
       long primaryKey,
+      long[] projectedHighs,
       long[] projectedValues,
-      long nullMask,
+      SqlNullWords projectedNulls,
       HeapRowResult source,
       SqlProjectedRow projected) {
-    if (table == null || projectedValues == null) {
+    if (table == null || projectedHighs == null || projectedValues == null
+        || projectedHighs.length < storage.projections()
+        || projectedValues.length < storage.projections()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = rowCount < MAXIMUM_ROWS
+    StatusCode status = rowCount < storage.runRows()
         ? StatusCode.OK
         : spillRun();
     if (!status.isOk()) {
       return status;
     }
+    if (totalRows == Long.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     int rowIndex = rowCount++;
     totalRows++;
-    keys[rowIndex] = key;
-    keyNulls[rowIndex] = keyNull;
-    primaryKeys[rowIndex] = primaryKey;
-    if (containsText) {
-      if (source == null) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      int rowOffset = rowIndex * TableSchema.MAXIMUM_ROW_BYTES;
-      rows.position(rowOffset);
-      rows.limit(rowOffset + source.length());
-      status = source.copyTo(rows);
-      rows.clear();
-      if (!status.isOk()) {
-        rowCount--;
-        totalRows--;
-        return status;
-      }
-      rowSlots[rowIndex] = rowIndex;
-      rowLengths[rowIndex] = source.length();
+    status = storage.append(
+        rowIndex, keyHigh, key, keyNull, primaryKey,
+        projectedHighs, projectedValues, projectedNulls, source, projected);
+    if (!status.isOk()) {
+      rowCount--;
+      totalRows--;
     }
-    int valueStart = rowIndex * TableSchema.MAXIMUM_COLUMNS;
-    for (int index = 0; index < projectedColumnCount; index++) {
-      values[valueStart + index] = projectedValues[index];
-    }
-    nullMasks[rowIndex] = nullMask;
-    if (containsGeneratedText) copyGeneratedText(rowIndex, projected);
-    return StatusCode.OK;
+    return status;
   }
 
   StatusCode finish() {
@@ -123,11 +138,11 @@ final class SqlSortWorkspace {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (!spilled) {
-      sortRows();
+      heap.sort(this, rowCount);
       return StatusCode.OK;
     }
     StatusCode status = spillRun();
-    return status.isOk() ? spill.initializeMerge() : status;
+    return status.isOk() ? spill.initializeMerge(totalRows) : status;
   }
 
   boolean isSpilled() {
@@ -135,10 +150,10 @@ final class SqlSortWorkspace {
   }
 
   boolean containsText() {
-    return containsText;
+    return storage.textRows();
   }
 
-  int totalRows() {
+  long totalRows() {
     return totalRows;
   }
 
@@ -146,104 +161,57 @@ final class SqlSortWorkspace {
     return table != null || spill.hasResources();
   }
 
-  long primaryKeyAt(int index) {
-    return primaryKeys[index];
+  long retainedProjectionBytes() {
+    return storage.retainedProjectionBytes();
   }
 
-  long nullMaskAt(int index) {
-    return nullMasks[index];
+  long primaryKeyAt(int index) {
+    return storage.primaryKey(index);
+  }
+
+  void selectNullWordsAt(int index) {
+    storage.selectNulls(index);
   }
 
   void copyValuesAt(int row, int count, long[] target) {
-    int valueStart = row * TableSchema.MAXIMUM_COLUMNS;
-    for (int index = 0; index < count; index++) {
-      target[index] = values[valueStart + index];
-    }
+    storage.copyValues(row, count, target);
+  }
+
+  void copyHighsAt(int row, int count, long[] target) {
+    storage.copyHighs(row, count, target);
   }
 
   HeapRowResult rowAt(int index) {
-    int slot = rowSlots[index];
-    rowView.set(
-        rows,
-        0,
-        slot * TableSchema.MAXIMUM_ROW_BYTES,
-        rowLengths[slot]);
-    return rowView;
+    return storage.row(index);
   }
 
   HeapRowResult spilledRow() {
     return spill.outputRow();
   }
 
-  StatusCode nextSpilled(int count, long[] target) {
-    StatusCode status = spill.next(count, target);
+  StatusCode nextSpilled(int count, long[] targetHighs, long[] targetValues) {
+    StatusCode status = spill.next(count, targetHighs, targetValues);
     outputPrimaryKey = spill.outputPrimaryKey();
-    outputNullMask = spill.outputNullMask();
     return status;
   }
 
   StatusCode setGeneratedText(SqlScanRowResult result, int row) {
-    if (!containsGeneratedText) return StatusCode.OK;
-    if (spilled) {
-      for (int projection = 0; projection < projectedColumnCount; projection++) {
-        int length = spill.outputTextLength(projection);
-        if (length > 0) {
-          StatusCode status = result.setTextAt(
-              projection, spill.outputText(projection), length);
-          if (!status.isOk()) return status;
-        }
-      }
-      return StatusCode.OK;
-    }
-    int lengthStart = row * TableSchema.MAXIMUM_COLUMNS;
-    int textStart = lengthStart * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
-    for (int projection = 0; projection < projectedColumnCount; projection++) {
-      int length = Byte.toUnsignedInt(generatedTextLengths[lengthStart + projection]);
-      if (length > 0) {
-        StatusCode status = result.setTextAt(
-            projection,
-            generatedText,
-            textStart + projection * SqlProjectedRow.MAXIMUM_GENERATED_TEXT,
-            length);
-        if (!status.isOk()) return status;
-      }
-    }
-    return StatusCode.OK;
+    return storage.setGeneratedText(result, row, spilled, spill);
   }
 
   void copyGeneratedText(SqlProjectedRow result, int row) {
-    if (!containsGeneratedText) return;
-    if (spilled) {
-      for (int projection = 0; projection < projectedColumnCount; projection++) {
-        int length = spill.outputTextLength(projection);
-        if (length > 0) {
-          result.setText(projection, spill.outputText(projection), length);
-        }
-      }
-      return;
-    }
-    int lengthStart = row * TableSchema.MAXIMUM_COLUMNS;
-    int textStart = lengthStart * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
-    for (int projection = 0; projection < projectedColumnCount; projection++) {
-      int length = Byte.toUnsignedInt(generatedTextLengths[lengthStart + projection]);
-      if (length > 0) {
-        int offset = textStart
-            + projection * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
-        for (int index = 0; index < length; index++) {
-          result.text(projection)[index] = generatedText[offset + index];
-        }
-        result.setText(projection, result.text(projection), length);
-      }
-    }
+    storage.copyGeneratedText(result, row, spilled, spill);
   }
 
   long outputPrimaryKey() {
     return outputPrimaryKey;
   }
 
-  long outputNullMask() {
-    return outputNullMask;
+  @Override public long nullWord(int word) {
+    return spilled ? spill.outputNullWord(word) : storage.nullWord(word);
   }
+
+  @Override public int nullWordCount() { return storage.nullWordCount(); }
 
   StatusCode close() {
     StatusCode status = StatusCode.OK;
@@ -253,6 +221,7 @@ final class SqlSortWorkspace {
       spilled = false;
       rowCount = 0;
       totalRows = 0;
+      storage.closeHighWater();
     }
     return status;
   }
@@ -261,10 +230,8 @@ final class SqlSortWorkspace {
     if (rowCount <= 0) {
       return StatusCode.OK;
     }
-    sortRows();
-    StatusCode status = spill.writeRun(
-        keys, keyNulls, primaryKeys, nullMasks, values,
-        rowSlots, rowLengths, rows, generatedTextLengths, generatedText, rowCount);
+    heap.sort(this, rowCount);
+    StatusCode status = storage.write(spill, rowCount);
     if (status.isOk()) {
       spilled = true;
       rowCount = 0;
@@ -272,146 +239,15 @@ final class SqlSortWorkspace {
     return status;
   }
 
-  private void ensureStorage() {
-    if (keys != null) {
-      return;
-    }
-    keys = new long[MAXIMUM_ROWS];
-    primaryKeys = new long[MAXIMUM_ROWS];
-    values = new long[MAXIMUM_ROWS * TableSchema.MAXIMUM_COLUMNS];
-    nullMasks = new long[MAXIMUM_ROWS];
-    keyNulls = new boolean[MAXIMUM_ROWS];
-    rowSlots = new int[MAXIMUM_ROWS];
-    rowLengths = new int[MAXIMUM_ROWS];
+  int compareRows(int left, int right) {
+    return storage.compare(
+        left, right, groupKeyCount, groupComparator,
+        textKey, keyDescriptor, descending);
   }
 
-  private void ensureTextStorage() {
-    if (!containsText || rows != null) return;
-    rows = ByteBuffer.allocateDirect(MAXIMUM_ROWS * TableSchema.MAXIMUM_ROW_BYTES);
+  void swapRows(int left, int right) {
+    storage.swap(left, right);
   }
 
-  private void sortRows() {
-    for (int root = rowCount / 2 - 1; root >= 0; root--) {
-      siftRow(root, rowCount);
-    }
-    for (int end = rowCount - 1; end > 0; end--) {
-      swapRows(0, end);
-      siftRow(0, end);
-    }
-  }
-
-  private void siftRow(int root, int length) {
-    int current = root;
-    while (current * 2 + 1 < length) {
-      int child = current * 2 + 1;
-      if (child + 1 < length && compareRows(child, child + 1) < 0) {
-        child++;
-      }
-      if (compareRows(current, child) >= 0) {
-        return;
-      }
-      swapRows(current, child);
-      current = child;
-    }
-  }
-
-  private int compareRows(int left, int right) {
-    int comparison;
-    if (keyNulls[left] != keyNulls[right]) {
-      comparison = keyNulls[left] ? -1 : 1;
-    } else {
-      comparison = textKey
-          ? compareText(left, right)
-          : Long.compare(keys[left], keys[right]);
-    }
-    if (comparison == 0) {
-      comparison = Long.compare(primaryKeys[left], primaryKeys[right]);
-    }
-    return descending ? -comparison : comparison;
-  }
-
-  private int compareText(int left, int right) {
-    long leftHandle = keys[left];
-    long rightHandle = keys[right];
-    int leftOffset = rowSlots[left] * TableSchema.MAXIMUM_ROW_BYTES
-        + (int) (leftHandle >>> 32);
-    int rightOffset = rowSlots[right] * TableSchema.MAXIMUM_ROW_BYTES
-        + (int) (rightHandle >>> 32);
-    int leftLength = (int) leftHandle;
-    int rightLength = (int) rightHandle;
-    int common = Math.min(leftLength, rightLength);
-    for (int index = 0; index < common; index++) {
-      int comparison = Integer.compare(
-          Byte.toUnsignedInt(rows.get(leftOffset + index)),
-          Byte.toUnsignedInt(rows.get(rightOffset + index)));
-      if (comparison != 0) {
-        return comparison;
-      }
-    }
-    return Integer.compare(leftLength, rightLength);
-  }
-
-  private void swapRows(int left, int right) {
-    long key = keys[left];
-    keys[left] = keys[right];
-    keys[right] = key;
-    long primaryKey = primaryKeys[left];
-    primaryKeys[left] = primaryKeys[right];
-    primaryKeys[right] = primaryKey;
-    long nullMask = nullMasks[left];
-    nullMasks[left] = nullMasks[right];
-    nullMasks[right] = nullMask;
-    boolean keyNull = keyNulls[left];
-    keyNulls[left] = keyNulls[right];
-    keyNulls[right] = keyNull;
-    int rowSlot = rowSlots[left];
-    rowSlots[left] = rowSlots[right];
-    rowSlots[right] = rowSlot;
-    int leftStart = left * TableSchema.MAXIMUM_COLUMNS;
-    int rightStart = right * TableSchema.MAXIMUM_COLUMNS;
-    for (int index = 0; index < projectedColumnCount; index++) {
-      long value = values[leftStart + index];
-      values[leftStart + index] = values[rightStart + index];
-      values[rightStart + index] = value;
-    }
-    if (!containsGeneratedText) return;
-    int leftLength = left * TableSchema.MAXIMUM_COLUMNS;
-    int rightLength = right * TableSchema.MAXIMUM_COLUMNS;
-    for (int projection = 0; projection < projectedColumnCount; projection++) {
-      int leftLane = leftLength + projection;
-      int rightLane = rightLength + projection;
-      byte length = generatedTextLengths[leftLane];
-      generatedTextLengths[leftLane] = generatedTextLengths[rightLane];
-      generatedTextLengths[rightLane] = length;
-      int leftText = leftLane * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
-      int rightText = rightLane * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
-      for (int index = 0; index < SqlProjectedRow.MAXIMUM_GENERATED_TEXT; index++) {
-        char character = generatedText[leftText + index];
-        generatedText[leftText + index] = generatedText[rightText + index];
-        generatedText[rightText + index] = character;
-      }
-    }
-  }
-
-  private void copyGeneratedText(int row, SqlProjectedRow projected) {
-    int laneStart = row * TableSchema.MAXIMUM_COLUMNS;
-    for (int projection = 0; projection < projectedColumnCount; projection++) {
-      int length = projected.textLength(projection);
-      int lane = laneStart + projection;
-      generatedTextLengths[lane] = (byte) length;
-      int start = lane * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
-      for (int index = 0; index < length; index++) {
-        generatedText[start + index] = projected.textCharacter(projection, index);
-      }
-    }
-  }
-
-  private void ensureGeneratedTextStorage() {
-    if (!containsGeneratedText || generatedText != null) return;
-    generatedTextLengths =
-        new byte[MAXIMUM_ROWS * TableSchema.MAXIMUM_COLUMNS];
-    generatedText = new char[
-        MAXIMUM_ROWS * TableSchema.MAXIMUM_COLUMNS
-            * SqlProjectedRow.MAXIMUM_GENERATED_TEXT];
-  }
+  int configuredRunRows() { return storage.runRows(); }
 }

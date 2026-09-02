@@ -4,48 +4,43 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.CatalogObjectCursor;
 import io.riverdb.engine.relational.CatalogIndexCursor;
 import io.riverdb.engine.relational.RelationalScanCursor;
-import io.riverdb.engine.relational.TableSchema;
 
 /** Reusable physical operator progress for the one active query in a SQL session. */
 final class SqlActiveScanState {
+  private final SqlRetainedArrayAllocator allocator;
   private final RelationalScanCursor relational = new RelationalScanCursor();
   private final CatalogObjectCursor catalogObjects = new CatalogObjectCursor();
   private final CatalogIndexCursor catalogIndexes = new CatalogIndexCursor();
-  private boolean groupLookahead;
-  private boolean groupLookaheadNull;
-  private boolean groupInputExhausted;
+  private final SqlGroupLookaheadState groupLookahead;
   private boolean distinctValueAvailable;
-  private boolean distinctValueNull;
   private boolean aggregateTransactionActive;
   private boolean aggregateNull;
   private boolean aggregateAvailable;
   private char[] aggregateText;
   private int aggregateTextLength;
+  private long aggregateHigh;
   private long aggregateValue;
   private long aggregateCommitSequence;
   private long explainCommitSequence;
-  private long groupLookaheadValue;
-  private long groupLookaheadAggregateValue;
-  private boolean groupLookaheadAggregateNull;
-  private final long[] groupLookaheadValues =
-      new long[TableSchema.MAXIMUM_COLUMNS];
-  private long groupLookaheadNullMask;
-  private long distinctValue;
-  private int sortedRowCount;
-  private int sortedRowIndex;
+  private long sortedRowCount;
+  private long sortedRowIndex;
   private int planStepIndex;
   private boolean active;
   private StatusCode terminalStatus;
+
+  SqlActiveScanState() { this(SqlRetainedArrayAllocator.STANDARD); }
+
+  SqlActiveScanState(SqlRetainedArrayAllocator retainedAllocator) {
+    allocator = retainedAllocator;
+    groupLookahead = new SqlGroupLookaheadState(retainedAllocator);
+  }
 
   public StatusCode reset() {
     if (active) {
       return StatusCode.CONFLICT;
     }
-    groupLookahead = false;
-    groupLookaheadNull = false;
-    groupInputExhausted = false;
+    groupLookahead.reset();
     distinctValueAvailable = false;
-    distinctValueNull = false;
     aggregateTransactionActive = false;
     aggregateNull = false;
     aggregateAvailable = false;
@@ -55,17 +50,10 @@ final class SqlActiveScanState {
       }
     }
     aggregateTextLength = 0;
+    aggregateHigh = 0;
     aggregateValue = 0;
     aggregateCommitSequence = 0;
     explainCommitSequence = 0;
-    groupLookaheadValue = 0;
-    groupLookaheadAggregateValue = 0;
-    groupLookaheadAggregateNull = false;
-    groupLookaheadNullMask = 0;
-    for (int index = 0; index < groupLookaheadValues.length; index++) {
-      groupLookaheadValues[index] = 0;
-    }
-    distinctValue = 0;
     sortedRowCount = 0;
     sortedRowIndex = 0;
     planStepIndex = 0;
@@ -97,7 +85,7 @@ final class SqlActiveScanState {
     return StatusCode.OK;
   }
 
-  StatusCode claimSorted(int rowCount) {
+  StatusCode claimSorted(long rowCount) {
     if (active || rowCount < 0) {
       return StatusCode.CONFLICT;
     }
@@ -111,23 +99,43 @@ final class SqlActiveScanState {
     if (active || result == null || result.commitSequence() < 0) {
       return StatusCode.CONFLICT;
     }
+    int length = result.textLengthAt(0);
+    char[] nextText = aggregateText;
+    if (length >= 0 && nextText == null) {
+      try {
+        nextText = allocator.characters(
+            io.riverdb.engine.api.CommandResult.MAXIMUM_TEXT_CHARACTERS);
+      } catch (OutOfMemoryError error) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+    }
     aggregateAvailable = result.hasValue();
+    aggregateHigh = result.highValueAt(0);
     aggregateValue = result.value();
     aggregateNull = result.isNull(0);
     aggregateTransactionActive = result.transactionActive();
     aggregateCommitSequence = result.commitSequence();
-    int length = result.textLengthAt(0);
     if (length >= 0) {
-      if (aggregateText == null) {
-        aggregateText = new char[io.riverdb.engine.api.CommandResult.MAXIMUM_TEXT_CHARACTERS];
-      }
+      aggregateText = nextText;
       aggregateTextLength = result.copyTextAt(0, aggregateText, 0);
     }
     active = true;
     return StatusCode.OK;
   }
 
-  StatusCode claimSortedInput(int sortedInputRows) {
+  StatusCode reserveAggregateText(boolean required) {
+    if (!required || aggregateText != null) return StatusCode.OK;
+    try {
+      char[] next = allocator.characters(
+          io.riverdb.engine.api.CommandResult.MAXIMUM_TEXT_CHARACTERS);
+      aggregateText = next;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+  }
+
+  StatusCode claimSortedInput(long sortedInputRows) {
     if (active || sortedInputRows < -1) {
       return StatusCode.CONFLICT;
     }
@@ -163,6 +171,11 @@ final class SqlActiveScanState {
   }
 
   int currentSortedRow() {
+    return sortedRowIndex < sortedRowCount && sortedRowIndex <= Integer.MAX_VALUE
+        ? (int) sortedRowIndex : -1;
+  }
+
+  long currentSortedOrdinal() {
     return sortedRowIndex < sortedRowCount ? sortedRowIndex : -1;
   }
 
@@ -170,80 +183,20 @@ final class SqlActiveScanState {
     sortedRowIndex++;
   }
 
-  boolean groupInputExhausted() {
-    return groupInputExhausted;
-  }
-
-  void exhaustGroupInput() {
-    groupInputExhausted = true;
-  }
-
-  boolean hasGroupLookahead() {
-    return groupLookahead;
-  }
-
-  long takeGroupLookahead() {
-    groupLookahead = false;
-    return groupLookaheadValue;
-  }
-
-  boolean groupLookaheadNull() {
-    return groupLookaheadNull;
-  }
-
-  long groupLookaheadAggregateValue() {
-    return groupLookaheadAggregateValue;
-  }
-
-  boolean groupLookaheadAggregateNull() {
-    return groupLookaheadAggregateNull;
-  }
-
-  void setGroupLookahead(
-      long value,
-      boolean nullValue,
-      long aggregateValue,
-      boolean aggregateNull) {
-    groupLookaheadValue = value;
-    groupLookaheadNull = nullValue;
-    groupLookaheadAggregateValue = aggregateValue;
-    groupLookaheadAggregateNull = aggregateNull;
-    groupLookahead = true;
-  }
-
-  void setGroupLookahead(long[] values, int count, long nullMask) {
-    System.arraycopy(values, 0, groupLookaheadValues, 0, count);
-    groupLookaheadNullMask = nullMask;
-    groupLookahead = true;
-  }
-
-  void takeGroupLookahead(long[] values, int count) {
-    System.arraycopy(groupLookaheadValues, 0, values, 0, count);
-    groupLookahead = false;
-  }
-
-  long groupLookaheadNullMask() { return groupLookaheadNullMask; }
+  SqlGroupLookaheadState groupLookahead() { return groupLookahead; }
 
   boolean hasDistinctValue() {
     return distinctValueAvailable;
   }
 
-  long distinctValue() {
-    return distinctValue;
-  }
-
-  boolean distinctValueNull() {
-    return distinctValueNull;
-  }
-
-  void setDistinctValue(long value, boolean nullValue) {
-    distinctValue = value;
-    distinctValueNull = nullValue;
-    distinctValueAvailable = true;
-  }
+  void markDistinctValue() { distinctValueAvailable = true; }
 
   long aggregateValue() {
     return aggregateValue;
+  }
+
+  long aggregateHigh() {
+    return aggregateHigh;
   }
 
   boolean aggregateNull() {

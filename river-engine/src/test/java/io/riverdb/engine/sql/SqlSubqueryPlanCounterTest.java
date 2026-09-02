@@ -28,10 +28,10 @@ final class SqlSubqueryPlanCounterTest {
       assertEquals(plain.details[step], analyzed.details[step]);
     }
     int edge = analyzed.count - 6;
-    assertEdgeShape(plain, edge, false, "member", "table", -1, 1);
-    assertEdgeShape(analyzed, edge, true, "member", "table", -1, 1);
+    assertEdgeShape(plain, edge, false, "member", "index", 2, 0);
+    assertEdgeShape(analyzed, edge, true, "member", "index", 2, 0);
     assertEquals(edgeDetail(0, 1, 2, false), analyzed.details[edge]);
-    assertRows(analyzed, edge, 4, 1, 4, 2, 4, 1);
+    assertRows(analyzed, edge, 4, 1, 2, 2, 4, 1);
     assertEquals(3, analyzed.rows[edge] - analyzed.rows[edge + 1], "cache hits");
 
     String correlated = "SELECT o.id FROM outer_rows o WHERE o.value IN "
@@ -40,7 +40,7 @@ final class SqlSubqueryPlanCounterTest {
         fixture.session(), "EXPLAIN ANALYZE " + correlated);
     edge = correlatedPlan.count - 6;
     assertTrue((correlatedPlan.details[edge] & CORRELATED) != 0);
-    assertEdgeShape(correlatedPlan, edge, true, "member", "index", 2, 1);
+    assertEdgeShape(correlatedPlan, edge, true, "member", "index", 2, 0);
     assertEquals(edgeDetail(0, 1, 2, true), correlatedPlan.details[edge]);
     assertRows(correlatedPlan, edge, 4, 4, 6, 6, 4, 1);
 
@@ -70,7 +70,7 @@ final class SqlSubqueryPlanCounterTest {
         "EXPLAIN ANALYZE SELECT o.id FROM outer_rows o WHERE o.value="
             + "(SELECT s.value FROM scalar_rows s WHERE s.owner=1)");
     edge = scalar.count - 6;
-    assertEdgeShape(scalar, edge, true, "scalar", "table", -1, 1);
+    assertEdgeShape(scalar, edge, true, "scalar", "table", -1, 0);
     assertEquals(edgeDetail(0, 1, 2, false), scalar.details[edge]);
     assertRows(scalar, edge, 4, 1, 3, 1, 4, 1);
 
@@ -135,9 +135,7 @@ final class SqlSubqueryPlanCounterTest {
     assertEquals(
         StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
         fixture.session().beginScan("EXPLAIN ANALYZE " + gap, cursor));
-    assertEquals(
-        StatusCode.OK,
-        fixture.session().closeScan(cursor, fixture.result()));
+    assertEquals(StatusCode.OK, cursor.reset());
     SqlScanCursor invalidZone = new SqlScanCursor();
     assertEquals(
         StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
@@ -183,7 +181,7 @@ final class SqlSubqueryPlanCounterTest {
     assertEquals(PackedText.pack("parent"), plan.operators[edge + 5]);
     assertEquals(1, plan.details[edge + 1]);
     assertEquals(column, plan.details[edge + 2]);
-    assertEquals(filterLeaves, plan.details[edge + 3]);
+    assertEquals(filterLeaves, plan.details[edge + 3], kind + "/" + access);
     assertEquals(1, plan.details[edge + 4]);
     assertEquals(0, plan.details[edge + 5]);
     for (int phase = 0; phase < 6; phase++) {

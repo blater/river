@@ -1,13 +1,14 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.text.Utf8Text;
 import java.nio.ByteBuffer;
 
 /** Caller-owned bounded SQL text for one durable logical view definition. */
 public final class ViewDefinition implements CharSequence {
   public static final int MAXIMUM_QUERY_LENGTH = 768;
-  public static final int MAXIMUM_LINEAGE_TABLES = 32;
+  public static final int MAXIMUM_LINEAGE_TABLES = SqlShapeLimits.MAX_JOIN_ROLES;
 
   private final char[] query = new char[MAXIMUM_QUERY_LENGTH];
   private final int[] tableIds = new int[MAXIMUM_LINEAGE_TABLES];

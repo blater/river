@@ -5,10 +5,10 @@ public final class BTreePageHeader {
   private int type;
   private int entryCount;
   private int pointer;
-  private int highSpace;
+  private long highSpace;
   private long highKey;
 
-  void set(int pageType, int count, int pagePointer, int fenceSpace, long fenceKey) {
+  void set(int pageType, int count, int pagePointer, long fenceSpace, long fenceKey) {
     type = pageType;
     entryCount = count;
     pointer = pagePointer;
@@ -33,7 +33,7 @@ public final class BTreePageHeader {
     return pointer;
   }
 
-  public int highSpace() {
+  public long highSpace() {
     return highSpace;
   }
 

@@ -55,6 +55,19 @@ class RiverJdbcStatement extends AbstractStatement {
     return resultSet;
   }
 
+  final ResultSet executePreparedQuery(long handle, ParameterSet parameters)
+      throws SQLException {
+    requireOpen();
+    closeCurrentResult();
+    connection.beforeExecution();
+    openedQuery.reset();
+    StatusCode status = session.beginPreparedQuery(handle, parameters, openedQuery);
+    JdbcExceptions.require(status, "execute prepared query");
+    resultSet = new RiverJdbcResultSet(this, openedQuery.query());
+    updateCount = -1;
+    return resultSet;
+  }
+
   @Override
   public int executeUpdate(String sql) throws SQLException {
     return executeUpdateSql(sql, null, false);
@@ -72,6 +85,25 @@ class RiverJdbcStatement extends AbstractStatement {
     JdbcExceptions.require(status, "execute update");
     if (command.rowAvailable()) {
       throw JdbcExceptions.invalid("query SQL must use executeQuery");
+    }
+    connection.commandCompleted(command);
+    updateCount = command.affectedRows();
+    generatedKeyAvailable = returnGeneratedKeys && command.key() > 0;
+    generatedKey = generatedKeyAvailable ? command.key() : 0;
+    return updateCount;
+  }
+
+  final int executePreparedUpdate(
+      long handle, ParameterSet parameters, boolean returnGeneratedKeys)
+      throws SQLException {
+    requireOpen();
+    closeCurrentResult();
+    connection.beforeExecution();
+    command.reset();
+    StatusCode status = session.executePrepared(handle, parameters, command);
+    JdbcExceptions.require(status, "execute prepared update");
+    if (command.rowAvailable()) {
+      throw JdbcExceptions.invalid("query handle must use executeQuery");
     }
     connection.commandCompleted(command);
     updateCount = command.affectedRows();
@@ -104,14 +136,14 @@ class RiverJdbcStatement extends AbstractStatement {
     if (closed) {
       return;
     }
-    try {
-      closeCurrentResult();
-    } finally {
-      clearBatchEntries();
-    }
+    closeCurrentResult();
+    JdbcExceptions.require(releaseRetainedPrepared(), "close prepared statement");
+    clearBatchEntries();
     closed = true;
     connection.statementClosed(this);
   }
+
+  StatusCode releaseRetainedPrepared() { return StatusCode.OK; }
 
   @Override
   public void cancel() throws SQLException {
@@ -403,6 +435,14 @@ class RiverJdbcStatement extends AbstractStatement {
     batchCount++;
   }
 
+  void addPreparedBatch(ParameterSet parameters) throws SQLException {
+    requireBatchCapacity();
+    if (batchParameters == null) {
+      batchParameters = new ParameterSet[MAXIMUM_BATCH_STATEMENTS];
+    }
+    batchParameters[batchCount++] = parameters;
+  }
+
   final void requireBatchCapacity() throws SQLException {
     if (batchCount >= batch.length) {
       throw JdbcExceptions.failure(
@@ -440,7 +480,7 @@ class RiverJdbcStatement extends AbstractStatement {
     if (parameters != null) parameters.reset();
   }
 
-  private void requireOpen() throws SQLException {
+  final void requireOpen() throws SQLException {
     if (closed) {
       throw JdbcExceptions.closed("statement");
     }

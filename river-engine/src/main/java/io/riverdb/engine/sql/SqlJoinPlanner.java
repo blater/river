@@ -55,7 +55,8 @@ final class SqlJoinPlanner {
       long outputRows) {
     int inner = context.accessInnerColumn(stage);
     if (inner < 0) return saturatedMultiply(outerRows, innerRows);
-    if (inner == 0 || context.table(stage + 1).hasUniqueIndexOn(inner)) {
+    if (context.table(stage + 1).hasPrimaryIndexOn(inner)
+        || context.table(stage + 1).hasUniqueIndexOn(inner)) {
       return outerRows;
     }
     if (context.table(stage + 1).hasIndexOn(inner)) return outputRows;
@@ -69,8 +70,8 @@ final class SqlJoinPlanner {
       long innerRows,
       long outputRows) {
     int inner = context.strategyInnerColumn(stage);
-    boolean ordered = inner == 0 || inner > 0
-        && context.table(stage + 1).hasIndexOn(inner);
+    boolean ordered = context.table(stage + 1).hasPrimaryIndexOn(inner)
+        || context.table(stage + 1).hasIndexOn(inner);
     long innerCost = ordered
         ? innerRows : saturatedMultiply(innerRows, logarithm(innerRows));
     return saturatedAdd(saturatedAdd(outerRows, innerCost), outputRows);

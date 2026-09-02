@@ -27,6 +27,7 @@ public enum StatusCode {
   PARAMETER_COUNT_MISMATCH(3014, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   CONFLICT(4000, StatusFamily.CONFLICT, true, false),
   NOT_OWNER(4001, StatusFamily.CONFLICT, false, false),
+  DEADLOCK(4002, StatusFamily.CONFLICT, true, false),
   RESOURCE_EXHAUSTED(5000, StatusFamily.RESOURCE_EXHAUSTED, false, false),
   QUERY_TOO_COMPLEX(5001, StatusFamily.RESOURCE_EXHAUSTED, false, false),
   TIMEOUT(6000, StatusFamily.TIMEOUT, false, false),

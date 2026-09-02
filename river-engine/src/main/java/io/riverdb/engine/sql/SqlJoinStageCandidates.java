@@ -17,9 +17,10 @@ final class SqlJoinStageCandidates {
   private int outcome;
   private boolean unique;
 
-  SqlJoinStageCandidates(RelationalSession relationalSession) {
+  SqlJoinStageCandidates(
+      RelationalSession relationalSession, SqlSessionShapeBudget budget) {
     session = relationalSession;
-    strategies = new SqlJoinStrategyCandidates(relationalSession);
+    strategies = new SqlJoinStrategyCandidates(relationalSession, budget);
   }
 
   void configure(SqlBoundJoinContext joinContext, SqlCommand command) {
@@ -56,7 +57,8 @@ final class SqlJoinStageCandidates {
       outcome = FINISHED;
       return StatusCode.OK;
     }
-    long value = expressions.readColumn(rows.key(outerRole), outerRow, outerColumn);
+    long value = expressions.readColumn(
+        rows.key(outerRole), outerRow, context.table(outerRole), outerColumn);
     StatusCode status = rows.ownThrough(current);
     if (!status.isOk()) return status;
     if (cursors.rightUnique(current)) {
@@ -118,14 +120,18 @@ final class SqlJoinStageCandidates {
     int outerRole = context.accessOuterRole(current);
     int outerColumn = context.accessOuterColumn(current);
     long leftValue = expressions.readColumn(
-        rows.key(outerRole), rows.row(outerRole), outerColumn);
+        rows.key(outerRole), rows.row(outerRole), context.table(outerRole), outerColumn);
     long rightValue = expressions.readColumn(
-        rows.key(rightRole), right, innerColumn);
+        rows.key(rightRole), right, rightTable, innerColumn);
+    TableDefinition leftTable = context.table(outerRole);
     return expressions.compareExact(
+        expressions.readColumnHigh(rows.key(rightRole), right, rightTable, innerColumn),
         rightValue,
         rightTable.typeDescriptor(innerColumn),
+        expressions.readColumnHigh(
+            rows.key(outerRole), rows.row(outerRole), leftTable, outerColumn),
         leftValue,
-        context.table(outerRole).typeDescriptor(outerColumn)) == 0;
+        leftTable.typeDescriptor(outerColumn)) == 0;
   }
 
   boolean fallback(int current) { return strategies.fallback(current); }

@@ -5,9 +5,9 @@ final class IndexedStorePhase {
   enum Mode {
     IDLE,
     STAGED,
-    PREPARED_PREFLIGHT,
-    PREPARED_ENCODING,
-    PREPARED_FORCED,
+    HYBRID_PREFLIGHT,
+    HYBRID_ENCODING,
+    HYBRID_FORCED,
     VACUUM_APPLY
   }
 
@@ -29,38 +29,38 @@ final class IndexedStorePhase {
     return mode == Mode.VACUUM_APPLY;
   }
 
-  boolean preparedInsertGroupActive() {
-    return mode == Mode.PREPARED_PREFLIGHT
-        || mode == Mode.PREPARED_ENCODING
-        || mode == Mode.PREPARED_FORCED;
-  }
-
-  boolean preparedInsertEncoding() {
-    return mode == Mode.PREPARED_ENCODING || mode == Mode.PREPARED_FORCED;
-  }
-
-  boolean preparedInsertForced() {
-    return mode == Mode.PREPARED_FORCED;
+  boolean commitGroupActive() {
+    return mode == Mode.HYBRID_PREFLIGHT
+        || mode == Mode.HYBRID_ENCODING
+        || mode == Mode.HYBRID_FORCED;
   }
 
   boolean beginStaged() {
     return transition(Mode.IDLE, Mode.STAGED);
   }
 
-  boolean beginPreparedPreflight() {
-    return transition(Mode.IDLE, Mode.PREPARED_PREFLIGHT);
-  }
-
-  boolean beginPreparedEncoding() {
-    return transition(Mode.PREPARED_PREFLIGHT, Mode.PREPARED_ENCODING);
-  }
-
-  boolean markPreparedForced() {
-    return transition(Mode.PREPARED_ENCODING, Mode.PREPARED_FORCED);
-  }
-
   boolean beginVacuumApply() {
     return transition(Mode.IDLE, Mode.VACUUM_APPLY);
+  }
+
+  boolean beginHybridPreflight() {
+    return transition(Mode.IDLE, Mode.HYBRID_PREFLIGHT);
+  }
+
+  boolean beginHybridEncoding() {
+    return transition(Mode.HYBRID_PREFLIGHT, Mode.HYBRID_ENCODING);
+  }
+
+  boolean markHybridForced() {
+    return transition(Mode.HYBRID_ENCODING, Mode.HYBRID_FORCED);
+  }
+
+  boolean hybridEncoding() {
+    return mode == Mode.HYBRID_ENCODING || mode == Mode.HYBRID_FORCED;
+  }
+
+  boolean hybridForced() {
+    return mode == Mode.HYBRID_FORCED;
   }
 
   void reset() {

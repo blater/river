@@ -22,6 +22,9 @@ final class LocalWalReservationAdmission {
     if (!admission.isOk()) {
       return admission;
     }
+    if (wal.hasOpenLogicalStream()) {
+      return StatusCode.CONFLICT;
+    }
     int recordBytes = WalRecordCodec.encodedBytes(payloadBytes);
     if (wal.hasActiveReservation() || wal.hasForcedBatch()) {
       return StatusCode.RESOURCE_EXHAUSTED;

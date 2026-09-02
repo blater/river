@@ -1,99 +1,160 @@
 package io.riverdb.format.btree;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.tuple.TupleOrder;
+import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.HexFormat;
 import org.junit.jupiter.api.Test;
 
 final class TupleKeyCodecTest {
   @Test
-  void encodesMixedCompositeTextAndStableNonuniqueTieBreaks() {
-    ByteBuffer bytes = ByteBuffer.allocate(256);
-    TupleKeyBuilder first = new TupleKeyBuilder();
-    assertEquals(StatusCode.OK, first.begin(bytes, 8, 4));
-    assertEquals(StatusCode.OK, first.addFixed(SqlTypeDescriptor.TYPE_ID_BIGINT, 1));
-    assertEquals(StatusCode.OK, first.addFixed(SqlTypeDescriptor.TYPE_ID_BIGINT, 2));
-    assertEquals(StatusCode.OK, first.addText(SqlTypeDescriptor.varchar(16), "BAR\u0000"));
-    assertEquals(StatusCode.OK, first.addText(SqlTypeDescriptor.varchar(16), "Å🙂"));
-    assertEquals(StatusCode.OK, first.finish(7));
-    assertTrue(TupleKeyCodec.validate(bytes, first.keyOffset(), first.keyBytes()));
-    assertEquals(7, TupleKeyCodec.logicalRowId(bytes, first.keyOffset(), first.keyBytes()));
-    assertArrayEquals(
-        HexFormat.of().parseHex(
-            "010400000101800000000000000101018000000000000002020100000043000000"
-                + "420000005300000001000000000201000000c60001f64300000000000000000000"
-                + "0007"),
-        Arrays.copyOfRange(bytes.array(), first.keyOffset(), first.keyOffset() + first.keyBytes()));
-
-    TupleKeyBuilder second = new TupleKeyBuilder();
-    assertEquals(StatusCode.OK, second.begin(bytes, 128, 4));
-    assertEquals(StatusCode.OK, second.addFixed(SqlTypeDescriptor.TYPE_ID_BIGINT, 1));
-    assertEquals(StatusCode.OK, second.addFixed(SqlTypeDescriptor.TYPE_ID_BIGINT, 2));
-    assertEquals(StatusCode.OK, second.addText(SqlTypeDescriptor.varchar(16), "BAR\u0000"));
-    assertEquals(StatusCode.OK, second.addText(SqlTypeDescriptor.varchar(16), "Å🙂"));
-    assertEquals(StatusCode.OK, second.finish(8));
-    assertTrue(TupleKeyCodec.compare(
-        bytes, first.keyOffset(), first.keyBytes(),
-        bytes, second.keyOffset(), second.keyBytes()) < 0);
+  void physicalMixedTupleOrdersByUserValuesThenLogicalIdentity() {
+    int[] descriptors = {
+        SqlTypeDescriptor.BIGINT,
+        SqlTypeDescriptor.BOOLEAN,
+        SqlTypeDescriptor.decimal(12, 2),
+        SqlTypeDescriptor.DATE,
+        SqlTypeDescriptor.time(6),
+        SqlTypeDescriptor.timestamp(6),
+        SqlTypeDescriptor.timestampWithTimeZone(6),
+        SqlTypeDescriptor.varchar(16)
+    };
+    TupleShape shape = shape(descriptors);
+    ByteBuffer bytes = ByteBuffer.allocate(1024);
+    int firstBytes = mixedKey(bytes, 0, descriptors, "Å🙂", 7);
+    int secondBytes = mixedKey(bytes, 256, descriptors, "Å🙂", 8);
+    assertTrue(TupleKeyCodec.matchesPhysicalIndexKey(bytes, 0, firstBytes, shape));
+    assertEquals(7, TupleKeyCodec.logicalRowId(bytes, 0, firstBytes));
     assertEquals(0, TupleKeyCodec.compareUserTuple(
-        bytes, first.keyOffset(), first.keyBytes(),
-        bytes, second.keyOffset(), second.keyBytes()));
-  }
-
-  @Test
-  void nullSortsBeforeValuesAndMalformedKeysFailClosed() {
-    ByteBuffer bytes = ByteBuffer.allocate(128);
-    TupleKeyBuilder nullKey = new TupleKeyBuilder();
-    assertEquals(StatusCode.OK, nullKey.begin(bytes, 0, 1));
-    assertEquals(StatusCode.OK, nullKey.addNull(SqlTypeDescriptor.varchar(1)));
-    assertEquals(StatusCode.OK, nullKey.finish(1));
-    TupleKeyBuilder valueKey = new TupleKeyBuilder();
-    assertEquals(StatusCode.OK, valueKey.begin(bytes, 32, 1));
-    assertEquals(StatusCode.OK, valueKey.addText(SqlTypeDescriptor.varchar(1), "A"));
-    assertEquals(StatusCode.OK, valueKey.finish(1));
+        bytes, 0, firstBytes, bytes, 256, secondBytes));
     assertTrue(TupleKeyCodec.compare(
-        bytes, nullKey.keyOffset(), nullKey.keyBytes(),
-        bytes, valueKey.keyOffset(), valueKey.keyBytes()) < 0);
-
-    bytes.put(valueKey.keyOffset(), (byte) 0);
-    assertFalse(TupleKeyCodec.validate(bytes, valueKey.keyOffset(), valueKey.keyBytes()));
+        bytes, 0, firstBytes, bytes, 256, secondBytes) < 0);
   }
 
   @Test
-  void enforcesTextAndFixedValueDomainsAtTheDurableBoundary() {
-    ByteBuffer bytes = ByteBuffer.allocate(TupleKeyCodec.MAXIMUM_KEY_BYTES * 2);
+  void genericTupleAdmits1664PartsWhileIndexRejectsPart33() {
+    int count = SqlShapeLimits.MAX_TUPLE_PARTS;
+    int[] descriptors = new int[count];
+    Arrays.fill(descriptors, SqlTypeDescriptor.BOOLEAN);
+    TupleShape shape = shape(descriptors);
+    ByteBuffer bytes = ByteBuffer.allocate(8_192);
     TupleKeyBuilder builder = new TupleKeyBuilder();
-    assertEquals(StatusCode.OK, builder.begin(bytes, 0, 1));
+    assertEquals(StatusCode.OK, builder.beginTuple(bytes, 0, count));
+    for (int part = 0; part < count; part++) {
+      assertEquals(StatusCode.OK, builder.addNull(descriptors[part]));
+    }
+    assertEquals(StatusCode.OK, builder.finishTuple());
+    assertEquals(count, TupleKeyCodec.arity(bytes, 0, builder.keyBytes()));
+    assertTrue(TupleKeyCodec.matchesShape(bytes, 0, builder.keyBytes(), shape));
+    assertFalse(TupleKeyCodec.isPhysical(bytes, 0, builder.keyBytes()));
     assertEquals(
-        StatusCode.OK,
-        builder.addText(
-            SqlTypeDescriptor.varchar(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS),
-            "a".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS)));
-    assertEquals(StatusCode.OK, builder.finish(1));
-    assertTrue(TupleKeyCodec.validate(bytes, 0, builder.keyBytes()));
+        StatusCode.RESOURCE_EXHAUSTED,
+        builder.beginIndex(bytes, 0, SqlShapeLimits.MAX_KEY_PARTS + 1));
+  }
 
-    assertEquals(StatusCode.OK, builder.begin(bytes, 0, 1));
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        builder.addText(
-            SqlTypeDescriptor.varchar(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS),
-            "a".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS + 1)));
-    assertEquals(StatusCode.OK, builder.begin(bytes, 0, 1));
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        builder.addFixed(SqlTypeDescriptor.BOOLEAN, 2));
+  @Test
+  void rejects3073UserBytesBeforePhysicalKeyPublication() {
+    int text = SqlTypeDescriptor.varchar(255);
+    ByteBuffer bytes = ByteBuffer.allocate(4_096);
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginIndex(bytes, 0, 3));
+    assertEquals(StatusCode.OK, builder.addText(text, "a".repeat(255)));
+    assertEquals(StatusCode.OK, builder.addText(text, "b".repeat(254)));
+    assertEquals(StatusCode.OK, builder.addText(text, "c".repeat(254)));
+    assertEquals(3_073, TupleKeyCodec.headerBytes(3) + 3 * 2 + (255 + 254 + 254 + 3) * 4);
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, builder.finishPhysical(1));
+    assertEquals(0, builder.keyBytes());
+  }
 
-    assertEquals(StatusCode.OK, builder.begin(bytes, 0, 1));
+  @Test
+  void semanticComparatorSuppliesDirectionAndNullPlacement() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    ByteBuffer bytes = ByteBuffer.allocate(128);
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginTuple(bytes, 0, 1));
+    assertEquals(StatusCode.OK, builder.addNull(SqlTypeDescriptor.BIGINT));
+    assertEquals(StatusCode.OK, builder.finishTuple());
+    int nullBytes = builder.keyBytes();
+    assertEquals(StatusCode.OK, builder.beginTuple(bytes, 32, 1));
+    assertEquals(StatusCode.OK, builder.addFixed(SqlTypeDescriptor.BIGINT, 9));
+    assertEquals(StatusCode.OK, builder.finishTuple());
+    int valueBytes = builder.keyBytes();
+    ByteBufferTupleInput left = new ByteBufferTupleInput();
+    ByteBufferTupleInput right = new ByteBufferTupleInput();
+    assertEquals(StatusCode.OK, left.reset(bytes, 0, nullBytes));
+    assertEquals(StatusCode.OK, right.reset(bytes, 32, valueBytes));
+    TupleOrder.Result orderResult = new TupleOrder.Result();
+    assertEquals(StatusCode.OK, TupleOrder.create(
+        shape, new byte[] {(byte) TupleOrder.DESC_NULLS_LAST}, 0, orderResult));
+    TupleComparison comparison = new TupleComparison();
+    assertEquals(StatusCode.OK, new TupleComparator().compare(
+        left, right, shape, orderResult.value(), false, comparison));
+    assertTrue(comparison.value() > 0);
+  }
+
+  @Test
+  void wideDecimalsPreserveSignedNumericOrder() {
+    int decimal = SqlTypeDescriptor.decimal(38, 4);
+    TupleShape shape = shape(new int[] {decimal});
+    ByteBuffer bytes = ByteBuffer.allocate(128);
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginTuple(bytes, 0, 1));
+    assertEquals(StatusCode.OK, builder.addDecimal128(decimal, -1, -1));
+    assertEquals(StatusCode.OK, builder.finishTuple());
+    int negativeBytes = builder.keyBytes();
+    assertEquals(StatusCode.OK, builder.beginTuple(bytes, 64, 1));
+    assertEquals(StatusCode.OK, builder.addDecimal128(decimal, 0, Long.MIN_VALUE));
+    assertEquals(StatusCode.OK, builder.finishTuple());
+    int positiveBytes = builder.keyBytes();
+
+    assertTrue(TupleKeyCodec.matchesShape(bytes, 0, negativeBytes, shape));
+    assertTrue(TupleKeyCodec.matchesShape(bytes, 64, positiveBytes, shape));
+    assertTrue(TupleKeyCodec.compare(
+        bytes, 0, negativeBytes, bytes, 64, positiveBytes) < 0);
+  }
+
+  @Test
+  void rejectsMalformedFlagsArityTextAndFixedDomains() {
+    ByteBuffer bytes = ByteBuffer.allocate(128);
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginIndex(bytes, 0, 1));
     assertEquals(StatusCode.OK, builder.addFixed(SqlTypeDescriptor.BOOLEAN, 1));
-    assertEquals(StatusCode.OK, builder.finish(1));
-    TupleKeyCodec.putBigEndianLong(bytes, TupleKeyCodec.HEADER_BYTES + 2, 2 ^ Long.MIN_VALUE);
-    assertFalse(TupleKeyCodec.validate(bytes, 0, builder.keyBytes()));
+    assertEquals(StatusCode.OK, builder.finishPhysical(1));
+    int length = builder.keyBytes();
+    bytes.put(1, (byte) 2);
+    assertFalse(TupleKeyCodec.validate(bytes, 0, length));
+    bytes.put(1, (byte) TupleKeyCodec.FLAG_PHYSICAL);
+    int valueOffset = TupleKeyCodec.headerBytes(1) + 2;
+    TupleKeyCodec.putBigEndianLong(bytes, valueOffset, 2 ^ Long.MIN_VALUE);
+    assertFalse(TupleKeyCodec.validate(bytes, 0, length));
+  }
+
+  private static int mixedKey(
+      ByteBuffer target, int offset, int[] descriptors, String text, long logicalRowId) {
+    TupleKeyBuilder builder = new TupleKeyBuilder();
+    assertEquals(StatusCode.OK, builder.beginIndex(target, offset, descriptors.length));
+    assertEquals(StatusCode.OK, builder.addFixed(descriptors[0], -4));
+    assertEquals(StatusCode.OK, builder.addFixed(descriptors[1], 1));
+    assertEquals(StatusCode.OK, builder.addFixed(descriptors[2], 1234));
+    assertEquals(StatusCode.OK, builder.addFixed(descriptors[3], 0));
+    assertEquals(StatusCode.OK, builder.addFixed(descriptors[4], 1_000_000));
+    assertEquals(StatusCode.OK, builder.addFixed(descriptors[5], 0));
+    assertEquals(StatusCode.OK, builder.addFixed(descriptors[6], 0));
+    assertEquals(StatusCode.OK, builder.addText(descriptors[7], text));
+    assertEquals(StatusCode.OK, builder.finishPhysical(logicalRowId));
+    return builder.keyBytes();
+  }
+
+  private static TupleShape shape(int[] descriptors) {
+    TupleShape.Result result = new TupleShape.Result();
+    assertEquals(StatusCode.OK, TupleShape.create(descriptors, result));
+    return result.value();
   }
 }

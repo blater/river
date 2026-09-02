@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlScalarExpression;
 
@@ -26,7 +27,7 @@ final class SqlExactExpressionEvaluator {
 
   StatusCode cast(long value, int source, int target) {
     return ExactDecimal.quantize(
-        value, source, target, true, target == SqlTypeDescriptor.BIGINT,
+        value, source, target, true, SqlNumericTypeRules.isIntegral(target),
         result, wide);
   }
 
@@ -55,6 +56,8 @@ final class SqlExactExpressionEvaluator {
   long value() {
     return result.value;
   }
+
+  void seed(long value) { result.value = value; }
 
   static boolean unaryOperator(int operator) {
     return operator == SqlScalarExpression.NEGATE

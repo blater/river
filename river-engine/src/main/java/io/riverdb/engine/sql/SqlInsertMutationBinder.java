@@ -10,13 +10,15 @@ final class SqlInsertMutationBinder {
       new SqlMutationExpressionBinder();
 
   StatusCode bind(SqlCommand command, BoundSqlStatement bound) {
+    StatusCode reserved = bound.reserveMutationColumns(command.mutationExpressionCount());
+    if (!reserved.isOk()) return reserved;
     bound.projectionPrograms.beginMutations(command.mutationExpressionCount());
     StatusCode status = SqlInsertColumnMapping.map(command, bound);
     for (int row = 0;
         status.isOk() && row < command.insertRowCount(); row++) {
       status = validateRow(command, bound, row);
     }
-    return status;
+    return status.isOk() ? bound.projectionPrograms.status() : status;
   }
 
   private StatusCode validateRow(
@@ -53,7 +55,8 @@ final class SqlInsertMutationBinder {
       SqlCommand command, BoundSqlStatement bound, int row, int column) {
     int source = bound.insertSourceByColumn[column];
     if (source >= 0 && command.insertIsDefault(row, source)
-        && !bound.table.hasDefault(column)) {
+        && !bound.table.hasDefault(column)
+        && !bound.table.isNullable(column)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = source >= 0 && command.insertHasExpression(row, source)
@@ -64,7 +67,9 @@ final class SqlInsertMutationBinder {
     }
     boolean nullValue = source < 0
         ? !bound.table.hasDefault(column)
-        : command.insertIsNull(row, source);
+        : command.insertIsNull(row, source)
+            || command.insertIsDefault(row, source)
+                && !bound.table.hasDefault(column);
     return nullValue && !bound.table.isNullable(column)
         ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
   }

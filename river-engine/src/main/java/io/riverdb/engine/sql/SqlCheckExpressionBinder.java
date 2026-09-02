@@ -28,11 +28,6 @@ final class SqlCheckExpressionBinder {
     if (!status.isOk() || size != 1) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    if (SqlTypeDescriptor.typeId(stack[0]) == SqlTypeDescriptor.TYPE_ID_BOOLEAN
-        && comparison != TableSchema.CHECK_EQUAL
-        && comparison != TableSchema.CHECK_NOT_EQUAL) {
-      return StatusCode.DATATYPE_MISMATCH;
-    }
     int valueDescriptor = command.columnCheckTypeDescriptor(column);
     status = SqlTypeDescriptor.canCompare(stack[0], valueDescriptor)
         ? StatusCode.OK : StatusCode.DATATYPE_MISMATCH;

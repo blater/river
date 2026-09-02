@@ -5,27 +5,31 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedDatabase;
 import io.riverdb.engine.checkpoint.CheckpointResult;
+import io.riverdb.engine.runtime.DatabaseResourcePlan;
+import io.riverdb.engine.runtime.RuntimeResourceRoot;
+import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import java.nio.file.Path;
 
 /** Durable named-table catalog and logical table sessions over the embedded kernel. */
 public final class RelationalDatabase {
   private final EmbeddedDatabase embedded;
+  private final RelationalDatabaseServices services;
   private final RelationalSchemaGate schemaGate = new RelationalSchemaGate();
-  private final RelationalSequenceService sequences =
-      new RelationalSequenceService(schemaGate);
   private final RelationalSchemaLifecycle schemaLifecycle;
-  private final RelationalTableCommands tableCommands;
-  private final RelationalSequenceCommands sequenceCommands;
+  private final RelationalDatabaseCommands commands;
   private final RelationalCatalogBootstrap catalogBootstrap =
       new RelationalCatalogBootstrap();
+  private final RelationalInternalSessionOwner bootstrapSessions =
+      new RelationalInternalSessionOwner();
 
-  RelationalDatabase(EmbeddedDatabase database) {
+  RelationalDatabase(
+      EmbeddedDatabase database,
+      RelationalDatabaseServices databaseServices) {
     embedded = database;
-    schemaLifecycle = new RelationalSchemaLifecycle(database, schemaGate);
-    tableCommands = new RelationalTableCommands(schemaLifecycle);
-    sequenceCommands = new RelationalSequenceCommands(
-        schemaLifecycle, schemaGate, sequences);
+    services = databaseServices;
+    schemaLifecycle = new RelationalSchemaLifecycle(database, schemaGate, services);
+    commands = new RelationalDatabaseCommands(schemaLifecycle, schemaGate);
   }
 
   public static StatusCode create(
@@ -36,6 +40,19 @@ public final class RelationalDatabase {
       RelationalDatabaseOpenResult result) {
     return RelationalDatabaseFactory.create(
         directory, database, generation, maximumActiveTransactions, result);
+  }
+
+  public static StatusCode create(
+      RuntimeResourceRoot resourceRoot,
+      DatabaseResourcePlan resourcePlan,
+      Path directory,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      RelationalDatabaseOpenResult result) {
+    return RelationalDatabaseFactory.create(
+        resourceRoot, resourcePlan, directory, database, generation,
+        maximumActiveTransactions, result);
   }
 
   public static StatusCode createWithDurableWalQuorum(
@@ -64,6 +81,19 @@ public final class RelationalDatabase {
       RelationalDatabaseOpenResult result) {
     return RelationalDatabaseFactory.openExisting(
         directory, database, generation, maximumActiveTransactions, result);
+  }
+
+  public static StatusCode openExisting(
+      RuntimeResourceRoot resourceRoot,
+      DatabaseResourcePlan resourcePlan,
+      Path directory,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      RelationalDatabaseOpenResult result) {
+    return RelationalDatabaseFactory.openExisting(
+        resourceRoot, resourcePlan, directory, database, generation,
+        maximumActiveTransactions, result);
   }
 
   public static StatusCode openWithDurableWalQuorum(
@@ -100,6 +130,10 @@ public final class RelationalDatabase {
     return embedded.replicatedWalPayloadBytes();
   }
 
+  boolean resourceGoverned() { return embedded.resourceGoverned(); }
+
+  long resourceWriteEntryCapacity() { return embedded.resourceWriteEntryCapacity(); }
+
   public StatusCode createTable(CharSequence name, TableDefinition result) {
     return createTable(name, "key", "value", result);
   }
@@ -109,37 +143,37 @@ public final class RelationalDatabase {
       CharSequence keyColumnName,
       CharSequence valueColumnName,
       TableDefinition result) {
-    return tableCommands.create(name, keyColumnName, valueColumnName, result);
+    return commands.createTable(name, keyColumnName, valueColumnName, result);
   }
 
   public StatusCode createSequence(
       CharSequence name,
       long start,
       long increment) {
-    return sequenceCommands.create(name, start, increment);
+    return commands.createSequence(name, start, increment);
   }
 
   public StatusCode dropSequence(CharSequence name) {
-    return sequenceCommands.drop(name);
+    return commands.dropSequence(name);
   }
 
   public StatusCode nextSequenceValue(
       CharSequence name,
       SequenceValueResult result) {
-    return sequenceCommands.next(name, result);
+    return commands.nextSequence(name, result);
   }
 
   public StatusCode nextIdentityValue(
       TableDefinition table,
       SequenceValueResult result) {
-    return sequenceCommands.nextIdentity(table, result);
+    return commands.nextIdentity(table, result);
   }
 
   public StatusCode createTable(
       CharSequence name,
       TableSchema schema,
       TableDefinition result) {
-    return tableCommands.create(name, schema, result);
+    return commands.createTable(name, schema, result);
   }
 
   public StatusCode dropTable(CharSequence name) {
@@ -194,33 +228,29 @@ public final class RelationalDatabase {
   public StatusCode renameTable(
       CharSequence currentName,
       CharSequence renamedName) {
-    return tableCommands.renameTable(currentName, renamedName);
+    return commands.renameTable(currentName, renamedName);
   }
 
   public StatusCode renameColumn(
       CharSequence tableName,
       CharSequence currentName,
       CharSequence renamedName) {
-    return tableCommands.renameColumn(tableName, currentName, renamedName);
+    return commands.renameColumn(tableName, currentName, renamedName);
   }
 
   public StatusCode renameIndex(
       CharSequence currentName,
       CharSequence renamedName) {
-    return tableCommands.renameIndex(currentName, renamedName);
+    return commands.renameIndex(currentName, renamedName);
   }
 
-  public StatusCode createSession(RelationalSessionOpenResult result) {
+  public synchronized StatusCode createSession(RelationalSessionOpenResult result) {
     if (result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    RelationalSession session = newSession();
-    if (session == null) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    result.set(session);
-    return StatusCode.OK;
+    if (services.isClosing()) return StatusCode.CLOSED;
+    return schemaLifecycle.openSession(result);
   }
 
   public StatusCode vacuum(TransactionOutcome result) {
@@ -231,16 +261,55 @@ public final class RelationalDatabase {
     return embedded.checkpoint(result);
   }
 
-  public StatusCode close() {
-    return embedded.close();
+  /** Auxiliary SQL runtime, schema-cache, and catalog-v2 services sharing this close gate. */
+  public RelationalDatabaseServices services() {
+    return services;
+  }
+
+  public synchronized StatusCode close() {
+    StatusCode status = commands.close();
+    status = firstFailure(status, bootstrapSessions.retry());
+    status = firstFailure(status, schemaLifecycle.close());
+    return firstFailure(status, services.close(embedded));
+  }
+
+  synchronized StatusCode closeAfterOpenFailure() {
+    StatusCode first = commands.close();
+    first = firstFailure(first, bootstrapSessions.retry());
+    first = firstFailure(first, schemaLifecycle.close());
+    return firstFailure(first, services.closeAfterOpenFailure());
+  }
+
+  private static StatusCode firstFailure(StatusCode first, StatusCode next) {
+    return first.isOk() ? next : first;
   }
 
   StatusCode initializeCatalog() {
-    return catalogBootstrap.initialize(newSession());
+    StatusCode status = bootstrapSessions.retry();
+    if (status.isOk()) {
+      status = catalogBootstrap.initialize(newSession(), bootstrapSessions);
+    }
+    return status.isOk() ? services.initializeCatalog() : status;
   }
 
   StatusCode validateCatalog() {
-    return catalogBootstrap.validate(newSession());
+    StatusCode status = bootstrapSessions.retry();
+    if (status.isOk()) {
+      status = catalogBootstrap.validate(newSession(), bootstrapSessions);
+    }
+    if (status.isOk()) status = services.validateCatalog();
+    return status.isOk() ? validateDescriptorNames() : status;
+  }
+
+  private StatusCode validateDescriptorNames() {
+    StatusCode cleanup = bootstrapSessions.retry();
+    if (!cleanup.isOk()) return cleanup;
+    RelationalSession session = newSession();
+    if (session == null) return StatusCode.RESOURCE_EXHAUSTED;
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
+    if (status.isOk()) status = session.validateDescriptorNames();
+    return bootstrapSessions.finish(session, outcome, status, false);
   }
 
   private RelationalSession newSession() {

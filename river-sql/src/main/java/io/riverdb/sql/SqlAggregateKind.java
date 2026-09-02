@@ -8,6 +8,8 @@ public final class SqlAggregateKind {
   public static final int AVG = 4;
   public static final int MIN = 5;
   public static final int MAX = 6;
+  /** COUNT of non-null values after equality deduplication. */
+  public static final int COUNT_DISTINCT = 7;
 
   private SqlAggregateKind() {}
 }

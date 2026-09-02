@@ -19,7 +19,7 @@ than a Java translation target:
   [`dm1h.c`](../../ingres/src/back/dmf/dmp/dm1h.c),
   [`dm1i.c`](../../ingres/src/back/dmf/dmp/dm1i.c), and
   [`dm1b.c`](../../ingres/src/back/dmf/dmp/dm1b.c).
-- Variable 2-64 KiB page support is implemented in
+- Variable 2-64 KB page support is implemented in
   [`dm1c.c`](../../ingres/src/back/dmf/dmp/dm1c.c); River benchmarks a narrower v1
   choice instead of inheriting all sizes automatically.
 - Row locking, four isolation levels, MVCC, escalation, and deadlock machinery

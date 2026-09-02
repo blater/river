@@ -20,12 +20,17 @@ final class RelationalTableLifecycle {
   private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
   private final TableDefinition table = new TableDefinition();
   private final TableDefinition updatedTable = new TableDefinition();
+  private final CatalogTableDecoder tableDecoder = new CatalogTableDecoder();
   private boolean alreadyMarked;
 
   RelationalTableLifecycle(RelationalSchemaGate gate) {
     schemaGate = gate;
     dependencies = new RelationalCatalogDependencies(gate);
     physicalCleanup = new RelationalPhysicalCleanup(gate);
+  }
+
+  StatusCode checkViewReferences(RelationalSession session, int tableId) {
+    return dependencies.checkViewReferences(session, tableId);
   }
 
   StatusCode renameTable(
@@ -143,9 +148,9 @@ final class RelationalTableLifecycle {
       alreadyMarked = CatalogRecord.isDroppingTable(catalogRow, catalogScratch);
       status = alreadyMarked
           ? CatalogRecord.decodeDroppingTable(
-              catalogRow, catalogScratch, name, schemaGate, table)
+              tableDecoder, catalogRow, catalogScratch, name, schemaGate, table)
           : CatalogRecord.decodeTable(
-              catalogRow, catalogScratch, name, schemaGate, table);
+              tableDecoder, catalogRow, catalogScratch, name, schemaGate, table);
     }
     if (status.isOk() && !alreadyMarked) {
       status = dependencies.checkSchemaReferences(session, table);

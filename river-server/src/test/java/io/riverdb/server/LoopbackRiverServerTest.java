@@ -57,19 +57,19 @@ final class LoopbackRiverServerTest {
       assertStatus(StatusCode.OK, inserted);
       assertEquals(3, inserted.affectedRows());
 
+      long beforeQuery = client.completedRequests();
       ProtocolResponse begun = client.send(
           ProtocolMessageType.BEGIN_QUERY,
           "SELECT id, balance FROM accounts WHERE id >= 1 AND id < 4");
       assertStatus(StatusCode.OK, begun);
       assertTrue(begun.queryActive());
-      assertRow(client.send(ProtocolMessageType.FETCH), 1, 1, 100);
-      assertRow(client.send(ProtocolMessageType.FETCH), 2, 2, 200);
-      assertRow(client.send(ProtocolMessageType.FETCH), 3, 3, 300);
-      ProtocolResponse end = client.send(ProtocolMessageType.FETCH);
-      assertStatus(StatusCode.OK, end);
-      assertFalse(end.rowAvailable());
-      assertEquals(3, end.rowsReturned());
-      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_QUERY));
+      assertRow(begun, 1, 1, 100, true);
+      assertRow(client.send(ProtocolMessageType.FETCH), 2, 2, 200, true);
+      ProtocolResponse finalRow = client.send(ProtocolMessageType.FETCH);
+      assertRow(finalRow, 3, 3, 300, false);
+      assertTrue(finalRow.endOfStream());
+      assertEquals(3, finalRow.rowsReturned());
+      assertEquals(beforeQuery + 3, client.completedRequests());
       assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_SESSION));
     }
     assertEquals(StatusCode.OK, server.close());
@@ -94,6 +94,66 @@ final class LoopbackRiverServerTest {
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, server.lastStatus());
     assertTrue(server.completedRequests() >= 4);
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void completesEmptySingletonAndEarlyClosedQueriesWithoutRedundantRequests(
+      @TempDir Path root) throws IOException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (TestClient client = new TestClient(server.port())) {
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.OPEN_SESSION));
+      assertStatus(StatusCode.OK, client.send(
+          ProtocolMessageType.EXECUTE,
+          "CREATE TABLE stream_rows (id BIGINT PRIMARY KEY, value BIGINT)"));
+
+      long before = client.completedRequests();
+      ProtocolResponse empty = client.send(
+          ProtocolMessageType.BEGIN_QUERY,
+          "SELECT id, value FROM stream_rows WHERE id=99");
+      assertStatus(StatusCode.OK, empty);
+      assertTrue(empty.endOfStream());
+      assertFalse(empty.queryActive());
+      assertFalse(empty.rowAvailable());
+      assertEquals(before + 1, client.completedRequests());
+
+      assertStatus(StatusCode.OK, client.send(
+          ProtocolMessageType.EXECUTE,
+          "INSERT INTO stream_rows VALUES (1, 10)"));
+      before = client.completedRequests();
+      ProtocolResponse singleton = client.send(
+          ProtocolMessageType.BEGIN_QUERY,
+          "SELECT id, value FROM stream_rows WHERE id=1");
+      assertRow(singleton, 1, 1, 10, false);
+      assertTrue(singleton.endOfStream());
+      assertEquals(before + 1, client.completedRequests());
+
+      assertStatus(StatusCode.OK, client.send(
+          ProtocolMessageType.EXECUTE,
+          "INSERT INTO stream_rows VALUES (2, 20)"));
+      before = client.completedRequests();
+      ProtocolResponse first = client.send(
+          ProtocolMessageType.BEGIN_QUERY,
+          "SELECT id, value FROM stream_rows ORDER BY id");
+      assertRow(first, 1, 1, 10, true);
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_QUERY));
+      assertEquals(before + 2, client.completedRequests());
+      assertStatus(StatusCode.OK, client.send(
+          ProtocolMessageType.EXECUTE,
+          "INSERT INTO stream_rows VALUES (3, 30)"));
+
+      assertStatus(StatusCode.INVALID_EXTERNAL_INPUT, client.send(
+          ProtocolMessageType.BEGIN_QUERY,
+          "SELECT absent FROM stream_rows"));
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_SESSION));
+    }
+    assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
   }
 
@@ -269,6 +329,45 @@ final class LoopbackRiverServerTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void partialContinuationIsScrubbedAndShedBeforeSlotReuse(@TempDir Path root)
+      throws IOException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database, 1);
+    long warmBytes = 2L * ProtocolFrameCodec.MAXIMUM_FRAME_BYTES;
+    assertEquals(warmBytes, server.retainedProtocolBufferBytes());
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    ByteBuffer continued = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_REQUEST_BYTES);
+    assertEquals(StatusCode.OK, codec.encodeSqlRequest(
+        continued,
+        ProtocolMessageType.EXECUTE,
+        1,
+        " ".repeat(20_000) + "SELECT 1",
+        null));
+    int firstFrameBytes = ProtocolFrameCodec.HEADER_BYTES + continued.getInt(24);
+    try (Socket partial = connect(server.port())) {
+      partial.getOutputStream().write(continued.array(), 0, firstFrameBytes);
+      partial.getOutputStream().flush();
+    }
+    awaitConnections(server, 0);
+    assertEquals(warmBytes, server.retainedProtocolBufferBytes());
+
+    try (TestClient client = new TestClient(server.port())) {
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.HELLO));
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.OPEN_SESSION));
+      assertStatus(StatusCode.OK,
+          client.send(ProtocolMessageType.EXECUTE, "SELECT 1"));
+      assertStatus(StatusCode.OK, client.send(ProtocolMessageType.CLOSE_SESSION));
+    }
+    awaitConnections(server, 0);
+    assertEquals(warmBytes, server.retainedProtocolBufferBytes());
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static LoopbackRiverServer start(RiverDatabase database) {
     return start(database, LoopbackRiverServer.DEFAULT_MAXIMUM_CONNECTIONS);
   }
@@ -332,10 +431,11 @@ final class LoopbackRiverServerTest {
       ProtocolResponse response,
       long key,
       long first,
-      long second) {
+      long second,
+      boolean queryActive) {
     assertStatus(StatusCode.OK, response);
     assertTrue(response.rowAvailable());
-    assertTrue(response.queryActive());
+    assertEquals(queryActive, response.queryActive());
     assertEquals(key, response.key());
     assertEquals(2, response.columnCount());
     assertEquals(first, response.valueAt(0));
@@ -389,6 +489,10 @@ final class LoopbackRiverServerTest {
               request, ProtocolMessageType.EXECUTE, requestId++, "A", null));
       request.put(ProtocolFrameCodec.HEADER_BYTES + 8, (byte) 0xc0);
       return exchange();
+    }
+
+    private long completedRequests() {
+      return requestId - 1;
     }
 
     private ProtocolResponse exchange() throws IOException {

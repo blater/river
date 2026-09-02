@@ -17,6 +17,7 @@ final class LocalWalQuorumAdmission {
         || requiredNodeCount < 2
         || requiredNodeCount > followers.length + 1
         || primary.hasDurableQuorum()
+        || primary.hasOpenLogicalStream()
         || primary.hasActiveReservation()
         || primary.hasPendingRecords()
         || primary.hasForcedBatch()) {
@@ -31,6 +32,7 @@ final class LocalWalQuorumAdmission {
       if (follower == null
           || follower == primary
           || follower.hasDurableQuorum()
+          || follower.hasOpenLogicalStream()
           || !primary.databaseIncarnation().equals(follower.databaseIncarnation())
           || !primary.walGeneration().equals(follower.walGeneration())
           || primary.tailEnd() != follower.tailEnd()
@@ -48,6 +50,12 @@ final class LocalWalQuorumAdmission {
       if (!equivalent.isOk()) {
         return equivalent;
       }
+    }
+    StatusCode recovery = primary.completeRecovery();
+    if (!recovery.isOk()) return recovery;
+    for (LocalWal follower : followers) {
+      recovery = follower.completeRecovery();
+      if (!recovery.isOk()) return recovery;
     }
     LocalWal[] ownedFollowers = new LocalWal[followers.length];
     System.arraycopy(followers, 0, ownedFollowers, 0, followers.length);

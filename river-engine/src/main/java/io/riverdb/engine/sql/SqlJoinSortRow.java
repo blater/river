@@ -9,9 +9,16 @@ import java.nio.ByteBuffer;
 
 /** Reusable canonical UTF-8 image for one projected JOIN tuple in the sorter. */
 final class SqlJoinSortRow {
+  private final SqlRetainedArrayAllocator allocator;
   private final Text text = new Text();
   private ByteBuffer bytes;
   private final HeapRowResult row = new HeapRowResult();
+
+  SqlJoinSortRow() { this(SqlRetainedArrayAllocator.STANDARD); }
+
+  SqlJoinSortRow(SqlRetainedArrayAllocator retainedAllocator) {
+    allocator = retainedAllocator;
+  }
 
   StatusCode encode(
       SqlBlockRow source, int[] descriptors, int columns) {
@@ -43,9 +50,14 @@ final class SqlJoinSortRow {
 
   HeapRowResult row() { return row; }
 
-  void prepare() {
-    if (bytes == null) {
-      bytes = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
+  StatusCode prepare() {
+    if (bytes != null) return StatusCode.OK;
+    try {
+      ByteBuffer next = allocator.direct(TableSchema.MAXIMUM_ROW_BYTES);
+      bytes = next;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
   }
 

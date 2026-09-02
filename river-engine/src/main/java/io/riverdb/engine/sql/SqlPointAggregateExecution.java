@@ -20,9 +20,9 @@ final class SqlPointAggregateExecution {
   private final SqlExpressionEvaluator expressions;
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlRowProjectionEvaluator projections;
+  private final SqlRetainedArrayAllocator allocator = SqlRetainedArrayAllocator.STANDARD;
   private final SqlProjectedRow projected = new SqlProjectedRow();
-  private final SqlAggregateAccumulatorSet accumulators =
-      new SqlAggregateAccumulatorSet();
+  private final SqlAggregateAccumulatorSet accumulators;
   private final SqlHavingEvaluator having;
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult row = new RelationalScanResult();
@@ -39,19 +39,22 @@ final class SqlPointAggregateExecution {
       SqlExpressionEvaluator evaluator,
       SqlBoundPredicateEvaluator predicateEvaluator,
       SqlRowProjectionEvaluator projectionEvaluator,
-      SqlTemporalContext temporal) {
+      SqlTemporalContext temporal,
+      SqlSessionShapeBudget shapeBudget) {
     session = relationalSession;
     bound = statement;
     query = statement.executableQuery;
     expressions = evaluator;
     predicates = predicateEvaluator;
     projections = projectionEvaluator;
-    having = new SqlHavingEvaluator(statement, evaluator, temporal);
+    accumulators = new SqlAggregateAccumulatorSet(shapeBudget);
+    having = new SqlHavingEvaluator(statement, evaluator, temporal, shapeBudget);
   }
 
   boolean accepts(SqlCommandType type) {
     return type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE
+        || type == SqlCommandType.COUNT_DISTINCT
         || type == SqlCommandType.SUM
         || type == SqlCommandType.AVG
         || type == SqlCommandType.MIN
@@ -87,19 +90,22 @@ final class SqlPointAggregateExecution {
           0);
     }
     if (!status.isOk() || !having.matched()) {
-      accumulators.clear(bound.aggregates);
+      status = accumulators.clear(bound.aggregates);
       eraseText();
       return status;
     }
     status = publish(result);
-    accumulators.clear(bound.aggregates);
+    StatusCode cleared = accumulators.clear(bound.aggregates);
+    if (status.isOk()) status = cleared;
     eraseText();
     return status;
   }
 
   private StatusCode prepare() {
     BoundSqlQuery.Block command = query.root();
-    StatusCode status = having.prepare(bound.command);
+    StatusCode status = having.prepare(bound.command, accumulators, bound.aggregates);
+    if (!status.isOk()) return status;
+    status = prepareText();
     if (!status.isOk()) return status;
     state.reset(
         command.type(),
@@ -113,8 +119,7 @@ final class SqlPointAggregateExecution {
         && bound.projectedColumns[0]
             == SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
     state.text = state.value && !state.computed && bound.table.isVarchar(state.column);
-    accumulators.reset(bound.aggregates);
-    return StatusCode.OK;
+    return accumulators.reset(bound.aggregates);
   }
 
   private void configureAccess() {
@@ -219,7 +224,7 @@ final class SqlPointAggregateExecution {
     if (expressions.isNull(source, bound.table, column)) {
       return StatusCode.OK;
     }
-    long value = expressions.readColumn(state.primaryKey, source, column);
+    long value = expressions.readColumn(state.primaryKey, source, bound.table, column);
     if (state.text) {
       accumulateText(source, column);
       state.present = true;
@@ -245,7 +250,7 @@ final class SqlPointAggregateExecution {
   }
 
   private void accumulateText(HeapRowResult source, int column) {
-    long handle = source.getLong((column - 1) * Long.BYTES);
+    long handle = source.getLong(bound.table.valueOffset(column));
     int offset = (int) (handle >>> 32);
     int length = (int) handle;
     int comparison = state.present
@@ -321,7 +326,7 @@ final class SqlPointAggregateExecution {
     if (SqlTypeDescriptor.typeId(bound.aggregates.resultDescriptor(invocation))
         != SqlTypeDescriptor.TYPE_ID_VARCHAR
         || accumulators.nullValue(invocation)) return StatusCode.OK;
-    if (text == null) text = ByteBuffer.allocateDirect(Utf8Text.MAXIMUM_BYTES);
+    if (text == null) return StatusCode.INVARIANT_BROKEN;
     text.clear();
     text.put(
         accumulators.text(), accumulators.textOffset(invocation), length);
@@ -332,6 +337,19 @@ final class SqlPointAggregateExecution {
     if (text == null) return;
     for (int index = 0; index < text.capacity(); index++) text.put(index, (byte) 0);
     text.clear();
+  }
+
+  private StatusCode prepareText() {
+    if (text != null || bound.aggregates.count() == 0
+        || SqlTypeDescriptor.typeId(bound.aggregates.resultDescriptor(0))
+            != SqlTypeDescriptor.TYPE_ID_VARCHAR) return StatusCode.OK;
+    try {
+      ByteBuffer next = allocator.direct(Utf8Text.MAXIMUM_BYTES);
+      text = next;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   private boolean accessEquality() {

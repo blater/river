@@ -13,10 +13,11 @@ final class IndexedTransactionWriteSet {
     this.session = session;
   }
 
-  StatusCode insert(int space, long key, ByteBuffer row) {
+  StatusCode insert(long space, long key, ByteBuffer row) {
     if (!validRow(space, row)) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (full()) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = session.acquireExclusiveKey(space, key);
+    StatusCode status = PendingMutationAdmission.reserveAndLock(
+        session, space, key, row.remaining());
     if (!status.isOk()) return status;
     int pendingIndex = session.findLatestPendingIndex(space, key);
     if (pendingIndex >= 0) {
@@ -47,10 +48,11 @@ final class IndexedTransactionWriteSet {
     return StatusCode.OK;
   }
 
-  StatusCode update(int space, long key, ByteBuffer row) {
+  StatusCode update(long space, long key, ByteBuffer row) {
     if (!validRow(space, row)) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (full()) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = session.acquireExclusiveKey(space, key);
+    StatusCode status = PendingMutationAdmission.reserveAndLock(
+        session, space, key, row.remaining());
     if (!status.isOk()) return status;
     int pendingIndex = session.findLatestPendingIndex(space, key);
     if (pendingIndex >= 0) {
@@ -79,13 +81,13 @@ final class IndexedTransactionWriteSet {
     return StatusCode.OK;
   }
 
-  StatusCode delete(int space, long key) {
+  StatusCode delete(long space, long key) {
     if (session.transaction().state() != io.riverdb.tx.api.TransactionState.ACTIVE
         || !OrderedKey.isFiniteSpace(space)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (full()) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = session.acquireExclusiveKey(space, key);
+    StatusCode status = PendingMutationAdmission.reserveAndLock(session, space, key, 1);
     if (!status.isOk()) return status;
     int pendingIndex = session.findLatestPendingIndex(space, key);
     if (pendingIndex >= 0) {
@@ -114,7 +116,67 @@ final class IndexedTransactionWriteSet {
     return StatusCode.OK;
   }
 
-  private boolean validRow(int space, ByteBuffer row) {
+  StatusCode updateLocked(IndexedLockedRow target, ByteBuffer row) {
+    if (!validLocked(target) || !validRow(target.keySpace(), row)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (full()) return StatusCode.RESOURCE_EXHAUSTED;
+    int pending = session.findLatestPendingIndex(target.keySpace(), target.key());
+    if (pending != target.pendingIndex()) return StatusCode.CONFLICT;
+    int operation = IndexedWalCodec.MUTATION_UPDATE;
+    long previousRowId = target.currentVersionRowId();
+    if (pending >= 0) {
+      operation = session.pendingMutations().operationAt(pending);
+      if (operation != IndexedWalCodec.MUTATION_INSERT
+          && operation != IndexedWalCodec.MUTATION_UPDATE) {
+        return StatusCode.CONFLICT;
+      }
+      previousRowId = session.pendingMutations().previousRowIdAt(pending);
+    }
+    StatusCode status = session.reservePending(1, row.remaining());
+    if (!status.isOk()) return status;
+    status = session.retainLocked(target);
+    if (!status.isOk()) return status;
+    session.appendPending(
+        operation, target.keySpace(), target.key(), previousRowId,
+        row, row.position(), row.remaining(), true);
+    return StatusCode.OK;
+  }
+
+  StatusCode deleteLocked(IndexedLockedRow target) {
+    if (!validLocked(target)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (full()) return StatusCode.RESOURCE_EXHAUSTED;
+    int pending = session.findLatestPendingIndex(target.keySpace(), target.key());
+    if (pending != target.pendingIndex()) return StatusCode.CONFLICT;
+    int operation = IndexedWalCodec.MUTATION_DELETE;
+    long previousRowId = target.currentVersionRowId();
+    if (pending >= 0) {
+      int pendingOperation = session.pendingMutations().operationAt(pending);
+      if (pendingOperation != IndexedWalCodec.MUTATION_INSERT
+          && pendingOperation != IndexedWalCodec.MUTATION_UPDATE) {
+        return StatusCode.CONFLICT;
+      }
+      operation = pendingOperation == IndexedWalCodec.MUTATION_INSERT
+          ? IndexedTransactionSession.MUTATION_NONE : IndexedWalCodec.MUTATION_DELETE;
+      previousRowId = session.pendingMutations().previousRowIdAt(pending);
+    }
+    StatusCode status = session.reservePending(1, 1);
+    if (!status.isOk()) return status;
+    status = session.retainLocked(target);
+    if (!status.isOk()) return status;
+    session.appendPendingDeletion(
+        operation, target.keySpace(), target.key(), previousRowId);
+    return StatusCode.OK;
+  }
+
+  private boolean validLocked(IndexedLockedRow target) {
+    return target != null
+        && target.isOwnedBy(session, session.transaction().transactionGeneration())
+        && session.transaction().state() == io.riverdb.tx.api.TransactionState.ACTIVE
+        && target.lock().isActive();
+  }
+
+  private boolean validRow(long space, ByteBuffer row) {
     return session.transaction().state() == io.riverdb.tx.api.TransactionState.ACTIVE
         && OrderedKey.isFiniteSpace(space)
         && row != null

@@ -56,16 +56,17 @@ final class CatalogViewRecordTest {
   }
 
   @Test
-  void preservesExactVersionFourHeaderLineageAndUtf8Bytes() {
+  void preservesExactVersionFiveHeaderLineageAndUtf8Bytes() {
     ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
     String query = "SELECT id FROM t";
+    int headerBytes = 24 + ViewDefinition.MAXIMUM_LINEAGE_TABLES * Integer.BYTES;
     assertEquals(
         StatusCode.OK,
         encode(encoded, "v", query, 7, 0));
 
-    assertEquals(153 + query.length(), encoded.remaining());
+    assertEquals(headerBytes + 1 + query.length(), encoded.remaining());
     assertEquals(0x5249564552564945L, encoded.getLong(0));
-    assertEquals(4, encoded.getInt(8));
+    assertEquals(5, encoded.getInt(8));
     assertEquals(1, encoded.getInt(12));
     assertEquals(query.length(), encoded.getInt(16));
     assertEquals(1, encoded.getInt(20));
@@ -73,9 +74,10 @@ final class CatalogViewRecordTest {
     for (int index = 1; index < ViewDefinition.MAXIMUM_LINEAGE_TABLES; index++) {
       assertEquals(0, encoded.getInt(24 + index * Integer.BYTES));
     }
-    assertEquals('v', Byte.toUnsignedInt(encoded.get(152)));
+    assertEquals('v', Byte.toUnsignedInt(encoded.get(headerBytes)));
     for (int index = 0; index < query.length(); index++) {
-      assertEquals(query.charAt(index), Byte.toUnsignedInt(encoded.get(153 + index)));
+      assertEquals(
+          query.charAt(index), Byte.toUnsignedInt(encoded.get(headerBytes + 1 + index)));
     }
   }
 
@@ -162,9 +164,10 @@ final class CatalogViewRecordTest {
     encoded.put(queryOffset + 3, (byte) 0x20);
     assertEquals(StatusCode.CORRUPTION, decode(encoded, "v"));
 
+    String malformed = "SELECT '" + (char) 0xd800 + "'";
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
-        encode(encoded, "v", "SELECT '\ud800'", 7, 0));
+        encode(encoded, "v", malformed, 7, 0));
   }
 
   @Test

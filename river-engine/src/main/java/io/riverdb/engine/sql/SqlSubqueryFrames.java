@@ -1,224 +1,157 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.RelationalScanCursor;
-import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
-import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.sql.SqlQuery;
 import io.riverdb.storage.heap.HeapRowResult;
 
-/** Owns reusable active rows and physical cursors by nested graph depth. */
+/** Routes nested graph frames between joins and mixed physical table sources. */
 final class SqlSubqueryFrames implements SqlNestedRowProvider {
-  private final RelationalSession session;
   private final BoundSqlQuery query;
-  private final SqlSubqueryAccess access;
-  private final RelationalScanCursor[] cursors =
-      new RelationalScanCursor[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final RelationalScanResult[] results =
-      new RelationalScanResult[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final ValueIndexLookupResult[] indexed =
-      new ValueIndexLookupResult[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final SqlJoinOuterRow[] owned =
-      new SqlJoinOuterRow[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final SqlPredicateOperand[] projected =
-      new SqlPredicateOperand[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final long[] keys = new long[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final HeapRowResult[] rows = new HeapRowResult[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final TableDefinition[] tables =
-      new TableDefinition[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final boolean[] copied = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final SqlSubqueryJoinFrames joined;
+  private final SqlSubqueryTableFrames tables;
+  private SqlUniversalJoinRows externalUniversal;
+  private int externalUniversalBlock = -1;
 
   SqlSubqueryFrames(
-      RelationalSession relationalSession,
+      RelationalSession session,
       BoundSqlStatement bound,
       SqlExpressionEvaluator evaluator,
       SqlTemporalContext temporal,
       SqlSubqueryJoinFrames joinFrames) {
-    session = relationalSession;
     query = bound.executableQuery;
     joined = joinFrames;
-    access = new SqlSubqueryAccess(relationalSession, bound, evaluator, temporal);
+    tables = new SqlSubqueryTableFrames(session, bound, evaluator, temporal);
   }
 
-  void prepareAccess() { access.prepare(); }
-  SqlSubqueryAccess access() { return access; }
+  void prepareAccess() { tables.prepareAccess(); }
+  SqlSubqueryAccess access() { return tables.access(); }
+  void prepareGraph() { joined.prepareGraph(); }
 
-  void prepareGraph() {
-    joined.prepareGraph();
-  }
-
-  void prepare(
+  StatusCode prepare(
       int block,
       boolean valueProjection,
       boolean textProjection,
       SqlJoinPredicateCallback joinPredicates) {
-    int frame = frame(block);
-    if (valueProjection && projected[frame] == null) {
-      projected[frame] = new SqlPredicateOperand();
+    boolean tableSource = joinPredicates == null;
+    StatusCode status = tables.prepare(
+        block, valueProjection, textProjection, tableSource, parent(block));
+    if (status.isOk() && !tableSource) {
+      status = joined.prepare(block, joinPredicates, this);
     }
-    if (joinPredicates != null) {
-      joined.prepare(block, joinPredicates);
-    } else if (cursors[frame] == null) {
-      cursors[frame] = new RelationalScanCursor();
-      results[frame] = new RelationalScanResult();
-      indexed[frame] = new ValueIndexLookupResult();
-      owned[frame] = new SqlJoinOuterRow();
-    }
-    if (joinPredicates == null && parent(block)) owned[frame].prepare();
-    if (textProjection) projected[frame].prepareText();
-    if (joinPredicates == null) tables[block] = query.block(block).table();
+    return status;
   }
 
   void registerExternalJoinSource(int block, SqlJoinChainSource source) {
     joined.registerExternal(block, source);
   }
-
-  void clearExternalJoinSource() {
-    joined.clearExternal();
+  void clearExternalJoinSource() { joined.clearExternal(); }
+  void registerExternalUniversal(int block, SqlUniversalJoinRows rows) {
+    externalUniversalBlock = block;
+    externalUniversal = rows;
   }
-
-  void activate(int block, long key, HeapRowResult row) {
-    if (copied[block]) release(block);
-    keys[block] = key;
-    rows[block] = row;
-    tables[block] = query.block(block).table();
+  void clearExternalUniversal() {
+    externalUniversalBlock = -1;
+    externalUniversal = null;
   }
+  void activate(int block, long key, HeapRowResult row) { tables.activate(block, key, row); }
 
   StatusCode own(int block) {
-    SqlJoinChainSource joined = joinedSource(block);
-    if (joined != null) {
-      return joined.rows().ownThrough(query.block(block).roleCount() - 1);
+    if (block == externalUniversalBlock && externalUniversal != null) {
+      return StatusCode.OK;
     }
-    if (copied[block]) return StatusCode.OK;
-    SqlJoinOuterRow target = owned[frame(block)];
-    StatusCode status = target.capture(rows[block]);
-    if (status.isOk()) {
-      rows[block] = target.row();
-      copied[block] = true;
-    }
-    return status;
+    if (joined.universal(block)) return StatusCode.OK;
+    SqlJoinChainSource source = joinedSource(block);
+    return source == null
+        ? tables.own(block)
+        : source.rows().ownThrough(query.block(block).roleCount() - 1);
   }
 
   StatusCode begin(int child) {
-    SqlJoinPredicateCallback predicates = joinedPredicate(child);
-    if (predicates != null) return joined.begin(child);
-    tables[child] = query.block(child).table();
-    return access.begin(child, this, cursors[frame(child)]);
+    return joinedPredicate(child) == null ? tables.begin(child, this) : joined.begin(child);
   }
 
   StatusCode next(int child) {
-    SqlJoinChainSource joined = joinedSource(child);
-    if (joined != null) return joined.next();
-    int frame = frame(child);
-    StatusCode status = access.next(
-        child, cursors[frame], results[frame], indexed[frame]);
-    if (status.isOk()) activate(
-        child,
-        access.valueIndex(child) ? indexed[frame].key() : results[frame].key(),
-        access.valueIndex(child) ? indexed[frame].row() : results[frame].row());
-    return status;
+    if (joined.universal(child)) return joined.nextUniversal(child);
+    SqlJoinChainSource source = joinedSource(child);
+    return source == null ? tables.next(child) : source.next();
   }
 
-  SqlPredicateOperand projected(int block) { return projected[frame(block)]; }
+  SqlPredicateOperand projected(int block) { return tables.projected(block); }
 
   StatusCode finish(int child, StatusCode body) {
     int frame = frame(child);
-    if (deeperResources(frame)) {
-      return body.isOk() ? StatusCode.CONFLICT : body;
-    }
+    if (deeperResources(frame)) return body.isOk() ? StatusCode.CONFLICT : body;
     StatusCode closed = joinedPredicate(child) == null
-        ? closeFrame(frame) : joined.closeFrame(frame);
+        ? tables.closeBlock(child) : joined.closeFrame(frame);
     if (closed.isOk()) release(child);
     return body.isOk() ? closed : body;
   }
 
   HeapRowResult evaluatedRow(int block, HeapRowResult original) {
-    return copied[block] ? rows[block] : original;
+    return tables.evaluatedRow(block, original);
   }
-
   void release(int block) {
-    if (joinedPredicate(block) != null) return;
-    if (copied[block]) {
-      owned[frame(block)].reset();
-      copied[block] = false;
-    }
-    keys[block] = 0;
-    rows[block] = null;
+    if (joinedPredicate(block) == null) tables.release(block);
   }
 
   @Override public long key(int block, int role) {
-    SqlJoinChainSource joined = joinedSource(block);
-    return joined != null ? joined.rows().key(role)
-        : valid(block) && role == 0 ? keys[block] : 0;
+    if (block == externalUniversalBlock && externalUniversal != null) {
+      return externalUniversal.key(role);
+    }
+    SqlUniversalJoinRows universal = joined.universalRows(block);
+    if (universal != null) return universal.key(role);
+    SqlJoinChainSource source = joinedSource(block);
+    return source == null ? tables.key(block, role) : source.rows().key(role);
   }
   @Override public HeapRowResult row(int block, int role) {
-    SqlJoinChainSource joined = joinedSource(block);
-    return joined != null ? joined.rows().row(role)
-        : valid(block) && role == 0 ? rows[block] : null;
+    if (block == externalUniversalBlock && externalUniversal != null) return null;
+    if (joined.universal(block)) return null;
+    SqlJoinChainSource source = joinedSource(block);
+    return source == null ? tables.row(block, role) : source.rows().row(role);
   }
   @Override public TableDefinition table(int block, int role) {
-    BoundSqlQuery.Block source = valid(block) ? query.block(block) : null;
-    return source == null ? null : source.table(role);
+    if (block == externalUniversalBlock && externalUniversal != null) {
+      return externalUniversal.table(role);
+    }
+    SqlUniversalJoinRows universal = joined.universalRows(block);
+    if (universal != null) return universal.table(role);
+    SqlJoinChainSource source = joinedSource(block);
+    return source == null ? tables.table(block, role) : source.rows().table(role);
+  }
+  @Override public SqlBlockRow blockRow(int block, int role) {
+    if (block == externalUniversalBlock && externalUniversal != null) {
+      return externalUniversal.row(role);
+    }
+    SqlUniversalJoinRows universal = joined.universalRows(block);
+    if (universal != null) return universal.row(role);
+    return joinedSource(block) == null ? tables.blockRow(block, role) : null;
   }
 
   StatusCode close() {
-    for (int frame = cursors.length - 1; frame >= 0; frame--) {
+    for (int frame = SqlQuery.MAXIMUM_QUERY_BLOCKS - 1; frame >= 0; frame--) {
       StatusCode status = joined.closeFrame(frame);
-      if (status.isOk()) status = closeFrame(frame);
       if (!status.isOk()) return status;
     }
-    for (int block = 0; block < rows.length; block++) release(block);
-    for (int frame = 0; frame < projected.length; frame++) {
-      if (projected[frame] != null) projected[frame].clear();
-    }
-    return StatusCode.OK;
-  }
-
-  boolean hasResources() {
-    for (int frame = 0; frame < cursors.length; frame++) {
-      if (cursors[frame] != null && cursors[frame].isActive()) return true;
-    }
-    return joined.hasResources();
-  }
-
-  private StatusCode closeFrame(int frame) {
-    if (cursors[frame] == null || !cursors[frame].isActive()) return StatusCode.OK;
-    StatusCode status = session.closeScan(cursors[frame]);
-    if (status.isOk()) {
-      status = cursors[frame].reset();
-      results[frame].reset();
-      indexed[frame].reset();
-    }
+    StatusCode status = joined.reset();
+    if (status.isOk()) status = tables.close();
+    if (status.isOk()) clearExternalUniversal();
     return status;
   }
 
+  boolean hasResources() { return joined.hasResources() || tables.hasResources(); }
+
   private boolean deeperResources(int frame) {
-    if (joined.deeperResources(frame)) return true;
-    for (int deeper = frame + 1; deeper < cursors.length; deeper++) {
-      if (cursors[deeper] != null && cursors[deeper].isActive()) return true;
-    }
-    return false;
+    return joined.deeperResources(frame) || tables.deeperResources(frame);
   }
-
-  private SqlJoinChainSource joinedSource(int block) {
-    return joined.source(block);
-  }
-
-  private SqlJoinPredicateCallback joinedPredicate(int block) {
-    return joined.predicate(block);
-  }
-
+  private SqlJoinChainSource joinedSource(int block) { return joined.source(block); }
+  private SqlJoinPredicateCallback joinedPredicate(int block) { return joined.predicate(block); }
   private int frame(int block) { return query.blockDepth(block) - 1; }
   private boolean parent(int block) {
     for (int edge = 0; edge < query.edgeCount(); edge++) {
       if (query.edgeParent(edge) == block) return true;
     }
     return false;
-  }
-  private static boolean valid(int block) {
-    return block >= 0 && block < SqlQuery.MAXIMUM_QUERY_BLOCKS;
   }
 }

@@ -15,7 +15,9 @@ final class SqlViewExpander {
       RelationalSession session, BoundSqlStatement bound) {
     StatusCode tableStatus = session.resolveTable(
         bound.command.tableName(), bound.table);
-    return tableStatus.isOk()
-        ? tableStatus : views.expand(session, bound, tableStatus);
+    if (tableStatus.isOk()) return tableStatus;
+    StatusCode status = views.expand(session, bound, tableStatus);
+    if (status.isOk()) bound.expandedView = true;
+    return status;
   }
 }

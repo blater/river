@@ -1,6 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
@@ -87,7 +88,7 @@ final class RelationalIndexBuilder {
     if (sourceTable.hasBuildingUniqueValueIndex()) {
       return StatusCode.RETRY;
     }
-    return sourceTable.uniqueIndexCount() >= TableDefinition.MAXIMUM_INDEXES
+    return sourceTable.uniqueIndexCount() >= SqlShapeLimits.MAX_SECONDARY_INDEXES
         ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
   }
 
@@ -173,8 +174,7 @@ final class RelationalIndexBuilder {
       int indexColumn,
       boolean unique,
       boolean constraint) {
-    boolean nullValue = (catalogScratch.getLong(sourceTable.nullMaskOffset())
-        & 1L << indexColumn) != 0;
+    boolean nullValue = sourceTable.isNull(catalogScratch, indexColumn);
     if (nullValue) {
       return StatusCode.OK;
     }
@@ -188,7 +188,7 @@ final class RelationalIndexBuilder {
           unique);
       return constraintStatus(status, constraint);
     }
-    long value = catalogScratch.getLong((indexColumn - 1) * Long.BYTES);
+    long value = catalogScratch.getLong(sourceTable.valueOffset(indexColumn));
     if (!unique) {
       return session.insertNonUniqueIndexedValue(indexTable, value, scanRow.key());
     }

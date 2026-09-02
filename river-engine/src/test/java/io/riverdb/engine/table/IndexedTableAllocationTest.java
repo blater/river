@@ -11,7 +11,6 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
-import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
@@ -53,21 +52,24 @@ final class IndexedTableAllocationTest {
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionManager manager = new TransactionManager(
+        database.high(), database.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, 256);
+    TransactionOutcome outcome = new TransactionOutcome();
     HeapRowResult fetched = new HeapRowResult();
     ByteBuffer row = ByteBuffer.allocateDirect(256);
     for (int index = 0; index < row.capacity(); index++) {
       row.put(index, (byte) index);
     }
     for (int index = 0; index < 64; index++) {
-      exerciseWide(table, row, inserted, index);
+      exerciseWide(session, row, outcome, index);
     }
     assertTrue(table.pageCount() >= 4, "wide rows did not allocate another heap page");
 
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 64; index < 80; index++) {
-      exerciseWide(table, row, inserted, index);
+      exerciseWide(session, row, outcome, index);
     }
     long insertAllocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(insertAllocated <= 512, "multipage insert allocated bytes: " + insertAllocated);
@@ -86,6 +88,7 @@ final class IndexedTableAllocationTest {
     long fetchAllocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(fetchAllocated <= 256, "multipage fetch allocated bytes: " + fetchAllocated);
 
+    assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -93,7 +96,7 @@ final class IndexedTableAllocationTest {
   }
 
   @Test
-  void warmedCompactHeapIndexCommitReusesProductionState(@TempDir Path root) {
+  void warmedImmutableHeapIndexCommitReusesProductionState(@TempDir Path root) {
     ThreadMXBean bean = allocationBean();
     DatabaseIncarnation database = DatabaseIncarnation.of(439, 443);
     WalGeneration generation = WalGeneration.of(1);
@@ -117,44 +120,49 @@ final class IndexedTableAllocationTest {
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionManager manager = new TransactionManager(
+        database.high(), database.low(), table.nextTransactionId(), 4);
+    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, Long.BYTES);
+    TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     for (int index = 0; index < 64; index++) {
-      exercise(table, row, inserted, index);
+      exercise(session, row, outcome, index);
     }
     long walCopiedBefore = table.walCopyBytes();
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     for (int index = 64; index < 128; index++) {
-      exercise(table, row, inserted, index);
+      exercise(session, row, outcome, index);
     }
     long allocated = bean.getThreadAllocatedBytes(threadId) - before;
 
-    assertEquals(64L * Long.BYTES, table.walCopyBytes() - walCopiedBefore);
+    assertEquals(
+        64L * Long.BYTES,
+        table.walCopyBytes() - walCopiedBefore);
     assertTrue(allocated <= 512, "warmed indexed insert allocated bytes: " + allocated);
 
     for (int index = 128; index < 256; index++) {
-      exercise(table, row, inserted, index);
+      exercise(session, row, outcome, index);
     }
     long stagedBeforeSplit = table.stagedCopyBytes();
     walCopiedBefore = table.walCopyBytes();
-    before = bean.getThreadAllocatedBytes(threadId);
-    exercise(table, row, inserted, 256);
-    long splitAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    exercise(session, row, outcome, 256);
     assertEquals(
         3L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
         table.stagedCopyBytes() - stagedBeforeSplit);
     assertEquals(
-        5L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
+        Long.BYTES,
         table.walCopyBytes() - walCopiedBefore);
+    for (int index = 10_000; index < 10_127; index++) {
+      exercise(session, row, outcome, index);
+    }
+    before = bean.getThreadAllocatedBytes(threadId);
+    exercise(session, row, outcome, 10_127);
+    long warmedSplitAllocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(
-        splitAllocated <= 1024,
-        "structural leaf split allocated bytes: " + splitAllocated);
+        warmedSplitAllocated <= 1024,
+        "warmed structural leaf split allocated bytes: " + warmedSplitAllocated);
 
-    TransactionManager manager = new TransactionManager(
-        database.high(), database.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, Long.BYTES);
-    TransactionOutcome outcome = new TransactionOutcome();
     for (int index = 300; index < 332; index++) {
       exerciseTransaction(session, row, outcome, index);
     }
@@ -177,6 +185,7 @@ final class IndexedTableAllocationTest {
     }
     writeSetCopiedBefore = session.copiedWriteSetBytes();
     walCopiedBefore = table.walCopyBytes();
+    long compiledCopiedBefore = table.relationalCompilationCopyBytes();
     long stagedBeforeBatch = table.stagedCopyBytes();
     before = bean.getThreadAllocatedBytes(threadId);
     for (int key = 416; key < 432; key += 2) {
@@ -187,7 +196,12 @@ final class IndexedTableAllocationTest {
         16L * Long.BYTES,
         session.copiedWriteSetBytes() - writeSetCopiedBefore);
     assertEquals(16L * Long.BYTES, table.walCopyBytes() - walCopiedBefore);
-    assertEquals(stagedBeforeBatch, table.stagedCopyBytes());
+    assertEquals(
+        16L * Long.BYTES,
+        table.relationalCompilationCopyBytes() - compiledCopiedBefore);
+    assertEquals(
+        16L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
+        table.stagedCopyBytes() - stagedBeforeBatch);
     assertTrue(
         batchAllocated <= 512,
         "warmed two-write transaction allocated bytes: " + batchAllocated);
@@ -198,6 +212,7 @@ final class IndexedTableAllocationTest {
     }
     writeSetCopiedBefore = session.copiedWriteSetBytes();
     walCopiedBefore = table.walCopyBytes();
+    compiledCopiedBefore = table.relationalCompilationCopyBytes();
     long stagedBeforeUpdate = table.stagedCopyBytes();
     before = bean.getThreadAllocatedBytes(threadId);
     for (int value = 508; value < 516; value++) {
@@ -208,11 +223,36 @@ final class IndexedTableAllocationTest {
         16L * Long.BYTES,
         session.copiedWriteSetBytes() - writeSetCopiedBefore);
     assertEquals(16L * Long.BYTES, table.walCopyBytes() - walCopiedBefore);
-    assertEquals(stagedBeforeUpdate, table.stagedCopyBytes());
+    assertEquals(
+        16L * Long.BYTES,
+        table.relationalCompilationCopyBytes() - compiledCopiedBefore);
+    assertEquals(
+        16L * io.riverdb.format.page.PageCodec.PAGE_BYTES,
+        table.stagedCopyBytes() - stagedBeforeUpdate);
     assertTrue(
         updateAllocated <= 512,
         "warmed two-update transaction allocated bytes: " + updateAllocated);
     assertEquals(0, manager.activeLockCount());
+
+    ByteBuffer wide = ByteBuffer.allocateDirect(4096);
+    wide.putLong(0, 9001);
+    wide.position(0);
+    wide.limit(wide.capacity());
+    IndexedTransactionSession wideSession = new IndexedTransactionSession(
+        manager, table, wide.capacity());
+    writeSetCopiedBefore = wideSession.copiedWriteSetBytes();
+    walCopiedBefore = table.walCopyBytes();
+    compiledCopiedBefore = table.relationalCompilationCopyBytes();
+    assertEquals(StatusCode.OK, wideSession.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, wideSession.insert(0, 9001, wide));
+    assertEquals(StatusCode.OK, wideSession.commit(outcome));
+    assertEquals(4096, wideSession.copiedWriteSetBytes() - writeSetCopiedBefore);
+    assertEquals(4096, table.walCopyBytes() - walCopiedBefore);
+    assertEquals(
+        4096,
+        table.relationalCompilationCopyBytes() - compiledCopiedBefore);
+    assertEquals(StatusCode.OK, wideSession.close());
+    assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -270,27 +310,31 @@ final class IndexedTableAllocationTest {
   }
 
   private static void exercise(
-      IndexedTable table,
+      IndexedTransactionSession session,
       ByteBuffer row,
-      HeapInsertResult inserted,
+      TransactionOutcome outcome,
       int value) {
     row.putLong(0, value);
     row.position(0);
     row.limit(Long.BYTES);
-    allocationGuard += table.insert(value + 2L, 0, value, row, inserted).ordinal();
-    allocationGuard += inserted.rowId();
+    allocationGuard += session.begin(IsolationLevel.REPEATABLE_READ).ordinal();
+    allocationGuard += session.insert(0, value, row).ordinal();
+    allocationGuard += session.commit(outcome).ordinal();
+    allocationGuard += outcome.commitSequence();
   }
 
   private static void exerciseWide(
-      IndexedTable table,
+      IndexedTransactionSession session,
       ByteBuffer row,
-      HeapInsertResult inserted,
+      TransactionOutcome outcome,
       int value) {
     row.putLong(0, value);
     row.position(0);
     row.limit(row.capacity());
-    allocationGuard += table.insert(2L + value, 0, 10_000L + value, row, inserted).ordinal();
-    allocationGuard += inserted.rowId();
+    allocationGuard += session.begin(IsolationLevel.REPEATABLE_READ).ordinal();
+    allocationGuard += session.insert(0, 10_000L + value, row).ordinal();
+    allocationGuard += session.commit(outcome).ordinal();
+    allocationGuard += outcome.commitSequence();
   }
 
   private static ThreadMXBean allocationBean() {

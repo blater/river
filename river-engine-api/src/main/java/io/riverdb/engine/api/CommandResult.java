@@ -1,39 +1,39 @@
 package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.text.Utf8Text;
-import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Reusable bounded result for one command or query close. */
 public final class CommandResult {
-  public static final int MAXIMUM_COLUMNS = 8;
-  public static final int MAXIMUM_TEXT_CHARACTERS = 510;
+  public static final int MAXIMUM_COLUMNS = SqlShapeLimits.MAX_RESULT_COLUMNS;
+  /** Public result scratch bound; independent of a column's declared VARCHAR width. */
+  public static final int MAXIMUM_TEXT_CHARACTERS = Utf8Text.MAXIMUM_BUFFER_CHARACTERS;
 
-  private final long[] values = new long[MAXIMUM_COLUMNS];
-  private final char[][] textValues =
-      new char[MAXIMUM_COLUMNS][MAXIMUM_TEXT_CHARACTERS];
-  private final int[] textLengths = new int[MAXIMUM_COLUMNS];
-  private final int[] typeDescriptors = new int[MAXIMUM_COLUMNS];
+  private final PublicResultValues values;
   private long commitSequence;
   private long key;
-  private long nullMask;
   private int affectedRows;
   private int columnCount;
   private boolean rowAvailable;
   private boolean transactionActive;
 
+  public CommandResult() {
+    this(RetainedMemoryLease.unbounded());
+  }
+
+  public CommandResult(RetainedMemoryLease retainedMemory) {
+    values = new PublicResultValues(retainedMemory);
+  }
+
   public void reset() {
     commitSequence = 0;
     key = 0;
-    nullMask = 0;
     affectedRows = 0;
     columnCount = 0;
     rowAvailable = false;
     transactionActive = false;
-    for (int index = 0; index < textLengths.length; index++) {
-      textLengths[index] = 0;
-      typeDescriptors[index] = 0;
-    }
+    values.reset();
   }
 
   public StatusCode complete(
@@ -49,31 +49,78 @@ public final class CommandResult {
     if (rows < 0
         || committedAt < 0
         || columns < 0
-        || columns > values.length
         || hasRow != (columns > 0)
-        || columns > 0 && (sourceValues == null || sourceTypeDescriptors == null)
-        || sourceTypeDescriptors != null && columns > sourceTypeDescriptors.length
-        || (sourceNullMask & ~((1L << columns) - 1)) != 0) {
+        || columns > Long.SIZE) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    for (int index = 0; index < columns; index++) {
-      if (!SqlTypeDescriptor.isValid(sourceTypeDescriptors[index])) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-    }
-    reset();
+    StatusCode status = values.beginLegacy(
+        sourceValues, sourceNullMask, sourceTypeDescriptors, columns);
+    if (!status.isOk()) return status;
     affectedRows = rows;
     commitSequence = committedAt;
     transactionActive = activeTransaction;
     rowAvailable = hasRow;
     key = selectedKey;
-    nullMask = sourceNullMask;
     columnCount = columns;
-    for (int index = 0; index < columns; index++) {
-      values[index] = sourceValues[index];
-      typeDescriptors[index] = sourceTypeDescriptors[index];
-    }
     return StatusCode.OK;
+  }
+
+  public StatusCode complete(
+      int rows,
+      long committedAt,
+      boolean activeTransaction,
+      boolean hasRow,
+      long selectedKey,
+      long[] sourceDecimalHighValues,
+      long[] sourceValues,
+      long[] sourceNullWords,
+      int sourceNullWordCount,
+      int[] sourceTypeDescriptors,
+      int columns) {
+    if (rows < 0 || committedAt < 0 || hasRow != (columns > 0)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = values.begin(
+        sourceDecimalHighValues, sourceValues, sourceNullWords,
+        sourceNullWordCount, sourceTypeDescriptors, columns);
+    if (!status.isOk()) return status;
+    affectedRows = rows;
+    commitSequence = committedAt;
+    transactionActive = activeTransaction;
+    rowAvailable = hasRow;
+    key = selectedKey;
+    columnCount = columns;
+    return StatusCode.OK;
+  }
+
+  public StatusCode complete(
+      int rows,
+      long committedAt,
+      boolean activeTransaction,
+      boolean hasRow,
+      long selectedKey,
+      long[] sourceValues,
+      long[] sourceNullWords,
+      int sourceNullWordCount,
+      int[] sourceTypeDescriptors,
+      int columns) {
+    if (rows < 0 || committedAt < 0 || hasRow != (columns > 0)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = values.begin(
+        sourceValues, sourceNullWords, sourceNullWordCount, sourceTypeDescriptors, columns);
+    if (!status.isOk()) return status;
+    affectedRows = rows;
+    commitSequence = committedAt;
+    transactionActive = activeTransaction;
+    rowAvailable = hasRow;
+    key = selectedKey;
+    columnCount = columns;
+    return StatusCode.OK;
+  }
+
+  public StatusCode reserve(int columns, int textBytes) {
+    return values.reserve(columns, textBytes);
   }
 
   public StatusCode setTextAt(
@@ -87,21 +134,10 @@ public final class CommandResult {
         || source == null
         || offset < 0
         || length < 0
-        || length > MAXIMUM_TEXT_CHARACTERS
-        || offset > source.length - length
-        || !isVarchar(index)) {
+        || length > MAXIMUM_TEXT_CHARACTERS) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (Utf8Text.encodedLength(
-        source,
-        offset,
-        length,
-        SqlTypeDescriptor.parameterOne(typeDescriptors[index])) < 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    System.arraycopy(source, offset, textValues[index], 0, length);
-    textLengths[index] = length;
-    return StatusCode.OK;
+    return values.setText(index, source, offset, length);
   }
 
 
@@ -130,31 +166,68 @@ public final class CommandResult {
   }
 
   public long valueAt(int index) {
-    return index >= 0 && index < columnCount ? values[index] : 0;
+    return values.valueAt(index);
+  }
+
+  public short smallintAt(int index) {
+    return PublicNumericValue.smallint(typeDescriptorAt(index), valueAt(index));
+  }
+
+  public int integerAt(int index) {
+    return PublicNumericValue.integer(typeDescriptorAt(index), valueAt(index));
+  }
+
+  public long bigintAt(int index) {
+    return PublicNumericValue.bigint(typeDescriptorAt(index), valueAt(index));
+  }
+
+  public long decimalUnscaledAt(int index) {
+    return PublicNumericValue.decimal(typeDescriptorAt(index), valueAt(index));
+  }
+
+  public long decimalUnscaledHighAt(int index) {
+    return PublicNumericValue.decimalHigh(
+        typeDescriptorAt(index), values.decimalHighAt(index), valueAt(index));
+  }
+
+  public long decimalUnscaledLowAt(int index) {
+    return PublicNumericValue.decimalLow(typeDescriptorAt(index), valueAt(index));
+  }
+
+  public float realAt(int index) {
+    return PublicNumericValue.real(typeDescriptorAt(index), valueAt(index));
+  }
+
+  public double doubleAt(int index) {
+    return PublicNumericValue.doubleValue(typeDescriptorAt(index), valueAt(index));
   }
 
   public boolean isNull(int index) {
-    return index >= 0 && index < columnCount && (nullMask & 1L << index) != 0;
+    return values.isNull(index);
   }
 
   public long nullMask() {
-    return nullMask;
+    return values.nullWord(0);
+  }
+
+  public long nullWord(int word) {
+    return values.nullWord(word);
+  }
+
+  public int nullWordCount() {
+    return values.nullWordCount();
   }
 
   public boolean isVarchar(int index) {
-    return index >= 0
-        && index < columnCount
-        && SqlTypeDescriptor.typeId(typeDescriptors[index])
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
+    return values.isText(index);
   }
 
   public int typeDescriptorAt(int index) {
-    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
+    return values.descriptorAt(index);
   }
 
   public int textLengthAt(int index) {
-    return isVarchar(index) && !isNull(index)
-        ? textLengths[index] : -1;
+    return values.textLengthAt(index);
   }
 
   public int copyTextAt(int index, char[] destination, int offset) {
@@ -165,16 +238,25 @@ public final class CommandResult {
         || offset > destination.length - length) {
       return -1;
     }
-    System.arraycopy(textValues[index], 0, destination, offset, length);
-    return length;
+    return values.copyTextAt(index, destination, offset);
   }
 
   public char textCharacterAt(int index, int character) {
-    return isVarchar(index)
-            && !isNull(index)
-            && character >= 0
-            && character < textLengths[index]
-        ? textValues[index][character] : 0;
+    return values.textCharacterAt(index, character);
   }
+
+  public StatusCode releaseHighWater() {
+    reset();
+    return values.releaseHighWater();
+  }
+
+  public StatusCode release() {
+    reset();
+    return values.release();
+  }
+
+  public long retainedBytes() { return values.retainedBytes(); }
+  public static long maximumRetainedBytes() { return PublicResultValues.maximumRetainedBytes(); }
+  public static long retainedFloorBytes() { return PublicResultValues.retainedFloorBytes(); }
 
 }

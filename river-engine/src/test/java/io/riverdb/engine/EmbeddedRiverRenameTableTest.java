@@ -85,7 +85,7 @@ final class EmbeddedRiverRenameTableTest {
         session.execute("INSERT INTO accounts VALUES (3, 'gamma')", result));
     assertEquals(2, countRows(session, "SELECT id FROM ledger"));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO ledger VALUES (3, 'alpha')", result));
     assertEquals(
         StatusCode.OK,

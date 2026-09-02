@@ -1,42 +1,41 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
 /**
- * Fixed-capacity primitive mutation set and direct row arena owned by one session.
+ * Fixed-count primitive mutation set and bounded growing row arena owned by one session.
  * Store consumes it synchronously while table admission and COMMITTING prevent mutation.
  */
 final class PendingMutationBuffer {
   private static final int MUTATION_NONE = 0;
 
-  private final ByteBuffer rows;
-  private final int[] operations;
-  private final long[] keys;
-  private final int[] spaces;
-  private final long[] previousRowIds;
-  private final int[] rowLengths;
-  private final boolean[] retained;
+  private final PendingRowArena rows;
+  private final PendingMutationMetadata metadata;
+  private final PendingMutationLatestIndex latest;
   private final int rowStride;
   private int count;
+  private int payloadBytes;
 
   PendingMutationBuffer(int capacity, int maximumRowBytes) {
-    rows = ByteBuffer.allocateDirect(capacity * maximumRowBytes);
-    operations = new int[capacity];
-    keys = new long[capacity];
-    spaces = new int[capacity];
-    previousRowIds = new long[capacity];
-    rowLengths = new int[capacity];
-    retained = new boolean[capacity];
+    this(capacity, maximumRowBytes, PendingRowChunkAllocator.HEAP);
+  }
+
+  PendingMutationBuffer(
+      int capacity,
+      int maximumRowBytes,
+      PendingRowChunkAllocator rowChunkAllocator) {
+    metadata = new PendingMutationMetadata(capacity);
+    latest = new PendingMutationLatestIndex(capacity);
+    rows = new PendingRowArena(capacity, maximumRowBytes, rowChunkAllocator);
     rowStride = maximumRowBytes;
   }
 
   int capacity() {
-    return keys.length;
+    return metadata.capacity();
   }
 
   int count() {
@@ -47,169 +46,173 @@ final class PendingMutationBuffer {
     return rowStride;
   }
 
+  int payloadBytes() { return payloadBytes; }
+
+  long accountedBytesForReservation(int additionalRows, int additionalRowBytes) {
+    if (additionalRows != 1 || additionalRows > capacity() - count) return -1;
+    long rowBytes = rows.accountedBytesForRow(additionalRowBytes);
+    long indexBytes = latest.accountedBytesForEntries(count + 1);
+    return rowBytes < 0 || indexBytes < 0 ? -1
+        : metadata.accountedBytesForCount(count + 1) + rowBytes + indexBytes;
+  }
+
+  long accountedBytesForReservation(int[] rowLengths, int start, int additionalRows) {
+    if (additionalRows <= 0 || additionalRows > capacity() - count) return -1;
+    long rowBytes = rows.accountedBytesForRows(rowLengths, start, additionalRows);
+    long indexBytes = latest.accountedBytesForEntries(count + additionalRows);
+    return rowBytes < 0 || indexBytes < 0 ? -1
+        : metadata.accountedBytesForCount(count + additionalRows) + rowBytes + indexBytes;
+  }
+
+  long accountedBytes() {
+    return metadata.accountedBytesForCount(count) + rows.accountedBytes()
+        + latest.accountedBytes();
+  }
+
+  void release() {
+    truncate(0);
+    metadata.release();
+    latest.release();
+    rows.release();
+    payloadBytes = 0;
+  }
+
   int operationAt(int index) {
-    return operations[index];
+    return metadata.operationAt(index);
   }
 
   long keyAt(int index) {
-    return keys[index];
+    return metadata.keyAt(index);
   }
 
-  int spaceAt(int index) {
-    return spaces[index];
+  long spaceAt(int index) {
+    return metadata.spaceAt(index);
   }
 
   long previousRowIdAt(int index) {
-    return previousRowIds[index];
+    return metadata.previousRowIdAt(index);
   }
 
   int rowLengthAt(int index) {
-    return rowLengths[index];
+    return metadata.rowLengthAt(index);
   }
 
-  void appendDeletion(int operation, int space, long key, long previousRowId) {
-    int destinationStart = count * rowStride;
-    rows.limit(rows.capacity());
-    rows.put(destinationStart, (byte) 0);
-    operations[count] = operation;
-    spaces[count] = space;
-    keys[count] = key;
-    previousRowIds[count] = previousRowId;
-    rowLengths[count] = 1;
+  StatusCode reserve(int additionalRows, int additionalRowBytes) {
+    if (additionalRows <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (additionalRows > capacity() - count) return StatusCode.RESOURCE_EXHAUSTED;
+    if (additionalRows != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = metadata.reserve(count, additionalRows);
+    if (status.isOk()) status = latest.reserve(count + additionalRows);
+    return status.isOk() ? rows.reserveRow(additionalRowBytes) : status;
+  }
+
+  StatusCode reserve(int[] rowLengths, int start, int additionalRows) {
+    if (additionalRows <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (additionalRows > capacity() - count) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = metadata.reserve(count, additionalRows);
+    if (status.isOk()) status = latest.reserve(count + additionalRows);
+    return status.isOk() ? rows.reserveRows(rowLengths, start, additionalRows) : status;
+  }
+
+  void appendDeletion(int operation, long space, long key, long previousRowId) {
+    metadata.set(
+        count, operation, space, key, previousRowId, rows.appendDeletion(), 1);
+    latest.put(space, key, count);
     count++;
+    payloadBytes++;
   }
 
   void append(
       int operation,
-      int space,
+      long space,
       long key,
       long previousRowId,
       ByteBuffer source,
       int sourceStart,
       int rowBytes) {
-    int destinationStart = count * rowStride;
-    rows.limit(rows.capacity());
-    for (int index = 0; index < rowBytes; index++) {
-      rows.put(destinationStart + index, source.get(sourceStart + index));
-    }
-    operations[count] = operation;
-    spaces[count] = space;
-    keys[count] = key;
-    previousRowIds[count] = previousRowId;
-    rowLengths[count] = rowBytes;
+    metadata.set(
+        count, operation, space, key, previousRowId,
+        rows.append(source, sourceStart, rowBytes), rowBytes);
+    latest.put(space, key, count);
     count++;
+    payloadBytes += rowBytes;
   }
 
   void copyRowTo(int index, ByteBuffer target, int targetOffset) {
-    int sourceOffset = index * rowStride;
-    int rowBytes = rowLengths[index];
-    for (int byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
-      target.put(targetOffset + byteIndex, rows.get(sourceOffset + byteIndex));
-    }
+    rows.copyTo(
+        metadata.rowOffsetAt(index), metadata.rowLengthAt(index), target, targetOffset);
   }
 
   StatusCode insertRowInto(int index, ByteBuffer heap, HeapInsertResult result) {
-    return HeapPage.insertFrom(
-        heap, rows, index * rowStride, rowLengths[index], result);
+    return rows.insertInto(
+        metadata.rowOffsetAt(index), metadata.rowLengthAt(index), heap, result);
   }
 
   /** Borrow remains valid only until this owner next appends, compacts, or truncates/reuses. */
   void setRowResult(int index, HeapRowResult result) {
-    result.set(rows, 0, index * rowStride, rowLengths[index]);
+    rows.setResult(metadata.rowOffsetAt(index), metadata.rowLengthAt(index), result);
   }
 
   boolean containsNonInsertMutation() {
     for (int index = 0; index < count; index++) {
-      if (operations[index] != IndexedWalCodec.MUTATION_INSERT
-          || previousRowIds[index] != 0) {
+      if (metadata.operationAt(index) != IndexedWalCodec.MUTATION_INSERT
+          || metadata.previousRowIdAt(index) != 0) {
         return true;
       }
     }
     return false;
   }
 
-  int findLatestIndex(int space, long key) {
-    for (int index = count - 1; index >= 0; index--) {
-      if (spaces[index] == space && keys[index] == key) {
-        return index;
-      }
-    }
-    return -1;
+  int findLatestIndex(long space, long key) {
+    return latest.find(space, key);
   }
 
   int nextIndex(IndexedScanCursor cursor) {
-    int selected = -1;
-    int selectedSpace = 0;
-    long selectedKey = 0;
-    for (int index = 0; index < count; index++) {
-      long key = keys[index];
-      int space = spaces[index];
-      if (findLatestIndex(space, key) == index
-          && cursor.contains(space, key)
-          && cursor.afterLastReturned(space, key)
-          && (selected < 0
-              || OrderedKey.lessThan(space, key, selectedSpace, selectedKey))) {
-        selected = index;
-        selectedSpace = space;
-        selectedKey = key;
-      }
-    }
-    return selected;
+    return latest.next(cursor);
   }
 
   void truncate(int first) {
+    int retainedBytes = first < count ? metadata.rowOffsetAt(first) : rows.endOffset();
     for (int index = first; index < count; index++) {
-      keys[index] = 0;
-      spaces[index] = 0;
-      operations[index] = 0;
-      previousRowIds[index] = 0;
-      rowLengths[index] = 0;
+      payloadBytes -= metadata.rowLengthAt(index);
+      metadata.clear(index);
     }
+    rows.truncateTo(retainedBytes);
     count = first;
+    latest.rebuild(metadata, count);
   }
 
   void compact() {
     int originalCount = count;
     for (int index = 0; index < originalCount; index++) {
-      boolean latest = true;
-      for (int later = index + 1; later < originalCount; later++) {
-        if (spaces[later] == spaces[index] && keys[later] == keys[index]) {
-          latest = false;
-          break;
-        }
-      }
-      retained[index] = latest && operations[index] != MUTATION_NONE;
+      metadata.retain(index,
+          latest.find(metadata.spaceAt(index), metadata.keyAt(index)) == index
+              && metadata.operationAt(index) != MUTATION_NONE);
     }
     int output = 0;
+    int compactedPayloadBytes = 0;
+    rows.beginCompaction();
     for (int index = 0; index < originalCount; index++) {
-      if (!retained[index]) {
+      if (!metadata.retainedAt(index)) {
         continue;
       }
-      if (output != index) {
-        int sourceOffset = index * rowStride;
-        int targetOffset = output * rowStride;
-        int rowBytes = rowLengths[index];
-        for (int byteIndex = 0; byteIndex < rowBytes; byteIndex++) {
-          rows.put(targetOffset + byteIndex, rows.get(sourceOffset + byteIndex));
-        }
-        operations[output] = operations[index];
-        spaces[output] = spaces[index];
-        keys[output] = keys[index];
-        previousRowIds[output] = previousRowIds[index];
-        rowLengths[output] = rowBytes;
-      }
+      int rowBytes = metadata.rowLengthAt(index);
+      int compactedOffset = rows.compactRow(metadata.rowOffsetAt(index), rowBytes);
+      metadata.copy(index, output, compactedOffset);
+      compactedPayloadBytes += rowBytes;
       output++;
     }
     for (int index = 0; index < originalCount; index++) {
-      retained[index] = false;
+      metadata.retain(index, false);
       if (index >= output) {
-        operations[index] = 0;
-        keys[index] = 0;
-        spaces[index] = 0;
-        previousRowIds[index] = 0;
-        rowLengths[index] = 0;
+        metadata.clear(index);
       }
     }
+    rows.finishCompaction();
     count = output;
+    payloadBytes = compactedPayloadBytes;
+    latest.rebuild(metadata, count);
   }
 }

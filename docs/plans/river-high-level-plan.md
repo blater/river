@@ -417,7 +417,7 @@ io.riverdb.tx.spi
 
 | Class or interface | Responsibility |
 | --- | --- |
-| `TransactionContext` | Immutable operation-facing transaction ID, isolation, snapshot, and cancellation view. |
+| `TransactionContext` | Reusable, generation-authenticated operation view of transaction ID, isolation, snapshot, and cancellation state. |
 | `IsolationLevel` | River-supported isolation contract independent of JDBC constants. |
 | `Snapshot` | Visibility boundary containing commit high-water and required active outcomes. |
 | `TransactionOutcome` | In-progress, committed-at-CSN, aborted, or internally indeterminate result. |
@@ -983,10 +983,14 @@ The required M5 scalar set is:
 
 | SQL type | V1 bound and durable meaning |
 | --- | --- |
+| `SMALLINT` | Signed 16-bit integer. |
+| `INTEGER` | Signed 32-bit integer. |
 | `BIGINT` | Signed 64-bit integer. |
 | `BOOLEAN` | `TRUE`, `FALSE`, or `NULL`; no implicit numeric truth values. |
-| `DECIMAL(p,s)` | `1 <= p <= 18`, `0 <= s <= p`; signed scaled 64-bit integer with checked exact arithmetic and JDBC `BigDecimal` boundary mapping. |
-| `VARCHAR(n)` | `1 <= n <= 255`; strict UTF-8, at most `n` Unicode scalar values and 1,020 encoded bytes per value, subject to the 4 KiB row bound. |
+| `DECIMAL(p,s)` | `1 <= p <= 38`, `0 <= s <= p`; signed scaled 64-bit value through precision 18 and signed two-lane 128-bit value thereafter, with checked exact arithmetic and JDBC `BigDecimal` boundary mapping. |
+| `REAL` | Finite IEEE-754 binary32 with canonical raw-bit storage and SQL numeric ordering. |
+| `DOUBLE PRECISION` | Finite IEEE-754 binary64 with canonical raw-bit storage and SQL numeric ordering. |
+| `VARCHAR(n)` | `1 <= n <= 255`; strict UTF-8, at most `n` Unicode scalar values and 1,020 encoded bytes per value, subject to the 4 KB row bound. |
 | `DATE` | Proleptic-Gregorian calendar date in years 0001-9999, stored as a signed epoch day. |
 | `TIME(p)` | Local wall-clock time with `0 <= p <= 6`, stored as microseconds since midnight. It has no zone. |
 | `TIMESTAMP(p)` | Local date and time with `0 <= p <= 6`, stored on a zone-free local microsecond timeline. |
@@ -1022,7 +1026,8 @@ fall back to a separate untyped comparison path.
 
 `BOOLEAN` supports equality, inequality, `IN`, and `IS TRUE`/`IS FALSE`/
 `IS UNKNOWN`, but is not ordered and cannot appear in `BETWEEN`, `MIN`, or
-`MAX`. `BIGINT`, `DECIMAL`, `VARCHAR`, `DATE`, `TIME`, and both timestamp types
+`MAX`. Integral, exact-decimal, finite approximate-numeric, `VARCHAR`, `DATE`,
+`TIME`, and both timestamp types
 are ordered and support the six comparison operators and `BETWEEN`.
 
 Temporal SQL text is locale-independent and strict:
@@ -1720,7 +1725,7 @@ Measure at minimum:
 - WAL bytes, force frequency, group size, and force latency.
 - Buffer hit rate, dirty-page age, eviction wait, and write amplification.
 - Lock waits, deadlocks, lock memory, and escalation frequency.
-- Checkpoint interference and recovery time per GiB of WAL.
+- Checkpoint interference and recovery time per GB of WAL.
 - Tail latency during vacuum, backup, and statistics collection.
 - Dead/reclaimable/reusable/truncatable bytes, page occupancy, rewrite
   amplification, file bytes returned, and time to reclaim after the safe

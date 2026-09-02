@@ -36,7 +36,7 @@ its normative SQL surface is in the
 - Embedded SQL plus authenticated TLS loopback JDBC and CLI access.
 - Eight SQL scalar families, typed parameters/results, DDL/DML, aggregation,
   grouping/`HAVING`, `DISTINCT`, direct/P3 ordering, and bounded spill.
-- Two-to-eight-role left-associative `INNER`/`LEFT` joins through one common
+- Two-to-64-role left-associative `INNER`/`LEFT` joins through one common
   source, with nested-loop, bounded hash, and merge strategies.
 - Direct and deepest-derived durable n-table JOIN views with canonical ordered
   lineage, including explicitly aliased self-joins.
@@ -49,20 +49,20 @@ its normative SQL surface is in the
 
 | Area | Limit or restriction |
 | --- | --- |
-| Indexed-table capacity | The legacy 65,536 physical row/version ceiling is removed. WAL and checkpoint metadata support positive logical row IDs through 4,294,967,294, but the transitional runtime remains bounded by positive-int page IDs and resident page frames and is not yet qualified for billion-row tables. |
-| Table shape | At most 8 columns and a 4,096-byte encoded row. |
-| Join shape | 2–8 left-associative roles; `RIGHT`, `FULL`, `CROSS`, `NATURAL`, `USING`, right-deep trees, multiple joined blocks, and nondeepest joined blocks are unsupported. |
+| Indexed-table capacity | The legacy 65,536 physical row/version ceiling is removed. Disk-backed row-location/version directories, scalable checkpoint metadata, and a bounded pinned page cache support positive logical row IDs through 4,294,967,294. Physical page IDs remain positive `int`s, operation/WAL bounds remain explicit, and TPC-C throughput is not implied. |
+| Table shape | At most 1,024 columns and an 8,192-byte encoded row. Index, primary-key, unique, and foreign-key definitions admit at most 32 key parts and 3,072 user-key bytes. |
+| Join shape | 2–64 left-associative roles; `RIGHT`, `FULL`, `CROSS`, `NATURAL`, `USING`, right-deep trees, multiple joined blocks, and nondeepest joined blocks are unsupported. |
 | Durable view lineage | At most 32 ordered physical role IDs. Durable subquery graphs are unsupported. |
 | Hash joins | Stable in-memory buckets through the 1,024-row store threshold; larger admitted inputs use the existing bounded stable fallback, not partitioned spill hashing. |
-| P3/spill stores | At most 65,536 rows and 256 MiB per bounded store. |
+| P3/spill stores | At most 65,536 rows and 256 MB per bounded store. |
 | Join planning | Statistics cost strategies in SQL role order. Physical inner-island reordering is deferred; DML does not refresh statistics until `ANALYZE` is rerun. |
 | Backup/operations | Backup is quiescent/offline. No online migration, repair automation, production packaging, replication, or failover. |
 | Network | Authenticated TLS loopback only; non-loopback deployment is unsupported. |
 
-The legacy 65,536-slot table ceiling no longer blocks a standard one-warehouse
-TPC-C load, but the current resident-page runtime is not yet a qualified or
-performance-tuned TPC-C implementation. Its initial `ORDER_LINE` relation is
-roughly 300,000 rows before workload growth.
+The legacy 65,536-slot table ceiling no longer blocks the storage path needed
+for a standard one-warehouse TPC-C load. TPC-C schema, workload, soak, and
+performance qualification remain unfinished; its initial `ORDER_LINE`
+relation is roughly 300,000 rows before workload growth.
 
 ## Alpha 2 — robust P4C subqueries
 
@@ -73,7 +73,7 @@ complete architectural and semantic contract is
 
 Delivery progress: P4C-0 through P4C-6 are accepted on
 `feature/p4c-subqueries` at `f85c499`. Joined root and child graph blocks run
-through the common 2–8-role join engine, and scalar/`EXISTS`/membership value,
+through the common 2–64-role join engine, and scalar/`EXISTS`/membership value,
 LIMIT, cache, resource-bound, temporal, Unicode, and allocation semantics are
 complete. Safe child access and exact per-edge `EXPLAIN [ANALYZE]` plan/counter
 truth are also complete. P4C-7 consumer integration is the next production
@@ -124,18 +124,21 @@ performance preview, not an official TPC result or certification claim.
 ### Required database additions
 
 1. **Composite relational identity:** primary, unique, secondary, and foreign
-   keys with at least four typed components, including text components needed
+   keys with up to 32 typed components, including text components needed
    by customer-name lookup. Comparators, WAL, recovery, catalog validation,
    dependency checks, and metadata must share one canonical tuple encoding.
-2. **TPC-C-scale bounded storage:** replace the 65,536-slot table ceiling with
-   a measured bounded capacity of at least 1,048,576 physical row/version slots
-   per relevant table, plus reclamation sufficient for the declared run. The
-   implementation must retain explicit `RESOURCE_EXHAUSTED` behavior rather
-   than becoming unbounded.
-3. **Composite access and DML:** point/range lookup, ordered scans, insert,
-   update, and delete over composite predicates without table-scan-only
-   execution. Transactional uniqueness and foreign-key checks must remain
-   atomic under concurrency.
+2. **TPC-C-scale bounded storage:** replace dense row/version/page arrays and
+   cardinality-derived cache retention with positive-long disk-backed
+   directories, bounded page frames, dirty extents, and resumable reclamation.
+   One warehouse and a deterministic million-version fixture are acceptance
+   floors; the architecture and identifiers must remain viable at billions of
+   persisted rows/index entries. Configured disk, cache, WAL, and operation
+   quotas retain explicit `RESOURCE_EXHAUSTED`/backpressure behavior.
+3. **Composite access and DML:** exact, leading-prefix, inclusive/exclusive and
+   unbounded range lookup, forward/reverse ordered scans, joins, insert, update,
+   and delete over composite predicates without table-scan-only execution.
+   Transactional uniqueness and foreign-key checks remain atomic under
+   concurrency and every candidate is rechecked against the visible base row.
 4. **Remaining transaction SQL:** descending latest/oldest-row selection with
    `LIMIT`, safe arithmetic updates, the required nonunique customer-name
    ordering, and `COUNT(DISTINCT ...)` or one equivalent admitted canonical

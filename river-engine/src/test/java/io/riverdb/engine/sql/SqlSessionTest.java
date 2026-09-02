@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
@@ -13,12 +14,240 @@ import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlQuery;
 import java.nio.file.Path;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class SqlSessionTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(757, 761);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void streamingForUpdateWaitIsGrantedAndLeavesExplicitTransactionUsable(
+      @TempDir Path root) throws Exception {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession first = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession second = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        first.execute(
+            "CREATE TABLE locked_rows (id BIGINT PRIMARY KEY, value BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        first.execute("INSERT INTO locked_rows VALUES (1,10),(2,20)", result));
+    assertEquals(StatusCode.OK, first.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, second.execute("BEGIN", result));
+
+    SqlScanCursor held = new SqlScanCursor();
+    SqlScanCursor waiting = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        first.beginScan(
+            "SELECT value FROM locked_rows WHERE id=1 FOR UPDATE", held));
+    assertEquals(StatusCode.OK, first.nextScan(held, row));
+    assertEquals(10, row.valueAt(0));
+    assertEquals(StatusCode.OK, first.closeScan(held, result));
+    assertEquals(StatusCode.OK,
+        first.execute("UPDATE locked_rows SET value=11 WHERE id=1", result));
+    assertEquals(
+        StatusCode.OK,
+        second.beginScan(
+            "SELECT value FROM locked_rows WHERE id=1 FOR UPDATE", waiting));
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    SqlScanRowResult waitingRow = new SqlScanRowResult();
+    try {
+      Future<StatusCode> granted = executor.submit(() ->
+          second.nextScan(waiting, waitingRow));
+      assertEquals(StatusCode.OK, first.execute("COMMIT", result));
+      assertEquals(StatusCode.OK, granted.get());
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(11, waitingRow.valueAt(0));
+    assertEquals(StatusCode.OK, second.closeScan(waiting, result));
+    assertEquals(true, result.transactionActive());
+
+    assertEquals(
+        StatusCode.OK,
+        second.execute("UPDATE locked_rows SET value=21 WHERE id=2", result));
+    assertEquals(StatusCode.OK, second.execute("COMMIT", result));
+    close(database, first, second);
+  }
+
+  @Test
+  void forUpdateReturnsAVisibleRowsCurrentCommittedSuccessor(
+      @TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession reader = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession writer = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        reader.execute(
+            "CREATE TABLE current_rows (id BIGINT PRIMARY KEY, value BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("INSERT INTO current_rows VALUES (1,10),(2,20)", result));
+    assertEquals(StatusCode.OK, reader.execute("BEGIN REPEATABLE READ", result));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("UPDATE current_rows SET value=11 WHERE id=1", result));
+
+    assertEquals(StatusCode.OK, reader.execute(
+        "SELECT value FROM current_rows WHERE id=1 FOR UPDATE", result));
+    assertEquals(11, result.value());
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("UPDATE current_rows SET value=21 WHERE id=2", result));
+    assertEquals(StatusCode.OK, reader.execute("ROLLBACK", result));
+    close(database, reader, writer);
+  }
+
+  @Test
+  void forUpdateReleasesARejectedCurrentSuccessor(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession reader = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession writer = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK,
+        reader.execute("CREATE TABLE legacy_current_rows", result));
+    assertEquals(StatusCode.OK,
+        reader.execute("INSERT INTO legacy_current_rows VALUES (1,11)", result));
+
+    assertEquals(StatusCode.OK, reader.execute("BEGIN REPEATABLE READ", result));
+    assertEquals(StatusCode.OK,
+        writer.execute("UPDATE legacy_current_rows SET value=12 WHERE key=1", result));
+    assertEquals(StatusCode.CONFLICT, reader.execute(
+        "SELECT value FROM legacy_current_rows "
+            + "WHERE key=1 AND value=11 FOR UPDATE", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(StatusCode.OK,
+        writer.execute("UPDATE legacy_current_rows SET value=13 WHERE key=1", result));
+    assertEquals(StatusCode.OK, reader.execute("ROLLBACK", result));
+
+    assertEquals(StatusCode.OK, reader.execute("BEGIN REPEATABLE READ", result));
+    assertEquals(StatusCode.OK,
+        writer.execute("DELETE FROM legacy_current_rows WHERE key=1", result));
+    assertEquals(StatusCode.OK,
+        writer.execute("INSERT INTO legacy_current_rows VALUES (1,14)", result));
+    assertEquals(StatusCode.CONFLICT, reader.execute(
+        "SELECT value FROM legacy_current_rows WHERE key=1 FOR UPDATE", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(StatusCode.OK, reader.execute("ROLLBACK", result));
+    close(database, reader, writer);
+  }
+
+  @Test
+  void selectForUpdateProtectsDescriptorRowsUntilTransactionEnd(
+      @TempDir Path root) throws Exception {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession first = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession second = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(StatusCode.OK, first.execute("CREATE TABLE legacy_accounts", result));
+    assertEquals(
+        StatusCode.OK,
+        first.execute("INSERT INTO legacy_accounts VALUES (1,100)", result));
+    assertEquals(StatusCode.OK, first.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, second.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        first.execute(
+            "SELECT value FROM legacy_accounts WHERE key=1 FOR UPDATE", result));
+    assertQueuedStatementGranted(
+        first, second, "ROLLBACK",
+        "UPDATE legacy_accounts SET value=101 WHERE key=1", result);
+    assertEquals(StatusCode.OK, second.execute("COMMIT", result));
+
+    assertEquals(
+        StatusCode.OK,
+        first.execute(
+            "CREATE TABLE district (d_w_id BIGINT, d_id BIGINT, "
+                + "d_next_o_id BIGINT, PRIMARY KEY(d_w_id,d_id))",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        first.execute("INSERT INTO district VALUES (1,1,10),(1,2,20)", result));
+    assertEquals(StatusCode.OK, first.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, second.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        first.execute(
+            "SELECT d_next_o_id FROM district "
+                + "WHERE d_w_id=1 AND d_id=1 FOR UPDATE",
+            result));
+    assertEquals(10, result.value());
+    assertQueuedStatementGranted(
+        first, second, "COMMIT",
+        "UPDATE district SET d_next_o_id=11 WHERE d_w_id=1 AND d_id=1", result);
+    assertEquals(
+        StatusCode.OK,
+        second.execute(
+            "UPDATE district SET d_next_o_id=21 WHERE d_w_id=1 AND d_id=2",
+            result));
+    assertEquals(StatusCode.OK, second.execute("COMMIT", result));
+
+    assertEquals(StatusCode.OK, first.execute("BEGIN", result));
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(
+        StatusCode.OK,
+        first.beginScan(
+            "SELECT d_id FROM district ORDER BY d_next_o_id LIMIT 1 FOR UPDATE",
+            cursor));
+    assertEquals(StatusCode.OK, first.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.OK, first.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, second.execute("BEGIN", result));
+    assertQueuedStatementGranted(
+        first, second, "ROLLBACK",
+        "UPDATE district SET d_next_o_id=12 WHERE d_w_id=1 AND d_id=1", result);
+    assertEquals(
+        StatusCode.OK,
+        second.execute(
+            "UPDATE district SET d_next_o_id=22 WHERE d_w_id=1 AND d_id=2",
+            result));
+    assertEquals(StatusCode.OK, second.execute("COMMIT", result));
+    close(database, first, second);
+  }
 
   @Test
   void executesScalarTemporalExtractAndDateArithmetic(@TempDir Path root) {
@@ -90,7 +319,7 @@ final class SqlSessionTest {
         SqlTypeDescriptor.BIGINT,
         29);
     assertScalar(
-        session, result, "SELECT 1+2", SqlTypeDescriptor.BIGINT, 3);
+        session, result, "SELECT 1+2", SqlTypeDescriptor.INTEGER, 3);
 
     assertEquals(
         StatusCode.OK,
@@ -111,7 +340,7 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.DATATYPE_MISMATCH,
         session.execute("SELECT EXTRACT(YEAR FROM TIME '12:34:56')", result));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -161,7 +390,7 @@ final class SqlSessionTest {
     assertEquals(7, result.key());
     assertEquals(701, result.value());
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO accounts VALUES (8, 701)", result));
     assertEquals(
         StatusCode.CONFLICT,
@@ -181,7 +410,7 @@ final class SqlSessionTest {
     assertEquals(8, result.key());
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("UPDATE accounts SET value=701 WHERE key=8", result));
     assertEquals(true, result.transactionActive());
     assertEquals(
@@ -199,7 +428,7 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.execute("CHECKPOINT", result));
     assertEquals(0, result.affectedRows());
     assertEquals(true, result.commitSequence() > insertSequence);
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
 
     assertEquals(
         StatusCode.OK,
@@ -224,7 +453,7 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("SELECT value FROM accounts WHERE key = 7", result));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -242,10 +471,12 @@ final class SqlSessionTest {
     assertEquals(StatusCode.CONFLICT, session.execute("SELECT value FROM t WHERE key=1", result));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, session.execute("SELECT nope", result));
     assertEquals(StatusCode.OK, session.execute("INSERT INTO t VALUES (1, 10)", result));
-    assertEquals(StatusCode.CONFLICT, session.execute("INSERT INTO t VALUES (1, 11)", result));
+    assertEquals(
+        StatusCode.UNIQUE_VIOLATION,
+        session.execute("INSERT INTO t VALUES (1, 11)", result));
     assertEquals(StatusCode.OK, session.execute("SELECT value FROM t WHERE key=1", result));
     assertEquals(10, result.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -268,7 +499,7 @@ final class SqlSessionTest {
     assertEquals(3, result.affectedRows());
     long batchCommit = result.commitSequence();
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute(
             "INSERT INTO batch_rows VALUES (4, 40), (2, 21), (5, 50)",
             result));
@@ -282,7 +513,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT COUNT(*) FROM batch_rows", result));
     assertEquals(3, result.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
 
     assertEquals(
         StatusCode.OK,
@@ -295,7 +526,7 @@ final class SqlSessionTest {
         session.execute("SELECT value FROM batch_rows WHERE key=3", result));
     assertEquals(30, result.value());
     assertEquals(batchCommit, result.commitSequence());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -357,7 +588,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT value FROM measurements WHERE key=4", execution));
     assertEquals(140737488355327L, execution.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -407,7 +638,7 @@ final class SqlSessionTest {
     assertEquals("second", new String(text, 0, length));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -455,7 +686,7 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, owner.nextScan(second, row));
     assertEquals(1, row.key());
     assertEquals(StatusCode.OK, owner.closeScan(second, execution));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, owner, other);
   }
 
   @Test
@@ -482,7 +713,7 @@ final class SqlSessionTest {
     assertEquals(41, row.valueAt(0));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -563,11 +794,12 @@ final class SqlSessionTest {
         observer.execute("SELECT value FROM accounts WHERE key=25", result));
     assertEquals(250, result.value());
     assertEquals(batchSequence, result.commitSequence());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, writer, observer);
   }
 
   @Test
-  void cancelledStatementWaitLeavesExplicitTransactionUsable(@TempDir Path root) {
+  void grantedInsertWaitReportsUniqueViolationAndLeavesExplicitTransactionUsable(
+      @TempDir Path root) throws Exception {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -585,14 +817,20 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         first.execute("INSERT INTO accounts VALUES (1, 100)", result));
-    assertEquals(
-        StatusCode.RETRY,
-        second.execute("INSERT INTO accounts VALUES (1, 101)", result));
-    assertEquals(true, result.transactionActive());
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    SqlExecutionResult waitingResult = new SqlExecutionResult();
+    try {
+      Future<StatusCode> waiting = executor.submit(() ->
+          second.execute("INSERT INTO accounts VALUES (1, 101)", waitingResult));
+      assertEquals(StatusCode.OK, first.execute("COMMIT", result));
+      assertEquals(StatusCode.UNIQUE_VIOLATION, waiting.get());
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(true, waitingResult.transactionActive());
     assertEquals(
         StatusCode.OK,
         second.execute("INSERT INTO accounts VALUES (2, 200)", result));
-    assertEquals(StatusCode.OK, first.execute("COMMIT", result));
     assertEquals(StatusCode.OK, second.execute("COMMIT", result));
     assertEquals(
         StatusCode.OK,
@@ -602,7 +840,61 @@ final class SqlSessionTest {
         StatusCode.OK,
         first.execute("SELECT value FROM accounts WHERE key=2", result));
     assertEquals(200, result.value());
-    assertEquals(StatusCode.OK, database.close());
+    assertEquals(StatusCode.OK, first.close());
+    assertEquals(StatusCode.OK, second.close());
+    close(database);
+  }
+
+  @Test
+  void currentPrimarySourceTransferNeverMutatesTheReplacement(
+      @TempDir Path root) throws Exception {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession mover = sessions.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession waiter = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        mover.execute(
+            "CREATE TABLE accounts "
+                + "(id BIGINT PRIMARY KEY, balance BIGINT)", result));
+    assertEquals(
+        StatusCode.OK,
+        mover.execute("INSERT INTO accounts VALUES (1, 100)", result));
+    assertEquals(StatusCode.OK, mover.execute("BEGIN", result));
+    assertEquals(StatusCode.OK, waiter.execute("BEGIN", result));
+    assertEquals(
+        StatusCode.OK,
+        mover.execute("UPDATE accounts SET id=2 WHERE id=1", result));
+
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    SqlExecutionResult waitingResult = new SqlExecutionResult();
+    try {
+      Future<StatusCode> waiting = executor.submit(() ->
+          waiter.execute(
+              "UPDATE accounts SET balance=999 WHERE id=1", waitingResult));
+      assertEquals(StatusCode.OK, mover.execute("COMMIT", result));
+      assertEquals(StatusCode.CONFLICT, waiting.get());
+    } finally {
+      executor.shutdownNow();
+    }
+
+    assertEquals(true, waitingResult.transactionActive());
+    assertEquals(StatusCode.OK, waiter.execute("ROLLBACK", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        mover.execute("SELECT balance FROM accounts WHERE id=1", result));
+    assertEquals(
+        StatusCode.OK,
+        mover.execute("SELECT balance FROM accounts WHERE id=2", result));
+    assertEquals(100, result.value());
+    close(database, mover, waiter);
   }
 
   @Test
@@ -643,12 +935,20 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.OK,
         writer.execute("ROLLBACK TO SAVEPOINT before_ddl", result));
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE replacement", result));
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO replacement VALUES (3, 300)", result));
     assertEquals(StatusCode.OK, writer.execute("RELEASE SAVEPOINT before_ddl", result));
     assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
     assertEquals(
         StatusCode.CONFLICT,
         observer.execute("SELECT value FROM discarded WHERE key=2", result));
-    assertEquals(StatusCode.OK, database.close());
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT value FROM replacement WHERE key=3", result));
+    assertEquals(300, result.value());
+    close(database, writer, observer);
 
     assertEquals(
         StatusCode.OK,
@@ -663,7 +963,11 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.CONFLICT,
         observer.execute("SELECT value FROM discarded WHERE key=2", result));
-    assertEquals(StatusCode.OK, database.close());
+    assertEquals(
+        StatusCode.OK,
+        observer.execute("SELECT value FROM replacement WHERE key=3", result));
+    assertEquals(300, result.value());
+    close(database, observer);
   }
 
   @Test
@@ -692,7 +996,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("INSERT INTO accounts VALUES (2, 200)", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO accounts VALUES (2, 201)", result));
     assertEquals(
         StatusCode.OK,
@@ -728,7 +1032,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT value FROM accounts WHERE key=4", result));
     assertEquals(400, result.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -847,7 +1151,43 @@ final class SqlSessionTest {
         StatusCode.OK,
         reader.execute("SELECT value FROM items WHERE key=4", execution));
     assertEquals(40, execution.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, reader, writer);
+  }
+
+  @Test
+  void scalarScanKeepsItsPageGenerationWhenAnEarlierKeyIsInserted(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession reader = sessionResult.session();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession writer = sessionResult.session();
+    SqlExecutionResult execution = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, writer.execute("CREATE TABLE items", execution));
+    assertEquals(StatusCode.OK, writer.execute("INSERT INTO items VALUES (10,100)", execution));
+    assertEquals(StatusCode.OK, writer.execute("INSERT INTO items VALUES (20,200)", execution));
+    assertEquals(StatusCode.OK, writer.execute("INSERT INTO items VALUES (30,300)", execution));
+
+    assertEquals(StatusCode.OK, reader.execute("BEGIN REPEATABLE READ", execution));
+    assertEquals(StatusCode.OK, writer.execute("INSERT INTO items VALUES (5,50)", execution));
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, reader.beginScan("SELECT key,value FROM items", cursor));
+    assertEquals(StatusCode.OK, reader.nextScan(cursor, row));
+    assertEquals(10, row.key());
+    assertEquals(StatusCode.OK, writer.execute("INSERT INTO items VALUES (1,10)", execution));
+    assertEquals(StatusCode.OK, reader.nextScan(cursor, row));
+    assertEquals(20, row.key());
+    assertEquals(StatusCode.OK, reader.nextScan(cursor, row));
+    assertEquals(30, row.key());
+    assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, reader.closeScan(cursor, execution));
+    assertEquals(StatusCode.OK, reader.execute("COMMIT", execution));
+    close(database, reader, writer);
   }
 
   @Test
@@ -883,13 +1223,13 @@ final class SqlSessionTest {
         StatusCode.OK,
         reader.execute("UPDATE items SET value=121 WHERE key=12", execution));
     assertEquals(
-        StatusCode.RETRY,
+        StatusCode.TIMEOUT,
         writer.execute("UPDATE items SET value=122 WHERE key=12", execution));
     assertEquals(
         StatusCode.OK,
         writer.execute("INSERT INTO items VALUES (25, 250)", execution));
     assertEquals(
-        StatusCode.RETRY,
+        StatusCode.TIMEOUT,
         writer.execute("INSERT INTO items VALUES (15, 150)", execution));
     assertEquals(StatusCode.OK, reader.execute("COMMIT", execution));
     assertEquals(
@@ -910,7 +1250,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         reader.execute("SELECT value FROM items WHERE key=25", execution));
     assertEquals(250, execution.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, reader, writer);
   }
 
   @Test
@@ -928,7 +1268,7 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.execute("INSERT INTO items VALUES (1, 10)", result));
     assertEquals(StatusCode.OK, session.execute("INSERT INTO items VALUES (2, 10)", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("CREATE UNIQUE INDEX items_value ON items(value)", result));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -947,7 +1287,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT key, value FROM items WHERE value=20", result));
     assertEquals(2, result.key());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -978,6 +1318,17 @@ final class SqlSessionTest {
         writer.execute("SELECT key, value FROM ledger WHERE value=202", result));
     assertEquals(2, result.key());
     assertEquals(
+        StatusCode.UNIQUE_VIOLATION,
+        writer.execute("INSERT INTO ledger VALUES (3, 202)", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.UNIQUE_VIOLATION,
+        writer.execute("UPDATE ledger SET value=101 WHERE key=2", result));
+    assertEquals(true, result.transactionActive());
+    assertEquals(
+        StatusCode.OK,
+        writer.execute("INSERT INTO ledger VALUES (3, 303)", result));
+    assertEquals(
         StatusCode.RETRY,
         reader.execute("SELECT value FROM ledger WHERE key=1", result));
     assertEquals(StatusCode.OK, writer.execute("COMMIT", result));
@@ -986,7 +1337,80 @@ final class SqlSessionTest {
         StatusCode.OK,
         reader.execute("SELECT key, value FROM ledger WHERE value=101", result));
     assertEquals(1, result.key());
-    assertEquals(StatusCode.OK, database.close());
+    assertEquals(
+        StatusCode.OK,
+        reader.execute("SELECT key, value FROM ledger WHERE value=303", result));
+    assertEquals(3, result.key());
+    close(database, writer, reader);
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession reopened = sessions.session();
+    assertEquals(
+        StatusCode.OK,
+        reopened.execute("SELECT key, value FROM ledger WHERE value=303", result));
+    assertEquals(3, result.key());
+    assertEquals(
+        StatusCode.UNIQUE_VIOLATION,
+        reopened.execute("INSERT INTO ledger VALUES (4, 303)", result));
+    close(database, reopened);
+  }
+
+  @Test
+  void publishingUniqueIndexProtectsKeysFromEarlierBackfillBatches(@TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessions = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    SqlSession session = sessions.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(StatusCode.OK, session.execute("CREATE TABLE ledger", result));
+    for (int first = 1; first <= 1_024; first += 64) {
+      StringBuilder insert = new StringBuilder("INSERT INTO ledger VALUES ");
+      for (int row = first; row < first + 64; row++) {
+        if (row > first) insert.append(',');
+        insert.append('(').append(row).append(',').append(row * 10).append(')');
+      }
+      assertEquals(StatusCode.OK, session.execute(insert.toString(), result));
+      assertEquals(64, result.affectedRows());
+    }
+
+    assertEquals(StatusCode.OK, session.execute("BEGIN SERIALIZABLE", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE UNIQUE INDEX ledger_value ON ledger(value)", result));
+    assertEquals(
+        StatusCode.UNIQUE_VIOLATION,
+        session.execute("INSERT INTO ledger VALUES (1025, 10)", result));
+    assertEquals(
+        StatusCode.UNIQUE_VIOLATION,
+        session.execute("UPDATE ledger SET value=10 WHERE key=1024", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO ledger VALUES (1025, 10250)", result));
+    assertEquals(StatusCode.OK, session.execute("COMMIT", result));
+    close(database, session);
+
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+    database = opened.database();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
+    session = sessions.session();
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT key FROM ledger WHERE value=10250", result));
+    assertEquals(1025, result.key());
+    assertEquals(
+        StatusCode.UNIQUE_VIOLATION,
+        session.execute("INSERT INTO ledger VALUES (1026, 10)", result));
+    close(database, session);
   }
 
   @Test
@@ -1012,8 +1436,10 @@ final class SqlSessionTest {
         session.execute("CREATE UNIQUE INDEX events_value ON events(value)", result));
     assertEquals(StatusCode.OK, session.execute("ROLLBACK TO before_index", result));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute("SELECT key, value FROM events WHERE value=11", result));
+    assertEquals(1, result.key());
+    assertEquals(11, result.value());
     assertEquals(
         StatusCode.OK,
         second.execute("SELECT value FROM events WHERE key=1", result));
@@ -1027,7 +1453,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         second.execute("SELECT key, value FROM events WHERE value=11", result));
     assertEquals(1, result.key());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session, second);
   }
 
   @Test
@@ -1102,7 +1528,7 @@ final class SqlSessionTest {
     assertEquals(701, scanRow.value());
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, scanRow));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
 
     assertEquals(
         StatusCode.OK,
@@ -1127,7 +1553,7 @@ final class SqlSessionTest {
         StatusCode.CONFLICT,
         session.execute(
             "SELECT amount FROM balances WHERE account_id=7", result));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -1221,10 +1647,10 @@ final class SqlSessionTest {
     assertEquals(260, result.valueAt(1));
     assertEquals(8, result.valueAt(2));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO accounts VALUES (4, 400, 8)", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO accounts VALUES (4, 260, 10)", result));
     assertEquals(
         StatusCode.OK,
@@ -1279,7 +1705,7 @@ final class SqlSessionTest {
         session.execute("SELECT id, balance FROM accounts WHERE balance=100", result));
     assertEquals(1, result.key());
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute(
             "UPDATE accounts SET balance=100, region=6 WHERE id=2",
             result));
@@ -1342,7 +1768,7 @@ final class SqlSessionTest {
     assertEquals(300, row.valueAt(2));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
 
     assertEquals(
         StatusCode.OK,
@@ -1371,7 +1797,7 @@ final class SqlSessionTest {
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("SELECT id, region FROM accounts WHERE region=6", result));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -1433,7 +1859,7 @@ final class SqlSessionTest {
         StatusCode.OK,
         session.execute("SELECT id, d FROM events WHERE d=4063", result));
     assertEquals(63, result.key());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -1533,6 +1959,12 @@ final class SqlSessionTest {
         session.execute("UPDATE events SET category=20 WHERE id=2", result));
     assertEquals(
         StatusCode.OK,
+        session.execute("SELECT category FROM events WHERE id=2", result));
+    assertEquals(20, result.value());
+    assertDuplicateIndexEquality(session, result, 10, new long[] {1, 3});
+    assertDuplicateIndexEquality(session, result, 20, new long[] {2, 4, 5});
+    assertEquals(
+        StatusCode.OK,
         session.execute("DELETE FROM events WHERE id=3", result));
     assertEquals(
         StatusCode.OK,
@@ -1550,7 +1982,7 @@ final class SqlSessionTest {
         session.execute("DELETE FROM events WHERE category=20", result));
     assertEquals(3, result.affectedRows());
     assertDuplicateIndexRows(session, result, new long[] {1, 6});
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
 
     assertEquals(
         StatusCode.OK,
@@ -1579,11 +2011,11 @@ final class SqlSessionTest {
     assertEquals(999, row.value());
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
-  void boundsDuplicateIndexMutationsBeforeChangingRows(@TempDir Path root) {
+  void mutatesDuplicateIndexRowsBeyondFormerFixedBatchLimit(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -1616,28 +2048,28 @@ final class SqlSessionTest {
         session.execute("CREATE INDEX events_category ON events(category)", result));
 
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         session.execute("UPDATE events SET amount=999 WHERE category=10", result));
+    assertEquals(65, result.affectedRows());
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT amount FROM events WHERE id=1", result));
-    assertEquals(100, result.value());
+    assertEquals(999, result.value());
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT amount FROM events WHERE id=65", result));
-    assertEquals(6500, result.value());
+    assertEquals(999, result.value());
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         session.execute("DELETE FROM events WHERE category=10", result));
+    assertEquals(65, result.affectedRows());
     assertEquals(
-        StatusCode.OK,
+        StatusCode.CONFLICT,
         session.execute("SELECT amount FROM events WHERE id=1", result));
-    assertEquals(100, result.value());
     assertEquals(
-        StatusCode.OK,
+        StatusCode.CONFLICT,
         session.execute("SELECT amount FROM events WHERE id=65", result));
-    assertEquals(6500, result.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -1785,20 +2217,13 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
     assertEquals(StatusCode.OK, unindexedOrder.reset());
     assertEquals(
-        StatusCode.OK,
+        StatusCode.CARDINALITY_VIOLATION,
         session.beginScan(
             "SELECT id FROM events WHERE amount="
                 + "(SELECT category FROM events WHERE category=10)",
             unindexedOrder));
-    assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
-        session.nextScan(unindexedOrder, orderedRow));
     assertFalse(orderedRow.isAvailable());
-    assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
-        session.nextScan(unindexedOrder, orderedRow));
-    assertFalse(orderedRow.isAvailable());
-    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertFalse(unindexedOrder.isActive());
     assertEquals(StatusCode.OK, unindexedOrder.reset());
     assertUnindexedRows(
         session,
@@ -1837,15 +2262,13 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
     assertEquals(StatusCode.OK, unindexedOrder.reset());
     assertEquals(
-        StatusCode.OK,
+        StatusCode.CARDINALITY_VIOLATION,
         session.beginScan(
             "SELECT e.id FROM events e WHERE e.amount="
                 + "(SELECT i.amount FROM events i WHERE i.category=e.category)",
             unindexedOrder));
-    assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
-        session.nextScan(unindexedOrder, orderedRow));
-    assertEquals(StatusCode.OK, session.closeScan(unindexedOrder, result));
+    assertFalse(orderedRow.isAvailable());
+    assertFalse(unindexedOrder.isActive());
     assertEquals(StatusCode.OK, unindexedOrder.reset());
     assertEquals(
         StatusCode.OK,
@@ -2155,7 +2578,7 @@ final class SqlSessionTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.beginScan(
             "SELECT id FROM events WHERE missing=10", new SqlScanCursor()));
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -2212,7 +2635,7 @@ final class SqlSessionTest {
     assertEquals(0, result.affectedRows());
     assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM events", result));
     assertEquals(2, result.value());
-    assertEquals(StatusCode.OK, database.close());
+    close(database, session);
   }
 
   @Test
@@ -2281,6 +2704,52 @@ final class SqlSessionTest {
     }
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    close(database, session);
+  }
+
+  private static void assertQueuedStatementGranted(
+      SqlSession holder,
+      SqlSession waiter,
+      String holderCompletion,
+      String waitingSql,
+      SqlExecutionResult holderResult) throws Exception {
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    CountDownLatch entered = new CountDownLatch(1);
+    AtomicReference<Thread> worker = new AtomicReference<>();
+    SqlExecutionResult waitingResult = new SqlExecutionResult();
+    try {
+      Future<StatusCode> granted = executor.submit(() -> {
+        worker.set(Thread.currentThread());
+        entered.countDown();
+        return waiter.execute(waitingSql, waitingResult);
+      });
+      assertTrue(entered.await(5, TimeUnit.SECONDS));
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      Thread.State state = Thread.State.NEW;
+      while (!granted.isDone() && System.nanoTime() < deadline) {
+        Thread thread = worker.get();
+        if (thread != null) {
+          state = thread.getState();
+          if (state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING) break;
+        }
+        Thread.onSpinWait();
+      }
+      assertFalse(granted.isDone());
+      assertTrue(state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING);
+      assertEquals(StatusCode.OK, holder.execute(holderCompletion, holderResult));
+      assertEquals(StatusCode.OK, granted.get(5, TimeUnit.SECONDS));
+      assertTrue(waitingResult.transactionActive());
+    } finally {
+      executor.shutdownNow();
+    }
+  }
+
+  private static void close(
+      RelationalDatabase database,
+      SqlSession... sessions) {
+    for (SqlSession session : sessions) {
+      assertEquals(StatusCode.OK, session.close());
+    }
     assertEquals(StatusCode.OK, database.close());
   }
 

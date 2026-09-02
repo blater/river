@@ -13,6 +13,7 @@ final class SqlPersistedViewCompiler {
   private final SqlBinder binder;
   private final SqlBlockPlanBinder blockBinder;
   private final SqlTemporalZoneNames zones = new SqlTemporalZoneNames();
+  private final SqlNestedTableResolver tables = new SqlNestedTableResolver();
   private final ViewDefinition definition = new ViewDefinition();
 
   SqlPersistedViewCompiler(SqlBinder binder) {
@@ -33,6 +34,9 @@ final class SqlPersistedViewCompiler {
       return tableStatus == StatusCode.CORRUPTION
               && status == StatusCode.CONFLICT
           ? tableStatus : status;
+    }
+    if (bound.command.isSelectForUpdate()) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     if (bound.query.hasNestedTopology()) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
@@ -78,7 +82,20 @@ final class SqlPersistedViewCompiler {
     }
     status = bound.query.expandRootSelectAllFrom(1);
     if (!status.isOk()) return status;
-    return bound.query.compileCombined(bound.command);
+    status = bound.query.compileCombined(bound.command);
+    if (status.isOk() && bound.query.sourceBlockCount() > 1
+        && !bound.query.isBlockPipeline()
+        && (bound.query.sourceBlockCount() > 2 || computedProjection(bound))) {
+      status = bound.query.promoteRootBlockPipeline(bound.command);
+    }
+    return status;
+  }
+
+  private static boolean computedProjection(BoundSqlStatement bound) {
+    for (int block = 0; block < bound.query.sourceBlockCount(); block++) {
+      if (SqlDescriptorExpressionRouting.required(bound.query.block(block))) return true;
+    }
+    return false;
   }
 
   private StatusCode resolveLineage(
@@ -89,8 +106,8 @@ final class SqlPersistedViewCompiler {
     int block = Math.max(0, bound.query.blockCount() - 1);
     SqlBoundJoinContext context = join ? bound.joinContext(block) : null;
     StatusCode status = join
-        ? binder.resolveJoinRoles(session, base, context, null, true)
-        : session.resolveTable(base.tableName(), bound.table);
+        ? tables.resolveContextRoles(session, base, context)
+        : tables.resolveTable(session, base.tableName(), bound.table);
     if (!status.isOk()) return StatusCode.CORRUPTION;
     int count = join ? base.joinChain().roleCount() : 1;
     if (definition.tableCount() != count) return StatusCode.CORRUPTION;

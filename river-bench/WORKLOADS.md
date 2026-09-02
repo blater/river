@@ -93,7 +93,7 @@ remain explicit canonical P05 gaps rather than being implied by the v2 name.
 Every value is a pure function of the generator version, signed 64-bit seed,
 row sequence, and a stable value lane. Output is independent of table emission
 order and scratch-buffer size. Generation accepts one caller-owned 64 byte to
-1 MiB scratch array, emits bounded chunks, manually encodes numbers, and reuses
+1 MB scratch array, emits bounded chunks, manually encodes numbers, and reuses
 static token bytes. It retains no row collection or cardinality-sized state.
 That design avoids intentional per-row model construction, but this slice does
 not present measured zero-allocation evidence. Dedicated allocation profiling

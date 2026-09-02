@@ -7,6 +7,25 @@ import io.riverdb.base.error.StatusCode;
  * Closing aborts an explicit transaction that the session still owns.
  */
 public interface RiverSession {
+  StatusCode prepare(String sql, PreparedOpenResult result);
+
+  StatusCode executePrepared(
+      long handle, ParameterSet parameters, CommandResult result);
+
+  StatusCode beginPreparedQuery(
+      long handle, ParameterSet parameters, QueryOpenResult result);
+
+  StatusCode closePrepared(long handle);
+
+  StatusCode prepareProgram(TransactionProgram program, ProgramOpenResult result);
+
+  StatusCode executeProgram(
+      long programHandle,
+      TransactionProgramArguments arguments,
+      TransactionProgramResult result);
+
+  StatusCode closeProgram(long programHandle);
+
   StatusCode execute(String sql, CommandResult result);
 
   StatusCode execute(String sql, ParameterSet parameters, CommandResult result);

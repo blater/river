@@ -27,6 +27,8 @@ final class SqlSubqueryPlan {
   private final long[] accepted = new long[SqlQuery.MAXIMUM_EDGES];
   private final long[] results = new long[SqlQuery.MAXIMUM_EDGES];
   private final long[] parentAccepted = new long[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final int[] specializedAccess = new int[SqlQuery.MAXIMUM_EDGES];
+  private final byte[] specializedKinds = new byte[SqlQuery.MAXIMUM_EDGES];
 
   SqlSubqueryPlan(
       BoundSqlStatement statement,
@@ -45,6 +47,8 @@ final class SqlSubqueryPlan {
       candidates[edge] = 0;
       accepted[edge] = 0;
       results[edge] = 0;
+      specializedAccess[edge] = Integer.MIN_VALUE;
+      specializedKinds[edge] = 0;
     }
     for (int block = 0; block < query.blockCount(); block++) parentAccepted[block] = 0;
   }
@@ -55,6 +59,11 @@ final class SqlSubqueryPlan {
   void accept(int edge) { accepted[edge]++; }
   void result(int edge) { results[edge]++; }
   void parentAccepted(int block) { parentAccepted[block]++; }
+  void specializedAccess(int edge, int kind, int column) {
+    if (edge < 0 || edge >= specializedAccess.length) return;
+    specializedKinds[edge] = (byte) kind;
+    specializedAccess[edge] = column;
+  }
 
   int count() { return query.edgeCount() * STEPS_PER_EDGE; }
 
@@ -63,7 +72,9 @@ final class SqlSubqueryPlan {
     int phase = step % STEPS_PER_EDGE;
     if (phase == 1) return EXECUTE;
     if (phase == 2) {
-      int column = access.column(query.edgeChild(edge));
+      int kind = Byte.toUnsignedInt(specializedKinds[edge]);
+      if (kind != 0) return kind == 3 ? INDEX : kind == 2 ? PRIMARY : TABLE;
+      int column = accessColumn(edge);
       return column > 0 ? INDEX : column == 0 ? PRIMARY : TABLE;
     }
     if (phase == 3) return FILTER;
@@ -85,7 +96,7 @@ final class SqlSubqueryPlan {
       return bound.nestedBoolean(query.edgeChild(edge)).leafCount();
     }
     if (phase == 5) return query.edgeParent(edge);
-    return access.column(query.edgeChild(edge));
+    return accessColumn(edge);
   }
 
   long rows(int step) {
@@ -106,5 +117,10 @@ final class SqlSubqueryPlan {
     detail |= (long) child << 6;
     detail |= (long) query.blockDepth(child) << 12;
     return cache.correlated(edge) ? detail | 1L << 18 : detail;
+  }
+
+  private int accessColumn(int edge) {
+    return specializedAccess[edge] == Integer.MIN_VALUE
+        ? access.column(query.edgeChild(edge)) : specializedAccess[edge];
   }
 }

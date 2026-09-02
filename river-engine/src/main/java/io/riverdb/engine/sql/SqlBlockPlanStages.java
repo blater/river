@@ -11,13 +11,18 @@ final class SqlBlockPlanStages {
   private final SqlBlockAggregateBinder aggregates = new SqlBlockAggregateBinder(expressions);
   private final SqlBlockProjectionBinder projections = new SqlBlockProjectionBinder(expressions);
   private final SqlBlockPredicateBinder predicates = new SqlBlockPredicateBinder();
+  private final SqlBindingTableResolver tables = new SqlBindingTableResolver();
   private final SqlBlockJoinBinder joins;
   private final SqlBooleanPredicateEvaluator predicatePreflight;
 
-  SqlBlockPlanStages(SqlTemporalContext temporal, SqlBinder sharedBinder) {
+  SqlBlockPlanStages(
+      SqlTemporalContext temporal,
+      SqlBinder sharedBinder,
+      SqlSessionShapeBudget shapeBudget) {
     joins = sharedBinder == null ? null : new SqlBlockJoinBinder(sharedBinder);
     predicatePreflight = temporal == null ? null
-        : new SqlBooleanPredicateEvaluator(new SqlExpressionEvaluator(), temporal);
+        : new SqlBooleanPredicateEvaluator(
+            new SqlExpressionEvaluator(), temporal, shapeBudget);
   }
 
   StatusCode resolveSource(
@@ -29,7 +34,9 @@ final class SqlBlockPlanStages {
     if (command.type() == SqlCommandType.JOIN_SCAN) {
       return resolveJoinSource(session, bound, command, deepest);
     }
-    return session.resolveTable(command.tableName(), bound.table);
+    StatusCode status = tables.resolve(session, command.tableName(), bound.table);
+    if (status.isOk()) plans.setDescriptorSource(tables.descriptor());
+    return status;
   }
 
   StatusCode activateBlock(
@@ -39,7 +46,8 @@ final class SqlBlockPlanStages {
       SqlRowProjectionEvaluator evaluator) {
     StatusCode status = activate(bound, block, child);
     if (!status.isOk()) return status;
-    return preflightBlock(bound, block, evaluator);
+    status = preflightBlock(bound, block, evaluator);
+    return status;
   }
 
   StatusCode activate(
@@ -54,8 +62,10 @@ final class SqlBlockPlanStages {
     if (type == SqlCommandType.JOIN_SCAN) {
       return bindJoinStage(bound, plans, block, output);
     }
-    status = bindStage(bound, child, output, type);
-    if (status.isOk()) projections.publishOperandSchema(bound, block, child, type);
+    status = bindStage(bound, child, output, type, block == 0);
+    if (status.isOk()) {
+      status = projections.publishOperandSchema(bound, block, child, type);
+    }
     if (!status.isOk()) return status;
     status = validateOrder(bound, block, output);
     if (!status.isOk()) return status;
@@ -117,14 +127,23 @@ final class SqlBlockPlanStages {
       BoundSqlStatement bound,
       SqlBlockSchema child,
       SqlBlockSchema output,
-      SqlCommandType type) {
+      SqlCommandType type,
+      boolean finalBlock) {
+    StatusCode status = SqlBlockShapeAdmission.reserve(bound.command, bound, type);
+    if (!status.isOk()) return status;
     if (SqlBinder.isScalarAggregate(type)) {
+      if (bound.command.joinChain() != null) {
+        return aggregates.bindLoweredJoin(bound.command, child, output, bound, false);
+      }
       return aggregates.bind(bound.command, child, output, bound, false);
     }
     if (SqlBinder.isGroupAggregate(type)) {
+      if (bound.command.joinChain() != null) {
+        return aggregates.bindLoweredJoin(bound.command, child, output, bound, true);
+      }
       return aggregates.bind(bound.command, child, output, bound, true);
     }
-    return projections.bind(bound.command, child, output, bound);
+    return projections.bind(bound.command, child, output, bound, finalBlock);
   }
 
   private StatusCode bindJoinStage(
@@ -133,12 +152,27 @@ final class SqlBlockPlanStages {
       int block,
       SqlBlockSchema output) {
     if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
-    return joins.bind(bound, plans, block, output);
+    StatusCode status = joins.bind(bound, plans, block, output);
+    if (status.isOk() && bound.command.aggregateInvocationCount() > 0) {
+      plans.operandSchema(block).copyFrom(output);
+      status = aggregates.bindJoined(
+          bound.command,
+          plans.operandSchema(block),
+          output,
+          bound,
+          bound.command.groupExpressionCount() > 0);
+    }
+    return status;
   }
 
   private StatusCode validateOrder(
       BoundSqlStatement bound, int block, SqlBlockSchema output) {
     if (block != 0 || !bound.command.isOrdered()) return StatusCode.OK;
+    if (bound.command.orderColumnTableName(0).length() > 0) {
+      int projection = SqlProjectionBinder.resolveOrderProjection(bound.command, 0);
+      return projection >= 0 && projection < output.count()
+          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     return output.find(bound.command.orderColumnName()) < 0
         ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
   }

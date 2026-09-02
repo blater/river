@@ -1,6 +1,8 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
+import io.riverdb.base.type.SqlValueDomain;
 
 /** Canonical validation rules for persisted deterministic CHECK programs. */
 final class TableCheckProgram {
@@ -65,7 +67,7 @@ final class TableCheckProgram {
   }
 
   private static int literal(long value, int descriptor, int state, int[] stack) {
-    if (!TableSchema.validFixedValue(descriptor, value)) return INVALID;
+    if (!SqlValueDomain.validFixed(descriptor, value)) return INVALID;
     int size = state & SIZE_MASK;
     stack[size] = descriptor;
     return state + 1;
@@ -111,7 +113,7 @@ final class TableCheckProgram {
   static int binaryDescriptor(int operator, int left, int right) {
     if (SqlTypeDescriptor.typeId(left) != SqlTypeDescriptor.TYPE_ID_DATE) return 0;
     int rightType = SqlTypeDescriptor.typeId(right);
-    if (rightType == SqlTypeDescriptor.TYPE_ID_BIGINT) return SqlTypeDescriptor.DATE;
+    if (SqlNumericTypeRules.isIntegral(right)) return SqlTypeDescriptor.DATE;
     return operator == TableSchema.CHECK_SUBTRACT
             && rightType == SqlTypeDescriptor.TYPE_ID_DATE
         ? SqlTypeDescriptor.BIGINT : 0;

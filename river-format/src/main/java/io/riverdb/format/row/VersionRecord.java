@@ -2,10 +2,10 @@ package io.riverdb.format.row;
 
 /** Caller-owned decoded MVCC version-directory record. */
 public final class VersionRecord {
-  private int tableId;
-  private long versionId;
+  private long objectId;
+  private long heapVersionId;
   private long logicalRowId;
-  private long previousVersionId;
+  private long previousHeapVersionId;
   private long commitSequence;
   private long pageNumber;
   private long pageGeneration;
@@ -14,20 +14,20 @@ public final class VersionRecord {
   private boolean deleted;
 
   void set(
-      int ownerTableId,
-      long rowVersionId,
-      long stableRowId,
-      long previousId,
+      long ownerObjectId,
+      long currentHeapVersionId,
+      long stableLogicalRowId,
+      long priorHeapVersionId,
       long committedAt,
       long physicalPageNumber,
       long physicalPageGeneration,
       int localSlotId,
       int localSlotGeneration,
       boolean tombstone) {
-    tableId = ownerTableId;
-    versionId = rowVersionId;
-    logicalRowId = stableRowId;
-    previousVersionId = previousId;
+    objectId = ownerObjectId;
+    heapVersionId = currentHeapVersionId;
+    logicalRowId = stableLogicalRowId;
+    previousHeapVersionId = priorHeapVersionId;
     commitSequence = committedAt;
     pageNumber = physicalPageNumber;
     pageGeneration = physicalPageGeneration;
@@ -37,10 +37,10 @@ public final class VersionRecord {
   }
 
   public void reset() { set(0, 0, 0, 0, 0, 0, 0, 0, 0, false); }
-  public int tableId() { return tableId; }
-  public long versionId() { return versionId; }
+  public long objectId() { return objectId; }
+  public long heapVersionId() { return heapVersionId; }
   public long logicalRowId() { return logicalRowId; }
-  public long previousVersionId() { return previousVersionId; }
+  public long previousHeapVersionId() { return previousHeapVersionId; }
   public long commitSequence() { return commitSequence; }
   public long pageNumber() { return pageNumber; }
   public long pageGeneration() { return pageGeneration; }

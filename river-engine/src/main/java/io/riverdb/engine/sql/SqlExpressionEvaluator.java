@@ -1,6 +1,8 @@
 package io.riverdb.engine.sql;
 
-import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.ExactDecimal128;
+import io.riverdb.base.type.SqlNumericTypeRules;
+import io.riverdb.base.type.SqlNumericValue;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableSchema;
@@ -10,9 +12,19 @@ import java.nio.ByteBuffer;
 
 /** Allocation-free primitive SQL value, NULL, comparison, and text semantics. */
 final class SqlExpressionEvaluator {
-  long readColumn(long primaryKey, HeapRowResult source, int column) {
+  private final ExactDecimal128.Scratch decimal128 = new ExactDecimal128.Scratch();
+  long readColumn(
+      long primaryKey, HeapRowResult source, TableDefinition table, int column) {
     return column == 0
-        ? primaryKey : source.getLong((column - 1) * Long.BYTES);
+        ? primaryKey : source.getLong(table.valueOffset(column));
+  }
+
+  long readColumnHigh(
+      long primaryKey, HeapRowResult source, TableDefinition table, int column) {
+    if (column == 0) return primaryKey >> 63;
+    long low = source.getLong(table.valueOffset(column));
+    return SqlTypeDescriptor.isWideDecimal(table.typeDescriptor(column))
+        ? source.getLong(table.highValueOffset(column)) : low >> 63;
   }
 
   boolean isNull(
@@ -20,7 +32,7 @@ final class SqlExpressionEvaluator {
       TableDefinition definition,
       int column) {
     return column > 0
-        && (source.getLong(definition.nullMaskOffset()) & 1L << column) != 0;
+        && SqlPhysicalRowNulls.get(source, definition, column);
   }
 
   int compareText(
@@ -79,10 +91,25 @@ final class SqlExpressionEvaluator {
       int leftDescriptor,
       long right,
       int rightDescriptor) {
-    return SqlTypeDescriptor.typeId(leftDescriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-            || SqlTypeDescriptor.typeId(rightDescriptor)
-                == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? ExactDecimal.compare(left, leftDescriptor, right, rightDescriptor)
+    return SqlNumericTypeRules.isNumeric(leftDescriptor)
+            && SqlNumericTypeRules.isNumeric(rightDescriptor)
+        ? SqlNumericValue.compare(left, leftDescriptor, right, rightDescriptor)
+        : Long.compare(left, right);
+  }
+
+  int compareExact(
+      long leftHigh,
+      long left,
+      int leftDescriptor,
+      long rightHigh,
+      long right,
+      int rightDescriptor) {
+    return SqlNumericTypeRules.isNumeric(leftDescriptor)
+            && SqlNumericTypeRules.isNumeric(rightDescriptor)
+        ? SqlNumericComparison.compare(
+            leftHigh, left, leftDescriptor,
+            rightHigh, right, rightDescriptor,
+            decimal128)
         : Long.compare(left, right);
   }
 

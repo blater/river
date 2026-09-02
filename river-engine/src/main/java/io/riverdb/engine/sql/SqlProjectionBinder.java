@@ -36,9 +36,9 @@ final class SqlProjectionBinder {
   private static StatusCode bindLegacy(
       SqlCommand command, BoundSqlStatement bound) {
     int count = command.columnCount();
-    if (count <= 0 || count > bound.projectedColumns.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
+    StatusCode reserved = bound.reserveProjectionColumns(count);
+    if (count <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!reserved.isOk()) return reserved;
     bound.projectionPrograms.begin(count);
     for (int index = 0; index < count; index++) {
       if (!hasValidQualifier(command, index)) {
@@ -67,12 +67,16 @@ final class SqlProjectionBinder {
           index, bound.projectedTypeDescriptors[index], column < 0 ? -1 : column);
     }
     bound.projectedColumnCount = count;
-    return StatusCode.OK;
+    return bound.projectionPrograms.status();
   }
 
   StatusCode bindOrder(SqlCommand command, BoundSqlStatement bound) {
+    CharSequence qualifier = command.orderColumnTableName(0);
+    if (qualifier.length() > 0 && !SqlBindingNames.matchesTable(command, qualifier)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     int column = bound.table.findColumn(command.orderColumnName());
-    int aliasProjection = resolveOrderAlias(command);
+    int aliasProjection = resolveOrderProjection(command, 0);
     if (aliasProjection == AMBIGUOUS_ALIAS
         || aliasProjection >= 0
             && column >= 0
@@ -89,7 +93,7 @@ final class SqlProjectionBinder {
   }
 
   StatusCode bindJoinOrder(SqlCommand command, BoundSqlStatement bound) {
-    int projection = resolveOrderAlias(command);
+    int projection = SqlJoinOrderBinding.firstProjection(command);
     if (projection < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     bound.orderColumn = SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
     bound.sortKeyProjection = projection;
@@ -112,6 +116,11 @@ final class SqlProjectionBinder {
       return status;
     }
     int column = bound.projectionPrograms.rawColumn(0);
+    if (command.columnCount() > 1) {
+      bound.distinctColumn = SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+      bound.sortKeyProjection = 0;
+      return predicates.bind(command, query, bound);
+    }
     if (column < 0) {
       status = rows.validateComputedKey(command, bound, 0);
       if (!status.isOk()) return status;
@@ -129,10 +138,25 @@ final class SqlProjectionBinder {
   }
 
   private static int resolveOrderAlias(SqlCommand command) {
+    return resolveOrderAlias(command, 0);
+  }
+
+  static int resolveOrderProjection(SqlCommand command, int expression) {
+    CharSequence qualifier = command.orderColumnTableName(expression);
+    if (qualifier.length() == 0) return resolveOrderAlias(command, expression);
+    CharSequence name = command.orderColumnName(expression);
+    for (int projection = 0; projection < command.columnCount(); projection++) {
+      if (SqlBindingNames.same(command.columnTableName(projection), qualifier)
+          && SqlBindingNames.same(command.columnName(projection), name)) return projection;
+    }
+    return -1;
+  }
+
+  static int resolveOrderAlias(SqlCommand command, int expression) {
     int resolved = -1;
     for (int index = 0; index < command.columnCount(); index++) {
       if (!SqlBindingNames.same(
-          command.columnOutputName(index), command.orderColumnName())) {
+          command.columnOutputName(index), command.orderColumnName(expression))) {
         continue;
       }
       if (resolved >= 0 || command.isNullProjection(index)) {

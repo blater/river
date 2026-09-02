@@ -18,7 +18,7 @@ final class IndexedTableMutationStager {
   }
 
   StatusCode stageInsertBatch(
-      int[] spaces, long[] keys, ByteBuffer rows, int rowStride,
+      long[] spaces, long[] keys, ByteBuffer rows, int rowStride,
       int[] rowLengths, int insertCount, HeapInsertResult result) {
     if (spaces == null || keys == null || rows == null || rowStride <= 0
         || rowLengths == null || insertCount <= 0 || insertCount > keys.length
@@ -38,7 +38,7 @@ final class IndexedTableMutationStager {
   }
 
   private StatusCode stageInsertEntry(
-      int space, long key, ByteBuffer rows, int rowOffset, int rowBytes, int rowStride) {
+      long space, long key, ByteBuffer rows, int rowOffset, int rowBytes, int rowStride) {
     if (!OrderedKey.isFiniteSpace(space) || rowBytes <= 0 || rowBytes > rowStride
         || rows.limit() - rowOffset < rowBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -58,7 +58,7 @@ final class IndexedTableMutationStager {
   }
 
   StatusCode stageMutationBatch(
-      int[] operations, int[] spaces, long[] keys, int[] previousRowIds,
+      int[] operations, long[] spaces, long[] keys, int[] previousRowIds,
       ByteBuffer rows, int rowStride, int[] rowLengths, int mutationCount,
       HeapInsertResult result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -74,7 +74,7 @@ final class IndexedTableMutationStager {
   }
 
   private StatusCode stageMutationEntry(
-      int operation, int space, long key, long previousRowId, ByteBuffer rows,
+      int operation, long space, long key, long previousRowId, ByteBuffer rows,
       int rowOffset, int rowBytes, int rowStride) {
     if (!validMutation(operation) || !OrderedKey.isFiniteSpace(space)
         || rowBytes <= 0 || rowBytes > rowStride
@@ -118,7 +118,7 @@ final class IndexedTableMutationStager {
 
   private StatusCode stagePendingMutation(PendingMutationBuffer mutations, int index) {
     int operation = mutations.operationAt(index);
-    int space = mutations.spaceAt(index);
+    long space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
     long previousRowId = mutations.previousRowIdAt(index);
     int rowBytes = mutations.rowLengthAt(index);
@@ -161,7 +161,7 @@ final class IndexedTableMutationStager {
   }
 
   private StatusCode stagePendingInsert(PendingMutationBuffer mutations, int index) {
-    int space = mutations.spaceAt(index);
+    long space = mutations.spaceAt(index);
     long key = mutations.keyAt(index);
     int rowBytes = mutations.rowLengthAt(index);
     if (!OrderedKey.isFiniteSpace(space) || rowBytes <= 0
@@ -183,7 +183,7 @@ final class IndexedTableMutationStager {
   }
 
   private StatusCode applyIndexEntry(
-      int leafPageId, ByteBuffer leaf, int space, long key,
+      int leafPageId, ByteBuffer leaf, long space, long key,
       boolean newIndexEntry, long rowId) {
     StatusCode status = newIndexEntry
         ? BTreePage.insertLeaf(leaf, space, key, rowId)

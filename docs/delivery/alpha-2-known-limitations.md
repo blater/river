@@ -15,7 +15,7 @@ The complete Alpha 1–Alpha 3 sequence and numeric limits are maintained in the
 - Embedded SQL plus authenticated TLS loopback JDBC and CLI access.
 - Typed parameters/results, DML, aggregation, grouping/HAVING, DISTINCT,
   ordering and bounded spill, EXPLAIN, and EXPLAIN ANALYZE.
-- Two-to-eight-role inner/left joins with durable lineage, bounded nested/hash/
+- Two-to-64-role inner/left joins with durable lineage, bounded nested/hash/
   merge planning, direct and deepest-derived views, and durable `ANALYZE`
   statistics for deterministic SQL-order costing.
 - Correlated scalar, EXISTS, IN and comparison subqueries across direct,
@@ -32,11 +32,11 @@ The complete Alpha 1–Alpha 3 sequence and numeric limits are maintained in the
   incompatibly. River does not provide upgrade adapters for this alpha.
 - A3C-0 freezes capacity formats; the runtime removes the legacy 65,536
   physical row/version ceiling. WAL and checkpoint metadata now carry positive
-  logical row IDs through 4,294,967,294, and an audited checkpoint test covers
-  a 3,000,000,000-row append-only manifest. The transitional runtime remains
-  bounded by positive-int page IDs and resident page frames and is not yet
-  qualified for billion-row tables or a standard one-warehouse TPC-C load.
-  A3C-1 and A3C-2 complete the disk-backed scale path.
+  logical row IDs through 4,294,967,294. Disk-backed row-location/version
+  directories and a bounded pinned page cache remove resident per-row state;
+  audited tests cover a 3,000,000,000-row metadata entry and a working set
+  larger than the page cache. Long-running billion-row soak and standard
+  one-warehouse TPC-C performance qualification are still unfinished.
 - The network service is restricted to authenticated TLS loopback use.
   Non-loopback deployment is unsupported.
 - The complete crash, recovery, isolation-history, fault-injection,

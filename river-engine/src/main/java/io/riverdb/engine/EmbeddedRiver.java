@@ -6,16 +6,24 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.ParameterSet;
+import io.riverdb.engine.api.PreparedOpenResult;
+import io.riverdb.engine.api.ProgramOpenResult;
 import io.riverdb.engine.api.QueryOpenResult;
+import io.riverdb.engine.api.QueryMetadata;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RiverSession;
 import io.riverdb.engine.api.RowResult;
 import io.riverdb.engine.api.SessionOpenResult;
 import io.riverdb.engine.api.SessionAuthorizer;
+import io.riverdb.engine.api.TransactionProgram;
+import io.riverdb.engine.api.TransactionProgramArguments;
+import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.sql.SqlExecutionResult;
+import io.riverdb.engine.sql.SqlPreparedPlan;
+import io.riverdb.engine.sql.SqlPublicResultPublisher;
 import io.riverdb.engine.sql.SqlScanCursor;
 import io.riverdb.engine.sql.SqlScanRowResult;
 import io.riverdb.engine.sql.SqlSession;
@@ -80,23 +88,36 @@ public final class EmbeddedRiver {
         : RelationalDatabase.openExisting(
             directory, database, generation, maximumActiveTransactions, opened);
     if (!status.isOk()) {
+      result.detail().copyFrom(opened.detail());
+      if (result.detail().code().isOk()) result.detail().set(status);
       return status;
     }
-    EngineDatabase engine = new EngineDatabase(opened.database());
+    EngineDatabase engine;
+    try {
+      engine = new EngineDatabase(opened.database());
+    } catch (OutOfMemoryError failure) {
+      StatusCode cleanup = opened.database().close();
+      status = cleanup.isOk() ? StatusCode.RESOURCE_EXHAUSTED : cleanup;
+      result.detail().set(status);
+      return status;
+    }
     status = result.complete(engine);
     if (!status.isOk()) {
       engine.close();
+      result.detail().set(status);
     }
     return status;
   }
 
   private static final class EngineDatabase implements RiverDatabase {
     private final RelationalDatabase database;
+    private final DeferredSessionCleanup terminalCleanup;
     private int openSessions;
     private boolean closed;
 
     private EngineDatabase(RelationalDatabase relational) {
       database = relational;
+      terminalCleanup = new DeferredSessionCleanup(this);
     }
 
     @Override
@@ -114,14 +135,31 @@ public final class EmbeddedRiver {
       if (closed) {
         return StatusCode.CLOSED;
       }
-      SqlSessionOpenResult opened = new SqlSessionOpenResult();
-      StatusCode status = authorizer == null
-          ? SqlSession.create(database, opened)
+      StatusCode cleanupHealth = terminalCleanup.health();
+      if (!cleanupHealth.isOk() && !cleanupHealth.isRetryable()) return cleanupHealth;
+      SqlSessionOpenResult opened;
+      try {
+        opened = new SqlSessionOpenResult();
+      } catch (OutOfMemoryError failure) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      StatusCode status = authorizer == null ? SqlSession.create(database, opened)
           : SqlSession.create(database, authorizer, opened);
       if (!status.isOk()) {
         return status;
       }
-      status = result.complete(new EngineSession(this, opened.session()));
+      EngineSession engineSession;
+      try {
+        engineSession = new EngineSession(this, opened.session());
+      } catch (OutOfMemoryError failure) {
+        StatusCode cleanup = opened.session().close();
+        return cleanup.isOk() ? StatusCode.RESOURCE_EXHAUSTED : cleanup;
+      }
+      status = result.complete(engineSession);
+      if (!status.isOk()) {
+        StatusCode cleanup = opened.session().close();
+        if (!cleanup.isOk()) return cleanup;
+      }
       if (status.isOk()) {
         openSessions++;
       }
@@ -129,14 +167,26 @@ public final class EmbeddedRiver {
     }
 
     @Override
+    public StatusCode deferTerminalClose(RiverSession session) {
+      return session instanceof TerminalSessionCleanupTarget target
+          ? terminalCleanup.transfer(target) : StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+
+    @Override
     public synchronized StatusCode close() {
       if (closed) {
         return StatusCode.CLOSED;
       }
+      StatusCode cleanup = terminalCleanup.health();
+      if (!cleanup.isOk()) {
+        if (!cleanup.isRetryable()) terminalCleanup.retryFence();
+        return StatusCode.RETRY;
+      }
       if (openSessions != 0) {
         return StatusCode.CONFLICT;
       }
-      StatusCode status = database.close();
+      StatusCode status = terminalCleanup.close();
+      if (status.isOk()) status = database.close();
       if (status.isOk()) {
         closed = true;
       }
@@ -148,22 +198,106 @@ public final class EmbeddedRiver {
     }
   }
 
-  private static final class EngineSession implements RiverSession {
+  private static final class EngineSession
+      implements RiverSession, TerminalSessionCleanupTarget {
     private final EngineDatabase owner;
     private final SqlSession session;
     private final SqlExecutionResult execution = new SqlExecutionResult();
     private final SqlScanCursor scan = new SqlScanCursor();
     private final SqlScanRowResult scanRow = new SqlScanRowResult();
-    private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
-    private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
-    private final char[] textCharacters =
-        new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
+    private final SqlPublicResultPublisher resultPublisher = new SqlPublicResultPublisher();
     private final EngineQuery query = new EngineQuery();
+    private final SessionHandleDirectory handles;
+    private final RetainedPreparedStatements prepared;
+    private final RetainedTransactionPrograms transactionPrograms;
+    private final TransactionProgramExecutor programExecutor;
+    private final io.riverdb.engine.sql.SqlPreparedValidationResult preparedValidation =
+        new io.riverdb.engine.sql.SqlPreparedValidationResult();
     private boolean closed;
+    private boolean terminalTransferred;
+    private TerminalSessionCleanupTarget terminalNext;
 
     private EngineSession(EngineDatabase database, SqlSession sqlSession) {
       owner = database;
       session = sqlSession;
+      handles = new SessionHandleDirectory(sqlSession);
+      prepared = new RetainedPreparedStatements(sqlSession, handles);
+      transactionPrograms = new RetainedTransactionPrograms(sqlSession, prepared, handles);
+      programExecutor = new TransactionProgramExecutor(sqlSession);
+    }
+
+    @Override
+    public StatusCode prepare(String sql, PreparedOpenResult result) {
+      if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      result.reset();
+      if (closed) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      StatusCode status = session.validatePrepared(sql, session, preparedValidation);
+      if (status.isOk()) status = prepared.open(preparedValidation, result);
+      StatusCode released = preparedValidation.reset();
+      return status.isOk() ? released : status;
+    }
+
+    @Override
+    public StatusCode executePrepared(
+        long handle, ParameterSet parameters, CommandResult result) {
+      if (parameters == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      result.reset();
+      if (closed) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      SqlPreparedPlan plan = prepared.resolve(handle, false);
+      if (plan == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      StatusCode status = session.executePrepared(plan, parameters, execution);
+      return status.isOk() ? copyExecution(result) : status;
+    }
+
+    @Override
+    public StatusCode beginPreparedQuery(
+        long handle, ParameterSet parameters, QueryOpenResult result) {
+      if (parameters == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      result.reset();
+      if (closed) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      SqlPreparedPlan plan = prepared.resolve(handle, true);
+      return plan == null
+          ? StatusCode.INVALID_EXTERNAL_INPUT
+          : beginPreparedQuery(plan, parameters, result);
+    }
+
+    @Override
+    public StatusCode closePrepared(long handle) {
+      if (closed) return StatusCode.CLOSED;
+      return query.active ? StatusCode.CONFLICT : prepared.close(handle);
+    }
+
+    @Override
+    public StatusCode prepareProgram(TransactionProgram program, ProgramOpenResult result) {
+      if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      result.reset();
+      if (closed) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      return transactionPrograms.open(program, result);
+    }
+
+    @Override
+    public StatusCode executeProgram(
+        long programHandle,
+        TransactionProgramArguments arguments,
+        TransactionProgramResult result) {
+      if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      result.reset();
+      if (closed) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      RetainedTransactionProgram program = transactionPrograms.resolve(programHandle);
+      return program == null
+          ? StatusCode.INVALID_EXTERNAL_INPUT
+          : programExecutor.execute(program, arguments, result);
+    }
+
+    @Override
+    public StatusCode closeProgram(long programHandle) {
+      if (closed) return StatusCode.CLOSED;
+      return query.active ? StatusCode.CONFLICT : transactionPrograms.close(programHandle);
     }
 
     @Override
@@ -210,10 +344,7 @@ public final class EmbeddedRiver {
     }
 
     private StatusCode beginQuery(
-        String sql,
-        ParameterSet parameters,
-        QueryOpenResult result,
-        boolean typed) {
+        String sql, ParameterSet parameters, QueryOpenResult result, boolean typed) {
       if (result == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
@@ -234,24 +365,83 @@ public final class EmbeddedRiver {
             : session.beginScan(sql, scan);
       }
       if (status.isOk()) {
+        status = query.prepare();
+      }
+      if (status.isOk()) {
         query.active = true;
         status = result.complete(query);
+      }
+      if (!status.isOk() && scan.isActive()) {
+        query.active = false;
+        StatusCode close = session.closeScan(scan, execution);
+        if (!close.isOk()) status = close;
+      }
+      return status;
+    }
+
+    private StatusCode beginPreparedQuery(
+        SqlPreparedPlan plan, ParameterSet parameters, QueryOpenResult result) {
+      if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      result.reset();
+      if (closed) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      StatusCode status = scan.reset();
+      if (status.isOk()) status = session.beginPreparedScan(plan, parameters, scan);
+      if (status.isOk()) status = query.prepare();
+      if (status.isOk()) {
+        query.active = true;
+        status = result.complete(query);
+      }
+      if (!status.isOk() && scan.isActive()) {
+        query.active = false;
+        StatusCode close = session.closeScan(scan, execution);
+        if (!close.isOk()) status = close;
       }
       return status;
     }
 
     @Override
     public StatusCode close() {
+      return terminalTransferred ? StatusCode.NOT_OWNER : closeOwned();
+    }
+
+    @Override
+    public boolean transferToTerminalCleanup(Object databaseOwner) {
+      if (databaseOwner != owner || closed || terminalTransferred) return false;
+      terminalTransferred = true;
+      return true;
+    }
+
+    @Override
+    public StatusCode retryTerminalClose() {
+      return !terminalTransferred ? StatusCode.NOT_OWNER : closeOwned();
+    }
+
+    @Override
+    public TerminalSessionCleanupTarget terminalCleanupNext() {
+      return terminalNext;
+    }
+
+    @Override
+    public void terminalCleanupNext(TerminalSessionCleanupTarget next) {
+      terminalNext = next;
+    }
+
+    private StatusCode closeOwned() {
       if (closed) {
         return StatusCode.CLOSED;
       }
       StatusCode status = StatusCode.OK;
       if (query.active) {
         status = session.closeScan(scan, execution);
-        if (status.isOk()) {
-          query.active = false;
-        }
+        if (!scan.isActive()) query.active = false;
       }
+      StatusCode validationReleased = preparedValidation.reset();
+      if (status.isOk()) status = validationReleased;
+      if (status.isOk()) status = programExecutor.close();
+      if (status.isOk()) status = transactionPrograms.clear();
+      if (status.isOk()) status = prepared.clear();
+      if (status.isOk()) status = handles.clear();
       if (status.isOk()) {
         status = session.close();
       }
@@ -263,74 +453,40 @@ public final class EmbeddedRiver {
     }
 
     private StatusCode copyExecution(CommandResult result) {
-      int columns = execution.columnCount();
-      for (int index = 0; index < columns; index++) {
-        values[index] = execution.valueAt(index);
-        typeDescriptors[index] = execution.typeDescriptorAt(index);
-      }
-      StatusCode status = result.complete(
-          execution.affectedRows(),
-          execution.commitSequence(),
-          execution.transactionActive(),
-          execution.hasValue(),
-          execution.key(),
-          values,
-          execution.nullMask(),
-          typeDescriptors,
-          columns);
-      for (int index = 0; status.isOk() && index < columns; index++) {
-        if (execution.isVarchar(index) && !execution.isNull(index)) {
-          int length = execution.copyTextAt(index, textCharacters, 0);
-          status = length < 0
-              ? StatusCode.INVARIANT_BROKEN
-              : result.setTextAt(index, textCharacters, 0, length);
-        }
-      }
-      return status;
+      return resultPublisher.publish(execution, result);
     }
 
     private final class EngineQuery implements RiverQuery {
+      private final EmbeddedQueryMetadata metadata = new EmbeddedQueryMetadata();
       private boolean active;
+
+      private StatusCode prepare() {
+        StatusCode status = metadata.prepare(session, scan);
+        return status.isOk() ? resultPublisher.reserve(metadata.columnCount()) : status;
+      }
 
       @Override
       public StatusCode next(RowResult result) {
         if (result == null) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
-        result.reset();
         if (closed) {
           return StatusCode.CLOSED;
         }
         if (!active) {
           return StatusCode.CONFLICT;
         }
-        StatusCode status = session.nextScan(scan, scanRow);
+        StatusCode status = result.reserve(metadata, null);
+        if (!status.isOk()) return status;
+        result.reset();
+        status = session.nextScan(scan, scanRow);
         if (status == StatusCode.CONFLICT && !scanRow.isAvailable()) {
           return StatusCode.OK;
         }
         if (!status.isOk()) {
           return status;
         }
-        int columns = scanRow.columnCount();
-        for (int index = 0; index < columns; index++) {
-          values[index] = scanRow.valueAt(index);
-          typeDescriptors[index] = session.scanColumnTypeDescriptor(scan, index);
-        }
-        StatusCode completed = result.complete(
-            scanRow.key(),
-            values,
-            scanRow.nullMask(),
-            typeDescriptors,
-            columns);
-        for (int index = 0; completed.isOk() && index < columns; index++) {
-          if (scanRow.isVarchar(index) && !scanRow.isNull(index)) {
-            int length = scanRow.copyTextAt(index, textCharacters, 0);
-            completed = length < 0
-                ? StatusCode.INVARIANT_BROKEN
-                : result.setTextAt(index, textCharacters, 0, length);
-          }
-        }
-        return completed;
+        return resultPublisher.publish(scanRow, result);
       }
 
       @Override
@@ -346,9 +502,10 @@ public final class EmbeddedRiver {
           return StatusCode.CONFLICT;
         }
         StatusCode status = session.closeScan(scan, execution);
-        if (status.isOk()) {
+        boolean physicalClosed = !scan.isActive();
+        if (physicalClosed) {
           active = false;
-          status = copyExecution(result);
+          if (status.isOk()) status = copyExecution(result);
         }
         return status;
       }
@@ -356,6 +513,11 @@ public final class EmbeddedRiver {
       @Override
       public boolean isActive() {
         return active;
+      }
+
+      @Override
+      public QueryMetadata metadata() {
+        return metadata;
       }
 
       @Override

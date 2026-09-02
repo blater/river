@@ -5,66 +5,77 @@ import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
-import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.relational.TableStatistics;
 
 /** Bounded allocation-free table scan producing durable planner statistics. */
 final class SqlAnalyzeTableExecution {
-  private static final int MAXIMUM_DISTINCT = 1_024;
   private final RelationalSession session;
   private final TableDefinition table = new TableDefinition();
   private final TableStatistics statistics = new TableStatistics();
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult scan = new RelationalScanResult();
-  private final SqlBlockPhysicalRowReader reader = new SqlBlockPhysicalRowReader();
-  private final SqlBlockRow row = new SqlBlockRow();
+  private final SqlAnalyzeWorkspace workspace;
+  private final SqlBlockPhysicalRowReader reader;
+  private final SqlBlockRow row;
   private final SqlExpressionEvaluator expressions = new SqlExpressionEvaluator();
-  private final long[] distinctValues =
-      new long[TableSchema.MAXIMUM_COLUMNS * MAXIMUM_DISTINCT];
-  private final short[] distinctCounts = new short[TableSchema.MAXIMUM_COLUMNS];
-  private final long[] nullCounts = new long[TableSchema.MAXIMUM_COLUMNS];
-  private final long[] minimumValues = new long[TableSchema.MAXIMUM_COLUMNS];
-  private final long[] maximumValues = new long[TableSchema.MAXIMUM_COLUMNS];
-  private long minMaxMask;
-  private long sampledMask;
+  private final SqlDescriptorAnalyzeScan descriptorScan;
+  private SqlBlockRow currentRow;
   private int rowCount;
+  private boolean descriptor;
 
   SqlAnalyzeTableExecution(RelationalSession relationalSession) {
+    this(relationalSession, SqlRetainedArrayAllocator.STANDARD);
+  }
+
+  SqlAnalyzeTableExecution(
+      RelationalSession relationalSession, SqlRetainedArrayAllocator allocator) {
     session = relationalSession;
+    workspace = new SqlAnalyzeWorkspace(allocator);
+    reader = new SqlBlockPhysicalRowReader(allocator);
+    row = new SqlBlockRow(allocator);
+    descriptorScan = new SqlDescriptorAnalyzeScan(session);
   }
 
   StatusCode analyze(CharSequence tableName) {
     reset();
-    StatusCode status = session.resolveTable(tableName, table);
-    if (status.isOk()) prepareRow();
-    if (status.isOk()) status = session.beginScan(table, cursor);
+    StatusCode status = descriptorScan.resolve(tableName, table);
+    descriptor = status.isOk();
+    if (status == StatusCode.CONFLICT) status = session.resolveTable(tableName, table);
+    if (status.isOk()) status = prepareRow();
+    if (status.isOk()) status = descriptor
+        ? descriptorScan.begin() : session.beginScan(table, cursor);
     while (status.isOk()) {
-      status = session.nextScan(cursor, scan);
+      status = descriptor ? descriptorScan.next() : session.nextScan(cursor, scan);
       if (status == StatusCode.CONFLICT) {
         status = StatusCode.OK;
         break;
       }
       if (!status.isOk()) break;
-      status = reader.read(scan.key(), scan.row(), table, row);
-      if (status.isOk()) accumulate();
+      if (!descriptor) status = reader.read(scan.key(), scan.row(), table, row);
+      if (status.isOk()) {
+        currentRow = descriptor ? descriptorScan.row() : row;
+        accumulate();
+      }
       scan.reset();
     }
     StatusCode runtime = status;
-    StatusCode closed = cursor.isActive()
-        ? session.closeScan(cursor) : StatusCode.OK;
+    StatusCode closed = descriptor ? descriptorScan.reset()
+        : cursor.isActive() ? session.closeScan(cursor) : StatusCode.OK;
     if (!runtime.isOk()) return runtime;
     if (!closed.isOk()) return closed;
-    publish();
-    StatusCode written = session.writeStatistics(table, statistics);
+    StatusCode published = publish();
+    StatusCode written = published.isOk()
+        ? session.writeStatistics(table, statistics) : published;
     eraseScratch();
     return written;
   }
 
   int rowCount() { return rowCount; }
 
-  boolean hasResources() { return cursor.isActive(); }
+  boolean hasResources() { return cursor.isActive() || descriptorScan.hasResources(); }
 
   StatusCode closeResources() {
+    if (descriptorScan.hasResources()) return descriptorScan.reset();
     if (!cursor.isActive()) return StatusCode.OK;
     StatusCode status = session.closeScan(cursor);
     if (status.isOk()) eraseScratch();
@@ -74,57 +85,59 @@ final class SqlAnalyzeTableExecution {
   private void accumulate() {
     rowCount++;
     for (int column = 0; column < table.columnCount(); column++) {
-      if (row.nullValue(column)) {
-        nullCounts[column]++;
+      if (currentRow.nullValue(column)) {
+        workspace.nullCounts[column]++;
         continue;
       }
       long hash = hash(column);
-      int count = Short.toUnsignedInt(distinctCounts[column]);
-      if (count < MAXIMUM_DISTINCT && addDistinct(column, count, hash)) {
-        distinctCounts[column] = (short) (count + 1);
-      } else if (count >= MAXIMUM_DISTINCT) {
-        sampledMask |= 1L << column;
+      int count = Short.toUnsignedInt(workspace.distinctCounts[column]);
+      if (count < SqlAnalyzeWorkspace.DISTINCT_SLOTS
+          && addDistinct(column, count, hash)) {
+        workspace.distinctCounts[column] = (short) (count + 1);
+      } else if (count >= SqlAnalyzeWorkspace.DISTINCT_SLOTS) {
+        workspace.sampled[column] = true;
       }
       if (!table.isVarchar(column)) accumulateRange(column);
     }
   }
 
   private boolean addDistinct(int column, int count, long hash) {
-    int offset = column * MAXIMUM_DISTINCT;
+    int offset = column * SqlAnalyzeWorkspace.DISTINCT_SLOTS;
     for (int index = 0; index < count; index++) {
-      if (distinctValues[offset + index] == hash) return false;
+      if (workspace.distinctValues[offset + index] == hash) return false;
     }
-    distinctValues[offset + count] = hash;
+    workspace.distinctValues[offset + count] = hash;
     return true;
   }
 
   private void accumulateRange(int column) {
-    long value = row.value(column);
-    long bit = 1L << column;
-    if ((minMaxMask & bit) == 0) {
-      minimumValues[column] = value;
-      maximumValues[column] = value;
-      minMaxMask |= bit;
+    long value = currentRow.value(column);
+    if (!workspace.minMax[column]) {
+      workspace.minimumValues[column] = value;
+      workspace.maximumValues[column] = value;
+      workspace.minMax[column] = true;
       return;
     }
     int descriptor = table.typeDescriptor(column);
-    if (expressions.compareExact(value, descriptor, minimumValues[column], descriptor) < 0) {
-      minimumValues[column] = value;
+    if (expressions.compareExact(
+        value, descriptor, workspace.minimumValues[column], descriptor) < 0) {
+      workspace.minimumValues[column] = value;
     }
-    if (expressions.compareExact(value, descriptor, maximumValues[column], descriptor) > 0) {
-      maximumValues[column] = value;
+    if (expressions.compareExact(
+        value, descriptor, workspace.maximumValues[column], descriptor) > 0) {
+      workspace.maximumValues[column] = value;
     }
   }
 
   private long hash(int column) {
     long hash = 0xcbf29ce484222325L;
     if (table.isVarchar(column)) {
-      for (int index = 0; index < row.textLength(column); index++) {
-        hash ^= row.textCharacter(column, index);
+      for (int index = 0; index < currentRow.textLength(column); index++) {
+        hash ^= currentRow.textCharacter(column, index);
         hash *= 0x100000001b3L;
       }
     } else {
-      long value = row.value(column);
+      long value = currentRow.value(column);
       for (int shift = 0; shift < Long.SIZE; shift += Byte.SIZE) {
         hash ^= value >>> shift & 0xff;
         hash *= 0x100000001b3L;
@@ -133,26 +146,28 @@ final class SqlAnalyzeTableExecution {
     return hash == 0 ? 1 : hash;
   }
 
-  private void publish() {
-    statistics.begin(table.tableId(), table.columnCount(), session.visibleCommitSequence());
+  private StatusCode publish() {
     statistics.setRowCount(rowCount);
     for (int column = 0; column < table.columnCount(); column++) {
       statistics.setColumn(
           column,
-          nullCounts[column],
-          Short.toUnsignedInt(distinctCounts[column]),
-          (sampledMask & 1L << column) != 0,
-          (minMaxMask & 1L << column) != 0,
-          minimumValues[column],
-          maximumValues[column]);
+          workspace.nullCounts[column],
+          Short.toUnsignedInt(workspace.distinctCounts[column]),
+          workspace.sampled[column],
+          workspace.minMax[column],
+          workspace.minimumValues[column],
+          workspace.maximumValues[column]);
     }
+    return StatusCode.OK;
   }
 
-  private void prepareRow() {
-    row.reset(table.columnCount());
-    for (int column = 0; column < table.columnCount(); column++) {
-      if (table.isVarchar(column)) row.prepareText(column);
-    }
+  private StatusCode prepareRow() {
+    int columns = table.columnCount();
+    StatusCode status = statistics.begin(
+        table.tableId(), columns, session.visibleCommitSequence());
+    if (!status.isOk()) return status;
+    status = workspace.reserve(columns);
+    return status.isOk() && !descriptor ? reader.prepare(table, row) : status;
   }
 
   private void reset() {
@@ -162,25 +177,29 @@ final class SqlAnalyzeTableExecution {
     cursor.reset();
     scan.reset();
     reader.reset();
-    minMaxMask = 0;
-    sampledMask = 0;
+    descriptorScan.reset();
+    currentRow = null;
+    descriptor = false;
     rowCount = 0;
   }
 
   private void eraseScratch() {
-    for (int column = 0; column < TableSchema.MAXIMUM_COLUMNS; column++) {
-      int count = Short.toUnsignedInt(distinctCounts[column]);
-      int offset = column * MAXIMUM_DISTINCT;
-      for (int index = 0; index < count; index++) distinctValues[offset + index] = 0;
-      distinctCounts[column] = 0;
-      nullCounts[column] = 0;
-      minimumValues[column] = 0;
-      maximumValues[column] = 0;
+    for (int column = 0; column < workspace.distinctCounts.length; column++) {
+      int count = Short.toUnsignedInt(workspace.distinctCounts[column]);
+      int offset = column * SqlAnalyzeWorkspace.DISTINCT_SLOTS;
+      for (int index = 0; index < count; index++) {
+        workspace.distinctValues[offset + index] = 0;
+      }
+      workspace.distinctCounts[column] = 0;
+      workspace.nullCounts[column] = 0;
+      workspace.minimumValues[column] = 0;
+      workspace.maximumValues[column] = 0;
+      workspace.minMax[column] = false;
+      workspace.sampled[column] = false;
     }
     scan.reset();
     reader.reset();
     row.reset(0);
-    minMaxMask = 0;
-    sampledMask = 0;
+    currentRow = null;
   }
 }

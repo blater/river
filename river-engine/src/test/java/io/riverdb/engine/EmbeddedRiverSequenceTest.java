@@ -73,6 +73,8 @@ final class EmbeddedRiverSequenceTest {
         session.execute(
             "CREATE SEQUENCE descending START WITH -10 INCREMENT BY -3", result));
     assertValue(-10, session, "SELECT NEXT VALUE FOR descending", result);
+    assertValue(-13, session, "SELECT NEXT VALUE FOR descending", result);
+    assertValue(-16, session, "SELECT NEXT VALUE FOR descending", result);
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE SEQUENCE maximum START WITH 9223372036854775807", result));
@@ -120,6 +122,50 @@ final class EmbeddedRiverSequenceTest {
         StatusCode.OK,
         session.execute("CREATE SEQUENCE invoice_ids START WITH 500", result));
     assertValue(500, session, "SELECT NEXT VALUE FOR invoice_ids", result);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void exhaustsSignedSequenceBoundariesWithoutLeakingInternalSessions(@TempDir Path root) {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    SessionOpenResult sessionResult = new SessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RiverSession session = sessionResult.session();
+    CommandResult result = new CommandResult();
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE SEQUENCE near_minimum START WITH -9223372036854775805 "
+                + "INCREMENT BY -3",
+            result));
+    assertValue(Long.MIN_VALUE + 3, session, "SELECT NEXT VALUE FOR near_minimum", result);
+    assertValue(Long.MIN_VALUE, session, "SELECT NEXT VALUE FOR near_minimum", result);
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        session.execute("SELECT NEXT VALUE FOR near_minimum", result));
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE SEQUENCE full_step START WITH 0 "
+                + "INCREMENT BY -9223372036854775808",
+            result));
+    assertValue(0, session, "SELECT NEXT VALUE FOR full_step", result);
+    assertValue(Long.MIN_VALUE, session, "SELECT NEXT VALUE FOR full_step", result);
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        session.execute("SELECT NEXT VALUE FOR full_step", result));
+
+    for (int index = 0; index < 16; index++) {
+      String name = "short_lived_" + index;
+      assertEquals(StatusCode.OK, session.execute("CREATE SEQUENCE " + name, result));
+      assertValue(1, session, "SELECT NEXT VALUE FOR " + name, result);
+      assertEquals(StatusCode.OK, session.execute("DROP SEQUENCE " + name, result));
+    }
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }
@@ -246,7 +292,7 @@ final class EmbeddedRiverSequenceTest {
       RiverSession session,
       String sql,
       CommandResult result) {
-    assertEquals(StatusCode.OK, session.execute(sql, result));
+    assertEquals(StatusCode.OK, session.execute(sql, result), sql);
     assertEquals(true, result.rowAvailable());
     assertEquals(1, result.columnCount());
     assertEquals(expected, result.valueAt(0));

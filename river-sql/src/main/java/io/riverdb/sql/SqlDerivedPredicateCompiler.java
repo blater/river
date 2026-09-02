@@ -9,10 +9,11 @@ final class SqlDerivedPredicateCompiler {
   private final SqlDerivedColumnResolver columns;
   private final SqlDerivedProjectionCompiler projections;
   private final SqlScalarExpression[] programs = new SqlScalarExpression[4];
-  private final int[] booleanMap =
-      new int[SqlBooleanPredicateProgram.MAXIMUM_BOOLEAN_NODES];
-  private final int[] leafMap = new int[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
+  int[] booleanMap = new int[16];
+  int[] leafMap = new int[8];
   private final long[] memberValues =
+      new long[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
+  private final long[] memberHighs =
       new long[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
   private final int[] memberDescriptors =
       new int[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
@@ -76,7 +77,12 @@ final class SqlDerivedPredicateCompiler {
       SqlBooleanPredicateProgram source,
       SqlCommand destination,
       SqlBooleanPredicateProgram target) {
-    clearMaps();
+    if (!SqlDerivedPredicateCapacity.ensure(
+        this, source.booleanNodeCount(), source.leafCount())) {
+      copyStatus = StatusCode.RESOURCE_EXHAUSTED;
+      return -1;
+    }
+    clearMaps(source.booleanNodeCount(), source.leafCount());
     for (int node = 0; node < source.booleanNodeCount(); node++) {
       int operator = source.booleanOperator(node);
       int left = source.booleanLeft(node);
@@ -169,11 +175,13 @@ final class SqlDerivedPredicateCompiler {
         }
       }
       memberValues[member] = value;
+      memberHighs[member] = source.memberHigh(leaf, member);
       memberDescriptors[member] = descriptor;
       memberNulls[member] = source.memberNull(leaf, member);
     }
     boolean accepted = target.setMembership(
         copied,
+        memberHighs,
         memberValues,
         memberDescriptors,
         memberNulls,
@@ -183,13 +191,14 @@ final class SqlDerivedPredicateCompiler {
     return accepted;
   }
 
-  private void clearMaps() {
-    for (int node = 0; node < booleanMap.length; node++) booleanMap[node] = -1;
-    for (int leaf = 0; leaf < leafMap.length; leaf++) leafMap[leaf] = -1;
+  private void clearMaps(int nodeCount, int leafCount) {
+    for (int node = 0; node < nodeCount; node++) booleanMap[node] = -1;
+    for (int leaf = 0; leaf < leafCount; leaf++) leafMap[leaf] = -1;
   }
 
   private void clearMembers(int count) {
     for (int member = 0; member < count; member++) {
+      memberHighs[member] = 0;
       memberValues[member] = 0;
       memberDescriptors[member] = 0;
       memberNulls[member] = false;

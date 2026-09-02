@@ -13,9 +13,10 @@ final class SqlBlockPredicateEvaluator {
   SqlBlockPredicateEvaluator(
       BoundSqlStatement statement,
       SqlExpressionEvaluator expressions,
-      SqlTemporalContext temporal) {
+      SqlTemporalContext temporal,
+      SqlSessionShapeBudget shapeBudget) {
     bound = statement;
-    predicates = new SqlBooleanPredicateEvaluator(expressions, temporal);
+    predicates = new SqlBooleanPredicateEvaluator(expressions, temporal, shapeBudget);
   }
 
   StatusCode prepare(SqlCommand command) {

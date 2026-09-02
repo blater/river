@@ -10,6 +10,7 @@ final class SqlBlockScalarAggregateStage {
   private final SqlHavingEvaluator having;
   private final SqlAggregateAccumulatorSet accumulator;
   private final SqlBlockAggregatePublisher publisher;
+  private final SqlBlockOutputOrder outputOrder;
   private final SqlBlockStageProjector.Projected projected =
       new SqlBlockStageProjector.Projected();
   private final SqlBlockRow sourceRow = new SqlBlockRow();
@@ -22,19 +23,22 @@ final class SqlBlockScalarAggregateStage {
       SqlBlockStageProjector stageProjector,
       SqlHavingEvaluator havingEvaluator,
       SqlAggregateAccumulatorSet aggregateAccumulator,
-      SqlBlockAggregatePublisher aggregatePublisher) {
+      SqlBlockAggregatePublisher aggregatePublisher,
+      SqlBlockOutputOrder blockOutputOrder) {
     bound = statement;
     source = blockSource;
     projector = stageProjector;
     having = havingEvaluator;
     accumulator = aggregateAccumulator;
     publisher = aggregatePublisher;
+    outputOrder = blockOutputOrder;
   }
 
   StatusCode execute(
-      int block, SqlBlockRowStore input, SqlBlockRowStore output, int sortKey) {
-    accumulator.reset(bound.aggregates);
-    StatusCode status = source.begin(input);
+      int block, SqlBlockRowStore input, SqlBlockRowStore output) {
+    StatusCode status = accumulator.reset(bound.aggregates);
+    if (!status.isOk()) return status;
+    status = source.begin(input, sourceRow);
     while (status.isOk()) {
       status = source.next(input, sourceRow);
       if (status == StatusCode.CONFLICT) {
@@ -52,9 +56,50 @@ final class SqlBlockScalarAggregateStage {
     if (status.isOk()) status = having.evaluate(
         bound.command, accumulator, 0, true, null, 0);
     if (!status.isOk()) return status;
-    status = output.begin(
-        bound.blockPlans().schema(block), sortKey,
-        bound.command.isDescendingOrder());
+    status = outputOrder.beginOutput(
+        bound.command, bound.blockPlans().schema(block), output);
+    if (status.isOk() && having.matched()) {
+      status = publisher.publish(block, accumulator, null, outputRow, false);
+      if (status.isOk()) status = output.append(outputRow);
+    }
+    return status.isOk() ? output.finish() : status;
+  }
+
+  StatusCode executeJoined(
+      int block, SqlBlockRowStore input, SqlBlockRowStore output) {
+    StatusCode status = accumulator.reset(bound.aggregates);
+    input.rewind();
+    while (status.isOk()) {
+      status = input.next(sourceRow);
+      if (status == StatusCode.CONFLICT) {
+        status = StatusCode.OK;
+        break;
+      }
+      if (status.isOk()) status = accumulator.accumulateBlock(bound.aggregates, sourceRow);
+    }
+    StatusCode closed = input.close();
+    if (status.isOk()) status = closed;
+    if (status.isOk()) status = accumulator.finish(bound.aggregates);
+    if (status.isOk()) status = having.evaluate(
+        bound.command, accumulator, 0, true, null, 0);
+    if (!status.isOk()) return status;
+    status = outputOrder.beginOutput(
+        bound.command, bound.blockPlans().schema(block), output);
+    if (status.isOk() && having.matched()) {
+      status = publisher.publish(block, accumulator, null, outputRow, false);
+      if (status.isOk()) status = output.append(outputRow);
+    }
+    return status.isOk() ? output.finish() : status;
+  }
+
+  StatusCode publishAccumulated(
+      int block, SqlBlockRowStore output) {
+    StatusCode status = accumulator.finish(bound.aggregates);
+    if (status.isOk()) status = having.evaluate(
+        bound.command, accumulator, 0, true, null, 0);
+    if (!status.isOk()) return status;
+    status = outputOrder.beginOutput(
+        bound.command, bound.blockPlans().schema(block), output);
     if (status.isOk() && having.matched()) {
       status = publisher.publish(block, accumulator, null, outputRow, false);
       if (status.isOk()) status = output.append(outputRow);

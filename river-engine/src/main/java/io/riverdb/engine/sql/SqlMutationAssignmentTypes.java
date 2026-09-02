@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Fixed-width assignment compatibility shared by INSERT and UPDATE. */
@@ -12,19 +13,6 @@ final class SqlMutationAssignmentTypes {
         || SqlTypeDescriptor.canImplicitlyCast(source, target)) {
       return true;
     }
-    return SqlTypeDescriptor.typeId(target) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        && exactNumeric(source)
-        && scale(source) <= SqlTypeDescriptor.parameterTwo(target);
-  }
-
-  private static boolean exactNumeric(int descriptor) {
-    int type = SqlTypeDescriptor.typeId(descriptor);
-    return type == SqlTypeDescriptor.TYPE_ID_BIGINT
-        || type == SqlTypeDescriptor.TYPE_ID_DECIMAL;
-  }
-
-  private static int scale(int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterTwo(descriptor) : 0;
+    return SqlNumericTypeRules.canAssign(source, target);
   }
 }

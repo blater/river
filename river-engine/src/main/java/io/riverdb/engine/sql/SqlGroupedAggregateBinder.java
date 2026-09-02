@@ -6,7 +6,7 @@ import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlQuery;
 import io.riverdb.sql.SqlScalarExpression;
 
-/** Resolves one raw grouping key and its raw or computed aggregate operand. */
+/** Resolves a bounded grouping tuple and its raw or computed aggregate operands. */
 final class SqlGroupedAggregateBinder {
   private final SqlPredicateBinder predicates;
   private final SqlRowProjectionBinder rows = new SqlRowProjectionBinder();
@@ -20,21 +20,24 @@ final class SqlGroupedAggregateBinder {
 
   StatusCode bind(
       SqlCommand command, SqlQuery query, BoundSqlStatement bound) {
-    boolean computedKey = computedKey(command);
+    boolean computedKey = hasComputedKey(command);
     boolean computedAggregate = hasComputedAggregate(command);
     boolean computedHaving = command.booleanHavingPredicates().isAvailable();
     StatusCode status = validateScope(
         query, computedKey, computedAggregate, computedHaving);
     if (status.isOk()) status = aggregates.bind(command, bound, true);
     if (!status.isOk()) return status;
-    status = bindGroupKey(command, bound, computedKey);
+    status = bindGroupKeys(command, bound);
     if (status.isOk()) status = having.bind(command, bound);
     if (!status.isOk()) return status;
-    if (command.isOrdered()
-        && SqlTypeDescriptor.comparisonFamily(
-            SqlPrimitiveSortKey.descriptor(bound, bound.groupColumn))
+    if (command.isOrdered()) {
+      for (int key = 0; key < command.groupExpressionCount(); key++) {
+        if (SqlTypeDescriptor.comparisonFamily(
+            bound.projectionPrograms.resultDescriptor(key))
             == SqlTypeDescriptor.COMPARISON_BOOLEAN) {
-      return StatusCode.DATATYPE_MISMATCH;
+          return StatusCode.DATATYPE_MISMATCH;
+        }
+      }
     }
     return predicates.bind(command, query, bound);
   }
@@ -49,29 +52,21 @@ final class SqlGroupedAggregateBinder {
         ? StatusCode.FEATURE_NOT_SUPPORTED : StatusCode.OK;
   }
 
-  private StatusCode bindGroupKey(
-      SqlCommand command, BoundSqlStatement bound, boolean computed) {
-    int column = computed
-        ? SqlBoundProjectionPrograms.COMPUTED_PROJECTION
-        : resolveGroupColumn(command, bound);
-    if (column < 0 && !SqlPrimitiveSortKey.computed(column)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (computed) {
-      StatusCode status = rows.validateComputedKey(command, bound, 0);
-      if (!status.isOk()) return status;
-      bound.sortKeyProjection = 0;
-    }
-    bound.groupColumn = column;
-    bound.projectedTypeDescriptors[0] =
-        bound.projectionPrograms.resultDescriptor(0);
-    return StatusCode.OK;
-  }
-
-  private static int resolveGroupColumn(
+  private static StatusCode bindGroupKeys(
       SqlCommand command, BoundSqlStatement bound) {
-    if (!validQualifier(command, 0)) return -1;
-    return bound.table.findColumn(command.firstColumnName());
+    int count = command.groupExpressionCount();
+    if (count <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    for (int key = 0; key < count; key++) {
+      if (!SqlTypeDescriptor.isValid(
+          bound.projectionPrograms.resultDescriptor(key))) {
+        return StatusCode.DATATYPE_MISMATCH;
+      }
+    }
+    int first = bound.projectionPrograms.rawColumn(0);
+    bound.groupColumn = count == 1 && first >= 0
+        ? first : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
+    bound.sortKeyProjection = count == 1 && first >= 0 ? -1 : 0;
+    return StatusCode.OK;
   }
 
   private static boolean hasComputedAggregate(SqlCommand command) {
@@ -86,15 +81,12 @@ final class SqlGroupedAggregateBinder {
     return false;
   }
 
-  private static boolean computedKey(SqlCommand command) {
-    SqlScalarExpression expression = command.projectionExpression(0);
-    return expression != null && expression.isAvailable()
-        && !expression.isDirectColumnReference();
-  }
-
-  private static boolean validQualifier(SqlCommand command, int index) {
-    CharSequence qualifier = command.columnTableName(index);
-    return qualifier.length() == 0
-        || SqlBindingNames.matchesTable(command, qualifier);
+  private static boolean hasComputedKey(SqlCommand command) {
+    for (int key = 0; key < command.groupExpressionCount(); key++) {
+      SqlScalarExpression expression = command.groupExpression(key);
+      if (expression != null && expression.isAvailable()
+          && !expression.isDirectColumnReference()) return true;
+    }
+    return false;
   }
 }

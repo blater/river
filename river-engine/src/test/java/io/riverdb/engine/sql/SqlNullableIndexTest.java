@@ -55,7 +55,7 @@ final class SqlNullableIndexTest {
         StatusCode.OK,
         session.execute("INSERT INTO events VALUES (5, NULL, NULL, 500)", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO events VALUES (6, 10, 8, 600)", result));
     assertEquals(
         StatusCode.OK,
@@ -71,6 +71,11 @@ final class SqlNullableIndexTest {
         StatusCode.OK,
         session.execute("SELECT id, category FROM events WHERE category=10", result));
     assertEquals(6, result.key());
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        session.execute("SELECT id, category FROM events WHERE category IS NULL", result));
+    assertEquals(false, result.hasValue());
+    assertEquals(0, result.columnCount());
     assertBucketMembers(session, 7, 4, 6);
     assertNullableOrder(session);
     assertDistinctCategories(session);

@@ -1,18 +1,23 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Caller-owned bounded query-block graph used while compiling nested SELECTs. */
 public final class SqlQuery {
-  public static final int MAXIMUM_QUERY_BLOCKS = 32;
+  public static final int MAXIMUM_QUERY_BLOCKS = SqlShapeLimits.MAX_QUERY_BLOCKS;
   public static final int MAXIMUM_EDGES = MAXIMUM_QUERY_BLOCKS - 1;
 
   public static final int SUBQUERY_SCALAR = 1;
   public static final int SUBQUERY_EXISTS = 2;
   public static final int SUBQUERY_MEMBERSHIP = 3;
+  public static final int SET_LEAF = 1;
+  public static final int SET_UNION_ALL = 2;
+  public static final int SET_UNION_DISTINCT = 3;
 
   private final SqlCommand[] blocks = new SqlCommand[MAXIMUM_QUERY_BLOCKS];
   private final SqlSubqueryGraph graph = new SqlSubqueryGraph();
+  private final SqlSetExpression setExpression = new SqlSetExpression();
   private final SqlDerivedQueryCompiler derivedCompiler = new SqlDerivedQueryCompiler(this);
   private final SqlViewCompiler viewCompiler = new SqlViewCompiler(this, derivedCompiler);
   private int blockCount;
@@ -34,6 +39,7 @@ public final class SqlQuery {
     }
     blockCount = 0;
     graph.reset();
+    setExpression.reset();
     sourceBlockCount = 0;
     sourcePlanDepth = 0;
     explain = false;
@@ -83,6 +89,37 @@ public final class SqlQuery {
     graph.setChild(edge, child, blockCount);
   }
 
+  int appendSetLeaf(int block) { return setExpression.appendLeaf(block); }
+  int appendSetUnion(int kind, int left, int right) {
+    return setExpression.appendUnion(kind, left, right);
+  }
+  StatusCode finishSetLeaf(int node) {
+    StatusCode status = graph.count() == 0 ? StatusCode.OK : validateNestedGraph();
+    if (status.isOk() && graph.count() > 0) {
+      status = validNestedChildren(setExpression.block(node) + 1);
+    }
+    if (status.isOk()) status = setExpression.captureLeaf(node, graph);
+    graph.reset();
+    return status;
+  }
+  SqlIdentifier appendSetOrder() { return setExpression.appendOrder(); }
+  void setSetOrderDescending(int expression, boolean descending) {
+    setExpression.orderDescending(expression, descending);
+  }
+  void setSetRowLimit(long limit) { setExpression.rowLimit(limit); }
+  SqlCommand firstSetBlock() {
+    int node = setExpression.root();
+    for (int depth = 0; depth < setExpression.count(); depth++) {
+      if (setExpression.kind(node) == SET_LEAF) return block(setExpression.block(node));
+      node = setExpression.left(node);
+    }
+    return null;
+  }
+  StatusCode publishSetResult(SqlCommand result) {
+    SqlCommand first = firstSetBlock();
+    return first == null ? StatusCode.INVALID_EXTERNAL_INPUT : setExpression.publish(first, result);
+  }
+
 
   StatusCode compileDerived(SqlCommand destination) {
     if (destination == null) {
@@ -106,6 +143,22 @@ public final class SqlQuery {
   public boolean isBlockPipeline() { return blockPipeline; }
 
   void markBlockPipeline() { blockPipeline = true; }
+
+  public StatusCode promoteRootBlockPipeline(SqlCommand command) {
+    if (command == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (blockCount != 0) {
+      // The compiled command remains the authoritative root when the engine
+      // captures this existing view or predicate-subquery graph.  Promotion
+      // only changes its physical route; appending another root would
+      // duplicate the graph's root block.
+      if (sourceBlockCount < 1) return StatusCode.INVALID_EXTERNAL_INPUT;
+      blockPipeline = true;
+      return StatusCode.OK;
+    }
+    StatusCode status = appendRootBlock(command);
+    if (status.isOk()) blockPipeline = true;
+    return status;
+  }
 
   public StatusCode appendRootBlock(SqlCommand command) {
     if (command == null || blockCount != 0) return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -147,17 +200,22 @@ public final class SqlQuery {
   private boolean hasCardinalityBlock() {
     if (graph.count() > 0 && sourceBlockCount > 1) return true;
     for (int index = 0; index < sourceBlockCount; index++) {
+      if (index > 0
+          && (blocks[index].isOrdered()
+              || blocks[index].rowLimit() != Long.MAX_VALUE)) return true;
       SqlCommandType type = blocks[index].type();
       if (type == SqlCommandType.JOIN_SCAN
           || type == SqlCommandType.DISTINCT_SCAN
           || type == SqlCommandType.COUNT
           || type == SqlCommandType.COUNT_VALUE
+          || type == SqlCommandType.COUNT_DISTINCT
           || type == SqlCommandType.SUM
           || type == SqlCommandType.AVG
           || type == SqlCommandType.MIN
           || type == SqlCommandType.MAX
           || type == SqlCommandType.GROUP_COUNT
           || type == SqlCommandType.GROUP_COUNT_VALUE
+          || type == SqlCommandType.GROUP_COUNT_DISTINCT
           || type == SqlCommandType.GROUP_SUM
           || type == SqlCommandType.GROUP_AVG
           || type == SqlCommandType.GROUP_MIN
@@ -213,12 +271,16 @@ public final class SqlQuery {
     StatusCode children = validNestedChildren();
     if (!children.isOk()) return children;
     destination.reset();
-    destination.copyQueryFrom(blocks[0]);
-    return destination.finish();
+    blockPipeline = SqlNestedPipelineRouting.required(graph, blocks, blockCount);
+    return destination.copyBlockFrom(blocks[0]);
   }
 
   private StatusCode validNestedChildren() {
-    for (int block = sourceBlockCount; block < blockCount; block++) {
+    return validNestedChildren(sourceBlockCount);
+  }
+
+  private StatusCode validNestedChildren(int firstBlock) {
+    for (int block = firstBlock; block < blockCount; block++) {
       SqlCommand command = blocks[block];
       if (command.type() != SqlCommandType.SCAN
           && command.type() != SqlCommandType.SELECT
@@ -237,6 +299,20 @@ public final class SqlQuery {
 
   public int blockCount() {
     return blockCount;
+  }
+
+  boolean hasSelectForUpdate() {
+    for (int index = 0; index < blockCount; index++) {
+      if (blocks[index].isSelectForUpdate()) return true;
+    }
+    return false;
+  }
+
+  boolean childHasSelectForUpdate() {
+    for (int index = 1; index < blockCount; index++) {
+      if (blocks[index].isSelectForUpdate()) return true;
+    }
+    return false;
   }
 
   public int sourceBlockCount() { return sourceBlockCount; }
@@ -275,6 +351,30 @@ public final class SqlQuery {
 
   public boolean hasNestedTopology() {
     return graph.count() > 0;
+  }
+
+  public boolean hasSetExpression() { return setExpression.count() > 0; }
+  public int setNodeCount() { return setExpression.count(); }
+  public int setRootNode() { return setExpression.root(); }
+  public int setNodeKind(int node) { return setExpression.kind(node); }
+  public int setLeftNode(int node) { return setExpression.left(node); }
+  public int setRightNode(int node) { return setExpression.right(node); }
+  public int setLeafBlock(int node) { return setExpression.block(node); }
+  public int setOrderExpressionCount() { return setExpression.orderCount(); }
+  public SqlIdentifier setOrderColumnName(int expression) {
+    return setExpression.orderName(expression);
+  }
+  public boolean isSetOrderDescending(int expression) {
+    return setExpression.orderDescending(expression);
+  }
+  public long setRowLimit() { return setExpression.rowLimit(); }
+
+  public StatusCode copySetLeafQuery(
+      int rootBlock, SqlQuery destination, SqlCommand result) {
+    if (destination == null || destination == this || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return setExpression.copyLeaf(rootBlock, this, destination, result);
   }
 
   public SqlCommand block(int index) {

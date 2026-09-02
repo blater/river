@@ -7,51 +7,61 @@ final class SqlCommandQueryState {
   private SqlCommandQueryState() { }
 
   static StatusCode expandSelectAll(SqlCommand command, SqlCommand source) {
-    if (!command.selectAll || command.columnCount != 0
-        || source == null || source.columnCount <= 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    command.selectAll = false;
-    for (int index = 0; index < source.columnCount; index++) {
-      SqlIdentifier column = command.writableNextColumnName();
-      if (column == null) return StatusCode.RESOURCE_EXHAUSTED;
-      column.copyFrom(source.columnOutputName(index));
-      StatusCode status = command.setProjectionColumn(index, "", column);
-      if (!status.isOk()) return status;
-    }
-    return StatusCode.OK;
+    return SqlSelectAllExpansion.expand(command, source);
   }
 
-  static void copy(SqlCommand command, SqlCommand source) {
+  static StatusCode copy(SqlCommand command, SqlCommand source) {
     command.reset();
-    command.scalarExpression.copyFrom(source.scalarExpression);
-    command.projections.copyFrom(source.projections);
-    command.aggregates.copyFrom(source.aggregates);
-    command.wherePredicates.copyFrom(source.wherePredicates);
+    if (source == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    command.type = source.type;
+    StatusCode status = command.scalarExpression.copyFrom(source.scalarExpression);
+    if (status.isOk()) status = command.projections.copyFrom(source.projections, source.columnCount);
+    if (status.isOk()) status = command.aggregates.copyFrom(source.aggregates);
+    if (status.isOk() && !command.grouping.copyFrom(source.grouping)) {
+      status = StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (status.isOk()) status = command.wherePredicates.copyFrom(source.wherePredicates);
+    if (!status.isOk()) return failed(command, status);
     boolean joined = source.joinChain != null && source.joinChain.stageCount() > 0;
     if (joined) {
-      command.writableJoinChain().copyFrom(source.joinChain);
+      status = command.ensureJoinChain();
+      if (status.isOk()) {
+        status = command.writableJoinChain().copyFrom(source.joinChain);
+      }
+      if (!status.isOk()) return failed(command, status);
     } else {
       command.tableName.copyFrom(source.tableName);
       command.tableAlias.copyFrom(source.tableAlias);
     }
-    command.booleanHavingPredicates.copyFrom(source.booleanHavingPredicates);
+    status = command.booleanHavingPredicates.copyFrom(source.booleanHavingPredicates);
+    if (!status.isOk()) return failed(command, status);
     System.arraycopy(source.textBytes, 0, command.textBytes, 0, source.textBytesUsed);
     command.textBytesUsed = source.textBytesUsed;
     for (int index = 0; index < source.columnCount; index++) {
-      command.writableNextColumnName().copyFrom(source.columnNames[index]);
+      SqlIdentifier column = command.writableNextColumnName();
+      if (column == null) return failed(command, StatusCode.RESOURCE_EXHAUSTED);
+      column.copyFrom(source.columnNames[index]);
       command.writableColumnTableName(index).copyFrom(source.columnTableNames[index]);
       command.writableColumnAlias(index).copyFrom(source.columnAliases[index]);
       command.nullProjections[index] = source.nullProjections[index];
     }
-    command.orderColumnName.copyFrom(source.orderColumnName);
+    if (!command.orderBy.copyFrom(source.orderBy)) {
+      return failed(command, StatusCode.RESOURCE_EXHAUSTED);
+    }
     command.descendingOrder = source.descendingOrder;
     if (source.selectAll) command.setSelectAll();
+    if (source.selectForUpdate) command.setSelectForUpdate();
     command.setRowLimit(source.rowLimit);
     if (source.type == SqlCommandType.SCAN) {
       command.setScan(source.scanLowerInclusive, source.scanUpperExclusive, source.boundedScan);
     } else {
       command.set(source.type, source.key, source.value);
     }
+    return StatusCode.OK;
+  }
+
+  private static StatusCode failed(SqlCommand command, StatusCode status) {
+    command.reset();
+    return status;
   }
 }

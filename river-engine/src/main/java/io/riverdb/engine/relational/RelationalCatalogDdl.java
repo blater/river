@@ -17,6 +17,7 @@ final class RelationalCatalogDdl {
       new CatalogSequenceCodec.SequenceResult();
   private final ViewDefinition view = new ViewDefinition();
   private final TableSchema twoColumnSchema = new TableSchema();
+  private final CatalogStatisticsWriter statisticsWriter = new CatalogStatisticsWriter();
 
   RelationalCatalogDdl(RelationalSchemaGate gate) {
     schemaGate = gate;
@@ -134,26 +135,15 @@ final class RelationalCatalogDdl {
       TableDefinition table,
       TableStatistics statistics) {
     if (table == null
-        || !table.isOwnedBy(schemaGate)
+        || !table.isOwnedBy(schemaGate) && !table.descriptorView
         || statistics == null
         || !statistics.canonicalFor(table)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    long statisticsKey = RelationalKey.tableStatisticsKey(table.tableId());
-    CatalogStatisticsCodec.encode(output, statistics);
-    StatusCode status = session.indexedSession().fetchByKey(
-        RelationalKey.CATALOG_SEQUENCE_SPACE, statisticsKey, catalogRow);
-    if (status.isOk()) {
-      return session.indexedSession().update(
-          RelationalKey.CATALOG_SEQUENCE_SPACE, statisticsKey, output);
-    }
-    return status == StatusCode.CONFLICT
-        ? session.indexedSession().insert(
-            RelationalKey.CATALOG_SEQUENCE_SPACE, statisticsKey, output)
-        : status;
+    return statisticsWriter.write(session, table, statistics);
   }
 
-  private StatusCode availableName(
+  StatusCode availableName(
       RelationalSession session, CharSequence name) {
     StatusCode status = RelationalKey.catalogTableKey(name, key);
     if (!status.isOk()) {

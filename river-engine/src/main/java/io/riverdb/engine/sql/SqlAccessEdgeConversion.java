@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
-import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.type.SqlNumericTypeRules;
+import io.riverdb.base.type.SqlNumericValue;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlComparison;
 
@@ -10,22 +11,26 @@ final class SqlAccessEdgeConversion {
 
   static boolean convert(SqlAccessEdgeSelector target, long value, int source, int descriptor,
       SqlComparison comparison) {
-    if (source == descriptor || !numeric(source) || !numeric(descriptor)) {
+    if (source == descriptor) {
       target.convertedValue = value;
       return true;
     }
-    boolean converted = comparison == SqlComparison.EQUAL
-        ? SqlTypeDescriptor.canImplicitlyCast(source, descriptor)
-            ? ExactDecimal.widenScale(value, source, descriptor, target.decimal)
-            : ExactDecimal.quantize(value, source, descriptor, false, true,
-                target.decimal, target.wide).isOk()
-        : ExactDecimal.ceilingScale(value, source, descriptor, target.decimal);
-    if (converted) target.convertedValue = target.decimal.value;
-    return converted;
+    if (!numeric(source) || !numeric(descriptor)) {
+      if (!SqlTypeDescriptor.canImplicitlyCast(source, descriptor)) return false;
+      target.convertedValue = value;
+      return true;
+    }
+    if (comparison != SqlComparison.EQUAL) return false;
+    io.riverdb.base.error.StatusCode status = SqlNumericValue.assign(
+        value, source, descriptor, target.decimal, target.wide);
+    if (!status.isOk()
+        || SqlNumericValue.compare(
+            value, source, target.decimal.value, descriptor) != 0) return false;
+    target.convertedValue = target.decimal.value;
+    return true;
   }
 
   private static boolean numeric(int descriptor) {
-    int type = SqlTypeDescriptor.typeId(descriptor);
-    return type == SqlTypeDescriptor.TYPE_ID_BIGINT || type == SqlTypeDescriptor.TYPE_ID_DECIMAL;
+    return SqlNumericTypeRules.isNumeric(descriptor);
   }
 }

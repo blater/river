@@ -45,8 +45,9 @@ final class SqlDerivedBlockValidator {
   private static boolean unsupported(SqlCommand block) {
     return switch (block.type()) {
       case JOIN_SCAN, DISTINCT_SCAN,
-          GROUP_COUNT, GROUP_COUNT_VALUE, GROUP_SUM, GROUP_AVG, GROUP_MIN, GROUP_MAX,
-          COUNT, COUNT_VALUE, SUM, AVG, MIN, MAX -> true;
+          GROUP_COUNT, GROUP_COUNT_VALUE, GROUP_COUNT_DISTINCT,
+          GROUP_SUM, GROUP_AVG, GROUP_MIN, GROUP_MAX,
+          COUNT, COUNT_VALUE, COUNT_DISTINCT, SUM, AVG, MIN, MAX -> true;
       default -> false;
     };
   }

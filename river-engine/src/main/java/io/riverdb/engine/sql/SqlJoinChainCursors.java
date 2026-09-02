@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
@@ -14,39 +15,72 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Owns one physical cursor and borrowed result carrier for every JOIN role. */
 final class SqlJoinChainCursors {
   private final RelationalSession session;
+  private final SqlJoinResourceAllocator allocator;
   private SqlBoundJoinContext context;
   private SqlCommand command;
-  private final RelationalScanCursor[] cursors =
-      new RelationalScanCursor[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final RelationalScanResult[] scans =
-      new RelationalScanResult[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final ValueIndexLookupResult[] indexed =
-      new ValueIndexLookupResult[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final HeapRowResult[] fetched =
-      new HeapRowResult[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final long[] keys = new long[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final HeapRowResult[] rows =
-      new HeapRowResult[SqlJoinChain.MAXIMUM_JOIN_ROLES];
+  private RelationalScanCursor[] cursors = new RelationalScanCursor[0];
+  private RelationalScanResult[] scans = new RelationalScanResult[0];
+  private ValueIndexLookupResult[] indexed = new ValueIndexLookupResult[0];
+  private HeapRowResult[] fetched = new HeapRowResult[0];
+  private long[] keys = new long[0];
+  private HeapRowResult[] rows = new HeapRowResult[0];
   private boolean rootValueIndex;
   private int activeRoleCount;
-  private final boolean[] rightIndexed =
-      new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final boolean[] rightUnique =
-      new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private boolean[] rightIndexed = new boolean[0];
+  private boolean[] rightUnique = new boolean[0];
 
   SqlJoinChainCursors(RelationalSession relationalSession) {
-    session = relationalSession;
-    for (int role = 0; role < cursors.length; role++) {
-      cursors[role] = new RelationalScanCursor();
-      scans[role] = new RelationalScanResult();
-      indexed[role] = new ValueIndexLookupResult();
-      fetched[role] = new HeapRowResult();
-    }
+    this(relationalSession, SqlJoinResourceAllocator.STANDARD);
   }
 
-  void configure(SqlBoundJoinContext joinContext, SqlCommand canonicalCommand) {
+  SqlJoinChainCursors(
+      RelationalSession relationalSession,
+      SqlJoinResourceAllocator resourceAllocator) {
+    session = relationalSession;
+    allocator = resourceAllocator;
+  }
+
+  StatusCode configure(SqlBoundJoinContext joinContext, SqlCommand canonicalCommand) {
+    int roles = canonicalCommand.joinChain().roleCount();
+    StatusCode status = prepare(roles);
+    if (!status.isOk()) return status;
     context = joinContext;
     command = canonicalCommand;
+    return StatusCode.OK;
+  }
+
+  StatusCode prepare(int roles) {
+    int capacity = BoundedArrayGrowth.capacity(
+        cursors.length, roles, SqlJoinChain.MAXIMUM_JOIN_ROLES, 2);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (capacity == cursors.length) return StatusCode.OK;
+    try {
+      RelationalScanCursor[] nextCursors = allocator.cursors(capacity);
+      RelationalScanResult[] nextScans = allocator.scans(capacity);
+      ValueIndexLookupResult[] nextIndexed = allocator.lookups(capacity);
+      HeapRowResult[] nextFetched = allocator.heapRows(capacity);
+      long[] nextKeys = allocator.longs(capacity);
+      HeapRowResult[] nextRows = allocator.heapRows(capacity);
+      boolean[] nextRightIndexed = allocator.booleans(capacity - 1);
+      boolean[] nextRightUnique = allocator.booleans(capacity - 1);
+      for (int role = 0; role < capacity; role++) {
+        nextCursors[role] = role < cursors.length ? cursors[role] : allocator.cursor();
+        nextScans[role] = role < scans.length ? scans[role] : allocator.scan();
+        nextIndexed[role] = role < indexed.length ? indexed[role] : allocator.lookup();
+        nextFetched[role] = role < fetched.length ? fetched[role] : allocator.heapRow();
+      }
+      cursors = nextCursors;
+      scans = nextScans;
+      indexed = nextIndexed;
+      fetched = nextFetched;
+      keys = nextKeys;
+      rows = nextRows;
+      rightIndexed = nextRightIndexed;
+      rightUnique = nextRightUnique;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   StatusCode beginRoot() {

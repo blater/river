@@ -166,7 +166,7 @@ final class SqlNestedQueryTest {
   }
 
   @Test
-  void boundsMembershipResultsAndRecoversAfterExhaustion(@TempDir Path root) {
+  void streamsMembershipBeyondLegacyCacheBoundAndRecovers(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
@@ -225,8 +225,9 @@ final class SqlNestedQueryTest {
             "SELECT id FROM probes WHERE value IN "
                 + "(SELECT value FROM candidates LIMIT 1025)",
             cursor));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
@@ -235,7 +236,9 @@ final class SqlNestedQueryTest {
             "SELECT p.id FROM probes p WHERE p.value IN "
                 + "(SELECT c.value FROM candidates c WHERE c.region=p.region)",
             cursor));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(StatusCode.OK, session.execute("SELECT COUNT(*) FROM probes", result));
     assertEquals(1, result.value());

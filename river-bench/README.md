@@ -52,7 +52,7 @@ intentionally construct a row model. Publication performs a digest-only
 preflight and a second streaming pass, then independently verifies row count,
 byte count, SHA-256, and the persisted file before the existing create-once
 atomic tree install. Retained generator state is bounded by artifact metadata
-and the 64 KiB publication scratch buffer, not row count. This is an
+and the 64 KB publication scratch buffer, not row count. This is an
 implementation property, not a measured zero-allocation claim: dedicated
 allocation profiles and generated-path bytecode evidence remain required.
 
@@ -72,7 +72,7 @@ The current mechanisms cover:
 - bounded preallocated WAL claim/direct-encode/checksum/gap-free publication,
   including a small two-producer delayed-hole and saturation-recovery scenario;
 - reusable primitive columns and selection-vector scans;
-- 8/16/32 KiB positional NIO read/write/force against owned temporary files;
+- 8/16/32 KB positional NIO read/write/force against owned temporary files;
 - first-page-image versus double-write first-dirty/redirty/checkpoint-storm
   accounting, retaining WAL/staging/data bytes and force classes separately; and
 - a fixed-layout append/read/visibility-scan version-store alternative.

@@ -20,12 +20,17 @@ final class IndexedCheckpointCoordinator {
   private final LocalWal wal;
   private final IndexedTableKernel kernel;
   private final IndexedPageSet pages;
+  private final IndexedRowDirectory rows;
+  private final IndexedVersionDirectory versions;
+  private final IndexedLogicalRowIdRegistry logicalRowIds;
   private final DatabaseIncarnation database;
   private final IndexedStorePhase phase;
   private final IndexedCheckpointWriter writer;
   private final IndexedCheckpointLoader loader;
   private final CRC32C checksum = new CRC32C();
   private final IoResult ioResult = new IoResult();
+  private final IndexedCheckpointVersionSource capturedVersions =
+      new IndexedCheckpointVersionSource();
   private WalGeneration generation;
   private boolean failed;
 
@@ -35,14 +40,19 @@ final class IndexedCheckpointCoordinator {
       LocalWal localWal,
       IndexedTableKernel tableKernel,
       IndexedPageSet pageSet,
+      IndexedVersionState versionState,
       DatabaseIncarnation databaseIncarnation,
       IndexedStorePhase storePhase,
-      WalGeneration walGeneration) {
+      WalGeneration walGeneration,
+      IndexedLogicalRowIdRegistry logicalRowIdRegistry) {
     directory = durableDirectory;
     file = durableFile;
     wal = localWal;
     kernel = tableKernel;
     pages = pageSet;
+    rows = versionState.rows().directory();
+    versions = versionState.directory();
+    logicalRowIds = logicalRowIdRegistry;
     database = databaseIncarnation;
     phase = storePhase;
     generation = walGeneration;
@@ -51,12 +61,20 @@ final class IndexedCheckpointCoordinator {
   }
 
   StatusCode flush() {
-    if (phase.preparedInsertGroupActive()) {
+    if (phase.commitGroupActive()) {
       return StatusCode.RETRY;
     }
     StatusCode status = writeDirtyPages();
     if (status.isOk()) {
       status = file.truncate((long) pages.highestPageId() * PageCodec.PAGE_BYTES);
+    }
+    if (status.isOk()) {
+      rows.setPublishedState(
+          kernel.rowCount(), kernel.lastHeapPageId(), wal.currentCommitSequence());
+      status = rows.flush();
+    }
+    if (status.isOk()) {
+      status = versions.flush();
     }
     if (status.isOk()) {
       status = file.force(ForceMode.CONTENT_AND_METADATA);
@@ -101,7 +119,7 @@ final class IndexedCheckpointCoordinator {
 
   StatusCode rebase(WalGeneration nextGeneration) {
     if (phase.operationActive()
-        || phase.preparedInsertGroupActive()
+        || phase.commitGroupActive()
         || nextGeneration == null
         || !nextGeneration.isValid()
         || nextGeneration.value() <= generation.value()) {
@@ -113,6 +131,7 @@ final class IndexedCheckpointCoordinator {
       return status;
     }
     generation = nextGeneration;
+    pages.setGeneration(nextGeneration);
     for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
       pages.markRebased(pageId);
     }
@@ -138,16 +157,11 @@ final class IndexedCheckpointCoordinator {
         maximumTransactionId,
         pages.highestPageId(),
         checkpointRows);
-    if (checkpointRows <= CheckpointState.MAXIMUM_ROWS || kernel.hasHistoricalVersions()) {
-      for (long rowId = 1; status.isOk() && rowId <= checkpointRows; rowId++) {
-        status = state.setRowVersion(
-            rowId,
-            kernel.rowCommitSequence(rowId),
-            kernel.previousRowId(rowId),
-            kernel.isDeletedRow(rowId));
-      }
+    if (status.isOk()) {
+      status = IndexedCheckpointRows.capture(
+          kernel, state, checkpointRows, capturedVersions);
     }
-    return status;
+    return status.isOk() ? state.attachLogicalRowIdSource(logicalRowIds) : status;
   }
 
   StatusCode load(CheckpointState checkpoint) {

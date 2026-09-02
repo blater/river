@@ -1,274 +1,279 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
+import io.riverdb.base.error.StatusDetail;
+import io.riverdb.engine.runtime.materialized.SqlMaterializedPagedByteStream;
+import io.riverdb.engine.runtime.materialized.SqlMaterializedScratchFileKind;
 
-/** Lazy bounded row store and external-sort owner for one block boundary. */
+/** Statement-owned paged row store with stable external ordering. */
 final class SqlBlockRowStore {
-  static final int MAXIMUM_ROWS = 65_536;
-  static final long MAXIMUM_BYTES = 256L * 1_024 * 1_024;
-  private static final int MEMORY_ROWS = 1_024;
-  private static final int INITIAL_BYTES = 256 * 1_024;
-  private static final int MAXIMUM_MEMORY_BYTES = 4 * 1_024 * 1_024;
-  private final SqlBlockRowCodec codec = new SqlBlockRowCodec();
-  private final SqlBlockRowIndex index = new SqlBlockRowIndex();
-  private ByteBuffer data;
+  private final SqlBlockRowCodec codec;
+  private final SqlBlockRowSortKeyCodec sortKey;
+  private final SqlBlockRowExternalOrder order;
+  private final SqlBlockRowPagedIndexRecord indexRecord = new SqlBlockRowPagedIndexRecord();
+  private final SqlBlockRowOrdinalStream.Result storedResult =
+      new SqlBlockRowOrdinalStream.Result();
+  private final SqlMaterializedPagedByteStream.AppendResult append =
+      new SqlMaterializedPagedByteStream.AppendResult();
+  private final SqlMaterializedPagedByteStream.Result opened =
+      new SqlMaterializedPagedByteStream.Result();
+  private final StatusDetail detail = new StatusDetail(160);
+  private final SqlMaterializedStatement materialized;
+  private SqlMaterializedPagedByteStream rows;
+  private SqlMaterializedPagedByteStream index;
+  private SqlMaterializedPagedByteStream keys;
   private SqlBlockSchema schema;
-  private FileChannel channel;
-  private Path path;
-  private long bytes;
-  private int rowCount;
-  private int next;
-  private boolean spilled;
+  private long rowCount;
+  private long next;
+  private long readLimit = Long.MAX_VALUE;
+  private StatusCode terminal = StatusCode.OK;
+
+  SqlBlockRowStore() { this(null); }
+
+  SqlBlockRowStore(SqlSessionShapeBudget shapeBudget) {
+    materialized = shapeBudget == null ? null : shapeBudget.materialized();
+    codec = new SqlBlockRowCodec(shapeBudget);
+    sortKey = new SqlBlockRowSortKeyCodec(shapeBudget);
+    order = new SqlBlockRowExternalOrder(shapeBudget);
+  }
 
   StatusCode begin(SqlBlockSchema rowSchema, int keyColumn, boolean descendingOrder) {
-    StatusCode status = close();
+    StatusCode validation = validateSchema(rowSchema);
+    if (!validation.isOk()) return validation;
+    if (keyColumn < -1 || keyColumn >= rowSchema.count()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = resetForBegin();
     if (!status.isOk()) return status;
-    if (rowSchema == null || keyColumn < -1 || keyColumn >= rowSchema.count()) {
+    if (!sortKey.beginSingle(rowSchema, keyColumn, descendingOrder)) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    schema = rowSchema;
+    return openStreams();
+  }
+
+  StatusCode begin(
+      SqlBlockSchema rowSchema, int[] keyColumns, boolean[] descendingOrder, int keyCount) {
+    StatusCode validation = validateSchema(rowSchema);
+    if (!validation.isOk()) return validation;
+    StatusCode status = resetForBegin();
+    if (!status.isOk()) return status;
+    if (!sortKey.beginTuple(rowSchema, keyColumns, descendingOrder, keyCount)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     schema = rowSchema;
-    index.begin(keyColumn, descendingOrder,
-        keyColumn >= 0 && rowSchema.varchar(keyColumn));
-    rowCount = 0;
-    next = 0;
-    bytes = 0;
-    spilled = false;
-    if (data != null) data.clear();
-    return StatusCode.OK;
+    return openStreams();
   }
 
   StatusCode append(SqlBlockRow source) {
-    if (schema == null || source == null || source.count() != schema.count()) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!usable() || source == null || source.count() != schema.count()) {
+      return terminal.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : terminal;
     }
-    if (rowCount >= MAXIMUM_ROWS) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = index.ensure(rowCount + 1, retainedWithoutIndex());
+    if (rowCount >= Long.MAX_VALUE / SqlBlockRowPagedIndexRecord.BYTES) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = codec.encode(source, schema, rowCount);
+    if (status.isOk() && sortKey.sorted()) status = sortKey.encode(source);
     if (!status.isOk()) return status;
-    int priorKeyText = index.textPosition();
-    status = codec.encode(source, schema, rowCount);
-    if (status.isOk()) status = index.captureKey(
-        source, rowCount, retainedWithoutIndex());
-    if (!status.isOk()) {
-      index.rollbackText(priorKeyText);
-      codec.eraseScratch();
-      index.eraseSlot(rowCount);
-      return status;
+    status = rows.append(codec.buffer(), append, detail);
+    if (!status.isOk()) return fail(status);
+    long rowOffset = append.offset();
+    int rowLength = append.bytes();
+    long keyOffset = 0;
+    int keyLength = 0;
+    int flags = 0;
+    if (sortKey.sorted()) {
+      status = keys.append(sortKey.bytes(), append, detail);
+      if (!status.isOk()) return fail(status);
+      keyOffset = append.offset();
+      keyLength = append.bytes();
+      flags = SqlBlockRowPagedIndexRecord.FLAG_KEY_PRESENT;
     }
-    int bytesToWrite = codec.buffer().remaining();
-    long ownedBytes = retainedBytes(bytesToWrite);
-    if (ownedBytes > MAXIMUM_BYTES) {
-      index.rollbackText(priorKeyText);
-      index.eraseSlot(rowCount);
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (!spilled && (rowCount >= MEMORY_ROWS
-        || !ensureData(bytesToWrite))) {
-      status = beginSpill();
-    }
-    if (!status.isOk()) {
-      index.rollbackText(priorKeyText);
-      index.eraseSlot(rowCount);
-      return status;
-    }
-    if (retainedBytes(bytesToWrite) > MAXIMUM_BYTES) {
-      index.rollbackText(priorKeyText);
-      index.eraseSlot(rowCount);
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    index.setRecord(rowCount, bytes, bytesToWrite);
-    if (spilled) status = write(codec.buffer(), bytes); else data.put(codec.buffer());
-    if (!status.isOk()) {
-      index.rollbackText(priorKeyText);
-      index.eraseSlot(rowCount);
-      return status;
-    }
-    bytes += bytesToWrite;
+    status = indexRecord.encode(
+        rowOffset, rowLength, source.key(), rowCount, keyOffset, keyLength, flags);
+    if (status.isOk()) status = index.append(indexRecord.bytes(), append, detail);
+    if (!status.isOk()) return fail(status);
     rowCount++;
     return StatusCode.OK;
   }
 
   StatusCode finish() {
-    if (schema == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    index.finish(rowCount);
+    if (!usable()) return terminal.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : terminal;
+    StatusCode status = sortKey.sorted()
+        ? order.build(materialized, index, keys, sortKey, rowCount)
+        : StatusCode.OK;
+    if (!status.isOk()) return fail(status);
     next = 0;
+    return StatusCode.OK;
+  }
+
+  StatusCode limit(long maximumRows) {
+    if (schema == null || maximumRows < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    readLimit = maximumRows;
+    if (next > rowCount()) next = rowCount();
     return StatusCode.OK;
   }
 
   StatusCode next(SqlBlockRow destination) {
     if (schema == null || destination == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (next >= rowCount) return StatusCode.CONFLICT;
-    int stored = index.stored(next++);
-    StatusCode status = readRecord(stored);
-    return status.isOk() ? codec.decode(destination, schema, stored) : status;
+    if (next >= rowCount()) return StatusCode.CONFLICT;
+    StatusCode status = readAt(next, destination);
+    if (status.isOk()) next++;
+    return status;
+  }
+
+  StatusCode readAt(long position, SqlBlockRow destination) {
+    if (!usable() || destination == null || position < 0 || position >= rowCount()) {
+      return terminal.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : terminal;
+    }
+    StatusCode status = storedPosition(position, storedResult);
+    if (!status.isOk()) return status;
+    long ordinal = storedResult.value();
+    status = readIndex(ordinal);
+    if (status.isOk()) status = codec.prepareRead(indexRecord.rowLength());
+    if (status.isOk()) status = rows.read(indexRecord.rowOffset(), codec.buffer(), detail);
+    if (status.isOk()) {
+      codec.buffer().flip();
+      status = codec.decode(destination, schema, ordinal);
+    }
+    if (status.isOk()) destination.setKey(indexRecord.rowKey());
+    return status;
   }
 
   StatusCode readAt(int position, SqlBlockRow destination) {
-    if (schema == null || destination == null
-        || position < 0 || position >= rowCount) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int stored = index.stored(position);
-    StatusCode status = readRecord(stored);
-    return status.isOk() ? codec.decode(destination, schema, stored) : status;
+    return readAt((long) position, destination);
   }
 
   void rewind() { next = 0; }
 
-  int rowCount() { return rowCount; }
-  boolean spilled() { return spilled; }
-  boolean hasResources() { return schema != null || channel != null || path != null; }
+  long rowCount() { return Math.min(rowCount, readLimit); }
+
+  boolean spilled() { return rows != null; }
+  boolean hasResources() { return schema != null || rows != null || index != null || keys != null; }
+
+  StatusCode clearForReuse() {
+    if (schema == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = closeStreams(false);
+    if (!status.isOk()) return status;
+    codec.reset();
+    sortKey.reset();
+    rowCount = 0;
+    next = 0;
+    readLimit = Long.MAX_VALUE;
+    terminal = StatusCode.OK;
+    return openStreams();
+  }
 
   StatusCode close() {
-    StatusCode status = StatusCode.OK;
-    if (channel != null) {
-      try {
-        channel.close();
-      } catch (IOException failure) {
-        status = StatusCode.IO_FAILURE;
-      }
-      if (!channel.isOpen()) channel = null;
-    }
-    if (status.isOk() && path != null) {
-      try {
-        Files.deleteIfExists(path);
-        path = null;
-      } catch (IOException failure) {
-        status = StatusCode.IO_FAILURE;
-      }
-    }
-    if (status.isOk()) {
-      index.close(rowCount);
-      erase(data);
-      codec.reset();
-      if (data != null && data.capacity() > INITIAL_BYTES) data = null;
+    StatusCode status = closeStreams(true);
+    codec.close();
+    sortKey.close();
+    schema = null;
+    rowCount = 0;
+    next = 0;
+    readLimit = Long.MAX_VALUE;
+    terminal = StatusCode.OK;
+    return status;
+  }
+
+  private StatusCode openStreams() {
+    if (materialized == null) {
       schema = null;
-      rowCount = 0;
-      next = 0;
-      bytes = 0;
-      spilled = false;
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = open(SqlMaterializedScratchFileKind.ROWS, 0);
+    if (status.isOk()) rows = opened.stream();
+    if (status.isOk()) status = open(
+        SqlMaterializedScratchFileKind.INDEX, SqlBlockRowPagedIndexRecord.BYTES);
+    if (status.isOk()) index = opened.stream();
+    if (status.isOk() && sortKey.sorted()) {
+      status = open(SqlMaterializedScratchFileKind.KEYS, 0);
+      if (status.isOk()) keys = opened.stream();
+    }
+    if (!status.isOk()) {
+      terminal = status;
+      closeStreams(false);
+      schema = null;
+      return status;
+    }
+    rowCount = 0;
+    next = 0;
+    readLimit = Long.MAX_VALUE;
+    terminal = StatusCode.OK;
+    return StatusCode.OK;
+  }
+
+  private StatusCode open(SqlMaterializedScratchFileKind kind, int fixedBytes) {
+    return materialized.openStream(kind, fixedBytes, 0, opened, detail);
+  }
+
+  private StatusCode readIndex(long ordinal) {
+    if (ordinal < 0 || ordinal > Long.MAX_VALUE / SqlBlockRowPagedIndexRecord.BYTES) {
+      return StatusCode.CORRUPTION;
+    }
+    indexRecord.prepareRead();
+    StatusCode status = index.read(
+        ordinal * SqlBlockRowPagedIndexRecord.BYTES, indexRecord.bytes(), detail);
+    if (status.isOk()) status = indexRecord.validate(ordinal);
+    if (status.isOk()) status = indexRecord.validateRowBounds(rows.logicalLength());
+    if (status.isOk() && sortKey.sorted()) {
+      status = indexRecord.validateKeyBounds(keys.logicalLength());
     }
     return status;
   }
 
-  private StatusCode readRecord(int stored) {
-    int length = index.length(stored);
-    StatusCode status = codec.prepareRead(length);
+  StatusCode storedPosition(
+      long position, SqlBlockRowOrdinalStream.Result target) {
+    if (!sortKey.sorted()) {
+      target.value = position;
+      return StatusCode.OK;
+    }
+    return order.stored(position, rowCount, target);
+  }
+
+  private StatusCode closeStreams(boolean finalClose) {
+    StatusCode status = finalClose ? order.close() : order.clearForReuse();
+    status = close(rows, status);
+    status = close(index, status);
+    status = close(keys, status);
+    if (status.isOk()) {
+      rows = null;
+      index = null;
+      keys = null;
+    }
+    return status;
+  }
+
+  private StatusCode resetForBegin() {
+    StatusCode status = closeStreams(false);
     if (!status.isOk()) return status;
-    ByteBuffer record = codec.buffer();
-    if (!spilled) {
-      int offset = Math.toIntExact(index.offset(stored));
-      for (int index = 0; index < length; index++) {
-        record.put(index, data.get(offset + index));
-      }
-      record.position(0);
-      return StatusCode.OK;
-    }
-    return read(record, index.offset(stored));
+    codec.reset();
+    sortKey.reset();
+    schema = null;
+    rowCount = 0;
+    next = 0;
+    readLimit = Long.MAX_VALUE;
+    terminal = StatusCode.OK;
+    return StatusCode.OK;
   }
 
-  private StatusCode beginSpill() {
-    try {
-      path = Files.createTempFile("river-block-", ".rows");
-      channel = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE);
-      data.flip();
-      StatusCode status = write(data, 0);
-      erase(data, data.limit());
-      spilled = status.isOk();
-      return status;
-    } catch (IOException failure) {
-      channel = null;
-      return StatusCode.IO_FAILURE;
-    }
+  private StatusCode close(
+      SqlMaterializedPagedByteStream stream, StatusCode prior) {
+    if (stream == null) return prior;
+    StatusCode status = stream.close(detail);
+    return prior.isOk() ? status : prior;
   }
 
-  private StatusCode write(ByteBuffer source, long offset) {
-    try {
-      long position = offset;
-      while (source.hasRemaining()) {
-        int written = channel.write(source, position);
-        if (written <= 0) return StatusCode.IO_FAILURE;
-        position += written;
-      }
-      return StatusCode.OK;
-    } catch (IOException failure) {
-      return StatusCode.IO_FAILURE;
-    }
+  private StatusCode fail(StatusCode status) {
+    terminal = status;
+    return status;
   }
 
-  private StatusCode read(ByteBuffer target, long offset) {
-    try {
-      long position = offset;
-      while (target.hasRemaining()) {
-        int count = channel.read(target, position);
-        if (count <= 0) return StatusCode.CORRUPTION;
-        position += count;
-      }
-      target.flip();
-      return StatusCode.OK;
-    } catch (IOException failure) {
-      return StatusCode.IO_FAILURE;
-    }
+  private boolean usable() {
+    return schema != null && rows != null && index != null && terminal.isOk();
   }
 
-  private boolean ensureData(int required) {
-    if (data == null) {
-      long maximum = maximumDataBytes();
-      if (required > maximum) return false;
-      data = ByteBuffer.allocateDirect((int) Math.min(INITIAL_BYTES, maximum));
-    }
-    if (data.remaining() >= required) return true;
-    int needed = data.position() + required;
-    if (needed > MAXIMUM_MEMORY_BYTES) return false;
-    long maximum = Math.min(MAXIMUM_MEMORY_BYTES, maximumDataBytes());
-    if (needed > maximum) return false;
-    int capacity = data.capacity();
-    while (capacity < needed) capacity = (int) Math.min(maximum, capacity * 2L);
-    ByteBuffer grown = ByteBuffer.allocateDirect(capacity);
-    int used = data.position();
-    data.flip();
-    grown.put(data);
-    erase(data, used);
-    data = grown;
-    return true;
+  private static StatusCode validateSchema(SqlBlockSchema schema) {
+    return schema == null ? StatusCode.INVALID_EXTERNAL_INPUT : schema.status();
   }
-
-  private long retainedWithoutIndex() {
-    return bytes
-        + (data == null ? 0 : data.capacity())
-        + codec.capacity();
-  }
-
-  private long retainedBytes(int appendedRecordBytes) {
-    return bytes + appendedRecordBytes
-        + (data == null ? 0 : data.capacity())
-        + codec.capacity()
-        + index.retainedBytes();
-  }
-
-  private long maximumDataBytes() {
-    return Math.max(
-        data == null ? 0 : data.capacity(),
-        MAXIMUM_BYTES - bytes - index.retainedBytes() - codec.capacity());
-  }
-
-  private static void erase(ByteBuffer buffer) {
-    if (buffer == null) return;
-    erase(buffer, buffer.position());
-  }
-
-  private static void erase(ByteBuffer buffer, int length) {
-    if (buffer == null) return;
-    buffer.clear();
-    for (int index = 0; index < Math.min(length, buffer.capacity()); index++) {
-      buffer.put(index, (byte) 0);
-    }
-    buffer.clear();
-  }
-
 }

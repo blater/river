@@ -240,12 +240,21 @@ final class SqlNTableJoinTest {
     assertEquals("second", new String(text, 0, 6));
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+    assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         session.beginScan(
             "SELECT a.id,b.id FROM chain0 a JOIN chain1 b ON a.k=b.k "
                 + "ORDER BY a.id",
-            new SqlScanCursor()));
+            cursor));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(1, row.valueAt(1));
+    assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+    assertEquals(2, row.valueAt(0));
+    assertEquals(2, row.valueAt(1));
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.beginScan(
@@ -281,11 +290,12 @@ final class SqlNTableJoinTest {
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    assertPlanRow(session, cursor, row, "block", 1, analyze ? 1 : -1);
     assertPlanRow(session, cursor, row, "table", -1, analyze ? 2 : -1);
     assertPlanRow(session, cursor, row, "index", 1, analyze ? 2 : -1);
     assertPlanRow(session, cursor, row, "on", 1, analyze ? 2 : -1);
     assertPlanRow(session, cursor, row, "join", 1, analyze ? 2 : -1);
-    assertPlanRow(session, cursor, row, "index", 1, analyze ? 3 : -1);
+    assertPlanRow(session, cursor, row, "index", 1, analyze ? 2 : -1);
     assertPlanRow(session, cursor, row, "on", 2, analyze ? 1 : -1);
     assertPlanRow(session, cursor, row, "extend", 2, analyze ? 1 : -1);
     assertPlanRow(session, cursor, row, "left", 2, analyze ? 2 : -1);

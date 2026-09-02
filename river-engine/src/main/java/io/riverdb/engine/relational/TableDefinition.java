@@ -1,12 +1,12 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.base.column.ColumnBitSet;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
+import io.riverdb.base.sql.SqlShapeLimits;
 import java.nio.ByteBuffer;
 
 /** Caller-owned resolved logical table identity. */
 public final class TableDefinition {
-  public static final int MAXIMUM_INDEXES = 4;
   static final int INDEX_NONE = 0;
   static final int INDEX_BUILDING = 1;
   static final int INDEX_READY = 2;
@@ -14,70 +14,68 @@ public final class TableDefinition {
 
   RelationalSchemaGate owner;
   int tableId;
-  final int[] uniqueIndexTableIds = new int[MAXIMUM_INDEXES];
-  final int[] uniqueIndexStates = new int[MAXIMUM_INDEXES];
-  final int[] uniqueIndexColumns = new int[MAXIMUM_INDEXES];
-  final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
-  final boolean[] constraintIndexes = new boolean[MAXIMUM_INDEXES];
-  final long[] defaultValues = new long[TableSchema.MAXIMUM_COLUMNS];
-  final byte[] defaultKinds = new byte[TableSchema.MAXIMUM_COLUMNS];
-  final byte[] defaultTextBytes = new byte[TableSchema.MAXIMUM_ROW_BYTES];
-  final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
-  final long[] checkValues = new long[TableSchema.MAXIMUM_COLUMNS];
-  final int[] checkComparisons = new int[TableSchema.MAXIMUM_COLUMNS];
-  final int[] checkTypeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
-  final byte[] checkNodeCounts = new byte[TableSchema.MAXIMUM_COLUMNS];
-  final byte[] checkNodeOffsets = new byte[TableSchema.MAXIMUM_COLUMNS];
-  final byte[] checkOperators = new byte[TableSchema.MAXIMUM_CHECK_NODES];
-  final long[] checkOperands = new long[TableSchema.MAXIMUM_CHECK_NODES];
-  final int[] checkNodeDescriptors =
-      new int[TableSchema.MAXIMUM_CHECK_NODES];
-  final int[] checkValidationStack =
-      new int[TableSchema.MAXIMUM_CHECK_NODES];
-  final int[] referenceTableIds = new int[TableSchema.MAXIMUM_COLUMNS];
-  final TableDefinitionColumnName keyColumnName = new TableDefinitionColumnName();
-  final TableDefinitionColumnName valueColumnName = new TableDefinitionColumnName();
-  final TableDefinitionColumnName[] additionalColumns =
-      new TableDefinitionColumnName[TableSchema.MAXIMUM_COLUMNS - 2];
+  int[] uniqueIndexTableIds = new int[0];
+  int[] uniqueIndexStates = new int[0];
+  int[] uniqueIndexColumns = new int[0];
+  boolean[] uniqueIndexes = new boolean[0];
+  boolean[] constraintIndexes = new boolean[0];
+  long[] defaultValues = new long[0];
+  byte[] defaultKinds = new byte[0];
+  byte[] defaultTextBytes = new byte[0];
+  int[] typeDescriptors = new int[0];
+  int[] valueOffsets = new int[0];
+  long[] checkValues = new long[0];
+  int[] checkComparisons = new int[0];
+  int[] checkTypeDescriptors = new int[0];
+  int[] checkNodeCounts = new int[0];
+  int[] checkNodeOffsets = new int[0];
+  byte[] checkOperators = new byte[0];
+  long[] checkOperands = new long[0];
+  int[] checkNodeDescriptors = new int[0];
+  int[] checkValidationStack = new int[0];
+  int[] referenceTableIds = new int[0];
+  TableDefinitionColumnName[] columnNames = new TableDefinitionColumnName[0];
+  final ColumnBitSet notNullColumns = new ColumnBitSet();
+  final ColumnBitSet defaultColumns = new ColumnBitSet();
+  final ColumnBitSet checkColumns = new ColumnBitSet();
+  final ColumnBitSet referenceColumns = new ColumnBitSet();
   int uniqueIndexCount;
   int columnCount;
-  long notNullMask;
-  long defaultMask;
-  long checkMask;
-  long referenceMask;
   long schemaVersion;
   long schemaAdmission;
+  long durableSchemaId;
+  long durableRowLayoutId;
+  long durableCatalogGeneration;
   boolean available;
   boolean identity;
+  boolean descriptorView;
+  int primaryIndexColumn = -1;
   int defaultTextBytesUsed;
   int checkNodeCount;
+  volatile int layoutColumns;
 
-  public TableDefinition() {
-    for (int index = 0; index < additionalColumns.length; index++) {
-      additionalColumns[index] = new TableDefinitionColumnName();
-    }
-  }
+  public TableDefinition() { }
 
   public void reset() {
     TableDefinitionStateLoader.reset(this);
   }
 
-  void set(
+  StatusCode set(
       RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState) {
-    set(schemaGate, id, valueIndexTableId, valueIndexState, "key", "value");
+    return set(schemaGate, id, valueIndexTableId, valueIndexState, "key", "value");
   }
 
-  void set(
+  StatusCode set(
       RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
       CharSequence keyName,
       CharSequence valueName) {
-    TableDefinitionStateLoader.setMinimal(
+    return TableDefinitionStateLoader.setMinimal(
         this,
         schemaGate,
         id,
@@ -87,14 +85,14 @@ public final class TableDefinition {
         valueName);
   }
 
-  void set(
+  StatusCode set(
       RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
       int indexColumn,
       TableDefinition schema) {
-    set(
+    return set(
         schemaGate,
         id,
         valueIndexTableId,
@@ -104,7 +102,7 @@ public final class TableDefinition {
         true);
   }
 
-  void set(
+  StatusCode set(
       RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
@@ -112,7 +110,7 @@ public final class TableDefinition {
       int indexColumn,
       TableDefinition schema,
       boolean unique) {
-    TableDefinitionStateLoader.setDefinition(
+    return TableDefinitionStateLoader.setDefinition(
         this,
         schemaGate,
         id,
@@ -123,14 +121,14 @@ public final class TableDefinition {
         unique);
   }
 
-  void set(
+  StatusCode set(
       RelationalSchemaGate schemaGate,
       int id,
       int valueIndexTableId,
       int valueIndexState,
       int indexColumn,
       TableSchema schema) {
-    TableDefinitionStateLoader.setSchema(
+    return TableDefinitionStateLoader.setSchema(
         this,
         schemaGate,
         id,
@@ -140,61 +138,49 @@ public final class TableDefinition {
         schema);
   }
 
-  void set(
-      RelationalSchemaGate schemaGate,
-      int id,
-      int valueIndexTableId,
-      int valueIndexState,
-      int indexColumn,
-      ByteBuffer source,
-      int columnsOffset,
-      int columns,
-      long requiredNotNullMask,
-      long requiredDefaultMask,
-      int typeDescriptorsOffset,
-      boolean requiredIdentity,
-      long requiredCheckMask,
-      int checksOffset,
-      int checkValuesOffset,
-      int checkTypeDescriptorsOffset,
-      int checkNodeCountsOffset,
-      int checkProgramOffset,
-      long requiredReferenceMask,
-      int referenceTableIdsOffset,
-      int defaultsOffset,
-      int defaultKindsOffset,
-      int defaultTextOffset,
-      int defaultTextLength) {
-    TableDefinitionStateLoader.setPersisted(
-        this,
-        schemaGate,
-        id,
-        valueIndexTableId,
-        valueIndexState,
-        indexColumn,
-        source,
-        columnsOffset,
-        columns,
-        requiredNotNullMask,
-        requiredDefaultMask,
-        typeDescriptorsOffset,
-        requiredIdentity,
-        requiredCheckMask,
-        checksOffset,
-        checkValuesOffset,
-        checkTypeDescriptorsOffset,
-        checkNodeCountsOffset,
-        checkProgramOffset,
-        requiredReferenceMask,
-        referenceTableIdsOffset,
-        defaultsOffset,
-        defaultKindsOffset,
-        defaultTextOffset,
-        defaultTextLength);
-  }
-
   public int tableId() {
     return tableId;
+  }
+
+  /** Global catalog generation under which this resolved definition is valid. */
+  public long catalogGeneration() { return schemaVersion; }
+
+  /** Admission identity for the schema publication that produced this definition. */
+  public long catalogAdmission() { return schemaAdmission; }
+
+  public long durableSchemaId() { return durableSchemaId; }
+
+  public long durableRowLayoutId() { return durableRowLayoutId; }
+
+  public long durableCatalogGeneration() { return durableCatalogGeneration; }
+
+  /** Exact primitive identity comparison for retained catalog dependencies. */
+  public boolean matchesCatalogIdentity(
+      int expectedTableId,
+      long expectedCatalogGeneration,
+      long expectedCatalogAdmission,
+      long expectedSchemaId,
+      long expectedRowLayoutId,
+      long expectedDurableGeneration) {
+    return available
+        && tableId == expectedTableId
+        && schemaVersion == expectedCatalogGeneration
+        && schemaAdmission == expectedCatalogAdmission
+        && durableSchemaId == expectedSchemaId
+        && durableRowLayoutId == expectedRowLayoutId
+        && durableCatalogGeneration == expectedDurableGeneration;
+  }
+
+  long statisticsSchemaId() {
+    return durableSchemaId > 0 ? durableSchemaId : tableId;
+  }
+
+  long statisticsRowLayoutId() {
+    return durableRowLayoutId > 0 ? durableRowLayoutId : tableId;
+  }
+
+  long statisticsCatalogGeneration() {
+    return durableCatalogGeneration > 0 ? durableCatalogGeneration : 1;
   }
 
   public boolean isAvailable() {
@@ -270,6 +256,10 @@ public final class TableDefinition {
     return identity;
   }
 
+  public boolean hasPrimaryIndexOn(int column) {
+    return column >= 0 && primaryIndexColumn == column;
+  }
+
   public long defaultValue(int column) {
     return TableDefinitionColumnView.defaultValue(this, column);
   }
@@ -299,19 +289,33 @@ public final class TableDefinition {
   }
 
   public int rowBytes() {
-    return TableDefinitionColumnView.maximumRowBytes(this);
+    return maximumRowBytes();
   }
 
   public int fixedRowBytes() {
-    return TableDefinitionColumnView.fixedRowBytes(this);
+    return TableDefinitionRowLayout.fixedBytes(this);
   }
 
   public int maximumRowBytes() {
-    return TableDefinitionColumnView.maximumRowBytes(this);
+    return TableDefinitionRowLayout.maximumBytes(this);
   }
 
-  public int nullMaskOffset() {
-    return TableDefinitionColumnView.nullMaskOffset(this);
+  public int nullBitmapOffset() {
+    return TableDefinitionRowLayout.nullBitmapOffset(this);
+  }
+
+  public int nullBitmapBytes() {
+    return TableDefinitionRowLayout.nullBitmapBytes(this);
+  }
+
+  /** Offset of the low/value lane for one non-key column in the legacy row image. */
+  public int valueOffset(int column) {
+    return TableDefinitionRowLayout.valueOffset(this, column);
+  }
+
+  /** Offset of the high lane for a wide DECIMAL, or the regular value lane otherwise. */
+  public int highValueOffset(int column) {
+    return TableDefinitionRowLayout.highValueOffset(this, column);
   }
 
   public boolean isNull(ByteBuffer row, int column) {
@@ -330,19 +334,16 @@ public final class TableDefinition {
     return TableDefinitionRowCodec.textLength(this, row, column);
   }
 
-  public boolean isValidNullMask(long nullMask) {
-    long allowed = ((1L << columnCount) - 1) & ~1L;
-    return available
-        && (nullMask & ~allowed) == 0
-        && (nullMask & notNullMask) == 0;
+  long notNullWord(int word) {
+    return notNullColumns.word(word);
   }
 
-  long notNullMask() {
-    return notNullMask;
+  long defaultWord(int word) {
+    return defaultColumns.word(word);
   }
 
-  long defaultMask() {
-    return defaultMask;
+  int bitmapWordCount() {
+    return (columnCount + Long.SIZE - 1) / Long.SIZE;
   }
 
   int uniqueValueIndexTableId() {
@@ -460,8 +461,7 @@ public final class TableDefinition {
   }
 
   private TableDefinitionColumnName writableColumn(int index) {
-    return index == 0
-        ? keyColumnName : index == 1 ? valueColumnName : additionalColumns[index - 2];
+    return columnNames[index];
   }
 
   void setColumnName(int index, CharSequence name) {
@@ -472,8 +472,8 @@ public final class TableDefinition {
     writableColumn(index).set(source, offset, bytes);
   }
 
-  long checkMask() {
-    return TableDefinitionCheckView.mask(this);
+  long checkWord(int word) {
+    return TableDefinitionCheckView.word(this, word);
   }
 
   public boolean hasChecks() {
@@ -533,17 +533,17 @@ public final class TableDefinition {
   }
 
   boolean hasReferences() {
-    return referenceMask != 0;
+    return !referenceColumns.isEmpty();
   }
 
-  long referenceMask() {
-    return referenceMask;
+  long referenceWord(int word) {
+    return referenceColumns.word(word);
   }
 
   boolean hasReference(int column) {
     return column > 0
         && column < columnCount
-        && (referenceMask & 1L << column) != 0;
+        && referenceColumns.get(column);
   }
 
   int referenceTableId(int column) {

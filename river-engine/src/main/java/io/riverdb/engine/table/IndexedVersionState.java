@@ -2,42 +2,42 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.checkpoint.CheckpointState;
+import io.riverdb.engine.checkpoint.CheckpointVersionResult;
 import java.nio.ByteBuffer;
 
-/** Owns bounded row-version metadata and operation/vacuum publication state. */
+/** Owns fixed-record row-version metadata without one resident record per row. */
 final class IndexedVersionState {
-  private final LongPagedLongArray commitSequences =
-      new LongPagedLongArray(IndexedTableLimits.MAX_ROWS);
-  private final LongPagedLongArray previousRows =
-      new LongPagedLongArray(IndexedTableLimits.MAX_ROWS);
-  private final LongPagedBooleanArray deleted =
-      new LongPagedBooleanArray(IndexedTableLimits.MAX_ROWS);
-  private final LongPagedBooleanArray vacuumDeleted =
-      new LongPagedBooleanArray(IndexedTableLimits.MAX_ROWS);
-  private final LongPagedBooleanArray overrides =
-      new LongPagedBooleanArray(IndexedTableLimits.MAX_ROWS);
-  private final long[] operationPreviousRows =
-      new long[IndexedTableLimits.MAX_OPERATION_ROWS];
-  private final boolean[] operationDeleted =
-      new boolean[IndexedTableLimits.MAX_OPERATION_ROWS];
-  private int operationCount;
-  private int obsoleteCount;
-  private int deletedCount;
+  private final IndexedVersionDirectory directory;
+  private final IndexedVersionRows rows;
+  private final IndexedVersionWalApply walApply;
+  private final IndexedVersionOperation operation = new IndexedVersionOperation();
+  private long obsoleteCount;
+  private long deletedCount;
   private CheckpointState checkpointBase;
+  private final CheckpointVersionResult checkpointVersion =
+      new CheckpointVersionResult();
+  private int checkpointBasePageCursor;
+  private int checkpointDeltaPageCursor;
 
-  int operationCount() {
-    return operationCount;
+  IndexedVersionState(
+      IndexedRowDirectory rowDirectory, IndexedVersionDirectory versionDirectory) {
+    rows = new IndexedVersionRows(rowDirectory);
+    directory = versionDirectory;
+    walApply = new IndexedVersionWalApply(directory);
   }
 
-  long operationPreviousRow(int index) {
-    return operationPreviousRows[index];
-  }
+  IndexedVersionRows rows() { return rows; }
+  IndexedVersionOperation operation() { return operation; }
 
-  boolean operationDeleted(int index) {
-    return operationDeleted[index];
+  IndexedVersionDirectory directory() {
+    return directory;
   }
 
   int obsoleteCount() {
+    return (int) Math.min(Integer.MAX_VALUE, obsoleteCount);
+  }
+
+  long checkpointObsoleteCount() {
     return obsoleteCount;
   }
 
@@ -45,95 +45,125 @@ final class IndexedVersionState {
     return obsoleteCount > 0 || deletedCount > 0;
   }
 
-  long commitSequence(long rowId, long rowCount) {
-    if (rowId <= 0 || rowId > rowCount) return 0;
-    long value = commitSequences.get(rowId);
-    return value != 0 ? value
-        : checkpointBase == null ? 0 : checkpointBase.rowCommitSequence(rowId);
+  int checkpointVersionPageCountUpperBound() {
+    int baseCount = checkpointBase == null ? 0 : checkpointBase.versionPageCount();
+    int deltaCount = directory.checkpointPageCount();
+    int base = 0;
+    int delta = 0;
+    int merged = 0;
+    while (base < baseCount || delta < deltaCount) {
+      long baseId = base < baseCount
+          ? checkpointBase.versionPageId(base) : Long.MAX_VALUE;
+      long deltaId = delta < deltaCount
+          ? directory.checkpointPageId(delta) : Long.MAX_VALUE;
+      long next = Math.min(baseId, deltaId);
+      if (baseId == next) base++;
+      if (deltaId == next) delta++;
+      if (merged == Integer.MAX_VALUE) return merged;
+      merged++;
+    }
+    return merged;
   }
 
-  long previousRow(long rowId, long rowCount) {
-    if (rowId <= 0 || rowId > rowCount) return 0;
-    return overrides.get(rowId)
-        ? previousRows.get(rowId)
-        : checkpointBase == null ? 0 : checkpointBase.previousRowId(rowId);
+  void resetCheckpointVersionPages() {
+    checkpointBasePageCursor = 0;
+    checkpointDeltaPageCursor = 0;
   }
 
-  boolean isDeleted(long rowId, long rowCount) {
-    if (rowId <= 0 || rowId > rowCount) return false;
-    return overrides.get(rowId)
-        ? deleted.get(rowId)
-        : checkpointBase != null && checkpointBase.isDeleted(rowId);
+  long nextCheckpointVersionPageId() {
+    int baseCount = checkpointBase == null ? 0 : checkpointBase.versionPageCount();
+    int deltaCount = directory.checkpointPageCount();
+    long base = checkpointBasePageCursor < baseCount
+        ? checkpointBase.versionPageId(checkpointBasePageCursor) : Long.MAX_VALUE;
+    long delta = checkpointDeltaPageCursor < deltaCount
+        ? directory.checkpointPageId(checkpointDeltaPageCursor) : Long.MAX_VALUE;
+    if (base == Long.MAX_VALUE && delta == Long.MAX_VALUE) return -1;
+    long next = Math.min(base, delta);
+    if (base == next) checkpointBasePageCursor++;
+    if (delta == next) checkpointDeltaPageCursor++;
+    return next;
   }
 
-  void beginOperation() {
-    operationCount = 0;
+  StatusCode lookup(long rowId, long rowCount, IndexedVersionRecord result) {
+    if (result == null || rowId <= 0 || rowId > rowCount) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = directory.lookup(rowId, result);
+    if (!status.isOk() || result.available()) return status;
+    if (checkpointBase == null) return StatusCode.CORRUPTION;
+    StatusCode checkpointStatus = checkpointBase.readVersion(rowId, checkpointVersion);
+    if (!checkpointStatus.isOk()) return checkpointStatus;
+    result.set(
+        checkpointVersion.commitSequence(),
+        checkpointVersion.previousRowId(),
+        checkpointVersion.deleted());
+    if (result.commitSequence() <= 0) return StatusCode.CORRUPTION;
+    return StatusCode.OK;
   }
 
-  boolean canStage(long previousRowId, boolean delete, long rowCount) {
-    return operationCount < IndexedTableLimits.MAX_OPERATION_ROWS
-        && previousRowId >= 0
-        && previousRowId <= rowCount
-        && (!delete || previousRowId > 0);
+  StatusCode admitRows(long firstRowId, int count) {
+    return operation.admit(firstRowId, count, rows, directory);
   }
 
-  void stage(long previousRowId, boolean delete) {
-    operationPreviousRows[operationCount] = previousRowId;
-    operationDeleted[operationCount] = delete;
-    operationCount++;
+  StatusCode publishOperationRows(long previousRowCount) {
+    return operation.publishRows(previousRowCount, rows);
   }
 
-  void recordCommitted(
+  StatusCode recordCommitted(
       long rowId,
       long commitSequence,
       long previousRowId,
       boolean delete) {
-    commitSequences.set(rowId, commitSequence);
-    previousRows.set(rowId, previousRowId);
-    deleted.set(rowId, delete);
-    overrides.set(rowId, true);
-    if (previousRowId > 0) {
-      obsoleteCount++;
-    }
-    if (delete) {
-      deletedCount++;
-    }
+    StatusCode status = directory.set(rowId, commitSequence, previousRowId, delete);
+    if (!status.isOk()) return status;
+    if (previousRowId > 0) obsoleteCount++;
+    if (delete) deletedCount++;
+    return StatusCode.OK;
   }
 
-  void recordNewRows(long previousRowCount, long rowCount, long commitSequence) {
+  StatusCode recordNewRows(long previousRowCount, long rowCount, long commitSequence) {
     for (long rowId = previousRowCount + 1; rowId <= rowCount; rowId++) {
-      commitSequences.set(rowId, commitSequence);
-      previousRows.set(rowId, 0);
-      deleted.set(rowId, false);
-      overrides.set(rowId, true);
+      StatusCode status = directory.set(rowId, commitSequence, 0, false);
+      if (!status.isOk()) return status;
     }
+    return StatusCode.OK;
   }
 
-  void recordOperation(long previousRowCount, long commitSequence) {
-    for (int index = 0; index < operationCount; index++) {
-      recordCommitted(
-          previousRowCount + index + 1,
-          commitSequence,
-          operationPreviousRows[index],
-          operationDeleted[index]);
+  StatusCode recordOperation(long previousRowCount, long commitSequence) {
+    return recordOperation(previousRowCount, 0, operation.count(), commitSequence);
+  }
+
+  StatusCode recordOperation(
+      long groupBaseRow, int first, int count, long commitSequence) {
+    if (first < 0 || count < 0 || first > operation.count() - count) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    for (int index = first; index < first + count; index++) {
+      StatusCode status = recordCommitted(
+          groupBaseRow + index + 1,
+          commitSequence,
+          operation.previousRow(index),
+          operation.deleted(index));
+      if (!status.isOk()) return status;
+    }
+    return StatusCode.OK;
   }
 
   void clearOperation() {
-    for (int index = 0; index < operationCount; index++) {
-      operationPreviousRows[index] = 0;
-      operationDeleted[index] = false;
-    }
-    operationCount = 0;
+    operation.clear();
   }
 
-  void load(CheckpointState checkpoint) {
+  StatusCode load(CheckpointState checkpoint) {
+    StatusCode status = directory.clear();
+    if (!status.isOk()) return status;
     checkpointBase = checkpoint;
-    obsoleteCount = (int) Math.min(Integer.MAX_VALUE, checkpoint.obsoleteVersionCount());
+    obsoleteCount = checkpoint.obsoleteVersionCount();
     deletedCount = checkpoint.versionDirectoryRequired() ? 1 : 0;
+    return StatusCode.OK;
   }
 
   void close() {
+    operation.release();
     if (checkpointBase != null) {
       checkpointBase.close();
       checkpointBase = null;
@@ -146,66 +176,31 @@ final class IndexedVersionState {
       long previousRowCount,
       int versionCount,
       long commitSequence) {
-    int recoveredObsolete = 0;
-    for (int index = 0; index < versionCount; index++) {
-      if (!IndexedWalCodec.validPageOperationVersion(payload, versionOffset)) {
-        return StatusCode.CORRUPTION;
-      }
-      long previousRowId = IndexedWalCodec.pageVersionPreviousRowId(payload, versionOffset);
-      boolean delete = IndexedWalCodec.pageVersionDeleted(payload, versionOffset);
-      long rowId = previousRowCount + index + 1;
-      if (previousRowId >= rowId || (delete && previousRowId == 0)) {
-        return StatusCode.CORRUPTION;
-      }
-      commitSequences.set(rowId, commitSequence);
-      previousRows.set(rowId, previousRowId);
-      deleted.set(rowId, delete);
-      overrides.set(rowId, true);
-      if (previousRowId > 0) {
-        recoveredObsolete++;
-      }
-      if (delete) {
-        deletedCount++;
-      }
-      versionOffset += IndexedWalCodec.PAGE_OPERATION_VERSION_BYTES;
+    StatusCode status = walApply.apply(
+        payload, versionOffset, previousRowCount, versionCount, commitSequence);
+    if (status.isOk()) {
+      obsoleteCount += walApply.obsolete();
+      deletedCount += walApply.deleted();
     }
-    obsoleteCount += recoveredObsolete;
-    return StatusCode.OK;
+    return status;
   }
 
-  void recordVacuumDeleted(long rowId, boolean delete) {
-    vacuumDeleted.set(rowId, delete);
+  StatusCode recordVacuumDeleted(long rowId, boolean delete) {
+    return directory.setVacuumDeleted(rowId, delete);
   }
 
-  void publishVacuum(long retainedRows, long commitSequence) {
-    commitSequences.clear();
-    previousRows.clear();
-    deleted.clear();
-    overrides.clear();
-    checkpointBase = null;
-    deletedCount = 0;
-    for (long rowId = 1; rowId <= retainedRows; rowId++) {
-      commitSequences.set(rowId, commitSequence);
-      boolean rowDeleted = vacuumDeleted.get(rowId);
-      deleted.set(rowId, rowDeleted);
-      overrides.set(rowId, true);
-      if (rowDeleted) deletedCount++;
-      vacuumDeleted.set(rowId, false);
+  StatusCode publishVacuum(long retainedRows, long commitSequence) {
+    StatusCode status = walApply.publishVacuum(retainedRows, commitSequence);
+    if (status.isOk()) {
+      checkpointBase = null;
+      deletedCount = walApply.deleted();
+      obsoleteCount = 0;
     }
-    obsoleteCount = 0;
+    return status;
   }
 
-  void cancelVacuum(long appliedRows) {
-    for (long rowId = 1; rowId <= appliedRows; rowId++) {
-      vacuumDeleted.set(rowId, false);
-    }
+  StatusCode cancelVacuum(long appliedRows) {
+    return walApply.cancelVacuum(appliedRows);
   }
 
-  long visibleRow(long rowId, long visibleCommitSequence, long rowCount) {
-    long visible = rowId;
-    while (visible > 0 && commitSequence(visible, rowCount) > visibleCommitSequence) {
-      visible = previousRow(visible, rowCount);
-    }
-    return visible;
-  }
 }

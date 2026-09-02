@@ -1,16 +1,19 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.ParameterSet;
+import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.RiverSession;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-/** Bounded prepared statement sending typed values separately from SQL text. */
+/** Prepared statement sending typed values separately from retained SQL text. */
 final class RiverJdbcPreparedStatement extends RiverJdbcTypedPreparedStatement {
   static final int MAXIMUM_PARAMETERS = ParameterSet.MAXIMUM_PARAMETERS;
-  static final int MAXIMUM_RENDERED_CHARACTERS = 16 * 1024;
 
-  private final String template;
+  private final RiverSession session;
+  private final long handle;
+  private final boolean query;
   private final boolean returnGeneratedKeys;
 
   RiverJdbcPreparedStatement(
@@ -26,30 +29,58 @@ final class RiverJdbcPreparedStatement extends RiverJdbcTypedPreparedStatement {
       String sql,
       boolean generatedKeys) throws SQLException {
     super(owner, session, parameterCount(sql));
-    template = sql;
+    this.session = session;
+    PreparedOpenResult prepared = new PreparedOpenResult();
+    JdbcExceptions.require(session.prepare(sql, prepared), "prepare statement");
+    int localParameters = parameterCount(sql);
+    if (prepared.parameterCount() != localParameters) {
+      session.closePrepared(prepared.handle());
+      throw JdbcExceptions.invalid("prepared parameter metadata mismatch");
+    }
+    handle = prepared.handle();
+    query = prepared.query();
     returnGeneratedKeys = generatedKeys;
   }
 
   @Override
   public ResultSet executeQuery() throws SQLException {
-    return executeQuerySql(template, boundParameters());
+    if (!query) throw JdbcExceptions.invalid("update handle must use executeUpdate");
+    return executePreparedQuery(handle, boundParameters());
   }
 
   @Override
   public int executeUpdate() throws SQLException {
-    return executeUpdateSql(
-        template, boundParameters(), returnGeneratedKeys);
+    if (query) throw JdbcExceptions.invalid("query handle must use executeQuery");
+    return executePreparedUpdate(handle, boundParameters(), returnGeneratedKeys);
   }
 
   @Override
   public boolean execute() throws SQLException {
-    return executeSql(template, boundParameters(), returnGeneratedKeys);
+    if (query) {
+      if (returnGeneratedKeys) throw JdbcExceptions.invalid("generated keys require update SQL");
+      executePreparedQuery(handle, boundParameters());
+      return true;
+    }
+    executePreparedUpdate(handle, boundParameters(), returnGeneratedKeys);
+    return false;
   }
 
   @Override
   public void addBatch() throws SQLException {
-    requireBatchCapacity();
-    addSqlBatch(template, snapshotParameters());
+    if (query) throw JdbcExceptions.invalid("query handle cannot be batched");
+    addPreparedBatch(snapshotParameters());
+  }
+
+  @Override
+  public int[] executeBatch() throws SQLException {
+    requireOpen();
+    closeOpenResult();
+    return RiverJdbcBatchExecutor.executePrepared(this, handle);
+  }
+
+  @Override
+  StatusCode releaseRetainedPrepared() {
+    return session.closePrepared(handle);
   }
 
   @Override
@@ -81,12 +112,9 @@ final class RiverJdbcPreparedStatement extends RiverJdbcTypedPreparedStatement {
     if (sql == null || sql.isEmpty()) {
       throw JdbcExceptions.invalid("prepared SQL must not be empty");
     }
-    if (sql.length() > MAXIMUM_RENDERED_CHARACTERS) {
-      throw JdbcExceptions.invalid("prepared SQL exceeds the bounded protocol payload");
-    }
     int count = RiverJdbcParameterTypes.countMarkers(sql);
-    if (count > MAXIMUM_PARAMETERS) {
-      throw JdbcExceptions.invalid("prepared SQL has too many parameters");
+    if (count < 0 || count > MAXIMUM_PARAMETERS) {
+      throw JdbcExceptions.invalid("prepared SQL has invalid parameter markers");
     }
     return count;
   }

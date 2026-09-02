@@ -1,6 +1,8 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.table.IndexedScanCursor;
 import io.riverdb.engine.table.IndexedScanResult;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -14,16 +16,16 @@ final class RelationalPhysicalCleanup {
   private final RelationalSchemaGate schemaGate;
   final IndexedScanCursor scanCursor = new IndexedScanCursor();
   final IndexedScanResult scanRow = new IndexedScanResult();
-  final int[] rowSpaces = new int[BATCH_ROWS];
+  final long[] rowSpaces = new long[BATCH_ROWS];
   final long[] rowKeys = new long[BATCH_ROWS];
-  final long[] indexCatalogKeys =
-      new long[TableDefinition.MAXIMUM_INDEXES];
+  long[] indexCatalogKeys = new long[0];
   final IndexedScanCursor catalogCursor = new IndexedScanCursor();
   final IndexedScanResult catalogRow = new IndexedScanResult();
   final ByteBuffer catalogScratch =
       ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
   final CatalogIndexCodec.Result indexRecord = new CatalogIndexCodec.Result();
   final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
+  final CatalogStatisticsCleanup statisticsCleanup = new CatalogStatisticsCleanup();
   StatusCode collectStatus;
   boolean scanExhausted;
   boolean batchComplete;
@@ -97,19 +99,13 @@ final class RelationalPhysicalCleanup {
   }
 
   StatusCode deleteStatistics(RelationalSession session, int tableId) {
-    long key = RelationalKey.tableStatisticsKey(tableId);
-    StatusCode status = session.indexedSession().fetchByKey(
-        RelationalKey.CATALOG_SEQUENCE_SPACE, key, catalogRow.row());
-    if (status == StatusCode.CONFLICT) return StatusCode.OK;
-    return status.isOk()
-        ? session.indexedSession().delete(RelationalKey.CATALOG_SEQUENCE_SPACE, key)
-        : status;
+    return statisticsCleanup.delete(session.indexedSession(), tableId);
   }
 
   int collectIndexCatalogKeys(
       RelationalSession session, TableDefinition table) {
     int count = 0;
-    collectStatus = StatusCode.OK;
+    collectStatus = ensureIndexCatalogKeyCapacity(table.uniqueIndexCount());
     while (collectStatus.isOk()) {
       collectStatus = session.indexedSession().nextScan(catalogCursor, catalogRow);
       if (collectStatus == StatusCode.CONFLICT) {
@@ -131,6 +127,24 @@ final class RelationalPhysicalCleanup {
       }
     }
     return count;
+  }
+
+  private StatusCode ensureIndexCatalogKeyCapacity(int required) {
+    if (required <= indexCatalogKeys.length) return StatusCode.OK;
+    int capacity = BoundedArrayGrowth.capacity(
+        indexCatalogKeys.length,
+        required,
+        SqlShapeLimits.MAX_SECONDARY_INDEXES,
+        4);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    try {
+      long[] grown = new long[capacity];
+      System.arraycopy(indexCatalogKeys, 0, grown, 0, indexCatalogKeys.length);
+      indexCatalogKeys = grown;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError ignored) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   static StatusCode finishTransaction(

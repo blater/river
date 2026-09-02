@@ -40,6 +40,7 @@ final class SqlJoinChainPlan {
   private final long[] estimates = new long[MAXIMUM_STEPS];
   private final SqlJoinStrategyPlan strategyPlan = new SqlJoinStrategyPlan();
   private SqlJoinChainSource source;
+  private SqlUniversalJoinSource universal;
   private boolean analyzed;
   private int count;
 
@@ -65,6 +66,32 @@ final class SqlJoinChainPlan {
           chain, stage, inner, strategyPlan.directAccess(context, stage, inner),
           strategy);
       if (status.isOk()) status = statistics(context, stage + 1);
+      if (status.isOk()) status = estimate(context, stage);
+    }
+    return finish(status, command);
+  }
+
+  StatusCode describeUniversal(
+      SqlCommand command,
+      SqlBoundJoinContext context,
+      SqlUniversalJoinSource rowSource,
+      boolean withActuals) {
+    begin(rowSource, withActuals);
+    StatusCode status = root(rowSource.accessColumn(0));
+    if (status.isOk()) status = statistics(context, 0);
+    SqlJoinChain chain = command.joinChain();
+    for (int stage = 0; status.isOk() && stage < chain.stageCount(); stage++) {
+      int role = stage + 1;
+      int strategy = rowSource.strategy(stage);
+      int inner = strategy != SqlJoinStrategy.NESTED_LOOP
+          ? strategyPlan.directInner(context, stage) : context.accessInnerColumn(stage);
+      int access = strategy != SqlJoinStrategy.NESTED_LOOP
+          ? strategyPlan.directAccess(context, stage, inner)
+          : !rowSource.indexedRole(role) ? 0
+              : rowSource.exactRole(role) && rowSource.uniqueRole(role) ? 2 : 1;
+      status = stage(
+          chain, stage, inner, access, strategy);
+      if (status.isOk()) status = statistics(context, role);
       if (status.isOk()) status = estimate(context, stage);
     }
     return finish(status, command);
@@ -96,23 +123,23 @@ final class SqlJoinChainPlan {
   int count() { return count; }
   long operator(int step) {
     return strategyPlan.operator(
-        step, stages[step], operators[step], analyzed, source);
+        step, stages[step], operators[step], analyzed, source, universal);
   }
   long detail(int step) { return details[step]; }
 
   long rows(int step) {
     if (metrics[step] == ESTIMATED) return estimates[step];
-    if (!analyzed || source == null) return -1;
+    if (!analyzed || source == null && universal == null) return -1;
     int stage = stages[step];
     return switch (metrics[step]) {
-      case ROOT -> source.rootCandidates();
-      case CANDIDATES -> source.stageAccessRows(stage);
-      case ON_TRUE -> source.stageOnTrue(stage);
-      case EXTENSIONS -> source.stageNullExtensions(stage);
-      case PUBLISHED -> source.stagePublished(stage);
-      case FILTERED -> source.whereTrue();
-      case SORTED -> source.whereTrue();
-      case LIMITED -> Math.min(source.whereTrue(), rowLimit);
+      case ROOT -> roots();
+      case CANDIDATES -> candidates(stage);
+      case ON_TRUE -> onTrue(stage);
+      case EXTENSIONS -> nullExtensions(stage);
+      case PUBLISHED -> published(stage);
+      case FILTERED -> whereTrue();
+      case SORTED -> whereTrue();
+      case LIMITED -> Math.min(whereTrue(), rowLimit);
       default -> -1;
     };
   }
@@ -139,7 +166,40 @@ final class SqlJoinChainPlan {
   private void begin(SqlJoinChainSource rowSource, boolean withActuals) {
     count = 0;
     source = rowSource;
+    universal = null;
     analyzed = withActuals;
+  }
+
+  private void begin(SqlUniversalJoinSource rowSource, boolean withActuals) {
+    count = 0;
+    source = null;
+    universal = rowSource;
+    analyzed = withActuals;
+  }
+
+  private long roots() {
+    return source != null ? source.rootCandidates() : universal.rootCandidates();
+  }
+
+  private long candidates(int stage) {
+    return source != null ? source.stageAccessRows(stage) : universal.stageAccessRows(stage);
+  }
+
+  private long onTrue(int stage) {
+    return source != null ? source.stageOnTrue(stage) : universal.stageOnTrue(stage);
+  }
+
+  private long nullExtensions(int stage) {
+    return source != null
+        ? source.stageNullExtensions(stage) : universal.stageNullExtensions(stage);
+  }
+
+  private long published(int stage) {
+    return source != null ? source.stagePublished(stage) : universal.stagePublished(stage);
+  }
+
+  private long whereTrue() {
+    return source != null ? source.whereTrue() : universal.whereTrue();
   }
 
   private StatusCode root(int access) {

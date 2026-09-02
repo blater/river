@@ -35,10 +35,34 @@ final class EmbeddedRiverTemporalAggregateExpressionTest {
     createFixture(session, result);
 
     assertAggregateResults(session, result);
+    assertSharedTemporalSnapshot(session, result);
     assertComputedPredicateAggregates(session, result);
     assertBoundariesAndCleanup(session, result);
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertSharedTemporalSnapshot(
+      RiverSession session, CommandResult result) {
+    assertEquals(StatusCode.OK, session.execute("SET TIME ZONE '+14:00'", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT MIN(CURRENT_DATE) FROM aggregate_moments", result));
+    long easternDate = result.valueAt(0);
+    assertEquals(StatusCode.OK, session.execute("SET TIME ZONE '-12:00'", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT MIN(CURRENT_DATE) FROM aggregate_moments", result));
+    long westernDate = result.valueAt(0);
+    assertEquals(true, easternDate > westernDate);
+    assertEquals(StatusCode.OK, session.execute("SET TIME ZONE 'UTC'", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT MAX(CURRENT_TIMESTAMP) FROM aggregate_moments "
+                + "HAVING MAX(CURRENT_TIMESTAMP)=CURRENT_TIMESTAMP",
+            result));
+    assertEquals(true, result.rowAvailable());
   }
 
   private static void createFixture(RiverSession session, CommandResult result) {
@@ -94,8 +118,8 @@ final class EmbeddedRiverTemporalAggregateExpressionTest {
         session,
         result,
         "SELECT AVG(day-DATE '2024-02-27') FROM aggregate_moments",
-        12,
-        SqlTypeDescriptor.decimal(18, 0));
+        12_000_000,
+        SqlTypeDescriptor.decimal(SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, 6));
 
     assertEquals(
         StatusCode.OK,
@@ -145,9 +169,12 @@ final class EmbeddedRiverTemporalAggregateExpressionTest {
         result,
         "SELECT MIN(CAST(day AS VARCHAR(10))) FROM aggregate_moments",
         "2024-02-28");
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.execute("SELECT MIN(DATE '2024-01-01') FROM aggregate_moments", result));
+    assertValue(
+        session,
+        result,
+        "SELECT MIN(DATE '2024-01-01') FROM aggregate_moments",
+        firstEpochDay(session, result) - 58,
+        SqlTypeDescriptor.DATE);
     assertEquals(
         StatusCode.DATATYPE_MISMATCH,
         session.execute(
@@ -205,8 +232,8 @@ final class EmbeddedRiverTemporalAggregateExpressionTest {
         session,
         result,
         "SELECT AVG(day-DATE '2024-02-27') FROM aggregate_moments" + dateRange,
-        2,
-        SqlTypeDescriptor.decimal(18, 0));
+        1_500_000,
+        SqlTypeDescriptor.decimal(SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, 6));
 
     long firstDay = firstEpochDay(session, result);
     assertValue(
@@ -283,7 +310,7 @@ final class EmbeddedRiverTemporalAggregateExpressionTest {
       String sql,
       long expected,
       int descriptor) {
-    assertEquals(StatusCode.OK, session.execute(sql, result));
+    assertEquals(StatusCode.OK, session.execute(sql, result), sql);
     assertEquals(expected, result.valueAt(0));
     assertEquals(descriptor, result.typeDescriptorAt(0));
   }
@@ -293,7 +320,7 @@ final class EmbeddedRiverTemporalAggregateExpressionTest {
       CommandResult result,
       String sql,
       int descriptor) {
-    assertEquals(StatusCode.OK, session.execute(sql, result));
+    assertEquals(StatusCode.OK, session.execute(sql, result), sql);
     assertEquals(true, result.isNull(0));
     assertEquals(descriptor, result.typeDescriptorAt(0));
   }

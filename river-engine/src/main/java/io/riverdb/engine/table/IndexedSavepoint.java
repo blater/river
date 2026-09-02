@@ -7,6 +7,10 @@ public final class IndexedSavepoint {
   private IndexedTransactionSession owner;
   private long transactionId;
   private int pendingMutationCount;
+  private int tupleMutationCount;
+  private int tupleDescriptorCount;
+  private int tuplePayloadBytes;
+  private int tupleLifecycleCount;
   private boolean active;
 
   public StatusCode reset() {
@@ -16,19 +20,31 @@ public final class IndexedSavepoint {
     owner = null;
     transactionId = 0;
     pendingMutationCount = 0;
+    tupleMutationCount = 0;
+    tupleDescriptorCount = 0;
+    tuplePayloadBytes = 0;
+    tupleLifecycleCount = 0;
     return StatusCode.OK;
   }
 
   StatusCode claim(
       IndexedTransactionSession session,
       long ownerTransactionId,
-      int mutations) {
+      int mutations,
+      int tupleMutations,
+      int tupleDescriptors,
+      int tupleBytes,
+      int lifecycleCount) {
     if (active) {
       return StatusCode.CONFLICT;
     }
     owner = session;
     transactionId = ownerTransactionId;
     pendingMutationCount = mutations;
+    tupleMutationCount = tupleMutations;
+    tupleDescriptorCount = tupleDescriptors;
+    tuplePayloadBytes = tupleBytes;
+    tupleLifecycleCount = lifecycleCount;
     active = true;
     return StatusCode.OK;
   }
@@ -40,6 +56,11 @@ public final class IndexedSavepoint {
   int pendingMutationCount() {
     return pendingMutationCount;
   }
+
+  int tupleMutationCount() { return tupleMutationCount; }
+  int tupleDescriptorCount() { return tupleDescriptorCount; }
+  int tuplePayloadBytes() { return tuplePayloadBytes; }
+  int tupleLifecycleCount() { return tupleLifecycleCount; }
 
   void complete() {
     active = false;

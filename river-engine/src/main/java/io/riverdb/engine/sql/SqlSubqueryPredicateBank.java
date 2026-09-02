@@ -19,6 +19,7 @@ final class SqlSubqueryPredicateBank {
   private final SqlSubqueryLeafEvaluator leaves;
   private final SqlNestedRowProvider rows;
   private final SqlSubqueryPlan plan;
+  private final SqlSessionShapeBudget budget;
   private SqlJoinedPredicateBank joined;
 
   SqlSubqueryPredicateBank(
@@ -27,7 +28,8 @@ final class SqlSubqueryPredicateBank {
       SqlTemporalContext temporalContext,
       SqlSubqueryLeafEvaluator leafEvaluator,
       SqlNestedRowProvider rowProvider,
-      SqlSubqueryPlan subqueryPlan) {
+      SqlSubqueryPlan subqueryPlan,
+      SqlSessionShapeBudget shapeBudget) {
     bound = statement;
     query = statement.executableQuery;
     expressions = evaluator;
@@ -35,6 +37,7 @@ final class SqlSubqueryPredicateBank {
     leaves = leafEvaluator;
     rows = rowProvider;
     plan = subqueryPlan;
+    budget = shapeBudget;
   }
 
   StatusCode prepare(int block) {
@@ -59,15 +62,24 @@ final class SqlSubqueryPredicateBank {
   }
 
   StatusCode accept(int block) {
-    return evaluators[block].matchesNested(
-        bound.query.block(block),
-        bound.nestedBoolean(block),
-        rows.key(block, 0),
-        rows.row(block, 0),
-        rows.table(block, 0),
-        leaves,
-        rows,
-        matches[block]);
+    SqlBlockRow blockRow = rows.blockRow(block, 0);
+    return blockRow == null
+        ? evaluators[block].matchesNested(
+            bound.query.block(block),
+            bound.nestedBoolean(block),
+            rows.key(block, 0),
+            rows.row(block, 0),
+            rows.table(block, 0),
+            leaves,
+            rows,
+            matches[block])
+        : evaluators[block].matchesNestedBlock(
+            bound.query.block(block),
+            bound.nestedBoolean(block),
+            blockRow,
+            leaves,
+            rows,
+            matches[block]);
   }
 
   boolean accepted(int block) { return matches[block].matched(); }
@@ -90,7 +102,7 @@ final class SqlSubqueryPredicateBank {
     }
     if (evaluators[block] == null) {
       evaluators[block] = new SqlBooleanPredicateEvaluator(
-          workspaces[block], temporal);
+          workspaces[block], temporal, budget);
       matches[block] = new SqlBooleanPredicateEvaluator.Match();
     }
     return evaluators[block].prepare(
@@ -100,7 +112,7 @@ final class SqlSubqueryPredicateBank {
   private StatusCode prepareJoin(int block) {
     if (joined == null) {
       joined = new SqlJoinedPredicateBank(
-          bound, expressions, temporal, leaves, rows, plan);
+          bound, expressions, temporal, leaves, rows, plan, budget);
     }
     return joined.prepare(block);
   }

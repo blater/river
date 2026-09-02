@@ -6,14 +6,14 @@ import io.riverdb.format.FormatBytes;
 import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
-/** Canonical v3 primitive-directory B-tree layout with distinct leaf and internal entries. */
+/** Canonical v4 primitive-directory B-tree layout with long object spaces. */
 public final class BTreePageCodec {
-  public static final int VERSION = 3;
+  public static final int VERSION = 4;
   public static final int TYPE_LEAF = 1;
   public static final int TYPE_INTERNAL = 2;
   public static final int HEADER_BYTES = 48;
   public static final int LEAF_ENTRY_BYTES = 24;
-  public static final int INTERNAL_ENTRY_BYTES = 16;
+  public static final int INTERNAL_ENTRY_BYTES = 24;
   public static final int MAXIMUM_LEAF_ENTRIES =
       (PageCodec.MAX_PAYLOAD_BYTES - HEADER_BYTES) / LEAF_ENTRY_BYTES;
   public static final int MAXIMUM_INTERNAL_ENTRIES =
@@ -26,7 +26,7 @@ public final class BTreePageCodec {
 
   /** Initializes and erases one complete primitive-tree payload. */
   public static StatusCode initializePage(
-      ByteBuffer target, int start, int type, int pointer, int highSpace, long highKey) {
+      ByteBuffer target, int start, int type, int pointer, long highSpace, long highKey) {
     if (target == null
         || target.isReadOnly()
         || start < 0
@@ -51,7 +51,7 @@ public final class BTreePageCodec {
       int type,
       int entryCount,
       int pointer,
-      int highSpace,
+      long highSpace,
       long highKey) {
     if (target == null
         || target.isReadOnly()
@@ -74,8 +74,7 @@ public final class BTreePageCodec {
     FormatBytes.putInt(target, start + 24, pointer);
     FormatBytes.putInt(target, start + 28, 0);
     FormatBytes.putLong(target, start + 32, highKey);
-    FormatBytes.putInt(target, start + 40, highSpace);
-    FormatBytes.putInt(target, start + 44, 0);
+    FormatBytes.putLong(target, start + 40, highSpace);
     return StatusCode.OK;
   }
 
@@ -91,7 +90,7 @@ public final class BTreePageCodec {
     int entryBytes = FormatBytes.getInt(source, start + 20);
     int pointer = FormatBytes.getInt(source, start + 24);
     long highKey = FormatBytes.getLong(source, start + 32);
-    int highSpace = FormatBytes.getInt(source, start + 40);
+    long highSpace = FormatBytes.getLong(source, start + 40);
     if (FormatBytes.getLong(source, start) != MAGIC
         || FormatBytes.getInt(source, start + 8) != VERSION
         || !validTypeAndCount(type, count)
@@ -102,8 +101,7 @@ public final class BTreePageCodec {
         || type == TYPE_LEAF
             && ((pointer == 0) != OrderedKey.isInfinity(highSpace, highKey))
         || FormatBytes.getInt(source, start + 28) != 0
-        || !validFence(highSpace, highKey)
-        || FormatBytes.getInt(source, start + 44) != 0) {
+        || !validFence(highSpace, highKey)) {
       return StatusCode.CORRUPTION;
     }
     result.set(type, count, pointer, highSpace, highKey);
@@ -111,7 +109,7 @@ public final class BTreePageCodec {
   }
 
   public static StatusCode encodeLeaf(
-      ByteBuffer target, int offset, int space, long key, long logicalRowId) {
+      ByteBuffer target, int offset, long space, long key, long logicalRowId) {
     if (!validTarget(target, offset, LEAF_ENTRY_BYTES)
         || !OrderedKey.isFiniteSpace(space)
         || logicalRowId <= 0) {
@@ -119,8 +117,7 @@ public final class BTreePageCodec {
     }
     FormatBytes.putLong(target, offset, key);
     FormatBytes.putLong(target, offset + 8, logicalRowId);
-    FormatBytes.putInt(target, offset + 16, space);
-    FormatBytes.putInt(target, offset + 20, 0);
+    FormatBytes.putLong(target, offset + 16, space);
     return StatusCode.OK;
   }
 
@@ -136,11 +133,9 @@ public final class BTreePageCodec {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int offset = pageStart + HEADER_BYTES + index * LEAF_ENTRY_BYTES;
-    int space = FormatBytes.getInt(source, offset + 16);
+    long space = FormatBytes.getLong(source, offset + 16);
     long logicalRowId = FormatBytes.getLong(source, offset + 8);
-    if (!OrderedKey.isFiniteSpace(space)
-        || logicalRowId <= 0
-        || FormatBytes.getInt(source, offset + 20) != 0) {
+    if (!OrderedKey.isFiniteSpace(space) || logicalRowId <= 0) {
       return StatusCode.CORRUPTION;
     }
     result.set(space, FormatBytes.getLong(source, offset), logicalRowId);
@@ -148,7 +143,7 @@ public final class BTreePageCodec {
   }
 
   public static StatusCode encodeInternal(
-      ByteBuffer target, int offset, int space, long key, int rightChildPageId) {
+      ByteBuffer target, int offset, long space, long key, int rightChildPageId) {
     if (!validTarget(target, offset, INTERNAL_ENTRY_BYTES)
         || !OrderedKey.isFiniteSpace(space)
         || rightChildPageId <= 0) {
@@ -156,7 +151,8 @@ public final class BTreePageCodec {
     }
     FormatBytes.putLong(target, offset, key);
     FormatBytes.putInt(target, offset + 8, rightChildPageId);
-    FormatBytes.putInt(target, offset + 12, space);
+    FormatBytes.putInt(target, offset + 12, 0);
+    FormatBytes.putLong(target, offset + 16, space);
     return StatusCode.OK;
   }
 
@@ -172,9 +168,10 @@ public final class BTreePageCodec {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int offset = pageStart + HEADER_BYTES + index * INTERNAL_ENTRY_BYTES;
-    int space = FormatBytes.getInt(source, offset + 12);
+    long space = FormatBytes.getLong(source, offset + 16);
     int child = FormatBytes.getInt(source, offset + 8);
-    if (!OrderedKey.isFiniteSpace(space) || child <= 0) return StatusCode.CORRUPTION;
+    if (!OrderedKey.isFiniteSpace(space) || child <= 0
+        || FormatBytes.getInt(source, offset + 12) != 0) return StatusCode.CORRUPTION;
     result.set(space, FormatBytes.getLong(source, offset), child);
     return StatusCode.OK;
   }
@@ -187,19 +184,18 @@ public final class BTreePageCodec {
     int type = result.type();
     int entryBytes = type == TYPE_LEAF ? LEAF_ENTRY_BYTES : INTERNAL_ENTRY_BYTES;
     boolean hasPrevious = false;
-    int previousSpace = 0;
+    long previousSpace = 0;
     long previousKey = 0;
     for (int index = 0; index < result.entryCount(); index++) {
       int offset = start + HEADER_BYTES + index * entryBytes;
       long key = FormatBytes.getLong(source, offset);
-      int space;
+      long space;
       boolean validValue;
       if (type == TYPE_LEAF) {
-        space = FormatBytes.getInt(source, offset + 16);
-        validValue = FormatBytes.getLong(source, offset + 8) > 0
-            && FormatBytes.getInt(source, offset + 20) == 0;
+        space = FormatBytes.getLong(source, offset + 16);
+        validValue = FormatBytes.getLong(source, offset + 8) > 0;
       } else {
-        space = FormatBytes.getInt(source, offset + 12);
+        space = FormatBytes.getLong(source, offset + 16);
         validValue = FormatBytes.getInt(source, offset + 8) > 0;
       }
       if (!OrderedKey.isFiniteSpace(space)
@@ -261,7 +257,7 @@ public final class BTreePageCodec {
     return HEADER_BYTES + count * entryBytes;
   }
 
-  private static boolean validFence(int space, long key) {
+  private static boolean validFence(long space, long key) {
     return OrderedKey.isFiniteSpace(space) || OrderedKey.isInfinity(space, key);
   }
 }

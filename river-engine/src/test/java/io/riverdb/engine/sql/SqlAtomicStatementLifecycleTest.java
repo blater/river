@@ -70,6 +70,25 @@ final class SqlAtomicStatementLifecycleTest {
   }
 
   @Test
+  void failedTerminalAttemptRetainsExplicitStateForRetry(@TempDir Path root) {
+    Fixture fixture = open(root);
+    assertEquals(
+        StatusCode.OK,
+        fixture.transactions.beginExplicit(IsolationLevel.READ_COMMITTED));
+    assertEquals(StatusCode.OK, fixture.transactions.beginStatement());
+
+    assertEquals(StatusCode.CONFLICT, fixture.transactions.abortExplicit());
+    assertTrue(fixture.transactions.isExplicit());
+    assertTrue(fixture.session.transactionActive());
+
+    assertEquals(StatusCode.OK, fixture.transactions.completeStatement());
+    assertEquals(StatusCode.OK, fixture.transactions.abortExplicit());
+    assertFalse(fixture.transactions.isExplicit());
+    assertFalse(fixture.session.transactionActive());
+    assertEquals(StatusCode.OK, fixture.database.close());
+  }
+
+  @Test
   void explicitFailureResumesAfterStatementCompletionBecomesPossible(
       @TempDir Path root) {
     Fixture fixture = open(root);

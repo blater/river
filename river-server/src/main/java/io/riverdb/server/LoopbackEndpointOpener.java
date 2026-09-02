@@ -20,10 +20,13 @@ final class LoopbackEndpointOpener {
       SecureRandom random,
       SecurityAuditLog audit,
       int authenticationTimeoutMillis,
+      ServerConnectionMemory memory,
+      ServerResponseBuffer responses,
       LoopbackEndpointOpenResult result) throws IOException {
     result.reset();
     if (authenticator == null) {
-      result.set(new SessionEndpoint(database), 0);
+      result.set(new SessionEndpoint(
+          database, null, 0, 0, null, null, memory, responses), 0);
       return;
     }
     if (!(connection instanceof SSLSocket secure)) {
@@ -51,7 +54,9 @@ final class LoopbackEndpointOpener {
             challengeHigh,
             challengeLow,
             binding,
-            audit),
+            audit,
+            memory,
+            responses),
         System.nanoTime() + authenticationTimeoutMillis * 1_000_000L);
   }
 }

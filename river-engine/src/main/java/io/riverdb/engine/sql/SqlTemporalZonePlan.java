@@ -10,9 +10,6 @@ import java.util.List;
 
 /** Session-owned primitive historic transitions and compact recurring rules. */
 final class SqlTemporalZonePlan {
-  private static final int MAXIMUM_HISTORIC_TRANSITIONS = 4_096;
-  private static final long[] NO_TRANSITION_SECONDS = new long[0];
-  private static final int[] NO_OFFSETS = new int[0];
   private static final long MINIMUM_SECOND = Math.floorDiv(
       LocalTemporal.MINIMUM_INSTANT_MICROSECONDS,
       LocalTemporal.MICROSECONDS_PER_SECOND);
@@ -25,13 +22,24 @@ final class SqlTemporalZonePlan {
 
   private final SqlTemporalRecurringRules recurring =
       new SqlTemporalRecurringRules();
-  private long[] transitionSeconds = NO_TRANSITION_SECONDS;
-  private int[] offsetsBefore = NO_OFFSETS;
-  private int[] offsetsAfter = NO_OFFSETS;
+  private final SqlTemporalTransitionStorage transitions;
   private int transitionCount;
   private int initialOffsetSeconds;
   private long lastHistoricSecond = Long.MIN_VALUE;
   private boolean prepared;
+
+  SqlTemporalZonePlan() {
+    this(SqlRetainedArrayAllocator.STANDARD, new SqlSessionShapeBudget(null));
+  }
+
+  SqlTemporalZonePlan(SqlSessionShapeBudget budget) {
+    this(SqlRetainedArrayAllocator.STANDARD, budget);
+  }
+
+  SqlTemporalZonePlan(
+      SqlRetainedArrayAllocator allocator, SqlSessionShapeBudget budget) {
+    transitions = new SqlTemporalTransitionStorage(allocator, budget);
+  }
 
   StatusCode prepare(ZoneId zone) {
     clear();
@@ -41,30 +49,25 @@ final class SqlTemporalZonePlan {
     ZoneRules rules = zone.getRules();
     List<ZoneOffsetTransition> historic = rules.getTransitions();
     int count = countHistoric(historic);
-    if (count > MAXIMUM_HISTORIC_TRANSITIONS) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    StatusCode status = recurring.prepare(rules.getTransitionRules());
+    StatusCode status = transitions.reserve(count);
+    if (!status.isOk()) return status;
+    status = recurring.prepare(rules.getTransitionRules());
     if (!status.isOk()) {
       recurring.reset();
       return status;
     }
-    long[] seconds = count == 0 ? NO_TRANSITION_SECONDS : new long[count];
-    int[] before = count == 0 ? NO_OFFSETS : new int[count];
-    int[] after = count == 0 ? NO_OFFSETS : new int[count];
-    int position = fillHistoric(historic, seconds, before, after);
-    if (position != count || !strictlyOrdered(seconds)) {
+    int position = fillHistoric(
+        historic, transitions.seconds, transitions.before, transitions.after);
+    if (position != count || !strictlyOrdered(transitions.seconds, count)) {
       recurring.reset();
       return StatusCode.INVARIANT_BROKEN;
     }
-    transitionSeconds = seconds;
-    offsetsBefore = before;
-    offsetsAfter = after;
     transitionCount = count;
-    lastHistoricSecond = count == 0 ? Long.MIN_VALUE : seconds[count - 1];
+    lastHistoricSecond = count == 0
+        ? Long.MIN_VALUE : transitions.seconds[count - 1];
     int fallback = rules.getOffset(Instant.EPOCH).getTotalSeconds();
     initialOffsetSeconds = count == 0
-        ? recurring.initialOffset(fallback) : before[0];
+        ? recurring.initialOffset(fallback) : transitions.before[0];
     prepared = true;
     return StatusCode.OK;
   }
@@ -147,9 +150,6 @@ final class SqlTemporalZonePlan {
   }
 
   private void clear() {
-    transitionSeconds = NO_TRANSITION_SECONDS;
-    offsetsBefore = NO_OFFSETS;
-    offsetsAfter = NO_OFFSETS;
     transitionCount = 0;
     initialOffsetSeconds = 0;
     lastHistoricSecond = Long.MIN_VALUE;
@@ -178,13 +178,13 @@ final class SqlTemporalZonePlan {
     int high = transitionCount;
     while (low < high) {
       int middle = low + (high - low) / 2;
-      if (transitionSeconds[middle] <= second) {
+      if (transitions.seconds[middle] <= second) {
         low = middle + 1;
       } else {
         high = middle;
       }
     }
-    return low == 0 ? initialOffsetSeconds : offsetsAfter[low - 1];
+    return low == 0 ? initialOffsetSeconds : transitions.after[low - 1];
   }
 
   private boolean historicDiscontinuity(long localMicros) {
@@ -195,14 +195,14 @@ final class SqlTemporalZonePlan {
         localMicros + MAXIMUM_OFFSET_MICROSECONDS,
         LocalTemporal.MICROSECONDS_PER_SECOND);
     for (int index = nearby;
-        index < transitionCount && transitionSeconds[index] <= upperSecond;
+        index < transitionCount && transitions.seconds[index] <= upperSecond;
         index++) {
-      long transition = transitionSeconds[index]
+      long transition = transitions.seconds[index]
           * LocalTemporal.MICROSECONDS_PER_SECOND;
       long before = transition
-          + offsetsBefore[index] * LocalTemporal.MICROSECONDS_PER_SECOND;
+          + transitions.before[index] * LocalTemporal.MICROSECONDS_PER_SECOND;
       long after = transition
-          + offsetsAfter[index] * LocalTemporal.MICROSECONDS_PER_SECOND;
+          + transitions.after[index] * LocalTemporal.MICROSECONDS_PER_SECOND;
       if (before != after
           && localMicros >= Math.min(before, after)
           && localMicros < Math.max(before, after)) {
@@ -217,7 +217,7 @@ final class SqlTemporalZonePlan {
     int high = transitionCount;
     while (low < high) {
       int middle = low + (high - low) / 2;
-      if (transitionSeconds[middle] < second) {
+      if (transitions.seconds[middle] < second) {
         low = middle + 1;
       } else {
         high = middle;
@@ -268,8 +268,8 @@ final class SqlTemporalZonePlan {
     return second >= MINIMUM_SECOND && second <= MAXIMUM_SECOND;
   }
 
-  private static boolean strictlyOrdered(long[] values) {
-    for (int index = 1; index < values.length; index++) {
+  private static boolean strictlyOrdered(long[] values, int count) {
+    for (int index = 1; index < count; index++) {
       if (values[index - 1] >= values[index]) {
         return false;
       }

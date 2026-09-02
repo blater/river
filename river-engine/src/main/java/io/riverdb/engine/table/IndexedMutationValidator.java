@@ -20,7 +20,7 @@ final class IndexedMutationValidator {
   }
 
   StatusCode validateNewAt(
-      int candidateLeafPageId, int space, long key, int earlierEntries) {
+      int candidateLeafPageId, long space, long key, int earlierEntries) {
     leafPageId = candidateLeafPageId;
     if (!pages.isPresent(IndexedTableKernel.HEAP_PAGE_ID) || leafPageId <= 0) {
       return StatusCode.CORRUPTION;
@@ -30,7 +30,7 @@ final class IndexedMutationValidator {
   }
 
   StatusCode validateNewIn(
-      ByteBuffer leaf, int space, long key, int earlierEntries) {
+      ByteBuffer leaf, long space, long key, int earlierEntries) {
     if (leaf == null) {
       return StatusCode.CORRUPTION;
     }
@@ -48,7 +48,7 @@ final class IndexedMutationValidator {
   StatusCode validateMutationAt(
       int candidateLeafPageId,
       int operation,
-      int space,
+      long space,
       long key,
       long previousRowId,
       int earlierEntries,
@@ -73,7 +73,7 @@ final class IndexedMutationValidator {
   StatusCode validateMutationIn(
       ByteBuffer leaf,
       int operation,
-      int space,
+      long space,
       long key,
       long previousRowId,
       int earlierEntries,
@@ -94,14 +94,19 @@ final class IndexedMutationValidator {
   }
 
   StatusCode validateVacuumAt(
-      int candidateLeafPageId, int space, long key, long rowId) {
+      int candidateLeafPageId,
+      long space,
+      long key,
+      long oldRowId,
+      long compactedRowId) {
     leafPageId = candidateLeafPageId;
     if (leafPageId <= 0) {
       return StatusCode.CORRUPTION;
     }
     StatusCode status = BTreePage.lookupLeaf(
         pages.currentPayload(leafPageId), space, key, lookup);
-    return status.isOk() && lookup.rowId() == rowId
+    return status.isOk()
+        && (lookup.rowId() == oldRowId || lookup.rowId() == compactedRowId)
         ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 }

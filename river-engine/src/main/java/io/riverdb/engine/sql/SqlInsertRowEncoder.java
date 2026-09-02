@@ -14,7 +14,6 @@ final class SqlInsertRowEncoder {
   private final SqlRowProjectionEvaluator expressions;
   private final SqlMutationFixedValues fixedValues;
   private int payloadOffset;
-  private long nullMask;
   private long key;
 
   SqlInsertRowEncoder(
@@ -54,12 +53,11 @@ final class SqlInsertRowEncoder {
     TableDefinition table = bound.table;
     row.clear();
     payloadOffset = table.fixedRowBytes();
-    nullMask = 0;
+    SqlPhysicalRowNulls.clear(row, table);
     for (int column = 1; column < table.columnCount(); column++) {
       StatusCode status = encodeColumn(command, bound, tuple, column);
       if (!status.isOk()) return status;
     }
-    row.putLong(table.nullMaskOffset(), nullMask);
     row.position(0);
     row.limit(payloadOffset);
     return table.isValidRow(row)
@@ -74,7 +72,9 @@ final class SqlInsertRowEncoder {
     boolean useDefault = omitted
         ? table.hasDefault(column) : command.insertIsDefault(tuple, source);
     boolean nullValue = omitted
-        ? !table.hasDefault(column) : command.insertIsNull(tuple, source);
+        ? !table.hasDefault(column)
+        : command.insertIsNull(tuple, source)
+            || command.insertIsDefault(tuple, source) && !table.hasDefault(column);
     boolean computed = source >= 0 && command.insertHasExpression(tuple, source);
     if (computed) {
       StatusCode status = expressions.evaluateMutation(
@@ -85,8 +85,8 @@ final class SqlInsertRowEncoder {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
-    setNull(column, nullValue);
-    int slot = (column - 1) * Long.BYTES;
+    setNull(table, column, nullValue);
+    int slot = table.valueOffset(column);
     if (!table.isVarchar(column)) {
       return encodeFixed(
           command, table, tuple, source, column, slot,
@@ -108,34 +108,45 @@ final class SqlInsertRowEncoder {
       boolean computed) {
     if (nullValue) {
       row.putLong(slot, 0);
+      if (SqlTypeDescriptor.isWideDecimal(table.typeDescriptor(column))) {
+        row.putLong(table.highValueOffset(column), 0);
+      }
       return StatusCode.OK;
     }
     long value;
+    long high;
     if (computed) {
       value = expressions.resultValue();
+      high = expressions.resultHighValue();
       int target = table.typeDescriptor(column);
       if (expressions.resultDescriptor() != target) {
         StatusCode status = fixedValues.coerce(
-            value, expressions.resultDescriptor(), target);
+            high, value, expressions.resultDescriptor(), target);
         if (!status.isOk()) return status;
         value = fixedValues.value();
+        high = fixedValues.highValue();
       }
     } else if (useDefault) {
       StatusCode status = fixedValues.defaultValue(table, column);
       if (!status.isOk()) return status;
       value = fixedValues.value();
+      high = fixedValues.highValue();
     } else {
       value = command.insertValue(tuple, source);
+      high = command.insertValueHigh(tuple, source);
       int supplied = command.insertTypeDescriptor(tuple, source);
       int target = table.typeDescriptor(column);
-      if (SqlTypeDescriptor.typeId(target) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-          && supplied != target) {
-        StatusCode status = fixedValues.widenDecimal(value, supplied, target);
+      if (supplied != target) {
+        StatusCode status = fixedValues.coerce(high, value, supplied, target);
         if (!status.isOk()) return status;
         value = fixedValues.value();
+        high = fixedValues.highValue();
       }
     }
     row.putLong(slot, value);
+    if (SqlTypeDescriptor.isWideDecimal(table.typeDescriptor(column))) {
+      row.putLong(table.highValueOffset(column), high);
+    }
     return StatusCode.OK;
   }
 
@@ -162,8 +173,7 @@ final class SqlInsertRowEncoder {
     return StatusCode.OK;
   }
 
-  private void setNull(int column, boolean value) {
-    if (value) nullMask |= 1L << column;
-    else nullMask &= ~(1L << column);
+  private void setNull(TableDefinition table, int column, boolean value) {
+    SqlPhysicalRowNulls.set(row, table, column, value);
   }
 }

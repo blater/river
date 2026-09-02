@@ -22,4 +22,5 @@ interface SqlNestedRowProvider {
   long key(int block, int role);
   HeapRowResult row(int block, int role);
   TableDefinition table(int block, int role);
+  default SqlBlockRow blockRow(int block, int role) { return null; }
 }

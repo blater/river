@@ -162,12 +162,8 @@ final class SqlCatalogCommandParser {
     if (status.isOk()) {
       status = input.requireCharacter(sql, '(');
     }
-    if (status.isOk()) {
-      SqlIdentifier column = result.writableNextColumnName();
-      status = column == null
-          ? StatusCode.RESOURCE_EXHAUSTED : input.identifier(sql, column);
-    }
-    return status.isOk() ? input.requireCharacter(sql, ')') : status;
+    return status.isOk()
+        ? SqlIndexColumnParser.parse(input, sql, result) : status;
   }
 
   private StatusCode parseAlterIndex(CharSequence sql, SqlCommand result) {

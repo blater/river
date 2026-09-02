@@ -6,11 +6,13 @@ final class SqlCommandUpdateView {
 
   static void append(
       SqlCommand command,
+      long high,
       long value,
       boolean isNull,
       boolean isDefault,
       int typeDescriptor,
       int operator) {
+    command.updateHighs[command.updateColumnCount] = high;
     command.updateValues[command.updateColumnCount] = value;
     command.nullUpdates[command.updateColumnCount] = isNull;
     command.defaultUpdates[command.updateColumnCount] = isDefault;
@@ -21,6 +23,10 @@ final class SqlCommandUpdateView {
 
   static long value(SqlCommand command, int index) {
     return valid(command, index) ? command.updateValues[index] : 0;
+  }
+
+  static long high(SqlCommand command, int index) {
+    return valid(command, index) ? command.updateHighs[index] : 0;
   }
 
   static int operator(SqlCommand command, int index) {
@@ -37,6 +43,17 @@ final class SqlCommandUpdateView {
 
   static int typeDescriptor(SqlCommand command, int index) {
     return valid(command, index) ? command.updateTypeDescriptors[index] : 0;
+  }
+
+  static void setLiteral(
+      SqlCommand command, int index, long high, long value,
+      boolean nullValue, int descriptor) {
+    command.updateHighs[index] = nullValue ? 0 : high;
+    command.updateValues[index] = nullValue ? 0 : value;
+    command.nullUpdates[index] = nullValue;
+    command.defaultUpdates[index] = false;
+    command.updateTypeDescriptors[index] = descriptor;
+    command.updateOperators[index] = SqlCommand.UPDATE_LITERAL;
   }
 
   private static boolean valid(SqlCommand command, int index) {

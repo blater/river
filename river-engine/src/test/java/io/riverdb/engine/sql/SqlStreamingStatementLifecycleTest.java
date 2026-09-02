@@ -13,6 +13,7 @@ import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.relational.TableDefinition;
+import io.riverdb.tx.api.IsolationLevel;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -62,7 +63,7 @@ final class SqlStreamingStatementLifecycleTest {
 
     assertEquals(
         StatusCode.IO_FAILURE,
-        fixture.lifecycle.failStart(StatusCode.IO_FAILURE, true));
+        fixture.lifecycle.failStart(StatusCode.OK, true));
     assertFalse(fixture.lifecycle.isActive());
     assertFalse(fixture.session.isTransactionActive());
     assertEquals(StatusCode.OK, fixture.lifecycle.begin());
@@ -99,6 +100,28 @@ final class SqlStreamingStatementLifecycleTest {
     assertEquals(StatusCode.OK, fixture.database.close());
   }
 
+  @Test
+  void explicitFailureRollsBackAndReleasesItsStatementSavepoint(
+      @TempDir Path root) {
+    Fixture fixture = open(root);
+    SqlExecutionResult result = new SqlExecutionResult();
+    assertEquals(
+        StatusCode.OK,
+        fixture.transactions.beginExplicit(IsolationLevel.REPEATABLE_READ));
+
+    assertEquals(StatusCode.OK, fixture.lifecycle.begin());
+    assertEquals(
+        StatusCode.RETRY,
+        fixture.lifecycle.finish(StatusCode.RETRY, true, result));
+    assertFalse(fixture.lifecycle.isActive());
+    assertTrue(fixture.session.isTransactionActive());
+
+    assertEquals(StatusCode.OK, fixture.lifecycle.begin());
+    assertEquals(StatusCode.OK, fixture.lifecycle.finish(StatusCode.OK, result));
+    assertEquals(StatusCode.OK, fixture.transactions.commitExplicit());
+    assertEquals(StatusCode.OK, fixture.database.close());
+  }
+
   private static Fixture open(Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
@@ -113,11 +136,13 @@ final class SqlStreamingStatementLifecycleTest {
     return new Fixture(
         database,
         session,
+        transactions,
         new SqlStreamingStatementLifecycle(session, transactions));
   }
 
   private record Fixture(
       RelationalDatabase database,
       RelationalSession session,
+      SqlTransactionState transactions,
       SqlStreamingStatementLifecycle lifecycle) {}
 }

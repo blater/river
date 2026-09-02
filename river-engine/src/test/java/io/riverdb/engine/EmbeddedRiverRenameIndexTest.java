@@ -49,6 +49,12 @@ final class EmbeddedRiverRenameIndexTest {
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE INDEX items_category ON items(category)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE TABLE other_items (id BIGINT PRIMARY KEY, code BIGINT)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("CREATE INDEX other_items_code ON other_items(code)", result));
 
     SessionOpenResult secondResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(secondResult));
@@ -63,13 +69,13 @@ final class EmbeddedRiverRenameIndexTest {
     assertEquals(
         StatusCode.CONFLICT,
         session.execute("ALTER INDEX items_code RENAME TO items_category", result));
+    assertEquals(
+        StatusCode.CONFLICT,
+        session.execute("ALTER INDEX items_code RENAME TO other_items_code", result));
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(
         StatusCode.OK,
         session.execute("ALTER INDEX items_code RENAME TO items_sku", result));
-    assertEquals(
-        StatusCode.OK,
-        session.execute("ALTER INDEX items_sku RENAME TO items_code_v2", result));
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
     assertEquals(
         StatusCode.CONFLICT,
@@ -93,7 +99,7 @@ final class EmbeddedRiverRenameIndexTest {
     assertEquals(1, countRows(session, "SELECT id FROM items WHERE code='alpha'"));
     assertEquals(2, countRows(session, "SELECT id FROM items WHERE category=7"));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
     assertEquals(
         StatusCode.CONFLICT,

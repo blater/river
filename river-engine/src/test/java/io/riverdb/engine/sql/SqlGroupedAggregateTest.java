@@ -261,8 +261,8 @@ final class SqlGroupedAggregateTest {
     SqlScanRowResult row = new SqlScanRowResult();
     SqlExecutionResult closed = new SqlExecutionResult();
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
-    assertEquals(true, "category".contentEquals(session.scanColumnName(cursor, 0)));
-    assertEquals(true, aggregateName.contentEquals(session.scanColumnName(cursor, 1)));
+    assertEquals("category", session.scanColumnName(cursor, 0).toString());
+    assertEquals(aggregateName, session.scanColumnName(cursor, 1).toString());
     for (int index = 0; index < groups.length; index++) {
       assertEquals(StatusCode.OK, session.nextScan(cursor, row));
       assertEquals(groups[index], row.valueAt(0));

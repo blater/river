@@ -5,100 +5,121 @@ import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.TableDefinition;
-import io.riverdb.sql.SqlJoinChain;
 import io.riverdb.storage.heap.HeapRowResult;
 
 /** Lazy bounded right-build store and stable hash/fallback candidate source. */
 final class SqlJoinHashWorkspace {
-  private static final int HASH_ROWS = 1_024;
-  private static final int BUCKETS = 2_048;
+  static final int HASH_ROWS = 1_024;
+  static final int BUCKETS = 2_048;
   private final RelationalSession session;
-  private final SqlBlockRowStore store = new SqlBlockRowStore();
-  private final SqlBlockSchema schema = new SqlBlockSchema();
-  private final SqlBlockRow buildRow = new SqlBlockRow();
-  private final SqlBlockRow candidateRow = new SqlBlockRow();
-  private final SqlBlockRow outerRow = new SqlBlockRow();
-  private final SqlBlockPhysicalRowReader reader = new SqlBlockPhysicalRowReader();
-  private final SqlBlockPhysicalRowWriter writer = new SqlBlockPhysicalRowWriter();
+  final SqlRetainedArrayAllocator allocator;
+  final SqlBlockRowStore store;
+  final SqlBlockSchema schema = new SqlBlockSchema();
+  final SqlBlockRow buildRow;
+  final SqlBlockRow candidateRow;
+  final SqlBlockRow outerRow;
+  final SqlBlockPhysicalRowReader reader;
+  final SqlBlockPhysicalRowWriter writer;
   private final SqlJoinHashKey keys = new SqlJoinHashKey();
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult result = new RelationalScanResult();
-  private int[] heads;
-  private int[] tails;
-  private int[] next;
-  private long[] hashes;
-  private TableDefinition table;
-  private int stage = -1;
-  private int innerColumn = -1;
+  int[] heads;
+  int[] tails;
+  int[] next;
+  long[] hashes;
+  TableDefinition table;
+  int stage = -1;
+  int innerColumn = -1;
+  int outerDescriptor;
   private int candidate = -1;
-  private boolean active;
+  private long candidatePosition = -1;
+  private long fallbackPosition;
+  boolean active;
   private boolean hashed;
 
-  SqlJoinHashWorkspace(RelationalSession relationalSession) { session = relationalSession; }
+  SqlJoinHashWorkspace(
+      RelationalSession relationalSession, SqlSessionShapeBudget budget) {
+    this(relationalSession, SqlRetainedArrayAllocator.STANDARD, budget);
+  }
+
+  SqlJoinHashWorkspace(
+      RelationalSession relationalSession, SqlRetainedArrayAllocator retainedAllocator,
+      SqlSessionShapeBudget budget) {
+    session = relationalSession;
+    allocator = retainedAllocator;
+    store = new SqlBlockRowStore(budget);
+    buildRow = new SqlBlockRow(allocator);
+    candidateRow = new SqlBlockRow(allocator);
+    outerRow = new SqlBlockRow(allocator);
+    reader = new SqlBlockPhysicalRowReader(allocator);
+    writer = new SqlBlockPhysicalRowWriter(allocator);
+  }
 
   StatusCode begin(
       io.riverdb.sql.SqlCommand command,
       SqlBoundJoinContext context) {
-    StatusCode status = close();
-    if (!status.isOk()) return status;
-    stage = selectedStage(command, context);
-    if (stage < 0) return StatusCode.OK;
-    table = context.table(stage + 1);
-    innerColumn = context.strategyInnerColumn(stage);
-    prepareSchema(table);
-    prepareRow(outerRow, context.table(context.strategyOuterRole(stage)));
-    writer.prepare();
-    status = store.begin(schema, -1, false);
-    if (!status.isOk()) return status;
-    status = session.beginScan(table, cursor);
-    if (!status.isOk()) return status;
-    status = build();
-    if (status.isOk()) status = store.finish();
-    if (status.isOk() && !store.spilled()) status = indexBuild();
-    active = status.isOk();
-    return status;
+    return SqlJoinHashAdmission.begin(this, command, context);
   }
 
   StatusCode beginProbe(SqlJoinRoleRows rows, SqlBoundJoinContext context) {
     if (!active) return StatusCode.INVALID_EXTERNAL_INPUT;
-    candidate = -1;
-    if (!hashed) {
-      store.rewind();
-      return StatusCode.OK;
-    }
     int outerRole = context.strategyOuterRole(stage);
     int outerColumn = context.strategyOuterColumn(stage);
     HeapRowResult row = rows.row(outerRole);
-    if (row == null) return StatusCode.OK;
+    if (row == null) return beginProbe((SqlBlockRow) null, outerColumn, 0);
     TableDefinition outerTable = context.table(outerRole);
     StatusCode status = reader.read(rows.key(outerRole), row, outerTable, outerRow);
     if (!status.isOk()) return status;
-    if (outerRow.nullValue(outerColumn)) return StatusCode.OK;
-    long hash = keys.decoded(
+    return beginProbe(
         outerRow, outerColumn, outerTable.typeDescriptor(outerColumn));
+  }
+
+  StatusCode nextCandidate() {
+    StatusCode status = nextDecodedCandidate();
+    return status.isOk() ? writer.write(candidateRow, table) : status;
+  }
+
+  StatusCode beginProbe(SqlBlockRow row, int column, int descriptor) {
+    if (!active) return StatusCode.INVALID_EXTERNAL_INPUT;
+    candidate = -1;
+    candidatePosition = -1;
+    if (!hashed) {
+      store.rewind();
+      fallbackPosition = 0;
+      return StatusCode.OK;
+    }
+    if (row == null || row.nullValue(column)) return StatusCode.OK;
+    long hash = keys.decoded(
+        row, column, descriptor, table.typeDescriptor(innerColumn));
     candidate = heads[bucket(hash)];
     while (candidate >= 0 && hashes[candidate] != hash) candidate = next[candidate];
     return StatusCode.OK;
   }
 
-  StatusCode nextCandidate() {
-    int current;
+  StatusCode nextDecodedCandidate() {
+    long current;
     if (hashed) {
       current = candidate;
       if (current < 0) return StatusCode.CONFLICT;
-      candidate = next[current];
-      long hash = hashes[current];
+      int indexed = (int) current;
+      candidate = next[indexed];
+      long hash = hashes[indexed];
       while (candidate >= 0 && hashes[candidate] != hash) candidate = next[candidate];
       StatusCode status = store.readAt(current, candidateRow);
       if (!status.isOk()) return status;
     } else {
+      current = fallbackPosition;
       StatusCode status = store.next(candidateRow);
       if (!status.isOk()) return status;
+      fallbackPosition++;
     }
-    return writer.write(candidateRow, table);
+    candidatePosition = current;
+    return StatusCode.OK;
   }
 
   int stage() { return stage; }
+  long candidatePosition() { return candidatePosition; }
+  SqlBlockRow decodedCandidate() { return candidateRow; }
   boolean hashed() { return active && hashed; }
   boolean fallback() { return active && !hashed; }
   long key() { return writer.key(candidateRow); }
@@ -125,13 +146,18 @@ final class SqlJoinHashWorkspace {
     table = null;
     stage = -1;
     innerColumn = -1;
+    outerDescriptor = 0;
     candidate = -1;
+    candidatePosition = -1;
+    fallbackPosition = 0;
     active = false;
     hashed = false;
     return StatusCode.OK;
   }
 
-  private StatusCode build() {
+  StatusCode openBuildScan() { return session.beginScan(table, cursor); }
+
+  StatusCode build() {
     StatusCode status;
     while (true) {
       status = session.nextScan(cursor, result);
@@ -152,16 +178,17 @@ final class SqlJoinHashWorkspace {
     return runtime.isOk() ? closed : runtime;
   }
 
-  private StatusCode indexBuild() {
-    ensureIndex();
+  StatusCode indexBuild() {
+    if (!withinHashCapacity()) return StatusCode.INVARIANT_BROKEN;
     clearIndex();
     hashed = true;
-    for (int row = 0; row < store.rowCount(); row++) {
+    int indexedRows = (int) store.rowCount();
+    for (int row = 0; row < indexedRows; row++) {
       StatusCode status = store.readAt(row, candidateRow);
       if (!status.isOk()) return status;
       if (candidateRow.nullValue(innerColumn)) continue;
       long hash = keys.decoded(
-          candidateRow, innerColumn, table.typeDescriptor(innerColumn));
+          candidateRow, innerColumn, table.typeDescriptor(innerColumn), outerDescriptor);
       hashes[row] = hash;
       int bucket = bucket(hash);
       if (tails[bucket] < 0) heads[bucket] = row;
@@ -171,32 +198,36 @@ final class SqlJoinHashWorkspace {
     return StatusCode.OK;
   }
 
-  private void prepareSchema(TableDefinition definition) {
-    schema.set(definition.columnCount());
-    prepareRow(buildRow, definition);
-    prepareRow(candidateRow, definition);
-    for (int column = 0; column < definition.columnCount(); column++) {
-      schema.setColumn(
-          column,
-          definition.columnName(column),
-          definition.typeDescriptor(column),
-          definition.isNullable(column));
-    }
+  StatusCode prepareDecodedBuild(
+      TableDefinition inner, TableDefinition outer, int selectedStage,
+      int selectedInnerColumn, int selectedOuterColumn) {
+    StatusCode status = close();
+    if (status.isOk()) status = SqlJoinHashAdmission.prepareRows(
+        inner, outer, schema, reader, buildRow, candidateRow, outerRow, writer);
+    if (status.isOk()) status = SqlJoinHashAdmission.prepareIndex(
+        this, allocator, BUCKETS, HASH_ROWS);
+    if (!status.isOk()) return status;
+    stage = selectedStage;
+    table = inner;
+    innerColumn = selectedInnerColumn;
+    outerDescriptor = outer.typeDescriptor(selectedOuterColumn);
+    return store.begin(schema, -1, false);
   }
 
-  private static void prepareRow(SqlBlockRow row, TableDefinition definition) {
-    row.reset(definition.columnCount());
-    for (int column = 0; column < definition.columnCount(); column++) {
-      if (definition.isVarchar(column)) row.prepareText(column);
-    }
+  StatusCode finishDecodedBuild() {
+    StatusCode status = store.finish();
+    if (status.isOk() && withinHashCapacity()) status = indexBuild();
+    active = status.isOk();
+    return status;
   }
 
-  private void ensureIndex() {
-    if (heads != null) return;
-    heads = new int[BUCKETS];
-    tails = new int[BUCKETS];
-    next = new int[HASH_ROWS];
-    hashes = new long[HASH_ROWS];
+  boolean withinHashCapacity() {
+    return hashes != null && store.rowCount() <= hashes.length;
+  }
+
+  StatusCode failBegin(StatusCode failure) {
+    StatusCode closed = close();
+    return failure.isOk() ? closed : failure;
   }
 
   private void clearIndex() {
@@ -211,17 +242,8 @@ final class SqlJoinHashWorkspace {
     }
   }
 
-  static int selectedStage(
-      io.riverdb.sql.SqlCommand command,
-      SqlBoundJoinContext context) {
-    SqlJoinChain chain = command.joinChain();
-    for (int stage = 0; stage < chain.stageCount(); stage++) {
-      if (context.strategy(stage) == SqlJoinStrategy.HASH) return stage;
-    }
-    return -1;
-  }
-
   private static int bucket(long hash) {
     return (int) (hash ^ hash >>> 32) & (BUCKETS - 1);
   }
+
 }

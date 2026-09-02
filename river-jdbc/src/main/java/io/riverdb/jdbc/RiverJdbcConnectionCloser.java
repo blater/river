@@ -34,15 +34,8 @@ final class RiverJdbcConnectionCloser {
         failure = closeFailure;
       }
     }
-    if (connection.statement != null) {
-      try {
-        connection.statement.close();
-      } catch (SQLException closeFailure) {
-        if (failure == null) {
-          failure = closeFailure;
-        }
-      }
-    }
+    SQLException statementFailure = connection.statements.closeAll();
+    if (failure == null) failure = statementFailure;
     return failure;
   }
 }

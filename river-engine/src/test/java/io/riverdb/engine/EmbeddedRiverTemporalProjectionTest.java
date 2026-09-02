@@ -29,6 +29,62 @@ final class EmbeddedRiverTemporalProjectionTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void sessionCloseReleasesQueryAfterDeliveredStreamingFailure(@TempDir Path root) {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    SessionOpenResult sessionResult = new SessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RiverSession session = sessionResult.session();
+    CommandResult result = new CommandResult();
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE close_temporal "
+                + "(id BIGINT PRIMARY KEY,observed TIMESTAMP(6))",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO close_temporal VALUES "
+                + "(1,TIMESTAMP '2024-01-01 00:00:00'),"
+                + "(2,TIMESTAMP '0001-01-01 00:00:00')",
+            result));
+    String failingOrder = "SELECT id FROM close_temporal WHERE observed AT TIME ZONE "
+        + "'Europe/London'>=TIMESTAMP WITH TIME ZONE "
+        + "'0001-01-01 00:00:00+00:00' ORDER BY observed";
+    QueryOpenResult explained = new QueryOpenResult();
+    assertEquals(StatusCode.OK, session.beginQuery("EXPLAIN " + failingOrder, explained));
+    RiverQuery explain = explained.query();
+    RowResult explainRow = new RowResult();
+    do {
+      assertEquals(StatusCode.OK, explain.next(explainRow));
+    } while (explainRow.isAvailable());
+    assertEquals(StatusCode.OK, explain.close(result));
+    assertEquals(
+        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
+        session.beginQuery("EXPLAIN ANALYZE " + failingOrder, new QueryOpenResult()));
+    QueryOpenResult queryResult = new QueryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery(
+            "SELECT id FROM close_temporal WHERE observed AT TIME ZONE "
+                + "'Europe/London'>=TIMESTAMP WITH TIME ZONE "
+                + "'0001-01-01 00:00:00+00:00'",
+            queryResult));
+    RiverQuery query = queryResult.query();
+    RowResult row = new RowResult();
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(1, row.valueAt(0));
+    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
+    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
+
+    assertEquals(StatusCode.OK, session.close());
+    assertFalse(query.isActive());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void projectsTemporalProgramsThroughPointAndStreaming(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
@@ -72,9 +128,7 @@ final class EmbeddedRiverTemporalProjectionTest {
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         session.beginQuery("SELECT 'too broad' FROM moments", queryResult));
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session.beginQuery("SELECT id,id FROM moments", queryResult));
+    assertRowCount(session, result, "SELECT id,id FROM moments", 2);
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT id+1 FROM moments WHERE id=1", result));

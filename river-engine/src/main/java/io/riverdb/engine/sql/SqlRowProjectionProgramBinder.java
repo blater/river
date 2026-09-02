@@ -1,7 +1,9 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
@@ -45,6 +47,13 @@ final class SqlRowProjectionProgramBinder {
     return bindProgram(command, bound, expression, projection);
   }
 
+  StatusCode bindGroupKey(
+      SqlCommand command, BoundSqlStatement bound, int group) {
+    join = false;
+    SqlScalarExpression expression = command.groupExpression(group);
+    return bindProgram(command, bound, expression, group);
+  }
+
   private StatusCode bindProgram(
       SqlCommand command,
       BoundSqlStatement bound,
@@ -78,7 +87,14 @@ final class SqlRowProjectionProgramBinder {
     if (SqlRowExpressionTypes.leaf(operator)) {
       int descriptor = expression.typeDescriptor(node);
       return SqlTypeDescriptor.isValid(descriptor)
-          ? push(bound, projection, operator, expression.operand(node), descriptor, false)
+          ? push(
+              bound,
+              projection,
+              operator,
+              expression.operandHigh(node),
+              expression.operand(node),
+              descriptor,
+              false)
           : StatusCode.DATATYPE_MISMATCH;
     }
     if (SqlRowExpressionTypes.unary(operator)
@@ -184,8 +200,7 @@ final class SqlRowProjectionProgramBinder {
     boolean leftNull = untypedNulls[size - 1];
     if (rightNull == leftNull) return false;
     int known = rightNull ? descriptors[size - 1] : descriptors[size];
-    return SqlTypeDescriptor.comparisonFamily(known)
-        == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC;
+    return SqlNumericTypeRules.isNumeric(known);
   }
 
   private StatusCode push(
@@ -196,7 +211,7 @@ final class SqlRowProjectionProgramBinder {
       int descriptor,
       boolean untypedNull) {
     return push(
-        bound, projection, operator, operand, descriptor, untypedNull,
+        bound, projection, operator, operand >> 63, operand, descriptor, untypedNull,
         SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
 
@@ -208,12 +223,38 @@ final class SqlRowProjectionProgramBinder {
       int descriptor,
       boolean untypedNull,
       int scope) {
+    return push(
+        bound, projection, operator, operand >> 63, operand, descriptor, untypedNull, scope);
+  }
+
+  private StatusCode push(
+      BoundSqlStatement bound,
+      int projection,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor,
+      boolean untypedNull) {
+    return push(
+        bound, projection, operator, operandHigh, operand, descriptor, untypedNull,
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
+  }
+
+  private StatusCode push(
+      BoundSqlStatement bound,
+      int projection,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor,
+      boolean untypedNull,
+      int scope) {
     if (size >= descriptors.length) return StatusCode.RESOURCE_EXHAUSTED;
     descriptors[size] = descriptor;
     untypedNulls[size] = untypedNull;
     size++;
     bound.projectionPrograms.append(
-        projection, operator, operand, descriptor, scope);
+        projection, operator, operandHigh, operand, descriptor, scope);
     return StatusCode.OK;
   }
 
@@ -247,8 +288,7 @@ final class SqlRowProjectionProgramBinder {
                     ? -raw - 1 : joinedColumn(scope, raw)
             : SqlBoundProjectionPrograms.COMPUTED_PROJECTION;
     bound.projectedColumns[projection] = column;
-    return duplicate(bound, projection, column)
-        ? StatusCode.INVALID_EXTERNAL_INPUT : StatusCode.OK;
+    return StatusCode.OK;
   }
 
   private static int resolveSymbol(
@@ -263,16 +303,7 @@ final class SqlRowProjectionProgramBinder {
     return bound.table.findColumn(name);
   }
 
-  private static boolean duplicate(
-      BoundSqlStatement bound, int projection, int column) {
-    if (column == SqlBoundProjectionPrograms.COMPUTED_PROJECTION) return false;
-    for (int previous = 0; previous < projection; previous++) {
-      if (bound.projectedColumns[previous] == column) return true;
-    }
-    return false;
-  }
-
   private static int joinedColumn(int role, int column) {
-    return Integer.MIN_VALUE + 2 + role * TableSchema.MAXIMUM_COLUMNS + column;
+    return Integer.MIN_VALUE + 2 + role * SqlShapeLimits.MAX_TABLE_COLUMNS + column;
   }
 }

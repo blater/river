@@ -10,20 +10,21 @@ final class SqlNestedProjectionExecution {
   private final BoundSqlStatement bound;
   private final SqlExpressionEvaluator expressions;
   private final SqlTemporalContext temporal;
+  private final SqlTemporalZoneSet zones;
   private final SqlRowExpressionEvaluator[] evaluators =
       new SqlRowExpressionEvaluator[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final SqlTemporalZonePlan[] zones =
-      new SqlTemporalZonePlan[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final SqlTemporalContext.LongResult current =
       new SqlTemporalContext.LongResult();
 
   SqlNestedProjectionExecution(
       BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
-      SqlTemporalContext temporalContext) {
+      SqlTemporalContext temporalContext,
+      SqlSessionShapeBudget shapeBudget) {
     bound = statement;
     expressions = evaluator;
     temporal = temporalContext;
+    zones = new SqlTemporalZoneSet(shapeBudget, SqlQuery.MAXIMUM_QUERY_BLOCKS);
   }
 
   StatusCode prepare(int block) {
@@ -43,9 +44,12 @@ final class SqlNestedProjectionExecution {
       }
       if (operator != SqlScalarExpression.AT_TIME_ZONE) continue;
       if (++zoneCount > 1) return StatusCode.FEATURE_NOT_SUPPORTED;
-      if (zones[block] == null) zones[block] = new SqlTemporalZonePlan();
-      StatusCode status = temporal.prepareZone(
-          command, programs.operand(0, node), zones[block]);
+      StatusCode status = zones.reserve(block + 1);
+      if (!status.isOk()) return status;
+      status = zones.ensure(block);
+      if (!status.isOk()) return status;
+      status = temporal.prepareZone(
+          command, programs.operand(0, node), zones.get(block));
       if (!status.isOk()) return status;
     }
     return StatusCode.OK;
@@ -56,7 +60,7 @@ final class SqlNestedProjectionExecution {
     return evaluators[block].evaluateNestedOperand(
         bound.query.block(block),
         bound.nestedProjection(block),
-        zones[block],
+        zones.get(block),
         rows,
         result);
   }
@@ -64,11 +68,8 @@ final class SqlNestedProjectionExecution {
   void reset() {
     for (int block = 0; block < evaluators.length; block++) {
       if (evaluators[block] != null) evaluators[block].reset();
-      if (zones[block] != null) {
-        zones[block].reset();
-        zones[block] = null;
-      }
     }
+    zones.reset();
     current.value = 0;
   }
 }

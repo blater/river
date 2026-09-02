@@ -68,6 +68,74 @@ final class SqlJoinBlockPipelineTest {
     assertJoinPlan(session, result, false, true);
     assertJoinPlan(session, result, true, false);
     assertTemporalAtomicFailure(session, result);
+    assertRows(
+        session,
+        result,
+        "SELECT lid,COUNT(*) AS n FROM (SELECT l.id AS lid FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id ORDER BY lid DESC LIMIT 1) "
+            + "joined GROUP BY lid",
+        new long[][] {{3, 1}});
+    assertRows(
+        session,
+        result,
+        "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id ORDER BY lid DESC LIMIT 1) "
+            + "joined",
+        new long[][] {{3}});
+    assertRows(
+        session,
+        result,
+        "SELECT bucket,amount FROM (SELECT l.bucket AS bucket,r.amount AS amount "
+            + "FROM left_rows l JOIN right_rows r ON l.id=r.left_id "
+            + "ORDER BY bucket ASC,amount DESC LIMIT 1) joined",
+        new long[][] {{10, 200}});
+    assertRows(
+        session,
+        result,
+        "SELECT bucket,amount FROM (SELECT l.bucket AS bucket,r.amount AS amount "
+            + "FROM left_rows l JOIN right_rows r ON l.id=r.left_id) joined "
+            + "ORDER BY bucket ASC,amount DESC LIMIT 1",
+        new long[][] {{10, 200}});
+    assertRows(
+        session,
+        result,
+        "SELECT l.id AS lid,COUNT(*) AS n FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id GROUP BY l.id "
+            + "ORDER BY n DESC,lid DESC LIMIT 2",
+        new long[][] {{1, 2}, {3, 1}});
+    assertRows(
+        session,
+        result,
+        "SELECT COUNT(*) AS n FROM (SELECT l.id AS lid FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id ORDER BY lid DESC LIMIT 0) "
+            + "joined",
+        new long[][] {{0}});
+    assertRows(
+        session,
+        result,
+        "SELECT l.bucket AS bucket,COUNT(*) AS n FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id GROUP BY l.bucket "
+            + "ORDER BY n DESC LIMIT 1",
+        new long[][] {{10, 3}});
+    assertRows(
+        session,
+        result,
+        "SELECT l.bucket AS bucket,COUNT(*) AS n FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id GROUP BY l.bucket "
+            + "ORDER BY n DESC",
+        new long[][] {{10, 3}, {20, 1}});
+    assertRows(
+        session,
+        result,
+        "SELECT l.bucket AS bucket,COUNT(*) AS n FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id GROUP BY l.bucket LIMIT 0",
+        new long[0][]);
+    assertRows(
+        session,
+        result,
+        "SELECT COUNT(*) AS n FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id LIMIT 0",
+        new long[0][]);
     assertDeepestOnly(session, result);
 
     assertEquals(
@@ -148,6 +216,14 @@ final class SqlJoinBlockPipelineTest {
       assertEquals(StatusCode.OK, session.execute(third.toString(), result));
     }
     assertDirectThreeRoleSpill(session, result);
+    assertRows(
+        session,
+        result,
+        "SELECT bucket,lid FROM (SELECT l.bucket AS bucket,l.id AS lid "
+            + "FROM spill_left l JOIN spill_right r ON l.id=r.id "
+            + "JOIN spill_third t ON r.id=t.id "
+            + "ORDER BY bucket ASC,lid DESC LIMIT 1) joined",
+        new long[][] {{0, 1_024}});
     assertEquals(
         StatusCode.OK,
         session.execute(
@@ -301,6 +377,26 @@ final class SqlJoinBlockPipelineTest {
     assertRows(
         session,
         result,
+        "SELECT SUM(amount+1) AS total FROM (SELECT r.amount AS amount FROM "
+            + "left_rows l JOIN right_rows r ON l.id=r.left_id "
+            + "WHERE r.flag=TRUE) joined",
+        new long[][] {{603}});
+    assertRows(
+        session,
+        result,
+        "SELECT COUNT(*) AS n FROM (SELECT r.amount AS amount FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id) joined WHERE amount>150",
+        new long[][] {{2}});
+    assertRows(
+        session,
+        result,
+        "SELECT COUNT(n) AS n FROM (SELECT COUNT(*) AS n FROM "
+            + "(SELECT l.id AS lid FROM left_rows l JOIN right_rows r "
+            + "ON l.id=r.left_id) joined) counted",
+        new long[][] {{1}});
+    assertRows(
+        session,
+        result,
         "SELECT n FROM (SELECT COUNT(*) AS n FROM "
             + "(SELECT l.id AS lid FROM left_rows l JOIN right_rows r "
             + "ON l.id=r.left_id) joined) counted WHERE n<0",
@@ -419,12 +515,12 @@ final class SqlJoinBlockPipelineTest {
                 + "JOIN right_rows r ON l.id=r.left_id) j "
                 + "JOIN right_rows x ON j.lid=x.left_id",
             new SqlScanCursor()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginScan(
-            "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
-                + "JOIN right_rows r ON l.id=r.left_id ORDER BY l.id) joined",
-            new SqlScanCursor()));
+    assertRows(
+        session,
+        result,
+        "SELECT lid FROM (SELECT l.id AS lid FROM left_rows l "
+            + "JOIN right_rows r ON l.id=r.left_id ORDER BY lid) joined",
+        new long[][] {{1}, {1}, {2}, {3}});
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT bucket FROM left_rows WHERE id=3", result));
@@ -485,6 +581,7 @@ final class SqlJoinBlockPipelineTest {
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
     for (String value : expected) {
       assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(0, row.key());
       int length = row.copyTextAt(0, text, 0);
       assertTrue(length >= 0);
       assertEquals(value, new String(text, 0, length));

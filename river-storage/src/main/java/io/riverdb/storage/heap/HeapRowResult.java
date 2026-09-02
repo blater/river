@@ -3,9 +3,10 @@ package io.riverdb.storage.heap;
 import io.riverdb.base.error.StatusCode;
 import java.nio.ByteBuffer;
 
-/** Borrowed heap-row view without creating a per-row ByteBuffer slice. */
+/** Reusable heap-row view that can retain bytes across provider pin lifetimes. */
 public final class HeapRowResult {
   private ByteBuffer page;
+  private ByteBuffer ownedPage;
   private int rowId;
   private int offset;
   private int length;
@@ -52,6 +53,32 @@ public final class HeapRowResult {
     rowId = 0;
     offset = 0;
     length = 0;
+  }
+
+  /** Copies the current borrowed row into geometrically grown result-owned storage. */
+  public StatusCode retainBytes() {
+    if (page == null || length <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    ByteBuffer source = page;
+    int sourceOffset = offset;
+    if (ownedPage == null || ownedPage.capacity() < length) {
+      try {
+        ownedPage = ByteBuffer.allocate(retainedCapacity(length));
+      } catch (OutOfMemoryError exhausted) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+    }
+    for (int index = 0; index < length; index++) {
+      ownedPage.put(index, source.get(sourceOffset + index));
+    }
+    page = ownedPage;
+    offset = 0;
+    return StatusCode.OK;
+  }
+
+  private static int retainedCapacity(int required) {
+    int capacity = 64;
+    while (capacity < required && capacity <= Integer.MAX_VALUE / 2) capacity <<= 1;
+    return capacity < required ? required : capacity;
   }
 
   public void copyFrom(HeapRowResult source) {

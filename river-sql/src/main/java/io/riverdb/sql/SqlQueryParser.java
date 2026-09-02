@@ -6,11 +6,20 @@ import io.riverdb.base.error.StatusCode;
 final class SqlQueryParser {
   private final SqlParser statements;
   private final SqlNestedQueryParser nested;
+  private final SqlSetExpressionParser sets;
   private final SourceView source = new SourceView();
+  private SqlParameterMarkers parameterMarkers;
 
   SqlQueryParser(SqlParser parser) {
     statements = parser;
     nested = new SqlNestedQueryParser(parser);
+    sets = new SqlSetExpressionParser(parser);
+  }
+
+  void parameterMarkers(SqlParameterMarkers markers) {
+    parameterMarkers = markers;
+    nested.parameterMarkers(markers);
+    sets.parameterMarkers(markers);
   }
 
   StatusCode parse(CharSequence sql, SqlQuery query, SqlCommand result) {
@@ -18,16 +27,43 @@ final class SqlQueryParser {
     result.reset();
     int start = skipExplainPrefix(sql, query);
     if (start < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (sets.contains(sql, start, sql.length())) {
+      return sets.parse(sql, start, sql.length(), query, result);
+    }
     if (findDerivedSource(sql, start, sql.length()) >= 0) {
       StatusCode status = parseDerivedBlocks(sql, start, sql.length(), query);
+      if (status.isOk() && query.hasSelectForUpdate()) {
+        status = StatusCode.FEATURE_NOT_SUPPORTED;
+      }
       return status.isOk() ? query.compileDerived(result) : status;
     }
     if (nested.hasPredicateSubquery(sql, start, sql.length())) {
-      return nested.parse(sql, start, sql.length(), query, result);
+      StatusCode status = nested.parse(sql, start, sql.length(), query, result);
+      return status.isOk() && query.childHasSelectForUpdate()
+          ? StatusCode.FEATURE_NOT_SUPPORTED : status;
     }
-    source.set(sql, start, sql.length(), sql.length(), sql.length());
-    return statements.parseQueryBlock(source, result);
+    source.set(sql, start, sql.length(), sql.length(), sql.length(), parameterMarkers);
+    StatusCode status = statements.parseQueryBlock(source, result);
+    if (status.isOk() && result.joinChain() != null
+        && result.aggregateInvocationCount() > 0) {
+      status = lowerJoinAggregate(query, result);
+    }
+    return status.isOk() && query.isExplain() && result.isSelectForUpdate()
+        ? StatusCode.FEATURE_NOT_SUPPORTED : status;
   }
+
+  private StatusCode lowerJoinAggregate(SqlQuery query, SqlCommand parsed) {
+    SqlCommand root = query.nextBlock();
+    SqlCommand sourceBlock = query.nextBlock();
+    if (root == null || sourceBlock == null) return StatusCode.QUERY_TOO_COMPLEX;
+    StatusCode status = root.copyBlockFrom(parsed);
+    if (status.isOk()) root.lowerJoinAggregateRoot();
+    if (status.isOk()) status = sourceBlock.copyBlockFrom(parsed);
+    if (status.isOk()) status = sourceBlock.lowerJoinAggregateSource(root);
+    if (status.isOk()) query.markBlockPipeline();
+    return status.isOk() ? query.compileBlockPipeline(parsed) : status;
+  }
+
 
   StatusCode parseAppend(CharSequence sql, SqlQuery query, SqlCommand result) {
     if (sql == null || query == null || result == null
@@ -39,13 +75,28 @@ final class SqlQueryParser {
     int start = query.blockCount();
     if (findDerivedSource(sql, 0, sql.length()) >= 0) {
       StatusCode status = parseDerivedBlocks(sql, 0, sql.length(), query);
+      if (status.isOk() && query.hasSelectForUpdate()) {
+        status = StatusCode.FEATURE_NOT_SUPPORTED;
+      }
       return status.isOk() ? result.copyBlockFrom(query.block(start)) : status;
     }
-    source.set(sql, 0, sql.length(), sql.length(), sql.length());
+    source.set(sql, 0, sql.length(), sql.length(), sql.length(), parameterMarkers);
     StatusCode status = statements.parseQueryBlock(source, result);
     if (!status.isOk()) return status;
+    if (query.blockCount() > 0 && result.isSelectForUpdate()) {
+      return StatusCode.FEATURE_NOT_SUPPORTED;
+    }
     SqlCommand block = query.nextBlock();
     return block == null ? StatusCode.QUERY_TOO_COMPLEX : block.copyBlockFrom(result);
+  }
+
+  StatusCode parseSetOperand(CharSequence sql, SqlQuery query) {
+    if (nested.hasPredicateSubquery(sql, 0, sql.length())) {
+      return nested.parseAppend(sql, 0, sql.length(), query);
+    }
+    SqlCommand block = query.nextBlock();
+    return block == null
+        ? StatusCode.QUERY_TOO_COMPLEX : statements.parseQueryBlock(sql, block);
   }
 
   int blockDepth(CharSequence sql) {
@@ -77,14 +128,14 @@ final class SqlQueryParser {
       }
       SqlCommand block = query.nextBlock();
       if (block == null) return StatusCode.QUERY_TOO_COMPLEX;
-      source.set(sql, start, end, end, end);
+      source.set(sql, start, end, end, end, parameterMarkers);
       return statements.parseQueryBlock(source, block);
     }
     SqlCommand block = query.nextBlock();
     if (block == null) return StatusCode.QUERY_TOO_COMPLEX;
     int close = matchingCloseParenthesis(sql, open, end);
     if (close < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    source.set(sql, start, open, close + 1, end);
+    source.set(sql, start, open, close + 1, end, parameterMarkers);
     StatusCode status = statements.parseQueryBlock(source, block);
     return status.isOk() ? parseDerivedBlocks(sql, open + 1, close, query) : status;
   }
@@ -184,13 +235,17 @@ final class SqlQueryParser {
     private int firstLength;
     private int secondStart;
     private int secondLength;
+    private SqlParameterMarkers markers;
 
-    void set(CharSequence text, int firstFrom, int firstTo, int secondFrom, int secondTo) {
+    void set(
+        CharSequence text, int firstFrom, int firstTo, int secondFrom, int secondTo,
+        SqlParameterMarkers markerIndex) {
       source = text;
       firstStart = firstFrom;
       firstLength = firstTo - firstFrom;
       secondStart = secondFrom;
       secondLength = secondTo - secondFrom;
+      markers = markerIndex;
     }
 
     @Override public int length() { return firstLength + secondLength; }
@@ -203,7 +258,7 @@ final class SqlQueryParser {
       if (offset < 0 || offset >= length() || charAt(offset) != '?') return -1;
       int original = offset < firstLength ? firstStart + offset
           : secondStart + offset - firstLength;
-      return SqlParameterOrdinalSource.ordinal(source, original);
+      return SqlParameterOrdinalSource.originalOrdinal(source, original, markers);
     }
     @Override public CharSequence subSequence(int start, int end) {
       throw new UnsupportedOperationException();

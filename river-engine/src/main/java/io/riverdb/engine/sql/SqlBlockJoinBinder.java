@@ -7,6 +7,7 @@ import io.riverdb.sql.SqlCommand;
 /** Binds the deepest two-table source and publishes its stable block boundary. */
 final class SqlBlockJoinBinder {
   private final SqlBinder binder;
+  private final SqlNestedTableResolver tables = new SqlNestedTableResolver();
 
   SqlBlockJoinBinder(SqlBinder sharedBinder) {
     binder = sharedBinder;
@@ -17,8 +18,8 @@ final class SqlBlockJoinBinder {
       BoundSqlStatement bound,
       SqlCommand command,
       int block) {
-    return binder.resolveJoinRoles(
-        session, command, bound.joinContext(block), null, true);
+    return tables.resolveContextRoles(
+        session, command, bound.joinContext(block));
   }
 
   StatusCode preflight(
@@ -66,10 +67,10 @@ final class SqlBlockJoinBinder {
         ? binder.bindJoinProjection(command, bound, context)
         : binder.bindJoin(command, bound, context);
     if (!status.isOk()) return status;
-    if (command.isOrdered()) {
-      return StatusCode.FEATURE_NOT_SUPPORTED;
-    }
+    if (command.isOrdered()) status = binder.bindJoinOrder(command, bound);
+    if (!status.isOk()) return status;
     output.set(bound.projectedColumnCount);
+    bound.joinProjectedColumnCount = bound.projectedColumnCount;
     for (int column = 0; column < bound.projectedColumnCount; column++) {
       output.setColumn(
           column,

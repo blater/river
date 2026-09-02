@@ -54,11 +54,13 @@ ALTER VIEW v RENAME TO w
 CREATE OR REPLACE VIEW v AS query
 ```
 
-River's current physical limits remain: eight columns, four secondary indexes,
-4 KiB maximum row, bounded names, one-column secondary/unique/FK definitions,
-and 32-node row-local CHECK/generated programs. Multi-column indexes,
-multi-column foreign keys, virtual generated columns, expression indexes,
-deferrable constraints, and `CASCADE` are recognized as
+The alpha-era eight-column, four-index, and one-column key/foreign-key limits in
+this historical plan are superseded by
+[`sql-shape-and-composite-key-capacity.md`](sql-shape-and-composite-key-capacity.md).
+Online `ALTER` must consume the shared 1,024-column, 64-secondary-index,
+32-key-part, composite-FK shape rather than reintroducing narrow shadow
+formats. Virtual generated columns, expression indexes, deferrable constraints,
+and `CASCADE` remain separate features and are recognized as
 `FEATURE_NOT_SUPPORTED`, not silently approximated.
 
 The primary-key column cannot be dropped or made nullable. A referenced object
@@ -273,7 +275,7 @@ Promotion requires:
   swap, schema publication, and cleanup; retry must be idempotent;
 - add/drop/rename/type/default/not-null/generated operations for every admitted
   type, including Unicode, decimal scale, temporal precision/zone, NULL,
-  conversion failure, and 4 KiB/8-column bounds;
+  conversion failure, and the current 8 KiB/1,024-column bounds;
 - online unique/nonunique index equality/range equivalence before, during, and
   after publication; planner invisibility while building; bounded drop cleanup;
 - FK changes involving both sides, referenced rename/drop/type changes, pending

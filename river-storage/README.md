@@ -6,7 +6,7 @@ The first indexed-table format is deliberately narrow and versioned:
 - Local WAL format `1002/1` records compact committed single inserts, bounded
   insert batches, mixed insert/update/delete version batches, and quiescent
   logical vacuum records. Bootstrap and structural leaf splits use atomic
-  groups of checksummed 16 KiB page images.
+  groups of checksummed 16 KB page images.
 - Unknown operation, page, or payload versions fail closed as corruption; no
   implicit upgrade is attempted.
 - Recovery currently replays retained WAL from the indexed-table bootstrap

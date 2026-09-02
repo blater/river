@@ -4,45 +4,101 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
+import io.riverdb.tx.api.lock.LockDeadline;
 import io.riverdb.tx.api.lock.LockMode;
-import io.riverdb.tx.api.lock.LockScope;
+import io.riverdb.tx.api.lock.LockRequest;
+import io.riverdb.tx.api.lock.LockService;
 import io.riverdb.tx.api.lock.LockToken;
 
 /** Bounded lifecycle manager and commit/snapshot publication barrier. */
 public final class TransactionManager {
-  private final long databaseHigh;
-  private final long databaseLow;
-  private final long[] activeTransactionIds;
-  private final LockManager locks;
-  private int activeTransactionCount;
+  public static final long DEFAULT_LOCK_WAIT_TIMEOUT_NANOS = LockDeadline.DEFAULT_WAIT_NANOS;
+  private static final long DEFAULT_LOCK_MEMORY_BYTES = 64L << 20;
+  final long databaseHigh;
+  final long databaseLow;
+  private final TransactionSnapshotLifecycle snapshots;
+  final LockManager locks;
+  private final long lockWaitTimeoutNanos;
+  private final TransactionCompletion completion;
+  private final LockRequest directLockRequest = new LockRequest();
   private long nextTransactionId;
-  private long nextSnapshotSequence = 1;
+  private long nextTransactionStartOrder = 1;
 
   public TransactionManager(
       long databaseIncarnationHigh,
       long databaseIncarnationLow,
       long firstTransactionId,
       int maximumActive) {
+    this(databaseIncarnationHigh, databaseIncarnationLow, firstTransactionId,
+        maximumActive, new LockMemoryEnvelope(DEFAULT_LOCK_MEMORY_BYTES),
+        DEFAULT_LOCK_WAIT_TIMEOUT_NANOS);
+  }
+
+  /** Constructs a manager with an independently byte-bounded lock provider. */
+  public TransactionManager(
+      long databaseIncarnationHigh,
+      long databaseIncarnationLow,
+      long firstTransactionId,
+      int maximumActive,
+      LockMemoryEnvelope lockMemory) {
+    this(databaseIncarnationHigh, databaseIncarnationLow, firstTransactionId,
+        maximumActive, lockMemory, DEFAULT_LOCK_WAIT_TIMEOUT_NANOS);
+  }
+
+  /** Constructs a manager with the default lock envelope and a chosen wait duration. */
+  public TransactionManager(
+      long databaseIncarnationHigh,
+      long databaseIncarnationLow,
+      long firstTransactionId,
+      int maximumActive,
+      long lockWaitTimeoutNanos) {
+    this(databaseIncarnationHigh, databaseIncarnationLow, firstTransactionId,
+        maximumActive, new LockMemoryEnvelope(DEFAULT_LOCK_MEMORY_BYTES),
+        lockWaitTimeoutNanos);
+  }
+
+  /** Constructs a manager with independently bounded lock bytes and wait duration. */
+  public TransactionManager(
+      long databaseIncarnationHigh,
+      long databaseIncarnationLow,
+      long firstTransactionId,
+      int maximumActive,
+      LockMemoryEnvelope lockMemory,
+      long lockWaitTimeoutNanos) {
+    if (maximumActive <= 0) {
+      throw new IllegalArgumentException("invalid active transaction capacity");
+    }
+    if (lockMemory == null || lockWaitTimeoutNanos <= 0) {
+      throw new IllegalArgumentException("invalid lock memory or wait timeout");
+    }
     databaseHigh = databaseIncarnationHigh;
     databaseLow = databaseIncarnationLow;
     nextTransactionId = firstTransactionId;
-    activeTransactionIds = new long[maximumActive];
-    locks = new LockManager(maximumActive * 64);
+    snapshots = new TransactionSnapshotLifecycle(
+        databaseIncarnationHigh, databaseIncarnationLow, maximumActive);
+    locks = new LockManager(lockMemory);
+    this.lockWaitTimeoutNanos = lockWaitTimeoutNanos;
+    completion = new TransactionCompletion(this);
   }
 
   public int maximumActiveTransactions() {
-    return activeTransactionIds.length;
+    return snapshots.capacity();
   }
 
   public synchronized int activeTransactionCount() {
-    return activeTransactionCount;
+    return snapshots.count();
   }
 
-  public int activeLockCount() {
+  /** Oldest commit sequence still visible to an active transaction. */
+  public synchronized long oldestVisibleCommitSequence() {
+    return snapshots.oldestVisibleCommitSequence();
+  }
+
+  public long activeLockCount() {
     return locks.activeLockCount();
   }
 
-  public int waitingLockCount() {
+  public long waitingLockCount() {
     return locks.waitingCount();
   }
 
@@ -50,69 +106,54 @@ public final class TransactionManager {
     return locks.deadlockVictimSelections();
   }
 
+  /** Intended authenticated lock boundary; callers pair it with {@link Transaction#context()}. */
+  public LockService lockService() { return locks; }
+
+  public long lockWaitTimeoutNanos() { return lockWaitTimeoutNanos; }
+
   public synchronized StatusCode tryAcquireKey(
       Transaction transaction,
-      int space,
+      long space,
       long key,
       LockToken token) {
     if (!validActive(transaction)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return locks.tryAcquire(
-        transaction.transactionId(),
-        LockScope.KEY,
-        space,
-        key,
-        space,
-        key,
-        LockMode.EXCLUSIVE,
-        0,
-        0,
-        token);
+    directLockRequest.setKey(space, key, LockMode.EXCLUSIVE, 0);
+    return locks.exact.tryAcquire(
+        transaction.transactionId(), transaction.transactionGeneration(),
+        transaction.transactionStartOrder(), directLockRequest, token);
   }
 
   public synchronized StatusCode tryAcquireSharedKey(
       Transaction transaction,
-      int space,
+      long space,
       long key,
       LockToken token) {
     if (!validActive(transaction)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return locks.tryAcquire(
-        transaction.transactionId(),
-        LockScope.KEY,
-        space,
-        key,
-        space,
-        key,
-        LockMode.SHARED,
-        0,
-        0,
-        token);
+    directLockRequest.setKey(space, key, LockMode.SHARED, 0);
+    return locks.exact.tryAcquire(
+        transaction.transactionId(), transaction.transactionGeneration(),
+        transaction.transactionStartOrder(), directLockRequest, token);
   }
 
   public synchronized StatusCode tryAcquireSharedRange(
       Transaction transaction,
-      int lowerSpace,
+      long lowerSpace,
       long lowerKey,
-      int upperSpace,
+      long upperSpace,
       long upperKey,
       LockToken token) {
     if (!validActive(transaction)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return locks.tryAcquire(
-        transaction.transactionId(),
-        LockScope.RANGE,
-        lowerSpace,
-        lowerKey,
-        upperSpace,
-        upperKey,
-        LockMode.SHARED,
-        0,
-        0,
-        token);
+    directLockRequest.setRange(
+        lowerSpace, lowerKey, upperSpace, upperKey, LockMode.SHARED, 0);
+    return locks.exact.tryAcquire(
+        transaction.transactionId(), transaction.transactionGeneration(),
+        transaction.transactionStartOrder(), directLockRequest, token);
   }
 
   public synchronized StatusCode upgradeKey(
@@ -123,25 +164,23 @@ public final class TransactionManager {
         || token.transactionId() != transaction.transactionId()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return locks.upgrade(token, LockMode.EXCLUSIVE, 0, 0);
+    return locks.upgrade(token, LockMode.EXCLUSIVE);
   }
 
-  public StatusCode release(LockToken token) {
+  public synchronized StatusCode release(Transaction transaction, LockToken token) {
+    if (transaction == null || !transaction.isOwnedIdentityBy(this)
+        || transaction.state() == TransactionState.COMMITTING
+        || transaction.state() == TransactionState.ABORTING
+        || token == null
+        || token.transactionId() != transaction.transactionId()
+        || token.transactionGeneration() != transaction.transactionGeneration()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     return locks.release(token);
   }
 
-  public synchronized StatusCode cancelLockWait(Transaction transaction) {
-    if (!validActive(transaction)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    locks.cancelWait(transaction.transactionId());
-    return StatusCode.OK;
-  }
-
   public synchronized boolean hasLockConflict(Transaction transaction) {
-    return validActive(transaction)
-        && (locks.isDeadlockVictim(transaction.transactionId())
-            || locks.isWaiting(transaction.transactionId()));
+    return validActive(transaction) && locks.lifecycle.hasCommitBlocker(transaction);
   }
 
   public synchronized StatusCode begin(
@@ -154,23 +193,32 @@ public final class TransactionManager {
     if (result.isActiveHandle()) {
       return StatusCode.CONFLICT;
     }
-    if (activeTransactionCount >= activeTransactionIds.length) {
+    if (snapshots.full()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    if (nextTransactionId <= 0) {
+    if (nextTransactionId <= 0 || nextTransactionStartOrder <= 0) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     long transactionId = nextTransactionId++;
+    long transactionStartOrder = nextTransactionStartOrder++;
     if (nextTransactionId <= 0) {
       nextTransactionId = 0;
     }
-    StatusCode status = result.claim(this, transactionId, isolationLevel);
+    if (nextTransactionStartOrder <= 0) nextTransactionStartOrder = 0;
+    StatusCode status = result.prepareClaim(
+        this, transactionId, transactionStartOrder, isolationLevel);
+    if (!status.isOk()) return status;
+    status = snapshots.admit(result, visibleCommitSequence);
     if (!status.isOk()) {
+      result.abandonClaim();
       return status;
     }
-    capture(result, visibleCommitSequence);
-    activeTransactionIds[activeTransactionCount++] = transactionId;
-    return StatusCode.OK;
+    status = locks.lifecycle.activate(result, databaseHigh, databaseLow);
+    if (!status.isOk()) {
+      snapshots.remove(transactionId);
+      result.abandonClaim();
+    }
+    return status;
   }
 
   public synchronized StatusCode begin(
@@ -186,16 +234,8 @@ public final class TransactionManager {
   public synchronized StatusCode refreshReadCommitted(
       Transaction transaction,
       long visibleCommitSequence) {
-    if (!validActive(transaction)
-        || transaction.isolationLevel() != IsolationLevel.READ_COMMITTED
-        || visibleCommitSequence < transaction.snapshot().visibleCommitSequence()) {
-      return StatusCode.CONFLICT;
-    }
-    if (locks.isDeadlockVictim(transaction.transactionId())) {
-      return StatusCode.CONFLICT;
-    }
-    capture(transaction, visibleCommitSequence);
-    return StatusCode.OK;
+    return snapshots.refresh(
+        this, locks, transaction, IsolationLevel.READ_COMMITTED, visibleCommitSequence);
   }
 
   public synchronized StatusCode refreshReadCommitted(
@@ -205,6 +245,16 @@ public final class TransactionManager {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return refreshReadCommitted(transaction, source.currentCommitSequence());
+  }
+
+  /** Captures the current frontier after a serializable read has acquired its protection. */
+  public synchronized StatusCode refreshSerializableAfterProtection(
+      Transaction transaction,
+      CommitSequenceSource source) {
+    if (source == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return snapshots.refresh(
+        this, locks, transaction, IsolationLevel.SERIALIZABLE,
+        source.currentCommitSequence());
   }
 
   /**
@@ -218,48 +268,28 @@ public final class TransactionManager {
     if (!validActive(transaction) || participant == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (locks.isDeadlockVictim(transaction.transactionId())
-        || locks.isWaiting(transaction.transactionId())) {
-      return abortForConflict(transaction, result);
-    }
     result.reset();
+    StatusCode admission = locks.lifecycle.freezeForCommit(transaction);
+    if (admission == StatusCode.CONFLICT) {
+      return completion.abortFrozenForConflict(transaction, result);
+    }
+    if (!admission.isOk()) return admission;
     transaction.transition(TransactionState.COMMITTING, 0, false);
     StatusCode status = participant.commit(transaction.transactionId());
     if (!status.isOk()) {
-      removeActive(transaction.transactionId());
-      if (indeterminate(status)) {
-        transaction.transition(TransactionState.INDETERMINATE, 0, true);
-      } else {
-        transaction.transition(TransactionState.ABORTED, 0, true);
-      }
-      result.set(
-          databaseHigh,
-          databaseLow,
-          transaction.transactionId(),
-          transaction.state(),
-          0);
+      completion.finish(transaction, result,
+          indeterminate(status) ? TransactionState.INDETERMINATE : TransactionState.ABORTED,
+          0, status);
       return status;
     }
     long commitSequence = participant.committedSequence();
     if (commitSequence <= transaction.snapshot().visibleCommitSequence()) {
-      removeActive(transaction.transactionId());
-      transaction.transition(TransactionState.INDETERMINATE, 0, true);
-      result.set(
-          databaseHigh,
-          databaseLow,
-          transaction.transactionId(),
-          TransactionState.INDETERMINATE,
-          0);
+      completion.finish(transaction, result, TransactionState.INDETERMINATE, 0,
+          StatusCode.INVARIANT_BROKEN);
       return StatusCode.INVARIANT_BROKEN;
     }
-    removeActive(transaction.transactionId());
-    transaction.transition(TransactionState.COMMITTED, commitSequence, true);
-    result.set(
-        databaseHigh,
-        databaseLow,
-        transaction.transactionId(),
-        TransactionState.COMMITTED,
-        commitSequence);
+    completion.finish(transaction, result, TransactionState.COMMITTED, commitSequence,
+        StatusCode.CANCELLED);
     return StatusCode.OK;
   }
 
@@ -268,15 +298,10 @@ public final class TransactionManager {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
+    StatusCode frozen = locks.lifecycle.freezeForAbort(transaction);
+    if (!frozen.isOk()) return frozen;
     transaction.transition(TransactionState.ABORTING, 0, false);
-    removeActive(transaction.transactionId());
-    transaction.transition(TransactionState.ABORTED, 0, true);
-    result.set(
-        databaseHigh,
-        databaseLow,
-        transaction.transactionId(),
-        TransactionState.ABORTED,
-        0);
+    completion.finish(transaction, result, TransactionState.ABORTED, 0, StatusCode.CANCELLED);
     return StatusCode.OK;
   }
 
@@ -291,23 +316,21 @@ public final class TransactionManager {
       if (!validActive(transactions[index])) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
-      if (locks.isDeadlockVictim(transactions[index].transactionId())
-          || locks.isWaiting(transactions[index].transactionId())) {
-        return StatusCode.CONFLICT;
-      }
       for (int previous = 0; previous < index; previous++) {
         if (transactions[previous] == transactions[index]) {
           return StatusCode.CONFLICT;
         }
       }
     }
+    StatusCode frozen = locks.lifecycle.freezeGroup(transactions, count);
+    if (!frozen.isOk()) return frozen;
     for (int index = 0; index < count; index++) {
       transactions[index].transition(TransactionState.COMMITTING, 0, false);
     }
     return StatusCode.OK;
   }
 
-  /** Publishes one forced group and its transaction outcomes as one snapshot-barrier action. */
+  /** Installs one prepared group and its outcomes as one bounded snapshot-barrier action. */
   public synchronized StatusCode publishCommitGroup(
       Transaction[] transactions,
       TransactionOutcome[] results,
@@ -323,7 +346,7 @@ public final class TransactionManager {
       long commitSequence = commitSequences[index];
       if (commitSequence <= previousCommitSequence
           || commitSequence <= transactions[index].snapshot().visibleCommitSequence()) {
-        return failCommitGroup(
+        return failForcedCommitGroup(
             transactions,
             results,
             count,
@@ -331,23 +354,14 @@ public final class TransactionManager {
       }
       previousCommitSequence = commitSequence;
     }
-    StatusCode status = participant.publishForcedGroup();
+    StatusCode status = participant.installPreparedGroup();
     if (!status.isOk()) {
-      return failCommitGroup(transactions, results, count, status);
+      return failForcedCommitGroup(transactions, results, count, status);
     }
     for (int index = 0; index < count; index++) {
       Transaction transaction = transactions[index];
-      removeActive(transaction.transactionId());
-      transaction.transition(
-          TransactionState.COMMITTED,
-          commitSequences[index],
-          true);
-      results[index].set(
-          databaseHigh,
-          databaseLow,
-          transaction.transactionId(),
-          TransactionState.COMMITTED,
-          commitSequences[index]);
+      completion.finish(transaction, results[index], TransactionState.COMMITTED,
+          commitSequences[index], StatusCode.CANCELLED);
     }
     return StatusCode.OK;
   }
@@ -380,14 +394,31 @@ public final class TransactionManager {
     }
     for (int index = 0; index < count; index++) {
       Transaction transaction = transactions[index];
-      removeActive(transaction.transactionId());
-      transaction.transition(state, 0, true);
-      results[index].set(
-          databaseHigh,
-          databaseLow,
-          transaction.transactionId(),
-          state,
-          0);
+      completion.finish(transaction, results[index], state, 0, failure);
+    }
+    return failure;
+  }
+
+  public synchronized StatusCode failForcedCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (failure == null || failure.isOk()
+        || transactions == null || results == null || count <= 0
+        || count > transactions.length || count > results.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      if (transaction == null || !transaction.isOwnedBy(this)
+          || transaction.state() != TransactionState.COMMITTING
+          || results[index] == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      completion.finish(
+          transaction, results[index], TransactionState.INDETERMINATE, 0, failure);
     }
     return failure;
   }
@@ -398,20 +429,15 @@ public final class TransactionManager {
     if (!validActive(transaction) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (locks.isDeadlockVictim(transaction.transactionId())
-        || locks.isWaiting(transaction.transactionId())) {
-      return abortForConflict(transaction, result);
-    }
     result.reset();
+    StatusCode admission = locks.lifecycle.freezeForCommit(transaction);
+    if (admission == StatusCode.CONFLICT) {
+      return completion.abortFrozenForConflict(transaction, result);
+    }
+    if (!admission.isOk()) return admission;
     long commitSequence = transaction.snapshot().visibleCommitSequence();
-    removeActive(transaction.transactionId());
-    transaction.transition(TransactionState.COMMITTED, commitSequence, true);
-    result.set(
-        databaseHigh,
-        databaseLow,
-        transaction.transactionId(),
-        TransactionState.COMMITTED,
-        commitSequence);
+    completion.finish(transaction, result, TransactionState.COMMITTED, commitSequence,
+        StatusCode.CANCELLED);
     return StatusCode.OK;
   }
 
@@ -425,7 +451,7 @@ public final class TransactionManager {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    if (activeTransactionCount != 0 || locks.activeLockCount() != 0) {
+    if (snapshots.count() != 0 || locks.activeLockCount() != 0) {
       return StatusCode.RETRY;
     }
     if (nextTransactionId <= 0) {
@@ -461,16 +487,6 @@ public final class TransactionManager {
     return StatusCode.OK;
   }
 
-  private void capture(Transaction transaction, long visibleCommitSequence) {
-    transaction.snapshot().capture(
-        databaseHigh,
-        databaseLow,
-        nextSnapshotSequence++,
-        visibleCommitSequence,
-        activeTransactionIds,
-        activeTransactionCount);
-  }
-
   private boolean validActive(Transaction transaction) {
     return transaction != null
         && transaction.isOwnedBy(this)
@@ -504,36 +520,8 @@ public final class TransactionManager {
     return true;
   }
 
-  private void removeActive(long transactionId) {
-    for (int index = 0; index < activeTransactionCount; index++) {
-      if (activeTransactionIds[index] != transactionId) {
-        continue;
-      }
-      int moved = activeTransactionCount - index - 1;
-      for (int move = 0; move < moved; move++) {
-        activeTransactionIds[index + move] = activeTransactionIds[index + move + 1];
-      }
-      activeTransactionCount--;
-      activeTransactionIds[activeTransactionCount] = 0;
-      locks.transactionCompleted(transactionId);
-      return;
-    }
-  }
-
-  private StatusCode abortForConflict(
-      Transaction transaction,
-      TransactionOutcome result) {
-    result.reset();
-    transaction.transition(TransactionState.ABORTING, 0, false);
-    removeActive(transaction.transactionId());
-    transaction.transition(TransactionState.ABORTED, 0, true);
-    result.set(
-        databaseHigh,
-        databaseLow,
-        transaction.transactionId(),
-        TransactionState.ABORTED,
-        0);
-    return StatusCode.CONFLICT;
+  void removeActive(long transactionId) {
+    snapshots.remove(transactionId);
   }
 
   private static boolean indeterminate(StatusCode status) {

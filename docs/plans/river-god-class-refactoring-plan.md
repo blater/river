@@ -408,7 +408,7 @@ state allocation.
 The proposed globally unique text-handle authority was rejected at the depth
 checkpoint: its atomic coordination and cross-command capability machinery
 were not proportional to a trusted-internal lifetime misuse. The command keeps
-its existing 64 KiB text storage and primitive handle format. Any later move
+its existing 64 KB text storage and primitive handle format. Any later move
 to an owned text arena or reusable structured views must be selected by a real
 consumer and use command-local lifetime fencing without adding another buffer,
 global token, or compatibility adapter. The longer-term candidate remains:

@@ -7,13 +7,13 @@ import java.nio.ByteBuffer;
 final class TableDefinitionColumnView {
   private TableDefinitionColumnView() { }
 
-  static CharSequence keyName(TableDefinition table) { return table.keyColumnName; }
-  static CharSequence valueName(TableDefinition table) { return table.valueColumnName; }
+  static CharSequence keyName(TableDefinition table) { return name(table, 0); }
+  static CharSequence valueName(TableDefinition table) { return name(table, 1); }
   static boolean matchesKey(TableDefinition table, CharSequence name) {
-    return table.keyColumnName.matches(name);
+    return table.columnCount > 0 && table.columnNames[0].matches(name);
   }
   static boolean matchesValue(TableDefinition table, CharSequence name) {
-    return table.valueColumnName.matches(name);
+    return table.columnCount > 1 && table.columnNames[1].matches(name);
   }
   static int count(TableDefinition table) { return table.columnCount; }
   static CharSequence name(TableDefinition table, int index) {
@@ -22,12 +22,12 @@ final class TableDefinitionColumnView {
   static boolean nullable(TableDefinition table, int column) {
     return column >= 0
         && column < table.columnCount
-        && (table.notNullMask & 1L << column) == 0;
+        && !table.notNullColumns.get(column);
   }
   static boolean hasDefault(TableDefinition table, int column) {
     return column > 0
         && column < table.columnCount
-        && (table.defaultMask & 1L << column) != 0;
+        && table.defaultColumns.get(column);
   }
   static boolean varchar(TableDefinition table, int column) {
     return column > 0
@@ -39,7 +39,8 @@ final class TableDefinitionColumnView {
     return column >= 0 && column < table.columnCount ? table.typeDescriptors[column] : 0;
   }
   static boolean supportsSecondaryIndex(TableDefinition table, int column) {
-    return column > 0 && column < table.columnCount;
+    return column > 0 && column < table.columnCount
+        && !SqlTypeDescriptor.isWideDecimal(table.typeDescriptors[column]);
   }
   static long defaultValue(TableDefinition table, int column) {
     return hasDefault(table, column) ? table.defaultValues[column] : 0;
@@ -79,15 +80,4 @@ final class TableDefinitionColumnView {
     }
     return -1;
   }
-  static int fixedRowBytes(TableDefinition table) { return table.columnCount * Long.BYTES; }
-  static int maximumRowBytes(TableDefinition table) {
-    int bytes = fixedRowBytes(table);
-    for (int column = 1; column < table.columnCount; column++) {
-      if (varchar(table, column)) {
-        bytes += SqlTypeDescriptor.parameterOne(table.typeDescriptors[column]) * 4;
-      }
-    }
-    return bytes;
-  }
-  static int nullMaskOffset(TableDefinition table) { return (table.columnCount - 1) * Long.BYTES; }
 }

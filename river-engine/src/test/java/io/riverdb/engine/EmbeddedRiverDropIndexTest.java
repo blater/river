@@ -76,7 +76,7 @@ final class EmbeddedRiverDropIndexTest {
         session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
     assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT before_drop", result));
@@ -87,7 +87,7 @@ final class EmbeddedRiverDropIndexTest {
         StatusCode.OK,
         session.execute("ROLLBACK TO SAVEPOINT before_drop", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
     assertEquals(StatusCode.OK, session.execute("COMMIT", result));
     assertEquals(StatusCode.OK, session.execute("BEGIN", result));
@@ -102,14 +102,14 @@ final class EmbeddedRiverDropIndexTest {
         StatusCode.OK,
         session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("CREATE UNIQUE INDEX items_code ON items(code)", result));
     assertEquals(StatusCode.OK, session.execute("DELETE FROM items WHERE id=3", result));
     assertEquals(
         StatusCode.OK,
         session.execute("CREATE UNIQUE INDEX items_code ON items(code)", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
 
     assertEquals(
@@ -122,12 +122,13 @@ final class EmbeddedRiverDropIndexTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened),
+        opened.detail().toString());
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.UNIQUE_VIOLATION,
         session.execute("INSERT INTO items VALUES (3, 'alpha', 8)", result));
     assertEquals(2, countRows(session, "SELECT id FROM items WHERE category=7"));
     assertEquals(StatusCode.OK, session.close());

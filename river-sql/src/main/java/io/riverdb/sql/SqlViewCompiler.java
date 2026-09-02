@@ -30,8 +30,12 @@ final class SqlViewCompiler {
       destination.reset();
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    outerBlock.copyQueryFrom(outer);
-    viewBlock.copyQueryFrom(view);
+    status = outerBlock.copyQueryFrom(outer);
+    if (status.isOk()) status = viewBlock.copyQueryFrom(view);
+    if (!status.isOk()) {
+      destination.reset();
+      return status;
+    }
     query.setSourceMetadata(outerDepth + viewDepth, explain, analyze);
     destination.reset();
     if (outerBlock.isSelectAll()) {

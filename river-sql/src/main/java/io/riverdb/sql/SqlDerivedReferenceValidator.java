@@ -68,24 +68,49 @@ final class SqlDerivedReferenceValidator {
 
   private static boolean validProjectionReferences(
       SqlCommand block, SqlCommand inner) {
+    if (loweredJoinAggregate(block, inner)) {
+      for (int group = 0; group < block.groupExpressionCount(); group++) {
+        int projection = block.groupOperandProjection(group);
+        if (projection < 0 || projection >= inner.columnCount()) return false;
+      }
+      for (int invocation = 0;
+          invocation < block.aggregateInvocationCount(); invocation++) {
+        int lane = block.aggregateOperandProjection(invocation);
+        if (lane >= inner.columnCount()) return false;
+      }
+      return true;
+    }
     for (int projection = 0; projection < block.columnCount(); projection++) {
       SqlScalarExpression expression = block.projectionExpression(projection);
       if ((expression == null || !expression.isAvailable())
           && countOutput(block, projection)) continue;
-      if (!validExpressionReferences(block, inner, expression)) return false;
+      if (!validExpressionReferences(block, inner, expression)) {
+        return false;
+      }
     }
     for (int invocation = 0;
         invocation < block.aggregateInvocationCount(); invocation++) {
       int lane = block.aggregateOperandProjection(invocation);
       if (lane < 0) continue;
       if (!validExpressionReferences(
-          block, inner, block.aggregateOperandExpression(lane))) return false;
+          block, inner, block.aggregateOperandExpression(lane))) {
+        return false;
+      }
     }
     return true;
   }
 
+  private static boolean loweredJoinAggregate(
+      SqlCommand block, SqlCommand inner) {
+    return inner != null
+        && block.joinChain() != null
+        && inner.joinChain() != null
+        && inner.type() == SqlCommandType.JOIN_SCAN
+        && block.aggregateInvocationCount() > 0;
+  }
+
   private static boolean countOutput(SqlCommand block, int projection) {
-    int output = block.type() == SqlCommandType.GROUP_COUNT ? projection - 1 : projection;
+    int output = projection - (block.columnCount() - block.aggregateOutputCount());
     if (output < 0 || output >= block.aggregateOutputCount()) return false;
     int invocation = block.aggregateOutputInvocation(output);
     return invocation >= 0
@@ -112,10 +137,14 @@ final class SqlDerivedReferenceValidator {
   }
 
   private static boolean validOrder(SqlCommand block, SqlCommand inner) {
-    return inner == null || !block.isOrdered()
-        || outputContains(inner, block.orderColumnName())
-        || SqlDerivedColumnResolver.outputIndex(
-            block, block.orderColumnName()) >= 0;
+    if (inner == null || !block.isOrdered()) return true;
+    for (int expression = 0;
+        expression < block.orderExpressionCount(); expression++) {
+      CharSequence name = block.orderColumnName(expression);
+      if (!outputContains(inner, name)
+          && SqlDerivedColumnResolver.outputIndex(block, name) < 0) return false;
+    }
+    return true;
   }
 
   private static boolean outputContains(SqlCommand command, CharSequence name) {

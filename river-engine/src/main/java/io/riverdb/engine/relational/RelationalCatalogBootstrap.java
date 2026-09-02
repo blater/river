@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
-import io.riverdb.tx.api.TransactionState;
 import java.nio.ByteBuffer;
 
 /** Creation and validation of the catalog allocation record. */
@@ -15,7 +14,8 @@ final class RelationalCatalogBootstrap {
   private final CatalogSequenceCodec.IntResult nextTableId =
       new CatalogSequenceCodec.IntResult();
 
-  StatusCode initialize(RelationalSession session) {
+  StatusCode initialize(
+      RelationalSession session, RelationalInternalSessionOwner sessions) {
     if (session == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -26,15 +26,11 @@ final class RelationalCatalogBootstrap {
       status = session.indexedSession().insert(
           RelationalKey.CATALOG_SEQUENCE_SPACE, 0, output);
     }
-    if (status.isOk()) {
-      status = session.commit(outcome);
-    } else if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      session.abort(outcome);
-    }
-    return status;
+    return sessions.finish(session, outcome, status);
   }
 
-  StatusCode validate(RelationalSession session) {
+  StatusCode validate(
+      RelationalSession session, RelationalInternalSessionOwner sessions) {
     if (session == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -47,7 +43,6 @@ final class RelationalCatalogBootstrap {
     if (status.isOk()) {
       status = CatalogSequenceCodec.decodeAllocation(row, scratch, nextTableId);
     }
-    StatusCode terminal = session.abort(outcome);
-    return status.isOk() ? terminal : status;
+    return sessions.finish(session, outcome, status, false);
   }
 }

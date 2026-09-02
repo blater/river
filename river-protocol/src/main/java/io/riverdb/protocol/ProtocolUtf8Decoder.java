@@ -1,11 +1,18 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.collection.BoundedArrayGrowth;
+import io.riverdb.engine.api.RetainedMemoryLease;
 import java.util.Arrays;
 
 /** Reusable strict UTF-8 decoder for one bounded frame payload range. */
 final class ProtocolUtf8Decoder {
-  private final char[] characters;
+  private static final ProtocolTextMaterializer DEFAULT_MATERIALIZER = String::new;
+  private static final int RETAINED_CHARACTER_FLOOR = 4 * 1024;
+  private char[] characters = new char[0];
+  private final int maximumBytes;
+  private final ProtocolTextMaterializer materializer;
+  private final RetainedMemoryLease memory;
   private String text;
   private int usedCharacters;
   private ProtocolFrame frame;
@@ -14,8 +21,29 @@ final class ProtocolUtf8Decoder {
   private int input;
   private int output;
 
+  static long maximumRetainedBytes(int maximumBytes) {
+    return (long) maximumBytes * Character.BYTES;
+  }
+
+  static long retainedFloorBytes() {
+    return (long) RETAINED_CHARACTER_FLOOR * Character.BYTES;
+  }
+
   ProtocolUtf8Decoder(int maximumBytes) {
-    characters = new char[maximumBytes];
+    this(maximumBytes, DEFAULT_MATERIALIZER, RetainedMemoryLease.unbounded());
+  }
+
+  ProtocolUtf8Decoder(int maximumBytes, ProtocolTextMaterializer textMaterializer) {
+    this(maximumBytes, textMaterializer, RetainedMemoryLease.unbounded());
+  }
+
+  ProtocolUtf8Decoder(
+      int maximumBytes,
+      ProtocolTextMaterializer textMaterializer,
+      RetainedMemoryLease retainedMemory) {
+    this.maximumBytes = maximumBytes;
+    materializer = textMaterializer;
+    memory = retainedMemory;
   }
 
   StatusCode decode(ProtocolFrame frame, int payloadOffset, int payloadBytes) {
@@ -25,9 +53,8 @@ final class ProtocolUtf8Decoder {
         || payloadOffset > frame.payloadBytes() - payloadBytes) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (payloadBytes > characters.length) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
+    StatusCode reserved = reserve(payloadBytes);
+    if (!reserved.isOk()) return reserved;
     this.frame = frame;
     this.payloadOffset = payloadOffset;
     this.payloadBytes = payloadBytes;
@@ -37,7 +64,16 @@ final class ProtocolUtf8Decoder {
       StatusCode status = decodeScalar();
       if (!status.isOk()) return invalid();
     }
-    text = new String(characters, 0, output);
+    return materialize();
+  }
+
+  private StatusCode materialize() {
+    try {
+      text = materializer.materialize(characters, 0, output);
+    } catch (OutOfMemoryError failure) {
+      reset();
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     releaseSource();
     return StatusCode.OK;
   }
@@ -51,6 +87,24 @@ final class ProtocolUtf8Decoder {
     usedCharacters = 0;
     text = null;
     releaseSource();
+  }
+
+  StatusCode releaseHighWater() {
+    reset();
+    int capacity = Math.min(characters.length, RETAINED_CHARACTER_FLOOR);
+    if (capacity == characters.length) return StatusCode.OK;
+    try {
+      characters = new char[capacity];
+      return memory.resize((long) capacity * Character.BYTES);
+    } catch (OutOfMemoryError failure) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+  }
+
+  StatusCode release() {
+    reset();
+    characters = new char[0];
+    return memory.resize(0);
   }
 
   private StatusCode invalid() {
@@ -136,5 +190,20 @@ final class ProtocolUtf8Decoder {
     payloadBytes = 0;
     input = 0;
     output = 0;
+  }
+
+  private StatusCode reserve(int required) {
+    if (required > maximumBytes) return StatusCode.RESOURCE_EXHAUSTED;
+    if (required <= characters.length) return StatusCode.OK;
+    int capacity = BoundedArrayGrowth.capacity(characters.length, required, maximumBytes, 8);
+    StatusCode admitted = memory.resize((long) capacity * Character.BYTES);
+    if (!admitted.isOk()) return admitted;
+    try {
+      characters = Arrays.copyOf(characters, capacity);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError failure) {
+      memory.resize((long) characters.length * Character.BYTES);
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 }

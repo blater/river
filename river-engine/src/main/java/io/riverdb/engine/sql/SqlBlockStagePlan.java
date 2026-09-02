@@ -28,6 +28,8 @@ final class SqlBlockStagePlan {
   private final SqlJoinChainSource source;
   private final SqlJoinChainPlan joins;
   private int joinOffset = -1;
+  private int rootAccessStep = -1;
+  private int rootAccessColumn = -1;
   private int count;
 
   SqlBlockStagePlan(
@@ -39,6 +41,8 @@ final class SqlBlockStagePlan {
   StatusCode describe(SqlBoundBlockPlans plans, boolean withActuals) {
     count = 0;
     joinOffset = -1;
+    rootAccessStep = -1;
+    rootAccessColumn = plans.rootAccessColumn();
     for (int block = 0; block < plans.count(); block++) {
       rowSteps[block] = count;
       StatusCode status = append(BLOCK, block + 1);
@@ -60,10 +64,23 @@ final class SqlBlockStagePlan {
     boolean join = plans.command(deepest).type()
         == io.riverdb.sql.SqlCommandType.JOIN_SCAN;
     if (join) return StatusCode.OK;
-    int access = -1;
+    int access = rootAccessColumn;
+    rootAccessStep = count;
     StatusCode status = append(
         access > 0 ? INDEX : access == 0 ? PRIMARY : TABLE, access);
     return status;
+  }
+
+  void resetSourceAccess() {
+    rootAccessColumn = -1;
+    rootAccessStep = -1;
+  }
+
+  void setRootAccess(int access) {
+    rootAccessColumn = access;
+    if (rootAccessStep < 0 || rootAccessStep >= count) return;
+    operators[rootAccessStep] = access > 0 ? INDEX : access == 0 ? PRIMARY : TABLE;
+    details[rootAccessStep] = access;
   }
 
   void setRows(int block, long actualRows) {

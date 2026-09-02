@@ -16,9 +16,8 @@ final class RelationalRowMutation {
   private final HeapRowResult indexedKeyRow = new HeapRowResult();
   private final HeapRowResult referencedRow = new HeapRowResult();
   private final ByteBuffer rowScratch = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
-  private final long[] previousIndexedValues = new long[TableDefinition.MAXIMUM_INDEXES];
-  private final boolean[] previousIndexedNulls =
-      new boolean[TableDefinition.MAXIMUM_INDEXES];
+  private final RelationalPreviousIndexValues previousIndexes =
+      new RelationalPreviousIndexValues();
   private final TableCheckEvaluator checks = new TableCheckEvaluator();
 
   RelationalRowMutation(
@@ -121,14 +120,16 @@ final class RelationalRowMutation {
   }
 
   private StatusCode capturePreviousIndexedValues(TableDefinition table, long key) {
-    StatusCode status = fetch(table, key, indexedKeyRow);
+    StatusCode status = previousIndexes.reserve(table.uniqueIndexCount());
+    if (status.isOk()) status = fetch(table, key, indexedKeyRow);
     if (status.isOk()) {
       status = copyRow(table, indexedKeyRow, rowScratch);
     }
     for (int slot = 0; status.isOk() && slot < table.uniqueIndexCount(); slot++) {
-      previousIndexedValues[slot] = indexedValue(table, rowScratch, slot);
-      previousIndexedNulls[slot] = table.isNull(
-          rowScratch, table.uniqueIndexColumn(slot));
+      previousIndexes.set(
+          slot,
+          indexedValue(table, rowScratch, slot),
+          table.isNull(rowScratch, table.uniqueIndexColumn(slot)));
     }
     return status;
   }
@@ -144,8 +145,7 @@ final class RelationalRowMutation {
     int column = table.uniqueIndexColumn(slot);
     boolean nextNull = table.isNull(row, column);
     long nextValue = indexedValue(table, row, slot);
-    if (previousIndexedNulls[slot] == nextNull
-        && (nextNull || previousIndexedValues[slot] == nextValue)) {
+    if (previousIndexes.same(slot, nextNull, nextValue)) {
       return StatusCode.OK;
     }
     prepareValueIndex(table, slot);
@@ -157,14 +157,14 @@ final class RelationalRowMutation {
 
   private StatusCode removePreviousIndexedValue(
       TableDefinition table, long key, int slot, int column) {
-    if (previousIndexedNulls[slot]) {
+    if (previousIndexes.isNull(slot)) {
       return StatusCode.OK;
     }
     if (table.isVarchar(column) || !table.indexIsUnique(slot)) {
       return secondaryIndexes.deleteNonUnique(
-          valueIndexTable, previousIndexedValues[slot], key);
+          valueIndexTable, previousIndexes.value(slot), key);
     }
-    return secondaryIndexes.deleteUnique(valueIndexTable, previousIndexedValues[slot]);
+    return secondaryIndexes.deleteUnique(valueIndexTable, previousIndexes.value(slot));
   }
 
   private StatusCode addUpdatedIndexedValue(
@@ -188,15 +188,15 @@ final class RelationalRowMutation {
 
   private StatusCode deleteReadyIndex(TableDefinition table, long key, int slot) {
     if (table.uniqueIndexState(slot) != TableDefinition.INDEX_READY
-        || previousIndexedNulls[slot]) {
+        || previousIndexes.isNull(slot)) {
       return StatusCode.OK;
     }
     prepareValueIndex(table, slot);
     return table.isVarchar(table.uniqueIndexColumn(slot))
             || !table.indexIsUnique(slot)
         ? secondaryIndexes.deleteNonUnique(
-            valueIndexTable, previousIndexedValues[slot], key)
-        : secondaryIndexes.deleteUnique(valueIndexTable, previousIndexedValues[slot]);
+            valueIndexTable, previousIndexes.value(slot), key)
+        : secondaryIndexes.deleteUnique(valueIndexTable, previousIndexes.value(slot));
   }
 
   private StatusCode validateReferences(TableDefinition table, ByteBuffer row) {
@@ -207,7 +207,7 @@ final class RelationalRowMutation {
       if (!table.hasReference(column) || table.isNull(row, column)) {
         continue;
       }
-      long referencedKey = row.getLong(row.position() + (column - 1) * Long.BYTES);
+      long referencedKey = row.getLong(row.position() + table.valueOffset(column));
       referenceTable.set(
           schemaGate,
           table.referenceTableId(column),

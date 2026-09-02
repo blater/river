@@ -39,22 +39,34 @@ abstract class RiverJdbcTypedPreparedStatement extends AbstractPreparedStatement
 
   @Override
   public final void setByte(int index, byte value) throws SQLException {
-    setLong(index, value);
+    setFixed(index, SqlTypeDescriptor.SMALLINT, value);
   }
 
   @Override
   public final void setShort(int index, short value) throws SQLException {
-    setLong(index, value);
+    setFixed(index, SqlTypeDescriptor.SMALLINT, value);
   }
 
   @Override
   public final void setInt(int index, int value) throws SQLException {
-    setLong(index, value);
+    setFixed(index, SqlTypeDescriptor.INTEGER, value);
   }
 
   @Override
   public final void setLong(int index, long value) throws SQLException {
     setFixed(index, SqlTypeDescriptor.BIGINT, value);
+  }
+
+  @Override
+  public final void setFloat(int index, float value) throws SQLException {
+    requireParameter(index);
+    bindings.setReal(index - 1, value);
+  }
+
+  @Override
+  public final void setDouble(int index, double value) throws SQLException {
+    requireParameter(index);
+    bindings.setDouble(index - 1, value);
   }
 
   @Override

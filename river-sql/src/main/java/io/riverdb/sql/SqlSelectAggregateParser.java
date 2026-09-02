@@ -9,6 +9,7 @@ final class SqlSelectAggregateParser {
   private final SqlAggregateExpressionParser expressions;
   private final SqlAggregateInvocationParser invocations;
   private final SqlHavingParser having;
+  private final SqlAggregateGroupTail groupTail;
 
   SqlSelectAggregateParser(
       SqlParser parent,
@@ -21,6 +22,8 @@ final class SqlSelectAggregateParser {
     invocations = new SqlAggregateInvocationParser(
         parserInput, selectParser, this.expressions);
     having = new SqlHavingParser(parent, parserInput, this.expressions);
+    SqlGroupingParser grouping = new SqlGroupingParser(parserInput, this.expressions);
+    groupTail = new SqlAggregateGroupTail(parserInput, grouping, having);
   }
 
   StatusCode scalarList(
@@ -31,7 +34,7 @@ final class SqlSelectAggregateParser {
 
   StatusCode groupedList(
       CharSequence sql, SqlCommand result, int firstKind) {
-    StatusCode status = invocations.parse(sql, result, firstKind, true);
+    StatusCode status = invocations.parse(sql, result, firstKind, false);
     return status;
   }
 
@@ -53,46 +56,12 @@ final class SqlSelectAggregateParser {
   }
 
   StatusCode finishGroupOrPoint(CharSequence sql, SqlCommand result) {
-    SqlCommandType type = result.type();
-    if (isGroupAggregate(type)) {
-      StatusCode status = requireKeyword(sql, "GROUP");
-      if (status.isOk()) {
-        status = requireKeyword(sql, "BY");
-      }
-      if (status.isOk()) {
-        status = matchingGroupKey(sql, result);
-      }
-      if (status.isOk() && consumeKeyword(sql, "HAVING")) {
-        status = having.parse(sql, result, true);
-      }
-      return status;
-    }
-    return StatusCode.OK;
-  }
-
-  private static boolean isGroupAggregate(SqlCommandType type) {
-    return type == SqlCommandType.GROUP_COUNT
-        || type == SqlCommandType.GROUP_COUNT_VALUE
-        || type == SqlCommandType.GROUP_SUM
-        || type == SqlCommandType.GROUP_AVG
-        || type == SqlCommandType.GROUP_MIN
-        || type == SqlCommandType.GROUP_MAX;
-  }
-
-  private StatusCode matchingGroupKey(CharSequence sql, SqlCommand result) {
-    if (result.directProjectionSymbol(0) >= 0) {
-      return matchingIdentifier(sql, result.firstColumnName());
-    }
-    return expressions.match(sql, result, 0);
+    return groupTail.parse(sql, result);
   }
 
   private StatusCode predicates(
       CharSequence sql, SqlCommand result, boolean qualified) {
     return parser.predicates(sql, result, qualified);
-  }
-
-  private StatusCode matchingIdentifier(CharSequence sql, CharSequence expected) {
-    return parser.matchingIdentifier(sql, expected);
   }
 
   private StatusCode optionalTableAlias(CharSequence sql, SqlCommand result) {

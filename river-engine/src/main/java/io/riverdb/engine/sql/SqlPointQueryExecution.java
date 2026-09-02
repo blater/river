@@ -15,10 +15,13 @@ final class SqlPointQueryExecution {
       SqlExpressionEvaluator expressions,
       SqlBoundPredicateEvaluator predicates,
       SqlRowProjectionEvaluator projections,
-      SqlTemporalContext temporal) {
+      SqlCurrentRowProtection currentRows,
+      SqlTemporalContext temporal,
+      SqlSessionShapeBudget shapeBudget) {
     aggregates = new SqlPointAggregateExecution(
-        session, bound, expressions, predicates, projections, temporal);
-    selects = new SqlPointSelectExecution(session, bound, predicates, projections);
+        session, bound, expressions, predicates, projections, temporal, shapeBudget);
+    selects = new SqlPointSelectExecution(
+        session, bound, predicates, projections, currentRows);
   }
 
   StatusCode execute(SqlCommandType type, SqlExecutionResult result) {
@@ -32,7 +35,8 @@ final class SqlPointQueryExecution {
 
   StatusCode closeResources() {
     StatusCode status = aggregates.closeResources();
-    return status.isOk() ? selects.closeResources() : status;
+    StatusCode selectStatus = selects.closeResources();
+    return status.isOk() ? selectStatus : status;
   }
 
   void finishStatement() {

@@ -6,17 +6,25 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Owns fixed literal, descriptor, text, temporal, and parameter parsing. */
 final class SqlLiteralReader {
-  private final char[] textCharacters = new char[Utf8Text.MAXIMUM_SCALARS * 2];
+  /* Scratch is bounded by row/value admission, not by a VARCHAR declaration. */
+  private final char[] textCharacters = new char[Utf8Text.MAXIMUM_BUFFER_CHARACTERS];
   private final SqlParserInput input;
   private final SqlTemporalParser temporal;
   private final SqlTypeDescriptorReader types;
   private final SqlParameterReader parameters = new SqlParameterReader();
+  private final SqlIntegralLiteralReader integers;
+  private final SqlDecimalLiteralReader decimals;
+  private final SqlApproximateLiteralReader approximates;
   private SqlCommand command;
+  private SqlParameterMarkers parameterMarkers;
 
   SqlLiteralReader(SqlParserInput parserInput) {
     input = parserInput;
     temporal = new SqlTemporalParser(input);
     types = new SqlTypeDescriptorReader(input, temporal, this);
+    integers = new SqlIntegralLiteralReader(input);
+    decimals = new SqlDecimalLiteralReader(input);
+    approximates = new SqlApproximateLiteralReader(input);
   }
 
   void command(SqlCommand activeCommand) {
@@ -27,62 +35,55 @@ final class SqlLiteralReader {
     parameters.begin(source);
   }
 
+  void beginParameterMarkers(SqlParameterMarkers markers) {
+    parameterMarkers = markers;
+  }
+
   StatusCode finishParameters() {
     return parameters.finish();
   }
 
   void clearParameters() {
     parameters.reset();
+    parameterMarkers = null;
   }
 
   StatusCode number(CharSequence sql, SqlParser.LongResult result) {
-    result.nullValue = false;
-    result.varchar = false;
-    result.textScalars = 0;
-    result.typeDescriptor = SqlTypeDescriptor.BIGINT;
-    input.skipSpaces(sql);
-    int position = input.position();
-    if (position >= sql.length()) return StatusCode.INVALID_EXTERNAL_INPUT;
-    boolean negative = sql.charAt(position) == '-';
-    if (negative) position++;
-    if (position >= sql.length() || !SqlParserInput.digit(sql.charAt(position))) {
-      input.position(position);
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
-    long multiplyMinimum = limit / 10;
-    long value = 0;
-    while (position < sql.length() && SqlParserInput.digit(sql.charAt(position))) {
-      int nextDigit = sql.charAt(position++) - '0';
-      if (value < multiplyMinimum) {
-        input.position(position);
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      value *= 10;
-      if (value < limit + nextDigit) {
-        input.position(position);
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      value -= nextDigit;
-    }
-    input.position(position);
-    result.value = negative ? value : -value;
-    return StatusCode.OK;
+    StatusCode status = integers.read(sql, result);
+    if (status.isOk()) result.high = result.value >> 63;
+    return status;
   }
 
   StatusCode literal(CharSequence sql, SqlParser.LongResult result) {
+    result.high = 0;
     result.nullValue = false;
+    result.parameter = false;
     if (input.consumeCharacter(sql, '?')) {
       int marker = input.position() - 1;
-      int ordinal = sql instanceof SqlParameterOrdinalSource source
-          ? source.parameterOrdinal(marker) : -1;
+      int ordinal = SqlParameterOrdinalSource.originalOrdinal(
+          sql, marker, parameterMarkers);
+      if (parameterMarkers != null) {
+        if (ordinal < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+        result.value = ordinal;
+        result.parameter = true;
+        result.varchar = false;
+        result.textScalars = 0;
+        result.typeDescriptor = 0;
+        return StatusCode.OK;
+      }
       return parameters.read(command, textCharacters, result, ordinal);
     }
     if (temporal.starts(sql)) return temporal.literal(sql, result);
     if (startsText(sql)) return packedText(sql, result);
     if (input.consumeKeyword(sql, "TRUE")) return setBoolean(result, true);
     if (input.consumeKeyword(sql, "FALSE")) return setBoolean(result, false);
-    return startsDecimal(sql) ? decimal(sql, result) : number(sql, result);
+    if (approximates.starts(sql)) return approximates.read(sql, result);
+    if (decimals.starts(sql)) return decimals.read(sql, result);
+    int start = input.position();
+    StatusCode status = number(sql, result);
+    if (status.isOk()) return status;
+    input.position(start);
+    return decimals.readIntegral(sql, result);
   }
 
   StatusCode packedText(CharSequence sql, SqlParser.LongResult result) {
@@ -158,59 +159,12 @@ final class SqlLiteralReader {
     return types.read(sql, result);
   }
 
-  private StatusCode decimal(CharSequence sql, SqlParser.LongResult result) {
-    result.varchar = false;
-    result.textScalars = 0;
-    input.skipSpaces(sql);
-    int position = input.position();
-    boolean negative = position < sql.length() && sql.charAt(position) == '-';
-    if (negative) position++;
-    int digits = 0;
-    int scale = 0;
-    long value = 0;
-    boolean point = false;
-    while (position < sql.length()) {
-      char character = sql.charAt(position);
-      if (SqlParserInput.digit(character)) {
-        if (++digits > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) {
-          input.position(position);
-          return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
-        }
-        value = value * 10 + character - '0';
-        if (point) scale++;
-        position++;
-      } else if (character == '.' && !point) {
-        point = true;
-        position++;
-      } else {
-        break;
-      }
-    }
-    input.position(position);
-    if (!point || scale == 0 || digits == scale) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.value = negative ? -value : value;
-    result.typeDescriptor = SqlTypeDescriptor.decimal(digits, scale);
-    return StatusCode.OK;
-  }
-
-  private boolean startsDecimal(CharSequence sql) {
-    int start = input.position();
-    input.skipSpaces(sql);
-    int position = input.position();
-    if (position < sql.length() && sql.charAt(position) == '-') position++;
-    while (position < sql.length() && SqlParserInput.digit(sql.charAt(position))) position++;
-    boolean decimal = position < sql.length() && sql.charAt(position) == '.';
-    input.position(start);
-    return decimal;
-  }
-
   private StatusCode storeText(SqlParser.LongResult result, int length) {
     int scalars = Utf8Text.scalarCount(textCharacters, 0, length);
     if (scalars < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (scalars > Utf8Text.MAXIMUM_SCALARS) return StatusCode.RESOURCE_EXHAUSTED;
     result.value = command.storeText(textCharacters, 0, length);
+    result.high = 0;
     result.textScalars = scalars;
     result.typeDescriptor = SqlTypeDescriptor.varchar(Math.max(1, scalars));
     return result.value == SqlCommand.INVALID_TEXT_HANDLE
@@ -220,6 +174,7 @@ final class SqlLiteralReader {
   private static StatusCode setBoolean(
       SqlParser.LongResult result, boolean value) {
     result.value = value ? 1 : 0;
+    result.high = 0;
     result.varchar = false;
     result.textScalars = 0;
     result.typeDescriptor = SqlTypeDescriptor.BOOLEAN;

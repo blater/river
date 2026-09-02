@@ -2,6 +2,7 @@ package io.riverdb.server;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.RiverDatabase;
+import io.riverdb.protocol.ProtocolMemoryBudget;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolFrameHeader;
 import io.riverdb.protocol.auth.TokenAuthenticator;
@@ -35,6 +36,7 @@ public final class LoopbackRiverServer {
   private final TokenAuthenticator authenticator;
   private final SecureRandom random;
   final SecurityAuditLog audit;
+  private final ProtocolMemoryBudget bufferBudget;
   private final int authenticationTimeoutMillis;
   private final int idleTimeoutMillis;
   private final ProtocolFrameCodec codec = new ProtocolFrameCodec();
@@ -63,6 +65,7 @@ public final class LoopbackRiverServer {
     authenticationTimeoutMillis = limits.authenticationTimeoutMillis();
     idleTimeoutMillis = limits.idleTimeoutMillis();
     random = tokenAuthenticator == null ? null : new SecureRandom();
+    bufferBudget = ProtocolMemoryBudget.forServer(limits.maximumConnections());
     slots = new ConnectionSlot[limits.maximumConnections()];
     for (int index = 0; index < slots.length; index++) {
       slots[index] = new ConnectionSlot(index);
@@ -179,6 +182,9 @@ public final class LoopbackRiverServer {
     return authorizationFailures.get();
   }
 
+  public long retainedProtocolBufferBytes() { return bufferBudget.retainedBytes(); }
+  public long maximumProtocolBufferBytes() { return bufferBudget.maximumBytes(); }
+
   public int auditRecordCount() {
     return audit == null ? 0 : audit.recordCount();
   }
@@ -204,8 +210,8 @@ public final class LoopbackRiverServer {
         Socket connection = listener.accept();
         ConnectionSlot slot = reserve(connection);
         if (slot == null) {
-          rejectedConnections.incrementAndGet();
           lastStatus = StatusCode.RESOURCE_EXHAUSTED;
+          rejectedConnections.incrementAndGet();
           connection.close();
         } else {
           acceptedConnections.incrementAndGet();
@@ -239,10 +245,15 @@ public final class LoopbackRiverServer {
     return null;
   }
 
-  private synchronized void release(ConnectionSlot slot) {
-    slot.socket = null;
-    slot.worker = null;
-    activeConnections.decrementAndGet();
+  private void release(ConnectionSlot slot) {
+    slot.requests.release();
+    StatusCode released = slot.responses.releaseHighWater();
+    synchronized (this) {
+      slot.socket = null;
+      slot.worker = null;
+      activeConnections.decrementAndGet();
+    }
+    if (!released.isOk()) lastStatus = released;
   }
 
   private void serve(ConnectionSlot slot) {
@@ -262,6 +273,8 @@ public final class LoopbackRiverServer {
           random,
           audit,
           authenticationTimeoutMillis,
+          slot.memory,
+          slot.responses,
           opened);
       if (!opened.status().isOk()) {
         lastStatus = opened.status();
@@ -288,7 +301,7 @@ public final class LoopbackRiverServer {
       if (endpoint != null) {
         authenticationFailures.addAndGet(endpoint.authenticationFailures());
         authorizationFailures.addAndGet(endpoint.authorizationFailures());
-        StatusCode closed = endpoint.close();
+        StatusCode closed = ServerTerminalSessionCleanup.complete(endpoint);
         if (!closed.isOk() && closed != StatusCode.CLOSED) {
           lastStatus = closed;
         }
@@ -314,6 +327,10 @@ public final class LoopbackRiverServer {
           connection,
           authenticationDeadline);
       if (headerBytes == 0) {
+        if (slot.requests.isActive()) {
+          rejectedFrames.incrementAndGet();
+          lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
+        }
         return;
       }
       if (headerBytes != ProtocolFrameCodec.HEADER_BYTES) {
@@ -344,14 +361,15 @@ public final class LoopbackRiverServer {
       }
       slot.request.position(0);
       slot.request.limit(ProtocolFrameCodec.HEADER_BYTES + payloadBytes);
-      StatusCode processed = endpoint.process(slot.request, slot.response);
+      StatusCode processed = ServerRequestDispatch.process(
+          codec, slot.requests, slot.responses, slot.request, slot.requestHeader,
+          endpoint, output);
+      if (processed == StatusCode.RETRY) continue;
       if (!processed.isOk()) {
         rejectedFrames.incrementAndGet();
         lastStatus = processed;
         return;
       }
-      output.write(slot.responseBytes, 0, slot.response.remaining());
-      output.flush();
       completedRequests.incrementAndGet();
       if (authenticationDeadline != 0 && endpoint.authenticationComplete()) {
         authenticationDeadline = 0;
@@ -444,11 +462,14 @@ public final class LoopbackRiverServer {
 
   final class ConnectionSlot implements Runnable {
     final int index;
+    private final ServerConnectionMemory memory = new ServerConnectionMemory(bufferBudget);
     private final ProtocolFrameHeader requestHeader = new ProtocolFrameHeader();
+    private final ServerRequestAssembly requests =
+        new ServerRequestAssembly(memory.lease());
+    private final ServerResponseBuffer responses =
+        new ServerResponseBuffer(memory.lease());
     private final byte[] requestBytes = new byte[ProtocolFrameCodec.MAXIMUM_FRAME_BYTES];
-    private final byte[] responseBytes = new byte[ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES];
     private final ByteBuffer request = ByteBuffer.wrap(requestBytes);
-    private final ByteBuffer response = ByteBuffer.wrap(responseBytes);
     Socket socket;
     Thread worker;
 

@@ -52,6 +52,19 @@ final class SqlSubqueryAcceptanceFixture {
     assertEquals(StatusCode.OK, session.closeScan(cursor, result));
   }
 
+  void assertSyntheticRows(String sql, long... expected) {
+    SqlScanCursor cursor = new SqlScanCursor();
+    SqlScanRowResult row = new SqlScanRowResult();
+    assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
+    for (long value : expected) {
+      assertEquals(StatusCode.OK, session.nextScan(cursor, row));
+      assertEquals(0, row.key());
+      assertEquals(value, row.valueAt(0));
+    }
+    assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
+    assertEquals(StatusCode.OK, session.closeScan(cursor, result));
+  }
+
   void close() {
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());

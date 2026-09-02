@@ -2,14 +2,12 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlCommand;
-import io.riverdb.sql.SqlJoinChain;
 
 /** Block-owned JOIN predicate state safe across recursive child evaluation. */
 final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
   private final SqlBooleanPredicateWorkspace workspace;
   private final SqlBooleanPredicateEvaluator where;
-  private final SqlBooleanPredicateEvaluator[] on =
-      new SqlBooleanPredicateEvaluator[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final SqlJoinPredicateEvaluators on;
   private final SqlBooleanPredicateEvaluator.Match match =
       new SqlBooleanPredicateEvaluator.Match();
   private final SqlJoinedRowProvider rows;
@@ -28,13 +26,15 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
       SqlTemporalContext temporalContext,
       SqlSubqueryLeafEvaluator leafEvaluator,
       SqlNestedRowProvider ancestors,
-      SqlSubqueryPlan subqueryPlan) {
+      SqlSubqueryPlan subqueryPlan,
+      SqlSessionShapeBudget shapeBudget) {
     this.block = block;
     temporal = temporalContext;
     subqueries = leafEvaluator;
     plan = subqueryPlan;
     workspace = new SqlBooleanPredicateWorkspace(expressions, temporalContext);
-    where = new SqlBooleanPredicateEvaluator(workspace, temporalContext);
+    where = new SqlBooleanPredicateEvaluator(workspace, temporalContext, shapeBudget);
+    on = new SqlJoinPredicateEvaluators(workspace, temporalContext, shapeBudget);
     rows = new SqlJoinedRowProvider(block, ancestors);
   }
 
@@ -50,13 +50,10 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
     command = canonicalCommand;
     context = joinContext;
     whereProgram = boundWhere;
-    status = StatusCode.OK;
+    status = on.prepare(command.joinChain().stageCount());
     for (int stage = 0;
         status.isOk() && stage < command.joinChain().stageCount(); stage++) {
-      if (on[stage] == null) {
-        on[stage] = new SqlBooleanPredicateEvaluator(workspace, temporal);
-      }
-      status = on[stage].prepare(command, context.onBoolean(stage));
+      status = on.get(stage).prepare(command, context.onBoolean(stage));
     }
     if (status.isOk()) status = where.prepare(command, whereProgram);
     return status;
@@ -65,7 +62,7 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
   @Override
   boolean matchesJoinOn(int stage, SqlJoinRoleRows localRows) {
     rows.activate(localRows);
-    status = on[stage].matchesNested(
+    status = on.get(stage).matchesNested(
         command,
         context.onBoolean(stage),
         0,
@@ -101,9 +98,7 @@ final class SqlJoinedPredicateEvaluator extends SqlJoinPredicateCallback {
 
   void reset() {
     where.reset();
-    for (SqlBooleanPredicateEvaluator evaluator : on) {
-      if (evaluator != null) evaluator.reset();
-    }
+    on.reset();
     rows.clear();
     command = null;
     context = null;

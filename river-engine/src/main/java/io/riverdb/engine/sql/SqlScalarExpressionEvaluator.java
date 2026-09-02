@@ -1,17 +1,17 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.LocalTemporal;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlScalarExpression;
 
 /** Evaluates one bounded postfix exact-value expression without allocating. */
 final class SqlScalarExpressionEvaluator {
   private final long[] values = new long[SqlScalarExpression.MAXIMUM_NODES];
+  private final long[] highs = new long[SqlScalarExpression.MAXIMUM_NODES];
   private final int[] descriptors = new int[SqlScalarExpression.MAXIMUM_NODES];
-  private final ExactDecimal.LongValue numeric = new ExactDecimal.LongValue();
-  private final ExactDecimal.WideScratch wide = new ExactDecimal.WideScratch();
+  private final SqlNumericExpressionEvaluator numeric = new SqlNumericExpressionEvaluator();
   private final LocalTemporal.Value temporal = new LocalTemporal.Value();
   private int size;
 
@@ -24,7 +24,9 @@ final class SqlScalarExpressionEvaluator {
     for (int index = 0; status.isOk() && index < expression.nodeCount(); index++) {
       int operator = expression.operator(index);
       status = operator == SqlScalarExpression.LITERAL
-          ? literal(expression.operand(index), expression.typeDescriptor(index))
+          ? literal(
+              expression.operandHigh(index), expression.operand(index),
+              expression.typeDescriptor(index))
           : operator == SqlScalarExpression.NEGATE
               || operator == SqlScalarExpression.ABSOLUTE
               || operator == SqlScalarExpression.CEILING
@@ -38,15 +40,15 @@ final class SqlScalarExpressionEvaluator {
     if (!status.isOk() || size != 1) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    result.setTypedScalar(values[0], descriptors[0], 0);
-    return StatusCode.OK;
+    return result.setTypedScalar(highs[0], values[0], descriptors[0], 0);
   }
 
-  private StatusCode literal(long value, int descriptor) {
+  private StatusCode literal(long high, long value, int descriptor) {
     if (size >= values.length || !SqlTypeDescriptor.isValid(descriptor)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     values[size] = value;
+    highs[size] = high;
     descriptors[size] = descriptor;
     size++;
     return StatusCode.OK;
@@ -61,41 +63,35 @@ final class SqlScalarExpressionEvaluator {
     int source = descriptors[slot];
     int target = expression.typeDescriptor(node);
     StatusCode status = switch (expression.operator(node)) {
-      case SqlScalarExpression.NEGATE -> ExactDecimal.negate(value, source, numeric);
-      case SqlScalarExpression.ABSOLUTE -> ExactDecimal.absolute(value, source, numeric);
-      case SqlScalarExpression.CEILING ->
-          ExactDecimal.integral(value, source, true, numeric);
-      case SqlScalarExpression.FLOOR ->
-          ExactDecimal.integral(value, source, false, numeric);
-      case SqlScalarExpression.ROUND -> ExactDecimal.quantize(
-          value, source, target, true, false, numeric, wide);
-      case SqlScalarExpression.TRUNCATE -> ExactDecimal.quantize(
-          value, source, target, false, false, numeric, wide);
-      case SqlScalarExpression.CAST -> cast(value, source, target);
+      case SqlScalarExpression.NEGATE,
+          SqlScalarExpression.ABSOLUTE,
+          SqlScalarExpression.CEILING,
+          SqlScalarExpression.FLOOR,
+          SqlScalarExpression.ROUND,
+          SqlScalarExpression.TRUNCATE -> numeric.unary(
+              expression.operator(node), highs[slot], value, source, target,
+              expression.operand(node));
+      case SqlScalarExpression.CAST -> cast(highs[slot], value, source, target);
       case SqlScalarExpression.EXTRACT -> extract(value, source, expression.operand(node));
       default -> StatusCode.INVALID_EXTERNAL_INPUT;
     };
     if (status.isOk()) {
-      values[slot] = numeric.value;
+      values[slot] = numeric.value();
+      highs[slot] = numeric.highValue();
       descriptors[slot] = target;
     }
     return status;
   }
 
-  private StatusCode cast(long value, int source, int target) {
-    if (source == target) {
-      numeric.value = value;
-      return StatusCode.OK;
-    }
+  private StatusCode cast(long high, long value, int source, int target) {
+    if (source == target) return numeric.cast(high, value, source, target);
     int sourceType = SqlTypeDescriptor.typeId(source);
     int targetType = SqlTypeDescriptor.typeId(target);
     if (sourceType == SqlTypeDescriptor.TYPE_ID_BOOLEAN
         || targetType == SqlTypeDescriptor.TYPE_ID_BOOLEAN) {
       return StatusCode.DATATYPE_MISMATCH;
     }
-    boolean exact = targetType == SqlTypeDescriptor.TYPE_ID_BIGINT;
-    return ExactDecimal.quantize(
-        value, source, target, true, exact, numeric, wide);
+    return numeric.cast(high, value, source, target);
   }
 
   private StatusCode extract(long value, int source, long field) {
@@ -103,7 +99,7 @@ final class SqlScalarExpressionEvaluator {
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : LocalTemporal.extract(value, source, (int) field, temporal);
     if (status.isOk()) {
-      numeric.value = temporal.value;
+      numeric.seed(temporal.value);
     }
     return status;
   }
@@ -124,20 +120,20 @@ final class SqlScalarExpressionEvaluator {
             == SqlTypeDescriptor.TYPE_ID_DATE
         ? dateArithmetic(operator, left, right, rightDescriptor)
         : switch (operator) {
-      case SqlScalarExpression.ADD -> ExactDecimal.add(
-          left, leftDescriptor, right, rightDescriptor, false, target, numeric, wide);
-      case SqlScalarExpression.SUBTRACT -> ExactDecimal.add(
-          left, leftDescriptor, right, rightDescriptor, true, target, numeric, wide);
-      case SqlScalarExpression.MULTIPLY -> ExactDecimal.multiply(
-          left, leftDescriptor, right, rightDescriptor, target, numeric, wide);
-      case SqlScalarExpression.DIVIDE -> ExactDecimal.divide(
-          left, leftDescriptor, right, rightDescriptor, target, numeric, wide);
-      case SqlScalarExpression.REMAINDER -> ExactDecimal.remainder(
-          left, leftDescriptor, right, rightDescriptor, target, numeric, wide);
+      case SqlScalarExpression.ADD,
+          SqlScalarExpression.SUBTRACT,
+          SqlScalarExpression.MULTIPLY,
+          SqlScalarExpression.DIVIDE,
+          SqlScalarExpression.REMAINDER -> numeric.binary(
+              operator,
+              highs[leftSlot], left, leftDescriptor,
+              highs[rightSlot], right, rightDescriptor,
+              target);
       default -> StatusCode.INVALID_EXTERNAL_INPUT;
     };
     if (status.isOk()) {
-      values[leftSlot] = numeric.value;
+      values[leftSlot] = numeric.value();
+      highs[leftSlot] = numeric.highValue();
       descriptors[leftSlot] = target;
     }
     return status;
@@ -145,8 +141,9 @@ final class SqlScalarExpressionEvaluator {
 
   private StatusCode dateArithmetic(
       int operator, long left, long right, int rightDescriptor) {
+    boolean integral = SqlNumericTypeRules.isIntegral(rightDescriptor);
     if (operator == SqlScalarExpression.ADD
-        && SqlTypeDescriptor.typeId(rightDescriptor) == SqlTypeDescriptor.TYPE_ID_BIGINT) {
+        && integral) {
       return copyTemporal(LocalTemporal.addDateDays(left, right, temporal));
     }
     if (operator != SqlScalarExpression.SUBTRACT) {
@@ -155,7 +152,7 @@ final class SqlScalarExpressionEvaluator {
     StatusCode status = SqlTypeDescriptor.typeId(rightDescriptor)
             == SqlTypeDescriptor.TYPE_ID_DATE
         ? LocalTemporal.subtractDates(left, right, temporal)
-        : SqlTypeDescriptor.typeId(rightDescriptor) == SqlTypeDescriptor.TYPE_ID_BIGINT
+        : integral
             ? LocalTemporal.subtractDateDays(left, right, temporal)
             : StatusCode.DATATYPE_MISMATCH;
     return copyTemporal(status);
@@ -163,7 +160,7 @@ final class SqlScalarExpressionEvaluator {
 
   private StatusCode copyTemporal(StatusCode status) {
     if (status.isOk()) {
-      numeric.value = temporal.value;
+      numeric.seed(temporal.value);
     }
     return status;
   }

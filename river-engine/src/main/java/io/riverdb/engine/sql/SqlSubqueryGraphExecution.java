@@ -23,18 +23,33 @@ final class SqlSubqueryGraphExecution
       BoundSqlStatement statement,
       SqlExpressionEvaluator evaluator,
       SqlTemporalContext temporalContext) {
+    this(
+        relationalSession,
+        statement,
+        evaluator,
+        temporalContext,
+        new SqlSessionShapeBudget(null));
+  }
+
+  SqlSubqueryGraphExecution(
+      RelationalSession relationalSession,
+      BoundSqlStatement statement,
+      SqlExpressionEvaluator evaluator,
+      SqlTemporalContext temporalContext,
+      SqlSessionShapeBudget shapeBudget) {
     bound = statement;
     query = statement.executableQuery;
     projections = new SqlNestedProjectionExecution(
-        statement, evaluator, temporalContext);
+        statement, evaluator, temporalContext, shapeBudget);
     cache = new SqlSubqueryResultCache(query, evaluator);
     SqlSubqueryJoinFrames joined = new SqlSubqueryJoinFrames(
-        relationalSession, statement, evaluator);
+        relationalSession, statement, evaluator, temporalContext, this, shapeBudget);
     frames = new SqlSubqueryFrames(
         relationalSession, statement, evaluator, temporalContext, joined);
     plan = new SqlSubqueryPlan(statement, frames.access(), cache);
+    joined.plan(plan);
     predicates = new SqlSubqueryPredicateBank(
-        statement, evaluator, temporalContext, this, frames, plan);
+        statement, evaluator, temporalContext, this, frames, plan, shapeBudget);
     scanner = new SqlSubqueryValueScanner(
         query, frames, projections, cache, evaluator, this, plan);
   }
@@ -51,7 +66,7 @@ final class SqlSubqueryGraphExecution
       status = predicates.prepare(block);
       boolean valueProjection = block > root && valueProjection(block);
       if (status.isOk() && valueProjection) status = projections.prepare(block);
-      if (status.isOk()) frames.prepare(
+      if (status.isOk()) status = frames.prepare(
           block,
           valueProjection,
           valueProjection && text(query.block(block).projectionType()),
@@ -105,6 +120,14 @@ final class SqlSubqueryGraphExecution
     frames.clearExternalJoinSource();
   }
 
+  void registerExternalUniversal(int block, SqlUniversalJoinRows rows) {
+    frames.registerExternalUniversal(block, rows);
+  }
+
+  void clearExternalUniversal() {
+    frames.clearExternalUniversal();
+  }
+
   HeapRowResult evaluatedRow(int block, HeapRowResult original) {
     return frames.evaluatedRow(block, original);
   }
@@ -125,6 +148,31 @@ final class SqlSubqueryGraphExecution
   }
 
   SqlSubqueryPlan plan() { return plan; }
+  SqlSubqueryResultCache resultCache() { return cache; }
+  SqlNestedRowProvider rows() { return frames; }
+
+  StatusCode beginBlockSource(int block) { return frames.begin(block); }
+
+  StatusCode nextBlockSource(int block, SqlBlockRow destination) {
+    while (true) {
+      StatusCode status = frames.next(block);
+      if (!status.isOk()) return status;
+      status = accept(block);
+      if (!status.isOk()) return status;
+      if (!accepted(block)) {
+        frames.release(block);
+        continue;
+      }
+      SqlBlockRow source = frames.blockRow(block, 0);
+      status = source == null ? StatusCode.CORRUPTION : destination.copyFrom(source);
+      frames.release(block);
+      return status;
+    }
+  }
+
+  StatusCode finishBlockSource(int block, StatusCode body) {
+    return frames.finish(block, body);
+  }
 
   SqlJoinPredicateCallback joinPredicates(int block) {
     return predicates.joinPredicates(block);
@@ -134,6 +182,7 @@ final class SqlSubqueryGraphExecution
     StatusCode status = close();
     if (!status.isOk()) return status;
     frames.clearExternalJoinSource();
+    frames.clearExternalUniversal();
     predicates.reset();
     projections.reset();
     return StatusCode.OK;

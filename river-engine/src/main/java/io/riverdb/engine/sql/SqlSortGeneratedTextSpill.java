@@ -1,34 +1,62 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.TableSchema;
+import io.riverdb.base.sql.SqlShapeLimits;
 import java.nio.ByteBuffer;
 
 /** Owns the optional fixed-lane generated-text portion of sort spill records. */
 final class SqlSortGeneratedTextSpill {
-  static final int MAXIMUM_RECORD_BYTES =
-      TableSchema.MAXIMUM_COLUMNS * (1 + SqlProjectedRow.MAXIMUM_GENERATED_TEXT);
-  private static final int MAXIMUM_RUNS = 64;
+  private static final int MERGE_SLOTS = 2;
   private static final int LANE_BYTES = 1 + SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
 
+  private final SqlRetainedArrayAllocator allocator;
   private byte[] mergeLengths;
   private char[] mergeCharacters;
   private byte[] outputLengths;
-  private char[][] outputCharacters;
+  private char[] outputCharacters;
   private int projectionCount;
+  private int projectionCapacity;
   private boolean enabled;
 
-  void begin(boolean generatedText, int projections) {
-    enabled = generatedText;
-    projectionCount = projections;
-    if (!enabled || mergeLengths != null) return;
-    mergeLengths = new byte[MAXIMUM_RUNS * TableSchema.MAXIMUM_COLUMNS];
-    mergeCharacters = new char[
-        MAXIMUM_RUNS * TableSchema.MAXIMUM_COLUMNS
-            * SqlProjectedRow.MAXIMUM_GENERATED_TEXT];
-    outputLengths = new byte[TableSchema.MAXIMUM_COLUMNS];
-    outputCharacters = new char[
-        TableSchema.MAXIMUM_COLUMNS][SqlProjectedRow.MAXIMUM_GENERATED_TEXT];
+  SqlSortGeneratedTextSpill() { this(SqlRetainedArrayAllocator.STANDARD); }
+
+  SqlSortGeneratedTextSpill(SqlRetainedArrayAllocator retainedAllocator) {
+    allocator = retainedAllocator;
+  }
+
+  StatusCode begin(boolean generatedText, int projections) {
+    if (!generatedText) {
+      enabled = false;
+      projectionCount = projections;
+      return StatusCode.OK;
+    }
+    int capacity = BoundedArrayGrowth.capacity(
+        projectionCapacity, projections, SqlShapeLimits.MAX_RESULT_COLUMNS, 8);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (capacity == projectionCapacity) {
+      enabled = true;
+      projectionCount = projections;
+      return StatusCode.OK;
+    }
+    try {
+      byte[] nextMergeLengths = allocator.bytes(MERGE_SLOTS * capacity);
+      char[] nextMergeCharacters = allocator.characters(
+          MERGE_SLOTS * capacity * SqlProjectedRow.MAXIMUM_GENERATED_TEXT);
+      byte[] nextOutputLengths = allocator.bytes(capacity);
+      char[] nextOutputCharacters = allocator.characters(
+          capacity * SqlProjectedRow.MAXIMUM_GENERATED_TEXT);
+      mergeLengths = nextMergeLengths;
+      mergeCharacters = nextMergeCharacters;
+      outputLengths = nextOutputLengths;
+      outputCharacters = nextOutputCharacters;
+      projectionCapacity = capacity;
+      projectionCount = projections;
+      enabled = true;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   int recordBytes() {
@@ -41,7 +69,7 @@ final class SqlSortGeneratedTextSpill {
       byte[] textLengths,
       char[] text) {
     if (!enabled) return;
-    int laneStart = row * TableSchema.MAXIMUM_COLUMNS;
+    int laneStart = row * projectionCount;
     for (int projection = 0; projection < projectionCount; projection++) {
       int lane = laneStart + projection;
       int length = Byte.toUnsignedInt(textLengths[lane]);
@@ -55,7 +83,7 @@ final class SqlSortGeneratedTextSpill {
 
   StatusCode read(ByteBuffer record, int run) {
     if (!enabled) return StatusCode.OK;
-    int laneStart = run * TableSchema.MAXIMUM_COLUMNS;
+    int laneStart = run * projectionCapacity;
     for (int projection = 0; projection < projectionCount; projection++) {
       int lane = laneStart + projection;
       int length = Byte.toUnsignedInt(record.get());
@@ -75,16 +103,36 @@ final class SqlSortGeneratedTextSpill {
     return StatusCode.OK;
   }
 
+  void skip(ByteBuffer record) {
+    record.position(record.position() + recordBytes());
+  }
+
+  void writeSlot(ByteBuffer record, int slot) {
+    if (!enabled) return;
+    int laneStart = slot * projectionCapacity;
+    for (int projection = 0; projection < projectionCount; projection++) {
+      int lane = laneStart + projection;
+      int length = Byte.toUnsignedInt(mergeLengths[lane]);
+      record.put((byte) length);
+      int textStart = lane * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
+      for (int index = 0; index < SqlProjectedRow.MAXIMUM_GENERATED_TEXT; index++) {
+        record.put((byte) (index < length ? mergeCharacters[textStart + index] : 0));
+      }
+    }
+  }
+
   void capture(int run) {
     if (!enabled) return;
-    int laneStart = run * TableSchema.MAXIMUM_COLUMNS;
+    int laneStart = run * projectionCapacity;
     for (int projection = 0; projection < projectionCount; projection++) {
       int lane = laneStart + projection;
       int length = Byte.toUnsignedInt(mergeLengths[lane]);
       outputLengths[projection] = (byte) length;
       int textStart = lane * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
       for (int index = 0; index < length; index++) {
-        outputCharacters[projection][index] = mergeCharacters[textStart + index];
+        outputCharacters[
+            projection * SqlProjectedRow.MAXIMUM_GENERATED_TEXT + index] =
+            mergeCharacters[textStart + index];
       }
     }
   }
@@ -93,7 +141,9 @@ final class SqlSortGeneratedTextSpill {
     return enabled ? Byte.toUnsignedInt(outputLengths[projection]) : 0;
   }
 
-  char[] output(int projection) {
-    return outputCharacters[projection];
+  char[] output() { return outputCharacters; }
+
+  int outputOffset(int projection) {
+    return projection * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
   }
 }

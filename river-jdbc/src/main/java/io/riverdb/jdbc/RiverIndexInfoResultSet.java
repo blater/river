@@ -1,6 +1,7 @@
 package io.riverdb.jdbc;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
@@ -13,7 +14,8 @@ import java.sql.Types;
 
 /** Bounded JDBC index rows backed by River's durable index catalog. */
 final class RiverIndexInfoResultSet extends AbstractResultSet {
-  private static final int MAXIMUM_INDEXES = 5;
+  private static final int MAXIMUM_ROWS =
+      SqlShapeLimits.MAX_TABLE_INDEXES * SqlShapeLimits.MAX_KEY_PARTS;
   private static final String TABLE = "TABLE";
   private static final String[] COLUMN_NAMES = {
       "TABLE_CAT",
@@ -78,9 +80,7 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
   private final char[] catalogType =
       new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private final char[] text = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
-  private final String[] indexNames = new String[MAXIMUM_INDEXES];
-  private final String[] columnNames = new String[MAXIMUM_INDEXES];
-  private final boolean[] uniqueIndexes = new boolean[MAXIMUM_INDEXES];
+  private final JdbcIndexMetadataRows indexRows = new JdbcIndexMetadataRows();
   private final String requestedTable;
   private final boolean uniqueOnly;
   private RiverQuery query;
@@ -412,14 +412,13 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
       if (uniqueOnly && !unique) {
         continue;
       }
-      if (indexCount >= MAXIMUM_INDEXES) {
+      if (indexCount >= MAXIMUM_ROWS) {
         throw JdbcExceptions.failure(
             StatusCode.INVARIANT_BROKEN,
             "decode table index count");
       }
-      indexNames[indexCount] = source.isNull(0) ? null : copyText(0);
-      columnNames[indexCount] = copyText(1);
-      uniqueIndexes[indexCount] = unique;
+      indexRows.append(indexCount, source.isNull(0) ? null : copyText(0),
+          copyText(1), unique);
       indexCount++;
     }
     sortIndexes();
@@ -462,27 +461,11 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
   }
 
   private int compare(int left, int right) {
-    int uniqueness = Boolean.compare(uniqueIndexes[right], uniqueIndexes[left]);
-    if (uniqueness != 0) {
-      return uniqueness;
-    }
-    String leftName = indexNames[left];
-    String rightName = indexNames[right];
-    return leftName == null
-        ? rightName == null ? 0 : -1
-        : rightName == null ? 1 : leftName.compareTo(rightName);
+    return indexRows.compare(left, right);
   }
 
   private void swap(int left, int right) {
-    String indexName = indexNames[left];
-    indexNames[left] = indexNames[right];
-    indexNames[right] = indexName;
-    String columnName = columnNames[left];
-    columnNames[left] = columnNames[right];
-    columnNames[right] = columnName;
-    boolean unique = uniqueIndexes[left];
-    uniqueIndexes[left] = uniqueIndexes[right];
-    uniqueIndexes[right] = unique;
+    indexRows.swap(left, right);
   }
 
   private Object readValue(int column) throws SQLException {
@@ -490,11 +473,11 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
     int index = indexPosition - 1;
     Object value = switch (column) {
       case 3 -> requestedTable;
-      case 4 -> !uniqueIndexes[index];
-      case 6 -> indexNames[index];
+      case 4 -> !indexRows.unique(index);
+      case 6 -> indexRows.name(index);
       case 7 -> Short.valueOf(DatabaseMetaData.tableIndexOther);
-      case 8 -> Short.valueOf((short) 1);
-      case 9 -> columnNames[index];
+      case 8 -> Short.valueOf(indexRows.ordinal(index));
+      case 9 -> indexRows.column(index);
       case 10 -> "A";
       case 11, 12 -> Long.valueOf(0);
       default -> null;
@@ -520,8 +503,7 @@ final class RiverIndexInfoResultSet extends AbstractResultSet {
 
   private void releaseRows() {
     for (int index = 0; index < indexCount; index++) {
-      indexNames[index] = null;
-      columnNames[index] = null;
+      indexRows.clear(index);
     }
   }
 

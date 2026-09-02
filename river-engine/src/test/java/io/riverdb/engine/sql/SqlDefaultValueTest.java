@@ -120,18 +120,24 @@ final class SqlDefaultValueTest {
     assertEquals(7, result.valueAt(0));
     assertEquals(-1, result.valueAt(1));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute(
             "INSERT INTO settings (id, required, optional) VALUES "
                 + "(9, DEFAULT, 90), (10, DEFAULT, DEFAULT)",
             result));
+    assertEquals(2, result.affectedRows());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute("UPDATE settings SET optional=DEFAULT WHERE id=1", result));
     assertEquals(
-        StatusCode.CONFLICT,
+        StatusCode.OK,
         session.execute("SELECT required FROM settings WHERE id=9", result));
-    assertDefaultIndexRows(session, 5, 21);
+    assertEquals(7, result.valueAt(0));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT optional FROM settings WHERE id=10", result));
+    assertTrue(result.isNull(0));
+    assertDefaultIndexRows(session, 7, 40);
 
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());

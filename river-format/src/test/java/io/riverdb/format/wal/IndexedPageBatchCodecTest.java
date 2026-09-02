@@ -132,6 +132,8 @@ final class IndexedPageBatchCodecTest {
             13,
             recordStart,
             recordEnd,
+            PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+            PageCodec.SCALAR_OWNER_KEY_ID,
             0,
             payload,
             pageOffset,
@@ -175,13 +177,17 @@ final class IndexedPageBatchCodecTest {
     assertEquals(
         StatusCode.OK,
         PageCodec.encodeAt(
-            database, wal, 7, 1, 20, 21, 0, payload,
+            database, wal, 7, 1, 20, 21,
+            PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+            PageCodec.SCALAR_OWNER_KEY_ID, 0, payload,
             IndexedPageBatchCodec.pageOffset(0, 2), new CRC32C()));
     payload.limit(bytes);
     assertEquals(
         StatusCode.OK,
         PageCodec.encodeAt(
-            database, wal, 7, 2, 20, 21, 0, payload,
+            database, wal, 7, 2, 20, 21,
+            PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+            PageCodec.SCALAR_OWNER_KEY_ID, 0, payload,
             IndexedPageBatchCodec.pageOffset(1, 2), new CRC32C()));
     payload.limit(bytes);
     IndexedPageBatchHeader header = new IndexedPageBatchHeader();
@@ -193,7 +199,9 @@ final class IndexedPageBatchCodecTest {
     assertEquals(
         StatusCode.OK,
         PageCodec.encodeAt(
-            database, wal, 8, 2, 20, 21, 0, payload,
+            database, wal, 8, 2, 20, 21,
+            PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+            PageCodec.SCALAR_OWNER_KEY_ID, 0, payload,
             IndexedPageBatchCodec.pageOffset(1, 2), new CRC32C()));
     payload.limit(bytes);
     assertEquals(

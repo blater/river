@@ -16,6 +16,9 @@ final class SqlCommandExpressionView {
   static long mutationOperand(SqlCommand command, int expression, int node) {
     return command.mutationExpressions.operand(expression, node);
   }
+  static long mutationOperandHigh(SqlCommand command, int expression, int node) {
+    return command.mutationExpressions.operandHigh(expression, node);
+  }
   static int mutationDescriptor(SqlCommand command, int expression, int node) {
     return command.mutationExpressions.descriptor(expression, node);
   }

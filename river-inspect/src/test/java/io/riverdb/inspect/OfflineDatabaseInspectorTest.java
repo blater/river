@@ -124,6 +124,8 @@ final class OfflineDatabaseInspectorTest {
             1,
             WalFileHeaderCodec.HEADER_BYTES,
             WalFileHeaderCodec.HEADER_BYTES + WalRecordCodec.HEADER_BYTES + 3,
+            PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+            PageCodec.SCALAR_OWNER_KEY_ID,
             1,
             page,
             new CRC32C()));

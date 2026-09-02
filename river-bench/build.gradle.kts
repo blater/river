@@ -1,11 +1,23 @@
+import org.gradle.api.tasks.compile.JavaCompile
+
 // Module policy and production dependencies are declared by the root build.
 
 dependencies {
+  implementation(project(":river-engine"))
+  implementation(project(":river-engine-api"))
+  implementation(project(":river-server"))
   implementation("com.fasterxml.jackson.core:jackson-databind:2.20.0")
   implementation("org.hdrhistogram:HdrHistogram:2.2.2")
   implementation("org.openjdk.jmh:jmh-core:1.37")
   annotationProcessor("org.openjdk.jmh:jmh-generator-annprocess:1.37")
   implementation("org.openjdk.jol:jol-core:0.17")
+  testImplementation(project(":river-engine"))
+  testImplementation(project(":river-engine-api"))
+  testImplementation(project(":river-server"))
+}
+
+tasks.withType<JavaCompile>().configureEach {
+  options.compilerArgs.add("-Xlint:-processing")
 }
 
 tasks.register<JavaExec>("benchmarkSmoke") {
@@ -45,4 +57,13 @@ tasks.register<JavaExec>("jmhSmoke") {
     "-w", "100ms",
     "-r", "100ms"
   )
+}
+
+tasks.register<JavaExec>("tpccAcceptance") {
+  group = "verification"
+  description = "Runs the JDBC-only one-warehouse TPC-C engineering acceptance."
+  classpath = sourceSets.main.get().runtimeClasspath
+  mainClass.set("io.riverdb.bench.tpcc.TpccAcceptanceMain")
+  val riverUrl = providers.gradleProperty("riverTpccUrl")
+  args("--url=${riverUrl.orNull ?: "jdbc:river://localhost:54321"}")
 }

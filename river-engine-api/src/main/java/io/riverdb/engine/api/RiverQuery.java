@@ -13,6 +13,10 @@ public interface RiverQuery {
 
   boolean isActive();
 
+  default QueryMetadata metadata() {
+    return null;
+  }
+
   int columnCount();
 
   CharSequence columnName(int index);

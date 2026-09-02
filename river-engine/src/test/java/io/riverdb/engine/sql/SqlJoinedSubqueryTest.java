@@ -109,36 +109,23 @@ final class SqlJoinedSubqueryTest {
         + "g.observed AT TIME ZONE 'Europe/London'=z.observed "
         + "WHERE g.id=o.id)";
 
-    assertEquals(StatusCode.OK, fixture.session.beginScan(temporal, cursor));
-    assertEquals(StatusCode.OK, fixture.session.nextScan(cursor, row));
-    assertEquals(1, row.valueAt(0));
     assertEquals(
         StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
-        fixture.session.nextScan(cursor, row));
+        fixture.session.beginScan(temporal, cursor));
     assertFalse(row.isAvailable());
-    assertEquals(
-        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
-        fixture.session.nextScan(cursor, row));
-    assertFalse(row.isAvailable());
-    assertEquals(StatusCode.OK, fixture.session.closeScan(cursor, fixture.result));
+    assertFalse(cursor.isActive());
     assertEquals(StatusCode.OK, cursor.reset());
+    fixture.assertRows("SELECT id FROM outer_rows", 1, 2, 3);
 
     String sql = "SELECT o.id FROM outer_rows o WHERE o.value="
         + "(SELECT d.value FROM role_rows r JOIN duplicate_rows d "
         + "ON r.id=d.owner WHERE r.id=o.id)";
 
-    assertEquals(StatusCode.OK, fixture.session.beginScan(sql, cursor));
-    assertEquals(StatusCode.OK, fixture.session.nextScan(cursor, row));
-    assertEquals(1, row.valueAt(0));
     assertEquals(
         StatusCode.CARDINALITY_VIOLATION,
-        fixture.session.nextScan(cursor, row));
+        fixture.session.beginScan(sql, cursor));
     assertFalse(row.isAvailable());
-    assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
-        fixture.session.nextScan(cursor, row));
-    assertFalse(row.isAvailable());
-    assertEquals(StatusCode.OK, fixture.session.closeScan(cursor, fixture.result));
+    assertFalse(cursor.isActive());
     fixture.assertRows("SELECT id FROM outer_rows", 1, 2, 3);
     StatusCode pointStatus = fixture.session.execute(
         "SELECT lid FROM (SELECT a.id AS lid FROM role_rows a "

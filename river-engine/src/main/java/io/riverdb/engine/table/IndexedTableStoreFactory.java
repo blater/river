@@ -18,18 +18,47 @@ final class IndexedTableStoreFactory {
       DatabaseIncarnation database,
       WalGeneration generation,
       IndexedTableStoreOpenResult result) {
-    if (!validInput(directory, wal, database, generation, result)) {
+    return create(
+        directory, wal, database, generation, IndexedPageCacheConfig.DEFAULT, result);
+  }
+
+  static StatusCode create(
+      DurableDirectory directory,
+      LocalWal wal,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      IndexedPageCacheConfig pageCacheConfig,
+      IndexedTableStoreOpenResult result) {
+    if (pageCacheConfig == null
+        || !validInput(directory, wal, database, generation, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    DirectoryOperationResult operation = new DirectoryOperationResult();
+    DirectoryOperationResult operation;
+    DirectoryOperationResult rows;
+    DirectoryOperationResult versions;
+    try {
+      operation = new DirectoryOperationResult();
+      rows = new DirectoryOperationResult();
+      versions = new DirectoryOperationResult();
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     StatusCode status = directory.createFile(IndexedTableStore.FILE_NAME, operation);
     if (!status.isOk()) {
       return status;
     }
-    result.set(new IndexedTableStore(
-        directory, operation.file(), wal, database, generation));
-    return StatusCode.OK;
+    status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, rows);
+    if (!status.isOk()) {
+      return cleanup(status, null, operation.file());
+    }
+    status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, versions);
+    if (!status.isOk()) {
+      return cleanup(status, rows.file(), operation.file());
+    }
+    return IndexedTableStoreConstruction.construct(
+        directory, operation, rows, versions, wal, database, generation, result,
+        pageCacheConfig);
   }
 
   static StatusCode open(
@@ -43,7 +72,16 @@ final class IndexedTableStoreFactory {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    DirectoryOperationResult operation = new DirectoryOperationResult();
+    DirectoryOperationResult operation;
+    DirectoryOperationResult rows;
+    DirectoryOperationResult versions;
+    try {
+      operation = new DirectoryOperationResult();
+      rows = new DirectoryOperationResult();
+      versions = new DirectoryOperationResult();
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     StatusCode status = directory.reopen(IndexedTableStore.FILE_NAME, operation);
     if (status == StatusCode.CONFLICT && createWhenMissing) {
       status = directory.createFile(IndexedTableStore.FILE_NAME, operation);
@@ -51,13 +89,16 @@ final class IndexedTableStoreFactory {
     if (!status.isOk()) {
       return status;
     }
-    IndexedTableStore store = new IndexedTableStore(
-        directory, operation.file(), wal, database, generation);
-    status = store.recoverFromWal();
-    if (status.isOk()) {
-      status = store.flush();
+    status = openRowDirectory(directory, rows);
+    if (!status.isOk()) {
+      return cleanup(status, null, operation.file());
     }
-    return finish(store, result, status);
+    status = openVersionDirectory(directory, versions);
+    if (!status.isOk()) {
+      return cleanup(status, rows.file(), operation.file());
+    }
+    return IndexedTableStoreConstruction.open(
+        directory, operation, rows, versions, wal, database, generation, result);
   }
 
   static StatusCode openCheckpoint(
@@ -66,9 +107,7 @@ final class IndexedTableStoreFactory {
       DatabaseIncarnation database,
       CheckpointState checkpoint,
       IndexedTableStoreOpenResult result) {
-    if (checkpoint == null
-        || !checkpoint.isAvailable()
-        || !checkpoint.database().equals(database)) {
+    if (!validCheckpoint(checkpoint, database)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     WalGeneration generation = checkpoint.walGeneration();
@@ -76,33 +115,67 @@ final class IndexedTableStoreFactory {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    DirectoryOperationResult operation = new DirectoryOperationResult();
+    DirectoryOperationResult operation;
+    DirectoryOperationResult rows;
+    DirectoryOperationResult versions;
+    try {
+      operation = new DirectoryOperationResult();
+      rows = new DirectoryOperationResult();
+      versions = new DirectoryOperationResult();
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     StatusCode status = directory.reopen(IndexedTableStore.FILE_NAME, operation);
     if (!status.isOk()) {
       return status == StatusCode.CONFLICT ? StatusCode.CORRUPTION : status;
     }
-    IndexedTableStore store = new IndexedTableStore(
-        directory, operation.file(), wal, database, generation);
-    status = store.loadCheckpoint(checkpoint);
-    if (status.isOk()) {
-      status = store.recoverFromWal();
+    status = openRowDirectory(directory, rows);
+    if (!status.isOk()) {
+      return cleanup(status, null, operation.file());
     }
-    if (status.isOk()) {
-      status = store.flush();
+    status = openVersionDirectory(directory, versions);
+    if (!status.isOk()) {
+      return cleanup(status, rows.file(), operation.file());
     }
-    return finish(store, result, status);
+    return IndexedTableStoreConstruction.openCheckpoint(
+        directory, operation, rows, versions, wal, database, generation, checkpoint, result);
   }
 
-  private static StatusCode finish(
-      IndexedTableStore store,
-      IndexedTableStoreOpenResult result,
-      StatusCode status) {
-    if (!status.isOk()) {
-      store.closeOpenFile();
-      return status;
+  private static boolean validCheckpoint(
+      CheckpointState checkpoint, DatabaseIncarnation database) {
+    return checkpoint != null
+        && checkpoint.isAvailable()
+        && checkpoint.database().equals(database);
+  }
+
+  private static StatusCode openRowDirectory(
+      DurableDirectory directory,
+      DirectoryOperationResult result) {
+    StatusCode status = directory.reopen(
+        IndexedTableStore.ROW_DIRECTORY_FILE_NAME, result);
+    if (status == StatusCode.CONFLICT) {
+      status = directory.createFile(IndexedTableStore.ROW_DIRECTORY_FILE_NAME, result);
     }
-    result.set(store);
-    return StatusCode.OK;
+    return status;
+  }
+
+  private static StatusCode openVersionDirectory(
+      DurableDirectory directory,
+      DirectoryOperationResult result) {
+    StatusCode status = directory.reopen(
+        IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, result);
+    if (status == StatusCode.CONFLICT) {
+      status = directory.createFile(IndexedTableStore.VERSION_DIRECTORY_FILE_NAME, result);
+    }
+    return status;
+  }
+
+  private static StatusCode cleanup(
+      StatusCode operation,
+      io.riverdb.platform.file.DurableFile rows,
+      io.riverdb.platform.file.DurableFile pages) {
+    StatusCode cleanup = IndexedOpenFiles.close(null, rows, pages);
+    return cleanup.isOk() ? operation : cleanup;
   }
 
   private static boolean validInput(

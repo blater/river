@@ -19,8 +19,8 @@ final class SqlMutationRowEncoder {
   private final SqlInsertRowEncoder inserts;
 
   private int payloadOffset;
-  private long nullMask;
   private long mutationValue;
+  private long mutationHigh;
   private int mutationDescriptor;
   private boolean mutationNull;
 
@@ -66,7 +66,7 @@ final class SqlMutationRowEncoder {
     TableDefinition table = bound.table;
     updatedRow.clear();
     payloadOffset = table.fixedRowBytes();
-    nullMask = sourceRow.getLong(table.nullMaskOffset());
+    SqlPhysicalRowNulls.clear(updatedRow, table);
     for (int column = 1; column < table.columnCount(); column++) {
       status = encodeUpdatedColumn(
           command, bound, source, primaryKey, column);
@@ -91,7 +91,9 @@ final class SqlMutationRowEncoder {
       int column) {
     int update = updateIndex(bound, column);
     boolean nullValue = update >= 0
-        ? command.updateIsNull(update) : (nullMask & 1L << column) != 0;
+        ? command.updateIsNull(update)
+            || command.updateIsDefault(update) && !bound.table.hasDefault(column)
+        : SqlPhysicalRowNulls.get(source, bound.table, column);
     if (update >= 0 && command.updateHasExpression(update)) {
       StatusCode status = evaluateMutation(
           command.updateExpression(update), primaryKey, source, bound);
@@ -101,7 +103,7 @@ final class SqlMutationRowEncoder {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
     }
-    setNull(column, nullValue);
+    setNull(bound.table, column, nullValue);
     return bound.table.isVarchar(column)
         ? encodeUpdatedText(command, bound, update, column, nullValue)
         : encodeUpdatedLong(
@@ -114,7 +116,7 @@ final class SqlMutationRowEncoder {
       int update,
       int column,
       boolean nullValue) {
-    int slot = (column - 1) * Long.BYTES;
+    int slot = bound.table.valueOffset(column);
     if (nullValue) {
       updatedRow.putLong(slot, 0);
       return StatusCode.OK;
@@ -139,15 +141,17 @@ final class SqlMutationRowEncoder {
       int update,
       int column,
       boolean nullValue) {
-    int slot = (column - 1) * Long.BYTES;
+    int slot = bound.table.valueOffset(column);
     StatusCode status = resolveUpdatedLong(
         command, bound.table, update, column, slot, nullValue);
     if (!status.isOk()) {
       return status;
     }
     long value = fixedValues.value();
+    long high = fixedValues.highValue();
     if (update >= 0 && command.updateHasExpression(update) && !nullValue) {
       value = mutationValue;
+      high = mutationHigh;
     }
     if (update >= 0 && !nullValue && !command.updateIsDefault(update)) {
       int sourceDescriptor = command.updateHasExpression(update)
@@ -155,14 +159,18 @@ final class SqlMutationRowEncoder {
           : command.updateTypeDescriptor(update);
       int targetDescriptor = bound.table.typeDescriptor(column);
       if (sourceDescriptor != targetDescriptor) {
-        status = coerceMutation(value, sourceDescriptor, targetDescriptor);
+        status = coerceMutation(high, value, sourceDescriptor, targetDescriptor);
         if (!status.isOk()) {
           return status;
         }
         value = fixedValues.value();
+        high = fixedValues.highValue();
       }
     }
     updatedRow.putLong(slot, value);
+    if (SqlTypeDescriptor.isWideDecimal(bound.table.typeDescriptor(column))) {
+      updatedRow.putLong(bound.table.highValueOffset(column), high);
+    }
     return StatusCode.OK;
   }
 
@@ -178,19 +186,23 @@ final class SqlMutationRowEncoder {
       return StatusCode.OK;
     }
     if (update < 0) {
-      fixedValues.set(sourceRow.getLong(slot));
+      long low = sourceRow.getLong(slot);
+      fixedValues.set(
+          SqlTypeDescriptor.isWideDecimal(table.typeDescriptor(column))
+              ? sourceRow.getLong(table.highValueOffset(column)) : low >> 63,
+          low);
       return StatusCode.OK;
     }
     if (command.updateIsDefault(update)) {
       return fixedValues.defaultValue(table, column);
     }
-    fixedValues.set(command.updateValue(update));
+    fixedValues.set(command.updateValueHigh(update), command.updateValue(update));
     return StatusCode.OK;
   }
 
   private StatusCode coerceMutation(
-      long value, int sourceDescriptor, int targetDescriptor) {
-    return fixedValues.coerce(value, sourceDescriptor, targetDescriptor);
+      long high, long value, int sourceDescriptor, int targetDescriptor) {
+    return fixedValues.coerce(high, value, sourceDescriptor, targetDescriptor);
   }
 
   private StatusCode evaluateMutation(
@@ -202,6 +214,7 @@ final class SqlMutationRowEncoder {
         expression, primaryKey, source);
     if (status.isOk()) {
       mutationNull = rowExpressions.resultNull();
+      mutationHigh = rowExpressions.resultHighValue();
       mutationValue = rowExpressions.resultValue();
       mutationDescriptor = rowExpressions.resultDescriptor();
     }
@@ -228,16 +241,11 @@ final class SqlMutationRowEncoder {
     return StatusCode.OK;
   }
 
-  private void setNull(int column, boolean value) {
-    if (value) {
-      nullMask |= 1L << column;
-    } else {
-      nullMask &= ~(1L << column);
-    }
+  private void setNull(TableDefinition table, int column, boolean value) {
+    SqlPhysicalRowNulls.set(updatedRow, table, column, value);
   }
 
   private StatusCode finishRow(ByteBuffer row, TableDefinition table) {
-    row.putLong(table.nullMaskOffset(), nullMask);
     row.position(0);
     row.limit(payloadOffset);
     return table.isValidRow(row)

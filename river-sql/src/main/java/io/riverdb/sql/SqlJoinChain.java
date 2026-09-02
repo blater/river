@@ -1,29 +1,33 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Command-owned bounded left-associative JOIN syntax. */
 public final class SqlJoinChain {
-  public static final int MAXIMUM_JOIN_ROLES = 8;
+  final SqlJoinAllocator allocator;
+  public static final int MAXIMUM_JOIN_ROLES = SqlShapeLimits.MAX_JOIN_ROLES;
   public static final int MAXIMUM_JOIN_STAGES = MAXIMUM_JOIN_ROLES - 1;
   public static final int SOURCE_RELATION = 1;
   public static final int INNER = 1;
   public static final int LEFT = 2;
 
-  private final SqlIdentifier[] tableNames = new SqlIdentifier[MAXIMUM_JOIN_ROLES];
-  private final SqlIdentifier[] aliases = new SqlIdentifier[MAXIMUM_JOIN_ROLES];
-  private final byte[] sourceKinds = new byte[MAXIMUM_JOIN_ROLES];
-  private final byte[] rightRoles = new byte[MAXIMUM_JOIN_STAGES];
-  private final byte[] joinKinds = new byte[MAXIMUM_JOIN_STAGES];
-  private final SqlBooleanPredicateProgram[] onPrograms =
-      new SqlBooleanPredicateProgram[MAXIMUM_JOIN_STAGES];
-  private int roleCount;
-  private int stageCount;
+  SqlIdentifier[] tableNames = new SqlIdentifier[8];
+  SqlIdentifier[] aliases = new SqlIdentifier[8];
+  int[] sourceKinds = new int[8];
+  int[] rightRoles = new int[8];
+  int[] joinKinds = new int[8];
+  SqlBooleanPredicateProgram[] onPrograms = new SqlBooleanPredicateProgram[8];
+  int roleCount;
+  int stageCount;
 
-  public SqlJoinChain() {
+  public SqlJoinChain() { this(SqlJoinAllocator.STANDARD); }
+
+  SqlJoinChain(SqlJoinAllocator joinAllocator) {
+    allocator = joinAllocator;
     for (int role = 0; role < tableNames.length; role++) {
-      tableNames[role] = new SqlIdentifier();
-      aliases[role] = new SqlIdentifier();
+      tableNames[role] = allocator.identifier();
+      aliases[role] = allocator.identifier();
     }
   }
 
@@ -36,11 +40,12 @@ public final class SqlJoinChain {
   }
 
   int appendStage(boolean left) {
-    if (roleCount < 1 || roleCount >= MAXIMUM_JOIN_ROLES) return -1;
+    if (roleCount < 1 || roleCount >= MAXIMUM_JOIN_ROLES
+        || !SqlJoinCapacity.ensureStage(this, roleCount + 1)) return -1;
     int stage = stageCount++;
     int role = roleCount++;
-    rightRoles[stage] = (byte) role;
-    joinKinds[stage] = (byte) (left ? LEFT : INNER);
+    rightRoles[stage] = role;
+    joinKinds[stage] = left ? LEFT : INNER;
     sourceKinds[role] = SOURCE_RELATION;
     return stage;
   }
@@ -54,29 +59,11 @@ public final class SqlJoinChain {
   }
 
   SqlBooleanPredicateProgram writableOnPredicates(int stage) {
-    if (!validStage(stage)) return null;
-    if (onPrograms[stage] == null) {
-      onPrograms[stage] = new SqlBooleanPredicateProgram();
-    }
-    return onPrograms[stage];
+    return validStage(stage) ? onPrograms[stage] : null;
   }
 
-  public void copyFrom(SqlJoinChain source) {
-    reset();
-    roleCount = source.roleCount;
-    stageCount = source.stageCount;
-    for (int role = 0; role < roleCount; role++) {
-      tableNames[role].copyFrom(source.tableNames[role]);
-      aliases[role].copyFrom(source.aliases[role]);
-      sourceKinds[role] = source.sourceKinds[role];
-    }
-    for (int stage = 0; stage < stageCount; stage++) {
-      rightRoles[stage] = source.rightRoles[stage];
-      joinKinds[stage] = source.joinKinds[stage];
-      if (source.onPrograms[stage] != null && source.onPrograms[stage].isAvailable()) {
-        writableOnPredicates(stage).copyFrom(source.onPrograms[stage]);
-      }
-    }
+  public StatusCode copyFrom(SqlJoinChain source) {
+    return SqlJoinChainCopy.copy(this, source);
   }
 
   public void reset() {
@@ -92,6 +79,12 @@ public final class SqlJoinChain {
     }
     roleCount = 0;
     stageCount = 0;
+  }
+
+  void clearPredicates() {
+    for (int stage = 0; stage < stageCount; stage++) {
+      if (onPrograms[stage] != null) onPrograms[stage].reset();
+    }
   }
 
   StatusCode validateStage(int stage) {
@@ -132,13 +125,13 @@ public final class SqlJoinChain {
   }
   public SqlIdentifier alias(int role) { return validRole(role) ? aliases[role] : null; }
   public int sourceKind(int role) {
-    return validRole(role) ? Byte.toUnsignedInt(sourceKinds[role]) : 0;
+    return validRole(role) ? sourceKinds[role] : 0;
   }
   public int rightRole(int stage) {
-    return validStage(stage) ? Byte.toUnsignedInt(rightRoles[stage]) : -1;
+    return validStage(stage) ? rightRoles[stage] : -1;
   }
   public int joinKind(int stage) {
-    return validStage(stage) ? Byte.toUnsignedInt(joinKinds[stage]) : 0;
+    return validStage(stage) ? joinKinds[stage] : 0;
   }
   public boolean isLeft(int stage) { return joinKind(stage) == LEFT; }
   public SqlBooleanPredicateProgram onPredicates(int stage) {

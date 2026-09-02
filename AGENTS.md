@@ -4,6 +4,19 @@ This file is the short operational contract for coding agents and contributors.
 The detailed rationale lives in
 [`docs/plans/river-engineering-personas-and-performance-charter.md`](docs/plans/river-engineering-personas-and-performance-charter.md).
 
+## Replace; do not preserve legacy behavior
+
+- Architectural improvements replace the superseded design completely. Delete
+  the old behavior, APIs, adapters, feature flags, tests, scratch state, and
+  duplicate code paths in the same delivery.
+- Backward compatibility with unreleased River behavior is a negative: it
+  increases ambiguity, impedes delivery, and is not a reason to retain code.
+- Do not introduce transitional wrappers or leave a legacy path for incremental
+  caller migration. Change all River-owned callers and their tests together.
+- Preserve compatibility only for an explicit external contract required by
+  the user. Such an exception must name the contract, its owner, and its removal
+  condition; implementation convenience is never sufficient.
+
 ## Delivery priority
 
 - Deliver the smallest end-to-end database capability that advances the
@@ -15,8 +28,7 @@ The detailed rationale lives in
 - Keep planned modules unwired and empty until production code needs the
   boundary.
 - River is greenfield before V1.0. Change internal APIs and on-disk formats
-  directly when that produces a cleaner design. Do not build compatibility
-  adapters for unreleased River versions.
+  directly when that produces a cleaner design.
 
 ## Persona selection
 

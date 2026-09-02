@@ -15,4 +15,5 @@ public final class IndexedTableStoreOpenResult {
   public void reset() {
     store = null;
   }
+
 }

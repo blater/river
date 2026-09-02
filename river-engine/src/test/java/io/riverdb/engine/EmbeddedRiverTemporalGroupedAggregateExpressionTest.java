@@ -41,10 +41,32 @@ final class EmbeddedRiverTemporalGroupedAggregateExpressionTest {
     assertOrderedAggregates(session, result);
     assertMaterializedAndSpilledAggregates(session, result);
     assertPostAggregateHaving(session, result);
+    assertSharedTemporalSnapshot(session);
     assertBoundariesAndCleanup(session, result);
 
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static void assertSharedTemporalSnapshot(RiverSession session) {
+    QueryOpenResult opened = new QueryOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        session.beginQuery(
+            "SELECT category,MAX(CURRENT_TIMESTAMP) FROM grouped_moments "
+                + "GROUP BY category "
+                + "HAVING MAX(CURRENT_TIMESTAMP)=CURRENT_TIMESTAMP "
+                + "ORDER BY category",
+            opened));
+    RiverQuery query = opened.query();
+    RowResult row = new RowResult();
+    for (long category = 7; category <= 9; category++) {
+      assertEquals(StatusCode.OK, query.next(row));
+      assertEquals(category, row.valueAt(0));
+    }
+    assertEquals(StatusCode.OK, query.next(row));
+    assertEquals(false, row.isAvailable());
+    assertEquals(StatusCode.OK, query.close(new CommandResult()));
   }
 
   private static void createFixture(RiverSession session, CommandResult result) {
@@ -95,8 +117,8 @@ final class EmbeddedRiverTemporalGroupedAggregateExpressionTest {
         session,
         "SELECT category, AVG(day-DATE '2024-02-27') FROM grouped_moments "
             + "WHERE category<9 GROUP BY category ORDER BY category",
-        SqlTypeDescriptor.decimal(18, 0),
-        7, 2, 8, 33);
+        SqlTypeDescriptor.decimal(SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, 6),
+        7, 1_500_000, 8, 33_000_000);
     assertGroups(
         session,
         "SELECT category, COUNT(day+(CURRENT_DATE-day)) FROM grouped_moments "
@@ -178,11 +200,15 @@ final class EmbeddedRiverTemporalGroupedAggregateExpressionTest {
         new long[] {7, 8, 9},
         new String[] {"2024-02-28", "2024-03-31", null});
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT category, MIN(DATE '2024-01-01') FROM grouped_moments "
-                + "GROUP BY category",
-            new QueryOpenResult()));
+        StatusCode.OK,
+        session.execute("SELECT day FROM grouped_moments WHERE id=1", result));
+    long firstDay = result.valueAt(0);
+    assertGroups(
+        session,
+        "SELECT category, MIN(DATE '2024-01-01') FROM grouped_moments "
+            + "GROUP BY category ORDER BY category",
+        SqlTypeDescriptor.DATE,
+        7, firstDay - 58, 8, firstDay - 58, 9, firstDay - 58);
     assertEquals(
         StatusCode.DATATYPE_MISMATCH,
         session.beginQuery(
@@ -209,20 +235,12 @@ final class EmbeddedRiverTemporalGroupedAggregateExpressionTest {
                 + "(6,6,0,DATE '2024-02-27',TIMESTAMP '2024-02-27 09:00:00')",
             result));
 
-    QueryOpenResult opened = new QueryOpenResult();
     assertEquals(
-        StatusCode.OK,
+        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
         session.beginQuery(
             "SELECT category, MAX(observed AT TIME ZONE 'Europe/London') "
                 + "FROM grouped_moments GROUP BY category ORDER BY category",
-            opened));
-    RiverQuery query = opened.query();
-    RowResult row = new RowResult();
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(6, row.valueAt(0));
-    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
-    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
-    assertEquals(StatusCode.OK, query.close(result));
+            new QueryOpenResult()));
     assertEquals(
         StatusCode.OK,
         session.execute("SELECT id FROM grouped_moments WHERE id=1", result));
@@ -275,8 +293,8 @@ final class EmbeddedRiverTemporalGroupedAggregateExpressionTest {
         "SELECT category, AVG(day-DATE '2024-02-27') FROM grouped_moments "
             + "GROUP BY category HAVING ROUND(AVG(day-DATE '2024-02-27'),0)>2 "
             + "ORDER BY category",
-        SqlTypeDescriptor.decimal(18, 0),
-        8, 33);
+        SqlTypeDescriptor.decimal(SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, 6),
+        8, 33_000_000);
     assertGroups(
         session,
         "SELECT category, MAX(day) FROM grouped_moments "
@@ -345,7 +363,7 @@ final class EmbeddedRiverTemporalGroupedAggregateExpressionTest {
   private static void assertPostAggregateFailure(
       RiverSession session, String sql, StatusCode expected) {
     QueryOpenResult opened = new QueryOpenResult();
-    assertEquals(StatusCode.OK, session.beginQuery(sql, opened));
+    assertEquals(StatusCode.OK, session.beginQuery(sql, opened), sql);
     RowResult row = new RowResult();
     assertEquals(expected, opened.query().next(row));
     assertEquals(expected, opened.query().next(row));
@@ -373,11 +391,11 @@ final class EmbeddedRiverTemporalGroupedAggregateExpressionTest {
     RiverQuery query = opened.query();
     RowResult row = new RowResult();
     for (int index = 0; index < expected.length; index += 2) {
-      assertEquals(StatusCode.OK, query.next(row));
-      assertEquals(expected[index], row.valueAt(0));
+      assertEquals(StatusCode.OK, query.next(row), sql);
+      assertEquals(expected[index], row.valueAt(0), sql);
       assertFalse(row.isNull(1));
-      assertEquals(expected[index + 1], row.valueAt(1));
-      assertEquals(descriptor, row.typeDescriptorAt(1));
+      assertEquals(expected[index + 1], row.valueAt(1), sql);
+      assertEquals(descriptor, row.typeDescriptorAt(1), sql);
     }
     assertEquals(StatusCode.OK, query.next(row));
     assertFalse(row.isAvailable());

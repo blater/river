@@ -53,12 +53,14 @@ final class SqlStoredViewPolicy {
     return type == SqlCommandType.DISTINCT_SCAN
         || type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE
+        || type == SqlCommandType.COUNT_DISTINCT
         || type == SqlCommandType.SUM
         || type == SqlCommandType.AVG
         || type == SqlCommandType.MIN
         || type == SqlCommandType.MAX
         || type == SqlCommandType.GROUP_COUNT
         || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_COUNT_DISTINCT
         || type == SqlCommandType.GROUP_SUM
         || type == SqlCommandType.GROUP_AVG
         || type == SqlCommandType.GROUP_MIN

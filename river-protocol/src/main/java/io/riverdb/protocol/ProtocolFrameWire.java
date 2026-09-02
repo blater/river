@@ -4,13 +4,14 @@ import io.riverdb.base.error.StatusCode;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-/** Shared v3 frame-header validation and emission. */
+/** Shared v4 frame-header validation and emission. */
 final class ProtocolFrameWire {
   static final int ROLE_REQUEST = 1;
   static final int ROLE_RESPONSE = 2;
   static final int FRAME_RESPONSE = 1;
+  static final int FRAME_CONTINUATION = 1 << 1;
+  static final int FRAME_FINAL = 1 << 2;
   private static final int MAGIC = 0x52495652;
-  private static final int RESPONSE_FIXED_BYTES = 64;
 
   private ProtocolFrameWire() { }
 
@@ -30,7 +31,9 @@ final class ProtocolFrameWire {
         headerInt(source, start + 8),
         headerLong(source, start + 16),
         headerInt(source, start + 24),
-        (flags & FRAME_RESPONSE) != 0);
+        (flags & FRAME_RESPONSE) != 0,
+        (flags & FRAME_CONTINUATION) != 0,
+        (flags & FRAME_FINAL) != 0);
     return StatusCode.OK;
   }
 
@@ -101,6 +104,11 @@ final class ProtocolFrameWire {
     return StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
+  static StatusCode exhaustedTarget(ByteBuffer target) {
+    if (target != null) empty(target);
+    return StatusCode.RESOURCE_EXHAUSTED;
+  }
+
   static void empty(ByteBuffer target) {
     target.clear();
     target.limit(0);
@@ -123,25 +131,8 @@ final class ProtocolFrameWire {
     long requestId = headerLong(source, start + 16);
     int payloadBytes = headerInt(source, start + 24);
     int reserved = headerInt(source, start + 28);
-    boolean response = (flags & FRAME_RESPONSE) != 0;
-    if (type == null || (flags & ~FRAME_RESPONSE) != 0
-        || role == ROLE_REQUEST && response
-        || role == ROLE_RESPONSE && !response
-        || requestId <= 0 || payloadBytes < 0 || reserved != 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int maximumPayload = role == ROLE_REQUEST
-        ? ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES
-        : ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES
-            - ProtocolFrameCodec.HEADER_BYTES;
-    if (payloadBytes > maximumPayload) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    if (role == ROLE_REQUEST && type.requiresPayload() != (payloadBytes > 0)
-        || role == ROLE_RESPONSE && payloadBytes < RESPONSE_FIXED_BYTES) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return StatusCode.OK;
+    return ProtocolFrameHeaderValidation.validate(
+        type, flags, requestId, payloadBytes, reserved, role);
   }
 
   private static int headerInt(ByteBuffer source, int offset) {

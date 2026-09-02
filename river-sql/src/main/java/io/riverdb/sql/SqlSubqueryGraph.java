@@ -4,12 +4,12 @@ import io.riverdb.base.error.StatusCode;
 
 /** Bounded ownership and shape validation for canonical predicate-subquery edges. */
 final class SqlSubqueryGraph {
-  private final byte[] kinds = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] parents = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] leaves = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] children = new byte[SqlQuery.MAXIMUM_EDGES];
-  private final byte[] blockParents = new byte[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final byte[] depths = new byte[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final int[] kinds = new int[SqlQuery.MAXIMUM_EDGES];
+  private final int[] parents = new int[SqlQuery.MAXIMUM_EDGES];
+  private final int[] leaves = new int[SqlQuery.MAXIMUM_EDGES];
+  private final int[] children = new int[SqlQuery.MAXIMUM_EDGES];
+  private final int[] blockParents = new int[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final int[] depths = new int[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] reached = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private int count;
   private int root = -1;
@@ -44,24 +44,24 @@ final class SqlSubqueryGraph {
       return -1;
     }
     int edge = count++;
-    kinds[edge] = (byte) kind;
-    parents[edge] = (byte) parent;
+    kinds[edge] = kind;
+    parents[edge] = parent;
     leaves[edge] = -1;
     children[edge] = -1;
     return edge;
   }
 
   void setLeaf(int edge, int leaf) {
-    if (edge >= 0 && edge < count) leaves[edge] = (byte) leaf;
+    if (edge >= 0 && edge < count) leaves[edge] = leaf;
   }
 
   void setChild(int edge, int child, int blockCount) {
     if (edge < 0 || edge >= count || child < 0 || child >= blockCount) return;
-    children[edge] = (byte) child;
-    int parent = Byte.toUnsignedInt(parents[edge]);
-    blockParents[child] = (byte) parent;
-    depths[child] = (byte) (Byte.toUnsignedInt(depths[parent]) + 1);
-    maximumDepth = Math.max(maximumDepth, Byte.toUnsignedInt(depths[child]));
+    children[edge] = child;
+    int parent = parents[edge];
+    blockParents[child] = parent;
+    depths[child] = depths[parent] + 1;
+    maximumDepth = Math.max(maximumDepth, depths[child]);
   }
 
   StatusCode validate(SqlQuery query) {
@@ -71,7 +71,7 @@ final class SqlSubqueryGraph {
     for (int block = root; block < query.blockCount(); block++) reached[block] = false;
     reached[root] = true;
     for (int edge = 0; edge < count; edge++) {
-      int parent = Byte.toUnsignedInt(parents[edge]);
+      int parent = parents[edge];
       int child = children[edge];
       int leaf = leaves[edge];
       if (parent < root || parent >= query.blockCount() || child <= parent
@@ -92,19 +92,19 @@ final class SqlSubqueryGraph {
   int count() { return count; }
   int root() { return root; }
   int maximumDepth() { return maximumDepth; }
-  int kind(int edge) { return valid(edge) ? Byte.toUnsignedInt(kinds[edge]) : 0; }
-  int parent(int edge) { return valid(edge) ? Byte.toUnsignedInt(parents[edge]) : -1; }
+  int kind(int edge) { return valid(edge) ? kinds[edge] : 0; }
+  int parent(int edge) { return valid(edge) ? parents[edge] : -1; }
   int leaf(int edge) { return valid(edge) ? leaves[edge] : -1; }
   int child(int edge) { return valid(edge) ? children[edge] : -1; }
   int blockParent(int block) {
     return block > root && block < blockParents.length ? blockParents[block] : -1;
   }
   int blockDepth(int block) {
-    return block >= root && block < depths.length ? Byte.toUnsignedInt(depths[block]) : 0;
+    return block >= root && block < depths.length ? depths[block] : 0;
   }
 
   private int expected(int edge) {
-    return switch (Byte.toUnsignedInt(kinds[edge])) {
+    return switch (kinds[edge]) {
       case SqlQuery.SUBQUERY_SCALAR -> SqlBooleanPredicateProgram.TEST_SUBQUERY_COMPARISON;
       case SqlQuery.SUBQUERY_EXISTS -> SqlBooleanPredicateProgram.TEST_SUBQUERY_EXISTS;
       case SqlQuery.SUBQUERY_MEMBERSHIP -> SqlBooleanPredicateProgram.TEST_SUBQUERY_MEMBERSHIP;

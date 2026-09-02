@@ -28,6 +28,31 @@ final class EmbeddedRiverCatalogTest {
   private static final String VIEW = "customer_account_transaction_history_view";
 
   @Test
+  void reportsFirstClassNumericTypeNames(@TempDir Path root) {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    SessionOpenResult sessionResult = new SessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RiverSession session = sessionResult.session();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE numeric_metadata (id BIGINT PRIMARY KEY,small SMALLINT,"
+            + "normal INTEGER,single REAL,double_value DOUBLE PRECISION,"
+            + "legacy_marker BIGINT DEFAULT 0)",
+        new CommandResult()));
+    assertColumns(
+        session,
+        "numeric_metadata",
+        new String[] {"id", "small", "normal", "single", "double_value", "legacy_marker"},
+        new String[] {
+            "BIGINT", "SMALLINT", "INTEGER", "REAL", "DOUBLE PRECISION", "BIGINT"
+        },
+        new boolean[] {false, true, true, true, true, true});
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void streamsTransactionallyVisibleCatalogObjectsAndReopens(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
@@ -41,7 +66,8 @@ final class EmbeddedRiverCatalogTest {
         StatusCode.OK,
         session.execute(
             "CREATE TABLE " + TABLE
-                + " (id BIGINT PRIMARY KEY, value BIGINT, region BIGINT, pending BIGINT)",
+                + " (id BIGINT PRIMARY KEY, value BIGINT, region BIGINT,"
+                + " pending BIGINT DEFAULT 0)",
             command));
     assertEquals(
         StatusCode.OK,
@@ -73,7 +99,7 @@ final class EmbeddedRiverCatalogTest {
         StatusCode.OK,
         session.execute(
             "CREATE TABLE rolled_back_catalog_table "
-                + "(id BIGINT PRIMARY KEY, value BIGINT)",
+                + "(id BIGINT PRIMARY KEY, value BIGINT DEFAULT 0)",
             command));
     assertEquals(
         StatusCode.OK,

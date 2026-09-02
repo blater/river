@@ -6,10 +6,10 @@ import io.riverdb.engine.table.IndexedScanCursor;
 /** Caller-owned cursor over the primary and ready secondary indexes of one table. */
 public final class CatalogIndexCursor {
   private final IndexedScanCursor indexed = new IndexedScanCursor();
+  private final CatalogIndexCursorSecondaries secondaries =
+      new CatalogIndexCursorSecondaries();
   private RelationalSession owner;
   private int tableId;
-  private int expectedSecondaryIndexes;
-  private int observedIndexMask;
   private boolean primaryPending;
   private boolean active;
 
@@ -19,8 +19,7 @@ public final class CatalogIndexCursor {
     }
     owner = null;
     tableId = 0;
-    expectedSecondaryIndexes = 0;
-    observedIndexMask = 0;
+    secondaries.reset();
     primaryPending = false;
     return indexed.reset();
   }
@@ -32,18 +31,18 @@ public final class CatalogIndexCursor {
   StatusCode claim(
       RelationalSession session,
       int ownerTableId,
-      int readySecondaryIndexes) {
+      int readySecondaryIndexes,
+      int secondaryIndexes) {
     if (active
         || session == null
         || ownerTableId <= 0
-        || readySecondaryIndexes < 0
-        || readySecondaryIndexes > TableDefinition.MAXIMUM_INDEXES
         || !indexed.isActive()) {
       return StatusCode.CONFLICT;
     }
+    StatusCode status = secondaries.prepare(readySecondaryIndexes, secondaryIndexes);
+    if (!status.isOk()) return status;
     owner = session;
     tableId = ownerTableId;
-    expectedSecondaryIndexes = readySecondaryIndexes;
     primaryPending = true;
     active = true;
     return StatusCode.OK;
@@ -64,16 +63,11 @@ public final class CatalogIndexCursor {
   }
 
   boolean recordSecondary(int slot) {
-    int bit = slot < 0 || slot >= TableDefinition.MAXIMUM_INDEXES ? 0 : 1 << slot;
-    if (bit == 0 || (observedIndexMask & bit) != 0) {
-      return false;
-    }
-    observedIndexMask |= bit;
-    return true;
+    return secondaries.record(slot);
   }
 
   boolean allSecondariesObserved() {
-    return Integer.bitCount(observedIndexMask) == expectedSecondaryIndexes;
+    return secondaries.complete();
   }
 
   public boolean isActive() {
@@ -83,8 +77,7 @@ public final class CatalogIndexCursor {
   void complete() {
     owner = null;
     tableId = 0;
-    expectedSecondaryIndexes = 0;
-    observedIndexMask = 0;
+    secondaries.reset();
     primaryPending = false;
     active = false;
   }

@@ -214,8 +214,11 @@ final class SqlViewTest {
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(StatusCode.OK, session.beginScan(sql, cursor));
-    assertPlanRow(session, cursor, row, "nested", depth);
+    assertPlanRow(session, cursor, row, "block", 1);
     assertPlanRow(session, cursor, row, "sort", 1);
+    for (int block = 2; block <= depth; block++) {
+      assertPlanRow(session, cursor, row, "block", block);
+    }
     assertPlanRow(session, cursor, row, "table", -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));

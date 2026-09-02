@@ -11,12 +11,12 @@ public final class IndexedScanCursor {
   private long visibleCommitSequence;
   private long lowerKey;
   private long upperKey;
-  private int lowerSpace;
-  private int upperSpace;
+  private long lowerSpace;
+  private long upperSpace;
   private int leafPageId;
   private int entryIndex;
   private long lastReturnedKey;
-  private int lastReturnedSpace;
+  private long lastReturnedSpace;
   private boolean hasCommittedLookahead;
   private boolean committedExhausted;
   private boolean hasLastReturnedKey;
@@ -47,9 +47,9 @@ public final class IndexedScanCursor {
   StatusCode claim(
       IndexedTable table,
       long visible,
-      int scanLowerSpace,
+      long scanLowerSpace,
       long lower,
-      int scanUpperSpace,
+      long scanUpperSpace,
       long upper,
       int firstLeafPageId) {
     if (active) {
@@ -95,15 +95,15 @@ public final class IndexedScanCursor {
     return upperKey;
   }
 
-  int lowerSpace() {
+  long lowerSpace() {
     return lowerSpace;
   }
 
-  int upperSpace() {
+  long upperSpace() {
     return upperSpace;
   }
 
-  boolean contains(int space, long key) {
+  boolean contains(long space, long key) {
     return OrderedKey.compare(space, key, lowerSpace, lowerKey) >= 0
         && OrderedKey.lessThan(space, key, upperSpace, upperKey);
   }
@@ -149,12 +149,12 @@ public final class IndexedScanCursor {
     committedExhausted = true;
   }
 
-  boolean afterLastReturned(int space, long key) {
+  boolean afterLastReturned(long space, long key) {
     return !hasLastReturnedKey
         || OrderedKey.lessThan(lastReturnedSpace, lastReturnedKey, space, key);
   }
 
-  void returned(int space, long key) {
+  void returned(long space, long key) {
     lastReturnedSpace = space;
     lastReturnedKey = key;
     hasLastReturnedKey = true;

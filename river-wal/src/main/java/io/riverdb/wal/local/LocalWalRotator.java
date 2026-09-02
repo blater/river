@@ -22,6 +22,7 @@ final class LocalWalRotator {
         || !nextGeneration.isValid()
         || nextGeneration.value() <= wal.walGeneration().value()
         || checkpointTransactionId <= 0
+        || wal.hasOpenLogicalStream()
         || wal.hasActiveReservation()
         || wal.hasPendingRecords()
         || wal.hasForcedBatch()) {

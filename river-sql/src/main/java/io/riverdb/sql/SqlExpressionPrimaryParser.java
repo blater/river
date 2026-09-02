@@ -1,8 +1,8 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 
 /** Parses expression leaves, casts, and bounded unary functions. */
 final class SqlExpressionPrimaryParser {
@@ -80,11 +80,11 @@ final class SqlExpressionPrimaryParser {
           ? appendNull(literal.typeDescriptor)
           : StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    int type = SqlTypeDescriptor.typeId(literal.typeDescriptor);
-    if (!admittedLiteral(type)) {
+    if (literal.parameter) return appendParameter((int) literal.value);
+    if (!admittedLiteral(literal.typeDescriptor)) {
       return StatusCode.DATATYPE_MISMATCH;
     }
-    return appendLiteral(literal.value, literal.typeDescriptor);
+    return appendLiteral(literal.high, literal.value, literal.typeDescriptor);
   }
 
   private StatusCode optionalAtTimeZone(CharSequence sql, StatusCode status) {
@@ -92,9 +92,9 @@ final class SqlExpressionPrimaryParser {
         ? temporal.optionalAtTimeZone(sql, expressions.program()) : status;
   }
 
-  private boolean admittedLiteral(int type) {
-    return type == SqlTypeDescriptor.TYPE_ID_BIGINT
-        || type == SqlTypeDescriptor.TYPE_ID_DECIMAL
+  private boolean admittedLiteral(int descriptor) {
+    int type = SqlTypeDescriptor.typeId(descriptor);
+    return SqlNumericTypeRules.isNumeric(descriptor)
         || type == SqlTypeDescriptor.TYPE_ID_BOOLEAN
         || expressions.rowExpression() && type == SqlTypeDescriptor.TYPE_ID_VARCHAR
         || type == SqlTypeDescriptor.TYPE_ID_DATE
@@ -130,10 +130,8 @@ final class SqlExpressionPrimaryParser {
     }
     int sourceType = SqlTypeDescriptor.typeId(source);
     int targetType = SqlTypeDescriptor.typeId(target);
-    boolean numeric = (sourceType == SqlTypeDescriptor.TYPE_ID_BIGINT
-            || sourceType == SqlTypeDescriptor.TYPE_ID_DECIMAL)
-        && (targetType == SqlTypeDescriptor.TYPE_ID_BIGINT
-            || targetType == SqlTypeDescriptor.TYPE_ID_DECIMAL);
+    boolean numeric = SqlNumericTypeRules.isNumeric(source)
+        && SqlNumericTypeRules.isNumeric(target);
     boolean bool = sourceType == SqlTypeDescriptor.TYPE_ID_BOOLEAN
         && targetType == SqlTypeDescriptor.TYPE_ID_BOOLEAN;
     return (numeric || bool) && SqlTypeDescriptor.canExplicitlyCast(source, target);
@@ -158,8 +156,8 @@ final class SqlExpressionPrimaryParser {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
     int descriptor = expressions.topDescriptor() == 0 ? 0
-        : ExactDecimal.quantizedDescriptor(
-            expressions.topDescriptor(), (int) literal.value);
+        : SqlNumericExpressionTypes.quantized(
+            expressions.topDescriptor(), literal.value);
     if (descriptor == 0 && expressions.topDescriptor() != 0) {
       return StatusCode.DATATYPE_MISMATCH;
     }
@@ -172,8 +170,14 @@ final class SqlExpressionPrimaryParser {
   }
 
   private StatusCode appendLiteral(long value, int descriptor) {
+    return appendLiteral(value >> 63, value, descriptor);
+  }
+
+  private StatusCode appendLiteral(
+      long high, long value, int descriptor) {
     if (!expressions.hasStackCapacity()
-        || !expressions.appendNode(SqlScalarExpression.LITERAL, value, descriptor)) {
+        || !expressions.appendNode(
+            SqlScalarExpression.LITERAL, high, value, descriptor)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     expressions.pushDescriptor(descriptor);
@@ -186,6 +190,15 @@ final class SqlExpressionPrimaryParser {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     expressions.pushDescriptor(descriptor);
+    return StatusCode.OK;
+  }
+
+  private StatusCode appendParameter(int ordinal) {
+    if (ordinal < 0 || !expressions.hasStackCapacity()
+        || !expressions.appendNode(SqlScalarExpression.PARAMETER, ordinal, 0)) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    expressions.pushDescriptor(0);
     return StatusCode.OK;
   }
 

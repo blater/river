@@ -29,19 +29,20 @@ final class RiverJdbcObjectConversion {
     } else if (resultSet.metadata().isBoolean(column)
         && (type == Boolean.class || type == Boolean.TYPE)) {
       converted = Boolean.valueOf(value != 0);
-    } else if (type == Long.class || type == Long.TYPE) {
-      converted = Long.valueOf(value);
+    } else if (type == Short.class || type == Short.TYPE) {
+      converted = Short.valueOf(resultSet.getShort(column));
     } else if (type == Integer.class || type == Integer.TYPE) {
-      if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
-        throw resultSet.numericOverflow();
-      }
-      converted = Integer.valueOf((int) value);
+      converted = Integer.valueOf(resultSet.getInt(column));
+    } else if (type == Long.class || type == Long.TYPE) {
+      converted = Long.valueOf(resultSet.getLong(column));
+    } else if (type == Float.class || type == Float.TYPE) {
+      converted = Float.valueOf(resultSet.getFloat(column));
+    } else if (type == Double.class || type == Double.TYPE) {
+      converted = Double.valueOf(resultSet.getDouble(column));
     } else if (type == String.class) {
       converted = stringValue(column, value);
     } else if (type == BigDecimal.class) {
-      converted = BigDecimal.valueOf(
-          value, resultSet.metadata().isDecimal(column)
-              ? resultSet.metadata().decimalScale(column) : 0);
+      converted = resultSet.getBigDecimal(column);
     } else {
       throw JdbcExceptions.unsupported();
     }
@@ -52,19 +53,17 @@ final class RiverJdbcObjectConversion {
 
   private Object stringValue(int column, long value) throws SQLException {
     if (resultSet.metadata().isBoolean(column)) return Boolean.toString(value != 0);
-    if (resultSet.metadata().isDecimal(column)) {
-      return BigDecimal.valueOf(
-          value, resultSet.metadata().decimalScale(column)).toPlainString();
-    }
-    return Long.toString(value);
+    return resultSet.getString(column);
   }
 
   private void requireSupported(int column, Class<?> type) throws SQLException {
     int descriptor = resultSet.metadata().typeDescriptor(column);
     boolean supported = switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> type == Long.class
-          || type == Long.TYPE || type == Integer.class || type == Integer.TYPE
-          || type == BigDecimal.class || type == String.class;
+      case SqlTypeDescriptor.TYPE_ID_SMALLINT,
+          SqlTypeDescriptor.TYPE_ID_INTEGER,
+          SqlTypeDescriptor.TYPE_ID_BIGINT,
+          SqlTypeDescriptor.TYPE_ID_REAL,
+          SqlTypeDescriptor.TYPE_ID_DOUBLE -> numericTarget(type);
       case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> type == Boolean.class
           || type == Boolean.TYPE || type == Long.class || type == Long.TYPE
           || type == Integer.class || type == Integer.TYPE
@@ -75,5 +74,14 @@ final class RiverJdbcObjectConversion {
       default -> RiverJdbcTemporalValues.supportsObjectClass(descriptor, type);
     };
     if (!supported) throw JdbcExceptions.unsupported();
+  }
+
+  private static boolean numericTarget(Class<?> type) {
+    return type == Short.class || type == Short.TYPE
+        || type == Integer.class || type == Integer.TYPE
+        || type == Long.class || type == Long.TYPE
+        || type == Float.class || type == Float.TYPE
+        || type == Double.class || type == Double.TYPE
+        || type == BigDecimal.class || type == String.class;
   }
 }

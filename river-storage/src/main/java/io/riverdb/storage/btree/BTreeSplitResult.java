@@ -2,10 +2,10 @@ package io.riverdb.storage.btree;
 
 /** Caller-owned publication data produced by one leaf split. */
 public final class BTreeSplitResult {
-  private int separatorSpace;
+  private long separatorSpace;
   private long separatorKey;
 
-  public int separatorSpace() {
+  public long separatorSpace() {
     return separatorSpace;
   }
 
@@ -13,7 +13,7 @@ public final class BTreeSplitResult {
     return separatorKey;
   }
 
-  public void setSeparator(int space, long value) {
+  public void setSeparator(long space, long value) {
     separatorSpace = space;
     separatorKey = value;
   }

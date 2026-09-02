@@ -18,7 +18,7 @@ final class BTreeKeyLayout {
     int type = getInt(page, 12);
     int count = getInt(page, 16);
     int pointer = getInt(page, 20);
-    int highSpace = getInt(page, 32);
+    long highSpace = getLong(page, 32);
     long highKey = getLong(page, 24);
     if (getLong(page, 0) != magic
         || getInt(page, 8) != BTreePage.VERSION
@@ -28,22 +28,21 @@ final class BTreeKeyLayout {
         || type == BTreePage.TYPE_LEAF && pointer < 0
         || type == BTreePage.TYPE_INTERNAL && pointer <= 0
         || !OrderedKey.isFiniteSpace(highSpace)
-            && !OrderedKey.isInfinity(highSpace, highKey)
-        || getInt(page, 36) != 0) {
+            && !OrderedKey.isInfinity(highSpace, highKey)) {
       return StatusCode.CORRUPTION;
     }
     return validateEntries(page, type, count, highSpace, highKey);
   }
 
   private static StatusCode validateEntries(
-      ByteBuffer page, int type, int count, int highSpace, long highKey) {
-    int previousSpace = 0;
+      ByteBuffer page, int type, int count, long highSpace, long highKey) {
+    long previousSpace = 0;
     long previousKey = 0;
     boolean hasPrevious = false;
     for (int index = 0; index < count; index++) {
       int offset = entryOffset(index);
       long key = getLong(page, offset);
-      int space = getInt(page, offset + 16);
+      long space = getLong(page, offset + 16);
       long value = type == BTreePage.TYPE_LEAF
           ? getLong(page, offset + 8) : Integer.toUnsignedLong(getInt(page, offset + 8));
       if (!OrderedKey.isFiniteSpace(space)
@@ -61,29 +60,29 @@ final class BTreeKeyLayout {
     return StatusCode.OK;
   }
 
-  static boolean belowHighKey(ByteBuffer page, int space, long key) {
-    int highSpace = getInt(page, 32);
+  static boolean belowHighKey(ByteBuffer page, long space, long key) {
+    long highSpace = getLong(page, 32);
     long highKey = getLong(page, 24);
     return OrderedKey.isInfinity(highSpace, highKey)
         || OrderedKey.lessThan(space, key, highSpace, highKey);
   }
 
   static boolean entryEquals(
-      ByteBuffer page, int index, int space, long key) {
+      ByteBuffer page, int index, long space, long key) {
     int offset = entryOffset(index);
     return OrderedKey.equal(
-        getInt(page, offset + 16), getLong(page, offset), space, key);
+        getLong(page, offset + 16), getLong(page, offset), space, key);
   }
 
   static int insertionPoint(
-      ByteBuffer page, int space, long key, int count) {
+      ByteBuffer page, long space, long key, int count) {
     int low = 0;
     int high = count;
     while (low < high) {
       int middle = (low + high) >>> 1;
       int offset = entryOffset(middle);
       if (OrderedKey.lessThan(
-          getInt(page, offset + 16), getLong(page, offset), space, key)) {
+          getLong(page, offset + 16), getLong(page, offset), space, key)) {
         low = middle + 1;
       } else {
         high = middle;
@@ -98,21 +97,20 @@ final class BTreeKeyLayout {
     int targetOffset = entryOffset(targetIndex);
     putLong(target, targetOffset, getLong(source, sourceOffset));
     putLong(target, targetOffset + 8, getLong(source, sourceOffset + 8));
-    putInt(target, targetOffset + 16, getInt(source, sourceOffset + 16));
+    putLong(target, targetOffset + 16, getLong(source, sourceOffset + 16));
   }
 
   static void putEntry(
-      ByteBuffer page, int index, int space, long key, long value) {
+      ByteBuffer page, int index, long space, long key, long value) {
     int offset = entryOffset(index);
     putLong(page, offset, key);
     putLong(page, offset + 8, value);
-    putInt(page, offset + 16, space);
+    putLong(page, offset + 16, space);
   }
 
-  static void putHighKey(ByteBuffer page, int space, long key) {
+  static void putHighKey(ByteBuffer page, long space, long key) {
     putLong(page, 24, key);
-    putInt(page, 32, space);
-    putInt(page, 36, 0);
+    putLong(page, 32, space);
   }
 
   private static int entryOffset(int index) {

@@ -16,15 +16,21 @@ final class SqlBooleanWhereParser {
   private final SqlParser.LongResult literal = new SqlParser.LongResult();
   private final long[] memberValues =
       new long[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
+  private final long[] memberHighs =
+      new long[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
   private final int[] memberDescriptors =
       new int[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
   private final boolean[] memberNulls =
       new boolean[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
+  private final byte[] memberKinds =
+      new byte[SqlBooleanPredicateProgram.MAXIMUM_MEMBERS];
   private SqlCommand command;
   private SqlBooleanPredicateProgram target;
   private int depth;
   private int parsedNode = -1;
   private final SqlSubqueryLeafRegistry subqueries = new SqlSubqueryLeafRegistry();
+  private final SqlBooleanChain conjunctions = new SqlBooleanChain();
+  private final SqlBooleanChain disjunctions = new SqlBooleanChain();
   private boolean grouped;
 
   SqlBooleanWhereParser(
@@ -67,6 +73,8 @@ final class SqlBooleanWhereParser {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     target.reset();
+    conjunctions.reset();
+    disjunctions.reset();
     depth = 0;
     StatusCode status = disjunction(sql);
     if (status.isOk() && !target.finish(parsedNode)) {
@@ -87,6 +95,8 @@ final class SqlBooleanWhereParser {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     target.reset();
+    conjunctions.reset();
+    disjunctions.reset();
     depth = 0;
     StatusCode status = disjunction(sql);
     if (status.isOk() && !target.finish(parsedNode)) {
@@ -112,31 +122,31 @@ final class SqlBooleanWhereParser {
   }
 
   private StatusCode disjunction(CharSequence sql) {
+    int frame = disjunctions.begin();
     StatusCode status = conjunction(sql);
+    disjunctions.seed(frame, parsedNode, status);
     while (status.isOk() && input.consumeKeyword(sql, "OR")) {
-      int leftNode = parsedNode;
       status = conjunction(sql);
-      if (status.isOk()) {
-        parsedNode = target.appendBoolean(
-            SqlBooleanPredicateProgram.BOOLEAN_OR, leftNode, parsedNode);
-        if (parsedNode < 0) status = StatusCode.RESOURCE_EXHAUSTED;
-      }
+      if (status.isOk() && !disjunctions.append(frame, parsedNode, target,
+          SqlBooleanPredicateProgram.BOOLEAN_OR)) status = StatusCode.RESOURCE_EXHAUSTED;
     }
-    return status;
+    parsedNode = disjunctions.finish(frame, target,
+        SqlBooleanPredicateProgram.BOOLEAN_OR, status.isOk());
+    return SqlBooleanChain.status(status, parsedNode);
   }
 
   private StatusCode conjunction(CharSequence sql) {
+    int frame = conjunctions.begin();
     StatusCode status = negation(sql);
+    conjunctions.seed(frame, parsedNode, status);
     while (status.isOk() && input.consumeKeyword(sql, "AND")) {
-      int leftNode = parsedNode;
       status = negation(sql);
-      if (status.isOk()) {
-        parsedNode = target.appendBoolean(
-            SqlBooleanPredicateProgram.BOOLEAN_AND, leftNode, parsedNode);
-        if (parsedNode < 0) status = StatusCode.RESOURCE_EXHAUSTED;
-      }
+      if (status.isOk() && !conjunctions.append(frame, parsedNode, target,
+          SqlBooleanPredicateProgram.BOOLEAN_AND)) status = StatusCode.RESOURCE_EXHAUSTED;
     }
-    return status;
+    parsedNode = conjunctions.finish(frame, target,
+        SqlBooleanPredicateProgram.BOOLEAN_AND, status.isOk());
+    return SqlBooleanChain.status(status, parsedNode);
   }
 
   private StatusCode negation(CharSequence sql) {
@@ -302,14 +312,19 @@ final class SqlBooleanWhereParser {
       status = predicateLiteral(sql);
       if (status.isOk()) {
         memberValues[count] = literal.value;
+        memberHighs[count] = literal.high;
         memberDescriptors[count] = literal.typeDescriptor;
+        memberKinds[count] = (byte) (literal.parameter
+            ? SqlScalarExpression.PARAMETER
+            : literal.nullValue ? SqlScalarExpression.NULL : SqlScalarExpression.LITERAL);
         memberNulls[count++] = literal.nullValue;
         complete = input.consumeCharacter(sql, ')');
         if (!complete) status = input.requireCharacter(sql, ',');
       }
     }
     if (status.isOk() && !target.setMembership(
-        leaf, memberValues, memberDescriptors, memberNulls, count, negated)) {
+        leaf, memberHighs, memberValues,
+        memberDescriptors, memberNulls, memberKinds, count, negated)) {
       status = StatusCode.RESOURCE_EXHAUSTED;
     }
     clearMembers(count);
@@ -321,9 +336,10 @@ final class SqlBooleanWhereParser {
     StatusCode status = predicateLiteral(sql);
     expression.reset();
     if (!status.isOk()) return status;
-    int operator = literal.nullValue
-        ? SqlScalarExpression.NULL : SqlScalarExpression.LITERAL;
-    if (!expression.append(operator, literal.value, literal.typeDescriptor)) {
+    int operator = literal.parameter ? SqlScalarExpression.PARAMETER
+        : literal.nullValue ? SqlScalarExpression.NULL : SqlScalarExpression.LITERAL;
+    if (!expression.append(
+        operator, literal.high, literal.value, literal.typeDescriptor)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (literal.typeDescriptor == 0) expression.finishUnresolved();
@@ -334,8 +350,10 @@ final class SqlBooleanWhereParser {
   private StatusCode predicateLiteral(CharSequence sql) {
     if (!input.consumeKeyword(sql, "NULL")) return input.literal(sql, literal);
     literal.value = 0;
+    literal.high = 0;
     literal.varchar = false;
     literal.nullValue = true;
+    literal.parameter = false;
     literal.textScalars = 0;
     literal.typeDescriptor = 0;
     return StatusCode.OK;
@@ -344,8 +362,10 @@ final class SqlBooleanWhereParser {
   private void clearMembers(int count) {
     for (int index = 0; index < count; index++) {
       memberValues[index] = 0;
+      memberHighs[index] = 0;
       memberDescriptors[index] = 0;
       memberNulls[index] = false;
+      memberKinds[index] = 0;
     }
   }
 
@@ -355,6 +375,7 @@ final class SqlBooleanWhereParser {
     lower.reset();
     upper.reset();
     literal.value = 0;
+    literal.high = 0;
     literal.typeDescriptor = 0;
     literal.textScalars = 0;
     literal.nullValue = false;
@@ -449,7 +470,8 @@ final class SqlBooleanWhereParser {
         || startsKeyword(sql, position, "GROUP")
         || startsKeyword(sql, position, "HAVING")
         || startsKeyword(sql, position, "ORDER")
-        || startsKeyword(sql, position, "LIMIT");
+        || startsKeyword(sql, position, "LIMIT")
+        || startsKeyword(sql, position, "FOR");
   }
 
 }

@@ -37,4 +37,11 @@ final class SqlJoinedRowProvider implements SqlNestedRowProvider {
         ? local == null ? null : local.table(role)
         : ancestors == null ? null : ancestors.table(queryBlock, role);
   }
+
+  @Override
+  public SqlBlockRow blockRow(int queryBlock, int role) {
+    return queryBlock == block
+        ? null
+        : ancestors == null ? null : ancestors.blockRow(queryBlock, role);
+  }
 }

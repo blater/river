@@ -1,14 +1,22 @@
 package io.riverdb.engine.table;
 
+import io.riverdb.base.error.StatusCode;
+
 /** Lazily allocated fixed-size pages for sparse long metadata indexed by a positive row id. */
 final class PagedLongArray {
   private static final int PAGE_SHIFT = PagedIntArray.PAGE_SHIFT;
   private static final int PAGE_SIZE = PagedIntArray.PAGE_SIZE;
   private static final int PAGE_MASK = PAGE_SIZE - 1;
   private final long[][] pages;
+  private final IndexedPagedArrayAllocator allocator;
 
   PagedLongArray(int maximumElements) {
+    this(maximumElements, HeapIndexedPagedArrayAllocator.INSTANCE);
+  }
+
+  PagedLongArray(int maximumElements, IndexedPagedArrayAllocator pageAllocator) {
     pages = new long[(int) (((long) maximumElements + PAGE_SIZE - 1) >>> PAGE_SHIFT)][];
+    allocator = pageAllocator;
   }
 
   long get(int index) {
@@ -22,9 +30,28 @@ final class PagedLongArray {
     int page = index >>> PAGE_SHIFT;
     long[] values = pages[page];
     if (values == null) {
-      values = pages[page] = new long[PAGE_SIZE];
+      if (value == 0 || !reserve(index).isOk()) return;
+      values = pages[page];
     }
     values[index & PAGE_MASK] = value;
+  }
+
+  StatusCode reserve(int index) {
+    if (index <= 0 || (index >>> PAGE_SHIFT) >= pages.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int page = index >>> PAGE_SHIFT;
+    if (pages[page] != null) return StatusCode.OK;
+    try {
+      long[] allocated = allocator.allocateLongs(PAGE_SIZE);
+      if (allocated == null || allocated.length < PAGE_SIZE) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      pages[page] = allocated;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError exhausted) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   void clear() {

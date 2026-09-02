@@ -1,9 +1,6 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.ExactDecimal;
-import io.riverdb.base.type.SqlDefaultKind;
-import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Parses CREATE TABLE schema columns and delegates other catalog CREATE families. */
 final class SqlCreateTableParser {
@@ -12,7 +9,9 @@ final class SqlCreateTableParser {
   private final SqlCatalogCommandParser catalogCommands;
   private final SqlColumnCheckParser checks;
   private final SqlParser.LongResult numberResult = new SqlParser.LongResult();
-  private final ExactDecimal.LongValue decimalResult = new ExactDecimal.LongValue();
+  private final SqlColumnDefaultParser defaults;
+  private final SqlCreateTableConstraints constraints;
+  private final SqlInlineColumnConstraints inlineConstraints;
 
   SqlCreateTableParser(
       SqlParser parent,
@@ -23,6 +22,9 @@ final class SqlCreateTableParser {
     input = parserInput;
     catalogCommands = catalogParser;
     checks = new SqlColumnCheckParser(parent, parserInput, expressionParser);
+    constraints = new SqlCreateTableConstraints(parent, parserInput, expressionParser);
+    inlineConstraints = new SqlInlineColumnConstraints(parserInput);
+    defaults = new SqlColumnDefaultParser(parserInput);
   }
 
   private StatusCode parseCreateTable(
@@ -33,19 +35,18 @@ final class SqlCreateTableParser {
     }
     if (!consumeCharacter(sql, '(')) {
       setIdentifier(result.writableNextColumnName(), "key");
-      result.markLastColumnNotNull();
-      setIdentifier(result.writableNextColumnName(), "value");
-      return StatusCode.OK;
+      status = inlinePrimary(result);
+      if (status.isOk()) setIdentifier(result.writableNextColumnName(), "value");
+      return status;
     }
-    status = parsePrimaryKeyColumn(sql, result);
+    status = parseTableElement(sql, result);
     while (status.isOk() && !consumeCharacter(sql, ')')) {
       status = requireCharacter(sql, ',');
       if (status.isOk()) {
-        status = parseTableColumn(sql, result);
+        status = parseTableElement(sql, result);
       }
     }
-    return status.isOk() && result.columnCount() < 2
-        ? StatusCode.INVALID_EXTERNAL_INPUT : status;
+    return status.isOk() ? SqlTableConstraintValidation.validate(result) : status;
   }
 
   StatusCode parse(CharSequence sql, SqlCommand result) {
@@ -59,44 +60,9 @@ final class SqlCreateTableParser {
     return catalogCommands.parseCreateRemainder(sql, result);
   }
 
-  private StatusCode parsePrimaryKeyColumn(
-      CharSequence sql, SqlCommand result) {
-    StatusCode status = columnIdentifier(sql, result);
-    if (!status.isOk()) {
-      return status;
-    }
-    status = requireKeyword(sql, "BIGINT");
-    if (!status.isOk()) {
-      return status;
-    }
-    if (consumeKeyword(sql, "NOT")) {
-      status = requireKeyword(sql, "NULL");
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    if (consumeKeyword(sql, "GENERATED")) {
-      status = parseIdentityClause(sql, result);
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    if (consumeKeyword(sql, "CHECK")) {
-      status = columnCheck(sql, result);
-      if (!status.isOk()) {
-        return status;
-      }
-    }
-    status = requireKeyword(sql, "PRIMARY");
-    if (!status.isOk()) {
-      return status;
-    }
-    status = requireKeyword(sql, "KEY");
-    if (!status.isOk()) {
-      return status;
-    }
-    result.markLastColumnNotNull();
-    return StatusCode.OK;
+  private StatusCode parseTableElement(CharSequence sql, SqlCommand result) {
+    return constraints.starts(sql)
+        ? constraints.parse(sql, result) : parseTableColumn(sql, result);
   }
 
   private StatusCode parseIdentityClause(
@@ -144,14 +110,20 @@ final class SqlCreateTableParser {
         notNull = status.isOk();
       } else if (consumeKeyword(sql, "DEFAULT")) {
         if (hasDefault) return StatusCode.INVALID_EXTERNAL_INPUT;
-        status = parseColumnDefault(sql, result);
+        status = defaults.parse(sql, result);
         hasDefault = status.isOk();
       } else if (consumeKeyword(sql, "CHECK")) {
         status = parseColumnCheck(sql, result);
       } else if (consumeKeyword(sql, "UNIQUE")) {
-        status = result.markLastColumnUnique();
+        status = inlineConstraints.unique(result);
       } else if (consumeKeyword(sql, "REFERENCES")) {
-        status = parseColumnReference(sql, result);
+        status = inlineConstraints.reference(sql, result);
+      } else if (consumeKeyword(sql, "GENERATED")) {
+        status = result.hasPrimaryKeyIdentity()
+            ? StatusCode.INVALID_EXTERNAL_INPUT : parseIdentityClause(sql, result);
+      } else if (consumeKeyword(sql, "PRIMARY")) {
+        status = requireKeyword(sql, "KEY");
+        if (status.isOk()) status = inlineConstraints.primary(result);
       } else {
         break;
       }
@@ -165,82 +137,19 @@ final class SqlCreateTableParser {
     return status;
   }
 
-  private StatusCode parseColumnDefault(CharSequence sql, SqlCommand result) {
-    int kind = currentDefaultKind(sql);
-    if (kind != SqlDefaultKind.NONE) {
-      int descriptor = result.columnTypeDescriptor(result.columnCount() - 1);
-      if (!SqlDefaultKind.compatible(kind, descriptor)) {
-        return StatusCode.DATATYPE_MISMATCH;
-      }
-      result.markLastColumnCurrentDefault(kind);
-      return StatusCode.OK;
-    }
-    StatusCode status = literal(sql, numberResult);
-    if (status.isOk()) {
-      status = coerceLiteral(result.columnTypeDescriptor(result.columnCount() - 1));
-    }
-    if (status.isOk()) result.markLastColumnDefault(numberResult.value);
+  private StatusCode parseColumnCheck(CharSequence sql, SqlCommand result) {
+    if (result.columnHasCheck(result.columnCount() - 1)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = columnCheck(sql, result);
+    long checkpoint = result.tableConstraints.checkpoint();
+    if (status.isOk()) status = result.beginTableConstraint(SqlTableConstraintSet.CHECK);
+    status = status.isOk()
+        ? result.addTableConstraintPart(result.columnName(result.columnCount() - 1), null) : status;
+    if (!status.isOk()) result.tableConstraints.rollback(checkpoint);
     return status;
   }
 
-  private int currentDefaultKind(CharSequence sql) {
-    if (consumeKeyword(sql, "CURRENT_DATE")) {
-      return SqlDefaultKind.CURRENT_DATE;
-    }
-    if (consumeKeyword(sql, "CURRENT_TIMESTAMP")) {
-      return SqlDefaultKind.CURRENT_TIMESTAMP;
-    }
-    if (consumeKeyword(sql, "LOCALTIME")) {
-      return SqlDefaultKind.LOCALTIME;
-    }
-    return consumeKeyword(sql, "LOCALTIMESTAMP")
-        ? SqlDefaultKind.LOCALTIMESTAMP : SqlDefaultKind.NONE;
-  }
-
-  private StatusCode coerceLiteral(int targetDescriptor) {
-    if (numberResult.typeDescriptor == targetDescriptor
-        || SqlTypeDescriptor.typeId(targetDescriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
-            && SqlTypeDescriptor.canImplicitlyCast(
-                numberResult.typeDescriptor, targetDescriptor)) {
-      return StatusCode.OK;
-    }
-    if (SqlTypeDescriptor.typeId(targetDescriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        && ExactDecimal.widenScale(
-            numberResult.value,
-            numberResult.typeDescriptor,
-            targetDescriptor,
-            decimalResult)) {
-      numberResult.value = decimalResult.value;
-      numberResult.typeDescriptor = targetDescriptor;
-      return StatusCode.OK;
-    }
-    if (sameLocalTemporalType(numberResult.typeDescriptor, targetDescriptor)
-        && SqlTypeDescriptor.canImplicitlyCast(
-            numberResult.typeDescriptor, targetDescriptor)) {
-      numberResult.typeDescriptor = targetDescriptor;
-      return StatusCode.OK;
-    }
-    return SqlTypeDescriptor.canImplicitlyCast(
-        numberResult.typeDescriptor, targetDescriptor)
-        ? StatusCode.NUMERIC_VALUE_OUT_OF_RANGE : StatusCode.DATATYPE_MISMATCH;
-  }
-
-  private static boolean sameLocalTemporalType(int source, int target) {
-    int sourceType = SqlTypeDescriptor.typeId(source);
-    return sourceType == SqlTypeDescriptor.typeId(target)
-        && (sourceType == SqlTypeDescriptor.TYPE_ID_TIME
-            || sourceType == SqlTypeDescriptor.TYPE_ID_TIMESTAMP
-            || sourceType == SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE);
-  }
-
-  private StatusCode parseColumnCheck(CharSequence sql, SqlCommand result) {
-    return result.columnHasCheck(result.columnCount() - 1)
-        ? StatusCode.INVALID_EXTERNAL_INPUT : columnCheck(sql, result);
-  }
-
-  private StatusCode parseColumnReference(CharSequence sql, SqlCommand result) {
-    return result.columnHasReference(result.columnCount() - 1)
-        ? StatusCode.INVALID_EXTERNAL_INPUT : columnReference(sql, result);
+  private StatusCode inlinePrimary(SqlCommand result) {
+    return inlineConstraints.primary(result);
   }
 
 
@@ -252,31 +161,8 @@ final class SqlCreateTableParser {
     return checks.parse(sql, result);
   }
 
-  private StatusCode columnReference(CharSequence sql, SqlCommand result) {
-    SqlIdentifier table = result.writableLastColumnReferenceTableName();
-    SqlIdentifier column = result.writableLastColumnReferenceColumnName();
-    if (table == null || column == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = identifier(sql, table);
-    if (status.isOk()) {
-      status = requireCharacter(sql, '(');
-    }
-    if (status.isOk()) {
-      status = identifier(sql, column);
-    }
-    if (status.isOk()) {
-      status = requireCharacter(sql, ')');
-    }
-    return status.isOk() ? result.markLastColumnReference() : status;
-  }
-
   private StatusCode identifier(CharSequence sql, SqlIdentifier result) {
     return input.identifier(sql, result);
-  }
-
-  private StatusCode literal(CharSequence sql, SqlParser.LongResult result) {
-    return input.literal(sql, result);
   }
 
   private StatusCode requireKeyword(CharSequence sql, String keyword) {

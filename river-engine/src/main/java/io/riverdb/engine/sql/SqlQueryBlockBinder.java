@@ -3,7 +3,6 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalSession;
-import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
@@ -13,13 +12,16 @@ import io.riverdb.sql.SqlQuery;
 final class SqlQueryBlockBinder {
   private final SqlNestedJoinBinder joins = new SqlNestedJoinBinder();
   private final SqlNestedProjectionBinder projections = new SqlNestedProjectionBinder();
+  private final SqlNestedTableResolver tables = new SqlNestedTableResolver();
 
   StatusCode bind(RelationalSession session, BoundSqlStatement bound) {
     BoundSqlQuery query = bound.executableQuery;
     int root = query.sourceBlockCount() - 1;
     query.beginBinding(bound.table, root);
     if (query.edgeCount() == 0) return StatusCode.OK;
-    StatusCode status = joins.bindRootRoles(bound, root);
+    StatusCode status = query.block(root).joinChain() == null
+        ? tables.resolveRoles(session, query, root)
+        : joins.bindRootRoles(bound, root);
     if (!status.isOk()) return status;
     for (int block = root + 1; block < query.blockCount(); block++) {
       status = resolve(session, bound, block);
@@ -42,12 +44,9 @@ final class SqlQueryBlockBinder {
     BoundSqlQuery.Block block = bound.executableQuery.block(blockIndex);
     if (block == null || block.isOrdered() || block.columnCount() != 1
         || block.isSelectAll()) return StatusCode.INVALID_EXTERNAL_INPUT;
-    for (int role = 0; role < block.roleCount(); role++) {
-      TableDefinition table = block.writableTable(role);
-      StatusCode status = session.resolveTable(block.roleTableName(role), table);
-      if (!status.isOk()) return status;
-    }
-    StatusCode status = joins.borrowRoles(session, bound, blockIndex, block);
+    StatusCode status = tables.resolveRoles(
+        session, bound.executableQuery, blockIndex);
+    if (status.isOk()) status = joins.borrowRoles(session, bound, blockIndex, block);
     if (!status.isOk()) return status;
     return projections.bind(
         bound.query.block(blockIndex),

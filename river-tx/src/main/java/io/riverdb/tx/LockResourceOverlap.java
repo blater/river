@@ -13,9 +13,9 @@ final class LockResourceOverlap {
 
   static boolean isValid(
       LockScope scope,
-      int lowerSpace,
+      long lowerSpace,
       long lowerKey,
-      int upperSpace,
+      long upperSpace,
       long upperKey) {
     if (scope == LockScope.KEY) {
       return OrderedKey.isFiniteSpace(lowerSpace)
@@ -33,14 +33,14 @@ final class LockResourceOverlap {
 
   static boolean same(
       byte leftScope,
-      int leftLowerSpace,
+      long leftLowerSpace,
       long leftLowerKey,
-      int leftUpperSpace,
+      long leftUpperSpace,
       long leftUpperKey,
       byte rightScope,
-      int rightLowerSpace,
+      long rightLowerSpace,
       long rightLowerKey,
-      int rightUpperSpace,
+      long rightUpperSpace,
       long rightUpperKey) {
     return leftScope == rightScope
         && OrderedKey.equal(
@@ -51,14 +51,14 @@ final class LockResourceOverlap {
 
   static boolean overlaps(
       byte leftScope,
-      int leftLowerSpace,
+      long leftLowerSpace,
       long leftLowerKey,
-      int leftUpperSpace,
+      long leftUpperSpace,
       long leftUpperKey,
       byte rightScope,
-      int rightLowerSpace,
+      long rightLowerSpace,
       long rightLowerKey,
-      int rightUpperSpace,
+      long rightUpperSpace,
       long rightUpperKey) {
     if (leftScope == RANGE_SCOPE && rightScope == RANGE_SCOPE) {
       return OrderedKey.lessThan(
@@ -98,11 +98,11 @@ final class LockResourceOverlap {
   }
 
   private static boolean contains(
-      int lowerSpace,
+      long lowerSpace,
       long lowerKey,
-      int upperSpace,
+      long upperSpace,
       long upperKey,
-      int keySpace,
+      long keySpace,
       long key) {
     return !OrderedKey.lessThan(keySpace, key, lowerSpace, lowerKey)
         && OrderedKey.lessThan(keySpace, key, upperSpace, upperKey);

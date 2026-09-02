@@ -3,12 +3,14 @@ package io.riverdb.engine.relational;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.sql.SqlExecutionResult;
 import io.riverdb.engine.sql.SqlScanCursor;
 import io.riverdb.engine.sql.SqlSession;
 import io.riverdb.engine.sql.SqlSessionOpenResult;
+import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import java.nio.ByteBuffer;
@@ -57,10 +59,8 @@ final class CatalogViewSemanticCorruptionTest {
     assertEquals(StatusCode.OK, database.createSession(relationalResult));
     RelationalSession relational = relationalResult.session();
     assertEquals(StatusCode.OK, relational.begin(IsolationLevel.SERIALIZABLE));
-    TableDefinition moments = new TableDefinition();
-    TableDefinition facts = new TableDefinition();
-    assertEquals(StatusCode.OK, relational.resolveTable("moments", moments));
-    assertEquals(StatusCode.OK, relational.resolveTable("facts", facts));
+    int moments = descriptorTableId(relational, "moments");
+    int facts = descriptorTableId(relational, "facts");
     ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
     assertEquals(
         StatusCode.OK,
@@ -69,7 +69,7 @@ final class CatalogViewSemanticCorruptionTest {
             "damaged_view",
             "SELECT moments.id AS bad FROM moments JOIN moments m "
                 + "ON moments.id=m.id WHERE EXTRACT(DAY FROM moments.day)=29",
-            moments.tableId(),
+            moments,
             0));
     RelationalKey.KeyResult key = new RelationalKey.KeyResult();
     assertEquals(
@@ -83,8 +83,8 @@ final class CatalogViewSemanticCorruptionTest {
             encoded,
             "duplicate_view",
             "SELECT m.id AS bad FROM moments m JOIN facts f ON m.id=f.id",
-            moments.tableId(),
-            moments.tableId()));
+            moments,
+            moments));
     assertEquals(
         StatusCode.OK, RelationalKey.catalogTableKey("duplicate_view", key));
     assertEquals(
@@ -96,8 +96,8 @@ final class CatalogViewSemanticCorruptionTest {
             encoded,
             "swapped_view",
             "SELECT m.id AS bad FROM moments m JOIN facts f ON m.id=f.id",
-            facts.tableId(),
-            moments.tableId()));
+            facts,
+            moments));
     assertEquals(
         StatusCode.OK, RelationalKey.catalogTableKey("swapped_view", key));
     assertEquals(
@@ -109,7 +109,7 @@ final class CatalogViewSemanticCorruptionTest {
             encoded,
             "missing_view",
             "SELECT m.id AS bad FROM moments m JOIN facts f ON m.id=f.id",
-            moments.tableId(),
+            moments,
             RelationalKey.MAXIMUM_TABLE_ID));
     assertEquals(
         StatusCode.OK, RelationalKey.catalogTableKey("missing_view", key));
@@ -124,8 +124,8 @@ final class CatalogViewSemanticCorruptionTest {
             "SELECT m.id AS bad FROM moments m JOIN facts f "
                 + "ON m.id=f.id AND "
                 + "(m.day AT TIME ZONE 'No/Such') IS NOT NULL",
-            moments.tableId(),
-            facts.tableId()));
+            moments,
+            facts));
     assertEquals(
         StatusCode.OK, RelationalKey.catalogTableKey("invalid_zone_view", key));
     assertEquals(
@@ -137,9 +137,10 @@ final class CatalogViewSemanticCorruptionTest {
             encoded,
             "malformed_aggregate",
             "SELECT SUM(id) AS total FROM moments",
-            moments.tableId(),
+            moments,
             0));
-    int queryOffset = 152 + "malformed_aggregate".length();
+    int queryOffset = 24 + ViewDefinition.MAXIMUM_LINEAGE_TABLES * Integer.BYTES
+        + "malformed_aggregate".length();
     encoded.put(queryOffset, (byte) 0xc0);
     encoded.put(queryOffset + 1, (byte) 0x80);
     assertEquals(
@@ -207,8 +208,7 @@ final class CatalogViewSemanticCorruptionTest {
     assertEquals(StatusCode.OK, database.createSession(relationalResult));
     RelationalSession relational = relationalResult.session();
     assertEquals(StatusCode.OK, relational.begin(IsolationLevel.SERIALIZABLE));
-    TableDefinition events = new TableDefinition();
-    assertEquals(StatusCode.OK, relational.resolveTable("events", events));
+    int events = descriptorTableId(relational, "events");
     ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
     assertEquals(
         StatusCode.OK,
@@ -216,9 +216,9 @@ final class CatalogViewSemanticCorruptionTest {
             encoded,
             "corrupt_view",
             "SELECT id FROM events",
-            events.tableId(),
+            events,
             0));
-    encoded.putInt(28, events.tableId());
+    encoded.putInt(28, events);
     RelationalKey.KeyResult key = new RelationalKey.KeyResult();
     assertEquals(StatusCode.OK, RelationalKey.catalogTableKey("corrupt_view", key));
     assertEquals(
@@ -251,5 +251,15 @@ final class CatalogViewSemanticCorruptionTest {
         ? new int[] {firstTableId} : new int[] {firstTableId, secondTableId};
     return CatalogViewCodec.encode(
         target, name, query, tableIds, tableIds.length);
+  }
+
+  private static int descriptorTableId(RelationalSession session, CharSequence name) {
+    SchemaPin pin = new SchemaPin();
+    StatusDetail detail = new StatusDetail(128);
+    assertEquals(StatusCode.OK, session.resolveDescriptor(name, pin, detail));
+    long tableId = pin.tableId();
+    assertEquals(tableId, (long) (int) tableId);
+    assertEquals(StatusCode.OK, pin.release());
+    return (int) tableId;
   }
 }

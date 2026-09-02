@@ -1,39 +1,56 @@
 package io.riverdb.format.btree;
 
+import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.SqlValueDomain;
+import io.riverdb.base.type.SqlNumericTypeRules;
+import io.riverdb.base.type.SqlApproximateNumeric;
 import java.nio.ByteBuffer;
 
-/** Checks tuple-key component descriptors against a declared shape. */
+/** Checks tuple components against the exact immutable descriptor shape. */
 final class TupleKeyShapeValidation {
   private TupleKeyShapeValidation() { }
 
-  static boolean matches(ByteBuffer source, int offset, int length, int arity,
-      int first, int second, int third, int fourth) {
-    if (!TupleKeyStructureValidation.validate(source, offset, length)
-        || Byte.toUnsignedInt(source.get(offset + 1)) != arity
-        || !TupleKeyCodec.validShape(arity, first, second, third, fourth)) return false;
-    int cursor = offset + TupleKeyCodec.HEADER_BYTES, valuesEnd = offset + length - Long.BYTES;
-    for (int column = 0; column < arity; column++) {
-      int type = Byte.toUnsignedInt(source.get(cursor++));
-      int descriptor = descriptorAt(column, first, second, third, fourth);
-      if (type != SqlTypeDescriptor.typeId(descriptor)) return false;
-      int marker = Byte.toUnsignedInt(source.get(cursor++));
-      if (marker == TupleKeyCodec.NULL_VALUE) continue;
-      if (type == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        int scalars = 0;
-        while (getInt(source, cursor) != 0) { cursor += Integer.BYTES; scalars++; }
-        cursor += Integer.BYTES;
-        if (scalars > SqlTypeDescriptor.parameterOne(descriptor)) return false;
-      } else {
-        long value = getLong(source, cursor) ^ Long.MIN_VALUE;
-        if (!SqlValueDomain.validFixed(descriptor, value)) return false;
-        cursor += Long.BYTES;
-      }
+  static boolean matches(
+      ByteBuffer source, int offset, int length, TupleShape shape) {
+    if (shape == null || !TupleKeyStructureValidation.validate(source, offset, length)
+        || TupleKeyCodec.arity(source, offset, length) != shape.partCount()) return false;
+    int cursor = offset + TupleKeyCodec.headerBytes(source, offset, length);
+    int valuesEnd = offset + TupleKeyCodec.userTupleBytes(source, offset, length);
+    for (int part = 0; part < shape.partCount(); part++) {
+      int descriptor = shape.descriptorAt(part);
+      if (!matchesPart(source, cursor, descriptor)) return false;
+      cursor = TupleKeyStructureValidation.partEnd(source, cursor, valuesEnd);
     }
     return cursor == valuesEnd;
   }
-  private static int descriptorAt(int index, int first, int second, int third, int fourth) { return switch (index) { case 0 -> first; case 1 -> second; case 2 -> third; case 3 -> fourth; default -> 0; }; }
-  private static int getInt(ByteBuffer source, int offset) { return Byte.toUnsignedInt(source.get(offset)) << 24 | Byte.toUnsignedInt(source.get(offset + 1)) << 16 | Byte.toUnsignedInt(source.get(offset + 2)) << 8 | Byte.toUnsignedInt(source.get(offset + 3)); }
-  private static long getLong(ByteBuffer source, int offset) { return (long) getInt(source, offset) << 32 | Integer.toUnsignedLong(getInt(source, offset + Integer.BYTES)); }
+
+  private static boolean matchesPart(ByteBuffer source, int cursor, int descriptor) {
+    int type = Byte.toUnsignedInt(source.get(cursor));
+    int marker = Byte.toUnsignedInt(source.get(cursor + 1));
+    if (type != SqlTypeDescriptor.typeId(descriptor)) return false;
+    if (marker == TupleKeyCodec.NULL_VALUE) return true;
+    if (type == SqlTypeDescriptor.TYPE_ID_DECIMAL) {
+      long high = TupleKeyCodec.getBigEndianLong(source, cursor + 2) ^ Long.MIN_VALUE;
+      long low = TupleKeyCodec.getBigEndianLong(source, cursor + 2 + Long.BYTES);
+      return ExactDecimal128.fits(
+          high, low, SqlTypeDescriptor.parameterOne(descriptor));
+    }
+    if (type != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      long encoded = TupleKeyCodec.getBigEndianLong(source, cursor + 2);
+      long value = SqlNumericTypeRules.isApproximate(descriptor)
+          ? SqlApproximateNumeric.valueBits(descriptor, encoded)
+          : encoded ^ Long.MIN_VALUE;
+      return SqlValueDomain.validFixed(descriptor, value);
+    }
+    int scalars = 0;
+    cursor += 2;
+    while (TupleKeyCodec.getBigEndianInt(source, cursor) != 0) {
+      cursor += Integer.BYTES;
+      if (++scalars > SqlTypeDescriptor.parameterOne(descriptor)) return false;
+    }
+    return true;
+  }
+
 }

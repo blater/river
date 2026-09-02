@@ -18,7 +18,7 @@ final class StatusDetailTest {
     for (StatusCode code : StatusCode.values()) {
       assertTrue(stableCodes.add(code.stableCode()), () -> "duplicate code " + code.stableCode());
       boolean expectedRetryable = switch (code) {
-        case RETRY, CONFLICT -> true;
+        case RETRY, CONFLICT, DEADLOCK -> true;
         case OK, FENCED, CLOSED, CANCELLED, INVALID_EXTERNAL_INPUT,
             INVALID_DATETIME_FORMAT, DATETIME_FIELD_OVERFLOW,
             INVALID_TIME_ZONE_DISPLACEMENT, STRING_DATA_RIGHT_TRUNCATION,
@@ -36,6 +36,9 @@ final class StatusDetailTest {
     assertTrue(StatusCode.OK.isOk());
     assertTrue(StatusCode.RETRY.isRetryable());
     assertTrue(StatusCode.CONFLICT.isRetryable());
+    assertEquals(4002, StatusCode.DEADLOCK.stableCode());
+    assertEquals(StatusFamily.CONFLICT, StatusCode.DEADLOCK.family());
+    assertTrue(StatusCode.DEADLOCK.isRetryable());
     assertFalse(StatusCode.CLOSED.isRetryable());
     assertFalse(StatusCode.NOT_OWNER.isRetryable());
     assertTrue(StatusCode.CORRUPTION.isFatal());
@@ -107,6 +110,25 @@ final class StatusDetailTest {
     StatusDetail detail = new StatusDetail(64);
     detail.append(Long.MIN_VALUE).append(',').append(Long.MAX_VALUE);
     assertEquals("-9223372036854775808,9223372036854775807", detail.asString());
+  }
+
+  @Test
+  void copyPreservesCodeTextAndSourceTruncation() {
+    StatusDetail source = new StatusDetail(4)
+        .set(StatusCode.IO_FAILURE)
+        .append("abcde");
+    StatusDetail copied = new StatusDetail(4);
+
+    assertSame(copied, copied.copyFrom(source));
+    assertEquals(StatusCode.IO_FAILURE, copied.code());
+    assertEquals("abcd", copied.asString());
+    assertTrue(copied.truncated());
+
+    source.reset().append("xy");
+    copied.copyFrom(source);
+    assertEquals(StatusCode.OK, copied.code());
+    assertEquals("xy", copied.asString());
+    assertFalse(copied.truncated());
   }
 
   @Test

@@ -28,6 +28,21 @@ final class SqlBlockAggregateViewTest {
     SqlExecutionResult result = new SqlExecutionResult();
     createFixture(session, result);
 
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE tiny_keys (id VARCHAR(1) PRIMARY KEY, amount BIGINT)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO tiny_keys VALUES ('a',1)", result));
+    assertTextRows(
+        session,
+        result,
+        "SELECT id FROM (SELECT id FROM tiny_keys ORDER BY id) ordered "
+            + "WHERE id='ab'",
+        new String[0]);
+
     assertRows(
         session,
         result,
@@ -39,6 +54,18 @@ final class SqlBlockAggregateViewTest {
     assertRows(
         session,
         result,
+        "SELECT n FROM (SELECT COUNT(*) AS n FROM events GROUP BY category) grouped "
+            + "ORDER BY n",
+        new long[][] {{1}, {1}, {2}});
+    assertRows(
+        session,
+        result,
+        "SELECT n FROM (SELECT COUNT(*) AS n FROM events GROUP BY category "
+            + "HAVING category>=20) grouped ORDER BY n",
+        new long[][] {{1}, {1}});
+    assertRows(
+        session,
+        result,
         "SELECT total FROM (SELECT SUM(amount) AS total FROM events) scalar "
             + "WHERE ABS(total)=600",
         new long[][] {{600}});
@@ -47,6 +74,49 @@ final class SqlBlockAggregateViewTest {
         result,
         "SELECT n FROM (SELECT COUNT(*) AS n FROM events) counted",
         new long[][] {{4}});
+    assertRows(
+        session,
+        result,
+        "SELECT id FROM (SELECT id FROM events LIMIT 1) limited",
+        new long[][] {{1}});
+    assertRows(
+        session,
+        result,
+        "SELECT id FROM (SELECT id FROM events LIMIT 0) limited",
+        new long[0][]);
+    assertRows(
+        session,
+        result,
+        "SELECT id FROM (SELECT id FROM events ORDER BY id DESC LIMIT 1) limited",
+        new long[][] {{4}});
+    assertRows(
+        session,
+        result,
+        "SELECT id FROM (SELECT id FROM events ORDER BY id LIMIT 1) limited WHERE id=2",
+        new long[0][]);
+    assertRows(
+        session,
+        result,
+        "SELECT category FROM "
+            + "(SELECT DISTINCT category FROM events ORDER BY category DESC LIMIT 1) limited",
+        new long[][] {{30}});
+    assertRows(
+        session,
+        result,
+        "SELECT category FROM (SELECT DISTINCT category FROM events LIMIT 0) limited",
+        new long[0][]);
+    assertRows(
+        session,
+        result,
+        "SELECT category FROM "
+            + "(SELECT category,COUNT(*) AS n FROM events GROUP BY category LIMIT 1) limited",
+        new long[][] {{10}});
+    assertRows(
+        session,
+        result,
+        "SELECT category FROM "
+            + "(SELECT category,COUNT(*) AS n FROM events GROUP BY category LIMIT 0) limited",
+        new long[0][]);
     assertRows(
         session,
         result,
@@ -82,6 +152,12 @@ final class SqlBlockAggregateViewTest {
         "SELECT total FROM (SELECT SUM(amount) AS total FROM events "
             + "HAVING SUM(amount)<0) scalar",
         new long[0][]);
+    assertRows(
+        session,
+        result,
+        "SELECT total FROM (SELECT SUM(amount) AS total FROM events) scalar "
+            + "WHERE total=600",
+        new long[][] {{600}});
     assertEquals(
         StatusCode.CONFLICT,
         session.execute(
@@ -134,18 +210,18 @@ final class SqlBlockAggregateViewTest {
         "SELECT n FROM (SELECT COUNT(*) AS n FROM events "
             + "WHERE EXTRACT(YEAR FROM day)=2024) computed_inner",
         new long[][] {{3}});
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginScan(
-            "SELECT category FROM (SELECT category,SUM(amount) AS total FROM events "
-                + "GROUP BY category ORDER BY category) ordered_inner",
-            new SqlScanCursor()));
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session.beginScan(
-            "SELECT n FROM (SELECT category,COUNT(*) AS n FROM events "
-                + "GROUP BY category) grouped ORDER BY category",
-            new SqlScanCursor()));
+    assertRows(
+        session,
+        result,
+        "SELECT category FROM (SELECT category,SUM(amount) AS total FROM events "
+            + "GROUP BY category ORDER BY category DESC LIMIT 1) ordered_inner",
+        new long[][] {{30}});
+    assertRows(
+        session,
+        result,
+        "SELECT n FROM (SELECT category,COUNT(*) AS n FROM events "
+            + "GROUP BY category) grouped ORDER BY category",
+        new long[][] {{2}, {1}, {1}});
 
     assertPlan(session, result, false);
     assertPlan(session, result, true);

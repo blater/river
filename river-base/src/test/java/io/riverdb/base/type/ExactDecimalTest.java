@@ -357,7 +357,8 @@ final class ExactDecimalTest {
   }
 
   private static int randomDescriptor(Random random) {
-    int precision = random.nextInt(SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) + 1;
+    int precision = random.nextInt(
+        SqlTypeDescriptor.MAXIMUM_COMPACT_DECIMAL_PRECISION) + 1;
     return SqlTypeDescriptor.decimal(precision, random.nextInt(precision + 1));
   }
 
@@ -397,6 +398,7 @@ final class ExactDecimalTest {
   }
 
   private static boolean fits(BigDecimal value, int descriptor) {
+    if (SqlTypeDescriptor.isWideDecimal(descriptor)) return false;
     BigInteger magnitude = value.unscaledValue().abs();
     return magnitude.compareTo(
         BigInteger.TEN.pow(SqlTypeDescriptor.parameterOne(descriptor))) < 0;

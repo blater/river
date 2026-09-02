@@ -1,12 +1,14 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.format.catalog.CatalogKeyspace;
 
 /** Primitive physical key-space assignment for catalog and relational table ownership. */
 final class RelationalKey {
-  static final int CATALOG_OBJECT_SPACE = 0;
-  static final int CATALOG_SEQUENCE_SPACE = 1;
-  static final int MAXIMUM_TABLE_ID = 0x7fff;
+  static final long CATALOG_OBJECT_SPACE = 0;
+  static final long CATALOG_SEQUENCE_SPACE = 1;
+  static final int MAXIMUM_TABLE_ID =
+      (int) CatalogKeyspace.MAXIMUM_RELATIONAL_OBJECT_ID;
 
   private RelationalKey() {
   }
@@ -42,12 +44,12 @@ final class RelationalKey {
     return StatusCode.OK;
   }
 
-  static int dataSpace(int tableId) {
-    return tableId << 1;
+  static long dataSpace(int tableId) {
+    return (long) tableId << 1;
   }
 
-  static int auxiliarySpace(int tableId) {
-    return (tableId << 1) + 1;
+  static long auxiliarySpace(int tableId) {
+    return ((long) tableId << 1) + 1;
   }
 
   static boolean validName(CharSequence name) {
@@ -75,15 +77,15 @@ final class RelationalKey {
   }
 
   static final class KeyResult {
-    private int space;
+    private long space;
     private long key;
 
-    void set(int valueSpace, long value) {
+    void set(long valueSpace, long value) {
       space = valueSpace;
       key = value;
     }
 
-    int space() {
+    long space() {
       return space;
     }
 

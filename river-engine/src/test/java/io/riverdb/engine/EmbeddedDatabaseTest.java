@@ -388,7 +388,7 @@ final class EmbeddedDatabaseTest {
   }
 
   @Test
-  void checkpointCompactsVersionChainsAcrossBoundedWalRecords(@TempDir Path root) {
+  void checkpointPreservesVacuumBeyondFormerPublicationBound(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
     EmbeddedDatabase database = opened.database();

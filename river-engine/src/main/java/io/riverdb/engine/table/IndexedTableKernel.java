@@ -2,18 +2,18 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
-import io.riverdb.storage.btree.BTreeLookupResult;
+import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.BTreeSplitResult;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
-import io.riverdb.format.wal.WalRecordCodec;
 import java.nio.ByteBuffer;
 
 /** Allocation-conscious indexed-table behavior over one owned page set. */
-final class IndexedTableKernel {
+final class IndexedTableKernel extends IndexedKernelVersions {
   static final int HEAP_PAGE_ID = 1;
   static final int ROOT_META_PAGE_ID = 2;
   static final int INITIAL_LEAF_PAGE_ID = 3;
@@ -21,97 +21,81 @@ final class IndexedTableKernel {
 
   private final IndexedPageSet pages;
   private final HeapInsertResult heapInsert = new HeapInsertResult();
-  private final IndexedVersionState versions = new IndexedVersionState();
-  private final LongPagedIntArray rowPageIds =
-      new LongPagedIntArray(IndexedTableLimits.MAX_ROWS);
-  private final LongPagedIntArray rowSlots =
-      new LongPagedIntArray(IndexedTableLimits.MAX_ROWS);
-  private final BTreeLookupResult indexLookup = new BTreeLookupResult();
-  private final IndexedTableValidator validator;
-  private final IndexedMutationValidator mutationValidator;
-  private final IndexedTableWalApplier walApplier;
-  private final IndexedTableVacuum vacuum;
-  private final IndexedTableIndexTree indexTree;
-  private final IndexedTableMutationStager mutationStager;
+  private final IndexedVersionRecord versionRecord = new IndexedVersionRecord();
+  private final IndexedKernelComponents components;
+  private final IndexedStagedPageAllocation stagedAllocation =
+      new IndexedStagedPageAllocation();
   private StatusCode stageOperationHeapStatus = StatusCode.OK;
   private long rowCount;
   private int lastHeapPageId = HEAP_PAGE_ID;
   private long operationRowCount;
   private int operationLastHeapPageId = HEAP_PAGE_ID;
 
-  int operationVersionCount() {
-    return versions.operationCount();
-  }
-
   long operationRowCount() {
     return operationRowCount;
-  }
-
-  long operationPreviousRowId(int index) {
-    return versions.operationPreviousRow(index);
-  }
-
-  boolean operationDeleted(int index) {
-    return versions.operationDeleted(index);
   }
 
   int lastHeapPageId() {
     return lastHeapPageId;
   }
 
+  int operationLastHeapPageId() { return operationLastHeapPageId; }
+
   HeapInsertResult heapInsertResult() {
     return heapInsert;
   }
 
-  void recordVacuumDeleted(long rowId, boolean deleted) {
-    versions.recordVacuumDeleted(rowId, deleted);
+  StatusCode fetchRow(long rowId, HeapRowResult result) {
+    return components.rows.fetch(rowId, rowCount, result);
   }
 
-  StatusCode fetchRow(long rowId, HeapRowResult result) {
-    if (result == null || rowId <= 0 || rowId > rowCount) {
+  StatusCode fetchOperationRow(long rowId, HeapRowResult result) {
+    if (result == null || rowId <= 0 || rowId > operationRowCount) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return HeapPage.fetch(
-        pages.currentPayloadUnchecked(rowPageIds.get(rowId)), rowSlots.get(rowId), result);
+    result.reset();
+    if (rowId <= rowCount) return components.rows.fetch(rowId, rowCount, result);
+    long ordinal = rowId - rowCount - 1;
+    IndexedVersionOperation operation = versions.operation();
+    if (ordinal < 0 || ordinal >= operation.count()) return StatusCode.CORRUPTION;
+    int index = (int) ordinal;
+    ByteBuffer heap = pages.operationPayload(operation.pageId(index));
+    StatusCode status = pages.lastStatus();
+    if (heap == null && status.isOk()) status = StatusCode.CORRUPTION;
+    if (heap != null) status = HeapPage.fetch(heap, operation.slot(index), result);
+    if (status.isOk()) status = result.retainBytes();
+    if (!status.isOk()) result.reset();
+    return status;
+  }
+
+  StatusCode pinRow(long rowId, HeapRowResult result, IndexedRowPin pin) {
+    return components.rows.pin(rowId, rowCount, result, pin);
+  }
+
+  StatusCode releaseRow(IndexedRowPin pin) {
+    return components.rows.release(pin);
   }
 
   int rowLength(long rowId) {
-    return rowId > 0 && rowId <= rowCount
-        ? HeapPage.rowLength(
-            pages.currentPayloadUnchecked(rowPageIds.get(rowId)), rowSlots.get(rowId)) : 0;
+    return components.rows.length(rowId, rowCount);
   }
 
   StatusCode copyRowTo(long rowId, ByteBuffer destination, int destinationOffset) {
-    if (rowId <= 0 || rowId > rowCount) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    return HeapPage.copyRowTo(
-        pages.currentPayloadUnchecked(rowPageIds.get(rowId)),
-        rowSlots.get(rowId),
-        destination,
-        destinationOffset);
+    return components.rows.copyTo(rowId, rowCount, destination, destinationOffset);
   }
 
-  long rowCommitSequence(long rowId) {
-    return versions.commitSequence(rowId, rowCount);
-  }
-
-  long previousRowId(long rowId) {
-    return versions.previousRow(rowId, rowCount);
-  }
-
-  boolean isDeletedRow(long rowId) {
-    return versions.isDeleted(rowId, rowCount);
-  }
-
-  boolean hasHistoricalVersions() {
-    return versions.hasHistoricalVersions();
+  StatusCode readVersion(long rowId, IndexedVersionRecord result) {
+    return versions.lookup(rowId, rowCount, result);
   }
 
   void beginOperationState() {
     operationRowCount = rowCount;
-    versions.beginOperation();
+    versions.operation().begin();
     operationLastHeapPageId = lastHeapPageId;
+  }
+
+  StatusCode reserveOperationVersions(int required) {
+    return versions.operation().reserve(required);
   }
 
   StatusCode stageVersionRow(
@@ -121,13 +105,38 @@ final class IndexedTableKernel {
       long previousRowId,
       boolean deleted,
       HeapInsertResult result) {
+    return stageVersionRow(
+        source, sourceOffset, rowBytes, previousRowId, deleted, result,
+        IndexedTableLimits.MAX_CHANGED_PAGES);
+  }
+
+  StatusCode stageRelationalVersionRow(
+      ByteBuffer source,
+      int sourceOffset,
+      int rowBytes,
+      long previousRowId,
+      boolean deleted,
+      HeapInsertResult result) {
+    return stageVersionRow(
+        source, sourceOffset, rowBytes, previousRowId, deleted, result,
+        IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES);
+  }
+
+  private StatusCode stageVersionRow(
+      ByteBuffer source,
+      int sourceOffset,
+      int rowBytes,
+      long previousRowId,
+      boolean deleted,
+      HeapInsertResult result,
+      int maximumChangedPages) {
     if (source == null
         || sourceOffset < 0
         || rowBytes <= 0
         || source.limit() - sourceOffset < rowBytes
         || result == null
         || operationRowCount >= IndexedTableLimits.MAX_ROWS
-        || !versions.canStage(previousRowId, deleted, rowCount)) {
+        || !versions.operation().canStage(previousRowId, deleted, operationRowCount)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -135,178 +144,116 @@ final class IndexedTableKernel {
     if (heap == null || !HeapPage.isHeap(heap)) {
       return StatusCode.CORRUPTION;
     }
-    heap = stageOperationHeap(heap, rowBytes);
+    heap = stageOperationHeap(heap, rowBytes, maximumChangedPages);
     if (heap == null) return stageOperationHeapStatus;
     StatusCode status = HeapPage.insertFrom(heap, source, sourceOffset, rowBytes, heapInsert);
     if (status.isOk()) {
+      int heapSlot = (int) heapInsert.rowId();
       operationRowCount++;
-      versions.stage(previousRowId, deleted);
+      versions.operation().stage(
+          previousRowId, deleted, operationLastHeapPageId, heapSlot);
       result.setRowId(operationRowCount);
     }
     return status;
   }
 
   boolean canAppendRow(int rowBytes) {
-    if (rowBytes <= 0
-        || rowCount >= IndexedTableLimits.MAX_ROWS
-        || !pages.isPresent(lastHeapPageId)) {
-      return false;
-    }
-    if (HeapPage.canInsert(pages.currentPayloadUnchecked(lastHeapPageId), rowBytes)) {
-      return true;
-    }
-    ByteBuffer metadata = pages.currentPayloadUnchecked(ROOT_META_PAGE_ID);
-    return rowBytes + HeapPage.SLOT_BYTES
-            <= pages.currentPayloadUnchecked(HEAP_PAGE_ID).limit() - HeapPage.HEADER_BYTES
-        && BTreeRootPage.nextPageId(metadata) <= IndexedTableLimits.MAX_PAGES;
-  }
-
-  StatusCode appendCurrentRow(
-      ByteBuffer source,
-      int sourceOffset,
-      int rowBytes,
-      long expectedRowId,
-      long recordStart,
-      long recordEnd,
-      long commitSequence,
-      long previousRowId,
-      boolean deleted) {
-    if (expectedRowId != rowCount + 1 || expectedRowId > IndexedTableLimits.MAX_ROWS) {
-      return StatusCode.CORRUPTION;
-    }
-    ByteBuffer heap = pages.currentPayloadUnchecked(lastHeapPageId);
-    if (!HeapPage.canInsert(heap, rowBytes)) {
-      ByteBuffer metadata = pages.currentPayloadUnchecked(ROOT_META_PAGE_ID);
-      if (BTreeRootPage.nextPageId(metadata) > IndexedTableLimits.MAX_PAGES) {
-        return StatusCode.RESOURCE_EXHAUSTED;
-      }
-      int pageId = BTreeRootPage.allocatePage(metadata);
-      if (pages.isPresent(pageId)) {
-        return StatusCode.CORRUPTION;
-      }
-      pages.ensureBuffers(pageId);
-      heap = pages.currentPayloadUnchecked(pageId);
-      StatusCode status = HeapPage.initialize(heap);
-      if (!status.isOk()) {
-        return status;
-      }
-      pages.installPresent(pageId);
-      lastHeapPageId = pageId;
-      pages.markCurrentChanged(ROOT_META_PAGE_ID, recordStart, recordEnd);
-    }
-    StatusCode status = HeapPage.insertFrom(heap, source, sourceOffset, rowBytes, heapInsert);
-    if (!status.isOk()) {
-      return status;
-    }
-    rowCount++;
-    rowPageIds.set(rowCount, lastHeapPageId);
-    rowSlots.set(rowCount, (int) heapInsert.rowId());
-    versions.recordCommitted(rowCount, commitSequence, previousRowId, deleted);
-    pages.markCurrentChanged(lastHeapPageId, recordStart, recordEnd);
-    return StatusCode.OK;
+    return components.capacity.row(operationRowCount, operationLastHeapPageId, rowBytes);
   }
 
   StatusCode rebuildRowLocations() {
-    long rebuiltRows = 0;
-    int rebuiltLastHeap = 0;
-    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
-      if (!pages.isPresent(pageId) || !HeapPage.isHeap(pages.currentPayloadUnchecked(pageId))) {
-        continue;
-      }
-      int pageRows = HeapPage.rowCount(pages.currentPayloadUnchecked(pageId));
-      if (pageRows < 0 || rebuiltRows > IndexedTableLimits.MAX_ROWS - pageRows) {
-        return StatusCode.CORRUPTION;
-      }
-      for (int slot = 1; slot <= pageRows; slot++) {
-        rebuiltRows++;
-        rowPageIds.set(rebuiltRows, pageId);
-        rowSlots.set(rebuiltRows, slot);
-      }
-      rebuiltLastHeap = pageId;
+    StatusCode status = versions.rows().rebuild(pages);
+    if (status.isOk()) {
+      rowCount = versions.rows().rebuiltRowCount();
+      lastHeapPageId = versions.rows().rebuiltLastHeapPageId();
     }
-    if (rebuiltLastHeap == 0) {
+    return status;
+  }
+
+  boolean rowDirectoryMatches(long expectedRowCount, long commitSequence) {
+    return versions.rows().matches(expectedRowCount, commitSequence);
+  }
+
+  StatusCode loadRowDirectory(long expectedRowCount) {
+    int expectedLastHeapPageId = versions.rows().publishedLastHeapPageId();
+    StatusCode status = versions.rows().load(expectedRowCount);
+    if (status.isOk()) {
+      rowCount = expectedRowCount;
+      lastHeapPageId = expectedLastHeapPageId;
+    }
+    return status;
+  }
+
+  StatusCode recordNewRowCommits(long previousRowCount, long commitSequence) {
+    if (!pages.isPresent(HEAP_PAGE_ID)) {
       return StatusCode.CORRUPTION;
     }
-    for (long rowId = rebuiltRows + 1; rowId <= rowCount; rowId++) {
-      rowPageIds.set(rowId, 0);
-      rowSlots.set(rowId, 0);
+    return versions.recordNewRows(previousRowCount, rowCount, commitSequence);
+  }
+
+  StatusCode recordOperationVersions(long previousRowCount, long commitSequence) {
+    return versions.recordOperation(previousRowCount, commitSequence);
+  }
+
+  StatusCode recordOperationVersions(
+      long groupBaseRow, int firstVersion, int versionCount, long commitSequence) {
+    return versions.recordOperation(
+        groupBaseRow, firstVersion, versionCount, commitSequence);
+  }
+
+  StatusCode admitOperationPublication() {
+    return versions.admitRows(rowCount + 1, versions.operation().count());
+  }
+
+  StatusCode publishOperationRows(long previousRowCount) {
+    if (previousRowCount != rowCount
+        || operationRowCount - previousRowCount != versions.operation().count()) {
+      return StatusCode.INVARIANT_BROKEN;
     }
-    rowCount = rebuiltRows;
-    lastHeapPageId = rebuiltLastHeap;
+    StatusCode status = versions.publishOperationRows(previousRowCount);
+    if (status.isOk()) {
+      rowCount = operationRowCount;
+      lastHeapPageId = operationLastHeapPageId;
+    }
+    return status;
+  }
+
+  StatusCode publishOperationRows(
+      long groupBaseRow, int firstVersion, int versionCount) {
+    if (groupBaseRow != rowCount || firstVersion < 0 || versionCount < 0
+        || firstVersion > versions.operation().count() - versionCount) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    return versions.operation().publishRows(
+        groupBaseRow, firstVersion, versionCount, versions.rows());
+  }
+
+  StatusCode publishOperationFrontier(long groupBaseRow, long memberRowEnd, int heapPageEnd) {
+    if (groupBaseRow != rowCount || memberRowEnd != operationRowCount
+        || memberRowEnd - groupBaseRow != versions.operation().count()
+        || heapPageEnd != operationLastHeapPageId) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    rowCount = memberRowEnd;
+    lastHeapPageId = heapPageEnd;
     return StatusCode.OK;
   }
 
-  void recordNewRowCommits(long previousRowCount, long commitSequence) {
-    if (!pages.isPresent(HEAP_PAGE_ID)) {
-      return;
-    }
-    versions.recordNewRows(previousRowCount, rowCount, commitSequence);
+  StatusCode indexedEntryCount(IndexedCountResult result) {
+    return components.entryCounter.count(result);
   }
 
-  void recordOperationVersions(long previousRowCount, long commitSequence) {
-    versions.recordOperation(previousRowCount, commitSequence);
+  StatusCode vacuumChunkCount(IndexedCountResult result) {
+    return components.vacuum.chunkCount(result);
   }
 
-  void clearOperationVersions() {
-    versions.clearOperation();
+  StatusCode vacuumChunkRowCount(long firstRow, IndexedCountResult result) {
+    return components.vacuum.chunkRowCount(firstRow, result);
   }
 
-  void loadCheckpointVersions(io.riverdb.engine.checkpoint.CheckpointState checkpoint) {
-    versions.load(checkpoint);
-  }
-
-  void closeCheckpointVersions() {
-    versions.close();
-  }
-
-  StatusCode applyRecoveredVersions(
-      ByteBuffer payload,
-      int versionOffset,
-      long previousRowCount,
-      int versionCount,
-      long commitSequence) {
-    return versions.applyRecovered(
-        payload, versionOffset, previousRowCount, versionCount, commitSequence);
-  }
-
-  void publishVacuumVersions(long retainedRows, long commitSequence) {
-    versions.publishVacuum(retainedRows, commitSequence);
-  }
-
-  void cancelVacuumVersions(long appliedRows) {
-    versions.cancelVacuum(appliedRows);
-  }
-
-  int indexedEntryCount() {
-    int count = 0;
-    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
-      if (!pages.isPresent(pageId) || pageId == ROOT_META_PAGE_ID) {
-        continue;
-      }
-      ByteBuffer page = pages.currentPayloadUnchecked(pageId);
-      if (HeapPage.isHeap(page)) {
-        continue;
-      }
-      int type = BTreePage.type(page);
-      if (type == BTreePage.TYPE_LEAF) {
-        count += BTreePage.entryCount(page);
-      } else if (type != BTreePage.TYPE_INTERNAL) {
-        return -1;
-      }
-    }
-    return count;
-  }
-
-  int vacuumChunkCount() {
-    return vacuum.chunkCount();
-  }
-
-  int vacuumChunkRowCount(long firstRow) {
-    return vacuum.chunkRowCount(firstRow);
-  }
-
-  int vacuumChunkPayloadBytes(long firstRow, int rowLimit) {
-    return vacuum.chunkPayloadBytes(firstRow, rowLimit);
+  StatusCode vacuumChunkPayloadBytes(
+      long firstRow, int rowLimit, IndexedCountResult result) {
+    return components.vacuum.chunkPayloadBytes(firstRow, rowLimit, result);
   }
 
   StatusCode encodeVacuumChunk(
@@ -317,95 +264,48 @@ final class IndexedTableKernel {
       int chunk,
       int chunkCount,
       int payloadBytes) {
-    return vacuum.encodeChunk(
+    return components.vacuum.encodeChunk(
         payload, retainedRows, firstRow, rowLimit, chunk, chunkCount, payloadBytes);
   }
 
   StatusCode beginVacuumApply() {
-    return vacuum.beginApply();
+    return components.vacuum.beginApply();
   }
 
   StatusCode applyVacuumEntry(ByteBuffer payload, int entryOffset, long compactedRowId) {
-    return vacuum.applyEntry(payload, entryOffset, compactedRowId);
+    return components.vacuum.applyEntry(payload, entryOffset, compactedRowId);
+  }
+
+  StatusCode finishVacuumApply() {
+    return components.vacuum.finishApply();
+  }
+
+  StatusCode publishVacuumApply(long start, long end) {
+    return components.vacuum.publish(start, end);
   }
 
   void resetVacuumApply() {
-    vacuum.resetApply();
-  }
-
-  boolean canAppendRows(int[] rowLengths, int count) {
-    if (rowCount > IndexedTableLimits.MAX_ROWS - count || !pages.isPresent(lastHeapPageId)) {
-      return false;
-    }
-    int available = HeapPage.availableBytes(pages.currentPayloadUnchecked(lastHeapPageId));
-    int newPages = 0;
-    int pageCapacity = pages.currentPayloadUnchecked(HEAP_PAGE_ID).limit() - HeapPage.HEADER_BYTES;
-    for (int index = 0; index < count; index++) {
-      int required = HeapPage.SLOT_BYTES + rowLengths[index];
-      if (required > pageCapacity) {
-        return false;
-      }
-      if (required > available) {
-        newPages++;
-        available = pageCapacity;
-      }
-      available -= required;
-    }
-    return BTreeRootPage.nextPageId(pages.currentPayloadUnchecked(ROOT_META_PAGE_ID))
-        <= IndexedTableLimits.MAX_PAGES - newPages + 1;
-  }
-
-  boolean canAppendEncodedRows(
-      ByteBuffer payload,
-      int firstEntryOffset,
-      int count,
-      int rowLengthOffset,
-      int entryBytes) {
-    if (rowCount > IndexedTableLimits.MAX_ROWS - count || !pages.isPresent(lastHeapPageId)) {
-      return false;
-    }
-    int available = HeapPage.availableBytes(pages.currentPayloadUnchecked(lastHeapPageId));
-    int newPages = 0;
-    int pageCapacity = pages.currentPayloadUnchecked(HEAP_PAGE_ID).limit() - HeapPage.HEADER_BYTES;
-    int entryOffset = firstEntryOffset;
-    for (int index = 0; index < count; index++) {
-      int rowBytes = IndexedWalCodec.encodedRowBytes(payload, entryOffset, rowLengthOffset);
-      int required = HeapPage.SLOT_BYTES + rowBytes;
-      if (required > pageCapacity) {
-        return false;
-      }
-      if (required > available) {
-        newPages++;
-        available = pageCapacity;
-      }
-      available -= required;
-      entryOffset += entryBytes + rowBytes;
-    }
-    return BTreeRootPage.nextPageId(pages.currentPayloadUnchecked(ROOT_META_PAGE_ID))
-        <= IndexedTableLimits.MAX_PAGES - newPages + 1;
+    components.vacuum.resetApply();
   }
 
   int currentHeapAvailableBytes() {
-    return HeapPage.availableBytes(pages.currentPayloadUnchecked(lastHeapPageId));
+    return components.capacity.available(operationLastHeapPageId);
   }
 
   StatusCode validateCurrentPage(int pageId) {
-    return validator.validateCurrentPage(pageId);
+    return components.validator.validateCurrentPage(pageId);
   }
 
   StatusCode validateAppliedPages(int[] pageIds, int pageCount) {
-    return validator.validateAppliedPages(pageIds, pageCount);
+    return components.validator.validateAppliedPages(pageIds, pageCount);
   }
 
-  IndexedTableKernel(IndexedPageSet pageSet) {
+  IndexedTableKernel(
+      IndexedPageSet pageSet,
+      IndexedVersionState versionState) {
+    super(versionState);
     pages = pageSet;
-    validator = new IndexedTableValidator(
-        pages, versions);
-    mutationValidator = new IndexedMutationValidator(pages);
-    walApplier = new IndexedTableWalApplier(this, pages);
-    vacuum = new IndexedTableVacuum(this, pages, versions, heapInsert);
-    indexTree = new IndexedTableIndexTree(pages);
-    mutationStager = new IndexedTableMutationStager(this, pages);
+    components = new IndexedKernelComponents(this, pages, versions, heapInsert);
   }
 
   StatusCode initializePages() {
@@ -426,24 +326,24 @@ final class IndexedTableKernel {
   }
 
   StatusCode validate() {
-    return validator.validate(rowCount);
+    return components.validator.validate(rowCount);
   }
 
   StatusCode stageInsertBatch(
-      int[] spaces,
+      long[] spaces,
       long[] keys,
       ByteBuffer rows,
       int rowStride,
       int[] rowLengths,
       int insertCount,
       HeapInsertResult result) {
-    return mutationStager.stageInsertBatch(
+    return components.mutationStager.stageInsertBatch(
         spaces, keys, rows, rowStride, rowLengths, insertCount, result);
   }
 
   StatusCode stageMutationBatch(
       int[] operations,
-      int[] spaces,
+      long[] spaces,
       long[] keys,
       int[] previousRowIds,
       ByteBuffer rows,
@@ -451,7 +351,7 @@ final class IndexedTableKernel {
       int[] rowLengths,
       int mutationCount,
       HeapInsertResult result) {
-    return mutationStager.stageMutationBatch(
+    return components.mutationStager.stageMutationBatch(
         operations, spaces, keys, previousRowIds, rows, rowStride,
         rowLengths, mutationCount, result);
   }
@@ -459,21 +359,13 @@ final class IndexedTableKernel {
   StatusCode stageMutationBatch(
       PendingMutationBuffer mutations,
       HeapInsertResult result) {
-    return mutationStager.stagePendingMutations(mutations, result);
+    return components.mutationStager.stagePendingMutations(mutations, result);
   }
 
   StatusCode stageInsertBatch(
       PendingMutationBuffer mutations,
       HeapInsertResult result) {
-    return mutationStager.stagePendingInserts(mutations, result);
-  }
-
-  boolean canAppendRows(PendingMutationBuffer mutations) {
-    int required = 0;
-    for (int index = 0; index < mutations.count(); index++) {
-      required += HeapPage.SLOT_BYTES + mutations.rowLengthAt(index);
-    }
-    return currentHeapAvailableBytes() >= required;
+    return components.mutationStager.stagePendingInserts(mutations, result);
   }
 
   StatusCode stageVersionRow(
@@ -487,7 +379,7 @@ final class IndexedTableKernel {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (operationRowCount >= IndexedTableLimits.MAX_ROWS
-        || !versions.canStage(previousRowId, deleted, rowCount)) {
+        || !versions.operation().canStage(previousRowId, deleted, rowCount)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -501,37 +393,45 @@ final class IndexedTableKernel {
     }
     StatusCode status = mutations.insertRowInto(index, heap, heapInsert);
     if (status.isOk()) {
+      int heapSlot = (int) heapInsert.rowId();
       operationRowCount++;
-      versions.stage(previousRowId, deleted);
+      versions.operation().stage(
+          previousRowId, deleted, operationLastHeapPageId, heapSlot);
       result.setRowId(operationRowCount);
     }
     return status;
   }
 
   private ByteBuffer stageOperationHeap(ByteBuffer current, int rowBytes) {
+    return stageOperationHeap(current, rowBytes, IndexedTableLimits.MAX_CHANGED_PAGES);
+  }
+
+  private ByteBuffer stageOperationHeap(
+      ByteBuffer current, int rowBytes, int maximumChangedPages) {
     stageOperationHeapStatus = StatusCode.OK;
     if (HeapPage.canInsert(current, rowBytes)) {
       ByteBuffer heap = pages.stageExisting(
-          operationLastHeapPageId, IndexedTableLimits.MAX_CHANGED_PAGES);
+          operationLastHeapPageId, maximumChangedPages);
       if (heap == null) {
         stageOperationHeapStatus = StatusCode.RESOURCE_EXHAUSTED;
       }
       return heap;
     }
     ByteBuffer metadata = pages.stageExisting(
-        ROOT_META_PAGE_ID, IndexedTableLimits.MAX_CHANGED_PAGES);
+        ROOT_META_PAGE_ID, maximumChangedPages);
     if (metadata == null
-        || BTreeRootPage.nextPageId(metadata) > IndexedTableLimits.MAX_PAGES) {
+        || !BTreeRootPage.hasAllocations(metadata, 1, IndexedTableLimits.MAX_PAGES)) {
       stageOperationHeapStatus = StatusCode.RESOURCE_EXHAUSTED;
       return null;
     }
-    int heapPageId = BTreeRootPage.allocatePage(metadata);
-    ByteBuffer heap = pages.stageNew(
-        heapPageId, IndexedTableLimits.MAX_CHANGED_PAGES);
-    if (heap == null) {
-      stageOperationHeapStatus = StatusCode.RESOURCE_EXHAUSTED;
+    stageOperationHeapStatus = stagedAllocation.stage(
+        pages, metadata, maximumChangedPages,
+        PageCodec.PAYLOAD_KIND_SCALAR_BTREE, PageCodec.SCALAR_OWNER_KEY_ID);
+    if (!stageOperationHeapStatus.isOk()) {
       return null;
     }
+    int heapPageId = stagedAllocation.pageId();
+    ByteBuffer heap = stagedAllocation.payload();
     stageOperationHeapStatus = HeapPage.initialize(heap);
     if (!stageOperationHeapStatus.isOk()) {
       return null;
@@ -542,7 +442,7 @@ final class IndexedTableKernel {
 
   StatusCode stageInsert(
       int leafPageId,
-      int space,
+      long space,
       long key,
       ByteBuffer row) {
     if (leafPageId <= 0 || !OrderedKey.isFiniteSpace(space) || row == null) {
@@ -564,140 +464,52 @@ final class IndexedTableKernel {
     }
     status = BTreePage.insertLeaf(leaf, space, key, heapInsert.rowId());
     if (status == StatusCode.RESOURCE_EXHAUSTED) {
-      status = indexTree.splitAndInsert(leafPageId, leaf, space, key, heapInsert.rowId());
+      status = components.indexTree.splitAndInsert(leafPageId, leaf, space, key, heapInsert.rowId());
     }
     return status;
   }
 
   StatusCode fetchByKeyAt(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       HeapRowResult result) {
-    if (!OrderedKey.isFiniteSpace(space) || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = lookupRowId(space, key);
-    if (!status.isOk()) {
-      return status;
-    }
-    long rowId = indexLookup.rowId();
-    while (rowId > 0) {
-      long rowCommitSequence = rowCommitSequence(rowId);
-      if (rowCommitSequence <= 0) {
-        return StatusCode.CORRUPTION;
-      }
-      if (rowCommitSequence <= visibleCommitSequence) {
-        if (isDeletedRow(rowId)) {
-          result.reset();
-          return StatusCode.CONFLICT;
-        }
-        return fetchRow(rowId, result);
-      }
-      rowId = previousRowId(rowId);
-    }
-    result.reset();
-    return StatusCode.CONFLICT;
+    return components.visibility.fetchByKey(visibleCommitSequence, space, key, rowCount, result);
+  }
+
+  StatusCode fetchVersionedByKeyAt(
+      long visibleCommitSequence, long space, long key,
+      IndexedVersionedRowResult result) {
+    return components.visibility.fetchVersionedByKey(
+        visibleCommitSequence, space, key, rowCount, result);
+  }
+
+  StatusCode fetchCurrentSuccessor(
+      long space, long key, long candidateRowId, IndexedVersionedRowResult result) {
+    return components.visibility.fetchCurrentSuccessor(
+        space, key, candidateRowId, rowCount, result);
   }
 
   StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
-    result.reset();
-    while (cursor.leafPageId() > 0) {
-      ByteBuffer leaf = pages.currentPayload(cursor.leafPageId());
-      if (leaf == null || BTreePage.type(leaf) != BTreePage.TYPE_LEAF) {
-        return StatusCode.CORRUPTION;
-      }
-      StatusCode status = nextVisibleLeafEntry(cursor, result, leaf);
-      if (status != StatusCode.CONFLICT || cursor.leafPageId() == 0) return status;
-      cursor.advanceLeaf(BTreePage.rightSiblingPageId(leaf));
-    }
-    return StatusCode.CONFLICT;
-  }
-
-  private StatusCode nextVisibleLeafEntry(
-      IndexedScanCursor cursor, IndexedScanResult result, ByteBuffer leaf) {
-    int entryCount = BTreePage.entryCount(leaf);
-    while (cursor.entryIndex() < entryCount) {
-      int entry = cursor.entryIndex();
-      cursor.advanceEntry();
-      long key = BTreePage.keyAt(leaf, entry);
-      int space = BTreePage.spaceAt(leaf, entry);
-      if (OrderedKey.compare(
-          space, key, cursor.lowerSpace(), cursor.lowerKey()) < 0) continue;
-      if (!OrderedKey.lessThan(
-          space, key, cursor.upperSpace(), cursor.upperKey())) {
-        cursor.advanceLeaf(0);
-        return StatusCode.CONFLICT;
-      }
-      long rowId = visibleRowId(
-          BTreePage.leafValueAt(leaf, entry), cursor.visibleCommitSequence());
-      if (rowId <= 0 || isDeletedRow(rowId)) continue;
-      StatusCode status = fetchRow(rowId, result.row());
-      if (!status.isOk()) return status;
-      result.set(space, key);
-      return StatusCode.OK;
-    }
-    return StatusCode.CONFLICT;
-  }
-
-  private long visibleRowId(long rowId, long visibleCommitSequence) {
-    return versions.visibleRow(rowId, visibleCommitSequence, rowCount);
+    return components.visibility.nextScan(cursor, result, rowCount);
   }
 
   StatusCode prepareMutation(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       IndexedMutationTarget result) {
-    if (visibleCommitSequence < 0
-        || !OrderedKey.isFiniteSpace(space) || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = lookupRowId(space, key);
-    if (!status.isOk()) {
-      return status;
-    }
-    long latestRowId = indexLookup.rowId();
-    long latestCommitSequence = rowCommitSequence(latestRowId);
-    if (latestCommitSequence <= 0) {
-      return StatusCode.CORRUPTION;
-    }
-    if (latestCommitSequence > visibleCommitSequence || isDeletedRow(latestRowId)) {
-      return StatusCode.CONFLICT;
-    }
-    result.set(latestRowId);
-    return StatusCode.OK;
+    return components.visibility.prepareMutation(
+        visibleCommitSequence, space, key, rowCount, false, result);
   }
 
   StatusCode prepareInsert(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       IndexedMutationTarget result) {
-    if (visibleCommitSequence < 0
-        || !OrderedKey.isFiniteSpace(space) || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    result.reset();
-    StatusCode status = lookupRowId(space, key);
-    if (status == StatusCode.CONFLICT) {
-      return StatusCode.OK;
-    }
-    if (!status.isOk()) {
-      return status;
-    }
-    long latestRowId = indexLookup.rowId();
-    long latestCommitSequence = rowCommitSequence(latestRowId);
-    if (latestCommitSequence <= 0) {
-      return StatusCode.CORRUPTION;
-    }
-    if (latestCommitSequence > visibleCommitSequence
-        || !isDeletedRow(latestRowId)) {
-      return StatusCode.CONFLICT;
-    }
-    result.set(latestRowId);
-    return StatusCode.OK;
+    return components.visibility.prepareMutation(
+        visibleCommitSequence, space, key, rowCount, true, result);
   }
 
   long rowCount() {
@@ -708,12 +520,20 @@ final class IndexedTableKernel {
     return versions.obsoleteCount();
   }
 
+  long checkpointObsoleteVersionCount() {
+    return versions.checkpointObsoleteCount();
+  }
+
   long remainingVersionCapacity() {
-    return (long) IndexedTableStore.MAX_ROWS - rowCount;
+    return IndexedTableLimits.MAX_ROWS - rowCount;
   }
 
   int rootPageId() {
     return BTreeRootPage.rootPageId(pages.currentPayload(ROOT_META_PAGE_ID));
+  }
+
+  int nextPageId() {
+    return BTreeRootPage.nextPageId(pages.currentPayloadUnchecked(ROOT_META_PAGE_ID));
   }
 
   int treeHeight() {
@@ -739,33 +559,33 @@ final class IndexedTableKernel {
   }
 
   int validatedLeafPageId() {
-    return mutationValidator.leafPageId();
+    return components.mutationValidator.leafPageId();
   }
 
   StatusCode validateNewIndexEntry(
-      int space, long key, int earlierEntriesInLeaf) {
+      long space, long key, int earlierEntriesInLeaf) {
     return validateNewIndexEntryAt(
         findLeafPageId(space, key), space, key, earlierEntriesInLeaf);
   }
 
   StatusCode validateNewIndexEntryAt(
-      int leafPageId, int space, long key, int earlierEntriesInLeaf) {
-    return mutationValidator.validateNewAt(
+      int leafPageId, long space, long key, int earlierEntriesInLeaf) {
+    return components.mutationValidator.validateNewAt(
         leafPageId, space, key, earlierEntriesInLeaf);
   }
 
   StatusCode validateNewIndexEntryIn(
       ByteBuffer leaf,
-      int space,
+      long space,
       long key,
       int earlierEntriesInLeaf) {
-    return mutationValidator.validateNewIn(
+    return components.mutationValidator.validateNewIn(
         leaf, space, key, earlierEntriesInLeaf);
   }
 
   StatusCode validateMutationTarget(
       int operation,
-      int space,
+      long space,
       long key,
       long previousRowId,
       int earlierNewEntriesInLeaf) {
@@ -777,88 +597,79 @@ final class IndexedTableKernel {
   StatusCode validateMutationTargetAt(
       int leafPageId,
       int operation,
-      int space,
+      long space,
       long key,
       long previousRowId,
       int earlierNewEntriesInLeaf) {
-    return mutationValidator.validateMutationAt(
+    boolean previousDeleted = false;
+    if (previousRowId > 0) {
+      StatusCode status = readVersion(previousRowId, versionRecord);
+      if (!status.isOk()) return status;
+      previousDeleted = versionRecord.deleted();
+    }
+    return components.mutationValidator.validateMutationAt(
         leafPageId,
         operation,
         space,
         key,
         previousRowId,
         earlierNewEntriesInLeaf,
-        isDeletedRow(previousRowId));
+        previousDeleted);
   }
 
   StatusCode validateMutationTargetIn(
       ByteBuffer leaf,
       int operation,
-      int space,
+      long space,
       long key,
       long previousRowId,
       int earlierNewEntriesInLeaf) {
-    return mutationValidator.validateMutationIn(
+    boolean previousDeleted = false;
+    if (previousRowId > 0) {
+      StatusCode status = readVersion(previousRowId, versionRecord);
+      if (!status.isOk()) return status;
+      previousDeleted = versionRecord.deleted();
+    }
+    return components.mutationValidator.validateMutationIn(
         leaf,
         operation,
         space,
         key,
         previousRowId,
         earlierNewEntriesInLeaf,
-        isDeletedRow(previousRowId));
+        previousDeleted);
   }
 
-  StatusCode validateVacuumHead(int space, long key, long rowId) {
-    return mutationValidator.validateVacuumAt(
-        findLeafPageId(space, key), space, key, rowId);
+  StatusCode validateVacuumHead(
+      long space, long key, long oldRowId, long compactedRowId) {
+    return components.mutationValidator.validateVacuumAt(
+        findLeafPageId(space, key), space, key, oldRowId, compactedRowId);
   }
 
-  StatusCode applyInsertOperation(
-      ByteBuffer payload,
-      long recordStart,
-      long recordEnd,
-      long commitSequence) {
-    return walApplier.applyInsert(payload, recordStart, recordEnd, commitSequence);
+  int findLeafPageId(long space, long key) {
+    return components.indexTree.findLeafPageId(space, key);
   }
 
-  StatusCode applyInsertBatchOperation(
-      ByteBuffer payload,
-      long recordStart,
-      long recordEnd,
-      long commitSequence) {
-    return walApplier.applyInsertBatch(
-        payload, recordStart, recordEnd, commitSequence);
+  int findLeafPageIdAt(long visibleCommitSequence, long space, long key) {
+    return components.indexTree.findLeafPageIdAt(visibleCommitSequence, space, key);
   }
 
-  StatusCode applyMutationBatchOperation(
-      ByteBuffer payload,
-      long recordStart,
-      long recordEnd,
-      long commitSequence) {
-    return walApplier.applyMutationBatch(
-        payload, recordStart, recordEnd, commitSequence);
+  StatusCode snapshotLookupStatus() { return components.indexTree.snapshotLookupStatus(); }
+
+  int findOperationLeafPageId(long space, long key) {
+    return components.indexTree.findOperationLeafPageId(space, key);
   }
 
-  private StatusCode lookupRowId(int space, long key) {
-    int leafPageId = findLeafPageId(space, key);
-    if (leafPageId <= 0) {
-      return StatusCode.CORRUPTION;
-    }
-    return BTreePage.lookupLeaf(
-        pages.currentPayload(leafPageId), space, key, indexLookup);
-  }
-
-  int findLeafPageId(int space, long key) {
-    return indexTree.findLeafPageId(space, key);
-  }
-
-  int findOperationLeafPageId(int space, long key) {
-    return indexTree.findOperationLeafPageId(space, key);
-  }
+  StatusCode operationLookupStatus() { return components.indexTree.lookupStatus(); }
 
   StatusCode splitIndexLeaf(
-      int leafPageId, ByteBuffer leaf, int space, long key, long rowId) {
-    return indexTree.splitAndInsert(leafPageId, leaf, space, key, rowId);
+      int leafPageId, ByteBuffer leaf, long space, long key, long rowId) {
+    return components.indexTree.splitAndInsert(leafPageId, leaf, space, key, rowId);
+  }
+
+  StatusCode splitRelationalIndexLeaf(
+      int leafPageId, ByteBuffer leaf, long space, long key, long rowId) {
+    return components.indexTree.splitAndInsertLogical(leafPageId, leaf, space, key, rowId);
   }
 
 }

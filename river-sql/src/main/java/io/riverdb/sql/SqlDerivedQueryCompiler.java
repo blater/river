@@ -46,7 +46,8 @@ final class SqlDerivedQueryCompiler {
     if (!status.isOk()) return status;
     SqlCommand root = query.block(0);
     SqlCommand base = query.block(query.sourceBlockCount() - 1);
-    destination.copyQueryFrom(root);
+    status = destination.copyQueryFrom(root);
+    if (!status.isOk()) return status;
     destination.writableTableName().copyFrom(base.tableName());
     return destination.finish();
   }

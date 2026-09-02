@@ -2,18 +2,18 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
-import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.CommitSequenceSource;
 import io.riverdb.tx.TransactionGroupCommitParticipant;
 import java.nio.ByteBuffer;
 
 /** Transaction-facing facade over one authoritative indexed-table store. */
-public final class IndexedTable
+public final class IndexedTable extends IndexedRelationalTableAccess
     implements CommitSequenceSource, TransactionGroupCommitParticipant {
   private final IndexedTableStore store;
 
   private IndexedTable(IndexedTableStore tableStore) {
+    super(tableStore);
     store = tableStore;
   }
 
@@ -47,103 +47,37 @@ public final class IndexedTable
     return status;
   }
 
-  public synchronized StatusCode insert(
-      long transactionId,
-      int space,
-      long key,
-      ByteBuffer row,
-      HeapInsertResult result) {
-    return store.insert(transactionId, space, key, row, result);
+  synchronized StatusCode preflightHybridCommitGroup(
+      IndexedTransactionSession[] sessions, int count,
+      long oldestVisibleCommitSequence) {
+    return store.preflightHybridGroup(
+        sessions, count, oldestVisibleCommitSequence);
   }
 
-  public synchronized StatusCode commitInsert(
-      long transactionId,
-      int space,
-      long key,
-      ByteBuffer row,
-      IndexedCommitResult result) {
-    return store.commitInsert(transactionId, space, key, row, result);
+  synchronized StatusCode appendHybridCommitGroup(
+      IndexedTransactionSession[] sessions, long[] commitSequences, int count) {
+    return store.appendHybridGroup(sessions, commitSequences, count);
   }
 
-  public synchronized StatusCode commitInserts(
-      long transactionId,
-      int[] spaces,
-      long[] keys,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int insertCount,
-      IndexedCommitResult result) {
-    return store.commitInserts(
-        transactionId, spaces, keys, rows, rowStride, rowLengths, insertCount, result);
+  StatusCode forceHybridCommitGroup() { return store.forceHybridGroup(); }
+
+  synchronized StatusCode cancelCommitGroup() {
+    return store.cancelCommitGroup();
   }
 
-  public synchronized StatusCode commitMutations(
-      long transactionId,
-      int[] operations,
-      int[] spaces,
-      long[] keys,
-      int[] previousRowIds,
-      ByteBuffer rows,
-      int rowStride,
-      int[] rowLengths,
-      int mutationCount,
-      IndexedCommitResult result) {
-    return store.commitMutations(
-        transactionId,
-        operations,
-        spaces,
-        keys,
-        previousRowIds,
-        rows,
-        rowStride,
-        rowLengths,
-        mutationCount,
-        result);
+  synchronized boolean commitGroupDecisionAppended() {
+    return store.commitGroupDecisionAppended();
   }
 
-  synchronized StatusCode preflightPreparedCommitGroup(
-      IndexedTransactionSession[] sessions,
-      int count) {
-    if (sessions == null || count <= 0 || count > sessions.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = store.beginPreparedInsertGroup();
-    for (int index = 0; status.isOk() && index < count; index++) {
-      status = store.preflightPreparedWrites(sessions[index].pendingMutations());
-    }
-    if (status.isOk()) {
-      status = store.finishPreparedInsertPreflight(count);
-    }
-    if (!status.isOk()) {
-      StatusCode cancel = store.cancelPreparedInsertPreflight();
-      if (!cancel.isOk()) {
-        return cancel;
-      }
-    }
-    return status;
-  }
-
-  synchronized StatusCode appendPreparedWrites(
-      long transactionId,
-      long commitSequence,
-      PendingMutationBuffer mutations,
-      HeapInsertResult result) {
-    return store.appendPreparedWrites(transactionId, commitSequence, mutations, result);
-  }
-
-  synchronized StatusCode cancelPreparedInsertGroup() {
-    return store.cancelPreparedInsertGroup();
-  }
-
-  StatusCode forcePreparedInserts() {
-    return store.forcePreparedInserts();
+  synchronized StatusCode prepareForcedGroupPublication() {
+    return store.prepareForcedGroupPublication();
   }
 
   @Override
-  public synchronized StatusCode publishForcedGroup() {
-    return store.publishForcedGroup();
+  public synchronized StatusCode installPreparedGroup() {
+    return store.installPreparedGroupPublication();
   }
+
 
   public synchronized StatusCode vacuum(
       long transactionId,
@@ -155,54 +89,151 @@ public final class IndexedTable
     return store.vacuumPreflight();
   }
 
-  public synchronized StatusCode insertCommitted(
-      long transactionId,
-      long commitSequence,
-      int space,
-      long key,
-      ByteBuffer row,
-      HeapInsertResult result) {
-    return store.insertCommitted(
-        transactionId, commitSequence, space, key, row, result);
+  StatusCode admitLogicalRowIds(long objectId, long publishedFloor) {
+    return store.admitLogicalRowIds(objectId, publishedFloor);
   }
 
-  synchronized StatusCode commitMutations(
-      long transactionId,
-      PendingMutationBuffer mutations,
-      IndexedCommitResult result) {
-    return store.commitMutations(transactionId, mutations, result);
+  StatusCode reserveLogicalRowIds(
+      long objectId, int count, IndexedLogicalRowIdReservation result) {
+    return store.reserveLogicalRowIds(objectId, count, result);
   }
 
   public synchronized StatusCode fetchByKey(
-      int space, long key, HeapRowResult result) {
+      long space, long key, HeapRowResult result) {
     return store.fetchByKey(space, key, result);
   }
 
+  synchronized StatusCode tupleIndexCleanupComplete(
+      int cleanupCursor, int cleanupEndPageId) {
+    if (cleanupCursor < io.riverdb.storage.btree.BTreeRootPage.FIRST_REUSABLE_PAGE_ID
+        || cleanupEndPageId < cleanupCursor || cleanupEndPageId > store.nextPageId()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return cleanupCursor == cleanupEndPageId ? StatusCode.OK : StatusCode.CONFLICT;
+  }
+
+  synchronized int nextPageId() { return store.nextPageId(); }
+
   public synchronized StatusCode fetchByKeyAt(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       HeapRowResult result) {
     return store.fetchByKeyAt(visibleCommitSequence, space, key, result);
   }
 
+  synchronized StatusCode fetchVersionedByKeyAt(
+      long visibleCommitSequence, long space, long key,
+      IndexedVersionedRowResult result) {
+    return store.fetchVersionedByKeyAt(visibleCommitSequence, space, key, result);
+  }
+
+  synchronized StatusCode fetchCurrentByKey(
+      long space, long key, IndexedVersionedRowResult result) {
+    return store.fetchVersionedByKeyAt(store.currentCommitSequence(), space, key, result);
+  }
+
+  synchronized StatusCode fetchCurrentSuccessor(
+      long space, long key, long candidateRowId, IndexedVersionedRowResult result) {
+    return store.fetchCurrentSuccessor(space, key, candidateRowId, result);
+  }
+
+  synchronized StatusCode probeTuplePrefixAt(
+      long visibleCommitSequence, long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return store.probeTuplePrefixAt(
+        visibleCommitSequence, ownerObjectId, keyId, schemaId,
+        shape, key, offset, length, result);
+  }
+
+  synchronized StatusCode probeTuplePrefixAfterAt(
+      long visibleCommitSequence, long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+      IndexedTupleProbeResult result) {
+    return store.probeTuplePrefixAfterAt(
+        visibleCommitSequence, ownerObjectId, keyId, schemaId,
+        shape, key, offset, length, afterLogicalRowId, result);
+  }
+
+  synchronized StatusCode probeTuplePrefixCurrent(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return store.probeTuplePrefixCurrent(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
+  }
+
+  synchronized StatusCode probeTuplePrefixAfterCurrent(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+      IndexedTupleProbeResult result) {
+    return store.probeTuplePrefixAfterCurrent(
+        ownerObjectId, keyId, schemaId, shape,
+        key, offset, length, afterLogicalRowId, result);
+  }
+
+  synchronized StatusCode probeTupleBuildingPrefixCurrent(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return store.probeTupleBuildingPrefixCurrent(
+        ownerObjectId, keyId, schemaId, privateOwner,
+        shape, key, offset, length, result);
+  }
+
+  synchronized StatusCode probeTupleBuildingPrefixAfterCurrent(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, long afterLogicalRowId,
+      IndexedTupleProbeResult result) {
+    return store.probeTupleBuildingPrefixAfterCurrent(
+        ownerObjectId, keyId, schemaId, privateOwner,
+        shape, key, offset, length, afterLogicalRowId, result);
+  }
+
+  synchronized StatusCode beginTupleScanAt(
+      long visibleCommitSequence, long ownerObjectId, long keyId, long schemaId,
+      long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape,
+      io.riverdb.storage.btree.TupleBTreeScanBounds bounds,
+      IndexedTupleIntentJournal intents, IndexedTupleScanCursor cursor) {
+    return store.beginTupleScanAt(
+        visibleCommitSequence, ownerObjectId, keyId, schemaId,
+        privateOwner, shape, bounds, intents, cursor);
+  }
+
+  synchronized StatusCode nextTupleScan(
+      IndexedTupleScanCursor cursor, IndexedTupleIntentJournal intents,
+      IndexedTupleScanResult result) {
+    return store.nextTupleScan(cursor, intents, result);
+  }
+
+  synchronized StatusCode closeTupleScan(IndexedTupleScanCursor cursor) {
+    return store.closeTupleScan(cursor);
+  }
+
   public synchronized StatusCode beginScan(
       long visibleCommitSequence,
-      int lowerSpace,
+      long lowerSpace,
       long lowerKey,
-      int upperSpace,
+      long upperSpace,
       long upperKey,
       IndexedScanCursor cursor) {
     if (visibleCommitSequence < 0
         || !OrderedKey.isFiniteSpace(lowerSpace)
-        || !OrderedKey.isFiniteSpace(upperSpace)
+        || !(OrderedKey.isFiniteSpace(upperSpace)
+            || OrderedKey.isInfinity(upperSpace, upperKey))
         || !OrderedKey.lessThan(lowerSpace, lowerKey, upperSpace, upperKey)
         || cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int leafPageId = store.firstLeafPageId(lowerSpace, lowerKey);
+    int leafPageId = store.firstLeafPageIdAt(
+        visibleCommitSequence, lowerSpace, lowerKey);
     if (leafPageId <= 0) {
-      return StatusCode.CORRUPTION;
+      return store.snapshotLookupStatus();
     }
     return cursor.claim(
         this, visibleCommitSequence,
@@ -228,7 +259,7 @@ public final class IndexedTable
 
   public synchronized StatusCode prepareMutation(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       IndexedMutationTarget result) {
     return store.prepareMutation(visibleCommitSequence, space, key, result);
@@ -236,7 +267,7 @@ public final class IndexedTable
 
   public synchronized StatusCode prepareInsert(
       long visibleCommitSequence,
-      int space,
+      long space,
       long key,
       IndexedMutationTarget result) {
     return store.prepareInsert(visibleCommitSequence, space, key, result);
@@ -271,7 +302,7 @@ public final class IndexedTable
   }
 
   @Override
-  public synchronized long currentCommitSequence() {
+  public long currentCommitSequence() {
     return store.currentCommitSequence();
   }
 
@@ -289,6 +320,10 @@ public final class IndexedTable
 
   public long walCopyBytes() {
     return store.walCopyBytes();
+  }
+
+  public long relationalCompilationCopyBytes() {
+    return store.relationalCompilationCopyBytes();
   }
 
   public StatusCode flush() {

@@ -6,7 +6,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 
-/** Metadata for River's bounded BIGINT and text result projection. */
+/** Metadata for River's bounded typed result projection. */
 final class RiverResultSetMetaData implements ResultSetMetaData {
   private final String[] columnNames;
   private final int[] columnTypes;
@@ -30,10 +30,10 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
         throw JdbcExceptions.invalid("query column type descriptor is invalid");
       }
       typeDescriptors[index] = descriptor;
-      columnTypes[index] = jdbcType(descriptor);
+      columnTypes[index] = RiverJdbcTypeMetadata.jdbcType(descriptor);
       nullability[index] = query.columnIsNullable(index)
           ? columnNullable : columnNoNulls;
-      displaySizes[index] = displaySize(descriptor);
+      displaySizes[index] = RiverJdbcTypeMetadata.displaySize(descriptor);
       CharSequence name = query.columnName(index);
       if (name == null || name.length() <= 0) {
         throw JdbcExceptions.invalid("query column name is missing");
@@ -131,7 +131,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
   @Override
   public boolean isSigned(int column) throws SQLException {
     requireColumn(column);
-    return numeric(columnTypes[column - 1]);
+    return RiverJdbcTypeMetadata.numeric(columnTypes[column - 1]);
   }
 
   @Override
@@ -162,7 +162,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     requireColumn(column);
     int descriptor = typeDescriptors[column - 1];
     if (SqlTypeDescriptor.isValid(descriptor)) {
-      return precision(descriptor);
+      return RiverJdbcTypeMetadata.precision(descriptor);
     }
     return switch (columnTypes[column - 1]) {
       case Types.VARCHAR -> displaySizes[column - 1];
@@ -211,7 +211,7 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     requireColumn(column);
     int descriptor = typeDescriptors[column - 1];
     if (SqlTypeDescriptor.isValid(descriptor)) {
-      return typeName(descriptor);
+      return RiverJdbcTypeMetadata.typeName(descriptor);
     }
     return switch (columnTypes[column - 1]) {
       case Types.VARCHAR -> "VARCHAR";
@@ -247,6 +247,8 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
       case Types.VARCHAR -> String.class.getName();
       case Types.BOOLEAN -> Boolean.class.getName();
       case Types.DECIMAL -> java.math.BigDecimal.class.getName();
+      case Types.REAL -> Float.class.getName();
+      case Types.FLOAT, Types.DOUBLE -> Double.class.getName();
       case Types.DATE -> java.time.LocalDate.class.getName();
       case Types.TIME -> java.time.LocalTime.class.getName();
       case Types.TIMESTAMP -> java.time.LocalDateTime.class.getName();
@@ -302,6 +304,12 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     return columnTypes[column - 1] == Types.DECIMAL;
   }
 
+  boolean isApproximate(int column) throws SQLException {
+    requireColumn(column);
+    int type = columnTypes[column - 1];
+    return type == Types.REAL || type == Types.FLOAT || type == Types.DOUBLE;
+  }
+
   int decimalScale(int column) throws SQLException {
     requireColumn(column);
     return SqlTypeDescriptor.parameterTwo(typeDescriptors[column - 1]);
@@ -312,73 +320,4 @@ final class RiverResultSetMetaData implements ResultSetMetaData {
     return typeDescriptors[column - 1];
   }
 
-  static int jdbcType(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> Types.BIGINT;
-      case SqlTypeDescriptor.TYPE_ID_VARCHAR -> Types.VARCHAR;
-      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> Types.BOOLEAN;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> Types.DECIMAL;
-      case SqlTypeDescriptor.TYPE_ID_DATE -> Types.DATE;
-      case SqlTypeDescriptor.TYPE_ID_TIME -> Types.TIME;
-      case SqlTypeDescriptor.TYPE_ID_TIMESTAMP -> Types.TIMESTAMP;
-      case SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE ->
-          Types.TIMESTAMP_WITH_TIMEZONE;
-      default -> Types.OTHER;
-    };
-  }
-
-  static String typeName(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> "BIGINT";
-      case SqlTypeDescriptor.TYPE_ID_VARCHAR -> "VARCHAR";
-      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> "BOOLEAN";
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> "DECIMAL";
-      case SqlTypeDescriptor.TYPE_ID_DATE -> "DATE";
-      case SqlTypeDescriptor.TYPE_ID_TIME -> "TIME";
-      case SqlTypeDescriptor.TYPE_ID_TIMESTAMP -> "TIMESTAMP";
-      case SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE ->
-          "TIMESTAMP WITH TIME ZONE";
-      default -> "OTHER";
-    };
-  }
-
-  static int precision(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 19;
-      case SqlTypeDescriptor.TYPE_ID_VARCHAR, SqlTypeDescriptor.TYPE_ID_DECIMAL ->
-          SqlTypeDescriptor.parameterOne(descriptor);
-      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> 1;
-      case SqlTypeDescriptor.TYPE_ID_DATE -> 10;
-      case SqlTypeDescriptor.TYPE_ID_TIME ->
-          8 + fractionalSuffix(SqlTypeDescriptor.parameterOne(descriptor));
-      case SqlTypeDescriptor.TYPE_ID_TIMESTAMP ->
-          19 + fractionalSuffix(SqlTypeDescriptor.parameterOne(descriptor));
-      case SqlTypeDescriptor.TYPE_ID_TIMESTAMP_WITH_TIME_ZONE ->
-          25 + fractionalSuffix(SqlTypeDescriptor.parameterOne(descriptor));
-      default -> 0;
-    };
-  }
-
-  static int displaySize(int descriptor) {
-    return switch (SqlTypeDescriptor.typeId(descriptor)) {
-      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 20;
-      case SqlTypeDescriptor.TYPE_ID_VARCHAR -> SqlTypeDescriptor.parameterOne(descriptor);
-      case SqlTypeDescriptor.TYPE_ID_BOOLEAN -> 5;
-      case SqlTypeDescriptor.TYPE_ID_DECIMAL ->
-          SqlTypeDescriptor.parameterOne(descriptor)
-              + (SqlTypeDescriptor.parameterTwo(descriptor) > 0 ? 2 : 1);
-      default -> precision(descriptor);
-    };
-  }
-
-  private static int fractionalSuffix(int precision) {
-    return precision == 0 ? 0 : precision + 1;
-  }
-
-  private static boolean numeric(int type) {
-    return type == Types.BIGINT
-        || type == Types.DECIMAL
-        || type == Types.INTEGER
-        || type == Types.SMALLINT;
-  }
 }

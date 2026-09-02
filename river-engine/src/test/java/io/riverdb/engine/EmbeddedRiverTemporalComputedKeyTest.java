@@ -139,7 +139,7 @@ final class EmbeddedRiverTemporalComputedKeyTest {
         StatusCode.OK,
         session.beginQuery(
             "SELECT id, day+1 AS tomorrow, label FROM computed_keys "
-                + "WHERE id<5 ORDER BY tomorrow DESC",
+                + "WHERE id<5 ORDER BY tomorrow DESC, id DESC",
             opened));
     RiverQuery query = opened.query();
     RowResult row = new RowResult();
@@ -152,13 +152,13 @@ final class EmbeddedRiverTemporalComputedKeyTest {
 
     assertPlan(
         session,
-        "SELECT id, day+1 AS tomorrow FROM computed_keys WHERE day BETWEEN "
-            + "DATE '2024-02-28' AND DATE '2024-02-29' ORDER BY tomorrow",
+        "SELECT id, day+1 AS tomorrow FROM computed_keys WHERE day>="
+            + "DATE '2024-02-28' AND day<=DATE '2024-02-29' ORDER BY tomorrow",
         "index");
     assertPlan(
         session,
-        "SELECT id, day+1 AS tomorrow FROM computed_keys WHERE day BETWEEN "
-            + "DATE '2024-02-28' AND DATE '2024-02-29' ORDER BY tomorrow",
+        "SELECT id, day+1 AS tomorrow FROM computed_keys WHERE day>="
+            + "DATE '2024-02-28' AND day<=DATE '2024-02-29' ORDER BY tomorrow",
         "sort");
   }
 
@@ -249,17 +249,17 @@ final class EmbeddedRiverTemporalComputedKeyTest {
         "SELECT day+(CURRENT_DATE-day) AS today FROM computed_keys "
             + "WHERE id<5 ORDER BY today",
         4);
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT CAST(observed AS VARCHAR(26)) AS rendered "
-                + "FROM computed_keys ORDER BY rendered",
-            new QueryOpenResult()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT CURRENT_DATE AS today FROM computed_keys ORDER BY today",
-            new QueryOpenResult()));
+    assertTypedRowCount(
+        session,
+        "SELECT CAST(observed AS VARCHAR(26)) AS rendered "
+            + "FROM computed_keys ORDER BY rendered",
+        5,
+        SqlTypeDescriptor.varchar(26));
+    assertTypedRowCount(
+        session,
+        "SELECT CURRENT_DATE AS today FROM computed_keys ORDER BY today",
+        5,
+        SqlTypeDescriptor.DATE);
     assertEquals(
         StatusCode.DATATYPE_MISMATCH,
         session.beginQuery(
@@ -271,21 +271,21 @@ final class EmbeddedRiverTemporalComputedKeyTest {
             "SELECT day+1 AS key_value, alarm AS key_value FROM computed_keys "
                 + "ORDER BY key_value",
             new QueryOpenResult()));
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        session.beginQuery(
-            "SELECT day+1 AS alarm FROM computed_keys ORDER BY alarm",
-            new QueryOpenResult()));
+    assertTypedRowCount(
+        session,
+        "SELECT day+1 AS alarm FROM computed_keys ORDER BY alarm",
+        5,
+        SqlTypeDescriptor.DATE);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.beginQuery(
             "SELECT day+1 FROM computed_keys ORDER BY missing_alias",
             new QueryOpenResult()));
-    assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
-        session.beginQuery(
-            "SELECT DISTINCT DATE '2024-01-01' AS fixed FROM computed_keys",
-            new QueryOpenResult()));
+    assertTypedRowCount(
+        session,
+        "SELECT DISTINCT DATE '2024-01-01' AS fixed FROM computed_keys",
+        1,
+        SqlTypeDescriptor.DATE);
   }
 
   private static void assertRawRegressions(RiverSession session) {

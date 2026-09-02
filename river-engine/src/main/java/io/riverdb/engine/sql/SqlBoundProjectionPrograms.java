@@ -1,195 +1,97 @@
 package io.riverdb.engine.sql;
 
-import io.riverdb.engine.relational.TableSchema;
-import io.riverdb.sql.SqlScalarExpression;
+import io.riverdb.base.error.StatusCode;
 
-/** Statement-owned resolved postfix programs for row projections. */
+/** Statement-owned resolved postfix programs retained at session high water. */
 final class SqlBoundProjectionPrograms {
   static final int COMPUTED_PROJECTION = Integer.MIN_VALUE + 1;
-  private static final int MAXIMUM_PROGRAMS = TableSchema.MAXIMUM_COLUMNS;
 
-  private final byte[][] operators =
-      new byte[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
-  private final long[][] operands =
-      new long[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
-  private final int[][] descriptors =
-      new int[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
-  private final byte[][] scopes =
-      new byte[MAXIMUM_PROGRAMS][SqlScalarExpression.MAXIMUM_NODES];
-  private final int[] nodeCounts = new int[MAXIMUM_PROGRAMS];
-  private final int[] resultDescriptors = new int[MAXIMUM_PROGRAMS];
-  private final int[] rawColumns = new int[MAXIMUM_PROGRAMS];
-  private final byte[] mutationOperators =
-      new byte[SqlScalarExpression.MAXIMUM_NODES];
-  private final long[] mutationOperands =
-      new long[SqlScalarExpression.MAXIMUM_NODES];
-  private final int[] mutationDescriptors =
-      new int[SqlScalarExpression.MAXIMUM_NODES];
-  private final byte[] mutationOffsets =
-      new byte[SqlScalarExpression.MAXIMUM_NODES];
-  private final byte[] mutationCounts =
-      new byte[SqlScalarExpression.MAXIMUM_NODES];
-  private final int[] mutationResultDescriptors =
-      new int[SqlScalarExpression.MAXIMUM_NODES];
-  private int count;
-  private int mutationCount;
-  private int mutationNodeCount;
+  private final SqlProjectionProgramStorage projections;
+  private final SqlMutationProgramStorage mutations;
+
+  SqlBoundProjectionPrograms() {
+    this(new SqlSessionShapeBudget(null));
+  }
+
+  SqlBoundProjectionPrograms(SqlSessionShapeBudget budget) {
+    projections = new SqlProjectionProgramStorage(budget);
+    mutations = new SqlMutationProgramStorage(budget);
+  }
+
+  StatusCode reserve(int programs) { return projections.reserve(programs); }
+  StatusCode reserveMutations(int programs) { return mutations.reserve(programs); }
 
   void reset() {
-    for (int program = 0; program < MAXIMUM_PROGRAMS; program++) {
-      for (int node = 0; node < nodeCounts[program]; node++) {
-        operators[program][node] = 0;
-        operands[program][node] = 0;
-        descriptors[program][node] = 0;
-        scopes[program][node] = 0;
-      }
-      nodeCounts[program] = 0;
-      resultDescriptors[program] = 0;
-      rawColumns[program] = -1;
-    }
-    count = 0;
-    for (int node = 0; node < mutationNodeCount; node++) {
-      mutationOperators[node] = 0;
-      mutationOperands[node] = 0;
-      mutationDescriptors[node] = 0;
-    }
-    for (int program = 0; program < mutationCount; program++) {
-      mutationOffsets[program] = 0;
-      mutationCounts[program] = 0;
-      mutationResultDescriptors[program] = 0;
-    }
-    mutationCount = 0;
-    mutationNodeCount = 0;
+    projections.reset();
+    mutations.reset();
   }
 
-  void begin(int projectionCount) {
-    reset();
-    count = projectionCount;
-    for (int index = 0; index < count; index++) {
-      rawColumns[index] = -1;
-    }
-  }
-
-  void beginMutations(int programs) {
-    mutationCount = programs;
-    mutationNodeCount = 0;
-    for (int program = 0; program < programs; program++) {
-      mutationOffsets[program] = 0;
-      mutationCounts[program] = 0;
-      mutationResultDescriptors[program] = 0;
-    }
-  }
-
-  void beginMutation(int program) {
-    mutationOffsets[program] = (byte) mutationNodeCount;
-    mutationCounts[program] = 0;
-  }
-
+  void begin(int count) { projections.begin(count); }
+  void beginMutations(int count) { mutations.begin(count); }
+  void beginMutation(int program) { mutations.beginProgram(program); }
   void appendMutation(int program, int operator, long operand, int descriptor) {
-    mutationOperators[mutationNodeCount] = (byte) operator;
-    mutationOperands[mutationNodeCount] = operand;
-    mutationDescriptors[mutationNodeCount++] = descriptor;
-    mutationCounts[program]++;
+    mutations.append(program, operator, operand, descriptor);
   }
+  void appendMutation(
+      int program, int operator, long operandHigh, long operand, int descriptor) {
+    mutations.append(program, operator, operandHigh, operand, descriptor);
+  }
+  void finishMutation(int program, int descriptor) { mutations.finish(program, descriptor); }
+  int mutationCount() { return mutations.count(); }
+  int mutationNodeCount(int program) { return mutations.nodeCount(program); }
+  int mutationOperator(int program, int node) { return mutations.operator(program, node); }
+  long mutationOperand(int program, int node) { return mutations.operand(program, node); }
+  long mutationOperandHigh(int program, int node) {
+    return mutations.operandHigh(program, node);
+  }
+  int mutationDescriptor(int program, int node) { return mutations.descriptor(program, node); }
+  int mutationResultDescriptor(int program) { return mutations.resultDescriptor(program); }
 
-  void finishMutation(int program, int descriptor) {
-    mutationResultDescriptors[program] = descriptor;
-  }
-
-  int mutationCount() { return mutationCount; }
-  int mutationNodeCount(int program) { return Byte.toUnsignedInt(mutationCounts[program]); }
-  int mutationOperator(int program, int node) {
-    return Byte.toUnsignedInt(mutationOperators[mutationSlot(program, node)]);
-  }
-  long mutationOperand(int program, int node) {
-    return mutationOperands[mutationSlot(program, node)];
-  }
-  int mutationDescriptor(int program, int node) {
-    return mutationDescriptors[mutationSlot(program, node)];
-  }
-  int mutationResultDescriptor(int program) {
-    return mutationResultDescriptors[program];
-  }
-
-  private int mutationSlot(int program, int node) {
-    return Byte.toUnsignedInt(mutationOffsets[program]) + node;
-  }
-
-  void append(
-      int projection, int operator, long operand, int descriptor) {
-    append(
+  void append(int projection, int operator, long operand, int descriptor) {
+    projections.append(
         projection, operator, operand, descriptor,
         SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
-
   void append(
-      int projection,
-      int operator,
-      long operand,
-      int descriptor,
-      int scope) {
-    int node = nodeCounts[projection]++;
-    operators[projection][node] = (byte) operator;
-    operands[projection][node] = operand;
-    descriptors[projection][node] = descriptor;
-    scopes[projection][node] = (byte) scope;
+      int projection, int operator,
+      long operandHigh, long operand, int descriptor) {
+    projections.append(
+        projection, operator, operandHigh, operand, descriptor,
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
-
+  void append(int projection, int operator, long operand, int descriptor, int scope) {
+    projections.append(projection, operator, operand, descriptor, scope);
+  }
+  void append(
+      int projection, int operator, long operandHigh, long operand,
+      int descriptor, int scope) {
+    projections.append(
+        projection, operator, operandHigh, operand, descriptor, scope);
+  }
   void finish(int projection, int descriptor, int rawColumn) {
-    resultDescriptors[projection] = descriptor;
-    rawColumns[projection] = rawColumn;
+    projections.finish(projection, descriptor, rawColumn);
   }
-
   void resolveNullProjection(int projection, int descriptor) {
-    if (nodeCounts[projection] == 1
-        && operators[projection][0] == SqlScalarExpression.NULL) {
-      descriptors[projection][0] = descriptor;
-      resultDescriptors[projection] = descriptor;
-    }
+    projections.resolveNull(projection, descriptor);
   }
 
-  int count() {
-    return count;
+  StatusCode status() {
+    StatusCode status = projections.status();
+    return status.isOk() ? mutations.status() : status;
   }
-
-  int nodeCount(int projection) {
-    return nodeCounts[projection];
+  int count() { return projections.count(); }
+  int nodeCount(int projection) { return projections.nodeCount(projection); }
+  int operator(int projection, int node) { return projections.operator(projection, node); }
+  long operand(int projection, int node) { return projections.operand(projection, node); }
+  long operandHigh(int projection, int node) {
+    return projections.operandHigh(projection, node);
   }
-
-  int operator(int projection, int node) {
-    return Byte.toUnsignedInt(operators[projection][node]);
-  }
-
-  long operand(int projection, int node) {
-    return operands[projection][node];
-  }
-
-  int descriptor(int projection, int node) {
-    return descriptors[projection][node];
-  }
-
-  int scope(int projection, int node) {
-    return Byte.toUnsignedInt(scopes[projection][node]);
-  }
-
+  int descriptor(int projection, int node) { return projections.descriptor(projection, node); }
+  int scope(int projection, int node) { return projections.scope(projection, node); }
   boolean referencesScope(int projection, int scope) {
-    for (int node = 0; node < nodeCounts[projection]; node++) {
-      if (operators[projection][node] == SqlScalarExpression.COLUMN
-          && Byte.toUnsignedInt(scopes[projection][node]) == scope) return true;
-    }
-    return false;
+    return projections.referencesScope(projection, scope);
   }
-
-  int resultDescriptor(int projection) {
-    return resultDescriptors[projection];
-  }
-
-  int rawColumn(int projection) {
-    return rawColumns[projection];
-  }
-
-  boolean computed(int projection) {
-    return rawColumns[projection] < 0
-        && operator(projection, 0) != SqlScalarExpression.NULL;
-  }
+  int resultDescriptor(int projection) { return projections.resultDescriptor(projection); }
+  int rawColumn(int projection) { return projections.rawColumn(projection); }
+  boolean computed(int projection) { return projections.computed(projection); }
 }

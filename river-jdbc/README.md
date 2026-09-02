@@ -44,9 +44,10 @@ preferred-mapping summary is:
 | local `TIMESTAMP(p)` | `setTimestamp`, `LocalDateTime` | `getTimestamp`, `LocalDateTime` |
 | zoned `TIMESTAMP(p)` | `OffsetDateTime`, `Instant` | `getTimestamp`, `OffsetDateTime` |
 
-Primitive numeric and integral object conversions from `DECIMAL` are
-deliberately rejected with `0A000`; `BigDecimal` and canonical string access
-preserve its scale, and River never exposes the internal scaled integer.
+`BigDecimal` and canonical string access preserve the full precision and scale.
+Integral getters accept exact integral `DECIMAL` values and report `22003` for
+fractional or out-of-range values; floating getters perform the JDBC numeric
+conversion. River never exposes the internal scaled integer through JDBC.
 
 `setNull` carries a declared family and Java null setters use a bounded SQL
 NULL. Incompatible types are `42804`, missing/excess parameters are `07001`,

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.text.PackedText;
@@ -11,9 +12,10 @@ import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
+import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.RelationalSessionOpenResult;
-import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.ViewDefinition;
+import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import java.nio.file.Path;
@@ -215,20 +217,26 @@ final class SqlJoinViewTest {
         StatusCode.OK,
         opened.session().begin(IsolationLevel.REPEATABLE_READ));
     ViewDefinition view = new ViewDefinition();
-    TableDefinition left = new TableDefinition();
-    TableDefinition right = new TableDefinition();
-    TableDefinition extra = new TableDefinition();
-    assertEquals(StatusCode.OK, opened.session().resolveTable("join_left", left));
-    assertEquals(StatusCode.OK, opened.session().resolveTable("join_right", right));
-    assertEquals(StatusCode.OK, opened.session().resolveTable("join_extra", extra));
+    long left = descriptorId(opened.session(), "join_left");
+    long right = descriptorId(opened.session(), "join_right");
+    long extra = descriptorId(opened.session(), "join_extra");
     assertEquals(StatusCode.OK, opened.session().resolveView(viewName, view));
     assertEquals(3, view.tableCount());
-    assertEquals(left.tableId(), view.tableId(0));
-    assertEquals(right.tableId(), view.tableId(1));
-    assertEquals(extra.tableId(), view.tableId(2));
+    assertEquals(left, view.tableId(0));
+    assertEquals(right, view.tableId(1));
+    assertEquals(extra, view.tableId(2));
     assertEquals(
         StatusCode.OK,
         opened.session().abort(new TransactionOutcome()));
+  }
+
+  private static long descriptorId(RelationalSession session, String name) {
+    SchemaPin pin = new SchemaPin();
+    StatusDetail detail = new StatusDetail(128);
+    assertEquals(StatusCode.OK, session.resolveDescriptor(name, pin, detail), detail.toString());
+    long tableId = pin.tableId();
+    assertEquals(StatusCode.OK, pin.release());
+    return tableId;
   }
 
   private static void assertDirectRows(

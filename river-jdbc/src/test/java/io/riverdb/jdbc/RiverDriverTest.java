@@ -42,6 +42,65 @@ final class RiverDriverTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void exposesAllocationFreeTransportCountersThroughJdbcUnwrap(@TempDir Path root)
+      throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertTrue(connection.isWrapperFor(RiverConnectionMetrics.class));
+      RiverConnectionMetrics metrics = connection.unwrap(RiverConnectionMetrics.class);
+      long requests = metrics.completedRequests();
+      assertEquals(0, statement.executeUpdate("CHECKPOINT"));
+      assertTrue(metrics.completedRequests() > requests);
+      assertTrue(metrics.bytesSent() > 0);
+      assertTrue(metrics.bytesReceived() > 0);
+    } finally {
+      assertEquals(StatusCode.OK, server.close());
+      assertEquals(StatusCode.OK, database.close());
+    }
+  }
+
+  @Test
+  void preparedHandleSendsSqlOnceAndSurvivesCatalogChange(@TempDir Path root)
+      throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement ddl = connection.createStatement()) {
+      ddl.executeUpdate("CREATE TABLE retained (id INTEGER PRIMARY KEY,value INTEGER)");
+      RiverConnectionMetrics metrics = connection.unwrap(RiverConnectionMetrics.class);
+      long requests = metrics.completedRequests();
+      PreparedStatement insert = connection.prepareStatement(
+          "INSERT INTO retained VALUES (?,?)");
+      assertEquals(requests + 1, metrics.completedRequests());
+
+      insert.setInt(1, 1);
+      insert.setInt(2, 10);
+      long beforeExecuteBytes = metrics.bytesSent();
+      assertEquals(1, insert.executeUpdate());
+      assertEquals(requests + 2, metrics.completedRequests());
+      long executeBytes = metrics.bytesSent() - beforeExecuteBytes;
+      ddl.executeUpdate("CREATE INDEX retained_value ON retained(value)");
+      insert.setInt(1, 2);
+      insert.setInt(2, 20);
+      beforeExecuteBytes = metrics.bytesSent();
+      assertEquals(1, insert.executeUpdate());
+      assertEquals(requests + 4, metrics.completedRequests());
+      assertEquals(executeBytes, metrics.bytesSent() - beforeExecuteBytes);
+      insert.close();
+      assertEquals(requests + 5, metrics.completedRequests());
+    } finally {
+      assertEquals(StatusCode.OK, server.close());
+      assertEquals(StatusCode.OK, database.close());
+    }
+  }
+
+  @Test
   void driverManagerExecutesStreamingSqlTransactionsAndDurableReopen(@TempDir Path root)
       throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
@@ -983,6 +1042,43 @@ final class RiverDriverTest {
   }
 
   @Test
+  void retainsColumnMetadataAcrossGeometricGrowth(@TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(
+          0,
+          statement.executeUpdate(
+              "CREATE TABLE wide_metadata (id BIGINT PRIMARY KEY, "
+                  + "c1 BIGINT, c2 BIGINT NOT NULL, c3 BIGINT, c4 BIGINT NOT NULL, "
+                  + "c5 BIGINT, c6 BIGINT NOT NULL, c7 BIGINT, c8 VARCHAR(7))"));
+      try (ResultSet columns = connection.getMetaData().getColumns(
+          null, null, "wide_metadata", "%")) {
+        assertColumnMetadata(columns, "wide_metadata", "id", Types.BIGINT, 1, false);
+        for (int column = 1; column < 8; column++) {
+          assertColumnMetadata(
+              columns,
+              "wide_metadata",
+              "c" + column,
+              Types.BIGINT,
+              column + 1,
+              (column & 1) != 0);
+        }
+        assertColumnMetadata(
+            columns, "wide_metadata", "c8", Types.VARCHAR, 9, true);
+        assertFalse(columns.next());
+      }
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void reportsBoundedSubsetAndStableSqlStates(@TempDir Path root) throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
@@ -1018,7 +1114,9 @@ final class RiverDriverTest {
           ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY));
       assertFalse(metadata.supportsResultSetConcurrency(
           ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY));
-      assertEquals(8, metadata.getMaxColumnsInTable());
+      assertEquals(1_024, metadata.getMaxColumnsInTable());
+      assertEquals(1_664, metadata.getMaxColumnsInSelect());
+      assertEquals(32, metadata.getMaxColumnsInIndex());
       assertEquals(64, metadata.getMaxTableNameLength());
       try (ResultSet tables = metadata.getTables(null, null, null, null)) {
         assertFalse(tables.next());
@@ -1726,7 +1824,7 @@ final class RiverDriverTest {
             BatchUpdateException.class,
             statement::executeBatch);
         assertTrue(Arrays.equals(new int[] {1}, partial.getUpdateCounts()));
-        assertEquals("40001", partial.getSQLState());
+        assertEquals("23505", partial.getSQLState());
 
         for (int index = 0;
             index < RiverJdbcStatement.MAXIMUM_BATCH_STATEMENTS;
@@ -2061,17 +2159,15 @@ final class RiverDriverTest {
         assertEquals("detail", metadata.getColumnName(2));
         assertEquals("rows", metadata.getColumnName(3));
         assertTrue(plan.next());
-        assertEquals("filter", plan.getString("operator"));
-        assertEquals(1, plan.getLong("detail"));
+        assertEquals("table", plan.getString("operator"));
         assertNull(plan.getObject("rows"));
-        assertTrue(plan.next());
-        assertEquals("index", plan.getString("operator"));
+        assertEquals(-1, plan.getLong("detail"));
         assertFalse(plan.next());
       }
       try (ResultSet plan = statement.executeQuery(
           "EXPLAIN ANALYZE SELECT id FROM planned WHERE category=7")) {
         assertTrue(plan.next());
-        assertEquals("filter", plan.getString(1));
+        assertEquals("table", plan.getString(1));
         assertEquals(2, plan.getLong(3));
       }
       try (ResultSet selected = statement.executeQuery(
@@ -2108,6 +2204,45 @@ final class RiverDriverTest {
         assertFalse(selected.next());
       }
       assertEquals(0, statement.executeUpdate("DROP VIEW expensive_plans"));
+    }
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void reportsCompositeNumericPrimaryKeysAndNoKeyForKeylessTables(
+      @TempDir Path root) throws SQLException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackRiverServer server = start(database);
+    try (Connection connection = DriverManager.getConnection(url(server));
+        Statement statement = connection.createStatement()) {
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE composite_metadata (tenant INTEGER,"
+              + "amount DECIMAL(22,18),payload BIGINT,"
+              + "CONSTRAINT composite_metadata_pk PRIMARY KEY(amount,tenant))"));
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE keyless_metadata (tenant INTEGER,amount DECIMAL(22,18))"));
+      DatabaseMetaData metadata = connection.getMetaData();
+      try (ResultSet keys = metadata.getPrimaryKeys(
+          null, null, "composite_metadata")) {
+        assertTrue(keys.next());
+        assertEquals("amount", keys.getString("COLUMN_NAME"));
+        assertEquals(1, keys.getShort("KEY_SEQ"));
+        assertEquals("composite_metadata_pk", keys.getString("PK_NAME"));
+        assertTrue(keys.next());
+        assertEquals("tenant", keys.getString("COLUMN_NAME"));
+        assertEquals(2, keys.getShort("KEY_SEQ"));
+        assertEquals("composite_metadata_pk", keys.getString("PK_NAME"));
+        assertFalse(keys.next());
+      }
+      try (ResultSet keys = metadata.getPrimaryKeys(
+          null, null, "keyless_metadata")) {
+        assertFalse(keys.next());
+      }
     }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());

@@ -1,7 +1,6 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.sql.SqlQuery;
 
@@ -14,7 +13,7 @@ final class SqlSubqueryValueScanner {
   private final SqlExpressionEvaluator expressions;
   private final SqlSubqueryCandidateEvaluator candidates;
   private final SqlSubqueryPlan plan;
-  private final int[] counts = new int[SqlQuery.MAXIMUM_QUERY_BLOCKS];
+  private final long[] counts = new long[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] matched = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] nullResults = new boolean[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final boolean[] caching = new boolean[SqlQuery.MAXIMUM_EDGES];
@@ -127,7 +126,7 @@ final class SqlSubqueryValueScanner {
     if (!status.isOk()) {
       return status;
     }
-    if (caching[edge]) cache.completeValues(edge, counts[child]);
+    if (caching[edge]) cache.completeValues(edge, (int) counts[child]);
     publish(edge, child, left, truth);
     return StatusCode.OK;
   }
@@ -136,15 +135,17 @@ final class SqlSubqueryValueScanner {
       int edge,
       int child,
       SqlPredicateOperand left) {
-    if (++counts[child] > SqlSubqueryResultCache.MAXIMUM_RESULTS) {
+    if (counts[child] == Long.MAX_VALUE) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    counts[child]++;
     SqlPredicateOperand candidate = frames.projected(child);
     StatusCode status = projections.evaluate(child, frames, candidate);
     if (!status.isOk()) return status;
     if (candidate.nullValue()) nullResults[child] = true;
     else if (left != null && !left.nullValue()
-        && compare(left, candidate, comparison(edge))) matched[child] = true;
+        && SqlSubqueryValueComparison.matches(
+            expressions, left, candidate, comparison(edge))) matched[child] = true;
     retain(edge, candidate);
     frames.release(child);
     if (!status.isOk()) return status;
@@ -189,40 +190,22 @@ final class SqlSubqueryValueScanner {
   private int scalar(
       SqlPredicateOperand left,
       SqlPredicateOperand right,
-      int count,
+      long count,
       SqlComparison comparison) {
     if (count == 0 || left == null || left.nullValue() || right.nullValue()) {
       return SqlBooleanPredicateEvaluator.UNKNOWN;
     }
-    return compare(left, right, comparison)
+    return SqlSubqueryValueComparison.matches(expressions, left, right, comparison)
         ? SqlBooleanPredicateEvaluator.TRUE : SqlBooleanPredicateEvaluator.FALSE;
   }
 
   private static int membership(
-      SqlPredicateOperand left, int count, boolean matched, boolean nullResult) {
+      SqlPredicateOperand left, long count, boolean matched, boolean nullResult) {
     if (count == 0) return SqlBooleanPredicateEvaluator.FALSE;
     if (left == null || left.nullValue()) return SqlBooleanPredicateEvaluator.UNKNOWN;
     if (matched) return SqlBooleanPredicateEvaluator.TRUE;
     return nullResult
         ? SqlBooleanPredicateEvaluator.UNKNOWN : SqlBooleanPredicateEvaluator.FALSE;
-  }
-
-  private boolean compare(
-      SqlPredicateOperand left, SqlPredicateOperand right, SqlComparison comparison) {
-    int compared = SqlTypeDescriptor.typeId(left.descriptor())
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR
-        ? SqlBooleanTextComparator.compare(left, right)
-        : expressions.compareExact(
-            left.value(), left.descriptor(), right.value(), right.descriptor());
-    return switch (comparison) {
-      case EQUAL -> compared == 0;
-      case NOT_EQUAL -> compared != 0;
-      case LESS_THAN -> compared < 0;
-      case LESS_OR_EQUAL -> compared <= 0;
-      case GREATER_THAN -> compared > 0;
-      case GREATER_OR_EQUAL -> compared >= 0;
-      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
-    };
   }
 
   private SqlComparison comparison(int edge) {

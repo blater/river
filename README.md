@@ -31,11 +31,12 @@ uses MVCC, heap pages, B+trees, a write-ahead log, and checkpoints.
 
 - Tables, indexes, views, sequences, identities, defaults, `NOT NULL`,
   `CHECK`, `UNIQUE`, and foreign keys.
-- `BIGINT`, `BOOLEAN`, `DECIMAL(p,s)`, `VARCHAR(n)`, `DATE`, `TIME(p)`, local
-  `TIMESTAMP(p)`, and `TIMESTAMP(p) WITH TIME ZONE`.
+- `SMALLINT`, `INTEGER`, `BIGINT`, `DECIMAL(p,s)`, `REAL`, `DOUBLE PRECISION`,
+  `BOOLEAN`, `VARCHAR(n)`, `DATE`, `TIME(p)`, local `TIMESTAMP(p)`, and
+  `TIMESTAMP(p) WITH TIME ZONE`.
 - Multi-row `INSERT`, `UPDATE`, and `DELETE`; indexed and scanned predicates;
   scalar expressions; and SQL three-valued logic.
-- Two-to-eight-role `INNER` and `LEFT` joins with bounded nested-loop, hash,
+- Two-to-64-role `INNER` and `LEFT` joins with bounded nested-loop, hash,
   and merge strategies.
 - Aggregation, `GROUP BY`, `HAVING`, `DISTINCT`, ordering, limits, and bounded
   disk spill.
@@ -56,17 +57,24 @@ conversions, metadata, SQLSTATEs, and deliberate omissions.
 
 | Area | Current limit |
 | --- | --- |
-| Table and result columns | 8 |
-| Encoded table row | 4,096 bytes |
-| Indexed-table capacity | The legacy 65,536 row/version ceiling is removed. WAL and checkpoint metadata support positive logical row IDs through 4,294,967,294; the transitional runtime still uses positive-int page IDs, resident page frames, and is not yet qualified for billion-row tables |
+| Table and result columns | 1,024 table columns; 1,664 result/group/order lanes |
+| Encoded table row | 8,192 bytes |
+| Indexed-table capacity | The legacy 65,536 row/version ceiling is removed. Disk-backed row-location and version directories, scalable checkpoint metadata, and a bounded pinned page cache support positive logical row IDs through 4,294,967,294 without resident per-row state. Physical page IDs remain positive `int`s, operation/WAL bounds remain explicit, and this is capacity/recovery evidence—not a TPC-C throughput claim |
 | Text | `VARCHAR(n)`, `1 <= n <= 255`; at most 1,020 encoded bytes per value |
-| Join shape | 2–8 left-associative roles |
-| Materialized query stores | 65,536 rows and 256 MiB per bounded store |
+| Join shape | 2–64 left-associative roles |
+| Materialized query stores | 65,536 rows and 256 MB per bounded store |
 | Network | Loopback only; authenticated access uses TLS 1.3 and a token |
 | JDBC | One live statement per connection; forward-only, read-only results |
 | Operations | Offline backup; no replication, failover, or online migration |
 
 ## Build and run
+
+### Size configuration convention
+
+User-facing River size values use standard `KB`, `MB`, and `GB` units. Binary
+unit suffixes are not used. Exact byte values remain an implementation detail
+for page and format invariants. See
+[ADR 0013](docs/adr/0013-configuration-size-units.md).
 
 River requires JDK 25. Gradle verifies dependency checksums.
 

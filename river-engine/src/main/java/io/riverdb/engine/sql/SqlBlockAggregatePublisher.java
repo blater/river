@@ -1,15 +1,14 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import java.nio.ByteBuffer;
+import io.riverdb.sql.SqlGroupExpressions;
 
 /** Publishes finalized aggregate and group-key values into an owned block row. */
 final class SqlBlockAggregatePublisher {
   private final BoundSqlStatement bound;
-  private final byte[] groupText = new byte[Utf8Text.MAXIMUM_BYTES];
-  private ByteBuffer aggregateText;
+  private final SqlBlockAggregateValuePublisher values =
+      new SqlBlockAggregateValuePublisher();
 
   SqlBlockAggregatePublisher(BoundSqlStatement statement) {
     bound = statement;
@@ -21,65 +20,56 @@ final class SqlBlockAggregatePublisher {
       SqlBlockRow groupKey,
       SqlBlockRow destination,
       boolean grouped) {
-    int selected = bound.command.aggregateOutputInvocation(0);
-    destination.reset(grouped ? 2 : 1);
-    if (grouped) publishGroup(block, groupKey, destination);
-    int output = grouped ? 1 : 0;
-    if (accumulator.nullValue(selected)) {
-      destination.setNull(output);
-      return StatusCode.OK;
+    int groups = grouped
+        ? bound.command.columnCount() - bound.command.aggregateOutputCount() : 0;
+    SqlBlockSchema schema = bound.blockPlans().schema(block);
+    StatusCode status = destination.reset(schema.count());
+    if (status.isOk() && grouped) status = publishGroup(block, groupKey, destination, groups);
+    for (int output = 0; status.isOk() && output < bound.command.aggregateOutputCount(); output++) {
+      int selected = bound.command.aggregateOutputInvocation(output);
+      int descriptor = bound.aggregates.resultDescriptor(selected);
+      status = values.publish(
+          accumulator, selected, descriptor, destination, groups + output);
     }
-    destination.setValue(output, accumulator.value(selected));
-    if (SqlTypeDescriptor.typeId(bound.aggregates.resultDescriptor(selected))
-        != SqlTypeDescriptor.TYPE_ID_VARCHAR) return StatusCode.OK;
-    int length = accumulator.textLength(selected);
-    if (length == 0) {
-      destination.setText(output, destination.text(output), 0, 0);
-      return StatusCode.OK;
+    for (int column = groups + bound.command.aggregateOutputCount();
+        status.isOk() && column < schema.count(); column++) {
+      int group = SqlBlockGroupOrderColumns.group(bound.command, schema.name(column));
+      status = group < 0 ? StatusCode.CORRUPTION
+          : publishGroupValue(schema, column, groupKey, group, destination);
     }
-    if (aggregateText == null) aggregateText = ByteBuffer.wrap(accumulator.text());
-    int characters = Utf8Text.decode(
-        aggregateText,
-        accumulator.textOffset(selected),
-        length,
-        destination.text(output),
-        0);
-    if (characters < 0) return StatusCode.CORRUPTION;
-    destination.setText(output, destination.text(output), 0, characters);
+    return status;
+  }
+
+  void reset() { }
+
+  private StatusCode publishGroup(
+      int block, SqlBlockRow groupKey, SqlBlockRow destination, int groups) {
+    SqlBlockSchema schema = bound.blockPlans().schema(block);
+    for (int output = 0; output < groups; output++) {
+      int group = SqlGroupExpressions.groupKey(bound.command, output);
+      if (group < 0) return StatusCode.CORRUPTION;
+      StatusCode status = publishGroupValue(schema, output, groupKey, group, destination);
+      if (!status.isOk()) return status;
+    }
     return StatusCode.OK;
   }
 
-  int encodeGroupKey(SqlBlockSchema operands, SqlBlockRow groupKey) {
-    eraseGroupText();
-    if (groupKey.nullValue(0) || !operands.varchar(0)) return 0;
-    return Utf8Text.encode(
-        groupKey.text(0),
-        0,
-        groupKey.textLength(0),
-        Utf8Text.MAXIMUM_SCALARS,
-        groupText,
-        0);
-  }
-
-  byte[] groupText() { return groupText; }
-
-  void reset() {
-    eraseGroupText();
-  }
-
-  private void publishGroup(
-      int block, SqlBlockRow groupKey, SqlBlockRow destination) {
-    if (groupKey.nullValue(0)) {
-      destination.setNull(0);
-      return;
+  private static StatusCode publishGroupValue(
+      SqlBlockSchema schema,
+      int output,
+      SqlBlockRow groupKey,
+      int group,
+      SqlBlockRow destination) {
+    if (groupKey.nullValue(group)) {
+      destination.setNull(output);
+      return StatusCode.OK;
     }
-    destination.setValue(0, groupKey.value(0));
-    if (bound.blockPlans().schema(block).varchar(0)) {
-      destination.setText(0, groupKey.text(0), 0, groupKey.textLength(0));
-    }
-  }
-
-  private void eraseGroupText() {
-    for (int index = 0; index < groupText.length; index++) groupText[index] = 0;
+    int descriptor = schema.descriptor(output);
+    if (SqlTypeDescriptor.isWideDecimal(descriptor)) {
+      destination.setDecimal128(output, groupKey.highValue(group), groupKey.value(group));
+    } else destination.setValue(output, groupKey.value(group));
+    return schema.varchar(output)
+        ? destination.setText(output, groupKey.text(group), 0, groupKey.textLength(group))
+        : StatusCode.OK;
   }
 }

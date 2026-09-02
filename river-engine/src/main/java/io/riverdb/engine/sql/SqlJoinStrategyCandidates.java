@@ -8,6 +8,7 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Lazy subordinate HASH/MERGE candidate workspaces for one selected stage. */
 final class SqlJoinStrategyCandidates {
   private final RelationalSession session;
+  private final SqlSessionShapeBudget budget;
   private SqlJoinHashWorkspace hash;
   private SqlJoinMergeWorkspace merge;
   private SqlBoundJoinContext context;
@@ -16,8 +17,10 @@ final class SqlJoinStrategyCandidates {
   private int strategy = SqlJoinStrategy.NESTED_LOOP;
   private boolean fallback;
 
-  SqlJoinStrategyCandidates(RelationalSession relationalSession) {
+  SqlJoinStrategyCandidates(
+      RelationalSession relationalSession, SqlSessionShapeBudget shapeBudget) {
     session = relationalSession;
+    budget = shapeBudget;
   }
 
   void configure(SqlBoundJoinContext joinContext, SqlCommand canonicalCommand) {
@@ -32,11 +35,11 @@ final class SqlJoinStrategyCandidates {
     strategy = context.strategy(stage);
     StatusCode status;
     if (strategy == SqlJoinStrategy.HASH) {
-      if (hash == null) hash = new SqlJoinHashWorkspace(session);
+      if (hash == null) hash = new SqlJoinHashWorkspace(session, budget);
       status = hash.begin(command, context);
       if (status.isOk()) fallback = hash.fallback();
     } else {
-      if (merge == null) merge = new SqlJoinMergeWorkspace(session);
+      if (merge == null) merge = new SqlJoinMergeWorkspace(session, budget);
       status = merge.begin(context);
     }
     return status;
@@ -45,7 +48,7 @@ final class SqlJoinStrategyCandidates {
   StatusCode beginProbe(
       SqlJoinRoleRows rows, SqlExpressionEvaluator expressions) {
     return strategy == SqlJoinStrategy.HASH
-        ? hash.beginProbe(rows, context) : merge.beginProbe(rows, expressions);
+        ? hash.beginProbe(rows, context) : merge.beginProbe(rows);
   }
 
   StatusCode nextCandidate() {

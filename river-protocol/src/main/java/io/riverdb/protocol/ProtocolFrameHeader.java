@@ -9,6 +9,8 @@ public final class ProtocolFrameHeader {
   private long requestId;
   private int payloadBytes;
   private boolean response;
+  private boolean continuation;
+  private boolean finalSegment;
   private boolean available;
 
   public int typeWireCode() {
@@ -27,6 +29,10 @@ public final class ProtocolFrameHeader {
     return available && response;
   }
 
+  public boolean isContinuation() { return available && continuation; }
+
+  public boolean isFinalSegment() { return available && finalSegment; }
+
   public boolean isAvailable() {
     return available;
   }
@@ -35,11 +41,15 @@ public final class ProtocolFrameHeader {
       int inspectedTypeWireCode,
       long inspectedRequestId,
       int inspectedPayloadBytes,
-      boolean inspectedResponse) {
+      boolean inspectedResponse,
+      boolean inspectedContinuation,
+      boolean inspectedFinalSegment) {
     typeWireCode = inspectedTypeWireCode;
     requestId = inspectedRequestId;
     payloadBytes = inspectedPayloadBytes;
     response = inspectedResponse;
+    continuation = inspectedContinuation;
+    finalSegment = inspectedFinalSegment;
     available = true;
   }
 
@@ -48,6 +58,8 @@ public final class ProtocolFrameHeader {
     requestId = 0;
     payloadBytes = 0;
     response = false;
+    continuation = false;
+    finalSegment = false;
     available = false;
   }
 }

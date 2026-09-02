@@ -22,7 +22,7 @@ final class SqlCommandLifecycleTest {
 
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
-        parser.parse("CREATE TABLE broken (id BIGINT PRIMARY KEY)", command));
+        parser.parse("CREATE TABLE broken (id BIGINT PRIMARY KEY", command));
     assertFalse(command.isAvailable());
 
     assertEquals(StatusCode.OK, parser.parse("BEGIN SERIALIZABLE", command));

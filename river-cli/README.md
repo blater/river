@@ -7,7 +7,7 @@ argument, the bounded token file is read into an erased byte buffer, and the
 default JVM trust configuration validates the server identity. Query output is
 tab separated, followed by a `ROWS` count; command output reports affected rows
 and commit sequence. Scripts stop on the first error and statements are bounded
-to 64 KiB.
+to 64 KB.
 
 Statement framing is quote-aware, including semicolons and doubled quotes inside
 VARCHAR literals. Result formatting is descriptor-driven: Boolean, scaled

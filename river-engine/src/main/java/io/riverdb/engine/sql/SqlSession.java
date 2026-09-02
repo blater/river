@@ -1,16 +1,15 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.RelationalDatabase;
-import io.riverdb.engine.relational.RelationalSessionOpenResult;
 import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.SessionAuthorizer;
+import io.riverdb.engine.relational.RelationalDatabase;
 
 /** Public SQL session façade; mutable execution state is owned by its components. */
-public final class SqlSession {
+public final class SqlSession implements SqlRetainedBudget {
   private final SqlSessionExecutionCoordinator coordinator;
 
-  private SqlSession(SqlSessionExecutionCoordinator sessionCoordinator) {
+  SqlSession(SqlSessionExecutionCoordinator sessionCoordinator) {
     coordinator = sessionCoordinator;
   }
 
@@ -32,14 +31,7 @@ public final class SqlSession {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
-    StatusCode status = database.createSession(sessionResult);
-    if (status.isOk()) {
-      result.set(new SqlSession(
-          new SqlSessionExecutionCoordinator(
-              database, sessionResult.session(), authorizer)));
-    }
-    return status;
+    return SqlSessionFactory.create(database, authorizer, result);
   }
 
   public StatusCode execute(String sql, SqlExecutionResult result) {
@@ -51,6 +43,16 @@ public final class SqlSession {
     return coordinator.execute(sql, parameters, result);
   }
 
+  public StatusCode validatePrepared(
+      String sql, SqlRetainedBudget budget, SqlPreparedValidationResult result) {
+    return coordinator.validatePrepared(sql, budget, result);
+  }
+
+  public StatusCode executePrepared(
+      SqlPreparedPlan plan, ParameterSet parameters, SqlExecutionResult result) {
+    return coordinator.executePrepared(plan, parameters, result);
+  }
+
   public StatusCode beginScan(String sql, SqlScanCursor cursor) {
     return coordinator.beginScan(sql, cursor);
   }
@@ -58,6 +60,11 @@ public final class SqlSession {
   public StatusCode beginScan(
       String sql, ParameterSet parameters, SqlScanCursor cursor) {
     return coordinator.beginScan(sql, parameters, cursor);
+  }
+
+  public StatusCode beginPreparedScan(
+      SqlPreparedPlan plan, ParameterSet parameters, SqlScanCursor cursor) {
+    return coordinator.beginPreparedScan(plan, parameters, cursor);
   }
 
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
@@ -81,7 +88,39 @@ public final class SqlSession {
     return coordinator.closeScan(cursor, result);
   }
 
+  public StatusCode beginProgram(SqlExecutionResult result) {
+    return coordinator.beginProgram(result);
+  }
+
+  public StatusCode commitProgram(SqlExecutionResult result) {
+    return coordinator.commitProgram(result);
+  }
+
+  public StatusCode abortProgram(SqlExecutionResult result) {
+    return coordinator.abortProgram(result);
+  }
+
+  public boolean programTransactionActive() {
+    return coordinator.programTransactionActive();
+  }
+
   public StatusCode close() {
     return coordinator.close();
   }
+
+  @Override
+  public StatusCode reserveRetainedBytes(long bytes) {
+    return coordinator.reserveRetainedBytes(bytes);
+  }
+
+  @Override
+  public StatusCode releaseRetainedBytes(long bytes) {
+    return coordinator.releaseRetainedBytes(bytes);
+  }
+
+  long retainedShapeBytes() { return coordinator.retainedShapeBytes(); }
+  long maximumShapeBytes() { return coordinator.maximumShapeBytes(); }
+  long preparedCompiles() { return coordinator.preparedCompiles(); }
+  long preparedExecutions() { return coordinator.preparedExecutions(); }
+  long preparedRecompiles() { return coordinator.preparedRecompiles(); }
 }

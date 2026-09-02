@@ -1,15 +1,13 @@
 package io.riverdb.format.btree;
 
-/** Caller-owned decoded inline-tuple B-tree page header. */
+/** Caller-owned decoded variable-key B-tree page header. */
 public final class TupleBTreePageHeader {
   private int type;
   private int entryCount;
   private int pointer;
+  private int leftSibling;
   private int keyArity;
-  private int firstDescriptor;
-  private int secondDescriptor;
-  private int thirdDescriptor;
-  private int fourthDescriptor;
+  private long descriptorHash;
   private long keySchemaId;
   private int highKeyOffset;
   private int highKeyLength;
@@ -18,44 +16,34 @@ public final class TupleBTreePageHeader {
       int pageType,
       int count,
       int pagePointer,
+      int pageLeftSibling,
       int arity,
-      int first,
-      int second,
-      int third,
-      int fourth,
+      long hash,
       long schemaId,
       int highOffset,
       int highLength) {
     type = pageType;
     entryCount = count;
     pointer = pagePointer;
+    leftSibling = pageLeftSibling;
     keyArity = arity;
-    firstDescriptor = first;
-    secondDescriptor = second;
-    thirdDescriptor = third;
-    fourthDescriptor = fourth;
+    descriptorHash = hash;
     keySchemaId = schemaId;
     highKeyOffset = highOffset;
     highKeyLength = highLength;
   }
 
   public void reset() {
-    set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    set(0, 0, 0, 0, 0, 0, 0, 0, 0);
   }
 
   public int type() { return type; }
   public int entryCount() { return entryCount; }
-  public int pointer() { return pointer; }
+  public int firstChildPageId() { return type == TupleBTreePageCodec.TYPE_INTERNAL ? pointer : 0; }
+  public int leftSiblingPageId() { return type == TupleBTreePageCodec.TYPE_LEAF ? leftSibling : 0; }
+  public int rightSiblingPageId() { return type == TupleBTreePageCodec.TYPE_LEAF ? pointer : 0; }
   public int keyArity() { return keyArity; }
-  public int descriptor(int index) {
-    return switch (index) {
-      case 0 -> firstDescriptor;
-      case 1 -> secondDescriptor;
-      case 2 -> thirdDescriptor;
-      case 3 -> fourthDescriptor;
-      default -> 0;
-    };
-  }
+  public long descriptorHash() { return descriptorHash; }
   public long keySchemaId() { return keySchemaId; }
   public int highKeyOffset() { return highKeyOffset; }
   public int highKeyLength() { return highKeyLength; }

@@ -34,8 +34,10 @@ final class ExactDecimalQuantize {
       return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
     }
     long converted = value / divisor;
-    if (halfEven && remainder != 0
-        && ExactDecimal.shouldRound(Math.abs(remainder), divisor, converted)) {
+    long magnitude = Math.abs(remainder);
+    boolean round = remainder != 0 && halfEven
+        && ExactDecimal.shouldRound(magnitude, divisor, converted);
+    if (round) {
       if (value < 0 && converted == Long.MIN_VALUE
           || value >= 0 && converted == Long.MAX_VALUE) {
         return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
@@ -46,6 +48,35 @@ final class ExactDecimalQuantize {
       return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
     }
     result.value = converted;
+    return StatusCode.OK;
+  }
+
+  static StatusCode halfAway(
+      long value,
+      int sourceDescriptor,
+      int targetDescriptor,
+      LongValue result,
+      WideScratch scratch) {
+    StatusCode status = apply(
+        value, sourceDescriptor, targetDescriptor, false, false, result, scratch);
+    if (!status.isOk()) return status;
+    int sourceScale = ExactDecimalDescriptors.scale(sourceDescriptor);
+    int targetScale = ExactDecimalDescriptors.scale(targetDescriptor);
+    if (targetScale >= sourceScale) return StatusCode.OK;
+    long divisor = ExactDecimal.powerOfTen(sourceScale - targetScale);
+    long remainder = value % divisor;
+    long magnitude = Math.abs(remainder);
+    if (remainder == 0 || magnitude < divisor - magnitude) return StatusCode.OK;
+    long rounded = result.value;
+    if (value < 0 && rounded == Long.MIN_VALUE
+        || value >= 0 && rounded == Long.MAX_VALUE) {
+      return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
+    }
+    rounded += value < 0 ? -1 : 1;
+    if (!ExactDecimalDescriptors.valueFitsDescriptor(rounded, targetDescriptor)) {
+      return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
+    }
+    result.value = rounded;
     return StatusCode.OK;
   }
 }

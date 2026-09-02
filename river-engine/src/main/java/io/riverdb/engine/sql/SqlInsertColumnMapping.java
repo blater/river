@@ -8,7 +8,9 @@ final class SqlInsertColumnMapping {
   private SqlInsertColumnMapping() {}
 
   static StatusCode map(SqlCommand command, BoundSqlStatement bound) {
-    for (int index = 0; index < bound.insertSourceByColumn.length; index++) {
+    StatusCode reserved = bound.reserveInsertColumns(bound.table.columnCount());
+    if (!reserved.isOk()) return reserved;
+    for (int index = 0; index < bound.table.columnCount(); index++) {
       bound.insertSourceByColumn[index] = -1;
     }
     if (command.columnCount() == 0) {

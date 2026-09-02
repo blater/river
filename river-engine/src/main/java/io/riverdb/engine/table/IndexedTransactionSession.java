@@ -2,6 +2,8 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
+import io.riverdb.engine.runtime.DatabaseResourceDefaults;
+import io.riverdb.engine.runtime.DatabaseResourceGovernor;
 import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.Transaction;
@@ -10,53 +12,26 @@ import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
-import io.riverdb.tx.api.lock.LockToken;
+import io.riverdb.tx.api.lock.LockMode;
 import java.nio.ByteBuffer;
 
 /** One reusable transaction/session write set over the first indexed table. */
 public final class IndexedTransactionSession implements TransactionCommitParticipant {
   static final int MUTATION_NONE = 0;
-  private static final int MAXIMUM_PENDING_INSERTS = 384;
-  private static final int MAXIMUM_HELD_LOCKS = 384;
-  private static final int MAXIMUM_SAVEPOINTS = 4;
-  private static final int MAXIMUM_ACTIVE_SCANS = 32;
-  private static final int AUTOMATIC_VACUUM_OBSOLETE_VERSIONS = MAXIMUM_PENDING_INSERTS;
+  private static final int MAXIMUM_PENDING_INSERTS =
+      DatabaseResourceDefaults.TRANSACTION_WRITE_ENTRIES;
 
   private final TransactionManager manager;
   private final IndexedTable table;
-  private final IndexedGroupCommitCoordinator groupCommit;
-  private final IndexedVacuum automaticVacuum;
-  private final int automaticVacuumThreshold;
-  private final int automaticVacuumCapacityReserve;
+  private final int maximumWriteEntries;
   private final Transaction transaction;
-  private final PendingMutationBuffer pendingMutations;
-  private final LockToken[] heldLocks = new LockToken[MAXIMUM_HELD_LOCKS];
-  private final long[] lockedKeys = new long[MAXIMUM_HELD_LOCKS];
-  private final long[] lockedUpperKeys = new long[MAXIMUM_HELD_LOCKS];
-  private final int[] lockedSpaces = new int[MAXIMUM_HELD_LOCKS];
-  private final int[] lockedUpperSpaces = new int[MAXIMUM_HELD_LOCKS];
-  private final boolean[] exclusiveLocks = new boolean[MAXIMUM_HELD_LOCKS];
-  private final boolean[] rangeLocks = new boolean[MAXIMUM_HELD_LOCKS];
-  private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
-  private final IndexedCommitResult commitResult = new IndexedCommitResult();
-  private final TransactionOutcome maintenanceOutcome = new TransactionOutcome();
-  private final HeapInsertResult preparedInsertResult = new HeapInsertResult();
-  private final IndexedMutationTarget mutationTarget = new IndexedMutationTarget();
+  private final IndexedSessionRegistry sessionRegistry;
+  private final IndexedSessionState state;
+  private IndexedRelationalMutation relationalMutation;
   private long committedSequence;
   private long copiedWriteSetBytes;
-  private int heldLockCount;
-  private final IndexedScanCursor[] activeScans =
-      new IndexedScanCursor[MAXIMUM_ACTIVE_SCANS];
-  private int activeScanCount;
-  private int savepointCount;
-  private boolean serializableScan;
   private boolean statementActive;
-  private final IndexedTransactionScanCoordinator scanCoordinator =
-      new IndexedTransactionScanCoordinator(this);
-  private final IndexedTransactionWriteSet writeSet =
-      new IndexedTransactionWriteSet(this);
-  private final IndexedTransactionReadAccess readAccess =
-      new IndexedTransactionReadAccess(this);
+  private boolean closed;
 
   public IndexedTransactionSession(
       TransactionManager transactionManager,
@@ -80,30 +55,40 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       IndexedGroupCommitCoordinator groupCommitCoordinator,
       IndexedVacuum versionVacuum) {
     this(
-        transactionManager,
-        indexedTable,
-        maximumRowBytes,
-        groupCommitCoordinator,
-        versionVacuum,
-        AUTOMATIC_VACUUM_OBSOLETE_VERSIONS,
-        MAXIMUM_PENDING_INSERTS);
+        transactionManager, indexedTable, maximumRowBytes,
+        groupCommitCoordinator, versionVacuum, null);
   }
 
-  IndexedTransactionSession(
+  public IndexedTransactionSession(
       TransactionManager transactionManager,
       IndexedTable indexedTable,
       int maximumRowBytes,
       IndexedGroupCommitCoordinator groupCommitCoordinator,
       IndexedVacuum versionVacuum,
-      int vacuumThreshold) {
+      DatabaseResourceGovernor resourceGovernor) {
     this(
         transactionManager,
         indexedTable,
         maximumRowBytes,
         groupCommitCoordinator,
         versionVacuum,
-        vacuumThreshold,
-        MAXIMUM_PENDING_INSERTS);
+        MAXIMUM_PENDING_INSERTS,
+        maximumWriteEntries(resourceGovernor),
+        resourceGovernor);
+  }
+
+  public IndexedTransactionSession(
+      TransactionManager transactionManager,
+      IndexedTable indexedTable,
+      int maximumRowBytes,
+      IndexedGroupCommitCoordinator groupCommitCoordinator,
+      IndexedVacuum versionVacuum,
+      DatabaseResourceGovernor resourceGovernor,
+      IndexedSessionRegistry registry) {
+    this(
+        transactionManager, indexedTable, maximumRowBytes, groupCommitCoordinator,
+        versionVacuum, MAXIMUM_PENDING_INSERTS, maximumWriteEntries(resourceGovernor),
+        resourceGovernor, registry);
   }
 
   IndexedTransactionSession(
@@ -112,19 +97,46 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       int maximumRowBytes,
       IndexedGroupCommitCoordinator groupCommitCoordinator,
       IndexedVacuum versionVacuum,
-      int vacuumThreshold,
       int vacuumCapacityReserve) {
+    this(
+        transactionManager, indexedTable, maximumRowBytes, groupCommitCoordinator,
+        versionVacuum, vacuumCapacityReserve, MAXIMUM_PENDING_INSERTS, null);
+  }
+
+  IndexedTransactionSession(
+      TransactionManager transactionManager,
+      IndexedTable indexedTable,
+      int maximumRowBytes,
+      IndexedGroupCommitCoordinator groupCommitCoordinator,
+      IndexedVacuum versionVacuum,
+      int vacuumCapacityReserve,
+      int maximumPendingMutations,
+      DatabaseResourceGovernor resourceGovernor) {
+    this(
+        transactionManager, indexedTable, maximumRowBytes, groupCommitCoordinator,
+        versionVacuum, vacuumCapacityReserve, maximumPendingMutations,
+        resourceGovernor, null);
+  }
+
+  public IndexedTransactionSession(
+      TransactionManager transactionManager,
+      IndexedTable indexedTable,
+      int maximumRowBytes,
+      IndexedGroupCommitCoordinator groupCommitCoordinator,
+      IndexedVacuum versionVacuum,
+      int vacuumCapacityReserve,
+      int maximumPendingMutations,
+      DatabaseResourceGovernor resourceGovernor,
+      IndexedSessionRegistry registry) {
     manager = transactionManager;
     table = indexedTable;
-    groupCommit = groupCommitCoordinator;
-    automaticVacuum = versionVacuum;
-    automaticVacuumThreshold = vacuumThreshold;
-    automaticVacuumCapacityReserve = vacuumCapacityReserve;
+    maximumWriteEntries = maximumPendingMutations;
     transaction = new Transaction(transactionManager.maximumActiveTransactions());
-    pendingMutations = new PendingMutationBuffer(MAXIMUM_PENDING_INSERTS, maximumRowBytes);
-    for (int index = 0; index < heldLocks.length; index++) {
-      heldLocks[index] = new LockToken();
-    }
+    sessionRegistry = registry;
+    state = new IndexedSessionState(
+        this, manager, transaction, maximumRowBytes, maximumPendingMutations,
+        tuplePayloadCapacity(maximumPendingMutations), resourceGovernor,
+        groupCommitCoordinator, versionVacuum, vacuumCapacityReserve);
   }
 
   public Transaction transaction() {
@@ -137,39 +149,150 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   /** Current write-set position for higher-level transactional metadata coordination. */
   public int pendingMutationCount() {
-    return pendingMutations.count();
+    return state.pendingMutations.count();
+  }
+
+  /** Current tuple-intent position for statement admission and rollback coordination. */
+  public int pendingTupleMutationCount() { return state.tupleIntents.mutationCount(); }
+
+  /** Reserves one table-scoped contiguous identity range and journals its commit floor. */
+  public StatusCode reserveLogicalRowIds(
+      long objectId, int count, IndexedLogicalRowIdReservation result) {
+    if (transaction.state() != TransactionState.ACTIVE || result == null || count <= 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = table.admitLogicalRowIds(objectId, 1);
+    if (status.isOk()) status = state.logicalRowFloors.record(objectId, 1);
+    if (status.isOk()) status = table.reserveLogicalRowIds(objectId, count, result);
+    if (status.isOk()) {
+      status = state.logicalRowFloors.record(objectId, result.nextLogicalRowId());
+    }
+    return status;
+  }
+
+  /** Preflights tuple delta slots and bytes against the shared transaction mutation budget. */
+  public StatusCode preflightTupleMutations(
+      int mutations, int descriptors, int payloadBytes) {
+    return state.tupleAccess.preflight(mutations, descriptors, payloadBytes);
+  }
+
+  /** Preflights scalar rows and tuple deltas against their shared transaction budget. */
+  public StatusCode preflightRelationalMutations(
+      int[] rowLengths, int start, int scalarRows,
+      int tupleMutations, int descriptors, int tuplePayloadBytes) {
+    return state.tupleAccess.preflightRelational(
+        rowLengths, start, scalarRows,
+        tupleMutations, descriptors, tuplePayloadBytes);
+  }
+
+  /** Reports whether this transaction already retains the exact tuple descriptor identity. */
+  public StatusCode tupleDescriptorStatus(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape) {
+    return state.tupleAccess.descriptorStatus(ownerObjectId, keyId, schemaId, shape);
+  }
+
+  /** Stages one physical tuple delta; roots and registry generations are derived at commit. */
+  public StatusCode appendTupleMutation(
+      int operation, long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape, long logicalRowId,
+      ByteBuffer key, int offset, int length) {
+    return state.tupleAccess.append(
+        operation, ownerObjectId, keyId, schemaId, shape,
+        logicalRowId, key, offset, length);
+  }
+
+  /** Reserves an atomic tuple-index lifecycle batch before its first request is staged. */
+  public StatusCode preflightTupleIndexLifecycles(int additional) {
+    return state.tupleAccess.preflightLifecycles(additional);
+  }
+
+  /** Stages one private empty tuple root; catalog visibility remains a later transaction. */
+  public StatusCode stageTupleIndexBuilding(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape) {
+    return stageTupleLifecycle(
+        IndexedTupleIndexLifecycleBatch.CREATE_BUILDING,
+        ownerObjectId, keyId, schemaId, privateOwner, shape);
+  }
+
+  /** Stages publication of one previously built and validated empty tuple root. */
+  public StatusCode stageTupleIndexReady(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape) {
+    return stageTupleLifecycle(
+        IndexedTupleIndexLifecycleBatch.PUBLISH_READY,
+        ownerObjectId, keyId, schemaId, privateOwner, shape);
+  }
+
+  /** Stages one bounded tuple batch while retaining private BUILDING ownership. */
+  public StatusCode stageTupleIndexBuildingBatch(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape) {
+    return stageTupleLifecycle(
+        IndexedTupleIndexLifecycleBatch.APPEND_BUILDING,
+        ownerObjectId, keyId, schemaId, privateOwner, shape);
+  }
+
+  /** Detaches one BUILDING or READY root and records cleanup ownership. */
+  public StatusCode stageTupleIndexDropping(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape) {
+    return stageTupleLifecycle(
+        IndexedTupleIndexLifecycleBatch.DETACH_DROPPING,
+        ownerObjectId, keyId, schemaId, privateOwner, shape);
+  }
+
+  /** Reclaims the next bounded page range of one detached tuple index. */
+  public StatusCode stageTupleIndexReclaim(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape, int cleanupEndPageId) {
+    return stageTupleLifecycle(
+        IndexedTupleIndexLifecycleBatch.RECLAIM_DROPPING,
+        ownerObjectId, keyId, schemaId, privateOwner, shape, cleanupEndPageId);
+  }
+
+  /** Publishes ABSENT after the detached tuple graph has been fully reclaimed. */
+  public StatusCode stageTupleIndexAbsent(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape, int cleanupEndPageId) {
+    return stageTupleLifecycle(
+        IndexedTupleIndexLifecycleBatch.FINISH_DROPPING,
+        ownerObjectId, keyId, schemaId, privateOwner, shape, cleanupEndPageId);
   }
 
   public StatusCode begin(IsolationLevel isolationLevel) {
+    if (closed) return StatusCode.CLOSED;
     if (transaction.isActiveHandle()
-        || activeScanCount != 0
-        || savepointCount != 0
+        || hasActiveScans()
+        || state.savepoints.active()
         || statementActive) {
       return StatusCode.CONFLICT;
     }
-    pendingMutations.truncate(0);
-    heldLockCount = 0;
+    state.pendingMutations.truncate(0);
+    state.tupleIntents.reset();
+    state.tupleLifecycle.reset();
+    state.logicalRowFloors.reset();
     committedSequence = 0;
-    serializableScan = false;
+    state.cursors.resetSerializable();
     statementActive = false;
-    for (LockToken heldLock : heldLocks) {
-      StatusCode status = heldLock.reset();
-      if (!status.isOk()) {
-        return status;
-      }
-    }
     StatusCode maintenance = maintainVersions();
     if (!maintenance.isOk()) {
       return maintenance;
     }
-    return manager.begin(isolationLevel, table, transaction);
+    StatusCode status = manager.begin(isolationLevel, table, transaction);
+    if (status.isOk()) {
+      status = state.resourceAdmission.begin(transaction.transactionId());
+      if (!status.isOk()) manager.abort(transaction, state.maintenanceOutcome);
+    }
+    return status;
   }
 
   /** Pins one statement snapshot while higher layers perform related storage calls. */
   public StatusCode beginStatement() {
     if (transaction.state() != TransactionState.ACTIVE
         || statementActive
-        || activeScanCount != 0) {
+        || hasActiveScans()) {
       return StatusCode.CONFLICT;
     }
     StatusCode status = transaction.isolationLevel() == IsolationLevel.READ_COMMITTED
@@ -183,7 +306,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   public StatusCode completeStatement() {
     if (transaction.state() != TransactionState.ACTIVE
         || !statementActive
-        || activeScanCount != 0) {
+        || hasActiveScans()) {
       return StatusCode.CONFLICT;
     }
     statementActive = false;
@@ -191,151 +314,412 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   private StatusCode maintainVersions() {
-    return readAccess.maintainVersions();
+    return state.readAccess.maintainVersions();
   }
 
-  public StatusCode insert(int space, long key, ByteBuffer row) {
-    return writeSet.insert(space, key, row);
+  public StatusCode insert(long space, long key, ByteBuffer row) {
+    return state.writeSet.insert(space, key, row);
   }
 
-  public StatusCode update(int space, long key, ByteBuffer row) {
-    return writeSet.update(space, key, row);
+  public StatusCode update(long space, long key, ByteBuffer row) {
+    return state.writeSet.update(space, key, row);
   }
 
-  public StatusCode delete(int space, long key) {
-    return writeSet.delete(space, key);
+  public StatusCode delete(long space, long key) {
+    return state.writeSet.delete(space, key);
+  }
+
+  /** Reads one durable tuple-root state through this transaction's current snapshot. */
+  public StatusCode readTupleIndexState(long keyId, IndexedTupleIndexState result) {
+    return state.tupleAccess.readState(keyId, result);
+  }
+
+  /**
+   * Probes committed physical entries sharing one complete generic user key.
+   *
+   * <p>The probe returns {@link StatusCode#RETRY} when this transaction's visible snapshot is not
+   * the table's current commit sequence. Pending tuple intents are not overlaid; callers needing
+   * read-your-writes must inspect {@link #pendingTupleMutationCount()} and fall back or merge them.
+   */
+  public StatusCode probeTuplePrefix(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return state.tupleAccess.probePrefix(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
+  }
+
+  /** Resolves one SQL-unique tuple through the visible root plus this transaction's intents. */
+  public StatusCode resolveTupleUniquePrefix(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return state.tupleAccess.resolveUnique(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
+  }
+
+  /** Resolves a stable SQL-unique source mapping under shared or exclusive tuple protection. */
+  public StatusCode resolveTupleUniqueSource(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, LockMode mode,
+      IndexedTupleProbeResult result) {
+    return state.tupleAccess.source.resolve(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, mode, result);
+  }
+
+  /** Resolves one current SQL-unique tuple while retaining shared integrity protection. */
+  public StatusCode resolveTupleUniqueCurrent(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return state.tupleAccess.current.unique(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
+  }
+
+  /** Resolves any tuple sharing a user prefix through the visible root plus this transaction. */
+  public StatusCode resolveTupleAnyPrefix(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return resolveTupleAnyPrefixExcept(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, 0, result);
+  }
+
+  /** Resolves any matching tuple except one caller-owned logical row. */
+  public StatusCode resolveTupleAnyPrefixExcept(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, long excludedRowId,
+      IndexedTupleProbeResult result) {
+    return state.tupleAccess.resolveAny(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length,
+        excludedRowId, result);
+  }
+
+  /** Resolves any current tuple sharing a user prefix after its integrity lock is retained. */
+  public StatusCode resolveTupleAnyPrefixCurrent(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
+    return resolveTupleAnyPrefixCurrentExcept(
+        ownerObjectId, keyId, schemaId, shape,
+        key, offset, length, 0, result);
+  }
+
+  /** Resolves any current matching tuple except one caller-owned logical row. */
+  public StatusCode resolveTupleAnyPrefixCurrentExcept(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, long excludedRowId,
+      IndexedTupleProbeResult result) {
+    return state.tupleAccess.current.any(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length,
+        excludedRowId, result);
+  }
+
+  /** Holds shared lifecycle and ordered tuple-key protection through transaction completion. */
+  public StatusCode protectTupleKey(
+      long keyId, ByteBuffer key, int offset, int length) {
+    return IndexedTupleKeyProtection.protectShared(this, keyId, key, offset, length);
+  }
+
+  /** Holds shared lifecycle and exclusive exact-key protection through transaction completion. */
+  public StatusCode protectTupleKeyForWrite(
+      long keyId, ByteBuffer key, int offset, int length) {
+    return IndexedTupleKeyProtection.protectExclusive(this, keyId, key, offset, length);
+  }
+
+  /** Reports exact exclusive tuple protection without acquiring or retaining it again. */
+  public StatusCode tupleWriteProtectionStatus(
+      long keyId, ByteBuffer key, int offset, int length) {
+    if (!io.riverdb.format.catalog.CatalogKeyspace.validKeyId(keyId)
+        || !IndexedTupleLockKey.valid(key, offset, length)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return state.lockWait.holdsTupleKey(
+        transaction, keyId, key,
+        IndexedTupleLockKey.userOffset(key, offset, length),
+        IndexedTupleLockKey.userLength(key, offset, length),
+        LockMode.EXCLUSIVE);
+  }
+
+  /** Reports whether this session owns a conditional exact-source tuple guard. */
+  public boolean tupleSourceBorrowed() { return state.tupleAccess.source.borrowed(); }
+
+  /** Adopts the conditional exact-source tuple guard through transaction completion. */
+  public StatusCode retainTupleSource() { return state.tupleAccess.source.retain(); }
+
+  /** Releases a conditional exact-source tuple guard after current-row rejection. */
+  public StatusCode releaseTupleSource() { return state.tupleAccess.source.release(); }
+
+  /** Serializes and validates one SQL-unique user tuple against committed and pending keys. */
+  public StatusCode validateTupleUniquePrefix(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, long logicalRowId) {
+    return state.tupleAccess.validateUnique(
+        ownerObjectId, keyId, schemaId, shape,
+        key, offset, length, logicalRowId);
+  }
+
+  /** Validates an append-only build key against private BUILDING and pending batch entries. */
+  public StatusCode validateTupleBuildingUniquePrefix(
+      long ownerObjectId, long keyId, long schemaId, long privateOwner,
+      io.riverdb.base.tuple.TupleShape shape,
+      ByteBuffer key, int offset, int length, long logicalRowId) {
+    return state.tupleAccess.validateBuilding(
+        ownerObjectId, keyId, schemaId, privateOwner, shape,
+        key, offset, length, logicalRowId);
+  }
+
+  /** Tests the current allocator frontier before staging a detached-root finish. */
+  public StatusCode tupleIndexCleanupComplete(
+      IndexedTupleIndexState state, int cleanupEndPageId) {
+    if (transaction.state() != TransactionState.ACTIVE || state == null
+        || state.state()
+            != io.riverdb.format.btree.TupleIndexRootRecordCodec.STATE_DROPPING) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return table.tupleIndexCleanupComplete(state.cleanupCursor(), cleanupEndPageId);
+  }
+
+  /** Captures the stable terminal page horizon before detaching one private root. */
+  public int tupleIndexCleanupHorizon() {
+    return transaction.state() == TransactionState.ACTIVE ? table.nextPageId() : 0;
+  }
+
+  /** Admits one caller-owned mutation before its lock or staged write. */
+  public StatusCode preflightPendingMutation(int rowBytes) {
+    if (transaction.state() != TransactionState.ACTIVE) {
+      return StatusCode.CONFLICT;
+    }
+    if (!sharedMutationCapacity(1)) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = ensureWriteEntries(
+        1, IndexedWriteWorkspaceAccounting.scalar(
+            state.pendingMutations, state.tupleIntents, state.tupleLifecycle, rowBytes));
+    return status.isOk() ? state.pendingMutations.reserve(1, rowBytes) : status;
+  }
+
+  /** Admits a complete variable-width mutation group before its first lock or staged write. */
+  public StatusCode preflightPendingMutations(
+      int[] rowLengths, int start, int additionalRows) {
+    if (transaction.state() != TransactionState.ACTIVE) {
+      return StatusCode.CONFLICT;
+    }
+    if (!sharedMutationCapacity(additionalRows)) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = ensureWriteEntries(
+        additionalRows, IndexedWriteWorkspaceAccounting.scalar(
+            state.pendingMutations, state.tupleIntents, state.tupleLifecycle,
+            rowLengths, start, additionalRows));
+    return status.isOk()
+        ? state.pendingMutations.reserve(rowLengths, start, additionalRows) : status;
+  }
+
+  StatusCode reservePending(int additionalRows, int additionalRowBytes) {
+    if (!sharedMutationCapacity(additionalRows)) return StatusCode.RESOURCE_EXHAUSTED;
+    long retainedBytes = additionalRows == 1
+        ? IndexedWriteWorkspaceAccounting.scalar(
+            state.pendingMutations, state.tupleIntents, state.tupleLifecycle, additionalRowBytes) : -1;
+    StatusCode status = ensureWriteEntries(additionalRows, retainedBytes);
+    return status.isOk()
+        ? state.pendingMutations.reserve(additionalRows, additionalRowBytes) : status;
+  }
+
+  StatusCode reservePending(int[] rowLengths, int start, int additionalRows) {
+    if (!sharedMutationCapacity(additionalRows)) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode status = ensureWriteEntries(
+        additionalRows, IndexedWriteWorkspaceAccounting.scalar(
+            state.pendingMutations, state.tupleIntents, state.tupleLifecycle,
+            rowLengths, start, additionalRows));
+    return status.isOk()
+        ? state.pendingMutations.reserve(rowLengths, start, additionalRows) : status;
   }
 
   void appendPendingDeletion(
-      int operation, int space, long key, long previousRowId) {
-    pendingMutations.appendDeletion(operation, space, key, previousRowId);
+      int operation, long space, long key, long previousRowId) {
+    state.pendingMutations.appendDeletion(operation, space, key, previousRowId);
   }
 
   void appendPending(
       int operation,
-      int space,
+      long space,
       long key,
       long previousRowId,
       ByteBuffer source,
       int sourceStart,
       int rowBytes,
       boolean countCopy) {
-    pendingMutations.append(
+    state.pendingMutations.append(
         operation, space, key, previousRowId, source, sourceStart, rowBytes);
     if (countCopy) {
       copiedWriteSetBytes += rowBytes;
     }
   }
 
-  public StatusCode fetchByKey(int space, long key, HeapRowResult result) {
-    return readAccess.fetchByKey(space, key, result);
+  public StatusCode fetchByKey(long space, long key, HeapRowResult result) {
+    return state.readAccess.fetchByKey(space, key, result);
+  }
+
+  public StatusCode fetchCandidateByKey(
+      long space, long key, IndexedRowCandidate result) {
+    return state.readAccess.fetchCandidateByKey(space, key, result);
+  }
+
+  /** Locks a selected logical key and returns its current uninterrupted update successor. */
+  public StatusCode lockCurrent(
+      IndexedRowCandidate candidate, IndexedLockedRow result) {
+    return state.currentRows.lockCurrent(candidate, result);
+  }
+
+  public StatusCode lockCurrent(
+      IndexedScanResult scanned, IndexedLockedRow result) {
+    return state.currentRows.lockCurrent(scanned, result);
+  }
+
+  /** Locks and discovers one current committed logical row without snapshot candidacy. */
+  public StatusCode lockCurrentKeyCurrent(
+      long space, long key, IndexedLockedRow result) {
+    return state.currentRows.lockCurrentKeyCurrent(space, key, result);
+  }
+
+  public StatusCode updateLocked(IndexedLockedRow target, ByteBuffer row) {
+    return state.writeSet.updateLocked(target, row);
+  }
+
+  public StatusCode deleteLocked(IndexedLockedRow target) {
+    return state.writeSet.deleteLocked(target);
+  }
+
+  /** Adopts a borrowed current-row guard as a transaction-lifetime lock. */
+  public StatusCode retainLocked(IndexedLockedRow target) {
+    if (target == null
+        || !target.isOwnedBy(this, transaction.transactionGeneration())) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = state.lockWait.retain(transaction, target.lock());
+    if (status.isOk()) target.consume();
+    return status;
+  }
+
+  /** Releases a borrowed current-row guard without retaining the row lock. */
+  public StatusCode releaseLocked(IndexedLockedRow target) {
+    if (target == null
+        || !target.isOwnedBy(this, transaction.transactionGeneration())) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = state.lockWait.release(transaction, target.lock());
+    if (status.isOk()) target.consume();
+    return status;
   }
 
   /** Holds a shared key lock through transaction completion for integrity checks. */
-  public StatusCode protectKey(int space, long key) {
+  public StatusCode protectKey(long space, long key) {
     if (transaction.state() != TransactionState.ACTIVE
         || !OrderedKey.isFiniteSpace(space)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (findHeldLock(space, key) >= 0) {
-      return StatusCode.OK;
-    }
-    if (heldLockCount >= MAXIMUM_HELD_LOCKS) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    StatusCode status = manager.tryAcquireSharedKey(
-        transaction, space, key, heldLocks[heldLockCount]);
-    if (status.isOk()) {
-      lockedKeys[heldLockCount] = key;
-      lockedSpaces[heldLockCount] = space;
-      lockedUpperKeys[heldLockCount] = 0;
-      exclusiveLocks[heldLockCount] = false;
-      rangeLocks[heldLockCount] = false;
-      heldLockCount++;
-    }
-    return status;
+    return state.lockWait.acquireKey(transaction, space, key, LockMode.SHARED);
+  }
+
+  /** Borrows the current uninterrupted successor of one snapshot-selected logical key. */
+  public StatusCode lockCurrentKey(long space, long key, HeapRowResult result) {
+    return state.currentRows.lockCurrentKey(space, key, result);
+  }
+
+  /** Adopts the borrowed current-key guard as transaction-lifetime ownership. */
+  public StatusCode retainCurrentKey() {
+    return state.currentRows.retainCurrentKey();
+  }
+
+  /** Releases a borrowed current-key guard whose current row was rejected. */
+  public StatusCode releaseCurrentKey() {
+    return state.currentRows.releaseCurrentKey();
   }
 
   public StatusCode beginScan(
-      int lowerSpace,
+      long lowerSpace,
       long lowerKey,
-      int upperSpace,
+      long upperSpace,
       long upperKey,
       IndexedScanCursor cursor) {
-    return scanCoordinator.begin(lowerSpace, lowerKey, upperSpace, upperKey, cursor);
+    return state.scans.begin(lowerSpace, lowerKey, upperSpace, upperKey, cursor);
   }
 
   public StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
-    return scanCoordinator.next(cursor, result);
+    return state.scans.next(cursor, result);
   }
 
   public StatusCode closeScan(IndexedScanCursor cursor) {
-    return scanCoordinator.close(cursor);
+    return state.scans.close(cursor);
+  }
+
+  public StatusCode beginTupleScan(
+      long ownerObjectId, long keyId, long schemaId,
+      io.riverdb.base.tuple.TupleShape shape,
+      io.riverdb.storage.btree.TupleBTreeScanBounds bounds,
+      IndexedTupleScanCursor cursor) {
+    return state.tupleScans.begin(ownerObjectId, keyId, schemaId, shape, bounds, cursor);
+  }
+
+  public StatusCode nextTupleScan(
+      IndexedTupleScanCursor cursor, IndexedTupleScanResult result) {
+    return state.tupleScans.next(cursor, result);
+  }
+
+  public StatusCode closeTupleScan(IndexedTupleScanCursor cursor) {
+    return state.tupleScans.close(cursor);
   }
 
   public StatusCode createSavepoint(IndexedSavepoint savepoint) {
-    if (savepoint == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (transaction.state() != TransactionState.ACTIVE || activeScanCount != 0) {
-      return StatusCode.CONFLICT;
-    }
-    if (savepointCount >= savepoints.length) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    StatusCode status = savepoint.claim(
-        this, transaction.transactionId(), pendingMutations.count());
-    if (status.isOk()) {
-      savepoints[savepointCount++] = savepoint;
-    }
-    return status;
+    return state.savepoints.create(savepoint, hasActiveScans());
   }
 
   /** Rolls back pending mutations but deliberately retains acquired locks until transaction end. */
   public StatusCode rollbackToSavepoint(IndexedSavepoint savepoint) {
-    if (savepoint == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (transaction.state() != TransactionState.ACTIVE
-        || activeScanCount != 0
-        || !savepoint.isOwnedBy(this, transaction.transactionId())
-        || savepoint.pendingMutationCount() > pendingMutations.count()) {
-      return StatusCode.CONFLICT;
-    }
-    int savepointIndex = findSavepoint(savepoint);
-    if (savepointIndex < 0) {
-      return StatusCode.NOT_OWNER;
-    }
-    clearPendingFrom(savepoint.pendingMutationCount());
-    completeSavepointsAfter(savepointIndex + 1);
-    return StatusCode.OK;
+    return state.savepoints.rollback(savepoint, hasActiveScans());
   }
 
   public StatusCode releaseSavepoint(IndexedSavepoint savepoint) {
-    if (savepoint == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (!savepoint.isOwnedBy(this, transaction.transactionId())) {
-      return StatusCode.NOT_OWNER;
-    }
-    int savepointIndex = findSavepoint(savepoint);
-    if (savepointIndex < 0) {
-      return StatusCode.NOT_OWNER;
-    }
-    completeSavepointsAfter(savepointIndex);
-    return StatusCode.OK;
+    return state.savepoints.release(savepoint);
   }
 
   public StatusCode cancelLockWait() {
-    return manager.cancelLockWait(transaction);
+    return state.lockWait.cancel(transaction);
+  }
+
+  /** Whether this session was created over the exact supplied database table instance. */
+  public boolean belongsTo(IndexedTable owner) {
+    return table == owner;
   }
 
   int activeScanCount() {
-    return activeScanCount;
+    return state.cursors.scalarCount();
   }
 
-  int activeScanCapacity() {
-    return activeScans.length;
+  boolean hasActiveScans() { return state.cursors.active(); }
+
+  boolean activeTransaction() { return transaction.state() == TransactionState.ACTIVE; }
+
+  long visibleCommitSequence() { return transaction.snapshot().visibleCommitSequence(); }
+
+  StatusCode selectScanSnapshot() {
+    if (hasActiveScans()) return StatusCode.OK;
+    if (transaction.isolationLevel() == IsolationLevel.READ_COMMITTED) {
+      return statementActive
+          ? StatusCode.OK : manager.refreshReadCommitted(transaction, table);
+    }
+    return transaction.isolationLevel() == IsolationLevel.SERIALIZABLE
+        ? manager.refreshSerializableAfterProtection(transaction, table)
+        : StatusCode.OK;
+  }
+
+  StatusCode reserveActiveScan() {
+    return state.cursors.reserveScalar();
+  }
+
+  StatusCode reserveTupleScan() {
+    return state.cursors.reserveTuple();
   }
 
   boolean statementActive() {
@@ -351,75 +735,95 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   IndexedVacuum automaticVacuum() {
-    return automaticVacuum;
-  }
-
-  int automaticVacuumThreshold() {
-    return automaticVacuumThreshold;
+    return state.automaticVacuum;
   }
 
   int automaticVacuumCapacityReserve() {
-    return automaticVacuumCapacityReserve;
+    return state.automaticVacuumCapacityReserve;
   }
 
   TransactionOutcome maintenanceOutcome() {
-    return maintenanceOutcome;
+    return state.maintenanceOutcome;
   }
 
   void registerScan(IndexedScanCursor cursor) {
-    activeScans[activeScanCount++] = cursor;
+    state.cursors.add(cursor);
   }
 
   void removeScan(int active) {
-    activeScanCount--;
-    activeScans[active] = activeScans[activeScanCount];
-    activeScans[activeScanCount] = null;
+    state.cursors.removeScalar(active);
+  }
+
+  void registerTupleScan(IndexedTupleScanCursor cursor) {
+    state.cursors.add(cursor);
+  }
+
+  void removeTupleScan(int active) {
+    state.cursors.removeTuple(active);
+  }
+
+  int findTupleScan(IndexedTupleScanCursor cursor) {
+    return state.cursors.find(cursor);
   }
 
   void markSerializableScan() {
-    serializableScan = true;
+    state.cursors.markSerializable();
   }
 
   int findActiveScan(IndexedScanCursor cursor) {
-    for (int index = 0; index < activeScanCount; index++) {
-      if (activeScans[index] == cursor) {
-        return index;
-      }
-    }
-    return -1;
+    return state.cursors.find(cursor);
   }
 
   public StatusCode commit(TransactionOutcome result) {
-    if (activeScanCount != 0 || statementActive) {
+    if (hasActiveScans() || statementActive) {
       return StatusCode.CONFLICT;
     }
+    if (!transaction.isActiveHandle()
+        && state.resourceAdmission.active()) {
+      return completeTerminalCleanup(StatusCode.OK);
+    }
     compactWriteSet();
-    if (pendingMutations.count() == 0) {
+    if (state.pendingMutations.count() == 0 && state.tupleIntents.mutationCount() == 0
+        && !state.tupleLifecycle.active() && state.logicalRowFloors.count() == 0) {
       StatusCode status = manager.commitReadOnly(transaction, result);
-      if (!transaction.isActiveHandle()) {
-        StatusCode release = releaseLocks();
-        clearWriteSet();
-        if (status.isOk() && !release.isOk()) {
-          return release;
-        }
-      }
-      return status;
+      return !transaction.isActiveHandle() ? completeTerminalCleanup(status) : status;
     }
-    if (manager.hasLockConflict(transaction)) {
-      return completeCoordinatedCommit(manager.commit(transaction, this, result));
-    }
-    if (groupCommit != null && eligibleForCommitGroup()) {
-      return groupCommit.commit(this, result);
+    if (state.groupCommit != null) {
+      return state.groupCommit.commit(state.groupCommitRequest, result);
     }
     return completeCoordinatedCommit(manager.commit(transaction, this, result));
   }
 
+  /** Commits one caller-preflighted relational group through this transaction. */
+  public StatusCode commitRelational(
+      IndexedRelationalMutation mutations, TransactionOutcome result) {
+    if (mutations == null || !mutations.sealed() || result == null
+        || transaction.state() != TransactionState.ACTIVE
+        || hasActiveScans() || statementActive || state.pendingMutations.count() != 0
+        || state.tupleIntents.mutationCount() != 0 || state.tupleLifecycle.active()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    relationalMutation = mutations;
+    StatusCode status = state.groupCommit == null
+        ? completeCoordinatedCommit(manager.commit(transaction, this, result))
+        : state.groupCommit.commit(state.groupCommitRequest, result);
+    relationalMutation = null;
+    return status;
+  }
+
+  boolean hasCommitWork() {
+    return transaction.state() == TransactionState.ACTIVE
+        && (state.hasHybridWork() || relationalMutation != null);
+  }
+
   boolean eligibleForCommitGroup() {
     return transaction.state() == TransactionState.ACTIVE
-        && activeScanCount == 0
-        && pendingMutations.count() > 0
+        && !hasActiveScans()
+        && (state.pendingMutations.count() > 0 || state.tupleIntents.mutationCount() > 0
+            || state.logicalRowFloors.count() > 0)
+        && !state.tupleLifecycle.active()
         && !manager.hasLockConflict(transaction)
-        && !serializableScan;
+        && !state.cursors.serializable();
   }
 
   Transaction groupTransaction() {
@@ -427,19 +831,27 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   PendingMutationBuffer pendingMutations() {
-    return pendingMutations;
+    return state.pendingMutations;
   }
+
+  IndexedTupleIntentJournal tupleIntents() { return state.tupleIntents; }
+
+  IndexedLogicalRowIdFloors logicalRowFloors() { return state.logicalRowFloors; }
+
+  IndexedTupleIndexLifecycleBatch tupleLifecycle() { return state.tupleLifecycle; }
+
+  boolean hasTupleIntents() { return state.tupleIntents.mutationCount() > 0; }
+
+  boolean hasHybridWork() { return state.hasHybridWork(); }
 
   IndexedMutationTarget mutationTarget() {
-    return mutationTarget;
+    return state.mutationTarget;
   }
 
-  HeapInsertResult preparedInsertResult() {
-    return preparedInsertResult;
-  }
+  IndexedRelationalWalPlan groupWalPlan() { return state.groupWalPlan; }
 
-  void recordPreparedAppend(long rowId, long commitSequence) {
-    commitResult.set(rowId, commitSequence);
+  void recordGroupAppend(long rowId, long commitSequence) {
+    state.commitResult.set(rowId, commitSequence);
     committedSequence = commitSequence;
   }
 
@@ -448,36 +860,34 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   StatusCode completeCoordinatedCommit(StatusCode status) {
-    if (!transaction.isActiveHandle()) {
-      StatusCode release = releaseLocks();
-      clearWriteSet();
-      if (status.isOk() && !release.isOk()) {
-        return release;
-      }
-    }
-    return status;
+    return !transaction.isActiveHandle() ? completeTerminalCleanup(status) : status;
   }
 
   public StatusCode abort(TransactionOutcome result) {
-    if (activeScanCount != 0 || statementActive) {
+    if (hasActiveScans() || statementActive) {
       return StatusCode.CONFLICT;
     }
-    StatusCode status = manager.abort(transaction, result);
-    if (status.isOk()) {
-      StatusCode release = releaseLocks();
-      clearWriteSet();
-      if (!release.isOk()) {
-        return release;
-      }
+    if (!transaction.isActiveHandle()
+        && state.resourceAdmission.active()) {
+      return completeTerminalCleanup(StatusCode.OK);
     }
-    return status;
+    StatusCode status = manager.abort(transaction, result);
+    return !transaction.isActiveHandle() ? completeTerminalCleanup(status) : status;
   }
 
   @Override
   public StatusCode commit(long transactionId) {
-    StatusCode status = table.commitMutations(
-        transactionId, pendingMutations, commitResult);
-    committedSequence = status.isOk() ? commitResult.commitSequence() : 0;
+    StatusCode status = relationalMutation != null
+        ? table.commitRelational(
+            transactionId, relationalMutation,
+            manager.oldestVisibleCommitSequence(), state.commitResult)
+        : hasHybridWork()
+            ? table.commitHybrid(
+                transactionId, state.pendingMutations, state.tupleIntents,
+                state.tupleLifecycle, state.logicalRowFloors,
+                manager.oldestVisibleCommitSequence(), state.commitResult)
+            : StatusCode.INVALID_EXTERNAL_INPUT;
+    committedSequence = status.isOk() ? state.commitResult.commitSequence() : 0;
     return status;
   }
 
@@ -486,121 +896,151 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return committedSequence;
   }
 
-  private StatusCode releaseLocks() {
-    StatusCode result = StatusCode.OK;
-    for (int index = 0; index < heldLockCount; index++) {
-      LockToken heldLock = heldLocks[index];
-      if (!heldLock.isActive()) {
-        continue;
-      }
-      StatusCode status = manager.release(heldLock);
-      if (result.isOk() && !status.isOk()) {
-        result = status;
-      }
-      lockedKeys[index] = 0;
-      lockedUpperKeys[index] = 0;
-      lockedSpaces[index] = 0;
-      lockedUpperSpaces[index] = 0;
-      exclusiveLocks[index] = false;
-      rangeLocks[index] = false;
+  private StatusCode completeTerminalCleanup(StatusCode terminal) {
+    clearWriteSet();
+    StatusCode release = state.resourceAdmission.end();
+    return release.isOk() ? terminal : release;
+  }
+
+  /** True until both transaction outcome and its physical/accounting cleanup are complete. */
+  public boolean transactionLifecycleActive() {
+    return transaction.isActiveHandle() || state.resourceAdmission.active();
+  }
+
+  /** Releases session-retained workspaces and returns this session to its database owner. */
+  public StatusCode close() {
+    if (closed) return StatusCode.CLOSED;
+    if (transactionLifecycleActive() || hasActiveScans() || statementActive) {
+      return StatusCode.CONFLICT;
     }
-    heldLockCount = 0;
-    return result;
+    state.pendingMutations.release();
+    state.tupleIntents.release();
+    state.tupleLifecycle.release();
+    state.logicalRowFloors.release();
+    StatusCode status = state.resourceAdmission.closeSession();
+    if (status.isOk() && sessionRegistry != null) status = sessionRegistry.release(this);
+    if (status.isOk()) closed = true;
+    return status;
   }
 
   private void clearWriteSet() {
     clearPendingFrom(0);
-    serializableScan = false;
-    completeSavepointsAfter(0);
+    state.tupleIntents.reset();
+    state.tupleLifecycle.reset();
+    state.logicalRowFloors.reset();
+    relationalMutation = null;
+    state.cursors.resetSerializable();
+    state.savepoints.clear();
   }
 
   private void clearPendingFrom(int first) {
-    pendingMutations.truncate(first);
+    state.pendingMutations.truncate(first);
   }
 
-  private int findSavepoint(IndexedSavepoint savepoint) {
-    for (int index = savepointCount - 1; index >= 0; index--) {
-      if (savepoints[index] == savepoint) {
-        return index;
-      }
-    }
-    return -1;
+  boolean sharedMutationCapacity(int additional) {
+    return additional > 0
+        && state.pendingMutations.count() + state.tupleIntents.mutationCount() + state.tupleLifecycle.count()
+            <= maximumWriteEntries - additional;
   }
 
-  private void completeSavepointsAfter(int first) {
-    for (int index = savepointCount - 1; index >= first; index--) {
-      savepoints[index].complete();
-      savepoints[index] = null;
-    }
-    savepointCount = first;
+  private StatusCode ensureWriteEntries(int additional) {
+    return ensureWriteEntries(additional, currentRetainedWriteBytes());
   }
 
-  private int findHeldLock(int space, long key) {
-    for (int index = 0; index < heldLockCount; index++) {
-      if (!rangeLocks[index]
-          && lockedSpaces[index] == space
-          && lockedKeys[index] == key) {
-        return index;
-      }
-    }
-    return -1;
-  }
-
-  StatusCode acquireExclusiveKey(int space, long key) {
-    int lockIndex = findHeldLock(space, key);
-    if (lockIndex >= 0) {
-      if (exclusiveLocks[lockIndex]) {
-        return StatusCode.OK;
-      }
-      StatusCode status = manager.upgradeKey(transaction, heldLocks[lockIndex]);
-      if (status.isOk()) {
-        exclusiveLocks[lockIndex] = true;
-      }
-      return status;
-    }
-    if (heldLockCount >= MAXIMUM_HELD_LOCKS) {
+  StatusCode ensureWriteEntries(int additional, long retainedWriteBytes) {
+    int current = currentWriteEntries();
+    if (additional <= 0 || retainedWriteBytes < 0
+        || current > Integer.MAX_VALUE - additional) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    StatusCode status = manager.tryAcquireKey(
-        transaction, space, key, heldLocks[heldLockCount]);
-    if (status.isOk()) {
-      lockedKeys[heldLockCount] = key;
-      lockedSpaces[heldLockCount] = space;
-      lockedUpperKeys[heldLockCount] = 0;
-      exclusiveLocks[heldLockCount] = true;
-      rangeLocks[heldLockCount] = false;
-      heldLockCount++;
-    }
-    return status;
+    return state.resourceAdmission.ensureWrite(
+        retainedWriteBytes, current + additional, current == 0);
+  }
+
+  private long currentRetainedWriteBytes() {
+    return IndexedWriteWorkspaceAccounting.current(
+        state.pendingMutations, state.tupleIntents, state.tupleLifecycle);
+  }
+
+  private int currentWriteEntries() {
+    return state.pendingMutations.count() + state.tupleIntents.mutationCount() + state.tupleLifecycle.count();
+  }
+
+
+  private static int tuplePayloadCapacity(int maximumMutations) {
+    long bytes = (long) maximumMutations
+        * io.riverdb.format.btree.TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES;
+    return (int) Math.min(Integer.MAX_VALUE, bytes);
+  }
+
+  private static int maximumWriteEntries(DatabaseResourceGovernor governor) {
+    if (governor == null) return MAXIMUM_PENDING_INSERTS;
+    return (int) governor.plan().writeEntryCapacity();
+  }
+
+  private StatusCode stageTupleLifecycle(
+      int operation, long ownerObjectId, long keyId, long schemaId,
+      long privateOwner, io.riverdb.base.tuple.TupleShape shape) {
+    return stageTupleLifecycle(
+        operation, ownerObjectId, keyId, schemaId, privateOwner, shape, 0);
+  }
+
+  private StatusCode stageTupleLifecycle(
+      int operation, long ownerObjectId, long keyId, long schemaId,
+      long privateOwner, io.riverdb.base.tuple.TupleShape shape, int cleanupEndPageId) {
+    return state.tupleAccess.stageLifecycle(
+        operation, ownerObjectId, keyId, schemaId,
+        privateOwner, shape, cleanupEndPageId);
+  }
+
+  StatusCode acquireExclusiveKey(long space, long key) {
+    return acquireExclusiveKey(space, key, true);
+  }
+
+  StatusCode tryAcquireExclusiveKey(long space, long key) {
+    return acquireExclusiveKey(space, key, false);
+  }
+
+  StatusCode holdsExclusiveKey(long space, long key) {
+    return state.lockWait.holdsKey(transaction, space, key, LockMode.EXCLUSIVE);
+  }
+
+  IndexedLockWait lockWait() { return state.lockWait; }
+
+  private StatusCode acquireExclusiveKey(long space, long key, boolean wait) {
+    return wait
+        ? state.lockWait.acquireKey(transaction, space, key, LockMode.EXCLUSIVE)
+        : state.lockWait.tryAcquireKey(transaction, space, key, LockMode.EXCLUSIVE);
   }
 
   StatusCode acquireSharedRangeForScan(
-      int lowerSpace, long lowerKey, int upperSpace, long upperKey) {
-    for (int index = 0; index < heldLockCount; index++) {
-      if (rangeLocks[index]
-          && OrderedKey.compare(
-              lockedSpaces[index], lockedKeys[index], lowerSpace, lowerKey) <= 0
-          && OrderedKey.compare(
-              lockedUpperSpaces[index], lockedUpperKeys[index], upperSpace, upperKey) >= 0) {
-        return StatusCode.OK;
-      }
-    }
-    if (heldLockCount >= MAXIMUM_HELD_LOCKS) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    StatusCode status = manager.tryAcquireSharedRange(
+      long lowerSpace, long lowerKey, long upperSpace, long upperKey) {
+    return state.lockWait.acquireRange(
         transaction, lowerSpace, lowerKey, upperSpace, upperKey,
-        heldLocks[heldLockCount]);
-    if (status.isOk()) {
-      lockedKeys[heldLockCount] = lowerKey;
-      lockedUpperKeys[heldLockCount] = upperKey;
-      lockedSpaces[heldLockCount] = lowerSpace;
-      lockedUpperSpaces[heldLockCount] = upperSpace;
-      exclusiveLocks[heldLockCount] = false;
-      rangeLocks[heldLockCount] = true;
-      heldLockCount++;
-    }
-    return status;
+        LockMode.SHARED);
+  }
+
+  StatusCode acquireTupleKey(
+      long namespace, ByteBuffer key, int offset, int length, LockMode mode) {
+    return state.lockWait.acquireTupleKey(
+        transaction, namespace, key, offset, length, mode);
+  }
+
+  StatusCode tryAcquireTupleKey(
+      long namespace, ByteBuffer key, int offset, int length, LockMode mode) {
+    return state.lockWait.tryAcquireTupleKey(
+        transaction, namespace, key, offset, length, mode);
+  }
+
+  StatusCode acquireSharedTupleRangeForScan(
+      long namespace,
+      ByteBuffer lower, int lowerOffset, int lowerLength, boolean lowerInclusive,
+      ByteBuffer upper, int upperOffset, int upperLength, boolean upperInclusive) {
+    return state.lockWait.acquireTupleRange(
+        transaction, namespace,
+        lower, lowerOffset, lowerLength, lowerInclusive,
+        upper, upperOffset, upperLength, upperInclusive,
+        LockMode.SHARED);
   }
 
   StatusCode refreshForWrite() {
@@ -612,14 +1052,14 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   private boolean containsNonInsertMutation() {
-    return pendingMutations.containsNonInsertMutation();
+    return state.pendingMutations.containsNonInsertMutation();
   }
 
-  int findLatestPendingIndex(int space, long key) {
-    return pendingMutations.findLatestIndex(space, key);
+  int findLatestPendingIndex(long space, long key) {
+    return state.pendingMutations.findLatestIndex(space, key);
   }
 
   private void compactWriteSet() {
-    pendingMutations.compact();
+    state.pendingMutations.compact();
   }
 }

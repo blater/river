@@ -1,6 +1,7 @@
 package io.riverdb.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
@@ -14,6 +15,10 @@ import io.riverdb.engine.api.RiverSession;
 import io.riverdb.engine.api.RowResult;
 import io.riverdb.engine.api.SessionOpenResult;
 import java.nio.file.Path;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,7 +28,8 @@ final class EmbeddedRiverForeignKeyTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void enforcesReferencesAcrossMutationsTransactionsAndRestart(@TempDir Path root) {
+  void enforcesReferencesAcrossMutationsTransactionsAndRestart(@TempDir Path root)
+      throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
@@ -39,7 +45,7 @@ final class EmbeddedRiverForeignKeyTest {
                 + "(id BIGINT PRIMARY KEY, external_id BIGINT UNIQUE)",
             result));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         session.execute(
             "CREATE TABLE wrong_target "
                 + "(id BIGINT PRIMARY KEY, parent_id BIGINT REFERENCES parents(external_id))",
@@ -61,26 +67,51 @@ final class EmbeddedRiverForeignKeyTest {
         StatusCode.OK,
         session.execute(
             "INSERT INTO parents VALUES (1, 100), (2, 200), (3, 300)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO wrong_target VALUES (1, 100)", result));
+    assertEquals(
+        StatusCode.FOREIGN_KEY_VIOLATION,
+        session.execute("INSERT INTO wrong_target VALUES (2, 999)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("DELETE FROM wrong_target WHERE id=1", result));
+    assertEquals(StatusCode.OK, session.execute("DROP TABLE wrong_target", result));
 
     SessionOpenResult secondResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(secondResult));
     RiverSession second = secondResult.session();
-    assertEquals(StatusCode.OK, session.execute("BEGIN REPEATABLE READ", result));
-    assertEquals(
-        StatusCode.OK,
-        session.execute("INSERT INTO children VALUES (9, 1, NULL)", result));
-    assertEquals(
-        StatusCode.RETRY,
-        second.execute("DELETE FROM parents WHERE id=1", result));
-    assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
-    assertEquals(StatusCode.OK, second.execute("BEGIN REPEATABLE READ", result));
-    assertEquals(
-        StatusCode.OK,
-        second.execute("DELETE FROM parents WHERE id=2", result));
-    assertEquals(
-        StatusCode.RETRY,
-        session.execute("INSERT INTO children VALUES (9, 2, NULL)", result));
-    assertEquals(StatusCode.OK, second.execute("ROLLBACK", result));
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    AtomicReference<Thread> worker = new AtomicReference<>();
+    try {
+      assertEquals(StatusCode.OK, session.execute("BEGIN REPEATABLE READ", result));
+      assertEquals(
+          StatusCode.OK,
+          session.execute("INSERT INTO children VALUES (9, 1, NULL)", result));
+      Future<StatusCode> delete = submit(executor, worker, second,
+          "DELETE FROM parents WHERE id=1");
+      awaitParked(worker, delete);
+      assertFalse(delete.isDone());
+      assertEquals(StatusCode.OK, session.execute("ROLLBACK", result));
+      assertEquals(StatusCode.OK, delete.get());
+      assertEquals(StatusCode.OK,
+          session.execute("INSERT INTO parents VALUES (1, 100)", result));
+
+      assertEquals(StatusCode.OK, second.execute("BEGIN REPEATABLE READ", result));
+      assertEquals(
+          StatusCode.OK,
+          second.execute("DELETE FROM parents WHERE id=2", result));
+      Future<StatusCode> insert = submit(executor, worker, session,
+          "INSERT INTO children VALUES (9, 2, NULL)");
+      awaitParked(worker, insert);
+      assertFalse(insert.isDone());
+      assertEquals(StatusCode.OK, second.execute("ROLLBACK", result));
+      assertEquals(StatusCode.OK, insert.get());
+      assertEquals(StatusCode.OK,
+          session.execute("DELETE FROM children WHERE id=9", result));
+    } finally {
+      executor.shutdownNow();
+    }
     assertEquals(StatusCode.OK, second.close());
 
     assertEquals(
@@ -173,6 +204,27 @@ final class EmbeddedRiverForeignKeyTest {
     assertEquals(StatusCode.OK, session.execute("DROP TABLE guardians", result));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
+  }
+
+  private static Future<StatusCode> submit(
+      ExecutorService executor, AtomicReference<Thread> worker,
+      RiverSession session, String sql) {
+    worker.set(null);
+    return executor.submit(() -> {
+      worker.set(Thread.currentThread());
+      return session.execute(sql, new CommandResult());
+    });
+  }
+
+  private static void awaitParked(
+      AtomicReference<Thread> worker, Future<StatusCode> operation) {
+    long deadline = System.nanoTime() + 1_000_000_000L;
+    while (!operation.isDone() && System.nanoTime() < deadline) {
+      Thread thread = worker.get();
+      if (thread != null && (thread.getState() == Thread.State.WAITING
+          || thread.getState() == Thread.State.TIMED_WAITING)) return;
+      Thread.onSpinWait();
+    }
   }
 
   private static void assertMissing(

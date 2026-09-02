@@ -11,7 +11,7 @@ public final class BTreePage {
   public static final int MAX_ENTRIES = 256;
   public static final int TYPE_LEAF = 1;
   public static final int TYPE_INTERNAL = 2;
-  public static final int VERSION = 2;
+  public static final int VERSION = 3;
 
   private static final long MAGIC = 0x5249564552425450L; // RIVERBTP
 
@@ -60,8 +60,8 @@ public final class BTreePage {
     return getLong(page, 24);
   }
 
-  public static int highSpace(ByteBuffer page) {
-    return getInt(page, 32);
+  public static long highSpace(ByteBuffer page) {
+    return getLong(page, 32);
   }
 
   public static int firstChildPageId(ByteBuffer page) {
@@ -72,8 +72,8 @@ public final class BTreePage {
     return getLong(page, entryOffset(index));
   }
 
-  public static int spaceAt(ByteBuffer page, int index) {
-    return getInt(page, entryOffset(index) + 16);
+  public static long spaceAt(ByteBuffer page, int index) {
+    return getLong(page, entryOffset(index) + 16);
   }
 
   public static int valueAt(ByteBuffer page, int index) {
@@ -86,7 +86,7 @@ public final class BTreePage {
 
   public static StatusCode lookupLeaf(
       ByteBuffer page,
-      int space,
+      long space,
       long key,
       BTreeLookupResult result) {
     if (!hasCapacity(page)
@@ -102,7 +102,7 @@ public final class BTreePage {
       int middle = (low + high) >>> 1;
       int offset = entryOffset(middle);
       long candidate = getLong(page, offset);
-      int candidateSpace = getInt(page, offset + 16);
+      long candidateSpace = getLong(page, offset + 16);
       int comparison = OrderedKey.compare(candidateSpace, candidate, space, key);
       if (comparison < 0) {
         low = middle + 1;
@@ -116,13 +116,13 @@ public final class BTreePage {
     return StatusCode.CONFLICT;
   }
 
-  public static int childForKey(ByteBuffer page, int space, long key) {
+  public static int childForKey(ByteBuffer page, long space, long key) {
     int child = getInt(page, 20);
     int count = getInt(page, 16);
     for (int index = 0; index < count; index++) {
       int offset = entryOffset(index);
       if (OrderedKey.lessThan(
-          space, key, getInt(page, offset + 16), getLong(page, offset))) {
+          space, key, getLong(page, offset + 16), getLong(page, offset))) {
         return child;
       }
       child = getInt(page, offset + 8);
@@ -131,7 +131,7 @@ public final class BTreePage {
   }
 
   public static StatusCode insertLeaf(
-      ByteBuffer page, int space, long key, long rowId) {
+      ByteBuffer page, long space, long key, long rowId) {
     if (!hasCapacity(page)
         || !OrderedKey.isFiniteSpace(space)
         || rowId <= 0
@@ -154,7 +154,7 @@ public final class BTreePage {
   }
 
   public static StatusCode updateLeaf(
-      ByteBuffer page, int space, long key, long rowId) {
+      ByteBuffer page, long space, long key, long rowId) {
     if (!hasCapacity(page)
         || !OrderedKey.isFiniteSpace(space)
         || rowId <= 0
@@ -174,7 +174,7 @@ public final class BTreePage {
       ByteBuffer left,
       ByteBuffer right,
       int rightPageId,
-      int space,
+      long space,
       long key,
       long rowId,
       BTreeSplitResult result) {
@@ -200,7 +200,7 @@ public final class BTreePage {
     }
     int previousRight = getInt(left, 20);
     long previousHigh = getLong(left, 24);
-    int previousHighSpace = getInt(left, 32);
+    long previousHighSpace = getLong(left, 32);
     int splitAt = count / 2;
     StatusCode status = initializeLeaf(right, previousRight);
     if (!status.isOk()) {
@@ -213,7 +213,7 @@ public final class BTreePage {
     putInt(left, 16, splitAt);
     putInt(right, 16, rightCount);
     long separator = getLong(right, entryOffset(0));
-    int separatorSpace = getInt(right, entryOffset(0) + 16);
+    long separatorSpace = getLong(right, entryOffset(0) + 16);
     putInt(left, 20, rightPageId);
     BTreeKeyLayout.putHighKey(left, separatorSpace, separator);
     BTreeKeyLayout.putHighKey(right, previousHighSpace, previousHigh);
@@ -224,16 +224,16 @@ public final class BTreePage {
       return status;
     }
     separator = getLong(right, entryOffset(0));
-    separatorSpace = getInt(right, entryOffset(0) + 16);
+    separatorSpace = getLong(right, entryOffset(0) + 16);
     BTreeKeyLayout.putHighKey(left, separatorSpace, separator);
-    clearUnusedEntries(left);
+    clearEntries(left, getInt(left, 16), MAX_ENTRIES);
     result.setSeparator(separatorSpace, separator);
     return StatusCode.OK;
   }
 
   public static StatusCode insertInternal(
       ByteBuffer page,
-      int separatorSpace,
+      long separatorSpace,
       long separatorKey,
       int rightChildPageId) {
     if (!hasCapacity(page)
@@ -265,7 +265,7 @@ public final class BTreePage {
   public static StatusCode splitInternal(
       ByteBuffer left,
       ByteBuffer right,
-      int separatorSpace,
+      long separatorSpace,
       long separatorKey,
       int rightChildPageId,
       BTreeSplitResult result) {
@@ -298,10 +298,10 @@ public final class BTreePage {
     int total = count + 1;
     int promotedIndex = total / 2;
     long promoted = getLong(left, entryOffset(promotedIndex));
-    int promotedSpace = getInt(left, entryOffset(promotedIndex) + 16);
+    long promotedSpace = getLong(left, entryOffset(promotedIndex) + 16);
     int rightFirstChild = getInt(left, entryOffset(promotedIndex) + 8);
     long previousHigh = getLong(left, 24);
-    int previousHighSpace = getInt(left, 32);
+    long previousHighSpace = getLong(left, 32);
     StatusCode status = initializeInternal(right, rightFirstChild);
     if (!status.isOk()) {
       return status;
@@ -314,8 +314,8 @@ public final class BTreePage {
     putInt(right, 16, rightCount);
     putInt(left, 16, promotedIndex);
     BTreeKeyLayout.putHighKey(left, promotedSpace, promoted);
-    clearEntriesFrom(left, promotedIndex);
-    clearUnusedEntries(right);
+    clearEntries(left, promotedIndex, MAX_ENTRIES + 1);
+    clearEntries(right, getInt(right, 16), MAX_ENTRIES);
     result.setSeparator(promotedSpace, promoted);
     return StatusCode.OK;
   }
@@ -339,22 +339,12 @@ public final class BTreePage {
     }
   }
 
-  private static void clearUnusedEntries(ByteBuffer page) {
-    int count = getInt(page, 16);
-    for (int index = count; index < MAX_ENTRIES; index++) {
+  private static void clearEntries(ByteBuffer page, int from, int limit) {
+    for (int index = from; index < limit; index++) {
       int offset = entryOffset(index);
       putLong(page, offset, 0);
       putLong(page, offset + 8, 0);
-      putInt(page, offset + 16, 0);
-    }
-  }
-
-  private static void clearEntriesFrom(ByteBuffer page, int from) {
-    for (int index = from; index <= MAX_ENTRIES; index++) {
-      int offset = entryOffset(index);
-      putLong(page, offset, 0);
-      putLong(page, offset + 8, 0);
-      putInt(page, offset + 16, 0);
+      putLong(page, offset + 16, 0);
     }
   }
 

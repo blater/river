@@ -15,7 +15,7 @@ final class RelationalPhysicalBatchCleanup {
     cleanup.batchComplete = false;
     StatusCode status = session.begin(io.riverdb.tx.api.IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
-      int dataSpace = RelationalKey.dataSpace(tableId);
+      long dataSpace = RelationalKey.dataSpace(tableId);
       status = session.indexedSession().beginScan(dataSpace, Long.MIN_VALUE,
           RelationalKey.auxiliarySpace(tableId) + 1, Long.MIN_VALUE, cleanup.scanCursor);
     }

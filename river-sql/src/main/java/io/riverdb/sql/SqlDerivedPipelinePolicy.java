@@ -22,14 +22,12 @@ final class SqlDerivedPipelinePolicy {
   }
 
   private static StatusCode shape(SqlCommand block, int index, int deepest) {
-    if (index > 0 && block.isOrdered()
-        || block.type() == SqlCommandType.JOIN_SCAN && index != deepest) {
+    if (block.type() == SqlCommandType.JOIN_SCAN && index != deepest) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
     return admitted(block.type())
             && !block.isSelectAll()
             && block.columnCount() > 0
-            && (index == 0 || block.rowLimit() == Long.MAX_VALUE)
         ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
@@ -40,12 +38,14 @@ final class SqlDerivedPipelinePolicy {
         || type == SqlCommandType.DISTINCT_SCAN
         || type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE
+        || type == SqlCommandType.COUNT_DISTINCT
         || type == SqlCommandType.SUM
         || type == SqlCommandType.AVG
         || type == SqlCommandType.MIN
         || type == SqlCommandType.MAX
         || type == SqlCommandType.GROUP_COUNT
         || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_COUNT_DISTINCT
         || type == SqlCommandType.GROUP_SUM
         || type == SqlCommandType.GROUP_AVG
         || type == SqlCommandType.GROUP_MIN

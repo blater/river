@@ -2,6 +2,7 @@ package io.riverdb.jdbc;
 
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.sql.SqlParameterMarkers;
 import java.sql.SQLException;
 import java.sql.Types;
 
@@ -11,27 +12,16 @@ final class RiverJdbcParameterTypes {
   }
 
   static int countMarkers(String sql) {
-    int count = 0;
-    boolean quoted = false;
-    for (int index = 0; index < sql.length(); index++) {
-      char character = sql.charAt(index);
-      if (character == '\'') {
-        if (quoted && index + 1 < sql.length() && sql.charAt(index + 1) == '\'') {
-          index++;
-        } else {
-          quoted = !quoted;
-        }
-      } else if (!quoted && character == '?') {
-        count++;
-      }
-    }
-    return count;
+    return SqlParameterMarkers.count(sql);
   }
 
   static int nullDescriptor(int sqlType) throws SQLException {
     return switch (sqlType) {
-      case Types.BIGINT, Types.INTEGER, Types.SMALLINT, Types.TINYINT ->
-          SqlTypeDescriptor.BIGINT;
+      case Types.SMALLINT, Types.TINYINT -> SqlTypeDescriptor.SMALLINT;
+      case Types.INTEGER -> SqlTypeDescriptor.INTEGER;
+      case Types.BIGINT -> SqlTypeDescriptor.BIGINT;
+      case Types.REAL, Types.FLOAT -> SqlTypeDescriptor.REAL;
+      case Types.DOUBLE -> SqlTypeDescriptor.DOUBLE;
       case Types.BOOLEAN, Types.BIT -> SqlTypeDescriptor.BOOLEAN;
       case Types.DECIMAL, Types.NUMERIC -> SqlTypeDescriptor.decimal(
           SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, 0);

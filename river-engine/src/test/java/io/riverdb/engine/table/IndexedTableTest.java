@@ -15,8 +15,10 @@ import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.btree.BTreePage;
-import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
+import io.riverdb.tx.TransactionManager;
+import io.riverdb.tx.api.IsolationLevel;
+import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.wal.local.LocalWalReadResult;
@@ -30,62 +32,33 @@ final class IndexedTableTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
-  void forcedWalDoesNotAdvancePublishedTableSnapshot(@TempDir Path root) {
-    NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
-    IndexedTableStore store = createStore(directory, wal);
-    IndexedTable table = createTable(store);
-    ByteBuffer rows = ByteBuffer.allocateDirect(Long.BYTES);
-    rows.putLong(0, 770);
-    HeapInsertResult inserted = new HeapInsertResult();
-    PendingMutationBuffer mutations = new PendingMutationBuffer(1, Long.BYTES);
-    mutations.append(IndexedWalCodec.MUTATION_INSERT, 0, 77, 0, rows, 0, Long.BYTES);
-
-    assertEquals(StatusCode.OK, store.beginPreparedInsertGroup());
-    assertEquals(StatusCode.OK, store.preflightPreparedWrites(mutations));
-    assertEquals(StatusCode.OK, store.finishPreparedInsertPreflight(1));
-    assertEquals(
-        StatusCode.OK,
-        store.appendPreparedWrites(2, 2, mutations, inserted));
-    assertEquals(StatusCode.OK, store.forcePreparedInserts());
-    assertEquals(2, wal.currentCommitSequence());
-    assertEquals(1, store.currentCommitSequence());
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,77, new HeapRowResult()));
-
-    assertEquals(StatusCode.OK, store.publishForcedInserts());
-    assertEquals(2, store.currentCommitSequence());
-    HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey( 0,77, fetched));
-    assertEquals(770, rowValue(fetched));
-    close(table, wal, directory);
-  }
-
-  @Test
   void insertsSplitsLooksUpAndReopens(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     int entries = BTreePage.MAX_ENTRIES + 1;
     for (int index = entries - 1; index >= 0; index--) {
       row.putLong(0, index * 10L);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index * 10L, row, inserted));
+      writer.insert(0, index * 10L, row);
     }
     assertEquals(entries, table.rowCount());
     assertEquals(5, table.pageCount());
     assertEquals(5, table.rootPageId());
-    assertEquals(StatusCode.CONFLICT, table.insert(900, 0, 100, row, inserted));
+    assertEquals(StatusCode.CONFLICT, writer.tryInsert(0, 100, row));
     assertEquals(entries, table.rowCount());
     assertAllRows(table, entries);
 
     LocalWalReadResult record = lastWalRecord(wal);
-    assertEquals(2, record.header().transactionId());
+    assertEquals(writer.lastCommittedTransactionId, record.header().transactionId());
     assertEquals(entries + 1L, record.header().commitSequence());
-    assertEquals(5, littleInt(record.payload(), 16));
+    assertEquals(IndexedRelationalWalCodec.WAL_FORMAT_ID, record.header().formatId());
+    assertEquals(IndexedRelationalWalCodec.WAL_FORMAT_VERSION, record.header().formatVersion());
 
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -101,10 +74,12 @@ final class IndexedTableTest {
     row.putLong(0, 99_999);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, table.insert(999, 0, 99_999, row, inserted));
+    writer = new TransactionWriter(table, Long.BYTES);
+    writer.insert(0, 99_999, row);
     HeapRowResult reopenedInsert = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey( 0,99_999, reopenedInsert));
     assertEquals(99_999, rowValue(reopenedInsert));
+    assertEquals(StatusCode.OK, writer.session.close());
     close(table, wal, directory);
   }
 
@@ -113,9 +88,9 @@ final class IndexedTableTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
-    int[] spaces = {3, 2, 3, 2};
+    long[] spaces = {3, 2, 3, 2};
     long[] keys = {Long.MIN_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, Long.MIN_VALUE};
     for (int index = 0; index < keys.length; index++) {
       row.putLong(0, index + 1);
@@ -123,8 +98,9 @@ final class IndexedTableTest {
       row.limit(Long.BYTES);
       assertEquals(
           StatusCode.OK,
-          table.insert(index + 2L, spaces[index], keys[index], row, inserted));
+          writer.tryInsert(spaces[index], keys[index], row));
     }
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -157,20 +133,21 @@ final class IndexedTableTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
       row.putLong(0, index);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index, row, inserted));
+      writer.insert(0, index, row);
     }
     assertEquals(StatusCode.OK, table.flush());
 
     row.putLong(0, 10_000);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, table.insert(10_002, 0, 10_000, row, inserted));
+    writer.insert(0, 10_000, row);
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(5, table.rootPageId());
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
@@ -187,17 +164,17 @@ final class IndexedTableTest {
   }
 
   @Test
-  void recoversCompactInsertBeforePageFlush(@TempDir Path root) {
+  void recoversLogicalInsertBeforePageFlush(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     row.putLong(0, 77_031);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(
-        StatusCode.OK,
-        table.insert(2, 0, 77, row, new HeapInsertResult()));
+    writer.insert(0, 77, row);
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
 
@@ -215,7 +192,7 @@ final class IndexedTableTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionWriter writer = new TransactionWriter(table, 256);
     ByteBuffer row = ByteBuffer.allocateDirect(256);
     int rows = 130;
     for (int index = 0; index < rows; index++) {
@@ -223,8 +200,8 @@ final class IndexedTableTest {
       row.putLong(0, index * 10L);
       row.position(0);
       row.limit(row.capacity());
-      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index, row, inserted));
-      assertEquals(index + 1, inserted.rowId());
+      writer.insert(0, index, row);
+      assertEquals(index + 1, table.rowCount());
     }
     assertEquals(rows, table.rowCount());
     assertEquals(true, table.pageCount() >= 5);
@@ -236,6 +213,7 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, table.fetchByKey( 0,129, fetched));
     assertEquals(1_290, rowValue(fetched));
 
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
     directory = openDirectory(root);
@@ -259,11 +237,10 @@ final class IndexedTableTest {
     int rows = 65_537;
     int batchSize = 64;
     long[] keys = new long[batchSize];
-    int[] spaces = new int[batchSize];
+    long[] spaces = new long[batchSize];
     int[] rowLengths = new int[batchSize];
     ByteBuffer values = ByteBuffer.allocateDirect(batchSize * Long.BYTES);
-    IndexedCommitResult committed = new IndexedCommitResult();
-    long transactionId = 2;
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     for (int first = 0; first < rows; first += batchSize) {
       int count = Math.min(batchSize, rows - first);
       values.clear();
@@ -276,10 +253,8 @@ final class IndexedTableTest {
       }
       values.position(0);
       values.limit(count * Long.BYTES);
-      assertEquals(
-          StatusCode.OK,
-          table.commitInserts(
-              transactionId++, spaces, keys, values, Long.BYTES, rowLengths, count, committed),
+      assertEquals(StatusCode.OK,
+          writer.insertBatch(spaces, keys, values, Long.BYTES, rowLengths, count),
           "first=" + first + " pageCount=" + table.pageCount());
     }
 
@@ -297,6 +272,7 @@ final class IndexedTableTest {
     }
     assertEquals(rows, scanned);
     assertEquals(StatusCode.OK, table.closeScan(cursor));
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -317,18 +293,18 @@ final class IndexedTableTest {
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
     long beforeInsert = table.visibleCommitSequence();
-    long commitSequence = table.nextCommitSequence();
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     row.putLong(0, 991);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(
-        StatusCode.OK,
-        table.insertCommitted(17, commitSequence, 0, 99, row, new HeapInsertResult()));
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
+    writer.insert(0, 99, row);
+    long commitSequence = table.visibleCommitSequence();
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.CONFLICT, table.fetchByKeyAt(beforeInsert, 0, 99, fetched));
     assertEquals(StatusCode.OK, table.fetchByKeyAt(commitSequence, 0, 99, fetched));
     assertEquals(991, rowValue(fetched));
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, table.flush());
     close(table, wal, directory);
   }
@@ -338,7 +314,7 @@ final class IndexedTableTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     long stagedBefore = table.stagedCopyBytes();
     long walBefore = table.walCopyBytes();
@@ -346,9 +322,11 @@ final class IndexedTableTest {
       row.putLong(0, index);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, index, row, inserted));
+      writer.insert(0, index, row);
     }
-    assertEquals(0, table.stagedCopyBytes() - stagedBefore);
+    assertEquals(
+        2L * BTreePage.MAX_ENTRIES * PageCodec.PAGE_BYTES,
+        table.stagedCopyBytes() - stagedBefore);
     assertEquals(
         (long) BTreePage.MAX_ENTRIES * Long.BYTES,
         table.walCopyBytes() - walBefore);
@@ -358,9 +336,10 @@ final class IndexedTableTest {
     row.putLong(0, 20_000);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, table.insert(20_002, 0, 20_000, row, inserted));
+    writer.insert(0, 20_000, row);
     assertEquals(3L * PageCodec.PAGE_BYTES, table.stagedCopyBytes() - stagedBefore);
-    assertEquals(5L * PageCodec.PAGE_BYTES, table.walCopyBytes() - walBefore);
+    assertEquals(Long.BYTES, table.walCopyBytes() - walBefore);
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, table.flush());
     close(table, wal, directory);
   }
@@ -370,7 +349,7 @@ final class IndexedTableTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     int entries = 800;
     for (int index = 0; index < entries; index++) {
@@ -378,9 +357,10 @@ final class IndexedTableTest {
       row.putLong(0, key);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, table.insert(index + 2L, 0, key, row, inserted));
+      writer.insert(0, key, row);
     }
     assertEquals(entries, table.rowCount());
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, table.flush());
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
@@ -406,10 +386,10 @@ final class IndexedTableTest {
     int batchCapacity = 64;
     int entries = BTreePage.MAX_ENTRIES * (BTreePage.MAX_ENTRIES / 2 + 1) + 1;
     long[] keys = new long[batchCapacity];
+    long[] spaces = new long[batchCapacity];
     int[] rowLengths = new int[batchCapacity];
     ByteBuffer rows = ByteBuffer.allocateDirect(batchCapacity * Long.BYTES);
-    IndexedCommitResult committed = new IndexedCommitResult();
-    long transactionId = 2;
+    TransactionWriter writer = new TransactionWriter(table, Long.BYTES);
     for (int first = 0; first < entries; first += batchCapacity) {
       int count = Math.min(batchCapacity, entries - first);
       rows.clear();
@@ -423,14 +403,7 @@ final class IndexedTableTest {
       rows.limit(count * Long.BYTES);
       assertEquals(
           StatusCode.OK,
-          table.commitInserts(
-              transactionId++, new int[keys.length],
-              keys,
-              rows,
-              Long.BYTES,
-              rowLengths,
-              count,
-              committed));
+          writer.insertBatch(spaces, keys, rows, Long.BYTES, rowLengths, count));
     }
     assertEquals(entries, table.rowCount());
     assertEquals(3, table.treeHeight());
@@ -449,15 +422,9 @@ final class IndexedTableTest {
     rows.limit(suffix * Long.BYTES);
     assertEquals(
         StatusCode.OK,
-        table.commitInserts(
-            transactionId, new int[keys.length],
-            keys,
-            rows,
-            Long.BYTES,
-            rowLengths,
-            suffix,
-            committed));
+        writer.insertBatch(spaces, keys, rows, Long.BYTES, rowLengths, suffix));
     int recoveredEntries = entries + suffix;
+    assertEquals(StatusCode.OK, writer.session.close());
     assertEquals(StatusCode.OK, directory.advanceGeneration());
     assertEquals(StatusCode.OK, directory.close());
 
@@ -503,13 +470,6 @@ final class IndexedTableTest {
     ByteBuffer value = ByteBuffer.allocate(row.length());
     assertEquals(StatusCode.OK, row.copyTo(value));
     return value.getLong(0);
-  }
-
-  private static int littleInt(ByteBuffer source, int offset) {
-    return Byte.toUnsignedInt(source.get(offset))
-        | Byte.toUnsignedInt(source.get(offset + 1)) << 8
-        | Byte.toUnsignedInt(source.get(offset + 2)) << 16
-        | Byte.toUnsignedInt(source.get(offset + 3)) << 24;
   }
 
   private static LocalWalReadResult lastWalRecord(LocalWal wal) {
@@ -599,5 +559,63 @@ final class IndexedTableTest {
     assertEquals(StatusCode.OK, table.close());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
+  }
+
+  private static final class TransactionWriter {
+    private final IndexedTransactionSession session;
+    private final TransactionOutcome outcome = new TransactionOutcome();
+    private long lastCommittedTransactionId;
+
+    private TransactionWriter(IndexedTable table, int maximumRowBytes) {
+      TransactionManager manager = new TransactionManager(
+          DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+      session = new IndexedTransactionSession(manager, table, maximumRowBytes);
+    }
+
+    private void insert(long space, long key, ByteBuffer value) {
+      assertEquals(StatusCode.OK, tryInsert(space, key, value));
+    }
+
+    private StatusCode tryInsert(long space, long key, ByteBuffer value) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      long transactionId = session.transaction().transactionId();
+      StatusCode status = session.insert(space, key, value);
+      if (!status.isOk()) {
+        assertEquals(StatusCode.OK, session.abort(outcome));
+        return status;
+      }
+      status = session.commit(outcome);
+      if (status.isOk()) {
+        lastCommittedTransactionId = transactionId;
+      }
+      return status;
+    }
+
+    private StatusCode insertBatch(
+        long[] spaces,
+        long[] keys,
+        ByteBuffer rows,
+        int rowStride,
+        int[] rowLengths,
+        int count) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      long transactionId = session.transaction().transactionId();
+      StatusCode status = StatusCode.OK;
+      for (int index = 0; index < count && status.isOk(); index++) {
+        rows.limit(rows.capacity());
+        rows.position(index * rowStride);
+        rows.limit(index * rowStride + rowLengths[index]);
+        status = session.insert(spaces[index], keys[index], rows);
+      }
+      if (!status.isOk()) {
+        assertEquals(StatusCode.OK, session.abort(outcome));
+        return status;
+      }
+      status = session.commit(outcome);
+      if (status.isOk()) {
+        lastCommittedTransactionId = transactionId;
+      }
+      return status;
+    }
   }
 }

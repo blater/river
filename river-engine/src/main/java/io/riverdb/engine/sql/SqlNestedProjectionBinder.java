@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
 
@@ -133,8 +134,7 @@ final class SqlNestedProjectionBinder {
       if (nulls[size]) return StatusCode.DATATYPE_MISMATCH;
     } else {
       int known = nulls[size] ? types[size - 1] : types[size];
-      if (SqlTypeDescriptor.comparisonFamily(known)
-          != SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) {
+      if (!SqlNumericTypeRules.isNumeric(known)) {
         if (!(operator == SqlScalarExpression.ADD && nulls[size]
             && SqlTypeDescriptor.typeId(types[size - 1])
                 == SqlTypeDescriptor.TYPE_ID_DATE)) return StatusCode.DATATYPE_MISMATCH;

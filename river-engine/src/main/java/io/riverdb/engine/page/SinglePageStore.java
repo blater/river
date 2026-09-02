@@ -206,6 +206,8 @@ public final class SinglePageStore {
         PAGE_GENERATION,
         walReservation.recordStartOffset(),
         walReservation.recordEndOffset(),
+        PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+        PageCodec.SCALAR_OWNER_KEY_ID,
         update.payloadBytes(),
         stagingPage,
         checksum);

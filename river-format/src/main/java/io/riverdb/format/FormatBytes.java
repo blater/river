@@ -8,6 +8,15 @@ public final class FormatBytes {
   private FormatBytes() {
   }
 
+  public static short getShort(ByteBuffer source, int offset) {
+    return (short) (Byte.toUnsignedInt(source.get(offset)) | source.get(offset + 1) << 8);
+  }
+
+  public static void putShort(ByteBuffer target, int offset, short value) {
+    target.put(offset, (byte) value);
+    target.put(offset + 1, (byte) (value >>> 8));
+  }
+
   public static int getInt(ByteBuffer source, int offset) {
     return Byte.toUnsignedInt(source.get(offset))
         | Byte.toUnsignedInt(source.get(offset + 1)) << 8

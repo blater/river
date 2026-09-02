@@ -65,47 +65,51 @@ final class LocalTemporalStorageValidationTest {
     HeapRowResult source = new HeapRowResult();
     ByteBuffer scratch = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
 
-    encoded.putLong(CatalogRecord.TABLE_DEFAULTS_OFFSET + 2 * Long.BYTES, 1);
+    encoded.putLong(columnDescriptorOffset(encoded, 2) + 6, 1);
     source.set(encoded, 1, 0, bytes);
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             source,
             scratch,
             "temporal_catalog",
             new RelationalSchemaGate(),
             new TableDefinition()));
 
-    encoded.putLong(CatalogRecord.TABLE_DEFAULTS_OFFSET + 2 * Long.BYTES, 0);
-    encoded.putLong(CatalogRecord.TABLE_CHECK_VALUES_OFFSET + 4 * Long.BYTES, 1);
+    encoded.putLong(columnDescriptorOffset(encoded, 2) + 6, 0);
+    encoded.putLong(columnDescriptorOffset(encoded, 4) + 22, 1);
     source.set(encoded, 1, 0, bytes);
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             source,
             scratch,
             "temporal_catalog",
             new RelationalSchemaGate(),
             new TableDefinition()));
 
-    encoded.putLong(CatalogRecord.TABLE_CHECK_VALUES_OFFSET + 4 * Long.BYTES, 0);
-    encoded.putLong(CatalogRecord.TABLE_DEFAULTS_OFFSET + 4 * Long.BYTES, 1);
+    encoded.putLong(columnDescriptorOffset(encoded, 4) + 22, 0);
+    encoded.putInt(columnDescriptorOffset(encoded, 4) + 14, 1);
     source.set(encoded, 1, 0, bytes);
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             source,
             scratch,
             "temporal_catalog",
             new RelationalSchemaGate(),
             new TableDefinition()));
 
-    encoded.putLong(CatalogRecord.TABLE_DEFAULTS_OFFSET + 4 * Long.BYTES, 0);
-    encoded.put(CatalogRecord.TABLE_DEFAULT_KINDS_OFFSET + 4, (byte) SqlDefaultKind.NONE);
+    encoded.putInt(columnDescriptorOffset(encoded, 4) + 14, 0);
+    encoded.put(columnDescriptorOffset(encoded, 4) + 5, (byte) SqlDefaultKind.NONE);
     source.set(encoded, 1, 0, bytes);
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             source,
             scratch,
             "temporal_catalog",
@@ -148,45 +152,42 @@ final class LocalTemporalStorageValidationTest {
     assertEquals(
         StatusCode.OK,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             source,
             scratch,
             "checked_text",
             new RelationalSchemaGate(),
             new TableDefinition()));
 
-    encoded.putLong(bytes - 13 + 5, 1);
+    encoded.putLong(checkProgramOffset(encoded) + 13 + 5, 1);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
-    encoded.putInt(bytes - 26 + 1, SqlTypeDescriptor.DATE | 1 << 8);
+    encoded.putInt(checkProgramOffset(encoded) + 1, SqlTypeDescriptor.DATE | 1 << 8);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
-    encoded.putInt(CatalogRecord.TABLE_CHECK_NODE_TOTAL_OFFSET, 1);
+    encoded.putInt(columnDescriptorOffset(encoded, 2) + 34, 1);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
-    encoded.put(CatalogRecord.TABLE_CHECK_NODE_COUNTS_OFFSET + 2, (byte) 1);
+    encoded.put(columnDescriptorOffset(encoded, 2) + 4, (byte) 0);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
-    encoded.put(bytes - 26, (byte) 99);
+    encoded.put(checkProgramOffset(encoded), (byte) 99);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
-    encoded.putLong(bytes - 26 + 5, 1);
+    encoded.putLong(checkProgramOffset(encoded) + 5, 1);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
-    encoded.putInt(
-        CatalogRecord.TABLE_CHECK_TYPE_DESCRIPTORS_OFFSET + 2 * Integer.BYTES,
-        SqlTypeDescriptor.BIGINT);
+    encoded.putInt(columnDescriptorOffset(encoded, 2) + 30, SqlTypeDescriptor.BIGINT);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
-    encoded.putInt(
-        CatalogRecord.TABLE_CHECK_TYPE_DESCRIPTORS_OFFSET + Integer.BYTES,
-        SqlTypeDescriptor.BIGINT);
+    encoded.putInt(columnDescriptorOffset(encoded, 1) + 30, SqlTypeDescriptor.BIGINT);
     assertCorrupt(encoded, source, scratch, bytes);
     CatalogRecord.encodeTable(
         encoded, 17, 0, TableDefinition.INDEX_NONE, -1, "checked_text", schema);
@@ -195,7 +196,7 @@ final class LocalTemporalStorageValidationTest {
   }
 
   @Test
-  void rejectsOutOfOrderFlatCheckProgramsAndBooleanOrdering() {
+  void supportsBooleanOrderingAndRejectsOutOfOrderFlatCheckPrograms() {
     TableSchema schema = new TableSchema();
     assertEquals(StatusCode.OK, schema.addBigint("id", false));
     assertEquals(StatusCode.OK, schema.addBigint("one", true));
@@ -205,23 +206,12 @@ final class LocalTemporalStorageValidationTest {
     long[] enabled = {2};
     int[] booleanType = {SqlTypeDescriptor.BOOLEAN};
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         schema.setCheck(
             2,
             TableSchema.CHECK_GREATER_THAN,
             SqlTypeDescriptor.BOOLEAN,
             0,
-            1,
-            operator,
-            enabled,
-            booleanType));
-    assertEquals(
-        StatusCode.OK,
-        schema.setCheck(
-            2,
-            TableSchema.CHECK_EQUAL,
-            SqlTypeDescriptor.BOOLEAN,
-            1,
             1,
             operator,
             enabled,
@@ -266,10 +256,34 @@ final class LocalTemporalStorageValidationTest {
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             source,
             scratch,
             "checked_text",
             new RelationalSchemaGate(),
             new TableDefinition()));
+  }
+
+  private static int checkProgramOffset(ByteBuffer encoded) {
+    int columns = encoded.getInt(20);
+    int offset = CatalogTableEncoder.HEADER_BYTES + encoded.getInt(16);
+    for (int column = 0; column < columns; column++) {
+      int nameBytes = encoded.getInt(offset);
+      int descriptor = offset + Integer.BYTES + nameBytes;
+      offset = descriptor + 42 + encoded.getInt(descriptor + 14);
+    }
+    return offset;
+  }
+
+  private static int columnDescriptorOffset(ByteBuffer encoded, int target) {
+    int columns = encoded.getInt(20);
+    int offset = CatalogTableEncoder.HEADER_BYTES + encoded.getInt(16);
+    for (int column = 0; column < columns; column++) {
+      int nameBytes = encoded.getInt(offset);
+      int descriptor = offset + Integer.BYTES + nameBytes;
+      if (column == target) return descriptor;
+      offset = descriptor + 42 + encoded.getInt(descriptor + 14);
+    }
+    throw new AssertionError("missing column " + target);
   }
 }

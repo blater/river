@@ -41,6 +41,98 @@ final class SqlHashJoinTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void hashesWideDecimalsAcrossScalesThroughTheUniversalExecutor(
+      @TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, WalGeneration.of(1), 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE wide_left (id BIGINT PRIMARY KEY,n DECIMAL(38,0))", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE wide_right (id BIGINT PRIMARY KEY,n DECIMAL(38,1))", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO wide_left VALUES "
+                + "(1,1234567890123456789012345678901234567),"
+                + "(2,-1234567890123456789012345678901234567)",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO wide_right VALUES "
+                + "(11,1234567890123456789012345678901234567.0),"
+                + "(12,-1234567890123456789012345678901234567.0)",
+            result));
+
+    String query = "SELECT a.id,b.id FROM wide_left a JOIN wide_right b ON a.n=b.n";
+    assertPlanContains(session, result, "EXPLAIN " + query, "hash");
+    assertRows(session, result, query, new long[][] {{1, 11}, {2, 12}});
+
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void retainsCompositeAndKeylessBuildRowsThroughDeeperStages(
+      @TempDir Path root) {
+    RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        RelationalDatabase.create(root, DATABASE, WalGeneration.of(1), 8, opened));
+    RelationalDatabase database = opened.database();
+    SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
+    assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
+    SqlSession session = sessionResult.session();
+    SqlExecutionResult result = new SqlExecutionResult();
+
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE identity_root (id BIGINT PRIMARY KEY,k BIGINT)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE identity_build (tenant INTEGER,code INTEGER,k BIGINT,payload BIGINT,"
+            + "PRIMARY KEY(tenant,code))", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE identity_child (id BIGINT PRIMARY KEY,tenant INTEGER,code INTEGER)",
+        result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE INDEX identity_child_pair ON identity_child(tenant,code)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE identity_keyless (k BIGINT,payload BIGINT)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO identity_root VALUES (1,10),(2,20)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO identity_build VALUES (7,8,10,7008),(7,9,20,7009)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO identity_child VALUES (101,7,8),(102,7,9)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO identity_keyless VALUES (10,901),(20,902)", result));
+
+    String composite = "SELECT b.payload,c.id FROM identity_root r "
+        + "JOIN identity_build b ON r.k=b.k "
+        + "JOIN identity_child c ON b.tenant=c.tenant AND b.code=c.code";
+    assertPlanContains(session, result, "EXPLAIN " + composite, "hash");
+    assertRows(session, result, composite, new long[][] {{7008, 101}, {7009, 102}});
+    String keyless = "SELECT k.payload FROM identity_root r "
+        + "JOIN identity_keyless k ON r.k=k.k";
+    assertPlanContains(session, result, "EXPLAIN " + keyless, "hash");
+    assertRows(session, result, keyless, new long[][] {{901}, {902}});
+
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static void createTypedFixture(SqlSession session, SqlExecutionResult result) {
     assertEquals(
         StatusCode.OK,
@@ -121,6 +213,7 @@ final class SqlHashJoinTest {
     assertPairIds(session, result, "a.label=b.label", 3);
     String later = "SELECT a.id AS aid,c.id AS cid FROM hash_left a "
         + "JOIN hash_right b ON a.k+0=b.k JOIN hash_third c ON b.k=c.k";
+    assertRows(session, result, later, new long[][] {{1, 101}, {1, 101}, {2, 102}});
     assertRows(
         session,
         result,

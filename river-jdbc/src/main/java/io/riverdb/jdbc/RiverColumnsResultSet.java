@@ -1,6 +1,7 @@
 package io.riverdb.jdbc;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
@@ -15,7 +16,6 @@ import java.sql.Types;
 final class RiverColumnsResultSet extends AbstractResultSet {
   private static final int INITIAL_RELATION_CAPACITY = 16;
   private static final int MAXIMUM_RELATIONS = 32_767;
-  private static final int MAXIMUM_COLUMNS = 8;
   private static final String[] COLUMN_NAMES = {
       "TABLE_CAT",
       "TABLE_SCHEM",
@@ -110,9 +110,7 @@ final class RiverColumnsResultSet extends AbstractResultSet {
   private final CommandResult completion = new CommandResult();
   private final char[] relationCharacters =
       new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
-  private final String[] currentColumnNames = new String[MAXIMUM_COLUMNS];
-  private final int[] currentTypeDescriptors = new int[MAXIMUM_COLUMNS];
-  private final boolean[] currentNullable = new boolean[MAXIMUM_COLUMNS];
+  private final JdbcColumnMetadataRows currentColumns = new JdbcColumnMetadataRows();
   private final String tablePattern;
   private final String columnPattern;
   private RiverQuery query;
@@ -157,7 +155,7 @@ final class RiverColumnsResultSet extends AbstractResultSet {
       currentColumn++;
       if (currentColumn < currentColumnCount) {
         if (RiverCatalogResultSet.matches(
-            currentColumnNames[currentColumn],
+            currentColumns.name(currentColumn),
             columnPattern)) {
           rowAvailable = true;
           rowNumber++;
@@ -404,14 +402,17 @@ final class RiverColumnsResultSet extends AbstractResultSet {
   }
 
   private void describeRelation(String relation) throws SQLException {
+    clearCurrentColumns();
     currentRelation = relation;
     query = connection.openColumnDescription(relation);
-    currentColumnCount = query.columnCount();
-    if (currentColumnCount < 0 || currentColumnCount > MAXIMUM_COLUMNS) {
+    int describedColumns = query.columnCount();
+    if (describedColumns < 0 || describedColumns > SqlShapeLimits.MAX_RESULT_COLUMNS) {
       throw JdbcExceptions.failure(
           StatusCode.INVARIANT_BROKEN,
           "decode column count");
     }
+    currentColumns.reserve(describedColumns);
+    currentColumnCount = describedColumns;
     for (int index = 0; index < currentColumnCount; index++) {
       CharSequence name = query.columnName(index);
       if (name == null || name.length() == 0) {
@@ -419,15 +420,14 @@ final class RiverColumnsResultSet extends AbstractResultSet {
             StatusCode.INVARIANT_BROKEN,
             "decode column name");
       }
-      currentColumnNames[index] = name.toString();
+      String columnName = name.toString();
       int descriptor = query.columnTypeDescriptor(index);
       if (!SqlTypeDescriptor.isValid(descriptor)) {
         throw JdbcExceptions.failure(
             StatusCode.CORRUPTION,
             "decode column type descriptor");
       }
-      currentTypeDescriptors[index] = descriptor;
-      currentNullable[index] = query.columnIsNullable(index);
+      currentColumns.set(index, columnName, descriptor, query.columnIsNullable(index));
     }
     closeQuery("close column description");
     currentColumn = -1;
@@ -486,29 +486,8 @@ final class RiverColumnsResultSet extends AbstractResultSet {
   }
 
   private Object value(int column) {
-    int descriptor = currentTypeDescriptors[currentColumn];
-    boolean varchar = SqlTypeDescriptor.typeId(descriptor)
-        == SqlTypeDescriptor.TYPE_ID_VARCHAR;
-    return switch (column) {
-      case 3 -> currentRelation;
-      case 4 -> currentColumnNames[currentColumn];
-      case 5 -> RiverResultSetMetaData.jdbcType(descriptor);
-      case 6 -> RiverResultSetMetaData.typeName(descriptor);
-      case 7 -> RiverResultSetMetaData.precision(descriptor);
-      case 9 -> SqlTypeDescriptor.typeId(descriptor)
-          == SqlTypeDescriptor.TYPE_ID_DECIMAL
-              ? SqlTypeDescriptor.parameterTwo(descriptor) : null;
-      case 10 -> SqlTypeDescriptor.comparisonFamily(descriptor)
-          == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC ? 10 : null;
-      case 11 -> currentNullable[currentColumn]
-          ? ResultSetMetaData.columnNullable : ResultSetMetaData.columnNoNulls;
-      case 16 -> varchar ? SqlTypeDescriptor.parameterOne(descriptor) : null;
-      case 17 -> currentColumn + 1;
-      case 18 -> currentNullable[currentColumn] ? "YES" : "NO";
-      case 23 -> "";
-      case 24 -> "NO";
-      default -> null;
-    };
+    return JdbcColumnMetadataValue.read(
+        column, currentRelation, currentColumns, currentColumn);
   }
 
   private void finishLocal() {
@@ -522,10 +501,13 @@ final class RiverColumnsResultSet extends AbstractResultSet {
     for (int index = 0; index < relationCount; index++) {
       relationNames[index] = null;
     }
-    for (int index = 0; index < currentColumnCount; index++) {
-      currentColumnNames[index] = null;
-    }
+    clearCurrentColumns();
     currentRelation = null;
+  }
+
+  private void clearCurrentColumns() {
+    for (int index = 0; index < currentColumnCount; index++) currentColumns.clear(index);
+    currentColumnCount = 0;
   }
 
   private void requireRow(int column) throws SQLException {

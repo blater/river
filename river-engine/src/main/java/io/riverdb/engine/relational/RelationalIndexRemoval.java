@@ -24,7 +24,7 @@ final class RelationalIndexRemoval {
   private final TableDefinition updatedTable = new TableDefinition();
   private final IndexedScanCursor scanCursor = new IndexedScanCursor();
   private final IndexedScanResult scanRow = new IndexedScanResult();
-  private final int[] rowSpaces = new int[BATCH_ROWS];
+  private final long[] rowSpaces = new long[BATCH_ROWS];
   private final long[] rowKeys = new long[BATCH_ROWS];
   private boolean alreadyMarked;
   private boolean batchComplete;
@@ -267,7 +267,7 @@ final class RelationalIndexRemoval {
     batchComplete = false;
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
-      int dataSpace = RelationalKey.dataSpace(indexTable.tableId());
+      long dataSpace = RelationalKey.dataSpace(indexTable.tableId());
       status = session.indexedSession().beginScan(
           dataSpace,
           Long.MIN_VALUE,

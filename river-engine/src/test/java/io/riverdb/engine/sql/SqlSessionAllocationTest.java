@@ -564,6 +564,7 @@ final class SqlSessionAllocationTest {
     }
     allocated = bean.getThreadAllocatedBytes(threadId) - before;
     assertTrue(allocated <= 512, "warmed SQL scan allocated bytes: " + allocated);
+    assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }
 
@@ -589,10 +590,15 @@ final class SqlSessionAllocationTest {
     int warmedRows = 0;
     for (int iteration = 0; iteration < 100; iteration++) {
       warmedRows += exerciseGraphSort(session, result, cursor, row, memory);
+    }
+    for (int iteration = 0; iteration < 100; iteration++) {
       warmedRows += exerciseGraphSort(session, result, cursor, row, smallSpill);
+    }
+    for (int iteration = 0; iteration < 100; iteration++) {
       warmedRows += exerciseGraphSort(session, result, cursor, row, largeSpill);
     }
     assertEquals(312_500, warmedRows);
+    long warmedRetained = session.retainedShapeBytes();
     long threadId = Thread.currentThread().threadId();
     long before = bean.getThreadAllocatedBytes(threadId);
     int memoryRows = 0;
@@ -611,10 +617,17 @@ final class SqlSessionAllocationTest {
           session, result, cursor, row, smallSpill);
     }
     long smallSpillAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    long smallRetained = session.retainedShapeBytes();
     assertEquals(102_500, smallSpillRows);
     assertTrue(
         smallSpillAllocated <= 262_144,
         "warmed 1025-row graph spill allocated bytes: " + smallSpillAllocated);
+    int largeTransitionRows = 0;
+    for (int iteration = 0; iteration < 100; iteration++) {
+      largeTransitionRows += exerciseGraphSort(
+          session, result, cursor, row, largeSpill);
+    }
+    assertEquals(110_000, largeTransitionRows);
     before = bean.getThreadAllocatedBytes(threadId);
     int largeSpillRows = 0;
     for (int iteration = 0; iteration < 100; iteration++) {
@@ -622,6 +635,7 @@ final class SqlSessionAllocationTest {
           session, result, cursor, row, largeSpill);
     }
     long largeSpillAllocated = bean.getThreadAllocatedBytes(threadId) - before;
+    long largeRetained = session.retainedShapeBytes();
     assertEquals(110_000, largeSpillRows);
     assertTrue(
         largeSpillAllocated <= 262_144,
@@ -631,7 +645,8 @@ final class SqlSessionAllocationTest {
         spillDelta <= 8_192,
         "warmed graph spill allocation bytes: small=" + smallSpillAllocated
             + ", large=" + largeSpillAllocated + ", delta=" + spillDelta
-            + ", extraRows=7500");
+            + ", extraRows=7500, shape=" + warmedRetained + "/"
+            + session.maximumShapeBytes() + "->" + smallRetained + "->" + largeRetained);
     fixture.close();
   }
 
@@ -1028,7 +1043,7 @@ final class SqlSessionAllocationTest {
     allocationGuard += result.affectedRows();
     status = session.execute(
         "INSERT INTO exact_values VALUES(1+0,20.00+0.00,FALSE)", result);
-    assertEquals(StatusCode.CONFLICT, status);
+    assertEquals(StatusCode.UNIQUE_VIOLATION, status);
     allocationGuard += status.ordinal();
     assertEquals(0, result.affectedRows());
     allocationGuard += result.affectedRows();

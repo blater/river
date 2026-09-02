@@ -1,13 +1,14 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.ExactDecimal;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 
 /** Parses a bounded constant exact-value expression into postfix form. */
 final class SqlScalarExpressionParser {
   private final SqlParserInput input;
-  private final int[] descriptorStack = new int[SqlScalarExpression.MAXIMUM_NODES];
+  int[] descriptorStack = new int[16];
   private final SqlExpressionPrimaryParser primaries;
   private SqlScalarExpression target;
   private SqlCommand projectionCommand;
@@ -194,7 +195,7 @@ final class SqlScalarExpressionParser {
   }
 
   private StatusCode unary(CharSequence sql) {
-    if (++depth > SqlScalarExpression.MAXIMUM_NODES) {
+    if (++depth > SqlShapeLimits.MAX_EXPRESSION_DEPTH) {
       depth--;
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -238,15 +239,14 @@ final class SqlScalarExpressionParser {
       }
       return StatusCode.OK;
     }
-    if (sourceType != SqlTypeDescriptor.TYPE_ID_BIGINT
-        && sourceType != SqlTypeDescriptor.TYPE_ID_DECIMAL) {
+    if (!SqlNumericTypeRules.isNumeric(source)) {
       return StatusCode.DATATYPE_MISMATCH;
     }
     int descriptor = source;
     if (operator == SqlScalarExpression.CEILING
         || operator == SqlScalarExpression.FLOOR) {
-      descriptor = sourceType == SqlTypeDescriptor.TYPE_ID_BIGINT
-          ? SqlTypeDescriptor.BIGINT
+      descriptor = SqlNumericTypeRules.isIntegral(source)
+          || SqlNumericTypeRules.isApproximate(source) ? source
           : SqlTypeDescriptor.decimal(
               SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION, 0);
     }
@@ -266,12 +266,10 @@ final class SqlScalarExpressionParser {
     int descriptor = left == 0 || right == 0 ? 0 : switch (operator) {
       case SqlScalarExpression.ADD, SqlScalarExpression.SUBTRACT ->
           SqlTemporalExpressionTypes.additiveDescriptor(operator, left, right);
-      case SqlScalarExpression.MULTIPLY ->
-          ExactDecimal.multiplyResultDescriptor(left, right);
-      case SqlScalarExpression.DIVIDE ->
-          ExactDecimal.divideResultDescriptor(left, right);
-      case SqlScalarExpression.REMAINDER ->
-          ExactDecimal.remainderResultDescriptor(left, right);
+      case SqlScalarExpression.MULTIPLY,
+          SqlScalarExpression.DIVIDE,
+          SqlScalarExpression.REMAINDER ->
+          SqlNumericExpressionTypes.binary(operator, left, right);
       default -> 0;
     };
     if (descriptor == 0 && left != 0 && right != 0) {
@@ -299,13 +297,13 @@ final class SqlScalarExpressionParser {
   }
 
   boolean pushDescriptor(int descriptor) {
-    if (stackSize >= descriptorStack.length) return false;
+    if (!SqlScalarParserCapacity.ensure(this, stackSize + 1)) return false;
     descriptorStack[stackSize++] = descriptor;
     return true;
   }
 
   boolean hasStackCapacity() {
-    return stackSize < descriptorStack.length;
+    return SqlScalarParserCapacity.ensure(this, stackSize + 1);
   }
 
   boolean allowsUnresolved() {
@@ -336,5 +334,10 @@ final class SqlScalarExpressionParser {
 
   boolean appendNode(int operator, long operand, int descriptor) {
     return target.append(operator, operand, descriptor);
+  }
+
+  boolean appendNode(
+      int operator, long operandHigh, long operand, int descriptor) {
+    return target.append(operator, operandHigh, operand, descriptor);
   }
 }

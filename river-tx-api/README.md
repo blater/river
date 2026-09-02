@@ -7,9 +7,11 @@ codec, heap/index/page type, lock-table implementation, or recovery algorithm.
 
 ## Authority and ownership
 
-- `TransactionContext` is an immutable operation view created by the trusted
-  transaction implementation. Its `Snapshot` and `CancellationToken` are
-  borrowed for the context lifetime; it is not a public authentication token.
+- `TransactionContext` is a reusable operation view owned and rebound by the
+  trusted transaction implementation. Each binding authenticates one active
+  transaction generation to its provider; terminal transition retires that
+  binding before the carrier may be reused. Its `Snapshot` and
+  `CancellationToken` are borrowed for the binding lifetime.
 - `Snapshot` exposes a commit publication boundary and a sorted primitive
   active-transaction set. Implementations own the immutable snapshot storage;
   the deterministic snapshot makes one lifecycle-time copy.
@@ -22,6 +24,17 @@ codec, heap/index/page type, lock-table implementation, or recovery algorithm.
 - `LockToken` is an authenticated provider capability. An active token cannot
   be reset, only the issuing provider can release it, and a completed or stale
   token cannot release a later lock occupying the same slot.
+- `LockRequest` borrows scalar or tuple identity bytes for one provider call.
+  Tuple exact keys are canonical user-tuple bodies: tuple headers and physical
+  row-id suffixes are excluded. Tuple range endpoints are prefix cuts; inclusive
+  lower and upper endpoints respectively sit before and after all descendants,
+  while exclusive endpoints reverse those cuts. Null endpoints are namespace
+  infinities.
+- Every context-based lock mutation also supplies the transaction generation
+  captured by value when the operation began. A reused context carrier cannot
+  authorize a stale asynchronous operation after rebinding. Commit and abort
+  freeze new mutations; terminal token acknowledgement may deactivate a caller
+  carrier only after its canonical holding generation no longer exists.
 - Provider mutation ownership is implementation-defined and explicit. The
   deterministic model is construction-thread owned and returns `NOT_OWNER`
   for cross-thread mutation.
@@ -72,8 +85,7 @@ not selected here:
 - durable transaction, snapshot, version-pointer, or version-record encodings;
 - transaction-ID reservation/high-water persistence and CSN publication;
 - statement versus transaction snapshot acquisition policy;
-- lock upgrades, conversion queues, fairness, deadlock detection, escalation,
-  savepoints, and the final serializable range-lock protocol;
+- lock escalation and savepoint-specific lock release policy;
 - validated status freezing and any cached-CSN visibility shortcut;
 - version-chain reachability, snapshot/recovery horizons, outcome compaction,
   safe vacuum candidates/reclamation, and physical rollback handlers;

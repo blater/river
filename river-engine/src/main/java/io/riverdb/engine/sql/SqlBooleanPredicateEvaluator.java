@@ -31,11 +31,9 @@ final class SqlBooleanPredicateEvaluator {
   private boolean block;
   private boolean join;
   private SqlJoinRoleRows joinRows;
+  private SqlUniversalJoinRows universalRows;
   private SqlAggregateAccumulatorSet havingAggregates;
-  private long havingGroupValue;
-  private boolean havingGroupNull;
-  private byte[] havingGroupText;
-  private int havingGroupTextLength;
+  private SqlHavingGroup havingGroup;
   private int truth;
   private SqlSubqueryLeafEvaluator subqueries;
   private SqlNestedRowProvider nestedRows;
@@ -44,14 +42,31 @@ final class SqlBooleanPredicateEvaluator {
 
   SqlBooleanPredicateEvaluator(
       SqlExpressionEvaluator columnReader, SqlTemporalContext temporalContext) {
-    this(new SqlBooleanPredicateWorkspace(columnReader, temporalContext), temporalContext);
+    this(
+        new SqlBooleanPredicateWorkspace(columnReader, temporalContext),
+        temporalContext,
+        new SqlSessionShapeBudget(null));
+  }
+
+  SqlBooleanPredicateEvaluator(
+      SqlExpressionEvaluator columnReader,
+      SqlTemporalContext temporalContext,
+      SqlSessionShapeBudget budget) {
+    this(new SqlBooleanPredicateWorkspace(columnReader, temporalContext), temporalContext, budget);
   }
 
   SqlBooleanPredicateEvaluator(
       SqlBooleanPredicateWorkspace shared,
       SqlTemporalContext temporalContext) {
+    this(shared, temporalContext, new SqlSessionShapeBudget(null));
+  }
+
+  SqlBooleanPredicateEvaluator(
+      SqlBooleanPredicateWorkspace shared,
+      SqlTemporalContext temporalContext,
+      SqlSessionShapeBudget budget) {
     exact = shared.columns;
-    preparation = new SqlBooleanPredicatePreparation(temporalContext);
+    preparation = new SqlBooleanPredicatePreparation(temporalContext, budget);
     workspace = shared;
     expressions = shared.expressions;
     left = shared.left;
@@ -109,6 +124,22 @@ final class SqlBooleanPredicateEvaluator {
     return status;
   }
 
+  StatusCode matchesNestedBlock(
+      SqlCommand source,
+      SqlBoundBooleanPredicateProgram bound,
+      SqlBlockRow row,
+      SqlSubqueryLeafEvaluator nested,
+      SqlNestedRowProvider rows,
+      Match result) {
+    SqlSubqueryLeafEvaluator previous = subqueries;
+    subqueries = nested;
+    nestedRows = rows;
+    StatusCode status = matchesBlock(source, bound, row, result);
+    subqueries = previous;
+    nestedRows = null;
+    return status;
+  }
+
   StatusCode matchesBlock(
       SqlCommand source,
       SqlBoundBooleanPredicateProgram bound,
@@ -154,14 +185,30 @@ final class SqlBooleanPredicateEvaluator {
     return status;
   }
 
+  StatusCode matchesUniversalJoin(
+      SqlCommand source,
+      SqlBoundBooleanPredicateProgram bound,
+      SqlUniversalJoinRows rows,
+      Match result) {
+    result.matched = false;
+    if (!bound.available()) {
+      result.matched = true;
+      return StatusCode.OK;
+    }
+    command = source;
+    programs = bound;
+    universalRows = rows;
+    StatusCode status = evaluateNode(bound.root());
+    if (status.isOk()) result.matched = truth == TRUE;
+    clearEvaluation();
+    return status;
+  }
+
   StatusCode matchesHaving(
       SqlCommand source,
       SqlBoundBooleanPredicateProgram bound,
       SqlAggregateAccumulatorSet aggregates,
-      long groupValue,
-      boolean groupNull,
-      byte[] groupText,
-      int groupTextLength,
+      SqlHavingGroup group,
       Match result) {
     result.matched = false;
     if (!bound.available()) {
@@ -171,10 +218,7 @@ final class SqlBooleanPredicateEvaluator {
     command = source;
     programs = bound;
     havingAggregates = aggregates;
-    havingGroupValue = groupValue;
-    havingGroupNull = groupNull;
-    havingGroupText = groupText;
-    havingGroupTextLength = groupTextLength;
+    havingGroup = group;
     StatusCode status = evaluateNode(bound.root());
     if (status.isOk()) result.matched = truth == TRUE;
     clearEvaluation();
@@ -305,7 +349,8 @@ final class SqlBooleanPredicateEvaluator {
     int compared = text(first.descriptor())
         ? SqlBooleanTextComparator.compare(first, second)
         : exact.compareExact(
-            first.value(), first.descriptor(), second.value(), second.descriptor());
+            first.highValue(), first.value(), first.descriptor(),
+            second.highValue(), second.value(), second.descriptor());
     return matches(compared, comparison) ? TRUE : FALSE;
   }
 
@@ -315,7 +360,8 @@ final class SqlBooleanPredicateEvaluator {
         ? SqlBooleanTextComparator.compareLiteral(
             left, command, programs.member(leaf, member))
         : exact.compareExact(
-            left.value(), left.descriptor(), programs.member(leaf, member), descriptor);
+            left.highValue(), left.value(), left.descriptor(),
+            programs.memberHigh(leaf, member), programs.member(leaf, member), descriptor);
   }
 
   private StatusCode operand(int leaf, int program, SqlPredicateOperand result) {
@@ -328,15 +374,16 @@ final class SqlBooleanPredicateEvaluator {
           program,
           zone,
           havingAggregates,
-          havingGroupValue,
-          havingGroupNull,
-          havingGroupText,
-          havingGroupTextLength,
+          havingGroup,
           result);
     }
     if (nestedRows != null) {
       return expressions.evaluateNested(
           command, programs, leaf, program, zone, nestedRows, result);
+    }
+    if (universalRows != null) {
+      return expressions.evaluateUniversalJoin(
+          command, programs, leaf, program, zone, universalRows, result);
     }
     if (join) {
       return expressions.evaluateJoin(
@@ -401,11 +448,9 @@ final class SqlBooleanPredicateEvaluator {
     block = false;
     join = false;
     joinRows = null;
+    universalRows = null;
     havingAggregates = null;
-    havingGroupValue = 0;
-    havingGroupNull = false;
-    havingGroupText = null;
-    havingGroupTextLength = 0;
+    havingGroup = null;
     truth = FALSE;
     subqueries = null;
     nestedRows = null;

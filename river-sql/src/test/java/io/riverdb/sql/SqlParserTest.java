@@ -8,8 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.LocalTemporal;
+import io.riverdb.base.type.SqlApproximateNumeric;
 import io.riverdb.base.type.SqlDefaultKind;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.lang.management.ManagementFactory;
@@ -18,6 +20,152 @@ import org.junit.jupiter.api.Test;
 
 final class SqlParserTest {
   private static volatile long allocationGuard;
+
+  @Test
+  void lowersDirectAggregateOverJoinIntoTwoCardinalityStages() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand command = new SqlCommand();
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT COUNT(DISTINCT s.s_i_id) FROM order_line ol "
+                + "INNER JOIN stock s ON s.s_w_id=ol.ol_supply_w_id "
+                + "AND s.s_i_id=ol.ol_i_id WHERE ol.ol_w_id=1 "
+                + "AND ol.ol_d_id=2 AND s.s_quantity<20",
+            query,
+            command));
+
+    assertTrue(query.isBlockPipeline());
+    assertEquals(2, query.sourceBlockCount());
+    assertEquals(SqlCommandType.COUNT_DISTINCT, command.type());
+    assertEquals(SqlCommandType.COUNT_DISTINCT, query.block(0).type());
+    assertEquals(SqlCommandType.JOIN_SCAN, query.block(1).type());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT COUNT(DISTINCT s.s_i_id),SUM(s.s_i_id) FROM order_line ol "
+                + "INNER JOIN stock s ON s.s_i_id=ol.ol_i_id",
+            query,
+            command));
+    assertEquals(2, query.block(0).aggregateInvocationCount());
+    assertEquals(2, query.block(0).aggregateOutputCount());
+    assertEquals(2, query.block(1).columnCount());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT s.s_i_id,ol.ol_i_id,COUNT(DISTINCT s.s_i_id),SUM(s.s_i_id) "
+                + "FROM order_line ol INNER JOIN stock s ON s.s_i_id=ol.ol_i_id "
+                + "GROUP BY s.s_i_id,ol.ol_i_id",
+            query,
+            command));
+    assertEquals(SqlCommandType.GROUP_COUNT_DISTINCT, query.block(0).type());
+    assertEquals(SqlCommandType.JOIN_SCAN, query.block(1).type());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT s.s_i_id,COUNT(*) AS n,SUM(s.s_i_id) AS total "
+                + "FROM order_line ol INNER JOIN stock s ON s.s_i_id=ol.ol_i_id "
+                + "GROUP BY s.s_i_id ORDER BY n DESC LIMIT 1",
+            query,
+            command));
+    assertEquals(0, query.block(0).groupOperandProjection(0));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT COUNT(*) FROM left_rows l JOIN right_rows r ON l.id=r.left_id "
+                + "GROUP BY l.a,r.b HAVING b=100",
+            query,
+            command));
+    assertEquals(2, query.block(0).groupExpressionCount());
+    assertEquals(3, query.block(1).columnCount());
+    assertEquals(1, query.block(0).groupOperandProjection(0));
+    assertEquals(2, query.block(0).groupOperandProjection(1));
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT COUNT(*) FROM order_line ol INNER JOIN stock s "
+                + "ON s.s_i_id=ol.ol_i_id LIMIT 0",
+            query,
+            command));
+    assertEquals(0, command.rowLimit());
+    assertEquals(Long.MAX_VALUE, query.block(1).rowLimit());
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parseQuery(
+            "SELECT s.s_i_id,COUNT(*) FROM order_line ol INNER JOIN stock s "
+                + "ON s.s_i_id=ol.ol_i_id GROUP BY s.s_i_id LIMIT 1",
+            query,
+            command));
+    assertEquals(1, command.rowLimit());
+    assertEquals(Long.MAX_VALUE, query.block(1).rowLimit());
+  }
+
+  @Test
+  void parsesOnlyLockableSelectForUpdateTailsAndRetainsState() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    SqlCommand copied = new SqlCommand();
+    SqlQuery query = new SqlQuery();
+
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT d_next_o_id FROM district "
+                + "WHERE d_w_id=1 AND d_id=2 ORDER BY d_next_o_id LIMIT 1 FOR UPDATE",
+            command));
+    assertTrue(command.isSelectForUpdate());
+    assertEquals(1, command.rowLimit());
+    assertTrue(command.isOrdered());
+    assertEquals(StatusCode.OK, copied.copyBlockFrom(command));
+    assertTrue(copied.isSelectForUpdate());
+    command.reset();
+    assertFalse(command.isSelectForUpdate());
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM district FOR", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM district FOR SHARE", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM district FOR UPDATE LIMIT 1", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("SELECT id FROM district FOR UPDATE NOWAIT", command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse("SELECT DISTINCT id FROM district FOR UPDATE", command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse("SELECT COUNT(*) FROM district FOR UPDATE", command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parse(
+            "SELECT d.id FROM district d JOIN warehouse w ON d.d_w_id=w.id FOR UPDATE",
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT x.id FROM (SELECT id FROM district) x FOR UPDATE", query, command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery(
+            "SELECT id FROM district WHERE id IN "
+                + "(SELECT id FROM warehouse FOR UPDATE)",
+            query,
+            command));
+    assertEquals(
+        StatusCode.FEATURE_NOT_SUPPORTED,
+        parser.parseQuery("EXPLAIN SELECT id FROM district FOR UPDATE", query, command));
+  }
 
   @Test
   void ownsBoundedOnProgramsAcrossCopyResetAndMarkers() {
@@ -72,15 +220,16 @@ final class SqlParserTest {
             command));
     assertEquals(8, command.joinChain().onPredicates(0).leafCount());
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT a.key FROM accounts a JOIN regions r ON "
                 + "a.key=1 AND a.region=2 AND r.id=3 AND r.code=4 "
                 + "AND a.key=5 AND a.region=6 AND r.id=7 AND r.code=8 "
                 + "AND a.key=9",
             command));
+    assertEquals(9, command.joinChain().onPredicates(0).leafCount());
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT a.key FROM accounts a JOIN regions r ON "
                 + "a.key+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1=r.id",
@@ -97,11 +246,13 @@ final class SqlParserTest {
                 + "JOIN regions r ON a.key=r.id ORDER BY account_key",
             command));
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT a.key FROM accounts a JOIN regions r ON a.key=r.id "
                 + "ORDER BY a.key",
             command));
+    assertEquals("a", command.orderColumnTableName(0).toString());
+    assertEquals("key", command.orderColumnName(0).toString());
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -155,7 +306,7 @@ final class SqlParserTest {
   }
 
   @Test
-  void ownsEightRoleJoinChainAndFailsClosedAtNinth() {
+  void growsJoinChainPastEightRoles() {
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
     SqlCommand copied = new SqlCommand();
@@ -189,8 +340,9 @@ final class SqlParserTest {
     assertNull(command.joinChain());
 
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse(eight.replace(" WHERE", " JOIN i i ON h.id=i.id WHERE"), command));
+    assertEquals(9, command.joinChain().roleCount());
     assertEquals(StatusCode.OK, parser.parse("SELECT m.id FROM moments m", command));
   }
 
@@ -409,6 +561,68 @@ final class SqlParserTest {
         StatusCode.DATATYPE_MISMATCH,
         parser.parse("SELECT TRUE+1", command));
     assertFalse(command.isAvailable());
+  }
+
+  @Test
+  void parsesApproximateArithmeticAndScaleFunctions() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    String[] expressions = {
+        "CAST(5.5 AS REAL)+CAST(2.0 AS REAL)",
+        "CAST(5.5 AS REAL)-CAST(2.0 AS DOUBLE PRECISION)",
+        "CAST(5.5 AS REAL)*CAST(2.0 AS DOUBLE PRECISION)",
+        "CAST(5.5 AS REAL)/CAST(2.0 AS DOUBLE PRECISION)",
+        "CAST(5.5 AS REAL)%CAST(2.0 AS DOUBLE PRECISION)",
+        "ROUND(CAST(1.256 AS DOUBLE PRECISION),2)",
+        "TRUNCATE(CAST(-1.259 AS REAL),2)"
+    };
+    int[] descriptors = {
+        SqlTypeDescriptor.REAL,
+        SqlTypeDescriptor.DOUBLE,
+        SqlTypeDescriptor.DOUBLE,
+        SqlTypeDescriptor.DOUBLE,
+        SqlTypeDescriptor.DOUBLE,
+        SqlTypeDescriptor.DOUBLE,
+        SqlTypeDescriptor.REAL
+    };
+    for (int index = 0; index < expressions.length; index++) {
+      assertEquals(StatusCode.OK, parser.parse("SELECT " + expressions[index], command));
+      assertEquals(descriptors[index], command.scalarExpression().resultTypeDescriptor());
+    }
+  }
+
+  @Test
+  void decimalLiteralPrecisionIgnoresLeadingIntegerZeros() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    String fractionalDigits = "9".repeat(38);
+    BigInteger unscaled = BigInteger.TEN.pow(38).subtract(BigInteger.ONE);
+
+    assertEquals(StatusCode.OK,
+        parser.parse("SELECT 0." + fractionalDigits, command));
+    SqlScalarExpression expression = command.scalarExpression();
+    assertEquals(SqlTypeDescriptor.decimal(38, 38), expression.typeDescriptor(0));
+    assertEquals(unscaled.longValue(), expression.operand(0));
+    assertEquals(unscaled.shiftRight(Long.SIZE).longValue(), expression.operandHigh(0));
+
+    assertEquals(StatusCode.OK,
+        parser.parse("SELECT -0." + fractionalDigits, command));
+    assertEquals(SqlTypeDescriptor.decimal(38, 38), expression.typeDescriptor(0));
+    assertEquals(unscaled.negate().longValue(), expression.operand(0));
+    assertEquals(
+        unscaled.negate().shiftRight(Long.SIZE).longValue(), expression.operandHigh(0));
+
+    assertEquals(StatusCode.OK,
+        parser.parse("SELECT 0000." + fractionalDigits, command));
+    assertEquals(SqlTypeDescriptor.decimal(38, 38), expression.typeDescriptor(0));
+    assertEquals(StatusCode.OK, parser.parse("SELECT 0000012.3400", command));
+    assertEquals(SqlTypeDescriptor.decimal(6, 4), expression.typeDescriptor(0));
+    assertEquals(123_400, expression.operand(0));
+
+    assertEquals(StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
+        parser.parse("SELECT 0." + "1".repeat(39), command));
+    assertEquals(StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
+        parser.parse("SELECT " + "1".repeat(39) + ".0", command));
   }
 
   @Test
@@ -829,11 +1043,12 @@ final class SqlParserTest {
             + "SUM(day)=0 AND AVG(day)=0 AND MIN(day)=0 AND MAX(day)=0 AND "
             + "MIN(observed)=0 AND MAX(observed)=0";
     assertEquals(StatusCode.OK, parser.parse(eightInvocations, command));
-    assertEquals(SqlAggregateSet.MAXIMUM_INVOCATIONS, command.aggregateInvocationCount());
-    assertEquals(SqlBooleanPredicateProgram.MAXIMUM_LEAVES, command.booleanHavingPredicates().leafCount());
+    assertEquals(8, command.aggregateInvocationCount());
+    assertEquals(8, command.booleanHavingPredicates().leafCount());
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse(eightInvocations + " AND SUM(observed)=0", command));
+    assertEquals(9, command.aggregateInvocationCount());
 
     StringBuilder ninthPredicate = new StringBuilder(
         "SELECT COUNT(*) FROM moments HAVING COUNT(*)=0");
@@ -849,20 +1064,20 @@ final class SqlParserTest {
 
     StringBuilder maximumNodes = new StringBuilder("SELECT COUNT(*) FROM moments HAVING ");
     for (int node = 1;
-        node < SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES - 1;
+        node < SqlBooleanPredicateProgram.MAXIMUM_DEPTH;
         node++) {
       maximumNodes.append("ABS(");
     }
     maximumNodes.append("COUNT(*)");
     for (int node = 1;
-        node < SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES - 1;
+        node < SqlBooleanPredicateProgram.MAXIMUM_DEPTH;
         node++) {
       maximumNodes.append(')');
     }
     maximumNodes.append(">=0");
     assertEquals(StatusCode.OK, parser.parse(maximumNodes, command));
     assertEquals(
-        SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES - 1,
+        SqlBooleanPredicateProgram.MAXIMUM_DEPTH,
         havingNodeCount(command, 0));
     maximumNodes.insert(
         "SELECT COUNT(*) FROM moments HAVING ".length(), "ABS(");
@@ -907,7 +1122,7 @@ final class SqlParserTest {
         SqlScalarExpression.EXTRACT);
     assertTrue(expression.hasColumnReference());
     assertEquals(SqlComparison.GREATER_OR_EQUAL, predicateComparison(command, 1));
-    assertEquals(SqlTypeDescriptor.BIGINT, predicateDescriptor(command, 1));
+    assertEquals(SqlTypeDescriptor.INTEGER, predicateDescriptor(command, 1));
 
     SqlCommand copied = new SqlCommand();
     copied.copyQueryFrom(command);
@@ -1098,7 +1313,7 @@ final class SqlParserTest {
         command.projectionExpression(1),
         SqlScalarExpression.COLUMN,
         SqlScalarExpression.EXTRACT);
-    assertEquals(SqlTypeDescriptor.BIGINT, command.columnCheckTypeDescriptor(1));
+    assertEquals(SqlTypeDescriptor.INTEGER, command.columnCheckTypeDescriptor(1));
     assertEquals(1, command.columnCheckValue(1));
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
@@ -1335,18 +1550,20 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.GROUP_COUNT, query.block(0).type());
     assertEquals(2, query.blockCount());
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d FROM (SELECT day AS d,COUNT(*) AS n FROM moments "
                 + "GROUP BY day ORDER BY day) q",
             query,
             compiled));
+    assertTrue(query.isBlockPipeline());
     assertEquals(
-        StatusCode.FEATURE_NOT_SUPPORTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d FROM (SELECT day+1 AS d FROM moments ORDER BY d) q",
             query,
             compiled));
+    assertTrue(query.isBlockPipeline());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(
@@ -1391,7 +1608,7 @@ final class SqlParserTest {
             query,
             compiled));
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT e+e AS f FROM (SELECT d+d AS e FROM "
                 + "(SELECT c+c AS d FROM (SELECT b+b AS c FROM "
@@ -1454,10 +1671,51 @@ final class SqlParserTest {
     assertEquals(2_000, predicateUpper(command, 1));
 
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
-            "CREATE TABLE invalid (id BIGINT PRIMARY KEY, amount DECIMAL(19,2))",
+            "CREATE TABLE wide_decimal (id BIGINT PRIMARY KEY, amount DECIMAL(19,2))",
             command));
+    assertEquals(SqlTypeDescriptor.decimal(19, 2), command.columnTypeDescriptor(1));
+  }
+
+  @Test
+  void parsesFirstClassNumericTypeAliasesAndFloatPrecision() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(StatusCode.OK, parser.parse(
+        "CREATE TABLE numeric_types (small SMALLINT, normal INTEGER, alias INT, "
+            + "wide BIGINT, exact NUMERIC(12,3), bare DECIMAL, single REAL, "
+            + "float24 FLOAT(24), float53 FLOAT(53), floating FLOAT, "
+            + "double_value DOUBLE PRECISION, mysql_double DOUBLE)", command));
+    int[] expected = {
+        SqlTypeDescriptor.SMALLINT, SqlTypeDescriptor.INTEGER, SqlTypeDescriptor.INTEGER,
+        SqlTypeDescriptor.BIGINT, SqlTypeDescriptor.decimal(12, 3),
+        SqlTypeDescriptor.decimal(10, 0), SqlTypeDescriptor.REAL,
+        SqlTypeDescriptor.REAL, SqlTypeDescriptor.DOUBLE, SqlTypeDescriptor.DOUBLE,
+        SqlTypeDescriptor.DOUBLE, SqlTypeDescriptor.DOUBLE
+    };
+    assertEquals(expected.length, command.columnCount());
+    for (int column = 0; column < expected.length; column++) {
+      assertEquals(expected[column], command.columnTypeDescriptor(column));
+    }
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE TABLE bad_float (value FLOAT(54))", command));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE TABLE bad_float (value FLOAT(0))", command));
+  }
+
+  @Test
+  void parsesFiniteScientificLiteralsAsCanonicalDoubleValues() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(StatusCode.OK, parser.parse(
+        "INSERT INTO measurements VALUES (1e3,-1.25E-2)", command));
+    assertEquals(SqlTypeDescriptor.DOUBLE, command.insertTypeDescriptor(0, 0));
+    assertEquals(SqlApproximateNumeric.doubleBits(1_000.0d), command.insertValue(0, 0));
+    assertEquals(SqlTypeDescriptor.DOUBLE, command.insertTypeDescriptor(0, 1));
+    assertEquals(SqlApproximateNumeric.doubleBits(-0.0125d), command.insertValue(0, 1));
+    assertEquals(StatusCode.NUMERIC_VALUE_OUT_OF_RANGE,
+        parser.parse("INSERT INTO measurements VALUES (1e309)", command));
   }
 
   @Test
@@ -1784,6 +2042,7 @@ final class SqlParserTest {
     assertName("accounts_region", command.indexName());
     assertName("accounts", command.tableName());
     assertName("region", command.firstColumnName());
+    assertCompositeIndexColumns(parser, command);
     assertEquals(
         StatusCode.OK,
         parser.parse("DROP INDEX accounts_region ON accounts", command));
@@ -1906,19 +2165,20 @@ final class SqlParserTest {
                 + "REFERENCES accounts(id) REFERENCES accounts(id))",
             command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "CREATE TABLE text_reference "
                 + "(id BIGINT PRIMARY KEY, account_id VARCHAR(7) REFERENCES accounts(id))",
             command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "CREATE TABLE excessive_references "
                 + "(id BIGINT PRIMARY KEY, a BIGINT REFERENCES parents(id), "
                 + "b BIGINT REFERENCES parents(id), c BIGINT REFERENCES parents(id), "
                 + "d BIGINT REFERENCES parents(id), e BIGINT REFERENCES parents(id))",
             command));
+    assertTrue(command.columnHasReference(5));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse(
@@ -1990,7 +2250,7 @@ final class SqlParserTest {
             command));
     assertEquals(3, command.columnCount());
     assertEquals(SqlTypeDescriptor.varchar(4), command.insertTypeDescriptor(0, 1));
-    assertEquals(SqlTypeDescriptor.BIGINT, command.insertTypeDescriptor(0, 2));
+    assertEquals(SqlTypeDescriptor.INTEGER, command.insertTypeDescriptor(0, 2));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -2037,6 +2297,16 @@ final class SqlParserTest {
     assertName("a", command.columnTableName(0));
     assertName("balance", command.columnName(0));
     assertName("present", command.columnAlias(0));
+    assertEquals(
+        StatusCode.OK,
+        parser.parse(
+            "SELECT COUNT(DISTINCT a.balance) AS unique_balance FROM accounts a",
+            command));
+    assertEquals(SqlCommandType.COUNT_DISTINCT, command.type());
+    assertEquals(SqlAggregateKind.COUNT_DISTINCT, command.aggregateKind(0));
+    assertEquals(0, command.aggregateOperandProjection(0));
+    assertName("balance", command.columnName(0));
+    assertName("unique_balance", command.columnAlias(0));
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -2299,24 +2569,29 @@ final class SqlParserTest {
     assertEquals(2, command.wherePredicates().leafCount());
     assertEquals(2, command.rowLimit());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("SELECT DISTINCT region, key FROM accounts", command));
+    assertEquals(2, command.columnCount());
+    assertName("region", command.columnName(0));
+    assertName("key", command.columnName(1));
     assertEquals(
         StatusCode.OK,
         parser.parse("SELECT key FROM accounts ORDER BY key DESC", command));
     assertTrue(command.isDescendingOrder());
     assertName("key", command.orderColumnName());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "SELECT region, COUNT(*) FROM accounts "
                 + "GROUP BY region ORDER BY region DESC",
             command));
+    assertTrue(command.isDescendingOrder());
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "SELECT DISTINCT region FROM accounts ORDER BY region DESC",
             command));
+    assertTrue(command.isDescendingOrder());
     assertEquals(
         StatusCode.OK,
         parser.parse(
@@ -2546,12 +2821,14 @@ final class SqlParserTest {
         Long.MIN_VALUE,
         command.mutationExpressionOperand(command.updateExpression(0), 0));
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse(
             "INSERT INTO accounts VALUES"
                 + "(1+1,2+2,3+3,4+4,5+5,6+6,7+7,8+8),"
                 + "(9+9,10+10,11+11,12+12,13+13,14+14,15+15,16+16)",
             command));
+    assertEquals(2, command.insertRowCount());
+    assertEquals(8, command.insertColumnCount());
     assertEquals(StatusCode.OK, parser.parse("DELETE FROM accounts WHERE key = 7", command));
     assertEquals(SqlCommandType.DELETE, command.type());
     assertEquals(true, (predicateComparison(command, 0) == SqlComparison.EQUAL));
@@ -2664,7 +2941,7 @@ final class SqlParserTest {
     assertEquals(SqlCommandType.SCAN, command.type());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, parser.parse("CREATE TABLE bad-name", command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("CREATE TABLE only_key (id BIGINT PRIMARY KEY)", command));
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -2673,13 +2950,13 @@ final class SqlParserTest {
                 + "(id BIGINT PRIMARY KEY, value BIGINT DEFAULT 1 DEFAULT 2)",
             command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "CREATE TABLE bad_primary_default "
                 + "(id BIGINT DEFAULT 1 PRIMARY KEY, value BIGINT)",
             command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse(
             "CREATE TABLE text_key (id VARCHAR(7) PRIMARY KEY, value BIGINT)",
             command));
@@ -2690,8 +2967,9 @@ final class SqlParserTest {
         StatusCode.OK,
         parser.parse("SELECT id FROM labels WHERE code IN ('one', 2)", command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parse("INSERT INTO x VALUES (9223372036854775808, 1)", command));
+    assertEquals(SqlTypeDescriptor.decimal(19, 0), command.insertTypeDescriptor(0, 0));
     assertEquals(
         StatusCode.OK,
         parser.parse("INSERT INTO x VALUES (0, -9223372036854775808)", command));
@@ -2701,11 +2979,12 @@ final class SqlParserTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parse("SELECT key, value FROM x WHERE key ! 1", command));
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parse(
             "SELECT key FROM x WHERE a=1 AND b=2 AND c=3 AND d=4 "
                 + "AND e=5 AND f=6 AND g=7 AND h=8 AND i=9",
             command));
+    assertEquals(9, command.wherePredicates().leafCount());
     StringBuilder tooManyRows = new StringBuilder("INSERT INTO x VALUES ");
     for (int index = 0; index <= SqlCommand.MAXIMUM_INSERT_ROWS; index++) {
       if (index > 0) {
@@ -3010,11 +3289,13 @@ final class SqlParserTest {
         StatusCode.QUERY_TOO_COMPLEX,
         parser.parseQuery(nestedQuery(33), query, command));
     assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
+        StatusCode.OK,
         parser.parseQuery(
             "SELECT d.id FROM (SELECT id FROM accounts LIMIT 1) d",
             query,
             command));
+    assertTrue(query.isBlockPipeline());
+    assertEquals(1, query.block(1).rowLimit());
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         parser.parseQuery(
@@ -3407,10 +3688,10 @@ final class SqlParserTest {
     assertEquals(9, query.blockCount());
     assertEquals(8, query.block(0).wherePredicates().leafCount());
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         parser.parseQuery(siblingExistenceQuery(9), query, command));
-    assertEquals(0, query.edgeCount());
-    assertEquals(0, query.blockCount());
+    assertEquals(9, query.edgeCount());
+    assertEquals(10, query.blockCount());
     assertEquals(
         StatusCode.OK,
         parser.parseQuery(siblingExistenceQuery(1), query, command));
@@ -3616,6 +3897,7 @@ final class SqlParserTest {
             query,
             command));
     assertEquals(SqlCommandType.JOIN_SCAN, query.block(1).type());
+    assertTrue(query.isBlockPipeline());
 
     String[] excluded = {
         "SELECT a.id FROM accounts a JOIN lookup b ON a.id=b.id ORDER BY a.id",
@@ -3889,6 +4171,30 @@ final class SqlParserTest {
     return query.toString();
   }
 
+  private static void assertCompositeIndexColumns(SqlParser parser, SqlCommand command) {
+    StringBuilder maximum = new StringBuilder("CREATE UNIQUE INDEX wide ON records(");
+    for (int part = 0; part < 32; part++) {
+      if (part > 0) maximum.append(',');
+      maximum.append('c').append(part + 1);
+    }
+    maximum.append(')');
+    assertEquals(StatusCode.OK, parser.parse(maximum, command));
+    assertEquals(32, command.columnCount());
+    assertName("c32", command.columnName(31));
+
+    maximum.insert(maximum.length() - 1, ",c33");
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, parser.parse(maximum, command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE INDEX empty ON records()", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE INDEX trailing ON records(c1,)", command));
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        parser.parse("CREATE INDEX duplicate ON records(c1,C1)", command));
+  }
+
   private static void assertName(String expected, SqlIdentifier actual) {
     assertText(expected, actual);
   }
@@ -3925,6 +4231,20 @@ final class SqlParserTest {
         assertEquals(SqlComparison.EQUAL, predicates.comparison(0));
       }
     }
+  }
+
+  @Test
+  void retainsAggregateShapeWhenJoinParserFinishesLast() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    assertEquals(StatusCode.OK, parser.parse(
+        "SELECT COUNT(DISTINCT s.i_id), SUM(s.i_id) FROM stock s "
+            + "INNER JOIN order_line ol ON ol.ol_i_id=s.i_id", command));
+    assertEquals(SqlCommandType.JOIN_SCAN, command.type());
+    assertEquals(2, command.aggregateOutputCount());
+    assertEquals(2, command.aggregateInvocationCount());
+    assertEquals(SqlAggregateKind.COUNT_DISTINCT, command.aggregateKind(0));
+    assertEquals(SqlAggregateKind.SUM, command.aggregateKind(1));
   }
 
   private static void assertBooleanNotOverLeaf(

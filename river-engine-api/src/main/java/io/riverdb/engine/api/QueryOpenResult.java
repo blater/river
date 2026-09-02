@@ -21,4 +21,8 @@ public final class QueryOpenResult {
   public RiverQuery query() {
     return query;
   }
+
+  public QueryMetadata metadata() {
+    return query == null ? null : query.metadata();
+  }
 }

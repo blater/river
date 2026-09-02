@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
-import io.riverdb.tx.api.TransactionState;
 import java.nio.ByteBuffer;
 
 /** Owns bounded sequence reservations and their schema-versioned value cache. */
@@ -20,7 +19,7 @@ final class RelationalSequenceService {
       CatalogRecord.MAXIMUM_BYTES);
   private final CatalogSequenceCodec.SequenceResult sequence =
       new CatalogSequenceCodec.SequenceResult();
-  private final int[] spaces = new int[CACHE_SLOTS];
+  private final long[] spaces = new long[CACHE_SLOTS];
   private final long[] keys = new long[CACHE_SLOTS];
   private final long[] nextValues = new long[CACHE_SLOTS];
   private final long[] increments = new long[CACHE_SLOTS];
@@ -33,7 +32,7 @@ final class RelationalSequenceService {
     schemaGate = gate;
   }
 
-  boolean consumeCached(int sequenceSpace, long sequenceKey, SequenceValueResult result) {
+  boolean consumeCached(long sequenceSpace, long sequenceKey, SequenceValueResult result) {
     refreshSchemaVersion();
     int slot = cacheSlot(sequenceSpace, sequenceKey);
     if (slot < 0) {
@@ -50,13 +49,14 @@ final class RelationalSequenceService {
 
   StatusCode reserve(
       RelationalSession session,
-      int sequenceSpace,
+      long sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId,
       long minimum,
       long maximum,
-      SequenceValueResult result) {
+      SequenceValueResult result,
+      RelationalInternalSessionOwner sessions) {
     TransactionOutcome outcome = new TransactionOutcome();
     StatusCode status = readForUpdate(
         session, sequenceSpace, sequenceKey, name, identityTableId);
@@ -82,7 +82,7 @@ final class RelationalSequenceService {
           increment,
           exhausted);
     }
-    status = finish(session, outcome, status);
+    status = sessions.finish(session, outcome, status);
     if (status.isOk()) {
       result.set(value, outcome.commitSequence());
       if (reserved > 1) {
@@ -100,7 +100,7 @@ final class RelationalSequenceService {
 
   private StatusCode readForUpdate(
       RelationalSession session,
-      int sequenceSpace,
+      long sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId) {
@@ -121,7 +121,7 @@ final class RelationalSequenceService {
 
   private StatusCode update(
       RelationalSession session,
-      int sequenceSpace,
+      long sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId,
@@ -137,20 +137,6 @@ final class RelationalSequenceService {
     }
     return session.indexedSession().update(
         sequenceSpace, sequenceKey, catalogOutput);
-  }
-
-  private StatusCode finish(
-      RelationalSession session,
-      TransactionOutcome outcome,
-      StatusCode bodyStatus) {
-    if (bodyStatus.isOk()) {
-      return session.commit(outcome);
-    }
-    if (session.indexedSession().transaction().state() != TransactionState.ACTIVE) {
-      return bodyStatus;
-    }
-    StatusCode abort = session.abort(outcome);
-    return abort.isOk() ? bodyStatus : abort;
   }
 
   private static int reservation(
@@ -187,7 +173,7 @@ final class RelationalSequenceService {
   }
 
   private void cache(
-      int sequenceSpace,
+      long sequenceSpace,
       long sequenceKey,
       long value,
       long increment,
@@ -202,7 +188,7 @@ final class RelationalSequenceService {
     remaining[slot] = reserved - 1;
   }
 
-  private int cacheSlot(int sequenceSpace, long sequenceKey) {
+  private int cacheSlot(long sequenceSpace, long sequenceKey) {
     for (int slot = 0; slot < CACHE_SLOTS; slot++) {
       if (remaining[slot] > 0
           && spaces[slot] == sequenceSpace
@@ -213,7 +199,7 @@ final class RelationalSequenceService {
     return -1;
   }
 
-  private int writableSlot(int sequenceSpace, long sequenceKey) {
+  private int writableSlot(long sequenceSpace, long sequenceKey) {
     for (int slot = 0; slot < CACHE_SLOTS; slot++) {
       if (remaining[slot] == 0
           || spaces[slot] == sequenceSpace && keys[slot] == sequenceKey) {

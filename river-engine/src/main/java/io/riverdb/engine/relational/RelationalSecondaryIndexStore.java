@@ -424,7 +424,7 @@ final class RelationalSecondaryIndexStore {
     int column = table.uniqueIndexColumn(slot);
     return table.isVarchar(column)
         ? textFingerprint(table, row, column)
-        : row.getLong(row.position() + (column - 1) * Long.BYTES);
+        : row.getLong(row.position() + table.valueOffset(column));
   }
 
   static long textFingerprint(TableDefinition table, ByteBuffer row, int column) {

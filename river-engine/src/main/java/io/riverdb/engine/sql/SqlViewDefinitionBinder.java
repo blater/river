@@ -9,6 +9,7 @@ import io.riverdb.sql.SqlCommandType;
 final class SqlViewDefinitionBinder {
   private final SqlBinder binder;
   private final SqlBlockPlanBinder blocks;
+  private final SqlBindingTableResolver tables = new SqlBindingTableResolver();
 
   SqlViewDefinitionBinder(SqlBinder sharedBinder) {
     binder = sharedBinder;
@@ -19,8 +20,8 @@ final class SqlViewDefinitionBinder {
     if (bound.query.isBlockPipeline()) {
       return bindPipeline(session, bound);
     }
-    StatusCode status = session.resolveTable(
-        bound.command.tableName(), bound.table);
+    StatusCode status = tables.resolve(
+        session, bound.command.tableName(), bound.table);
     if (!status.isOk()) return status;
     SqlCommandType type = bound.command.type();
     if (type == SqlCommandType.JOIN_SCAN) {
@@ -51,7 +52,7 @@ final class SqlViewDefinitionBinder {
       BoundSqlStatement bound,
       SqlCommand command) {
     SqlBoundJoinContext context = bound.joinContext(0);
-    StatusCode status = resolveRight(session, bound, command, context);
+    StatusCode status = resolveRoles(session, command, context, bound.table, false);
     if (status.isOk()) status = binder.bindJoin(command, bound, context);
     return status;
   }
@@ -61,18 +62,25 @@ final class SqlViewDefinitionBinder {
       BoundSqlStatement bound,
       SqlCommand command) {
     int block = Math.max(0, bound.query.blockCount() - 1);
-    StatusCode status = binder.resolveJoinRoles(
+    StatusCode status = resolveRoles(
         session, command, bound.joinContext(block), null, true);
     return status;
   }
 
-  private StatusCode resolveRight(
+  private StatusCode resolveRoles(
       RelationalSession session,
-      BoundSqlStatement bound,
       SqlCommand command,
-      SqlBoundJoinContext context) {
-    StatusCode status = binder.resolveJoinRoles(
-        session, command, context, bound.table, false);
+      SqlBoundJoinContext context,
+      io.riverdb.engine.relational.TableDefinition root,
+      boolean resolveLeft) {
+    if (command.joinChain() == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    int roles = command.joinChain().roleCount();
+    StatusCode status = context.beginRoles(roles, resolveLeft ? null : root);
+    int first = resolveLeft ? 0 : 1;
+    for (int role = first; status.isOk() && role < roles; role++) {
+      status = tables.resolve(
+          session, command.joinChain().tableName(role), context.table(role));
+    }
     return status;
   }
 }

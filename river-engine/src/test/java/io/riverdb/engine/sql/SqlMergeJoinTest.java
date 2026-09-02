@@ -129,10 +129,71 @@ final class SqlMergeJoinTest {
     assertPlanContains(session, result, "EXPLAIN " + exact, "merge");
     assertCount(session, result, "SELECT COUNT(*) FROM (" + exact + ") pairs", 3);
 
+    assertWideDecimalMergeKeys(session, result);
+    assertTextMergeKeys(session, result);
+
     String nested = "SELECT a.id,b.id FROM merge_left a "
         + "JOIN merge_right b ON a.k+0=b.k";
     assertPlanContains(session, result, "EXPLAIN " + nested, "join");
     assertCount(session, result, "SELECT COUNT(*) FROM (" + nested + ") pairs", 5);
+  }
+
+  private static void assertWideDecimalMergeKeys(
+      SqlSession session, SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE merge_wide_left "
+            + "(id BIGINT PRIMARY KEY,amount DECIMAL(38,18) NOT NULL)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE merge_wide_right "
+            + "(id BIGINT PRIMARY KEY,amount DECIMAL(38,18) NOT NULL)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO merge_wide_left VALUES "
+            + "(1,1.000000000000000000),(2,19.446744073709551616)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO merge_wide_right VALUES "
+            + "(11,1.000000000000000000),(12,1.000000000000000000),"
+            + "(13,19.446744073709551616)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE INDEX merge_wide_left_amount ON merge_wide_left(amount)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE INDEX merge_wide_right_amount ON merge_wide_right(amount)", result));
+    String query = "SELECT a.id,b.id FROM merge_wide_left a "
+        + "JOIN merge_wide_right b ON a.amount=b.amount";
+    assertPlanContains(session, result, "EXPLAIN " + query, "merge");
+    assertCount(session, result, "SELECT COUNT(*) FROM (" + query + ") pairs", 3);
+  }
+
+  private static void assertTextMergeKeys(
+      SqlSession session, SqlExecutionResult result) {
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE merge_text_left "
+            + "(id BIGINT PRIMARY KEY,name VARCHAR(16) NOT NULL)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE merge_text_indexed "
+            + "(id BIGINT PRIMARY KEY,name VARCHAR(16) NOT NULL)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE merge_text_unsorted "
+            + "(id BIGINT PRIMARY KEY,name VARCHAR(16) NOT NULL)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO merge_text_left VALUES (1,'alpha'),(2,'zeta')", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO merge_text_indexed VALUES "
+            + "(11,'alpha'),(12,'alpha'),(13,'zeta')", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "INSERT INTO merge_text_unsorted VALUES "
+            + "(21,'zeta'),(22,'alpha'),(23,'alpha')", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE INDEX merge_text_left_name ON merge_text_left(name)", result));
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE INDEX merge_text_indexed_name ON merge_text_indexed(name)", result));
+    String indexed = "SELECT a.id,b.id FROM merge_text_left a "
+        + "JOIN merge_text_indexed b ON a.name=b.name";
+    assertPlanContains(session, result, "EXPLAIN " + indexed, "merge");
+    assertCount(session, result, "SELECT COUNT(*) FROM (" + indexed + ") pairs", 3);
+    String sorted = "SELECT a.id,b.id FROM merge_text_left a "
+        + "JOIN merge_text_unsorted b ON a.name=b.name";
+    assertPlanContains(session, result, "EXPLAIN " + sorted, "merge");
+    assertCount(session, result, "SELECT COUNT(*) FROM (" + sorted + ") pairs", 3);
   }
 
   private static void assertNullableOuterKeyDoesNotReuseRun(
@@ -154,7 +215,7 @@ final class SqlMergeJoinTest {
     String query = "SELECT a.id,b.id FROM merge_nullable_outer a "
         + "JOIN merge_right b ON a.k=b.k";
     assertPlanContains(session, result, "EXPLAIN " + query, "merge");
-    assertRows(session, result, query, new long[][] {{1, 12}, {1, 11}});
+    assertRows(session, result, query, new long[][] {{1, 11}, {1, 12}});
   }
 
   private static void assertLeftResidualAndPlans(

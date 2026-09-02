@@ -15,7 +15,7 @@ Status: declared initial host; calibration and repeated benchmark evidence pendi
 | Memory | 16 GB unified memory |
 | Storage | Apple SSD `AP0256Q`; TRIM enabled |
 | Filesystem | APFS; local and journaled |
-| Free space at declaration | 12 GiB of 228 GiB data volume available (94% used) |
+| Free space at declaration | 12 GB of 228 GB data volume available (94% used) |
 | Power at declaration | AC power; battery fully charged |
 | OS | macOS 26.5.2 build 25F84; arm64 |
 | JVM | Oracle GraalVM 25.0.3 LTS; HotSpot JVMCI |
@@ -31,7 +31,7 @@ Results from this host are not portable Linux or server-hardware performance
 claims. Direct Ingres comparison is authorized but optional. A later dedicated
 Linux runner should revalidate performance before portable product claims.
 
-The current 12 GiB free-space margin is sufficient for bounded mechanism
+The current 12 GB free-space margin is sufficient for bounded mechanism
 smokes but is a constraint for larger scale, recovery, checkpoint-storm, and
 write-amplification runs. Those runs must declare bounded scratch use and fail
 before exhausting the data volume; larger evidence needs reclaimed space or a

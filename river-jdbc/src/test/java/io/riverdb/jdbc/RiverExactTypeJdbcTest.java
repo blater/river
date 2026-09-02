@@ -61,8 +61,7 @@ final class RiverExactTypeJdbcTest {
         assertEquals(1, insert.executeUpdate());
         insert.setLong(1, 3);
         insert.setBigDecimal(3, new BigDecimal("42.701"));
-        SQLException lossy = assertThrows(SQLException.class, insert::executeUpdate);
-        assertEquals("42804", lossy.getSQLState());
+        assertEquals(1, insert.executeUpdate());
       }
       try (PreparedStatement select = connection.prepareStatement(
           "SELECT paid, amount FROM invoices WHERE paid=? AND amount=?")) {
@@ -91,24 +90,32 @@ final class RiverExactTypeJdbcTest {
           assertEquals(new BigDecimal("42.70"), rows.getObject(2, BigDecimal.class));
           assertEquals("42.70", rows.getString(2));
           assertEquals("42.70", rows.getObject(2, String.class));
-          assertUnsupported(() -> rows.getBoolean(2));
-          assertUnsupported(() -> rows.getByte(2));
-          assertUnsupported(() -> rows.getShort(2));
-          assertUnsupported(() -> rows.getInt(2));
-          assertUnsupported(() -> rows.getLong(2));
-          assertUnsupported(() -> rows.getFloat(2));
-          assertUnsupported(() -> rows.getDouble(2));
+          assertTrue(rows.getBoolean(2));
+          assertNumericOverflow(() -> rows.getByte(2));
+          assertNumericOverflow(() -> rows.getShort(2));
+          assertNumericOverflow(() -> rows.getInt(2));
+          assertNumericOverflow(() -> rows.getLong(2));
+          assertEquals(42.7F, rows.getFloat(2), 0.0001F);
+          assertEquals(42.7D, rows.getDouble(2), 0.0001D);
           assertUnsupported(() -> rows.getObject(2, Long.class));
           assertUnsupported(() -> rows.getObject(2, Integer.class));
-          assertUnsupported(() -> rows.getLong("amount"));
+          assertNumericOverflow(() -> rows.getLong("amount"));
           assertFalse(rows.next());
         }
+      }
+      try (Statement statement = connection.createStatement();
+          ResultSet rows = statement.executeQuery(
+              "SELECT amount FROM invoices WHERE id=3")) {
+        assertTrue(rows.next());
+        assertEquals(new BigDecimal("42.70"), rows.getBigDecimal(1));
+        assertFalse(rows.next());
       }
       try (Statement select = connection.createStatement();
           ResultSet rows = select.executeQuery(
               "SELECT amount FROM invoices WHERE id=2")) {
         assertTrue(rows.next());
-        assertUnsupported(() -> rows.getLong(1));
+        assertEquals(0L, rows.getLong(1));
+        assertTrue(rows.wasNull());
         assertUnsupported(() -> rows.getObject(1, Long.class));
         assertNull(rows.getBigDecimal(1));
         assertTrue(rows.wasNull());
@@ -128,11 +135,12 @@ final class RiverExactTypeJdbcTest {
             SQLException.class,
             () -> expression.executeQuery("SELECT 1.0/0.0"));
         assertEquals("22012", failure.getSQLState());
-        SQLException overflow = assertThrows(
-            SQLException.class,
-            () -> expression.executeQuery(
-                "SELECT 900000000000000000+900000000000000000.0"));
-        assertEquals("22003", overflow.getSQLState());
+        try (ResultSet sum = expression.executeQuery(
+            "SELECT 900000000000000000+900000000000000000.0")) {
+          assertTrue(sum.next());
+          assertEquals(new BigDecimal("1800000000000000000.0"), sum.getBigDecimal(1));
+          assertFalse(sum.next());
+        }
       }
       try (Statement expression = connection.createStatement();
           ResultSet value = expression.executeQuery("SELECT 2147483648")) {
@@ -150,5 +158,10 @@ final class RiverExactTypeJdbcTest {
   private static void assertUnsupported(Executable operation) {
     SQLException failure = assertThrows(SQLException.class, operation);
     assertEquals("0A000", failure.getSQLState());
+  }
+
+  private static void assertNumericOverflow(Executable operation) {
+    SQLException failure = assertThrows(SQLException.class, operation);
+    assertEquals("22003", failure.getSQLState());
   }
 }

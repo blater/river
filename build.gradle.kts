@@ -119,7 +119,7 @@ val declaredDependencies = mapOf(
   "river-format" to setOf("river-base"),
   "river-tx-api" to setOf("river-base"),
   "river-wal" to setOf("river-base", "river-format", "river-platform"),
-  "river-storage" to setOf("river-base"),
+  "river-storage" to setOf("river-base", "river-format"),
   "river-tx" to setOf("river-base", "river-tx-api"),
   "river-backup" to setOf("river-base", "river-format", "river-platform"),
   "river-sql" to setOf("river-base"),
@@ -136,7 +136,9 @@ val declaredDependencies = mapOf(
     "river-tx", "river-tx-api", "river-wal", "river-sql", "river-engine-api"
   ),
   "river-inspect" to setOf("river-base", "river-format", "river-platform"),
-  "river-bench" to setOf("river-base")
+  "river-bench" to setOf(
+    "river-base", "river-jdbc", "river-engine-api", "river-engine", "river-server"
+  )
 )
 
 // Project dependencies are compile-private unless a current River consumer
@@ -263,6 +265,10 @@ val pendingMutationBufferDescriptor =
   "Lio/riverdb/engine/table/PendingMutationBuffer;"
 val indexedScanCursorDescriptor = "Lio/riverdb/engine/table/IndexedScanCursor;"
 val indexedScanResultDescriptor = "Lio/riverdb/engine/table/IndexedScanResult;"
+val indexedRowDirectoryFrameDescriptor =
+  "Lio/riverdb/engine/table/IndexedRowDirectory\$DirectoryFrame;"
+val indexedVersionDirectoryFrameDescriptor =
+  "Lio/riverdb/engine/table/IndexedVersionDirectory\$VersionFrame;"
 val relationalScanCursorDescriptor = "Lio/riverdb/engine/relational/RelationalScanCursor;"
 val relationalScanResultDescriptor = "Lio/riverdb/engine/relational/RelationalScanResult;"
 val sqlCommandDescriptor = "Lio/riverdb/sql/SqlCommand;"
@@ -277,6 +283,12 @@ val exactDecimalLongValueDescriptor =
   "Lio/riverdb/base/type/ExactDecimal\$LongValue;"
 val exactDecimalWideScratchDescriptor =
   "Lio/riverdb/base/type/ExactDecimal\$WideScratch;"
+val schemaTableDescriptor = "Lio/riverdb/engine/schema/TableDescriptor;"
+val sqlValueBufferDescriptor = "Lio/riverdb/base/type/SqlValueBuffer;"
+val storedTableRowEncodeResultDescriptor =
+  "Lio/riverdb/engine/row/StoredTableRowEncodeResult;"
+val logicalRowIdReservationDescriptor =
+  "Lio/riverdb/engine/row/LogicalRowIdReservation;"
 val byteBufferDescriptor = "Ljava/nio/ByteBuffer;"
 val crc32cDescriptor = "Ljava/util/zip/CRC32C;"
 val longArrayDescriptor = "[J"
@@ -562,52 +574,52 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "lookupLeaf",
-    "($byteBufferDescriptor" + "IJ$btreeLookupResultDescriptor)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JJ$btreeLookupResultDescriptor)$statusCodeDescriptor"
   ),
-  hotMethod("io.riverdb.base.key.OrderedKey", "compare", "(IJIJ)I"),
-  hotMethod("io.riverdb.base.key.OrderedKey", "lessThan", "(IJIJ)Z"),
-  hotMethod("io.riverdb.base.key.OrderedKey", "equal", "(IJIJ)Z"),
+  hotMethod("io.riverdb.base.key.OrderedKey", "compare", "(JJJJ)I"),
+  hotMethod("io.riverdb.base.key.OrderedKey", "lessThan", "(JJJJ)Z"),
+  hotMethod("io.riverdb.base.key.OrderedKey", "equal", "(JJJJ)Z"),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "childForKey",
-    "($byteBufferDescriptor" + "IJ)I"
+    "($byteBufferDescriptor" + "JJ)I"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "insertLeaf",
-    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "updateLeaf",
-    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "splitLeaf",
     "($byteBufferDescriptor$byteBufferDescriptor"
-        + "IIJI$btreeSplitResultDescriptor)$statusCodeDescriptor"
+        + "IJJJ$btreeSplitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.btree.BTreePage",
     "insertInternal",
-    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedLogicalCommitter",
     "commitInsert",
-    "(JJIJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JJJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedLogicalCommitter",
     "commitInsertBatch",
-    "(JJ$intArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
+    "(JJ$longArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedLogicalCommitter",
     "commitMutations",
-    "(JJ$intArrayDescriptor$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+    "(JJ$intArrayDescriptor$longArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
@@ -619,37 +631,37 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateNewIndexEntry",
-    "(IJI)$statusCodeDescriptor"
+    "(JJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateNewIndexEntryAt",
-    "(IIJI)$statusCodeDescriptor"
+    "(IJJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateNewIndexEntryIn",
-    "($byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateMutationTarget",
-    "(IIJII)$statusCodeDescriptor"
+    "(IJJJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateMutationTargetAt",
-    "(IIIJII)$statusCodeDescriptor"
+    "(IIJJJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateMutationTargetIn",
-    "($byteBufferDescriptor" + "IIJII)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IJJJI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "validateVacuumHead",
-    "(IJI)$statusCodeDescriptor"
+    "(JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -662,12 +674,12 @@ val liveHotPathMethods = setOf(
     "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableWalApplier",
     "containsEarlierInsertKey",
-    "($byteBufferDescriptor" + "IIJ)Z"
+    "($byteBufferDescriptor" + "IJJ)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableWalApplier",
     "countEarlierInsertEntriesInLeaf",
     "($byteBufferDescriptor" + "II)I"
   ),
@@ -677,30 +689,94 @@ val liveHotPathMethods = setOf(
     "($byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableWalApplier",
     "containsEarlierMutationKey",
-    "($byteBufferDescriptor" + "IIJ)Z"
+    "($byteBufferDescriptor" + "IJJ)Z"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableWalApplier",
     "countEarlierMutationInsertsInLeaf",
     "($byteBufferDescriptor" + "II)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "rowCommitSequence",
-    "(I)J"
+    "(J)J"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "previousRowId",
-    "(I)I"
+    "(J)J"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "isDeletedRow",
-    "(I)Z"
+    "(J)Z"
   ),
+  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "pageId", "(J)I"),
+  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "slot", "(J)I"),
+  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "set", "(JII)V"),
+  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "read", "(JZ)Z"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedRowDirectory",
+    "frame",
+    "(JZ)$indexedRowDirectoryFrameDescriptor"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "findFrame", "(Z)I"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionState",
+    "commitSequence",
+    "(JJ)J"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedVersionState", "previousRow", "(JJ)J"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionState", "isDeleted", "(JJ)Z"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionState",
+    "recordCommitted",
+    "(JJJZ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionState",
+    "recordNewRows",
+    "(JJJ)V"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedVersionState", "recordOperation", "(JJ)V"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionState",
+    "applyRecovered",
+    "($byteBufferDescriptor" + "IJIJ)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionState",
+    "recordVacuumDeleted",
+    "(JZ)V"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedVersionState", "publishVacuum", "(JJ)V"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionState", "cancelVacuum", "(J)V"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionState", "visibleRow", "(JJJ)J"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "set", "(JJJZ)V"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionDirectory",
+    "setVacuumDeleted",
+    "(JZ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionDirectory",
+    "clearVacuumDeleted",
+    "(J)V"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "read", "(J)Z"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "commitSequence", "()J"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "previousRowId", "()J"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "deleted", "()Z"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "vacuumDeleted", "()Z"),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "write", "(JJJJJ)V"),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionDirectory",
+    "frame",
+    "(J)$indexedVersionDirectoryFrameDescriptor"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedVersionDirectory", "findFrame", "()I"),
   hotMethod(
     "io.riverdb.engine.table.IndexedPageSet",
     "stageExisting",
@@ -812,12 +888,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodePageOperationVersion",
-    "($byteBufferDescriptor" + "IIZ)V"
+    "($byteBufferDescriptor" + "IJZ)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeInsertHeader",
-    "($byteBufferDescriptor" + "IJII)V"
+    "($byteBufferDescriptor" + "JJJI)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -827,7 +903,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeInsertBatchEntry",
-    "($byteBufferDescriptor" + "IIJII)V"
+    "($byteBufferDescriptor" + "IJJJI)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -837,22 +913,22 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeMutationBatchEntry",
-    "($byteBufferDescriptor" + "IIIJIII)V"
+    "($byteBufferDescriptor" + "IIJJJJI)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeVacuumChunkHeader",
-    "($byteBufferDescriptor" + "IIIII)V"
+    "($byteBufferDescriptor" + "JJIII)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeVacuumEntry",
-    "($byteBufferDescriptor" + "IIJIIZ)V"
+    "($byteBufferDescriptor" + "IJJJIZ)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "encodeVacuumCommit",
-    "($byteBufferDescriptor" + "III)V"
+    "($byteBufferDescriptor" + "JIJ)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -877,12 +953,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "validateVacuumChunk",
-    "($byteBufferDescriptor" + "II)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
     "validateVacuumCommit",
-    "($byteBufferDescriptor" + "II)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JI)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedWalCodec",
@@ -954,55 +1030,55 @@ val liveHotPathMethods = setOf(
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationPageOffset", "(I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageOperationVersionsOffset", "(I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertKey", "($byteBufferDescriptor)J"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertSpace", "($byteBufferDescriptor)I"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertRowId", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertSpace", "($byteBufferDescriptor)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertRowId", "($byteBufferDescriptor)J"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertRowBytes", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "batchEntryCount", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchKey", "($byteBufferDescriptor" + "I)J"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchSpace", "($byteBufferDescriptor" + "I)I"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchSpace", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchRowId", "($byteBufferDescriptor" + "I)J"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "insertBatchRowBytes", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationOperation", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationKey", "($byteBufferDescriptor" + "I)J"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationSpace", "($byteBufferDescriptor" + "I)I"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationRowId", "($byteBufferDescriptor" + "I)I"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationPreviousRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationSpace", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationRowId", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationPreviousRowId", "($byteBufferDescriptor" + "I)J"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "mutationRowBytes", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "encodedRowBytes", "($byteBufferDescriptor" + "II)I"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageVersionPreviousRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageVersionPreviousRowId", "($byteBufferDescriptor" + "I)J"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "pageVersionDeleted", "($byteBufferDescriptor" + "I)Z"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumRetainedRows", "($byteBufferDescriptor)I"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumFirstRow", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumRetainedRows", "($byteBufferDescriptor)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumFirstRow", "($byteBufferDescriptor)J"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumRowCount", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumChunk", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumChunkCount", "($byteBufferDescriptor)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryKey", "($byteBufferDescriptor" + "I)J"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntrySpace", "($byteBufferDescriptor" + "I)I"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryRowId", "($byteBufferDescriptor" + "I)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntrySpace", "($byteBufferDescriptor" + "I)J"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryRowId", "($byteBufferDescriptor" + "I)J"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryRowBytes", "($byteBufferDescriptor" + "I)I"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumEntryDeleted", "($byteBufferDescriptor" + "I)Z"),
-  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumCommitRowsBefore", "($byteBufferDescriptor)I"),
+  hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumCommitRowsBefore", "($byteBufferDescriptor)J"),
   hotMethod("io.riverdb.engine.table.IndexedWalCodec", "vacuumCommitChunkCount", "($byteBufferDescriptor)I"),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "stageVersionRow",
-    "($byteBufferDescriptor" + "IIIZ$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IIJZ$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod("io.riverdb.engine.table.IndexedTableKernel", "canAppendRow", "(I)Z"),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "fetchRow",
-    "(I$heapRowResultDescriptor)$statusCodeDescriptor"
+    "(J$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "rowLength",
-    "(I)I"
+    "(J)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "copyRowTo",
-    "(I$byteBufferDescriptor" + "I)$statusCodeDescriptor"
+    "(J$byteBufferDescriptor" + "I)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -1017,16 +1093,16 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "appendCurrentRow",
-    "($byteBufferDescriptor" + "IIIJJJIZ)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IIJJJJJZ)$statusCodeDescriptor"
   ),
   hotMethod("io.riverdb.engine.table.IndexedTableKernel", "indexedEntryCount", "()I"),
   hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkCount", "()I"),
-  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkRowCount", "(I)I"),
-  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkPayloadBytes", "(II)I"),
+  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkRowCount", "(J)I"),
+  hotMethod("io.riverdb.engine.table.IndexedTableKernel", "vacuumChunkPayloadBytes", "(JI)I"),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "encodeVacuumChunk",
-    "($byteBufferDescriptor" + "IIIIII)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "JJIIII)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -1036,7 +1112,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "applyVacuumEntry",
-    "($byteBufferDescriptor" + "II)$statusCodeDescriptor"
+    "($byteBufferDescriptor" + "IJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -1051,7 +1127,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "insert",
-    "(JIJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.storage.heap.HeapRowResult",
@@ -1066,18 +1142,18 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "commitInsert",
-    "(JIJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
+    "(JJJ$byteBufferDescriptor$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "commitInserts",
-    "(J$intArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
+    "(J$longArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "commitMutations",
-    "(J$intArrayDescriptor$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+    "(J$intArrayDescriptor$longArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$indexedCommitResultDescriptor)$statusCodeDescriptor"
   ),
@@ -1090,22 +1166,22 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "prepareMutation",
-    "(JIJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
+    "(JJJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "prepareInsert",
-    "(JIJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
+    "(JJJ$indexedMutationTargetDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedMutationTarget",
     "rowId",
-    "()I"
+    "()J"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedMutationTarget",
     "set",
-    "(I)V"
+    "(J)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedMutationTarget",
@@ -1115,35 +1191,35 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "insertCommitted",
-    "(JJIJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+    "(JJJJ$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "stageInsertBatch",
-    "($intArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
+    "($longArrayDescriptor$longArrayDescriptor$byteBufferDescriptor"
         + "I${intArrayDescriptor}I$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "stageMutationBatch",
-    "($intArrayDescriptor$intArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
+    "($intArrayDescriptor$longArrayDescriptor$longArrayDescriptor$intArrayDescriptor"
         + "$byteBufferDescriptor" + "I${intArrayDescriptor}I"
         + "$heapInsertResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "stageInsert",
-    "(IIJ$byteBufferDescriptor)$statusCodeDescriptor"
+    "(IJJ$byteBufferDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
-    "io.riverdb.engine.table.IndexedTableKernel",
+    "io.riverdb.engine.table.IndexedTableIndexTree",
     "splitAndInsert",
-    "(I$byteBufferDescriptor" + "IJI)$statusCodeDescriptor"
+    "(I$byteBufferDescriptor" + "JJJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "findOperationLeafPageId",
-    "(IJ)I"
+    "(JJ)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableValidator",
@@ -1153,12 +1229,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTableStore",
     "fetchByKey",
-    "(IJ$heapRowResultDescriptor)$statusCodeDescriptor"
+    "(JJ$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
     "fetchByKeyAt",
-    "(JIJ$heapRowResultDescriptor)$statusCodeDescriptor"
+    "(JJJ$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
@@ -1195,7 +1271,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.tx.LockManager",
     "tryAcquire",
-    "(J$lockScopeDescriptor" + "IJIJ$lockModeDescriptor"
+    "(J$lockScopeDescriptor" + "JJJJ$lockModeDescriptor"
         + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
@@ -1221,7 +1297,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.tx.TransactionManager",
     "tryAcquireKey",
-    "($transactionDescriptor" + "IJ$lockTokenDescriptor)$statusCodeDescriptor"
+    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
@@ -1231,12 +1307,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.tx.TransactionManager",
     "tryAcquireSharedKey",
-    "($transactionDescriptor" + "IJ$lockTokenDescriptor)$statusCodeDescriptor"
+    "($transactionDescriptor" + "JJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
     "tryAcquireSharedRange",
-    "($transactionDescriptor" + "IJIJ$lockTokenDescriptor)$statusCodeDescriptor"
+    "($transactionDescriptor" + "JJJJ$lockTokenDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.tx.TransactionManager",
@@ -1312,7 +1388,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTable",
     "beginScan",
-    "(JIJIJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+    "(JJJJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTableKernel",
@@ -1327,12 +1403,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "beginScan",
-    "(IJIJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
+    "(JJJJ$indexedScanCursorDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
-    "acquireSharedRange",
-    "(IJIJ)$statusCodeDescriptor"
+    "acquireSharedRangeForScan",
+    "(JJJJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -1381,34 +1457,263 @@ val liveHotPathMethods = setOf(
     "($engineRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
+    "io.riverdb.engine.row.StoredTableRowCodec",
+    "encode",
+    "($schemaTableDescriptor" + "J$sqlValueBufferDescriptor$byteBufferDescriptor"
+        + "I$storedTableRowEncodeResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.LogicalRowIdAllocator",
+    "reserveInserts",
+    "(I$logicalRowIdReservationDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.LogicalRowIdAllocator",
+    "reserveHeapVersions",
+    "(I$logicalRowIdReservationDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.LogicalRowIdAllocator",
+    "encodeWatermark",
+    "($byteBufferDescriptor" + "I$crc32cDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.LogicalRowIdAllocator",
+    "available",
+    "(JI)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowCodec",
+    "decode",
+    "($schemaTableDescriptor" + "J$byteBufferDescriptor"
+        + "II$sqlValueBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "encode",
+    "($schemaTableDescriptor" + "J$sqlValueBufferDescriptor$byteBufferDescriptor"
+        + "I$storedTableRowEncodeResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "validArguments",
+    "($schemaTableDescriptor" + "J$sqlValueBufferDescriptor$byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "checkedLength",
+    "($schemaTableDescriptor$sqlValueBufferDescriptor)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "writeBitmap",
+    "($schemaTableDescriptor$sqlValueBufferDescriptor$byteBufferDescriptor" + "I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "writeSlots",
+    "($schemaTableDescriptor$sqlValueBufferDescriptor$byteBufferDescriptor" + "I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "writeFixed",
+    "($byteBufferDescriptor" + "IIJ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "zero",
+    "($byteBufferDescriptor" + "II)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowEncoder",
+    "fixedEnd",
+    "($schemaTableDescriptor)I"
+  ),
+  hotMethod("io.riverdb.engine.row.StoredTableRowEncoder", "isText", "(I)Z"),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowDecoder",
+    "decode",
+    "($schemaTableDescriptor" + "J$byteBufferDescriptor"
+        + "II$sqlValueBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowDecoder",
+    "validArguments",
+    "($schemaTableDescriptor" + "J$byteBufferDescriptor"
+        + "II$sqlValueBufferDescriptor)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowBodyValidator",
+    "validate",
+    "($schemaTableDescriptor$byteBufferDescriptor" + "II)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowBodyValidator",
+    "validateSlot",
+    "($schemaTableDescriptor$byteBufferDescriptor" + "IIII)I"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowBodyValidator",
+    "canonicalBitmap",
+    "($schemaTableDescriptor$byteBufferDescriptor" + "I)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowPublisher",
+    "publish",
+    "($schemaTableDescriptor$byteBufferDescriptor" + "I$sqlValueBufferDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowPublisher",
+    "publishSlot",
+    "($schemaTableDescriptor$byteBufferDescriptor" + "II$sqlValueBufferDescriptor)"
+        + statusCodeDescriptor
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowAccess",
+    "nullAt",
+    "($byteBufferDescriptor" + "II)Z"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowAccess",
+    "fixedValue",
+    "($schemaTableDescriptor" + "I$byteBufferDescriptor" + "I)J"
+  ),
+  hotMethod(
+    "io.riverdb.engine.row.StoredTableRowAccess",
+    "zero",
+    "($byteBufferDescriptor" + "II)Z"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.SqlValueBuffer",
+    "setTextBytes",
+    "(II$byteBufferDescriptor" + "II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.SqlValueBuffer",
+    "clearForSize",
+    "(I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.SqlValueBuffer",
+    "setFixed",
+    "(IIJ)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.type.SqlValueBuffer",
+    "setNull",
+    "(II)$statusCodeDescriptor"
+  ),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "count", "()I"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "capacity", "()I"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "valueAt", "(I)J"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "descriptorAt", "(I)I"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "isNull", "(I)Z"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "nullWord", "(I)J"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "textByteLengthAt", "(I)I"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "textCapacity", "()I"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "textMaximumBytes", "()I"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "textByteAt", "(II)I"),
+  hotMethod(
+    "io.riverdb.base.type.SqlValueBuffer",
+    "publish",
+    "(IIJII)V"
+  ),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "validIndex", "(I)Z"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "unassigned", "(I)Z"),
+  hotMethod("io.riverdb.base.type.SqlValueBuffer", "isText", "(I)Z"),
+  hotMethod(
+    "io.riverdb.base.text.Utf8TextArena",
+    "append",
+    "($byteBufferDescriptor" + "III)$statusCodeDescriptor"
+  ),
+  hotMethod("io.riverdb.base.text.Utf8TextArena", "byteAt", "(I)I"),
+  hotMethod("io.riverdb.base.text.Utf8TextArena", "maximumBytes", "()I"),
+  hotMethod(
+    "io.riverdb.base.text.Utf8TextArena",
+    "ensureCapacity",
+    "(I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.base.text.Utf8TextArena",
+    "grow",
+    "(II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationAdmission",
+    "reserveAndLock",
+    "(Lio/riverdb/engine/table/IndexedTransactionSession;JJI)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "reservePending",
+    "(II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionSession",
+    "reservePending",
+    "([III)$statusCodeDescriptor"
+  ),
+  hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "insert",
-    "(IJ$byteBufferDescriptor)$statusCodeDescriptor"
+    "(JJ$byteBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionWriteSet",
+    "insert",
+    "(JJ$byteBufferDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "update",
-    "(IJ$byteBufferDescriptor)$statusCodeDescriptor"
+    "(JJ$byteBufferDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionWriteSet",
+    "update",
+    "(JJ$byteBufferDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "delete",
-    "(IJ)$statusCodeDescriptor"
+    "(JJ)$statusCodeDescriptor"
   ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionWriteSet",
+    "delete",
+    "(JJ)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTransactionWriteSet",
+    "validRow",
+    "(J$byteBufferDescriptor)Z"
+  ),
+  hotMethod("io.riverdb.engine.table.IndexedTransactionWriteSet", "full", "()Z"),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "appendPending",
-    "(IIJI$byteBufferDescriptor" + "IIZ)V"
+    "(IJJJ$byteBufferDescriptor" + "IIZ)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "reserve",
+    "(II)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingMutationBuffer",
+    "reserve",
+    "([III)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
     "append",
-    "(IIJI$byteBufferDescriptor" + "II)V"
+    "(IJJJ$byteBufferDescriptor" + "II)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
     "appendDeletion",
-    "(IIJI)V"
+    "(IJJJ)V"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
@@ -1433,7 +1738,7 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
     "findLatestIndex",
-    "(IJ)I"
+    "(JJ)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.PendingMutationBuffer",
@@ -1454,13 +1759,55 @@ val liveHotPathMethods = setOf(
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "rowStride", "()I"),
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "operationAt", "(I)I"),
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "keyAt", "(I)J"),
-  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "spaceAt", "(I)I"),
-  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "previousRowIdAt", "(I)I"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "spaceAt", "(I)J"),
+  hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "previousRowIdAt", "(I)J"),
   hotMethod("io.riverdb.engine.table.PendingMutationBuffer", "rowLengthAt", "(I)I"),
+  hotMethod(
+    "io.riverdb.engine.table.PendingRowArena",
+    "reserveRow",
+    "(I)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingRowArena",
+    "reserveRows",
+    "([III)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingRowArena",
+    "append",
+    "($byteBufferDescriptor" + "II)I"
+  ),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "appendDeletion", "()I"),
+  hotMethod(
+    "io.riverdb.engine.table.PendingRowArena",
+    "copyTo",
+    "(II$byteBufferDescriptor" + "I)V"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingRowArena",
+    "insertInto",
+    "(II$byteBufferDescriptor$heapInsertResultDescriptor)$statusCodeDescriptor"
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.PendingRowArena",
+    "setResult",
+    "(II$heapRowResultDescriptor)V"
+  ),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "beginCompaction", "()V"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "compactRow", "(II)I"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "finishCompaction", "()V"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "truncateTo", "(I)V"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "endOffset", "()I"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "advanceFor", "(I)V"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "allocateChunk", "(I)V"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "encodeOffset", "(II)I"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "chunkIndex", "(I)I"),
+  hotMethod("io.riverdb.engine.table.PendingRowArena", "chunkOffset", "(I)I"),
+  hotMethod("io.riverdb.engine.table.HeapPendingRowChunkAllocator", "allocate", "(I)[B"),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "fetchByKey",
-    "(IJ$heapRowResultDescriptor)$statusCodeDescriptor"
+    "(JJ$heapRowResultDescriptor)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -1480,12 +1827,12 @@ val liveHotPathMethods = setOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "findHeldLock",
-    "(IJ)I"
+    "(JJ)I"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
     "acquireExclusiveKey",
-    "(IJ)$statusCodeDescriptor"
+    "(JJ)$statusCodeDescriptor"
   ),
   hotMethod(
     "io.riverdb.engine.table.IndexedTransactionSession",
@@ -1520,6 +1867,60 @@ val liveHotPathAllowedRules = mapOf(
     HotPathBytecodePolicy.Allowance(
       HotPathBytecodePolicy.Rule.EXCEPTION_THROW,
       "athrow"
+    )
+  ),
+  // javac emits one synthetic rethrow so the pinned scan page is always released.
+  hotMethod(
+    "io.riverdb.engine.table.IndexedTableKernel",
+    "nextScan",
+    "($indexedScanCursorDescriptor$indexedScanResultDescriptor)$statusCodeDescriptor"
+  ) to setOf(
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.EXCEPTION_THROW,
+      "athrow"
+    )
+  ),
+  // Cache frames are allocated only on a bounded cold miss and then retained.
+  hotMethod(
+    "io.riverdb.engine.table.IndexedRowDirectory",
+    "frame",
+    "(JZ)$indexedRowDirectoryFrameDescriptor"
+  ) to setOf(
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
+      "new io.riverdb.engine.table.IndexedRowDirectory\$DirectoryFrame"
+    )
+  ),
+  hotMethod(
+    "io.riverdb.engine.table.IndexedVersionDirectory",
+    "frame",
+    "(J)$indexedVersionDirectoryFrameDescriptor"
+  ) to setOf(
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
+      "new io.riverdb.engine.table.IndexedVersionDirectory\$VersionFrame"
+    )
+  ),
+  // Pending-row chunks are allocated only after bounded reservation and then retained.
+  hotMethod(
+    "io.riverdb.engine.table.HeapPendingRowChunkAllocator",
+    "allocate",
+    "(I)[B"
+  ) to setOf(
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.ARRAY_ALLOCATION,
+      "new byte array"
+    )
+  ),
+  // UTF-8 storage grows only at bounded admission and retains its array and buffer view.
+  hotMethod(
+    "io.riverdb.base.text.Utf8TextArena",
+    "grow",
+    "(II)$statusCodeDescriptor"
+  ) to setOf(
+    HotPathBytecodePolicy.Allowance(
+      HotPathBytecodePolicy.Rule.ARRAY_ALLOCATION,
+      "new byte array"
     )
   )
 )
@@ -1574,6 +1975,105 @@ val verifySourcePolicy = tasks.register("verifySourcePolicy") {
     )
     if (violations.isNotEmpty()) {
       throw GradleException(violations.joinToString(separator = "\n"))
+    }
+  }
+}
+
+val sqlShapeLegacyMatchCeilings = mapOf(
+  "river-base" to 4,
+  "river-client" to 8,
+  "river-engine" to 433,
+  "river-engine-api" to 13,
+  "river-format" to 4,
+  "river-jdbc" to 9,
+  "river-protocol" to 59,
+  "river-sql" to 11
+)
+val sqlShapeLegacyPattern = Regex(
+  """\b(?:MAXIMUM_COLUMNS|MAXIMUM_JOIN_ROLES|MAXIMUM_ARITY)\b"""
+      + """|\b[A-Za-z0-9_]*null_?masks?[A-Za-z0-9_]*\b"""
+      + """|\b1L\s*<<\s*\(*\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)*"""
+      + """(?:[A-Za-z0-9_]*(?:column|lane|projection)[A-Za-z0-9_]*|index)\b""",
+  RegexOption.IGNORE_CASE
+)
+fun sqlShapeLegacyMatchCount(source: CharSequence): Int =
+  sqlShapeLegacyPattern.findAll(source).count()
+
+val verifySqlShapeSourcePolicy = tasks.register("verifySqlShapeSourcePolicy") {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Prevents growth of legacy fixed-column and scalar-null-mask source patterns."
+
+  val productionSources = productionModules.associateWith { module ->
+    project(":$module").fileTree("src/main/java") { include("**/*.java") }
+  }
+  inputs.files(productionSources.values)
+
+  doLast {
+    val violations = mutableListOf<String>()
+    productionModules.forEach { module ->
+      val matches = productionSources.getValue(module).files.sumOf { source ->
+        sqlShapeLegacyMatchCount(source.readText())
+      }
+      val ceiling = sqlShapeLegacyMatchCeilings[module] ?: 0
+      if (matches > ceiling) {
+        violations.add("$module has $matches legacy SQL-shape matches; ceiling is $ceiling")
+      }
+    }
+    if (violations.isNotEmpty()) {
+      throw GradleException(violations.joinToString(separator = "\n"))
+    }
+  }
+}
+
+val verifySqlShapeSourcePolicyFixtures = tasks.register(
+  "verifySqlShapeSourcePolicyFixtures"
+) {
+  group = LifecycleBasePlugin.VERIFICATION_GROUP
+  description = "Proves legacy SQL-shape source matching and occurrence counting."
+  inputs.property("sqlShapeLegacyPattern", sqlShapeLegacyPattern.pattern)
+
+  doLast {
+    val positiveFixtures = linkedMapOf(
+      "fixed maxima" to Pair(
+        "MAXIMUM_COLUMNS MAXIMUM_JOIN_ROLES MAXIMUM_ARITY",
+        3
+      ),
+      "compound camel null masks" to Pair(
+        "nullMask rowNullMask rowNullMasks projectedNullMaskWords",
+        4
+      ),
+      "compound snake null masks" to Pair(
+        "null_mask row_null_mask row_null_masks projected_null_mask_words",
+        4
+      ),
+      "qualified and parenthesized shifts" to Pair(
+        "1L << row.column; 1L << (state.columnIndex & 63); "
+            + "1L << ((plan.lane)); 1L << output.projectionOrdinal",
+        4
+      ),
+      "two occurrences on one line" to Pair(
+        "long columns = 1L << column; long projections = 1L << projection;",
+        2
+      )
+    )
+    positiveFixtures.forEach { (name, fixture) ->
+      val matches = sqlShapeLegacyMatchCount(fixture.first)
+      require(matches == fixture.second) {
+        "$name fixture produced $matches matches; expected ${fixture.second}"
+      }
+    }
+
+    val unrelatedFixture = """
+      int nullable = 1;
+      long mask = 1L << flag;
+      long column = 1 << columnIndex;
+      long count = 1L << count;
+      long bit = 1L << bitIndex;
+      long value = otherLong << projection;
+      String text = "nullabilityMask";
+    """.trimIndent()
+    require(sqlShapeLegacyMatchCount(unrelatedFixture) == 0) {
+      "unrelated SQL-shape fixture unexpectedly matched"
     }
   }
 }
@@ -3230,6 +3730,8 @@ val verifyProvenancePolicyFixtures = tasks.register("verifyProvenancePolicyFixtu
 tasks.named("check") {
   dependsOn(
     verifySourcePolicy,
+    verifySqlShapeSourcePolicy,
+    verifySqlShapeSourcePolicyFixtures,
     verifyModuleGraph,
     verifyBuildPolicyFixtures,
     verifyProjectDependencyVisibility,

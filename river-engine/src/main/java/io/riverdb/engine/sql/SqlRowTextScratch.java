@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
+import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -9,7 +10,7 @@ import java.nio.ByteBuffer;
 
 /** Reusable owned text scratch for one scalar expression result. */
 final class SqlRowTextScratch implements CharSequence {
-  private final char[] characters = new char[510];
+  private final char[] characters = new char[Utf8Text.MAXIMUM_BUFFER_CHARACTERS];
   private ByteBuffer literalBytes;
   private int length;
   private int highWater;
@@ -26,10 +27,21 @@ final class SqlRowTextScratch implements CharSequence {
     return StatusCode.OK;
   }
 
+  StatusCode loadValueBuffer(SqlValueBuffer source, int column) {
+    clear();
+    int copied = source.copyTextChars(column, characters, 0);
+    if (copied < 0 || copied > characters.length) {
+      clear();
+      return StatusCode.CORRUPTION;
+    }
+    publish(copied);
+    return StatusCode.OK;
+  }
+
   StatusCode loadLiteral(SqlCommand command, long handle) {
     clear();
     int byteLength = command.textByteLength(handle);
-    if (literalBytes == null) literalBytes = ByteBuffer.allocate(1_020);
+    if (literalBytes == null) literalBytes = ByteBuffer.allocate(Utf8Text.MAXIMUM_BUFFER_BYTES);
     literalBytes.clear();
     if (byteLength < 0 || byteLength > literalBytes.remaining()
         || command.copyText(handle, literalBytes) != byteLength) {
@@ -59,7 +71,7 @@ final class SqlRowTextScratch implements CharSequence {
     int offset = (int) (handle >>> 32);
     int byteLength = (int) handle;
     if (source == null || definition == null || offset < definition.fixedRowBytes()
-        || byteLength < 0 || byteLength > 1_020
+        || byteLength < 0 || byteLength > Utf8Text.MAXIMUM_BUFFER_BYTES
         || offset > source.length() - byteLength) return StatusCode.CORRUPTION;
     int decoded = Utf8RowText.decode(
         source, offset, byteLength, characters);

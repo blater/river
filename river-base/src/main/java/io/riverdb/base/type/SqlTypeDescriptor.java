@@ -3,6 +3,7 @@ package io.riverdb.base.type;
 /**
  * Packed dependency-neutral SQL type descriptor shared by catalog, binder, results, and wire
  * boundaries. The low byte is a stable type ID; the next two bytes are bounded type parameters.
+ * VARCHAR uses the complete 16-bit parameter region for its declared Unicode-scalar length.
  */
 public final class SqlTypeDescriptor {
   public static final int TYPE_ID_BIGINT = 1;
@@ -13,10 +14,18 @@ public final class SqlTypeDescriptor {
   public static final int TYPE_ID_TIME = 6;
   public static final int TYPE_ID_TIMESTAMP = 7;
   public static final int TYPE_ID_TIMESTAMP_WITH_TIME_ZONE = 8;
+  public static final int TYPE_ID_SMALLINT = 9;
+  public static final int TYPE_ID_INTEGER = 10;
+  public static final int TYPE_ID_REAL = 11;
+  public static final int TYPE_ID_DOUBLE = 12;
 
   public static final int BIGINT = TYPE_ID_BIGINT;
   public static final int BOOLEAN = TYPE_ID_BOOLEAN;
   public static final int DATE = TYPE_ID_DATE;
+  public static final int SMALLINT = TYPE_ID_SMALLINT;
+  public static final int INTEGER = TYPE_ID_INTEGER;
+  public static final int REAL = TYPE_ID_REAL;
+  public static final int DOUBLE = TYPE_ID_DOUBLE;
 
   public static final int COMPARISON_NONE = 0;
   public static final int COMPARISON_BOOLEAN = 1;
@@ -24,19 +33,26 @@ public final class SqlTypeDescriptor {
   public static final int COMPARISON_TEXT = 3;
   public static final int COMPARISON_LOCAL_TEMPORAL = 4;
   public static final int COMPARISON_INSTANT = 5;
+  public static final int COMPARISON_APPROXIMATE_NUMERIC = 6;
 
   /** NULL is represented only by a side bitmap; no in-band value is reserved. */
   public static final int NULL_REPRESENTATION_BITMAP = 1;
   public static final int LENGTH_UNIT_UNICODE_SCALAR = 1;
   public static final int PRECISION_UNIT_DECIMAL_DIGIT = 2;
   public static final int PRECISION_UNIT_FRACTIONAL_SECOND_DIGIT = 3;
+  public static final int PRECISION_UNIT_BINARY_DIGIT = 4;
 
-  public static final int MAXIMUM_VARCHAR_SCALARS = 255;
-  public static final int MAXIMUM_DECIMAL_PRECISION = 18;
+  /** Largest VARCHAR declaration representable in the descriptor (16-bit scalar length). */
+  public static final int MAXIMUM_VARCHAR_SCALARS = 65_535;
+  /** Largest decimal that fits River's compact signed-long value lane. */
+  public static final int MAXIMUM_COMPACT_DECIMAL_PRECISION = 18;
+  /** SQL/catalog decimal admission bound, aligned with common PostgreSQL/MySQL practice. */
+  public static final int MAXIMUM_DECIMAL_PRECISION = 38;
   public static final int MAXIMUM_TEMPORAL_PRECISION = 6;
 
   private static final int TYPE_MASK = 0xff;
   private static final int PARAMETER_MASK = 0xff;
+  private static final int VARCHAR_PARAMETER_MASK = 0xffff;
   private static final int PARAMETER_ONE_SHIFT = 8;
   private static final int PARAMETER_TWO_SHIFT = 16;
   private static final int RESERVED_MASK = 0xff000000;
@@ -46,7 +62,7 @@ public final class SqlTypeDescriptor {
 
   public static int varchar(int maximumScalars) {
     return maximumScalars >= 1 && maximumScalars <= MAXIMUM_VARCHAR_SCALARS
-        ? pack(TYPE_ID_VARCHAR, maximumScalars, 0) : 0;
+        ? TYPE_ID_VARCHAR | maximumScalars << PARAMETER_ONE_SHIFT : 0;
   }
 
   public static int decimal(int precision, int scale) {
@@ -77,7 +93,9 @@ public final class SqlTypeDescriptor {
     int first = parameterOne(descriptor);
     int second = parameterTwo(descriptor);
     return switch (type) {
-      case TYPE_ID_BIGINT, TYPE_ID_BOOLEAN, TYPE_ID_DATE -> first == 0 && second == 0;
+      case TYPE_ID_BIGINT, TYPE_ID_BOOLEAN, TYPE_ID_DATE,
+          TYPE_ID_SMALLINT, TYPE_ID_INTEGER, TYPE_ID_REAL, TYPE_ID_DOUBLE ->
+          first == 0 && second == 0;
       case TYPE_ID_VARCHAR -> first >= 1
           && first <= MAXIMUM_VARCHAR_SCALARS
           && second == 0;
@@ -95,11 +113,15 @@ public final class SqlTypeDescriptor {
   }
 
   public static int parameterOne(int descriptor) {
-    return descriptor >>> PARAMETER_ONE_SHIFT & PARAMETER_MASK;
+    return typeId(descriptor) == TYPE_ID_VARCHAR
+        ? descriptor >>> PARAMETER_ONE_SHIFT & VARCHAR_PARAMETER_MASK
+        : descriptor >>> PARAMETER_ONE_SHIFT & PARAMETER_MASK;
   }
 
   public static int parameterTwo(int descriptor) {
-    return descriptor >>> PARAMETER_TWO_SHIFT & PARAMETER_MASK;
+    /* VARCHAR consumes both parameter bytes for one 16-bit length. */
+    return typeId(descriptor) == TYPE_ID_VARCHAR
+        ? 0 : descriptor >>> PARAMETER_TWO_SHIFT & PARAMETER_MASK;
   }
 
   public static int lengthUnit(int descriptor) {
@@ -111,6 +133,7 @@ public final class SqlTypeDescriptor {
       case TYPE_ID_DECIMAL -> PRECISION_UNIT_DECIMAL_DIGIT;
       case TYPE_ID_TIME, TYPE_ID_TIMESTAMP, TYPE_ID_TIMESTAMP_WITH_TIME_ZONE ->
           PRECISION_UNIT_FRACTIONAL_SECOND_DIGIT;
+      case TYPE_ID_REAL, TYPE_ID_DOUBLE -> PRECISION_UNIT_BINARY_DIGIT;
       default -> 0;
     };
   }
@@ -121,7 +144,9 @@ public final class SqlTypeDescriptor {
     }
     return switch (typeId(descriptor)) {
       case TYPE_ID_BOOLEAN -> COMPARISON_BOOLEAN;
-      case TYPE_ID_BIGINT, TYPE_ID_DECIMAL -> COMPARISON_EXACT_NUMERIC;
+      case TYPE_ID_SMALLINT, TYPE_ID_INTEGER, TYPE_ID_BIGINT, TYPE_ID_DECIMAL ->
+          COMPARISON_EXACT_NUMERIC;
+      case TYPE_ID_REAL, TYPE_ID_DOUBLE -> COMPARISON_APPROXIMATE_NUMERIC;
       case TYPE_ID_VARCHAR -> COMPARISON_TEXT;
       case TYPE_ID_DATE, TYPE_ID_TIME, TYPE_ID_TIMESTAMP -> COMPARISON_LOCAL_TEMPORAL;
       case TYPE_ID_TIMESTAMP_WITH_TIME_ZONE -> COMPARISON_INSTANT;
@@ -129,11 +154,21 @@ public final class SqlTypeDescriptor {
     };
   }
 
+  /** True when a valid DECIMAL descriptor requires the two-long value lane. */
+  public static boolean isWideDecimal(int descriptor) {
+    return typeId(descriptor) == TYPE_ID_DECIMAL
+        && isValid(descriptor)
+        && parameterOne(descriptor) > MAXIMUM_COMPACT_DECIMAL_PRECISION;
+  }
+
   public static boolean canCompare(int left, int right) {
     if (!isValid(left) || !isValid(right)) {
       return false;
     }
     if (left == right) {
+      return true;
+    }
+    if (SqlNumericTypeRules.isNumeric(left) && SqlNumericTypeRules.isNumeric(right)) {
       return true;
     }
     int family = comparisonFamily(left);
@@ -153,6 +188,9 @@ public final class SqlTypeDescriptor {
     if (source == target) {
       return true;
     }
+    if (SqlNumericTypeRules.isNumeric(source) && SqlNumericTypeRules.isNumeric(target)) {
+      return SqlNumericTypeRules.canImplicitlyCast(source, target);
+    }
     if (typeId(source) == TYPE_ID_VARCHAR && typeId(target) == TYPE_ID_VARCHAR) {
       return parameterOne(source) <= parameterOne(target);
     }
@@ -162,9 +200,7 @@ public final class SqlTypeDescriptor {
         && typeId(source) == typeId(target)) {
       return parameterOne(source) <= parameterOne(target);
     }
-    if (typeId(source) != TYPE_ID_DECIMAL || typeId(target) != TYPE_ID_DECIMAL) {
-      return false;
-    }
+    if (typeId(source) != TYPE_ID_DECIMAL || typeId(target) != TYPE_ID_DECIMAL) return false;
     int sourceIntegerDigits = parameterOne(source) - parameterTwo(source);
     int targetIntegerDigits = parameterOne(target) - parameterTwo(target);
     return targetIntegerDigits >= sourceIntegerDigits
@@ -180,14 +216,13 @@ public final class SqlTypeDescriptor {
     }
     int sourceType = typeId(source);
     int targetType = typeId(target);
+    if (SqlNumericTypeRules.isNumeric(source) && SqlNumericTypeRules.isNumeric(target)) {
+      return true;
+    }
     if (sourceType == targetType) {
       return true;
     }
     if (sourceType == TYPE_ID_VARCHAR || targetType == TYPE_ID_VARCHAR) {
-      return true;
-    }
-    if ((sourceType == TYPE_ID_BIGINT || sourceType == TYPE_ID_DECIMAL)
-        && (targetType == TYPE_ID_BIGINT || targetType == TYPE_ID_DECIMAL)) {
       return true;
     }
     if ((sourceType == TYPE_ID_DATE && targetType == TYPE_ID_TIMESTAMP)

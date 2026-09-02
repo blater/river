@@ -109,11 +109,40 @@ final class EmbeddedRiverVariableVarcharTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         session.execute(malformed, command));
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         session.execute(
-            "CREATE TABLE too_wide (id BIGINT PRIMARY KEY, a VARCHAR(255), "
+            "CREATE TABLE wide_text (id BIGINT PRIMARY KEY, a VARCHAR(255), "
                 + "b VARCHAR(255), c VARCHAR(255), d VARCHAR(255))",
             command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO wide_text VALUES (1, 'a', 'b', 'c', 'd')", command));
+
+    String customerData = "customer-history-" + "x".repeat(483);
+    assertEquals(500, customerData.length());
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE customers (id BIGINT PRIMARY KEY, c_data VARCHAR(500), "
+                + "state CHAR(2))",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO customers VALUES (1, '" + customerData + "', 'GC')",
+            command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE UNIQUE INDEX customers_data ON customers(c_data)", command));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "SELECT c_data, state FROM customers WHERE c_data='" + customerData + "'",
+            command));
+    assertText(command, 0, customerData, SqlTypeDescriptor.varchar(500));
+    assertText(command, 1, "GC", SqlTypeDescriptor.varchar(2));
 
     assertEquals(
         StatusCode.OK,
@@ -166,6 +195,10 @@ final class EmbeddedRiverVariableVarcharTest {
         session.execute("SELECT value, state FROM names WHERE id=1", command));
     assertText(command, 0, "résumé-東京-🌊", SqlTypeDescriptor.varchar(32));
     assertText(command, 1, "新規🌊", SqlTypeDescriptor.varchar(12));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("SELECT c_data FROM customers WHERE id=1", command));
+    assertText(command, 0, customerData, SqlTypeDescriptor.varchar(500));
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
   }
@@ -175,7 +208,7 @@ final class EmbeddedRiverVariableVarcharTest {
       int index,
       String expected,
       int descriptor) {
-    char[] text = new char[64];
+    char[] text = new char[expected.length()];
     assertEquals(descriptor, result.typeDescriptorAt(index));
     assertEquals(expected.length(), result.copyTextAt(index, text, 0));
     assertEquals(expected, new String(text, 0, expected.length()));
@@ -186,7 +219,7 @@ final class EmbeddedRiverVariableVarcharTest {
       int index,
       String expected,
       int descriptor) {
-    char[] text = new char[64];
+    char[] text = new char[expected.length()];
     assertEquals(descriptor, result.typeDescriptorAt(index));
     assertEquals(expected.length(), result.copyTextAt(index, text, 0));
     assertEquals(expected, new String(text, 0, expected.length()));

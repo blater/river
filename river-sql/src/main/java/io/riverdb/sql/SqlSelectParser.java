@@ -39,21 +39,6 @@ final class SqlSelectParser {
       return status.isOk()
           ? identifier(sql, result.writableSequenceName()) : status;
     }
-    if (consumeKeyword(sql, "COUNT")) {
-      return aggregates.scalarList(sql, result, SqlAggregateKind.COUNT);
-    }
-    if (consumeKeyword(sql, "SUM")) {
-      return aggregates.scalarList(sql, result, SqlAggregateKind.SUM);
-    }
-    if (consumeKeyword(sql, "AVG")) {
-      return aggregates.scalarList(sql, result, SqlAggregateKind.AVG);
-    }
-    if (consumeKeyword(sql, "MIN")) {
-      return aggregates.scalarList(sql, result, SqlAggregateKind.MIN);
-    }
-    if (consumeKeyword(sql, "MAX")) {
-      return aggregates.scalarList(sql, result, SqlAggregateKind.MAX);
-    }
     if (!SqlSelectSourceDetector.hasRowSource(sql, input.position())
         && scalarExpressions.starts(sql)) {
       result.set(SqlCommandType.SCALAR_EXPRESSION, 0, 0);
@@ -138,6 +123,7 @@ final class SqlSelectParser {
   private static boolean isGroupAggregate(SqlCommandType type) {
     return type == SqlCommandType.GROUP_COUNT
         || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_COUNT_DISTINCT
         || type == SqlCommandType.GROUP_SUM
         || type == SqlCommandType.GROUP_AVG
         || type == SqlCommandType.GROUP_MIN
@@ -162,7 +148,8 @@ final class SqlSelectParser {
         || nextKeyword(sql, "WHERE")
         || nextKeyword(sql, "GROUP")
         || nextKeyword(sql, "ORDER")
-        || nextKeyword(sql, "LIMIT")) {
+        || nextKeyword(sql, "LIMIT")
+        || nextKeyword(sql, "FOR")) {
       return StatusCode.OK;
     }
     return identifierStart(sql.charAt(input.position()))

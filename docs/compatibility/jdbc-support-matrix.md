@@ -96,6 +96,6 @@ The principal real-path evidence is
 `RiverTypedParameterJdbcTest`, `RiverExactTypeJdbcTest`,
 `RiverTemporalJdbcTest`, `RiverDriverTest`, and
 `SecureRemoteJdbcGateTest`. `RiverTypedParameterJdbcTest` and
-`RiverSqlMainTest` carry all eight families through the real TLS/token boundary.
+`RiverSqlMainTest` carry every admitted family through the real TLS/token boundary.
 Protocol domain and cross-frame validation remain owned by the protocol/client
 suites; U06 owns the combined recovery, backup, and fault-injection fixture.

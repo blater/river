@@ -20,7 +20,7 @@ public final class VacuumProgressCodec {
 
   /**
    * Encodes the value for catalog sequence-space key
-   * {@link CatalogContinuationKey#VACUUM_PROGRESS_KEY}.
+   * {@link CatalogKeyspace#VACUUM_PROGRESS_KEY}.
    */
   public static StatusCode encode(
       ByteBuffer target,

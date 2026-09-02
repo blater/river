@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 
@@ -26,7 +27,8 @@ final class SqlAggregateOperandTypes {
       StatusCode status = validateComputed(command, projection, family);
       if (!status.isOk()) return status;
     }
-    return validateFamily(command.type(), family);
+    return validateFamily(
+        command.type(), bound.projectedTypeDescriptors[projection], family);
   }
 
   private static StatusCode validateComputed(
@@ -38,12 +40,13 @@ final class SqlAggregateOperandTypes {
     return StatusCode.OK;
   }
 
-  private static StatusCode validateFamily(SqlCommandType type, int family) {
+  private static StatusCode validateFamily(
+      SqlCommandType type, int descriptor, int family) {
     if ((type == SqlCommandType.SUM
             || type == SqlCommandType.AVG
             || type == SqlCommandType.GROUP_SUM
             || type == SqlCommandType.GROUP_AVG)
-        && family != SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) {
+        && !SqlNumericTypeRules.isNumeric(descriptor)) {
       return StatusCode.DATATYPE_MISMATCH;
     }
     if ((type == SqlCommandType.MIN

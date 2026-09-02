@@ -26,6 +26,7 @@ final class DurableWalQuorum {
   private final LocalWalForceResult[] forceResults =
       new LocalWalForceResult[MAXIMUM_FOLLOWERS];
   private final LocalWalReadResult primaryRead = new LocalWalReadResult();
+  private final DurableWalLogicalStreams logicalStreams;
   private final int followerCount;
   private final int requiredNodeCount;
   private long replicatedPayloadBytes;
@@ -37,6 +38,7 @@ final class DurableWalQuorum {
     followerCount = configuredFollowers.length;
     requiredNodeCount = requiredNodes;
     availableNodeCount = followerCount + 1;
+    logicalStreams = new DurableWalLogicalStreams(this);
     for (int index = 0; index < followerCount; index++) {
       followers[index] = configuredFollowers[index];
       available[index] = true;
@@ -44,6 +46,22 @@ final class DurableWalQuorum {
       appendResults[index] = new LocalWalAppendResult();
       forceResults[index] = new LocalWalForceResult();
     }
+  }
+
+  StatusCode beginLogicalStream(long transactionId, int formatId, int formatVersion) {
+    return logicalStreams.begin(transactionId, formatId, formatVersion);
+  }
+
+  StatusCode replicateLogicalStreamBatch(LocalWal primary, int recordCount) {
+    return logicalStreams.replicate(primary, recordCount);
+  }
+
+  StatusCode cancelLogicalStreams() {
+    return logicalStreams.cancel();
+  }
+
+  void fenceLogicalStreams() {
+    logicalStreams.fence();
   }
 
   StatusCode replicateForcedBatch(LocalWal primary, int recordCount) {
@@ -124,10 +142,37 @@ final class DurableWalQuorum {
     return quorumDurableCommitSequence;
   }
 
-  private void retireFollower(int follower) {
+  int followerCount() { return followerCount; }
+
+  boolean followerAvailable(int follower) { return available[follower]; }
+
+  LocalWal follower(int follower) { return followers[follower]; }
+
+  boolean fenced() { return fenced; }
+
+  void addReplicatedPayloadBytes(long bytes) { replicatedPayloadBytes += bytes; }
+
+  StatusCode acceptLogicalDurability(int durableNodes, long commitSequence) {
+    availableNodeCount = durableNodes;
+    if (durableNodes < requiredNodeCount) return fence(StatusCode.FENCED);
+    quorumDurableCommitSequence = commitSequence;
+    return StatusCode.OK;
+  }
+
+  void retireFollower(int follower) {
     if (available[follower]) {
       available[follower] = false;
       availableNodeCount--;
     }
+  }
+
+  StatusCode retainQuorum() {
+    if (availableNodeCount >= requiredNodeCount) return StatusCode.OK;
+    return fence(StatusCode.FENCED);
+  }
+
+  StatusCode fence(StatusCode status) {
+    fenced = true;
+    return status;
   }
 }

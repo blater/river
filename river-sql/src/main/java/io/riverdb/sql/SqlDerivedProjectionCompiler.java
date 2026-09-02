@@ -113,14 +113,16 @@ final class SqlDerivedProjectionCompiler {
       SqlScalarExpression target) {
     int operator = source.programOperator(leaf, program, node);
     int descriptor = source.programDescriptor(leaf, program, node);
+    long operandHigh = source.programOperandHigh(leaf, program, node);
     long operand = source.programOperand(leaf, program, node);
     if (hasTextOperand(operator, descriptor)) {
       operand = destination.copyTextFrom(sourceCommand, operand);
+      operandHigh = 0;
       if (operand == SqlCommand.INVALID_TEXT_HANDLE) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
     }
-    return target.append(operator, operand, descriptor)
+    return target.append(operator, operandHigh, operand, descriptor)
         ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
   }
 
@@ -187,14 +189,16 @@ final class SqlDerivedProjectionCompiler {
       SqlScalarExpression target) {
     int operator = source.operator(node);
     int descriptor = source.typeDescriptor(node);
+    long operandHigh = source.operandHigh(node);
     long operand = source.operand(node);
     if (hasTextOperand(operator, descriptor)) {
       operand = destination.copyTextFrom(sourceCommand, operand);
+      operandHigh = 0;
       if (operand == SqlCommand.INVALID_TEXT_HANDLE) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
     }
-    return target.append(operator, operand, descriptor)
+    return target.append(operator, operandHigh, operand, descriptor)
         ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
   }
 

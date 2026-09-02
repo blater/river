@@ -9,12 +9,26 @@ import java.nio.ByteBuffer;
 
 /** Rehomes one decoded block row into a reusable canonical physical row image. */
 final class SqlBlockPhysicalRowWriter {
+  private final SqlRetainedArrayAllocator allocator;
   private final TextView text = new TextView();
   private final HeapRowResult row = new HeapRowResult();
   private ByteBuffer bytes;
 
-  void prepare() {
-    if (bytes == null) bytes = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
+  SqlBlockPhysicalRowWriter() { this(SqlRetainedArrayAllocator.STANDARD); }
+
+  SqlBlockPhysicalRowWriter(SqlRetainedArrayAllocator retainedAllocator) {
+    allocator = retainedAllocator;
+  }
+
+  StatusCode prepare() {
+    if (bytes != null) return StatusCode.OK;
+    try {
+      ByteBuffer next = allocator.direct(TableSchema.MAXIMUM_ROW_BYTES);
+      bytes = next;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   StatusCode write(SqlBlockRow source, TableDefinition table) {
@@ -24,12 +38,16 @@ final class SqlBlockPhysicalRowWriter {
     }
     bytes.clear();
     int payload = table.fixedRowBytes();
-    long nulls = 0;
+    SqlPhysicalRowNulls.clear(bytes, table);
     for (int column = 1; column < table.columnCount(); column++) {
-      int slot = (column - 1) * Long.BYTES;
+      int slot = table.valueOffset(column);
       if (source.nullValue(column)) {
-        nulls |= 1L << column;
+        SqlPhysicalRowNulls.set(bytes, table, column, true);
         bytes.putLong(slot, 0);
+        if (io.riverdb.base.type.SqlTypeDescriptor.isWideDecimal(
+            table.typeDescriptor(column))) {
+          bytes.putLong(table.highValueOffset(column), 0);
+        }
       } else if (table.isVarchar(column)) {
         text.set(source, column);
         bytes.position(payload);
@@ -40,9 +58,12 @@ final class SqlBlockPhysicalRowWriter {
         payload += length;
       } else {
         bytes.putLong(slot, source.value(column));
+        if (io.riverdb.base.type.SqlTypeDescriptor.isWideDecimal(
+            table.typeDescriptor(column))) {
+          bytes.putLong(table.highValueOffset(column), source.highValue(column));
+        }
       }
     }
-    bytes.putLong(table.nullMaskOffset(), nulls);
     bytes.position(0);
     bytes.limit(payload);
     if (!table.isValidRow(bytes)) return StatusCode.CORRUPTION;

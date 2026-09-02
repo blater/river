@@ -50,13 +50,13 @@ final class RiverSqlMainTest {
         SELECT id, name, state FROM labels ORDER BY id;
         CREATE TABLE typed_output
           (id BIGINT PRIMARY KEY, flag BOOLEAN, amount DECIMAL(6,2), day DATE,
-           clock TIME(6), observed TIMESTAMP(6),
-           captured TIMESTAMP(6) WITH TIME ZONE, note VARCHAR(32));
+          \sclock TIME(6), observed TIMESTAMP(6),
+          \scaptured TIMESTAMP(6) WITH TIME ZONE, note VARCHAR(32));
         INSERT INTO typed_output VALUES
           (1, TRUE, 12.30, DATE '2024-02-29', TIME '01:02:03.123456',
-           TIMESTAMP '2024-02-29 01:02:03.123456',
-           TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00.123456+01:00',
-           'semi;colon');
+          \sTIMESTAMP '2024-02-29 01:02:03.123456',
+          \sTIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00.123456+01:00',
+          \s'semi;colon');
         SHOW COLUMNS FROM typed_output;
         SELECT flag,amount,day,clock,observed,captured,note FROM typed_output;
         SELECT accounts.id, regions.code FROM accounts
@@ -144,12 +144,12 @@ final class RiverSqlMainTest {
     String script = """
         CREATE TABLE authenticated_types
           (id BIGINT PRIMARY KEY, flag BOOLEAN, amount DECIMAL(6,2),
-           note VARCHAR(16), day DATE, clock TIME(6),
-           observed TIMESTAMP(6), captured TIMESTAMP(6) WITH TIME ZONE);
+          \snote VARCHAR(16), day DATE, clock TIME(6),
+          \sobserved TIMESTAMP(6), captured TIMESTAMP(6) WITH TIME ZONE);
         INSERT INTO authenticated_types VALUES
           (1, TRUE, 42.70, 'secure', DATE '2024-02-29',
-           TIME '01:02:03.123456', TIMESTAMP '2024-02-29 01:02:03.123456',
-           TIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00.123456+01:00');
+          \sTIME '01:02:03.123456', TIMESTAMP '2024-02-29 01:02:03.123456',
+          \sTIMESTAMP WITH TIME ZONE '2024-01-01 00:00:00.123456+01:00');
         SELECT id,flag,amount,note,day,clock,observed,captured
           FROM authenticated_types;
         """;

@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
 
@@ -29,7 +30,7 @@ final class SqlMutationExpressionBinder {
     if (size != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (!fixedWidth(descriptors[0])) return StatusCode.FEATURE_NOT_SUPPORTED;
     bound.projectionPrograms.finishMutation(expression, descriptors[0]);
-    return StatusCode.OK;
+    return bound.projectionPrograms.status();
   }
 
   private StatusCode bindNode(
@@ -46,7 +47,7 @@ final class SqlMutationExpressionBinder {
       int declared = command.mutationExpressionTypeDescriptor(expression, node);
       boolean untyped = !SqlTypeDescriptor.isValid(declared);
       return push(
-          bound, expression, operator, 0,
+          bound, expression, operator, 0, 0,
           untyped ? SqlTypeDescriptor.BIGINT : declared, untyped);
     }
     if (SqlRowExpressionTypes.leaf(operator)) {
@@ -56,6 +57,7 @@ final class SqlMutationExpressionBinder {
               bound,
               expression,
               operator,
+              command.mutationExpressionOperandHigh(expression, node),
               command.mutationExpressionOperand(expression, node),
               descriptor,
               false)
@@ -89,6 +91,7 @@ final class SqlMutationExpressionBinder {
             bound,
             expression,
             SqlScalarExpression.COLUMN,
+            0,
             column,
             bound.table.typeDescriptor(column),
             false);
@@ -144,8 +147,7 @@ final class SqlMutationExpressionBinder {
     }
     if (untypedNulls[left] == untypedNulls[right]) return false;
     int known = untypedNulls[right] ? descriptors[left] : descriptors[right];
-    if (SqlTypeDescriptor.comparisonFamily(known)
-        != SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) return false;
+    if (!SqlNumericTypeRules.isNumeric(known)) return false;
     descriptors[untypedNulls[right] ? right : left] = known;
     untypedNulls[left] = false;
     untypedNulls[right] = false;
@@ -156,6 +158,7 @@ final class SqlMutationExpressionBinder {
       BoundSqlStatement bound,
       int expression,
       int operator,
+      long operandHigh,
       long operand,
       int descriptor,
       boolean untyped) {
@@ -163,8 +166,8 @@ final class SqlMutationExpressionBinder {
     descriptors[size] = descriptor;
     untypedNulls[size++] = untyped;
     bound.projectionPrograms.appendMutation(
-        expression, operator, operand, descriptor);
-    return StatusCode.OK;
+        expression, operator, operandHigh, operand, descriptor);
+    return bound.projectionPrograms.status();
   }
 
   private static void append(
@@ -176,6 +179,7 @@ final class SqlMutationExpressionBinder {
     bound.projectionPrograms.appendMutation(
         expression,
         command.mutationExpressionOperator(expression, node),
+        command.mutationExpressionOperandHigh(expression, node),
         command.mutationExpressionOperand(expression, node),
         descriptor);
   }
@@ -193,8 +197,7 @@ final class SqlMutationExpressionBinder {
   private static boolean fixedWidth(int descriptor) {
     int type = SqlTypeDescriptor.typeId(descriptor);
     return type == SqlTypeDescriptor.TYPE_ID_BOOLEAN
-        || type == SqlTypeDescriptor.TYPE_ID_BIGINT
-        || type == SqlTypeDescriptor.TYPE_ID_DECIMAL
+        || SqlNumericTypeRules.isNumeric(descriptor)
         || SqlRowExpressionTypes.temporal(type);
   }
 }

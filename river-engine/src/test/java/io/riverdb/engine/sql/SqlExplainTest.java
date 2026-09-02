@@ -53,9 +53,9 @@ final class SqlExplainTest {
         session.beginScan(
             "EXPLAIN SELECT id, amount FROM events WHERE category=7",
             cursor));
-    assertEquals("operator", session.scanColumnName(cursor, 0));
-    assertEquals("detail", session.scanColumnName(cursor, 1));
-    assertEquals("rows", session.scanColumnName(cursor, 2));
+    assertEquals("operator", session.scanColumnName(cursor, 0).toString());
+    assertEquals("detail", session.scanColumnName(cursor, 1).toString());
+    assertEquals("rows", session.scanColumnName(cursor, 2).toString());
     assertEquals(SqlTypeDescriptor.varchar(64), session.scanColumnTypeDescriptor(cursor, 0));
     assertEquals(SqlTypeDescriptor.BIGINT, session.scanColumnTypeDescriptor(cursor, 1));
     assertEquals(StatusCode.OK, session.nextScan(cursor, row));
@@ -158,7 +158,6 @@ final class SqlExplainTest {
             "EXPLAIN SELECT category, SUM(amount) FROM events GROUP BY category",
             cursor));
     assertPlanRow(session, cursor, row, "group", 2);
-    assertPlanRow(session, cursor, row, "sort", 1);
     assertPlanRow(session, cursor, row, "table", -1);
     assertEquals(StatusCode.CONFLICT, session.nextScan(cursor, row));
     assertEquals(StatusCode.OK, session.closeScan(cursor, execution));

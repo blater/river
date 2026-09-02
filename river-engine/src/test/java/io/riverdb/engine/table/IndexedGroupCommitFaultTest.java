@@ -14,7 +14,6 @@ import io.riverdb.engine.testsupport.fault.FaultOperation;
 import io.riverdb.engine.testsupport.fault.FaultPointRegistry;
 import io.riverdb.engine.testsupport.fault.FaultPointSlot;
 import io.riverdb.engine.testsupport.fault.FaultingDurableDirectory;
-import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
@@ -63,7 +62,7 @@ final class IndexedGroupCommitFaultTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
     IndexedGroupCommitCoordinator coordinator =
-        new IndexedGroupCommitCoordinator(manager, table, 50_000_000);
+        new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
     IndexedTransactionSession first =
         new IndexedTransactionSession(manager, table, Long.BYTES, coordinator);
     IndexedTransactionSession second =
@@ -99,9 +98,17 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(TransactionState.INDETERMINATE, firstOutcome.state());
     assertEquals(TransactionState.INDETERMINATE, secondOutcome.state());
     assertEquals(0, manager.activeTransactionCount());
-    assertEquals(
-        StatusCode.FENCED,
-        table.insert(99, 0, 99, row(990), new HeapInsertResult()));
+    IndexedTransactionSession rejected =
+        new IndexedTransactionSession(manager, table, Long.BYTES, coordinator);
+    TransactionOutcome rejectedOutcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, rejected.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, rejected.insert(0, 99, row(990)));
+    assertEquals(StatusCode.FENCED, rejected.commit(rejectedOutcome));
+    assertEquals(TransactionState.INDETERMINATE, rejectedOutcome.state());
+    assertEquals(StatusCode.OK, first.close());
+    assertEquals(StatusCode.OK, second.close());
+    assertEquals(StatusCode.OK, rejected.close());
+    assertEquals(StatusCode.OK, coordinator.close());
   }
 
   private static Stream<Arguments> groupFaults() {

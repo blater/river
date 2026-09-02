@@ -12,7 +12,7 @@ final class SqlCommandProjectionView {
   }
 
   static SqlScalarExpression aggregateExpression(SqlCommand command, int index) {
-    return index >= 0 && index < SqlCommand.MAXIMUM_COLUMNS
+    return index >= 0 && index < SqlCommand.MAXIMUM_PROJECTIONS
         ? command.projections.expression(index) : null;
   }
 

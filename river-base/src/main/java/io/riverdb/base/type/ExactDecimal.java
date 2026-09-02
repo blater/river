@@ -41,7 +41,7 @@ public final class ExactDecimal {
 
   public static boolean fits(long unscaled, int precision) {
     return precision >= 1
-        && precision <= SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION
+        && precision <= SqlTypeDescriptor.MAXIMUM_COMPACT_DECIMAL_PRECISION
         && unscaled > -POWERS_OF_TEN[precision]
         && unscaled < POWERS_OF_TEN[precision];
   }
@@ -254,6 +254,16 @@ public final class ExactDecimal {
         scratch);
   }
 
+  public static StatusCode quantizeHalfAway(
+      long value,
+      int sourceDescriptor,
+      int targetDescriptor,
+      LongValue result,
+      WideScratch scratch) {
+    return ExactDecimalQuantize.halfAway(
+        value, sourceDescriptor, targetDescriptor, result, scratch);
+  }
+
   /** Converts an ordered lower or exclusive-upper bound to the least target-scale value. */
   public static boolean ceilingScale(
       long value,
@@ -305,7 +315,7 @@ public final class ExactDecimal {
     if (remainder != 0 && (ceiling ? value > 0 : value < 0)) {
       integral += ceiling ? 1 : -1;
     }
-    if (!fits(integral, SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION)) {
+    if (!fits(integral, SqlTypeDescriptor.MAXIMUM_COMPACT_DECIMAL_PRECISION)) {
       return StatusCode.NUMERIC_VALUE_OUT_OF_RANGE;
     }
     result.value = integral;

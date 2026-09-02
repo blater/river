@@ -4,8 +4,13 @@ import java.nio.ByteBuffer;
 
 /** Strict, allocation-free UTF-8 operations over caller-owned storage. */
 public final class Utf8Text {
-  public static final int MAXIMUM_SCALARS = 255;
-  public static final int MAXIMUM_BYTES = MAXIMUM_SCALARS * 4;
+  /** Maximum declared VARCHAR length accepted by the UTF-8 primitives. */
+  public static final int MAXIMUM_SCALARS = 65_535;
+  /** Maximum byte capacity used by bounded row/value scratch buffers. */
+  public static final int MAXIMUM_BYTES = 8 * 1_024;
+  /** Bound for fixed parser/result scratch, independent of a column declaration. */
+  public static final int MAXIMUM_BUFFER_CHARACTERS = 8_192;
+  public static final int MAXIMUM_BUFFER_BYTES = MAXIMUM_BYTES;
 
   private Utf8Text() {
   }
@@ -55,6 +60,11 @@ public final class Utf8Text {
   public static int decode(ByteBuffer source, int offset, int length, char[] target,
       int targetOffset) {
     return Utf8TextDecoding.decode(source, offset, length, target, targetOffset);
+  }
+
+  /** Returns the decoded UTF-16 code-unit count, or {@code -1} for non-canonical UTF-8. */
+  public static int decodedLength(ByteBuffer source, int offset, int length) {
+    return Utf8TextDecoding.decodedLength(source, offset, length);
   }
 
   /** Unicode-code-point order; canonical UTF-8 preserves this under unsigned byte order. */

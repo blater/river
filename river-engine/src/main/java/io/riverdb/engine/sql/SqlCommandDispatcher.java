@@ -27,6 +27,20 @@ final class SqlCommandDispatcher {
   private final TableDefinition createdTable = new TableDefinition();
   private final TableDefinition referencedTable = new TableDefinition();
   private final TableSchema createSchema = new TableSchema();
+  private final SqlDescriptorTableCreation descriptorTables =
+      new SqlDescriptorTableCreation();
+  private final SqlDescriptorIndexCreation descriptorIndexes =
+      new SqlDescriptorIndexCreation();
+  private final SqlDescriptorIndexDrop descriptorIndexDrops =
+      new SqlDescriptorIndexDrop();
+  private final SqlDescriptorTableDrop descriptorTableDrops =
+      new SqlDescriptorTableDrop();
+  private final SqlDescriptorTableRename descriptorTableRenames =
+      new SqlDescriptorTableRename();
+  private final SqlDescriptorColumnRename descriptorColumnRenames =
+      new SqlDescriptorColumnRename();
+  private final SqlDescriptorIndexRename descriptorIndexRenames =
+      new SqlDescriptorIndexRename();
   private final ByteBuffer row = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
   private SqlAnalyzeTableExecution analyzeTables;
 
@@ -105,15 +119,8 @@ final class SqlCommandDispatcher {
       return status;
     }
     if (type == SqlCommandType.NEXT_SEQUENCE_VALUE) {
-      StatusCode status = database.nextSequenceValue(
-          command.sequenceName(), sequenceValue);
-      if (status.isOk()) {
-        result.setScalar(sequenceValue.value(), sequenceValue.commitSequence());
-        if (transactions.isExplicit()) {
-          result.setTransaction(true, session.visibleCommitSequence());
-        }
-      }
-      return status;
+      return SqlSequenceCommandExecution.execute(
+          database, session, transactions, command, sequenceValue, result);
     }
     if (type == SqlCommandType.SCALAR_EXPRESSION) {
       return scalarExpressions.evaluate(command.scalarExpression(), result);
@@ -136,6 +143,43 @@ final class SqlCommandDispatcher {
     }
     if (type == SqlCommandType.CREATE_TABLE) {
       return executeCreateTable(command, atomic, result);
+    }
+    if (type == SqlCommandType.CREATE_INDEX
+        || type == SqlCommandType.CREATE_UNIQUE_INDEX) {
+      StatusCode status = descriptorIndexes.execute(
+          session, transactions, atomic, command, result);
+      return descriptorIndexes.legacyTable()
+          ? executeCatalogMutation(command, atomic, result) : status;
+    }
+    if (type == SqlCommandType.DROP_INDEX) {
+      StatusCode status = descriptorIndexDrops.execute(
+          session, transactions, atomic, command, result);
+      return descriptorIndexDrops.legacyTable()
+          ? executeCatalogMutation(command, atomic, result) : status;
+    }
+    if (type == SqlCommandType.DROP_TABLE) {
+      StatusCode status = descriptorTableDrops.execute(
+          session, transactions, atomic, command, result);
+      return descriptorTableDrops.legacyTable()
+          ? executeCatalogMutation(command, atomic, result) : status;
+    }
+    if (type == SqlCommandType.ALTER_TABLE_RENAME) {
+      StatusCode status = descriptorTableRenames.execute(
+          session, transactions, atomic, command, result);
+      return descriptorTableRenames.legacyTable()
+          ? executeCatalogMutation(command, atomic, result) : status;
+    }
+    if (type == SqlCommandType.ALTER_TABLE_RENAME_COLUMN) {
+      StatusCode status = descriptorColumnRenames.execute(
+          session, transactions, atomic, command, result);
+      return descriptorColumnRenames.legacyTable()
+          ? executeCatalogMutation(command, atomic, result) : status;
+    }
+    if (type == SqlCommandType.ALTER_INDEX_RENAME) {
+      StatusCode status = descriptorIndexRenames.execute(
+          session, transactions, atomic, command, result);
+      return descriptorIndexRenames.legacyTable()
+          ? executeCatalogMutation(command, atomic, result) : status;
     }
     return executeCatalogMutation(command, atomic, result);
   }
@@ -164,40 +208,26 @@ final class SqlCommandDispatcher {
       SqlCommand command,
       SqlAtomicStatementLifecycle atomic,
       SqlExecutionResult result) {
+    StatusCode admission = SqlCreateTableLifecycleAdmission.validate(command);
+    if (!admission.isOk()) return admission;
+    if (!SqlCreateTableLifecycleAdmission.requiresLegacy(command)) {
+      return descriptorTables.execute(
+          session, transactions, atomic, command, result);
+    }
     StatusCode status = prepareCreateSchema(command);
-    if (!status.isOk()) {
-      return status;
-    }
-    if (!transactions.isExplicit()
-        && !command.hasUniqueColumns()
-        && !command.hasReferences()) {
-      status = database.createTable(
-          command.tableName(), createSchema, createdTable);
-      if (status.isOk()) {
-        result.setUpdate(0, 0);
-      }
-      return status;
-    }
+    if (!status.isOk()) return status;
     status = atomic.begin(IsolationLevel.SERIALIZABLE);
     boolean began = status.isOk();
     boolean implicit = began && atomic.implicit();
+    if (status.isOk()) status = resolveCreateReferences(command);
+    if (status.isOk()) status = session.createTable(
+        command.tableName(), createSchema, createdTable);
+    if (status.isOk()) status = createConstraintIndexes(command);
+    if (began) status = atomic.finish(status);
     if (status.isOk()) {
-      status = resolveCreateReferences(command);
-    }
-    if (status.isOk()) {
-      status = session.createTable(
-          command.tableName(), createSchema, createdTable);
-    }
-    if (status.isOk()) {
-      status = createConstraintIndexes(command);
-    }
-    if (began) {
-      status = atomic.finish(status);
-    }
-    if (status.isOk()) {
-      long commitSequence = implicit ? transactions.commitSequence() : 0;
-      result.setUpdate(0, commitSequence);
-      result.setTransaction(transactions.isExplicit(), commitSequence);
+      long commit = implicit ? transactions.commitSequence() : 0;
+      result.setUpdate(0, commit);
+      result.setTransaction(transactions.isExplicit(), commit);
     }
     return status;
   }
@@ -296,6 +326,8 @@ final class SqlCommandDispatcher {
       SqlCommand command,
       SqlAtomicStatementLifecycle atomic,
       SqlExecutionResult result) {
+    StatusCode admitted = SqlCompositeIndexAdmission.validate(command);
+    if (!admitted.isOk()) return admitted;
     if (!transactions.isExplicit()) {
       StatusCode status = mutateDatabase(command);
       if (status.isOk()) {

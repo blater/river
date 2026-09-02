@@ -2,7 +2,10 @@
 
 Status: J1-J6b are accepted on the alpha line; J7a durable statistics and
 SQL-order strategy costing are accepted at `4de99ca`. J7b physical inner-island
-reordering is deliberately deferred beyond this alpha.
+reordering is deliberately deferred beyond this alpha. The eight-role capacity
+in this historical checkpoint is superseded by
+[`sql-shape-and-composite-key-capacity.md`](sql-shape-and-composite-key-capacity.md),
+whose active bound is 64 roles.
 
 Owner: relational execution lead. Catalog-format changes require an independent
 durability/compatibility review before promotion.
@@ -39,20 +42,20 @@ multi-role scope and row-provider boundary that P4C consumes next.
 
 ## Fixed bounds and syntax
 
-- `MAXIMUM_JOIN_ROLES = 8`, including the first `FROM` relation.
-- Roles are numbered in SQL occurrence order from zero through seven.
+- `MAXIMUM_JOIN_ROLES = 64`, including the first `FROM` relation.
+- Roles are numbered in SQL occurrence order from zero through 63.
 - Grammar is `FROM relation ( [INNER | LEFT] JOIN relation ON predicate )+`.
 - A relation is a physical table or an already-expanded durable view. A joined
   chain may be the deepest source of the existing P3 block pipeline.
-- Every physical query block retains the accepted P4 bounds: at most eight
-  predicate leaves, 32 scalar nodes, 32 Boolean nodes, Boolean depth 16, and
-  256 literal membership values. Those bounds apply independently to each
-  `ON` program and to `WHERE`.
-- A ninth role returns `RESOURCE_EXHAUSTED`. Recognized but excluded join forms
+- Every physical query block uses the shared SQL shape policy: at most 4,096
+  predicate leaves, 16,384 expression nodes, and expression depth 64. Those
+  bounds apply independently to each `ON` program and to `WHERE`; backing
+  arrays grow geometrically from small initial capacities.
+- A 65th role returns `RESOURCE_EXHAUSTED`. Recognized but excluded join forms
   return `FEATURE_NOT_SUPPORTED`.
 - Hash execution uses stable in-memory buckets through the existing 1,024-row
   store threshold, then the same store's bounded nested fallback through
-  65,536 rows/256 MiB. Partitioned spill hashing is deferred.
+  65,536 rows/256 MB. Partitioned spill hashing is deferred.
 - J7b cost enumeration will use fixed arrays for at most 256 role subsets; J7a
   allocates no plan candidates on the statement or row path.
 
@@ -173,16 +176,16 @@ most 32 existing spill-backed stores using the same stable hash. Process one
 partition at a time with the reusable hash workspace. A skewed partition that
 still exceeds the memory bound falls back to nested loop for that partition;
 it never allocates an unbounded table or silently drops rows. Total join spill
-above 256 MiB returns `RESOURCE_EXHAUSTED` and follows normal terminal cleanup.
+above 256 MB returns `RESOURCE_EXHAUSTED` and follows normal terminal cleanup.
 
 The accepted J5 alpha checkpoint deliberately stops before that partitioned
 implementation. It hashes a stable right-side build while the existing
-`SqlBlockRowStore` remains in memory (at most 1,024 rows and its 4 MiB memory
+`SqlBlockRowStore` remains in memory (at most 1,024 rows and its 4 MB memory
 cap). If that store spills, execution reports an explicit `fallbk`/`fbleft`
 operator and replays the stored right rows in stable nested-loop order. The
-same store still enforces the 65,536-row and 256 MiB statement bounds. This is
+same store still enforces the 65,536-row and 256 MB statement bounds. This is
 a performance limitation, not a semantic or durability alternative. The
-32-partition/64 MiB hash expansion remains post-alpha work and must reuse the
+32-partition/64 MB hash expansion remains post-alpha work and must reuse the
 same store/codec rather than add another spill format.
 
 ### Merge join

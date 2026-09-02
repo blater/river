@@ -1,25 +1,16 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.TableSchema;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.sql.SqlCommandType;
 
 /** Reusable bounded physical-plan state shared by execution and EXPLAIN. */
 final class SqlPhysicalPlan {
-  static final int MAXIMUM_STEPS = 8;
+  static final int MAXIMUM_STEPS = SqlShapeLimits.MAX_PLAN_STEPS;
 
-  private final long[] operators = new long[MAXIMUM_STEPS];
-  private final long[] details = new long[MAXIMUM_STEPS];
-  private final int[] resultProjections =
-      new int[TableSchema.MAXIMUM_COLUMNS];
-  private final int[] resultTypes =
-      new int[TableSchema.MAXIMUM_COLUMNS];
-  private final ResultName[] resultNames =
-      new ResultName[TableSchema.MAXIMUM_COLUMNS];
-  private int stepCount;
+  private final SqlPhysicalPlanSteps steps;
+  private final SqlPhysicalResultShape result;
   private int accessColumn = -1;
-  private int resultColumnCount;
-  private long resultNullableMask;
   private long rowLimit = Long.MAX_VALUE;
   private SqlCommandType commandType;
   private int aggregateColumn = -1;
@@ -39,19 +30,19 @@ final class SqlPhysicalPlan {
   private long actualRows;
   private SqlBlockStagePlan blockStages;
   private SqlJoinChainPlan joinStages;
+  private SqlUnionStagePlan unionStages;
   private SqlSubqueryPlan subqueries;
 
-  SqlPhysicalPlan() {
-    for (int index = 0; index < resultNames.length; index++) {
-      resultNames[index] = new ResultName();
-    }
+  SqlPhysicalPlan() { this(new SqlSessionShapeBudget(null)); }
+  SqlPhysicalPlan(SqlSessionShapeBudget budget) {
+    steps = new SqlPhysicalPlanSteps(budget);
+    result = new SqlPhysicalResultShape(budget);
   }
 
   void reset() {
-    stepCount = 0;
+    steps.reset();
+    result.reset();
     accessColumn = -1;
-    resultColumnCount = 0;
-    resultNullableMask = 0;
     rowLimit = Long.MAX_VALUE;
     commandType = null;
     aggregateColumn = -1;
@@ -71,25 +62,36 @@ final class SqlPhysicalPlan {
     actualRows = 0;
     blockStages = null;
     joinStages = null;
+    unionStages = null;
     subqueries = null;
   }
 
   void resetSteps() {
-    stepCount = 0;
+    steps.reset();
     blockStages = null;
     joinStages = null;
+    unionStages = null;
   }
 
   void setBlockStages(SqlBlockStagePlan stages) {
     blockStages = stages;
     joinStages = null;
-    stepCount = 0;
+    unionStages = null;
+    steps.reset();
   }
 
   void setJoinStages(SqlJoinChainPlan stages) {
     joinStages = stages;
     blockStages = null;
-    stepCount = 0;
+    unionStages = null;
+    steps.reset();
+  }
+
+  void setUnionStages(SqlUnionStagePlan stages) {
+    unionStages = stages;
+    blockStages = null;
+    joinStages = null;
+    steps.reset();
   }
 
   void setSubqueries(SqlSubqueryPlan nested) { subqueries = nested; }
@@ -222,8 +224,12 @@ final class SqlPhysicalPlan {
   void setExplainResult(boolean analyzed) {
     explainResult = true;
     explainAnalyzed = analyzed;
-    resultColumnCount = 0;
-    resultNullableMask = 0;
+    result.begin(3);
+  }
+
+  StatusCode beginResult(int columns) {
+    result.begin(columns);
+    return result.status();
   }
 
   boolean explainResult() {
@@ -236,90 +242,85 @@ final class SqlPhysicalPlan {
 
   void setResultShape(
       int[] projections, int[] types, int count, BoundSqlQuery.Block command) {
-    resultColumnCount = count;
+    result.begin(count);
     for (int index = 0; index < count; index++) {
-      resultProjections[index] = projections[index];
-      resultTypes[index] = types[index];
       CharSequence name = command.columnOutputName(index);
-      resultNames[index].copyFrom(name == null ? "" : name);
+      result.set(index, projections[index], types[index], name);
     }
   }
 
   void setResultColumn(
       int index, int projection, int type, CharSequence name) {
-    resultProjections[index] = projection;
-    resultTypes[index] = type;
-    resultNames[index].copyFrom(name);
-    if (resultColumnCount <= index) {
-      resultColumnCount = index + 1;
-    }
+    result.set(index, projection, type, name);
   }
 
-  void setBlockResult(SqlBlockSchema schema) {
-    resultColumnCount = 0;
-    resultNullableMask = 0;
-    for (int column = 0; column < schema.count(); column++) {
+  void setBlockResult(SqlBlockSchema schema, int visibleColumns) {
+    result.begin(visibleColumns);
+    for (int column = 0; column < visibleColumns; column++) {
       setResultColumn(column, column, schema.descriptor(column), schema.name(column));
       setResultNullable(column, schema.nullable(column));
     }
   }
 
   int resultColumnCount() {
-    return resultColumnCount;
+    return result.count();
   }
 
   int resultProjection(int index) {
-    return index >= 0 && index < resultColumnCount
-        ? resultProjections[index] : -1;
+    return result.projection(index);
   }
 
   int resultType(int index) {
-    return index >= 0 && index < resultColumnCount
-        ? resultTypes[index] : 0;
+    return result.descriptor(index);
   }
 
   CharSequence resultName(int index) {
-    return index >= 0 && index < resultColumnCount
-        ? resultNames[index].toString() : null;
+    return result.name(index);
   }
 
   int resultNameLength(int index) {
-    return index >= 0 && index < resultColumnCount
-        ? resultNames[index].length() : 0;
+    return result.nameLength(index);
   }
 
   void setResultNullable(int index, boolean nullable) {
-    if (nullable) resultNullableMask |= 1L << index;
-    else resultNullableMask &= ~(1L << index);
+    result.setNullable(index, nullable);
   }
 
   boolean resultNullable(int index) {
-    return index >= 0 && index < resultColumnCount
-        && (resultNullableMask & 1L << index) != 0;
+    return result.isNullable(index);
   }
 
   long resultNullableMask() {
-    return resultNullableMask;
+    return result.nullableWord(0);
+  }
+
+  long resultNullableWord(int word) { return result.nullableWord(word); }
+  int resultNullableWordCount() { return result.nullableWordCount(); }
+
+  StatusCode reserve(SqlScanRowResult row) {
+    StatusCode status = result.status();
+    return status.isOk() ? row.prepare(result.descriptors(), result.count()) : status;
+  }
+
+  int[] copyResultDescriptors(int[] destination, int columns) {
+    return result.copyDescriptors(destination, columns);
   }
 
   StatusCode claimCapability(
       SqlScanCursor cursor,
       SqlQueryExecution execution,
       long generation) {
-    return cursor.claim(
+    StatusCode status = result.status();
+    return status.isOk() ? cursor.claim(
         execution,
         generation,
-        resultProjections,
-        resultColumnCount,
-        rowLimit);
+        result.projections(),
+        result.count(),
+        rowLimit) : status;
   }
 
   StatusCode addStep(long operator, long detail) {
-    if (stepCount >= operators.length) return StatusCode.RESOURCE_EXHAUSTED;
-    operators[stepCount] = operator;
-    details[stepCount] = detail;
-    stepCount++;
-    return StatusCode.OK;
+    return steps.add(operator, detail);
   }
 
   int stepCount() {
@@ -329,65 +330,31 @@ final class SqlPhysicalPlan {
   long operator(int index) {
     int base = baseStepCount();
     if (index >= base) return subqueries.operator(index - base);
-    return blockStages != null ? blockStages.operator(index)
-        : joinStages != null ? joinStages.operator(index) : operators[index];
+    return unionStages != null ? unionStages.operator(index)
+        : blockStages != null ? blockStages.operator(index)
+        : joinStages != null ? joinStages.operator(index) : steps.operator(index);
   }
 
   long detail(int index) {
     int base = baseStepCount();
     if (index >= base) return subqueries.detail(index - base);
-    return blockStages != null ? blockStages.detail(index)
-        : joinStages != null ? joinStages.detail(index) : details[index];
+    return unionStages != null ? unionStages.detail(index)
+        : blockStages != null ? blockStages.detail(index)
+        : joinStages != null ? joinStages.detail(index) : steps.detail(index);
   }
 
   long stepRows(int index) {
     int base = baseStepCount();
     if (index >= base) return subqueries.rows(index - base);
-    return blockStages != null ? blockStages.rows(index)
+    return unionStages != null ? unionStages.rows(index)
+        : blockStages != null ? blockStages.rows(index)
         : joinStages != null ? joinStages.rows(index)
             : index == 0 ? actualRows : -1;
   }
 
   private int baseStepCount() {
-    return blockStages != null ? blockStages.count()
-        : joinStages != null ? joinStages.count() : stepCount;
-  }
-
-  private static final class ResultName implements CharSequence {
-    private final char[] value = new char[64];
-    private int length;
-
-    void copyFrom(CharSequence source) {
-      length = source.length();
-      for (int index = 0; index < length; index++) {
-        value[index] = source.charAt(index);
-      }
-    }
-
-    @Override
-    public int length() {
-      return length;
-    }
-
-    @Override
-    public char charAt(int index) {
-      if (index < 0 || index >= length) {
-        throw new IndexOutOfBoundsException(index);
-      }
-      return value[index];
-    }
-
-    @Override
-    public CharSequence subSequence(int start, int end) {
-      if (start < 0 || end < start || end > length) {
-        throw new IndexOutOfBoundsException(start);
-      }
-      return new String(value, start, end - start);
-    }
-
-    @Override
-    public String toString() {
-      return new String(value, 0, length);
-    }
+    return unionStages != null ? unionStages.count()
+        : blockStages != null ? blockStages.count()
+        : joinStages != null ? joinStages.count() : steps.count();
   }
 }

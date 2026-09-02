@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.error.StatusCode;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlComparison;
 
@@ -8,55 +9,46 @@ final class SqlBoundBooleanPredicateProgram {
   static final int SCOPE_LEFT = 0;
   static final int SCOPE_RIGHT = 1;
   private static final int PROGRAMS_PER_LEAF = 4;
-  private static final int INITIAL_MEMBER_CAPACITY = 16;
+  final SqlRetainedArrayAllocator allocator;
+  byte[] operators = new byte[0];
+  long[] operandHighs = new long[0];
+  long[] operands = new long[0];
+  int[] descriptors = new int[0];
+  int[] scopes = new int[0];
+  int[] offsets = new int[0];
+  int[] counts = new int[0];
+  int[] resultDescriptors = new int[0];
+  boolean[] unresolvedResults = new boolean[0];
+  int[] rawColumns = new int[0];
+  byte[] tests = new byte[0];
+  SqlComparison[] comparisons = new SqlComparison[0];
+  boolean[] negated = new boolean[0];
+  int[] subqueryEdges = new int[0];
+  int[] memberOffsets = new int[0];
+  int[] memberCounts = new int[0];
+  long[] members;
+  long[] memberHighs;
+  int[] memberDescriptors;
+  boolean[] memberNulls;
+  byte[] booleanOperators = new byte[0];
+  int[] booleanLeft = new int[0];
+  int[] booleanRight = new int[0];
+  int nodeCount;
+  int leafCount;
+  int memberCount;
+  int booleanNodeCount;
+  int root = -1;
 
-  private final byte[] operators =
-      new byte[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
-  private final long[] operands =
-      new long[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
-  private final int[] descriptors =
-      new int[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
-  private final byte[] scopes =
-      new byte[SqlBooleanPredicateProgram.MAXIMUM_SCALAR_NODES];
-  private final byte[] offsets = new byte[
-      SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
-  private final byte[] counts = new byte[
-      SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
-  private final int[] resultDescriptors = new int[
-      SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
-  private final boolean[] unresolvedResults = new boolean[
-      SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
-  private final int[] rawColumns = new int[
-      SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
-  private final byte[] tests = new byte[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private final SqlComparison[] comparisons =
-      new SqlComparison[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private final boolean[] negated =
-      new boolean[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private final byte[] subqueryEdges =
-      new byte[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private final short[] memberOffsets =
-      new short[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private final short[] memberCounts =
-      new short[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private long[] members;
-  private int[] memberDescriptors;
-  private boolean[] memberNulls;
-  private final byte[] booleanOperators =
-      new byte[SqlBooleanPredicateProgram.MAXIMUM_BOOLEAN_NODES];
-  private final byte[] booleanLeft =
-      new byte[SqlBooleanPredicateProgram.MAXIMUM_BOOLEAN_NODES];
-  private final byte[] booleanRight =
-      new byte[SqlBooleanPredicateProgram.MAXIMUM_BOOLEAN_NODES];
-  private int nodeCount;
-  private int leafCount;
-  private int memberCount;
-  private int booleanNodeCount;
-  private int root = -1;
+  SqlBoundBooleanPredicateProgram() { this(SqlRetainedArrayAllocator.STANDARD); }
+
+  SqlBoundBooleanPredicateProgram(SqlRetainedArrayAllocator retainedAllocator) {
+    allocator = retainedAllocator;
+  }
 
   void reset() {
     for (int node = 0; node < nodeCount; node++) {
       operators[node] = 0;
+      operandHighs[node] = 0;
       operands[node] = 0;
       descriptors[node] = 0;
       scopes[node] = 0;
@@ -79,6 +71,7 @@ final class SqlBoundBooleanPredicateProgram {
     }
     for (int member = 0; member < memberCount; member++) {
       members[member] = 0;
+      memberHighs[member] = 0;
       memberDescriptors[member] = 0;
       memberNulls[member] = false;
     }
@@ -94,70 +87,23 @@ final class SqlBoundBooleanPredicateProgram {
     root = -1;
   }
 
-  void begin(SqlBooleanPredicateProgram source) {
+  StatusCode begin(SqlBooleanPredicateProgram source) {
     reset();
-    leafCount = source.leafCount();
-    int sourceMemberCount = source.memberCount();
-    ensureMembers(sourceMemberCount);
-    memberCount = sourceMemberCount;
-    booleanNodeCount = source.booleanNodeCount();
-    root = source.root();
-    for (int leaf = 0; leaf < leafCount; leaf++) {
-      tests[leaf] = (byte) source.leafTest(leaf);
-      comparisons[leaf] = source.comparison(leaf);
-      negated[leaf] = source.leafNegated(leaf);
-      subqueryEdges[leaf] = (byte) source.subqueryEdge(leaf);
-      memberOffsets[leaf] = (short) copyMembers(source, leaf);
-      memberCounts[leaf] = (short) source.leafMemberCount(leaf);
-      for (int program = 0; program < PROGRAMS_PER_LEAF; program++) {
-        int slot = programSlot(leaf, program);
-        offsets[slot] = (byte) nodeCount;
-        counts[slot] = 0;
-        rawColumns[slot] = -1;
-      }
-    }
-    for (int node = 0; node < booleanNodeCount; node++) {
-      booleanOperators[node] = (byte) source.booleanOperator(node);
-      booleanLeft[node] = (byte) source.booleanLeft(node);
-      booleanRight[node] = (byte) source.booleanRight(node);
-    }
+    return SqlBoundPredicateInitialization.begin(this, source);
   }
 
-  private int copyMembers(SqlBooleanPredicateProgram source, int leaf) {
-    int offset = leaf == 0 ? 0
-        : Short.toUnsignedInt(memberOffsets[leaf - 1])
-            + Short.toUnsignedInt(memberCounts[leaf - 1]);
-    for (int member = 0; member < source.leafMemberCount(leaf); member++) {
-      int slot = offset + member;
-      members[slot] = source.memberValue(leaf, member);
-      memberDescriptors[slot] = source.memberDescriptor(leaf, member);
-      memberNulls[slot] = source.memberNull(leaf, member);
+  void prepareLeafPrograms(int leaf) {
+    for (int program = 0; program < PROGRAMS_PER_LEAF; program++) {
+      int slot = programSlot(leaf, program);
+      offsets[slot] = nodeCount;
+      counts[slot] = 0;
+      rawColumns[slot] = -1;
     }
-    return offset;
-  }
-
-  private void ensureMembers(int required) {
-    if (required == 0 || members != null && required <= members.length) return;
-    int capacity = members == null ? INITIAL_MEMBER_CAPACITY : members.length;
-    while (capacity < required) {
-      capacity = Math.min(SqlBooleanPredicateProgram.MAXIMUM_MEMBERS, capacity * 2);
-    }
-    long[] nextMembers = new long[capacity];
-    int[] nextDescriptors = new int[capacity];
-    boolean[] nextNulls = new boolean[capacity];
-    if (members != null && memberCount > 0) {
-      System.arraycopy(members, 0, nextMembers, 0, memberCount);
-      System.arraycopy(memberDescriptors, 0, nextDescriptors, 0, memberCount);
-      System.arraycopy(memberNulls, 0, nextNulls, 0, memberCount);
-    }
-    members = nextMembers;
-    memberDescriptors = nextDescriptors;
-    memberNulls = nextNulls;
   }
 
   void beginProgram(int leaf, int program) {
     int slot = programSlot(leaf, program);
-    offsets[slot] = (byte) nodeCount;
+    offsets[slot] = nodeCount;
     counts[slot] = 0;
     resultDescriptors[slot] = 0;
     unresolvedResults[slot] = false;
@@ -171,10 +117,22 @@ final class SqlBoundBooleanPredicateProgram {
       long operand,
       int descriptor,
       int scope) {
+    append(leaf, program, operator, operand >> 63, operand, descriptor, scope);
+  }
+
+  void append(
+      int leaf,
+      int program,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor,
+      int scope) {
     operators[nodeCount] = (byte) operator;
+    operandHighs[nodeCount] = operandHigh;
     operands[nodeCount] = operand;
     descriptors[nodeCount] = descriptor;
-    scopes[nodeCount] = (byte) scope;
+    scopes[nodeCount] = scope;
     nodeCount++;
     counts[programSlot(leaf, program)]++;
   }
@@ -197,8 +155,8 @@ final class SqlBoundBooleanPredicateProgram {
     int slot = programSlot(leaf, program);
     resultDescriptors[slot] = descriptor;
     unresolvedResults[slot] = false;
-    if (Byte.toUnsignedInt(counts[slot]) == 1) {
-      int node = Byte.toUnsignedInt(offsets[slot]);
+    if (counts[slot] == 1) {
+      int node = offsets[slot];
       if (operators[node] == io.riverdb.sql.SqlScalarExpression.NULL) {
         descriptors[node] = descriptor;
       }
@@ -209,14 +167,14 @@ final class SqlBoundBooleanPredicateProgram {
   int root() { return root; }
   int leafCount() { return leafCount; }
   int booleanOperator(int node) { return Byte.toUnsignedInt(booleanOperators[node]); }
-  int booleanLeft(int node) { return Byte.toUnsignedInt(booleanLeft[node]); }
-  int booleanRight(int node) { return Byte.toUnsignedInt(booleanRight[node]); }
+  int booleanLeft(int node) { return booleanLeft[node]; }
+  int booleanRight(int node) { return booleanRight[node]; }
   int leafTest(int leaf) { return Byte.toUnsignedInt(tests[leaf]); }
   SqlComparison comparison(int leaf) { return comparisons[leaf]; }
   boolean negated(int leaf) { return negated[leaf]; }
   int subqueryEdge(int leaf) { return subqueryEdges[leaf]; }
   int nodeCount(int leaf, int program) {
-    return Byte.toUnsignedInt(counts[programSlot(leaf, program)]);
+    return counts[programSlot(leaf, program)];
   }
   int operator(int leaf, int program, int node) {
     return Byte.toUnsignedInt(operators[nodeSlot(leaf, program, node)]);
@@ -224,11 +182,14 @@ final class SqlBoundBooleanPredicateProgram {
   long operand(int leaf, int program, int node) {
     return operands[nodeSlot(leaf, program, node)];
   }
+  long operandHigh(int leaf, int program, int node) {
+    return operandHighs[nodeSlot(leaf, program, node)];
+  }
   int descriptor(int leaf, int program, int node) {
     return descriptors[nodeSlot(leaf, program, node)];
   }
   int scope(int leaf, int program, int node) {
-    return Byte.toUnsignedInt(scopes[nodeSlot(leaf, program, node)]);
+    return scopes[nodeSlot(leaf, program, node)];
   }
   int resultDescriptor(int leaf, int program) {
     return resultDescriptors[programSlot(leaf, program)];
@@ -236,8 +197,11 @@ final class SqlBoundBooleanPredicateProgram {
   int rawColumn(int leaf, int program) {
     return rawColumns[programSlot(leaf, program)];
   }
-  int memberCount(int leaf) { return Short.toUnsignedInt(memberCounts[leaf]); }
+  int memberCount(int leaf) { return memberCounts[leaf]; }
   long member(int leaf, int member) { return members[memberSlot(leaf, member)]; }
+  long memberHigh(int leaf, int member) {
+    return memberHighs[memberSlot(leaf, member)];
+  }
   int memberDescriptor(int leaf, int member) {
     return memberDescriptors[memberSlot(leaf, member)];
   }
@@ -246,11 +210,11 @@ final class SqlBoundBooleanPredicateProgram {
   }
 
   private int memberSlot(int leaf, int member) {
-    return Short.toUnsignedInt(memberOffsets[leaf]) + member;
+    return memberOffsets[leaf] + member;
   }
 
   private int nodeSlot(int leaf, int program, int node) {
-    return Byte.toUnsignedInt(offsets[programSlot(leaf, program)]) + node;
+    return offsets[programSlot(leaf, program)] + node;
   }
 
   private static int programSlot(int leaf, int program) {

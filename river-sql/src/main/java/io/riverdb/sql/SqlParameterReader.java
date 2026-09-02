@@ -47,9 +47,14 @@ final class SqlParameterReader {
       return readText(command, text, parameter, descriptor, result);
     }
     long value = source.valueAt(parameter);
-    if (!SqlValueDomain.validFixed(descriptor, value)) {
+    long high = source.highValueAt(parameter);
+    boolean valid = SqlTypeDescriptor.isWideDecimal(descriptor)
+        ? SqlValueDomain.validDecimal128(descriptor, high, value)
+        : SqlValueDomain.validFixed(descriptor, value);
+    if (!valid) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    result.high = high;
     result.value = value;
     result.varchar = false;
     result.textScalars = 0;
@@ -63,6 +68,7 @@ final class SqlParameterReader {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.value = 0;
+    result.high = 0;
     result.varchar = descriptor != 0
         && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR;
     result.textScalars = 0;
@@ -93,6 +99,7 @@ final class SqlParameterReader {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     result.value = handle;
+    result.high = 0;
     result.varchar = true;
     result.textScalars = scalars;
     result.typeDescriptor = descriptor;

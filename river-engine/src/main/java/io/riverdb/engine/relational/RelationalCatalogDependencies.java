@@ -13,6 +13,7 @@ final class RelationalCatalogDependencies {
   private final IndexedScanCursor catalogCursor = new IndexedScanCursor();
   private final IndexedScanResult catalogRow = new IndexedScanResult();
   private final TableDefinition referencingTable = new TableDefinition();
+  private final CatalogTableScanDecoder tableScanDecoder = new CatalogTableScanDecoder();
   private final TableSchema.ColumnName scannedName = new TableSchema.ColumnName();
   private final ViewDefinition scannedView = new ViewDefinition();
 
@@ -68,7 +69,7 @@ final class RelationalCatalogDependencies {
   }
 
   private StatusCode checkSchemaCandidate(int tableId) {
-    StatusCode decoded = CatalogRecord.decodeTableForScan(
+    StatusCode decoded = CatalogRecord.decodeTableForScan(tableScanDecoder,
         catalogRow.row(),
         catalogScratch,
         schemaGate,

@@ -3,335 +3,226 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.page.PageHeader;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.IoResult;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
-/** Owns the indexed table's bounded current and staged page frames. */
+/** Owns page publication metadata and delegates bounded frame storage. */
 final class IndexedPageSet {
-  private final PagedObjectArray<ByteBuffer> currentPages =
-      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
-  private final PagedObjectArray<ByteBuffer> currentPayloads =
-      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
-  private final PagedObjectArray<ByteBuffer> stagingPages =
-      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
-  private final PagedObjectArray<ByteBuffer> stagingPayloads =
-      new PagedObjectArray<>(IndexedTableLimits.MAX_PAGES);
-  private final PagedBooleanArray present = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
-  private final PagedBooleanArray staged = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
-  private final PagedBooleanArray dirty = new PagedBooleanArray(IndexedTableLimits.MAX_PAGES);
-  private final PagedLongArray recordStarts = new PagedLongArray(IndexedTableLimits.MAX_PAGES);
-  private final PagedLongArray recordEnds = new PagedLongArray(IndexedTableLimits.MAX_PAGES);
-  private final PagedIntArray changedPageIds = new PagedIntArray(IndexedTableLimits.MAX_PAGES);
-  private int changedPageCount;
-  private int highestPageId;
-  private long stagedCopyBytes;
+  private final IndexedPageState state;
+  private final IndexedPageFrameCache cache;
 
-  ByteBuffer currentPayloadUnchecked(int pageId) {
-    return currentPayloads.get(pageId);
-  }
-
-  boolean isPresent(int pageId) {
-    return present.get(pageId);
-  }
-
-  boolean isStaged(int pageId) {
-    return staged.get(pageId);
-  }
-
-  boolean isDirty(int pageId) {
-    return dirty.get(pageId);
-  }
-
-  long recordStart(int pageId) {
-    return recordStarts.get(pageId);
-  }
-
-  long recordEnd(int pageId) {
-    return recordEnds.get(pageId);
-  }
-
-  int changedPageCount() {
-    return changedPageCount;
-  }
-
-  int changedPageId(int index) {
-    return changedPageIds.get(index);
-  }
-
-  int highestPageId() {
-    return highestPageId;
-  }
-
-  long stagedCopyBytes() {
-    return stagedCopyBytes;
-  }
-
-  void resetChanges() {
-    changedPageCount = 0;
-  }
-
-  void markCurrentChanged(int pageId, long recordStart, long recordEnd) {
-    recordStarts.set(pageId, recordStart);
-    recordEnds.set(pageId, recordEnd);
-    dirty.set(pageId, true);
-  }
-
-  void installPresent(int pageId) {
-    present.set(pageId, true);
-    highestPageId = Math.max(highestPageId, pageId);
-  }
-
-  void installChanged(int pageId, long recordStart, long recordEnd) {
-    installPresent(pageId);
-    markCurrentChanged(pageId, recordStart, recordEnd);
-  }
-
-  void markClean(int pageId) {
-    dirty.set(pageId, false);
-  }
-
-  void markRebased(int pageId) {
-    recordStarts.set(pageId, 0);
-    recordEnds.set(pageId, 0);
-    dirty.set(pageId, false);
-  }
-
-  StatusCode encodeCurrent(
-      int pageId,
+  IndexedPageSet(
+      DurableFile durableFile,
+      DurableFile durableStagingFile,
       DatabaseIncarnation database,
-      WalGeneration generation,
-      long recordStart,
-      long recordEnd,
-      CRC32C checksum) {
-    return PageCodec.encode(
+      WalGeneration generation) {
+    this(
+        durableFile,
+        durableStagingFile,
         database,
         generation,
-        pageId,
-        1,
-        recordStart,
-        recordEnd,
-        PageCodec.MAX_PAYLOAD_BYTES,
-        currentPages.get(pageId),
-        checksum);
+        IndexedPageCacheConfig.DEFAULT);
+  }
+
+  IndexedPageSet(
+      DurableFile durableFile,
+      DurableFile durableStagingFile,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      IndexedPageCacheConfig config) {
+    state = new IndexedPageState(config);
+    cache = new IndexedPageFrameCache(
+        durableFile, durableStagingFile, database, generation, state, config);
+  }
+
+  void setGeneration(WalGeneration generation) { cache.setGeneration(generation); }
+  void beginPageImageOperation() { state.beginPageImageOperation(); }
+
+  IndexedTableKernel createKernel(DurableFile rowFile, DurableFile versionFile) {
+    return new IndexedTableKernel(
+        this,
+        new IndexedVersionState(
+            new IndexedRowDirectory(rowFile), new IndexedVersionDirectory(versionFile)));
+  }
+
+  ByteBuffer currentPayloadUnchecked(int pageId) { return cache.currentPayloadUnchecked(pageId); }
+  boolean isPresent(int pageId) { return state.present(pageId); }
+  boolean isStaged(int pageId) { return state.staged(pageId); }
+  boolean isDirty(int pageId) { return state.dirty(pageId); }
+  long recordStart(int pageId) { return cache.recordStart(pageId); }
+  long recordEnd(int pageId) { return cache.recordEnd(pageId); }
+  int changedPageCount() { return state.changedPageCount(); }
+  int changedPageId(int index) { return state.changedPageId(index); }
+  int highestPageId() { return state.highestPageId(); }
+  int payloadKind(int pageId) { return cache.payloadKind(pageId); }
+  long ownerKeyId(int pageId) { return cache.ownerKeyId(pageId); }
+  long stagedCopyBytes() { return state.stagedCopyBytes(); }
+  StatusCode lastStatus() { return cache.lastStatus(); }
+  StatusCode pinCurrentPage(int pageId) { return cache.pinCurrentPage(pageId); }
+  void unpinCurrentPage(int pageId) { cache.unpinCurrentPage(pageId); }
+  StatusCode pinPageAt(
+      int pageId, long visibleCommitSequence, IndexedPageGenerationPin result) {
+    return cache.pinPageAt(pageId, visibleCommitSequence, result);
+  }
+  StatusCode unpinPage(IndexedPageGenerationPin pin) { return cache.unpinPage(pin); }
+  boolean pageValidationMatches(
+      int pageId, long pageGeneration, long schemaId,
+      long descriptorHash, int expectedType) {
+    return cache.pageValidationMatches(
+        pageId, pageGeneration, schemaId, descriptorHash, expectedType);
+  }
+  void rememberPageValidation(
+      int pageId, long pageGeneration, long schemaId,
+      long descriptorHash, int pageType) {
+    cache.rememberPageValidation(
+        pageId, pageGeneration, schemaId, descriptorHash, pageType);
+  }
+  StatusCode pinOperationPage(
+      int pageId, boolean writable, IndexedOperationPage result) {
+    return cache.pinOperationPage(pageId, writable, result);
+  }
+  StatusCode pinTupleOperationPage(
+      int pageId, boolean writable, long ownerKeyId, IndexedOperationPage result) {
+    return cache.pinTupleOperationPage(pageId, writable, ownerKeyId, result);
+  }
+  StatusCode pinScalarOperationPage(
+      int pageId, boolean writable, IndexedOperationPage result) {
+    return cache.pinScalarOperationPage(pageId, writable, result);
+  }
+  StatusCode pinNewOperationPage(int pageId, IndexedOperationPage result) {
+    return cache.pinNewOperationPage(pageId, result);
+  }
+  StatusCode pinNewScalarOperationPage(int pageId, IndexedOperationPage result) {
+    return cache.pinNewOperationPage(
+        pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_SCALAR_BTREE,
+        io.riverdb.format.page.PageCodec.SCALAR_OWNER_KEY_ID, result);
+  }
+  StatusCode pinNewTupleOperationPage(
+      int pageId, long ownerKeyId, IndexedOperationPage result) {
+    return cache.pinNewOperationPage(
+        pageId, io.riverdb.format.page.PageCodec.PAYLOAD_KIND_TUPLE_BTREE,
+        ownerKeyId, result);
+  }
+  StatusCode releaseOperationPage(IndexedOperationPage page) {
+    return cache.releaseOperationPage(page);
+  }
+  void resetChanges() { state.resetChanges(); }
+  StatusCode beginPreparedBatch() { return cache.beginPreparedBatch(); }
+  StatusCode freezeChangedPages(int member, long oldestVisibleCommitSequence) {
+    return cache.freezeChangedPages(member, oldestVisibleCommitSequence);
+  }
+  StatusCode installPreparedPages(
+      long[] commitSequences, int memberCount, long start, long end) {
+    return cache.installPreparedPages(commitSequences, memberCount, start, end);
+  }
+  StatusCode releasePreparedBatch() { return cache.releasePreparedBatch(); }
+  void cancelPreparedBatch() { cache.cancelPreparedBatch(); }
+
+  StatusCode markCurrentChanged(int pageId, long start, long end) {
+    return cache.markCurrentChanged(pageId, start, end);
+  }
+
+  StatusCode reidentifyCurrent(int pageId, int payloadKind, long ownerKeyId) {
+    return cache.reidentifyCurrent(pageId, payloadKind, ownerKeyId);
+  }
+
+  StatusCode installPresent(int pageId) { return state.installPresent(pageId); }
+
+  StatusCode installChanged(int pageId, long start, long end) {
+    StatusCode status = state.reservePublication(pageId);
+    if (status.isOk()) status = state.installPresent(pageId);
+    return status.isOk() ? cache.markCurrentChanged(pageId, start, end) : status;
+  }
+
+  StatusCode reservePublication(int pageId) { return state.reservePublication(pageId); }
+
+  void markClean(int pageId) { cache.markClean(pageId); }
+  void markRebased(int pageId) { cache.markRebased(pageId); }
+
+  StatusCode encodeCurrent(
+      int pageId, DatabaseIncarnation database, WalGeneration generation,
+      long start, long end, CRC32C checksum) {
+    return cache.encodeCurrent(pageId, database, generation, start, end, checksum);
   }
 
   StatusCode encodeStaged(
-      int pageId,
-      DatabaseIncarnation database,
-      WalGeneration generation,
-      long recordStart,
-      long recordEnd,
-      CRC32C checksum) {
-    return PageCodec.encode(
-        database,
-        generation,
-        pageId,
-        1,
-        recordStart,
-        recordEnd,
-        PageCodec.MAX_PAYLOAD_BYTES,
-        stagingPages.get(pageId),
-        checksum);
+      int pageId, DatabaseIncarnation database, WalGeneration generation,
+      long start, long end, CRC32C checksum) {
+    return cache.encodeStaged(pageId, database, generation, start, end, checksum);
   }
 
-  StatusCode readCurrent(
-      DurableFile file,
-      int pageId,
-      long offset,
-      IoResult result) {
-    ByteBuffer page = currentPages.get(pageId);
-    page.clear();
-    StatusCode status = file.read(offset, page, result);
-    if (status.isOk() && result.bytesTransferred() == PageCodec.PAGE_BYTES) {
-      page.position(0);
-      page.limit(PageCodec.PAGE_BYTES);
-    }
-    return status;
+  StatusCode readCurrent(DurableFile file, int pageId, long offset, IoResult result) {
+    return cache.readCurrent(file, pageId, offset, result);
   }
 
-  StatusCode writeCurrent(
-      DurableFile file,
-      int pageId,
-      long offset,
-      IoResult result) {
-    ByteBuffer page = currentPages.get(pageId);
-    page.position(0);
-    page.limit(PageCodec.PAGE_BYTES);
-    return file.write(offset, page, result);
+  StatusCode writeCurrent(DurableFile file, int pageId, long offset, IoResult result) {
+    return cache.writeCurrent(file, pageId, offset, result);
   }
 
   StatusCode validateCurrent(int pageId, PageHeader header, CRC32C checksum) {
-    return PageCodec.validate(currentPages.get(pageId), header, checksum);
+    return cache.validateCurrent(pageId, header, checksum);
   }
 
   StatusCode validateRecord(
-      ByteBuffer source,
-      int sourceOffset,
-      PageHeader header,
-      CRC32C checksum) {
-    return PageCodec.validateAt(source, sourceOffset, header, checksum);
+      ByteBuffer source, int sourceOffset, PageHeader header, CRC32C checksum) {
+    return cache.validateRecord(source, sourceOffset, header, checksum);
   }
 
   void copyStagedToRecord(int pageId, ByteBuffer target, int targetOffset) {
-    ByteBuffer source = stagingPages.get(pageId);
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      target.put(targetOffset + index, source.get(index));
-    }
+    cache.copyStagedToRecord(pageId, target, targetOffset);
   }
 
-  void installFromRecord(
-      ByteBuffer source,
-      int sourceOffset,
-      int pageId,
-      long recordStart,
-      long recordEnd) {
-    ensureBuffers(pageId);
-    copyFromRecord(source, sourceOffset, currentPages.get(pageId));
-    installChanged(pageId, recordStart, recordEnd);
+  StatusCode installFromRecord(
+      ByteBuffer source, int sourceOffset, int pageId, long start, long end) {
+    return cache.installFromRecord(source, sourceOffset, pageId, start, end);
   }
 
-  /**
-   * Returns the cached committed payload view. The borrowed view is immutable to callers and is
-   * valid until publication, checkpoint rebase, or close.
-   */
-  ByteBuffer currentPayload(int pageId) {
-    return validPresentPage(pageId) ? currentPayloads.get(pageId) : null;
-  }
-
-  /**
-   * Returns a mutable staged payload for the current operation. The view expires at publication or
-   * cancellation. The first touch performs the operation's single full-page copy.
-   */
+  ByteBuffer currentPayload(int pageId) { return cache.currentPayload(pageId); }
   ByteBuffer stageExisting(int pageId, int maximumChangedPages) {
-    if (!validPageId(pageId)) {
-      return null;
-    }
-    if (staged.get(pageId)) {
-      return stagingPayloads.get(pageId);
-    }
-    if (!present.get(pageId) || !addChangedPage(pageId, maximumChangedPages)) {
-      return null;
-    }
-    copyPage(currentPages.get(pageId), stagingPages.get(pageId));
-    stagedCopyBytes += PageCodec.PAGE_BYTES;
-    return stagingPayloads.get(pageId);
+    return cache.stageExisting(pageId, maximumChangedPages);
   }
-
-  /** Returns the active operation's staged view when present, otherwise its committed view. */
-  ByteBuffer operationPayload(int pageId) {
-    if (!validPageId(pageId)) {
-      return null;
-    }
-    return staged.get(pageId) ? stagingPayloads.get(pageId)
-        : present.get(pageId) ? currentPayloads.get(pageId) : null;
-  }
-
-  /** Returns a zeroed mutable payload for a new page in the current operation. */
+  ByteBuffer operationPayload(int pageId) { return cache.operationPayload(pageId); }
   ByteBuffer stageNew(int pageId, int maximumChangedPages) {
-    if (!validPageId(pageId) || present.get(pageId)) {
-      return null;
-    }
-    if (staged.get(pageId)) {
-      return stagingPayloads.get(pageId);
-    }
-    if (!addChangedPage(pageId, maximumChangedPages)) {
-      return null;
-    }
-    ensureBuffers(pageId);
-    ByteBuffer page = stagingPages.get(pageId);
-    page.clear();
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      page.put(index, (byte) 0);
-    }
-    ByteBuffer payload = stagingPayloads.get(pageId);
-    payload.clear();
-    return payload;
+    return cache.stageNew(pageId, maximumChangedPages);
   }
-
-  void ensureBuffers(int pageId) {
-    if (currentPages.get(pageId) != null) {
-      return;
-    }
-    currentPages.set(pageId, ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES));
-    currentPayloads.set(pageId, payloadView(currentPages.get(pageId)));
-    stagingPages.set(pageId, ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES));
-    stagingPayloads.set(pageId, payloadView(stagingPages.get(pageId)));
+  ByteBuffer stageNew(
+      int pageId, int maximumChangedPages, int payloadKind, long ownerKeyId) {
+    return cache.stageNew(pageId, maximumChangedPages, payloadKind, ownerKeyId);
   }
-
-  boolean validPresentPage(int pageId) {
-    return validPageId(pageId) && present.get(pageId);
+  ByteBuffer stageFreeTuple(int pageId, long ownerKeyId, int maximumChangedPages) {
+    return cache.stageFreeTuple(pageId, ownerKeyId, maximumChangedPages);
   }
-
-  boolean hasDirtyPages() {
-    for (int pageId = 1; pageId <= highestPageId; pageId++) {
-      if (dirty.get(pageId)) {
-        return true;
-      }
-    }
-    return false;
+  StatusCode ensureBuffers(int pageId) { return cache.ensureBuffers(pageId); }
+  StatusCode retainBuffer(int pageId) { return cache.retainBuffer(pageId); }
+  void releaseBuffer(int pageId) { cache.releaseBuffer(pageId); }
+  StatusCode reclaimHistorical(long oldestVisibleCommitSequence) {
+    return cache.reclaimHistorical(oldestVisibleCommitSequence);
   }
-
+  boolean validPresentPage(int pageId) { return cache.validPresentPage(pageId); }
+  boolean operationPresentPage(int pageId) { return cache.operationPresentPage(pageId); }
+  boolean hasDirtyPages() { return cache.hasDirtyPages(); }
+  int activePageMetadataCount() { return state.metadataEntryCount(); }
+  int activePageMetadataCapacity() { return state.metadataCapacity(); }
   boolean addChangedPage(int pageId, int maximumChangedPages) {
-    if (changedPageCount >= maximumChangedPages) {
-      return false;
-    }
-    changedPageIds.set(changedPageCount++, pageId);
-    staged.set(pageId, true);
-    return true;
+    return cache.addChangedPage(pageId, maximumChangedPages);
   }
-
-  void clearStagedFlags() {
-    for (int index = 0; index < changedPageCount; index++) {
-      staged.set(changedPageIds.get(index), false);
-    }
+  void clearStagedFlags() { cache.clearStagedFlags(); }
+  StatusCode closeStagingFile() { return StatusCode.OK; }
+  ByteBuffer beginVacuumPage(int pageId) { return cache.beginVacuumPage(pageId); }
+  ByteBuffer vacuumPayload(int pageId) { return cache.vacuumPayload(pageId); }
+  StatusCode sealVacuumPage(int pageId) { return cache.sealVacuumPage(pageId); }
+  StatusCode publishVacuumPage(int pageId, long start, long end) {
+    return cache.publishVacuumPage(pageId, start, end);
   }
-
-  void publish(long recordStart, long recordEnd) {
-    for (int index = 0; index < changedPageCount; index++) {
-      int pageId = changedPageIds.get(index);
-      ByteBuffer page = currentPages.get(pageId);
-      currentPages.set(pageId, stagingPages.get(pageId));
-      stagingPages.set(pageId, page);
-      ByteBuffer payload = currentPayloads.get(pageId);
-      currentPayloads.set(pageId, stagingPayloads.get(pageId));
-      stagingPayloads.set(pageId, payload);
-      present.set(pageId, true);
-      dirty.set(pageId, true);
-      staged.set(pageId, false);
-      recordStarts.set(pageId, recordStart);
-      recordEnds.set(pageId, recordEnd);
-      highestPageId = Math.max(highestPageId, pageId);
-    }
-  }
+  StatusCode forceVacuumPublication() { return cache.forceVacuumPublication(); }
+  void discardVacuumPages() { cache.discardVacuumPages(); }
 
   static void copyPage(ByteBuffer source, ByteBuffer target) {
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      target.put(index, source.get(index));
-    }
+    target.put(0, source, 0, source.limit());
     target.position(0);
-    target.limit(PageCodec.PAGE_BYTES);
-  }
-
-  private static void copyFromRecord(ByteBuffer source, int offset, ByteBuffer target) {
-    for (int index = 0; index < PageCodec.PAGE_BYTES; index++) {
-      target.put(index, source.get(offset + index));
-    }
-    target.position(0);
-    target.limit(PageCodec.PAGE_BYTES);
-  }
-
-  private static ByteBuffer payloadView(ByteBuffer page) {
-    page.clear();
-    page.position(PageCodec.HEADER_BYTES);
-    page.limit(PageCodec.PAGE_BYTES);
-    return page.slice();
-  }
-
-  private static boolean validPageId(int pageId) {
-    return pageId > 0 && pageId <= IndexedTableLimits.MAX_PAGES;
+    target.limit(source.limit());
   }
 }

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlApproximateNumeric;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
@@ -30,13 +31,25 @@ final class ProtocolFrameCodecTest {
           payload = new byte[] {0x5a};
           encoded = codec.encodeBinaryRequest(bytes, type, 9, payload, payload.length);
         }
-        case EXECUTE, BEGIN_QUERY -> {
+        case EXECUTE, BEGIN_QUERY, PREPARE -> {
           payload = new byte[] {0, 0, 0, 1, 0, 0, 0, 0, 'A'};
           encoded = codec.encodeSqlRequest(bytes, type, 9, "A", null);
+        }
+        case EXECUTE_PREPARED, BEGIN_PREPARED_QUERY -> {
+          payload = new byte[] {0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0};
+          encoded = codec.encodePreparedRequest(
+              bytes, type, 9, 1, new io.riverdb.engine.api.ParameterSet(0, 0));
+        }
+        case CLOSE_PREPARED -> {
+          payload = new byte[] {0, 0, 0, 0, 0, 0, 0, 1};
+          encoded = codec.encodePreparedRequest(bytes, type, 9, 1, null);
         }
         case HELLO, OPEN_SESSION, FETCH, CLOSE_QUERY, CLOSE_SESSION -> {
           payload = new byte[0];
           encoded = codec.encodeRequest(bytes, type, 9);
+        }
+        case PREPARE_PROGRAM, EXECUTE_PROGRAM, CLOSE_PROGRAM -> {
+          continue;
         }
         default -> throw new AssertionError("uncovered message kind " + type);
       }
@@ -50,7 +63,7 @@ final class ProtocolFrameCodecTest {
           goldenFrame(wireCode, 1, 9, new byte[64]),
           encodedBytes(bytes));
     }
-    assertEquals(8, ProtocolMessageType.values().length);
+    assertEquals(15, ProtocolMessageType.values().length);
   }
 
   @Test
@@ -73,19 +86,33 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(
-            bytes, 12, StatusCode.OK, new MetadataQuery("id", "balance", "region")));
-    byte[] metadataPayload = new byte[94];
+            bytes, ProtocolMessageType.BEGIN_QUERY, 12, StatusCode.OK,
+            metadata(new MetadataQuery("id", "balance", "region")),
+            row(7, 0b010, 7, 0, 1), 1, completion(), false));
+    byte[] metadataPayload = new byte[114];
     ByteBuffer metadata = ByteBuffer.wrap(metadataPayload).order(ByteOrder.BIG_ENDIAN);
-    metadata.putInt(4, 12);
+    metadata.putInt(4, 41);
     metadata.putInt(12, 3);
-    metadata.putLong(56, 0b010);
-    metadata.putInt(64, 1);
-    metadata.putInt(68, 0x0000_0702);
-    metadata.putInt(72, 3);
-    int offset = 76;
+    metadata.putLong(24, 7);
+    metadata.putLong(32, 1);
+    metadata.putInt(56, 1);
+    metadata.putInt(60, 31);
+    metadata.put(64, (byte) 0b010);
+    metadata.putInt(65, 1);
+    metadata.putInt(69, 0x0000_0702);
+    metadata.putInt(73, 3);
+    int offset = 77;
     offset = putAsciiName(metadata, offset, "id");
     offset = putAsciiName(metadata, offset, "balance");
-    assertEquals(94, putAsciiName(metadata, offset, "region"));
+    offset = putAsciiName(metadata, offset, "region");
+    metadata.put(offset++, (byte) 0b010);
+    metadata.putLong(offset, 7);
+    offset += Long.BYTES;
+    metadata.putShort(offset, (short) 0);
+    offset += Short.BYTES;
+    metadata.putLong(offset, 1);
+    offset += Long.BYTES;
+    assertEquals(114, offset);
     assertArrayEquals(goldenFrame(5, 1, 12, metadataPayload), encodedBytes(bytes));
   }
 
@@ -110,6 +137,7 @@ final class ProtocolFrameCodecTest {
   void roundTripsBoundedCommandResponse() {
     CommandResult command = new CommandResult();
     char[] text = "catalog_table_identifier_longer_than_seven".toCharArray();
+    assertEquals(StatusCode.OK, command.reserve(2, text.length));
     assertEquals(
         StatusCode.OK,
         command.complete(
@@ -193,9 +221,46 @@ final class ProtocolFrameCodecTest {
   }
 
   @Test
+  void roundTripsDecimal128ResponseWithoutIntermediateObjects() {
+    int descriptor = SqlTypeDescriptor.decimal(38, 6);
+    long high = 669_260_594_276_348_691L;
+    long low = -4_302_749_291_975_740_594L;
+    CommandResult command = new CommandResult();
+    assertEquals(StatusCode.OK, command.complete(
+        1, 1, false, true, 0,
+        new long[] {high}, new long[] {low}, new long[1], 1,
+        new int[] {descriptor}, 1));
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(StatusCode.OK, codec.encodeCommandResponse(
+        bytes, ProtocolMessageType.EXECUTE, 92, StatusCode.OK, command, false));
+    ProtocolResponse response = new ProtocolResponse();
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(high, response.decimalUnscaledHighAt(0));
+    assertEquals(low, response.decimalUnscaledLowAt(0));
+    assertEquals(0, response.decimalUnscaledAt(0));
+
+    assertEquals(StatusCode.OK, codec.encodeCommandResponse(
+        bytes, ProtocolMessageType.EXECUTE, 92, StatusCode.OK, command, false));
+    int valueOffset = ProtocolFrameCodec.HEADER_BYTES + 64 + 1 + Integer.BYTES;
+    bytes.putLong(valueOffset, Long.MAX_VALUE);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+  }
+
+  @Test
   void rejectsInvalidFixedWidthValuesAtTheRemoteBoundary() {
+    assertInvalidFixedValue(SqlTypeDescriptor.SMALLINT, Short.MIN_VALUE,
+        (long) Short.MIN_VALUE - 1);
+    assertInvalidFixedValue(SqlTypeDescriptor.INTEGER, Integer.MAX_VALUE,
+        (long) Integer.MAX_VALUE + 1);
     assertInvalidFixedValue(SqlTypeDescriptor.BOOLEAN, 1, 2);
     assertInvalidFixedValue(SqlTypeDescriptor.decimal(3, 1), 999, 1_000);
+    assertInvalidFixedValue(SqlTypeDescriptor.REAL,
+        SqlApproximateNumeric.realBits(1.25f),
+        Integer.toUnsignedLong(Float.floatToRawIntBits(-0.0f)));
+    assertInvalidFixedValue(SqlTypeDescriptor.DOUBLE,
+        SqlApproximateNumeric.doubleBits(-2.5d),
+        Double.doubleToRawLongBits(Double.POSITIVE_INFINITY));
     assertInvalidFixedValue(SqlTypeDescriptor.DATE, -1, 2_932_897L);
     assertInvalidFixedValue(SqlTypeDescriptor.time(3), 123_000, 123_001);
     assertInvalidFixedValue(
@@ -205,18 +270,21 @@ final class ProtocolFrameCodecTest {
   }
 
   @Test
-  void roundTripsQueryMetadataWithoutClaimingARow() {
+  void roundTripsQueryMetadataAndFirstRowWithIndependentNullability() {
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
     MetadataQuery query = new MetadataQuery("id", "balance", "region", "amount");
     assertEquals(
         StatusCode.OK,
-        codec.encodeQueryOpenResponse(bytes, 9, StatusCode.OK, query));
+        codec.encodeQueryOpenResponse(
+            bytes, ProtocolMessageType.BEGIN_QUERY, 9, StatusCode.OK, metadata(query),
+            row(9, 0b0101, 0, 0, 1, 0), 1, null, true));
 
     ProtocolResponse response = new ProtocolResponse();
     assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
     assertEquals(StatusCode.OK, response.status());
     assertTrue(response.queryActive());
-    assertFalse(response.rowAvailable());
+    assertFalse(response.endOfStream());
+    assertTrue(response.rowAvailable());
     assertEquals(4, response.columnCount());
     assertEquals("id", response.columnName(0));
     assertEquals("balance", response.columnName(1));
@@ -230,12 +298,36 @@ final class ProtocolFrameCodecTest {
     assertEquals(SqlTypeDescriptor.BOOLEAN, response.typeDescriptorAt(2));
     assertEquals(
         SqlTypeDescriptor.decimal(18, 6), response.typeDescriptorAt(3));
-    assertEquals(0b1010, response.nullMask());
+    assertEquals(0b0101, response.nullMask());
+    assertFalse(response.columnIsNullable(0));
+    assertTrue(response.columnIsNullable(1));
+    assertFalse(response.columnIsNullable(2));
+    assertTrue(response.columnIsNullable(3));
+    bytes.putInt(ProtocolFrameCodec.HEADER_BYTES + 4,
+        bytes.getInt(ProtocolFrameCodec.HEADER_BYTES + 4)
+            | ProtocolFrameCodec.FLAG_END_OF_STREAM);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
 
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(
-            bytes, 10, StatusCode.INVALID_EXTERNAL_INPUT, null));
+            bytes, ProtocolMessageType.BEGIN_QUERY, 10, StatusCode.OK, metadata(query),
+            new RowResult(), 0, completion(0, 22, true), false));
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertTrue(response.endOfStream());
+    assertFalse(response.queryActive());
+    assertFalse(response.rowAvailable());
+    assertEquals(0, response.rowsReturned());
+    assertTrue(response.columnIsNullable(1));
+    assertTrue(response.transactionActive());
+    assertEquals(22, response.commitSequence());
+
+    assertEquals(
+        StatusCode.OK,
+        codec.encodeQueryOpenResponse(
+            bytes, ProtocolMessageType.BEGIN_QUERY, 11,
+            StatusCode.INVALID_EXTERNAL_INPUT, null, null, 0, null, false));
     assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, response.status());
     assertFalse(response.queryActive());
@@ -244,38 +336,198 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(
-            bytes, 11, StatusCode.QUERY_TOO_COMPLEX, null));
+            bytes, ProtocolMessageType.BEGIN_QUERY, 12,
+            StatusCode.QUERY_TOO_COMPLEX, null, null, 0, null, false));
     assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
     assertEquals(StatusCode.QUERY_TOO_COMPLEX, response.status());
 
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(
-            bytes, 12, StatusCode.CARDINALITY_VIOLATION, null));
+            bytes, ProtocolMessageType.BEGIN_QUERY, 13,
+            StatusCode.CARDINALITY_VIOLATION, null, null, 0, null, false));
     assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
     assertEquals(StatusCode.CARDINALITY_VIOLATION, response.status());
 
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(
-            bytes, 12, StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, null));
+            bytes, ProtocolMessageType.BEGIN_QUERY, 14,
+            StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, null, null, 0, null, false));
     assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
     assertEquals(StatusCode.NUMERIC_VALUE_OUT_OF_RANGE, response.status());
 
     assertEquals(
         StatusCode.OK,
         codec.encodeQueryOpenResponse(
-            bytes, 12, StatusCode.DATATYPE_MISMATCH, null));
+            bytes, ProtocolMessageType.BEGIN_QUERY, 15,
+            StatusCode.DATATYPE_MISMATCH, null, null, 0, null, false));
     assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
     assertEquals(StatusCode.DATATYPE_MISMATCH, response.status());
 
     assertEquals(
         StatusCode.OK,
-        codec.encodeQueryOpenResponse(bytes, 13, StatusCode.OK, query));
-    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 80, (byte) 0);
+        codec.encodeQueryOpenResponse(
+            bytes, ProtocolMessageType.BEGIN_QUERY, 16, StatusCode.OK, metadata(query),
+            row(9, 0, 91, 0, 1, 2), 1, null, true));
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 81, (byte) 0);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         codec.decodeResponse(bytes, frame, response));
+  }
+
+  @Test
+  void finalFetchCarriesItsRowAndQueryCompletionTogether() {
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    RowResult finalRow = row(12, 0b010, 12, 0, 1);
+    CommandResult completion = completion(0, 44, true);
+    assertEquals(StatusCode.OK, codec.encodeRowResponse(
+        bytes, ProtocolMessageType.FETCH, 17, StatusCode.OK,
+        finalRow, 3, completion, false));
+    ProtocolResponse response = new ProtocolResponse();
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertTrue(response.rowAvailable());
+    assertTrue(response.endOfStream());
+    assertFalse(response.queryActive());
+    assertTrue(response.transactionActive());
+    assertEquals(3, response.rowsReturned());
+    assertEquals(44, response.commitSequence());
+    assertEquals(12, response.valueAt(0));
+  }
+
+  @Test
+  void roundTripsMultiwordNullsThroughMaximumResultShape() {
+    int columns = 1_664;
+    long[] values = new long[columns];
+    int[] descriptors = new int[columns];
+    long[] nulls = new long[(columns + 63) >>> 6];
+    for (int index = 0; index < columns; index++) {
+      values[index] = index;
+      descriptors[index] = SqlTypeDescriptor.BIGINT;
+    }
+    char[] text = "é😀".toCharArray();
+    descriptors[1_662] = SqlTypeDescriptor.varchar(8);
+    nulls[1] = 1;
+    nulls[nulls.length - 1] = 1L << 63;
+    CommandResult command = new CommandResult();
+    assertEquals(StatusCode.OK, command.reserve(columns, 6));
+    assertEquals(StatusCode.OK, command.complete(
+        1, 0, false, true, 0, values, nulls, nulls.length, descriptors, columns));
+    assertEquals(StatusCode.OK, command.setTextAt(1_662, text, 0, text.length));
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(StatusCode.OK, codec.encodeCommandResponse(
+        bytes, ProtocolMessageType.EXECUTE, 42, StatusCode.OK, command, false));
+    ProtocolResponse response = new ProtocolResponse();
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertEquals(columns, response.columnCount());
+    assertTrue(response.isNull(64));
+    assertTrue(response.isNull(1_663));
+    assertFalse(response.isNull(63));
+    char[] decoded = new char[8];
+    assertEquals(text.length, response.copyTextAt(1_662, decoded, 0));
+    assertEquals(new String(text), new String(decoded, 0, text.length));
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        new ProtocolQueryMetadata().capture(new WideMetadataQuery(1_665)));
+
+    ProtocolQueryMetadata metadata = new ProtocolQueryMetadata();
+    assertEquals(StatusCode.OK, metadata.capture(new WideMetadataQuery(columns)));
+    RowResult row = new RowResult();
+    int[] queryDescriptors = new int[columns];
+    java.util.Arrays.fill(queryDescriptors, SqlTypeDescriptor.BIGINT);
+    assertEquals(StatusCode.OK, row.complete(
+        0, values, nulls, nulls.length, queryDescriptors, columns));
+    assertEquals(StatusCode.OK, codec.encodeQueryOpenResponse(
+        bytes, ProtocolMessageType.BEGIN_QUERY, 43, StatusCode.OK,
+        metadata, row, 1, null, true));
+    assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
+    assertTrue(response.queryActive());
+    assertTrue(response.rowAvailable());
+    assertEquals(columns, response.columnCount());
+    assertEquals(columns - 1, response.valueAt(columns - 1));
+  }
+
+  @Test
+  void rejectsGappedOverlappingAndPrematureContinuationFrames() {
+    int columns = 1_664;
+    long[] values = new long[columns];
+    int[] descriptors = new int[columns];
+    java.util.Arrays.fill(descriptors, SqlTypeDescriptor.BIGINT);
+    CommandResult command = new CommandResult();
+    assertEquals(StatusCode.OK, command.complete(
+        1, 0, false, true, 0, values, new long[26], 26, descriptors, columns));
+    ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    ProtocolResponse response = new ProtocolResponse();
+
+    assertEquals(StatusCode.OK, codec.encodeCommandResponse(
+        bytes, ProtocolMessageType.EXECUTE, 44, StatusCode.OK, command, false));
+    int second = ProtocolFrameCodec.MAXIMUM_FRAME_BYTES;
+    bytes.putInt(second + ProtocolFrameCodec.HEADER_BYTES + 4,
+        ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES - 11);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+
+    assertEquals(StatusCode.OK, codec.encodeCommandResponse(
+        bytes, ProtocolMessageType.EXECUTE, 44, StatusCode.OK, command, false));
+    bytes.putInt(second + ProtocolFrameCodec.HEADER_BYTES + 4,
+        ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES - 13);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+
+    assertEquals(StatusCode.OK, codec.encodeCommandResponse(
+        bytes, ProtocolMessageType.EXECUTE, 44, StatusCode.OK, command, false));
+    bytes.putInt(12, bytes.getInt(12) | 4);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeResponse(bytes, frame, response));
+    assertEquals(0, response.columnCount());
+  }
+
+  @Test
+  void responseAssemblyFailsClosedOnDuplicateInvalidAndEmptySegments() {
+    int columns = 1_664;
+    int[] descriptors = new int[columns];
+    java.util.Arrays.fill(descriptors, SqlTypeDescriptor.BIGINT);
+    CommandResult command = new CommandResult();
+    assertEquals(StatusCode.OK, command.complete(
+        1, 0, false, true, 0, new long[columns], new long[26], 26,
+        descriptors, columns));
+    ByteBuffer encoded = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    assertEquals(StatusCode.OK, codec.encodeCommandResponse(
+        encoded, ProtocolMessageType.EXECUTE, 45, StatusCode.OK, command, false));
+    ByteBuffer first = encoded.duplicate();
+    first.limit(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    first = first.slice();
+    ProtocolFrameHeader firstHeader = new ProtocolFrameHeader();
+    assertEquals(StatusCode.OK, codec.inspectResponseHeader(first, firstHeader));
+    ProtocolResponseAssembly assembly = new ProtocolResponseAssembly();
+    assertEquals(StatusCode.OK, assembly.accept(first, firstHeader));
+    assertTrue(assembly.isActive());
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, assembly.accept(first, firstHeader));
+    assertFalse(assembly.isActive());
+
+    ByteBuffer second = encoded.duplicate();
+    second.position(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ProtocolFrameHeader secondHeader = new ProtocolFrameHeader();
+    assertEquals(StatusCode.OK, codec.inspectResponseHeader(second, secondHeader));
+    second.limit(second.position() + ProtocolFrameCodec.HEADER_BYTES
+        + secondHeader.payloadBytes());
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        assembly.accept(second.slice(), secondHeader));
+    assertFalse(assembly.isActive());
+
+    ProtocolFrameHeader unknown = new ProtocolFrameHeader();
+    unknown.complete(Integer.MAX_VALUE, 45, firstHeader.payloadBytes(), true, true, false);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, assembly.accept(first, unknown));
+
+    encoded.putInt(24, ProtocolResponseSegmenter.SEGMENT_BYTES);
+    encoded.putInt(ProtocolFrameCodec.HEADER_BYTES + 8, 0);
+    ByteBuffer empty = encoded.duplicate();
+    empty.limit(ProtocolFrameCodec.HEADER_BYTES + ProtocolResponseSegmenter.SEGMENT_BYTES);
+    empty = empty.slice();
+    ProtocolFrameHeader emptyHeader = new ProtocolFrameHeader();
+    assertEquals(StatusCode.OK, codec.inspectResponseHeader(empty, emptyHeader));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, assembly.accept(empty, emptyHeader));
+    assertFalse(assembly.isActive());
   }
 
   @Test
@@ -293,7 +545,9 @@ final class ProtocolFrameCodecTest {
     for (StatusCode status : statuses) {
       assertEquals(
           StatusCode.OK,
-          codec.encodeQueryOpenResponse(bytes, 18, status, null));
+          codec.encodeQueryOpenResponse(
+              bytes, ProtocolMessageType.BEGIN_QUERY, 18,
+              status, null, null, 0, null, false));
       assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
       assertEquals(status, response.status());
     }
@@ -473,11 +727,10 @@ final class ProtocolFrameCodecTest {
     assertEquals(StatusCode.OK, codec.inspectResponseHeader(bytes, header));
     assertEquals(64, header.payloadBytes());
 
-    bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES
-        - ProtocolFrameCodec.HEADER_BYTES);
+    bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES);
     assertEquals(StatusCode.OK, codec.inspectResponseHeader(bytes, header));
 
-    bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES);
+    bytes.putInt(24, ProtocolFrameCodec.MAXIMUM_PAYLOAD_BYTES + 1);
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         codec.inspectResponseHeader(bytes, header));
@@ -560,6 +813,57 @@ final class ProtocolFrameCodecTest {
     }
   }
 
+  private static ProtocolQueryMetadata metadata(RiverQuery query) {
+    ProtocolQueryMetadata metadata = new ProtocolQueryMetadata();
+    assertEquals(StatusCode.OK, metadata.capture(query));
+    return metadata;
+  }
+
+  private static RowResult row(long key, long nullMask, long... values) {
+    int[] descriptors = new int[values.length];
+    for (int index = 0; index < values.length; index++) {
+      descriptors[index] = switch (index) {
+        case 0 -> SqlTypeDescriptor.BIGINT;
+        case 1 -> SqlTypeDescriptor.varchar(7);
+        case 2 -> SqlTypeDescriptor.BOOLEAN;
+        case 3 -> SqlTypeDescriptor.decimal(18, 6);
+        default -> throw new AssertionError("unsupported test column " + index);
+      };
+    }
+    RowResult row = new RowResult();
+    assertEquals(StatusCode.OK, row.reserve(values.length, 1));
+    assertEquals(StatusCode.OK, row.complete(key, values, nullMask, descriptors, values.length));
+    if (values.length > 1 && (nullMask & 2) == 0) {
+      assertEquals(StatusCode.OK, row.setTextAt(1, new char[] {'x'}, 0, 1));
+    }
+    return row;
+  }
+
+  private static CommandResult completion() {
+    return completion(0, 0, false);
+  }
+
+  private static CommandResult completion(int rows, long sequence, boolean transactionActive) {
+    CommandResult result = new CommandResult();
+    assertEquals(StatusCode.OK, result.complete(
+        rows, sequence, transactionActive, false, 0, null, 0, null, 0));
+    return result;
+  }
+
+  private static final class WideMetadataQuery implements RiverQuery {
+    private final int columns;
+
+    private WideMetadataQuery(int count) { columns = count; }
+    @Override public StatusCode next(RowResult result) { return StatusCode.CONFLICT; }
+    @Override public StatusCode close(CommandResult result) { return StatusCode.OK; }
+    @Override public boolean isActive() { return true; }
+    @Override public int columnCount() { return columns; }
+    @Override public CharSequence columnName(int index) { return "c" + index; }
+    @Override public int columnTypeDescriptor(int index) { return SqlTypeDescriptor.BIGINT; }
+    @Override public boolean columnIsNullable(int index) { return false; }
+    @Override public long rowsReturned() { return 0; }
+  }
+
   private void assertInvalidFixedValue(
       int descriptor, long valid, long invalid) {
     CommandResult command = new CommandResult();
@@ -589,7 +893,7 @@ final class ProtocolFrameCodecTest {
     ProtocolResponse response = new ProtocolResponse();
     assertEquals(StatusCode.OK, codec.decodeResponse(bytes, frame, response));
     bytes.putLong(
-        ProtocolFrameCodec.HEADER_BYTES + 64 + Integer.BYTES,
+        ProtocolFrameCodec.HEADER_BYTES + 64 + 1 + Integer.BYTES,
         invalid);
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
@@ -634,6 +938,13 @@ final class ProtocolFrameCodecTest {
       case FETCH -> 6;
       case CLOSE_QUERY -> 7;
       case CLOSE_SESSION -> 8;
+      case PREPARE -> 9;
+      case EXECUTE_PREPARED -> 10;
+      case BEGIN_PREPARED_QUERY -> 11;
+      case CLOSE_PREPARED -> 12;
+      case PREPARE_PROGRAM -> 13;
+      case EXECUTE_PROGRAM -> 14;
+      case CLOSE_PROGRAM -> 15;
     };
   }
 

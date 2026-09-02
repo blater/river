@@ -6,13 +6,18 @@ import io.riverdb.base.id.WalGeneration;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
-/** Fixed 16 KiB v1 page codec over caller-owned storage. */
+/** Fixed 16,384-byte v3 page codec over caller-owned storage. */
 public final class PageCodec {
   public static final int PAGE_BYTES = 16 * 1024;
   public static final int HEADER_BYTES = 128;
   public static final int MAX_PAYLOAD_BYTES = PAGE_BYTES - HEADER_BYTES;
-  public static final int VERSION = 1;
+  public static final int VERSION = 3;
   public static final int PAGE_TYPE_SYNTHETIC = 1;
+  public static final int PAYLOAD_KIND_SCALAR_BTREE = 1;
+  public static final int PAYLOAD_KIND_TUPLE_BTREE = 2;
+  public static final int PAYLOAD_KIND_FREE = 3;
+  public static final int FREE_PAYLOAD_BYTES = Integer.BYTES;
+  public static final long SCALAR_OWNER_KEY_ID = 0;
 
   private static final long MAGIC = 0x5249564552504147L; // RIVERPAG
   private static final int CHECKSUM_OFFSET = 120;
@@ -28,6 +33,8 @@ public final class PageCodec {
       long pageGeneration,
       long recordStart,
       long recordEnd,
+      int payloadKind,
+      long ownerKeyId,
       int payloadBytes,
       ByteBuffer page,
       CRC32C checksum) {
@@ -38,6 +45,8 @@ public final class PageCodec {
         pageGeneration,
         recordStart,
         recordEnd,
+        payloadKind,
+        ownerKeyId,
         payloadBytes,
         page,
         0,
@@ -52,6 +61,8 @@ public final class PageCodec {
       long pageGeneration,
       long recordStart,
       long recordEnd,
+      int payloadKind,
+      long ownerKeyId,
       int payloadBytes,
       ByteBuffer page,
       int start,
@@ -62,8 +73,7 @@ public final class PageCodec {
         || !walGeneration.isValid()
         || pageId <= 0
         || pageGeneration <= 0
-        || payloadBytes < 0
-        || payloadBytes > MAX_PAYLOAD_BYTES
+        || !PagePayloadIdentity.isValid(payloadKind, ownerKeyId, payloadBytes)
         || ((recordStart == 0 || recordEnd == 0)
             ? recordStart != recordEnd
             : recordEnd <= recordStart)
@@ -87,8 +97,9 @@ public final class PageCodec {
     putLong(page, start + 64, recordStart);
     putLong(page, start + 72, recordEnd);
     putInt(page, start + 80, payloadBytes);
-    putInt(page, start + 84, 0);
-    for (int index = 88; index < CHECKSUM_OFFSET; index++) {
+    putInt(page, start + 84, payloadKind);
+    putLong(page, start + 88, ownerKeyId);
+    for (int index = 96; index < CHECKSUM_OFFSET; index++) {
       page.put(start + index, (byte) 0);
     }
     putInt(page, start + CHECKSUM_OFFSET, 0);
@@ -136,6 +147,8 @@ public final class PageCodec {
     long recordStart = getLong(page, start + 64);
     long recordEnd = getLong(page, start + 72);
     int payloadBytes = getInt(page, start + 80);
+    int payloadKind = getInt(page, start + 84);
+    long ownerKeyId = getLong(page, start + 88);
     int storedChecksum = getInt(page, start + CHECKSUM_OFFSET);
     if (getLong(page, start) != MAGIC
         || getInt(page, start + 8) != VERSION
@@ -146,13 +159,12 @@ public final class PageCodec {
         || walGeneration <= 0
         || pageId <= 0
         || pageGeneration <= 0
-        || payloadBytes < 0
-        || payloadBytes > MAX_PAYLOAD_BYTES
+        || !PagePayloadIdentity.isValid(payloadKind, ownerKeyId, payloadBytes)
         || ((recordStart == 0 || recordEnd == 0)
             ? recordStart != recordEnd
             : recordEnd <= recordStart)
-        || getInt(page, start + 84) != 0
         || !reservedBytesAreZero(page, start)
+        || payloadKind == PAYLOAD_KIND_FREE && !freeRemainderIsZero(page, start)
         || getInt(page, start + COMPLEMENT_OFFSET) != ~storedChecksum
         || checksum(page, start, checksum) != storedChecksum) {
       return StatusCode.CORRUPTION;
@@ -165,15 +177,24 @@ public final class PageCodec {
         pageGeneration,
         recordStart,
         recordEnd,
+        payloadKind,
+        ownerKeyId,
         payloadBytes);
     return StatusCode.OK;
   }
 
   private static boolean reservedBytesAreZero(ByteBuffer page, int start) {
-    for (int index = 88; index < CHECKSUM_OFFSET; index++) {
+    for (int index = 96; index < CHECKSUM_OFFSET; index++) {
       if (page.get(start + index) != 0) {
         return false;
       }
+    }
+    return true;
+  }
+
+  private static boolean freeRemainderIsZero(ByteBuffer page, int start) {
+    for (int index = HEADER_BYTES + FREE_PAYLOAD_BYTES; index < PAGE_BYTES; index++) {
+      if (page.get(start + index) != 0) return false;
     }
     return true;
   }

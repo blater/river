@@ -79,7 +79,7 @@ river-cli/build/install/river-cli/bin/river-cli 9191 < setup.sql
 DDL and standalone DML statements are transactional and auto-commit. Use
 `BEGIN`, `COMMIT`, `ROLLBACK`, and named savepoints when several statements
 must be atomic. The client prints tab-separated rows, stops at the first error,
-and limits each statement to 64 KiB. `CHECKPOINT` is an administrative command
+and limits each statement to 64 KB. `CHECKPOINT` is an administrative command
 and returns `CONFLICT` inside an explicit transaction.
 
 ## Stop safely

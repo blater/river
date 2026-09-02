@@ -1,6 +1,8 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Index-state mutations for a reusable table definition. */
 final class TableDefinitionIndexMutation {
@@ -43,9 +45,11 @@ final class TableDefinitionIndexMutation {
         return StatusCode.OK;
       }
     }
-    if (table.uniqueIndexCount >= TableDefinition.MAXIMUM_INDEXES) {
+    if (table.uniqueIndexCount >= SqlShapeLimits.MAX_SECONDARY_INDEXES) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+    StatusCode capacity = ensureCapacity(table, table.uniqueIndexCount + 1);
+    if (!capacity.isOk()) return capacity;
     set(table, table.uniqueIndexCount++, tableId, state, column, unique, constraint);
     return StatusCode.OK;
   }
@@ -73,6 +77,38 @@ final class TableDefinitionIndexMutation {
           table.uniqueIndexColumns[move + 1],
           table.uniqueIndexes[move + 1],
           table.constraintIndexes[move + 1]);
+    }
+  }
+
+  static StatusCode ensureCapacity(TableDefinition table, int required) {
+    if (required <= table.uniqueIndexTableIds.length) return StatusCode.OK;
+    int capacity = BoundedArrayGrowth.capacity(
+        table.uniqueIndexTableIds.length,
+        required,
+        SqlShapeLimits.MAX_SECONDARY_INDEXES,
+        4);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    try {
+      int[] tableIds = new int[capacity];
+      int[] states = new int[capacity];
+      int[] columns = new int[capacity];
+      boolean[] unique = new boolean[capacity];
+      boolean[] constraint = new boolean[capacity];
+      System.arraycopy(
+          table.uniqueIndexTableIds, 0, tableIds, 0, table.uniqueIndexCount);
+      System.arraycopy(table.uniqueIndexStates, 0, states, 0, table.uniqueIndexCount);
+      System.arraycopy(table.uniqueIndexColumns, 0, columns, 0, table.uniqueIndexCount);
+      System.arraycopy(table.uniqueIndexes, 0, unique, 0, table.uniqueIndexCount);
+      System.arraycopy(
+          table.constraintIndexes, 0, constraint, 0, table.uniqueIndexCount);
+      table.uniqueIndexTableIds = tableIds;
+      table.uniqueIndexStates = states;
+      table.uniqueIndexColumns = columns;
+      table.uniqueIndexes = unique;
+      table.constraintIndexes = constraint;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError ignored) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
   }
 }

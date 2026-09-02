@@ -7,6 +7,7 @@ import io.riverdb.engine.table.IndexedScanCursor;
 public final class CatalogObjectCursor {
   private final IndexedScanCursor indexed = new IndexedScanCursor();
   private RelationalSession owner;
+  private boolean descriptorPhase;
   private boolean active;
 
   public StatusCode reset() {
@@ -14,6 +15,7 @@ public final class CatalogObjectCursor {
       return StatusCode.CONFLICT;
     }
     owner = null;
+    descriptorPhase = false;
     return indexed.reset();
   }
 
@@ -34,12 +36,21 @@ public final class CatalogObjectCursor {
     return active && owner == session;
   }
 
+  boolean descriptorPhase() {
+    return descriptorPhase;
+  }
+
+  void beginDescriptorPhase() {
+    descriptorPhase = true;
+  }
+
   public boolean isActive() {
     return active;
   }
 
   void complete() {
     owner = null;
+    descriptorPhase = false;
     active = false;
   }
 }

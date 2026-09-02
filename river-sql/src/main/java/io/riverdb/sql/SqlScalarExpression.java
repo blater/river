@@ -1,10 +1,12 @@
 package io.riverdb.sql;
 
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.error.StatusCode;
 
 /** Fixed-capacity postfix program for one scalar exact-value expression. */
 public final class SqlScalarExpression {
-  public static final int MAXIMUM_NODES = 32;
+  public static final int MAXIMUM_NODES = SqlShapeLimits.MAX_EXPRESSION_NODES;
 
   public static final int LITERAL = 1;
   public static final int NEGATE = 2;
@@ -29,17 +31,20 @@ public final class SqlScalarExpression {
   public static final int NULL = 21;
   public static final int AGGREGATE_VALUE = 22;
   public static final int GROUP_VALUE = 23;
+  public static final int PARAMETER = 24;
 
-  private final byte[] operators = new byte[MAXIMUM_NODES];
-  private final long[] operands = new long[MAXIMUM_NODES];
-  private final int[] typeDescriptors = new int[MAXIMUM_NODES];
-  private int nodeCount;
+  byte[] operators = new byte[16];
+  long[] operandHighs = new long[16];
+  long[] operands = new long[16];
+  int[] typeDescriptors = new int[16];
+  int nodeCount;
   private int resultTypeDescriptor;
   private boolean available;
 
   void reset() {
     for (int index = 0; index < nodeCount; index++) {
       operators[index] = 0;
+      operandHighs[index] = 0;
       operands[index] = 0;
       typeDescriptors[index] = 0;
     }
@@ -49,10 +54,17 @@ public final class SqlScalarExpression {
   }
 
   boolean append(int operator, long operand, int typeDescriptor) {
-    if (nodeCount >= operators.length) {
+    return append(operator, operand >> 63, operand, typeDescriptor);
+  }
+
+  boolean append(
+      int operator, long operandHigh, long operand, int typeDescriptor) {
+    if (nodeCount >= MAXIMUM_NODES
+        || !SqlScalarCapacity.ensure(this, nodeCount + 1)) {
       return false;
     }
     operators[nodeCount] = (byte) operator;
+    operandHighs[nodeCount] = operandHigh;
     operands[nodeCount] = operand;
     typeDescriptors[nodeCount] = typeDescriptor;
     nodeCount++;
@@ -69,19 +81,24 @@ public final class SqlScalarExpression {
     available = nodeCount > 0;
   }
 
-  void copyFrom(SqlScalarExpression source) {
+  StatusCode copyFrom(SqlScalarExpression source) {
     reset();
     if (source == null) {
-      return;
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < source.nodeCount; index++) {
-      append(
+      if (!append(
           source.operators[index],
+          source.operandHighs[index],
           source.operands[index],
-          source.typeDescriptors[index]);
+          source.typeDescriptors[index])) {
+        reset();
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
     }
     resultTypeDescriptor = source.resultTypeDescriptor;
     available = source.available;
+    return StatusCode.OK;
   }
 
   public boolean isAvailable() {
@@ -98,6 +115,10 @@ public final class SqlScalarExpression {
 
   public long operand(int index) {
     return index >= 0 && index < nodeCount ? operands[index] : 0;
+  }
+
+  public long operandHigh(int index) {
+    return index >= 0 && index < nodeCount ? operandHighs[index] : 0;
   }
 
   public int typeDescriptor(int index) {
@@ -128,6 +149,13 @@ public final class SqlScalarExpression {
   public void replaceWithLiteral(long value, int descriptor) {
     reset();
     append(LITERAL, value, descriptor);
+    finish(descriptor);
+  }
+
+  public void replaceWithDecimalLiteral(
+      long high, long low, int descriptor) {
+    reset();
+    append(LITERAL, high, low, descriptor);
     finish(descriptor);
   }
 

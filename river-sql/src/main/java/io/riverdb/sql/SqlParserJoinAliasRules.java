@@ -19,6 +19,7 @@ final class SqlParserJoinAliasRules {
         || parser.nextKeyword(sql, "HAVING")
         || parser.nextKeyword(sql, "GROUP")
         || parser.nextKeyword(sql, "ORDER")
-        || parser.nextKeyword(sql, "LIMIT");
+        || parser.nextKeyword(sql, "LIMIT")
+        || parser.nextKeyword(sql, "FOR");
   }
 }

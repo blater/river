@@ -42,10 +42,49 @@ final class EmbeddedRiverExpressionCheckConstraintTest {
                 + "CHECK (label>'a'))",
             result));
     assertEquals(
-        StatusCode.DATATYPE_MISMATCH,
+        StatusCode.OK,
         session.execute(
-            "CREATE TABLE rejected_boolean (id BIGINT PRIMARY KEY, enabled BOOLEAN "
-                + "CHECK (enabled>TRUE))",
+            "CREATE TABLE checked_boolean (id BIGINT PRIMARY KEY, enabled BOOLEAN "
+                + "CHECK (enabled>FALSE))",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute("INSERT INTO checked_boolean VALUES (1,TRUE)", result));
+    assertEquals(
+        StatusCode.CHECK_VIOLATION,
+        session.execute("INSERT INTO checked_boolean VALUES (2,FALSE)", result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "CREATE TABLE approximate_checks ("
+                + "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+                + "single_value REAL CHECK(single_value<0),"
+                + "double_value DOUBLE PRECISION CHECK(double_value<0),"
+                + "enabled BOOLEAN CHECK(enabled>FALSE))",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO approximate_checks(single_value,double_value,enabled) "
+                + "VALUES (-1.0,-2.0,TRUE)",
+            result));
+    assertEquals(
+        StatusCode.CHECK_VIOLATION,
+        session.execute(
+            "INSERT INTO approximate_checks(single_value,double_value,enabled) "
+                + "VALUES (1.0,-2.0,TRUE)",
+            result));
+    assertEquals(
+        StatusCode.CHECK_VIOLATION,
+        session.execute(
+            "INSERT INTO approximate_checks(single_value,double_value,enabled) "
+                + "VALUES (-1.0,2.0,TRUE)",
+            result));
+    assertEquals(
+        StatusCode.CHECK_VIOLATION,
+        session.execute(
+            "INSERT INTO approximate_checks(single_value,double_value,enabled) "
+                + "VALUES (-1.0,-2.0,FALSE)",
             result));
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
@@ -127,11 +166,23 @@ final class EmbeddedRiverExpressionCheckConstraintTest {
             "INSERT INTO mixed_check VALUES (2,TIME '01:00:00.100000')", result));
     String bounded = "+1-1+1-1+1-1+1-1";
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         session.execute(
-            "CREATE TABLE excessive_checks (id BIGINT PRIMARY KEY, "
+            "CREATE TABLE wider_checks (id BIGINT PRIMARY KEY, "
                 + "a DATE CHECK (a" + bounded + ">DATE '0001-01-01'), "
                 + "b DATE CHECK (b" + bounded + ">DATE '0001-01-01'))",
+            result));
+    assertEquals(
+        StatusCode.OK,
+        session.execute(
+            "INSERT INTO wider_checks VALUES "
+                + "(1,DATE '2024-01-01',DATE '2024-01-02')",
+            result));
+    assertEquals(
+        StatusCode.CHECK_VIOLATION,
+        session.execute(
+            "INSERT INTO wider_checks VALUES "
+                + "(2,DATE '0001-01-01',DATE '2024-01-02')",
             result));
 
     assertEquals(

@@ -7,6 +7,9 @@ import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.sql.SqlParser;
+import io.riverdb.sql.SqlRuntimeParameterBindings;
+import io.riverdb.sql.SqlStatementTemplate;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.tx.api.IsolationLevel;
 
 /** Owns the public session operation gate and delegates to concrete executors. */
@@ -14,15 +17,16 @@ final class SqlSessionExecutionCoordinator {
   private final RelationalSession session;
   private final SessionAuthorizer authorizer;
   private final SqlParser parser = new SqlParser();
-  private final SqlParameterSetSource parameterSource = new SqlParameterSetSource();
-  private final BoundSqlStatement bound = new BoundSqlStatement();
+  private final SqlRuntimeParameterBindings runtimeParameters =
+      new SqlRuntimeParameterBindings();
+  private final SqlStatementTemplate.Result templateResult =
+      new SqlStatementTemplate.Result();
+  private final BoundSqlStatement bound;
   private final SqlBinder binder = new SqlBinder();
   private final SqlExpressionEvaluator expressions = new SqlExpressionEvaluator();
   private final SqlTemporalContext temporal = new SqlTemporalContext();
-  private final SqlBlockPlanBinder blockBinder =
-      new SqlBlockPlanBinder(temporal, binder);
-  private final SqlRowProjectionEvaluator rowExpressions =
-      new SqlRowProjectionEvaluator(expressions, temporal);
+  private final SqlBlockPlanBinder blockBinder;
+  private final SqlRowProjectionEvaluator rowExpressions;
   private final SqlViewExpander viewExpander = new SqlViewExpander(binder);
   private final SqlViewDefinitionValidator viewValidator =
       new SqlViewDefinitionValidator(binder);
@@ -33,19 +37,37 @@ final class SqlSessionExecutionCoordinator {
   private final SqlStreamingStatementLifecycle streaming;
   private final SqlAtomicStatementLifecycle atomic;
   private final SqlQueryExecution queries;
-  private boolean closed;
+  private final SqlStreamingQueryRouter streamingQueries;
+  private final SqlSessionRuntimeLease runtimeLease = new SqlSessionRuntimeLease();
+  private final SqlSessionShapeBudget shapeBudget;
+  private final SqlSessionCloseLifecycle closes;
+  private long preparedCompiles;
+  private long preparedExecutions;
+  private long preparedRecompiles;
 
   SqlSessionExecutionCoordinator(
       RelationalDatabase database, RelationalSession session) {
-    this(database, session, null);
+    this(database, session, null, null);
   }
 
   SqlSessionExecutionCoordinator(
       RelationalDatabase database,
       RelationalSession session,
       SessionAuthorizer sessionAuthorizer) {
+    this(database, session, sessionAuthorizer, null);
+  }
+
+  SqlSessionExecutionCoordinator(
+      RelationalDatabase database,
+      RelationalSession session,
+      SessionAuthorizer sessionAuthorizer,
+      io.riverdb.engine.runtime.SqlRuntimeLease lease) {
     this.session = session;
     authorizer = sessionAuthorizer;
+    shapeBudget = new SqlSessionShapeBudget(lease);
+    blockBinder = new SqlBlockPlanBinder(temporal, binder, shapeBudget);
+    rowExpressions = new SqlRowProjectionEvaluator(expressions, temporal, shapeBudget);
+    bound = new BoundSqlStatement(shapeBudget);
     transactions = new SqlTransactionState(session);
     dispatcher = new SqlCommandDispatcher(database, session, transactions, temporal);
     queries = new SqlQueryExecution(
@@ -54,7 +76,14 @@ final class SqlSessionExecutionCoordinator {
         expressions,
         temporal,
         rowExpressions,
-        blockBinder);
+        blockBinder,
+        new SqlPhysicalPlan(shapeBudget),
+        shapeBudget,
+        binder);
+    SqlStreamingQueryBinder streamingBindings = new SqlStreamingQueryBinder(
+        session, bound, binder, queries, blockBinder, rowExpressions, temporal);
+    streamingQueries = new SqlStreamingQueryRouter(
+        session, bound, binder, viewExpander, queries, streamingBindings);
     dml = new SqlDmlExecutor(
         database,
         session,
@@ -69,9 +98,26 @@ final class SqlSessionExecutionCoordinator {
         dml,
         queries,
         blockBinder,
-        rowExpressions);
+        rowExpressions,
+        temporal,
+        shapeBudget);
     streaming = new SqlStreamingStatementLifecycle(session, transactions);
     atomic = new SqlAtomicStatementLifecycle(session, transactions);
+    runtimeLease.claim(lease);
+    closes = new SqlSessionCloseLifecycle(
+        session, transactions, queries, streaming, temporal, shapeBudget, runtimeLease);
+  }
+
+  long retainedShapeBytes() { return shapeBudget.retainedBytes(); }
+  long maximumShapeBytes() { return shapeBudget.maximumBytes(); }
+  StatusCode reserveRetainedBytes(long bytes) { return shapeBudget.reserve(bytes); }
+  StatusCode releaseRetainedBytes(long bytes) { return shapeBudget.release(bytes); }
+  long preparedCompiles() { return preparedCompiles; }
+  long preparedExecutions() { return preparedExecutions; }
+  long preparedRecompiles() { return preparedRecompiles; }
+
+  void claimDatabaseLease(io.riverdb.engine.runtime.SqlRuntimeLease lease) {
+    runtimeLease.claim(lease);
   }
 
   StatusCode execute(String sql, SqlExecutionResult result) {
@@ -83,24 +129,96 @@ final class SqlSessionExecutionCoordinator {
     if (parameters == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    parameterSource.set(parameters);
-    try {
-      return execute(sql, parameterSource, result, true);
-    } finally {
-      parameterSource.reset();
+    return execute(sql, parameters, result, true);
+  }
+
+  StatusCode executePrepared(
+      SqlPreparedPlan plan, ParameterSet parameters, SqlExecutionResult result) {
+    if (plan == null || parameters == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    result.reset();
+    if (closes.unavailable()) return StatusCode.CLOSED;
+    StatusCode status = retryPendingCleanup();
+    if (!status.isOk()) return status;
+    if (queries.hasActiveScan()) return StatusCode.CONFLICT;
+    if (parameters.count() != plan.parameterCount()) {
+      return StatusCode.PARAMETER_COUNT_MISMATCH;
+    }
+    boolean recompile = plan.needsRecompile(session);
+    if (transactions.isExplicit()) {
+      result.setTransaction(true, session.visibleCommitSequence());
+    }
+    bound.reset();
+    status = plan.template().restore(bound.query, bound.command);
+    if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
+    if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
+    runtimeParameters.reset();
+    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) status = binder.captureExecutableQuery(bound);
+    if (!status.isOk()) return status;
+    preparedExecutions++;
+    status = executeBound(result);
+    return status.isOk()
+        ? publishPreparedBinding(plan, recompile, pointCommands.catalogGeneration()) : status;
+  }
+
+  StatusCode validatePrepared(
+      String sql, SqlRetainedBudget budget, SqlPreparedValidationResult result) {
+    if (budget == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = result.reset();
+    if (!status.isOk()) return status;
+    if (closes.unavailable()) return StatusCode.CLOSED;
+    StatusCode cleanup = retryPendingCleanup();
+    if (!cleanup.isOk()) return cleanup;
+    if (queries.hasActiveScan()) return StatusCode.CONFLICT;
+    bound.reset();
+    status = parser.parseTemplate(sql, bound.query, bound.command);
+    if (status.isOk()) status = authorize(bound.command.type());
+    boolean began = false;
+    if (status.isOk()) {
+      status = atomic.begin(IsolationLevel.READ_COMMITTED);
+      began = status.isOk();
+    }
+    if (status.isOk()) {
+      status = session.resolveBindingTable(bound.command.tableName(), bound.table);
+    }
+    long catalogGeneration = status.isOk() ? session.catalogGeneration() : 0;
+    if (began) status = atomic.finish(status);
+    long retainedBytes = status.isOk()
+        ? SqlPreparedPlan.estimateByteCharge(bound.command, bound.query) : 0;
+    if (status.isOk() && retainedBytes <= 0) status = StatusCode.INVARIANT_BROKEN;
+    boolean reserved = false;
+    if (status.isOk()) {
+      status = budget.reserveRetainedBytes(retainedBytes);
+      reserved = status.isOk();
+    }
+    if (status.isOk()) status = SqlStatementTemplate.capture(
+        bound.command, bound.query, parser.templateParameterCount(), templateResult);
+    if (status.isOk()) status = result.complete(
+        templateResult.value(), SqlSessionCommandKinds.query(bound.command.type()),
+        catalogGeneration, budget, retainedBytes);
+    if (status.isOk()) reserved = false;
+    if (reserved) {
+      StatusCode release = budget.releaseRetainedBytes(retainedBytes);
+      if (!release.isOk()) status = release;
+    }
+    if (status.isOk()) preparedCompiles++;
+    templateResult.reset();
+    bound.reset();
+    return status;
   }
 
   private StatusCode execute(
       String sql,
-      io.riverdb.sql.SqlParameterSource parameters,
+      ParameterSet parameters,
       SqlExecutionResult result,
       boolean typed) {
     if (result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    if (closed) {
+    if (closes.unavailable()) {
       return StatusCode.CLOSED;
     }
     StatusCode cleanup = retryPendingCleanup();
@@ -114,13 +232,10 @@ final class SqlSessionExecutionCoordinator {
       result.setTransaction(true, session.visibleCommitSequence());
     }
     bound.reset();
-    StatusCode status = beginsSelect(sql)
-        ? typed
-            ? parser.parseQuery(
-                sql, parameters, bound.query, bound.command)
-            : parser.parseQuery(sql, bound.query, bound.command)
-        : typed
-            ? parser.parse(sql, parameters, bound.command)
+    StatusCode status = typed
+        ? parseInvocation(sql, parameters)
+        : SqlSessionCommandKinds.beginsSelect(sql)
+            ? parser.parseQuery(sql, bound.query, bound.command)
             : parser.parse(sql, bound.command);
     if (status.isOk()) {
       status = authorize(bound.command.type());
@@ -131,6 +246,10 @@ final class SqlSessionExecutionCoordinator {
     if (!status.isOk()) {
       return status;
     }
+    return executeBound(result);
+  }
+
+  private StatusCode executeBound(SqlExecutionResult result) {
     if (dispatcher.handles(bound.command.type())) {
       if (bound.command.type() == SqlCommandType.SCALAR_EXPRESSION) {
         return executeScalar(result);
@@ -149,17 +268,39 @@ final class SqlSessionExecutionCoordinator {
     if (parameters == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    parameterSource.set(parameters);
-    try {
-      return beginScan(sql, parameterSource, cursor, true);
-    } finally {
-      parameterSource.reset();
+    return beginScan(sql, parameters, cursor, true);
+  }
+
+  StatusCode beginPreparedScan(
+      SqlPreparedPlan plan, ParameterSet parameters, SqlScanCursor cursor) {
+    StatusCode status = admitScan(cursor);
+    if (!status.isOk()) return status;
+    if (plan == null || parameters == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (parameters.count() != plan.parameterCount()) {
+      return StatusCode.PARAMETER_COUNT_MISMATCH;
     }
+    boolean recompile = plan.needsRecompile(session);
+    bound.reset();
+    status = plan.template().restore(bound.query, bound.command);
+    if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
+    if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
+    runtimeParameters.reset();
+    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) status = binder.captureExecutableQuery(bound);
+    if (status.isOk() && !SqlSessionCommandKinds.query(bound.command.type())) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (!status.isOk()) return status;
+    long bindingCatalogGeneration = recompile ? session.catalogGeneration() : 0;
+    preparedExecutions++;
+    status = beginCompiledScan(cursor);
+    return status.isOk()
+        ? publishPreparedBinding(plan, recompile, bindingCatalogGeneration) : status;
   }
 
   private StatusCode beginScan(
       String sql,
-      io.riverdb.sql.SqlParameterSource parameters,
+      ParameterSet parameters,
       SqlScanCursor cursor,
       boolean typed) {
     StatusCode status = admitScan(cursor);
@@ -169,8 +310,13 @@ final class SqlSessionExecutionCoordinator {
     if (!status.isOk()) {
       return status;
     }
+    return beginCompiledScan(cursor);
+  }
+
+  private StatusCode beginCompiledScan(SqlScanCursor cursor) {
     boolean scalar = SqlBinder.isScalarAggregate(bound.command.type());
     boolean preexecuted = shouldPreexecuteScan();
+    StatusCode status = StatusCode.OK;
     if (preexecuted) {
       status = preexecuteScan();
     }
@@ -191,7 +337,7 @@ final class SqlSessionExecutionCoordinator {
     if (cursor == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (closed) {
+    if (closes.unavailable()) {
       return StatusCode.CLOSED;
     }
     StatusCode status = retryPendingCleanup();
@@ -204,11 +350,11 @@ final class SqlSessionExecutionCoordinator {
 
   private StatusCode parseScan(
       String sql,
-      io.riverdb.sql.SqlParameterSource parameters,
+      ParameterSet parameters,
       boolean typed) {
     bound.reset();
     StatusCode status = typed
-        ? parser.parseQuery(sql, parameters, bound.query, bound.command)
+        ? parseInvocation(sql, parameters)
         : parser.parseQuery(sql, bound.query, bound.command);
     if (status.isOk()) {
       status = authorize(bound.command.type());
@@ -216,10 +362,56 @@ final class SqlSessionExecutionCoordinator {
     if (status.isOk()) {
       status = binder.captureExecutableQuery(bound);
     }
-    if (status.isOk() && !isQueryCommand(bound.command.type())) {
+    if (status.isOk() && !SqlSessionCommandKinds.query(bound.command.type())) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return status;
+  }
+
+  private StatusCode parseInvocation(String sql, ParameterSet parameters) {
+    if (parameters == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = parser.parseTemplate(sql, bound.query, bound.command);
+    if (status.isOk() && parser.templateParameterCount() != parameters.count()) {
+      status = StatusCode.PARAMETER_COUNT_MISMATCH;
+    }
+    if (status.isOk()) status = loadParameters(parameters, parser.templateParameterCount());
+    if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
+    runtimeParameters.reset();
+    return status;
+  }
+
+  private StatusCode loadParameters(ParameterSet parameters, int expected) {
+    if (parameters == null || parameters.count() != expected) {
+      return StatusCode.PARAMETER_COUNT_MISMATCH;
+    }
+    StatusCode status = runtimeParameters.begin(expected, parameters.textBytes());
+    for (int parameter = 0; status.isOk() && parameter < expected; parameter++) {
+      int descriptor = parameters.typeDescriptorAt(parameter);
+      int textLength = !parameters.isNull(parameter)
+              && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
+          ? parameters.textLengthAt(parameter) : 0;
+      status = runtimeParameters.set(
+          parameter, descriptor, parameters.decimalUnscaledHighAt(parameter),
+          parameters.valueAt(parameter), parameters.isNull(parameter), textLength);
+      for (int index = 0; status.isOk() && index < textLength; index++) {
+        status = runtimeParameters.setTextByte(
+            parameter, index, parameters.textByteAt(parameter, index));
+      }
+    }
+    return status;
+  }
+
+  private StatusCode publishPreparedBinding(
+      SqlPreparedPlan plan, boolean invalidated, long catalogGeneration) {
+    if (!invalidated) return StatusCode.OK;
+    if (catalogGeneration <= 0 || !session.matchesCatalogGeneration(catalogGeneration)) {
+      return StatusCode.OK;
+    }
+    if (!plan.publishRecompile(catalogGeneration)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    preparedRecompiles++;
+    return StatusCode.OK;
   }
 
   private boolean shouldPreexecuteScan() {
@@ -271,6 +463,7 @@ final class SqlSessionExecutionCoordinator {
       adoptStreamingQuery();
     }
     if (status.isOk() && scalar && !queries.hasBlockPipelinePlan()
+        && !queries.descriptorScanMatched()
         && !queries.explainOnly()) {
       queries.aggregateExecution().reset();
       status = queries.executePointQuery(queries.aggregateExecution());
@@ -278,7 +471,8 @@ final class SqlSessionExecutionCoordinator {
     if (!status.isOk()) {
       return failStreamingStart(status);
     }
-    if (queries.explainOnly() && scalar && !queries.hasBlockPipelinePlan()) {
+    if (queries.explainOnly() && scalar && !queries.hasBlockPipelinePlan()
+        && !queries.descriptorScanMatched()) {
       return explainScalarScan(cursor);
     }
     return beginPreparedStreamingScan(cursor);
@@ -301,6 +495,12 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode beginPreparedStreamingScan(SqlScanCursor cursor) {
+    if (queries.explainOnly()
+        && (queries.descriptorScanMatched() || queries.universalJoinMatched())) {
+      StatusCode status = queries.claimPreparedPlan(cursor);
+      if (status.isOk()) status = queries.describeCurrentPlan(cursor);
+      return finishExplain(cursor, false, status);
+    }
     StatusCode status = queries.beginScan(cursor);
     if (!status.isOk()) {
       return failStreamingStart(status);
@@ -326,49 +526,55 @@ final class SqlSessionExecutionCoordinator {
   }
 
   StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
-    if (closed) {
+    if (closes.unavailable()) {
       return StatusCode.CLOSED;
     }
     return queries.nextScan(cursor, result);
   }
 
   CharSequence scanColumnName(SqlScanCursor cursor, int index) {
-    if (closed) {
+    if (closes.unavailable()) {
       return null;
     }
     return queries.scanColumnName(cursor, index);
   }
 
   int scanColumnTypeDescriptor(SqlScanCursor cursor, int index) {
-    if (closed) {
+    if (closes.unavailable()) {
       return 0;
     }
     return queries.scanColumnTypeDescriptor(cursor, index);
   }
 
   boolean scanColumnIsNullable(SqlScanCursor cursor, int index) {
-    return !closed && queries.scanColumnIsNullable(cursor, index);
+    return !closes.unavailable() && queries.scanColumnIsNullable(cursor, index);
   }
 
   StatusCode closeScan(SqlScanCursor cursor, SqlExecutionResult result) {
-    if (closed) {
+    if (closes.unavailable()) {
       return StatusCode.CLOSED;
     }
     if (cursor == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (queries.syntheticScan()) {
+      StatusCode terminal = queries.terminalStatus();
       StatusCode status = queries.closeSyntheticScan(cursor, result);
       if (!streaming.isActive()) return status;
       boolean complete = status.isOk();
-      status = streaming.finish(status, complete, result);
+      status = terminal != null && complete
+          ? streaming.finishDelivered(terminal, true, result)
+          : streaming.finish(status, complete, result);
       if (complete && !streaming.isActive()) temporal.finishStatement();
       return status;
     }
     result.reset();
-    StatusCode status = queries.closePhysicalScan(cursor);
-    boolean physicalCleanupComplete = status.isOk();
-    status = streaming.finish(status, physicalCleanupComplete, result);
+    StatusCode terminal = queries.terminalStatus();
+    StatusCode cleanup = queries.closePhysicalScan(cursor);
+    boolean physicalCleanupComplete = cleanup.isOk();
+    StatusCode status = terminal != null && physicalCleanupComplete
+        ? streaming.finishDelivered(terminal, true, result)
+        : streaming.finish(cleanup, physicalCleanupComplete, result);
     if (physicalCleanupComplete && !streaming.isActive()) {
       queries.completeScan(cursor);
       temporal.finishStatement();
@@ -376,53 +582,52 @@ final class SqlSessionExecutionCoordinator {
     return status;
   }
 
-  StatusCode close() {
-    if (closed) {
-      return StatusCode.CLOSED;
-    }
-    if (queries.hasActiveScan()) {
-      return StatusCode.CONFLICT;
-    }
-    StatusCode cleanup = retryPendingCleanup();
-    if (!cleanup.isOk()) {
-      return cleanup;
-    }
-    StatusCode status = transactions.isExplicit()
-        ? transactions.abortExplicit() : StatusCode.OK;
-    if (status.isOk()) {
-      closed = true;
-    }
+  StatusCode beginProgram(SqlExecutionResult result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
+    if (closes.unavailable()) return StatusCode.CLOSED;
+    StatusCode status = retryPendingCleanup();
+    if (!status.isOk()) return status;
+    if (queries.hasActiveScan() || transactions.isExplicit()) return StatusCode.CONFLICT;
+    status = transactions.beginExplicit(IsolationLevel.SERIALIZABLE);
+    if (status.isOk()) result.setTransaction(true, session.visibleCommitSequence());
     return status;
   }
 
-  private StatusCode executePoint(SqlExecutionResult result) {
-    StatusCode status = atomic.begin(IsolationLevel.READ_COMMITTED);
-    boolean began = status.isOk();
-    boolean implicit = began && atomic.implicit();
-    if (status.isOk()) {
-      status = temporal.beginStatement();
-    }
-    if (status.isOk()) {
-      status = pointCommands.execute(result);
-    }
-    boolean select = pointCommands.isPointQuery();
-    if (began) {
-      status = atomic.finish(status);
-    }
-    finishAtomicTemporalIfIdle();
-    if (status.isOk()) {
-      long commitSequence = implicit
-          ? transactions.commitSequence() : session.visibleCommitSequence();
-      if (select) {
-        result.setCommitSequence(commitSequence);
-      } else {
-        result.setUpdate(
-            pointCommands.affectedRows(), implicit ? commitSequence : 0);
-      }
-      result.setTransaction(
-          transactions.isExplicit(), select ? commitSequence : implicit ? commitSequence : 0);
-    }
+  StatusCode commitProgram(SqlExecutionResult result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
+    if (closes.unavailable()) return StatusCode.CLOSED;
+    if (queries.hasActiveScan()) return StatusCode.CONFLICT;
+    StatusCode status = transactions.commitExplicit();
+    if (status.isOk()) result.setCommitSequence(transactions.commitSequence());
     return status;
+  }
+
+  StatusCode abortProgram(SqlExecutionResult result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
+    if (closes.unavailable()) return StatusCode.CLOSED;
+    if (queries.hasActiveScan()) return StatusCode.CONFLICT;
+    StatusCode status = transactions.abortExplicit();
+    if (status.isOk()) result.setCommitSequence(transactions.commitSequence());
+    return status;
+  }
+
+  boolean programTransactionActive() { return transactions.isExplicit(); }
+
+  StatusCode close() {
+    if (closes.closed()) return StatusCode.CLOSED;
+    if (!closes.closing()) {
+      StatusCode status = retryPendingCleanup();
+      if (!status.isOk()) return status;
+    }
+    return closes.close();
+  }
+
+  private StatusCode executePoint(SqlExecutionResult result) {
+    return SqlAtomicPointExecution.execute(
+        atomic, temporal, pointCommands, transactions, session, streaming, result);
   }
 
   private StatusCode retryPendingCleanup() {
@@ -445,146 +650,7 @@ final class SqlSessionExecutionCoordinator {
   }
 
   private StatusCode prepareStreamingQuery() {
-    SqlCommandType type = bound.command.type();
-    if (type == SqlCommandType.SHOW_TABLES
-        || type == SqlCommandType.SHOW_INDEXES
-        || type == SqlCommandType.SHOW_COLUMNS) {
-      return binder.captureExecutableQuery(bound);
-    }
-    StatusCode expansion = viewExpander.resolve(session, bound);
-    if (expansion.isOk()) expansion = binder.captureExecutableQuery(bound);
-    if (!expansion.isOk()) return expansion;
-    if (bound.query.isBlockPipeline()) return prepareBlockPipeline();
-    if (type == SqlCommandType.JOIN_SCAN) {
-      return prepareJoinQuery();
-    }
-    if (SqlBinder.isGroupAggregate(type)) {
-      return prepareGroupQuery();
-    }
-    if (type == SqlCommandType.DISTINCT_SCAN) {
-      return prepareDistinctQuery();
-    }
-    return prepareDataQuery(type);
-  }
-
-  private StatusCode prepareBlockPipeline() {
-    StatusCode status = bound.query.isBlockPipeline()
-        ? StatusCode.OK : StatusCode.CORRUPTION;
-    if (status.isOk() && !bound.query.isBlockPipeline()) {
-      return StatusCode.CORRUPTION;
-    }
-    if (status.isOk()) {
-      status = blockBinder.bind(
-          session, bound, queries.explainOnly() ? null : rowExpressions);
-    }
-    if (status.isOk() && queries.explainOnly()) {
-      status = temporal.validateZones(bound.command, bound.query);
-    }
-    if (status.isOk()) status = queries.prepareBlockPipeline();
-    return publishPreparedQuery(status);
-  }
-
-  private StatusCode prepareJoinQuery() {
-    SqlBoundJoinContext context = bound.joinContext(0);
-    StatusCode status = binder.resolveJoinRoles(
-        session, bound.command, context, bound.table, false);
-    if (status.isOk()) {
-      status = binder.bindQueryBlocks(session, bound);
-    }
-    if (status.isOk()) {
-      status = bound.executableQuery.edgeCount() == 0
-          ? binder.bindJoin(bound.command, bound, context)
-          : binder.bindJoinProjection(bound.command, bound, context);
-    }
-    if (status.isOk() && bound.command.isOrdered()) {
-      status = binder.bindJoinOrder(bound.command, bound);
-    }
-    if (status.isOk()) status = queries.configureJoin();
-    if (status.isOk()) {
-      status = queries.explainOnly()
-          ? temporal.validateZones(bound.command, bound.query)
-          : queries.prepareProjectionPrograms();
-    }
-    return publishPreparedQuery(status);
-  }
-
-  private StatusCode prepareGroupQuery() {
-    StatusCode status = resolveRootTableAndBlocks();
-    if (status.isOk()) {
-      status = binder.bindGroupAggregate(bound.command, bound.query, bound);
-    }
-    if (status.isOk()) {
-      status = queries.prepareProjectionPrograms();
-    }
-    return publishPreparedQuery(status);
-  }
-
-  private StatusCode prepareDistinctQuery() {
-    StatusCode status = resolveRootTableAndBlocks();
-    if (status.isOk()) {
-      status = binder.bindDistinct(bound.command, bound.query, bound);
-    }
-    if (status.isOk()) {
-      status = queries.prepareProjectionPrograms();
-    }
-    return publishPreparedQuery(status);
-  }
-
-  private StatusCode resolveRootTableAndBlocks() {
-    return binder.bindQueryBlocks(session, bound);
-  }
-
-  private StatusCode prepareDataQuery(SqlCommandType type) {
-    StatusCode status = resolveRootTableAndBlocks();
-    if (status.isOk()) {
-      status = binder.bindDataCommand(bound.command, bound.query, bound);
-    }
-    if (status.isOk() && bound.command.isOrdered()) {
-      status = binder.bindOrder(bound.command, bound);
-    }
-    if (status.isOk()) {
-      status = queries.prepareProjectionPrograms();
-    }
-    return publishPreparedQuery(status);
-  }
-
-  private StatusCode publishPreparedQuery(StatusCode status) {
-    if (status.isOk()) {
-      binder.publishExecutableQuery(bound);
-    }
-    return status;
-  }
-
-  private static boolean isQueryCommand(SqlCommandType type) {
-    return type == SqlCommandType.SHOW_TABLES
-        || type == SqlCommandType.SHOW_INDEXES
-        || type == SqlCommandType.SHOW_COLUMNS
-        || type == SqlCommandType.SCAN
-        || type == SqlCommandType.SELECT
-        || type == SqlCommandType.DISTINCT_SCAN
-        || type == SqlCommandType.JOIN_SCAN
-        || type == SqlCommandType.NEXT_SEQUENCE_VALUE
-        || type == SqlCommandType.SCALAR_EXPRESSION
-        || SqlBinder.isScalarAggregate(type)
-        || SqlBinder.isGroupAggregate(type);
-  }
-
-  private static boolean beginsSelect(String sql) {
-    if (sql == null) return false;
-    int index = 0;
-    while (index < sql.length() && Character.isWhitespace(sql.charAt(index))) {
-      index++;
-    }
-    String keyword = "SELECT";
-    if (sql.length() - index < keyword.length()) return false;
-    for (int offset = 0; offset < keyword.length(); offset++) {
-      if (Character.toUpperCase(sql.charAt(index + offset)) != keyword.charAt(offset)) {
-        return false;
-      }
-    }
-    int end = index + keyword.length();
-    return end == sql.length()
-        || !Character.isLetterOrDigit(sql.charAt(end)) && sql.charAt(end) != '_';
+    return streamingQueries.prepare();
   }
 
   private StatusCode failStreamingStart(StatusCode status) {

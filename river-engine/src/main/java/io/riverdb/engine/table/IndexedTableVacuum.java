@@ -2,9 +2,9 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
-import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapPage;
+import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
 /** Encodes and applies the indexed-table vacuum stream. */
@@ -12,12 +12,16 @@ final class IndexedTableVacuum {
   private final IndexedTableKernel table;
   private final IndexedPageSet pages;
   private final IndexedVersionState versions;
+  private final IndexedVacuumScanner scanner;
+  private final IndexedVacuumRowCursor encodeCursor;
+  private final IndexedVacuumPublicationAdmission publicationAdmission;
+  private final IndexedVacuumShadowPages shadow;
   private final io.riverdb.storage.heap.HeapInsertResult heapInsert;
-  private long encodeOrdinal;
+  private final HeapRowResult sourceRow = new HeapRowResult();
+  private final IndexedVersionRecord sourceVersion = new IndexedVersionRecord();
   private int encodedRows;
   private int outputOffset;
-  private int heapPageId;
-  private int lastSpace;
+  private long lastSpace;
   private long lastKey;
 
   IndexedTableVacuum(
@@ -29,77 +33,22 @@ final class IndexedTableVacuum {
     this.pages = pages;
     this.versions = versions;
     this.heapInsert = heapInsert;
+    scanner = new IndexedVacuumScanner(table, pages);
+    encodeCursor = new IndexedVacuumRowCursor(table, pages);
+    publicationAdmission = new IndexedVacuumPublicationAdmission(pages);
+    shadow = new IndexedVacuumShadowPages(pages);
   }
 
-  int chunkCount() {
-    int chunks = 0;
-    int chunkBytes = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
-    int rows = 0;
-    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
-      ByteBuffer leaf = leafPayload(pageId);
-      if (leaf == null) continue;
-      int entryCount = BTreePage.entryCount(leaf);
-      for (int entry = 0; entry < entryCount; entry++) {
-        int rowBytes = table.rowLength(BTreePage.leafValueAt(leaf, entry));
-        int required = IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
-        if (rowBytes <= 0
-            || required > WalRecordCodec.MAX_PAYLOAD_BYTES
-                - IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES) {
-          return -1;
-        }
-        if (chunkBytes > WalRecordCodec.MAX_PAYLOAD_BYTES - required) {
-          chunks++;
-          chunkBytes = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
-        }
-        chunkBytes += required;
-        rows++;
-      }
-    }
-    if (rows > 0) chunks++;
-    return rows == table.indexedEntryCount() ? chunks : -1;
+  StatusCode chunkCount(IndexedCountResult result) {
+    return scanner.chunkCount(result);
   }
 
-  int chunkRowCount(long firstRow) {
-    long ordinal = 0;
-    int rows = 0;
-    int bytes = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
-    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
-      ByteBuffer leaf = leafPayload(pageId);
-      if (leaf == null) continue;
-      int entryCount = BTreePage.entryCount(leaf);
-      for (int entry = 0; entry < entryCount; entry++) {
-        if (ordinal++ < firstRow) continue;
-        int rowBytes = table.rowLength(BTreePage.leafValueAt(leaf, entry));
-        int required = IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
-        if (rowBytes <= 0 || bytes > WalRecordCodec.MAX_PAYLOAD_BYTES - required) {
-          return rows;
-        }
-        bytes += required;
-        rows++;
-      }
-    }
-    return rows;
+  StatusCode chunkRowCount(long firstRow, IndexedCountResult result) {
+    return scanner.chunkRowCount(firstRow, result);
   }
 
-  int chunkPayloadBytes(long firstRow, int rowLimit) {
-    long ordinal = 0;
-    int rows = 0;
-    int bytes = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
-    for (int pageId = 1;
-        rows < rowLimit && pageId <= pages.highestPageId();
-        pageId++) {
-      ByteBuffer leaf = leafPayload(pageId);
-      if (leaf == null) continue;
-      int entryCount = BTreePage.entryCount(leaf);
-      for (int entry = 0; rows < rowLimit && entry < entryCount; entry++) {
-        if (ordinal++ < firstRow) continue;
-        int rowBytes = table.rowLength(BTreePage.leafValueAt(leaf, entry));
-        if (rowBytes <= 0) return -1;
-        bytes += IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
-        rows++;
-      }
-    }
-    return rows == rowLimit ? bytes : -1;
+  StatusCode chunkPayloadBytes(long firstRow, int rowLimit, IndexedCountResult result) {
+    return scanner.chunkPayloadBytes(firstRow, rowLimit, result);
   }
 
   StatusCode encodeChunk(
@@ -123,15 +72,16 @@ final class IndexedTableVacuum {
     }
     IndexedWalCodec.encodeVacuumChunkHeader(
         payload, retainedRows, firstRow, rowLimit, chunk, chunkCount);
-    encodeOrdinal = 0;
     encodedRows = 0;
     outputOffset = IndexedWalCodec.VACUUM_CHUNK_HEADER_BYTES;
-    StatusCode status = StatusCode.OK;
-    for (int pageId = 1;
-        status.isOk() && encodedRows < rowLimit && pageId <= pages.highestPageId();
-        pageId++) {
-      ByteBuffer leaf = leafPayload(pageId);
-      if (leaf != null) status = encodeLeaf(payload, leaf, firstRow, rowLimit);
+    StatusCode status = encodeCursor.reset(firstRow);
+    try {
+      while (status.isOk() && encodedRows < rowLimit) {
+        status = encodeCursor.next(sourceRow);
+        if (status.isOk()) status = encodeCurrent(payload);
+      }
+    } finally {
+      encodeCursor.close();
     }
     if (!status.isOk()) return status;
     if (encodedRows != rowLimit || outputOffset != payloadBytes) {
@@ -141,44 +91,32 @@ final class IndexedTableVacuum {
     return StatusCode.OK;
   }
 
-  private StatusCode encodeLeaf(
-      ByteBuffer payload, ByteBuffer leaf, long firstRow, int rowLimit) {
-    int entryCount = BTreePage.entryCount(leaf);
-    for (int entry = 0; encodedRows < rowLimit && entry < entryCount; entry++) {
-      if (encodeOrdinal++ < firstRow) continue;
-      long rowId = BTreePage.leafValueAt(leaf, entry);
-      int rowBytes = table.rowLength(rowId);
-      IndexedWalCodec.encodeVacuumEntry(
-          payload,
-          outputOffset,
-          BTreePage.spaceAt(leaf, entry),
-          BTreePage.keyAt(leaf, entry),
-          rowId,
-          rowBytes,
-          table.isDeletedRow(rowId));
-      StatusCode status = table.copyRowTo(
-          rowId, payload, outputOffset + IndexedWalCodec.VACUUM_ENTRY_BYTES);
-      if (!status.isOk()) return status;
-      outputOffset += IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
-      encodedRows++;
-    }
+  private StatusCode encodeCurrent(ByteBuffer payload) {
+    StatusCode status = table.readVersion(encodeCursor.rowId(), sourceVersion);
+    if (!status.isOk()) return status;
+    int rowBytes = sourceRow.length();
+    IndexedWalCodec.encodeVacuumEntry(
+        payload,
+        outputOffset,
+        encodeCursor.space(),
+        encodeCursor.key(),
+        encodeCursor.rowId(),
+        rowBytes,
+        sourceVersion.deleted());
+    payload.position(outputOffset + IndexedWalCodec.VACUUM_ENTRY_BYTES);
+    status = sourceRow.copyTo(payload);
+    if (!status.isOk()) return status;
+    outputOffset += IndexedWalCodec.VACUUM_ENTRY_BYTES + rowBytes;
+    encodedRows++;
     return StatusCode.OK;
   }
 
   StatusCode beginApply() {
-    heapPageId = IndexedTableKernel.HEAP_PAGE_ID;
+    StatusCode status = publicationAdmission.admit();
+    if (!status.isOk()) return status;
     lastSpace = 0;
     lastKey = 0;
-    StatusCode status = StatusCode.OK;
-    for (int pageId = 1; status.isOk() && pageId <= pages.highestPageId(); pageId++) {
-      if (!pages.isPresent(pageId) || !HeapPage.isHeap(pages.currentPayloadUnchecked(pageId))) {
-        continue;
-      }
-      ByteBuffer stagedHeap = pages.stageExisting(pageId, IndexedTableLimits.MAX_PAGES);
-      status = stagedHeap == null
-          ? StatusCode.RESOURCE_EXHAUSTED : HeapPage.initialize(stagedHeap);
-    }
-    return status;
+    return shadow.begin();
   }
 
   StatusCode applyEntry(ByteBuffer payload, int entryOffset, long compactedRowId) {
@@ -186,28 +124,21 @@ final class IndexedTableVacuum {
       return StatusCode.CORRUPTION;
     }
     long key = IndexedWalCodec.vacuumEntryKey(payload, entryOffset);
-    int space = IndexedWalCodec.vacuumEntrySpace(payload, entryOffset);
+    long space = IndexedWalCodec.vacuumEntrySpace(payload, entryOffset);
     long oldRowId = IndexedWalCodec.vacuumEntryRowId(payload, entryOffset);
     int rowBytes = IndexedWalCodec.vacuumEntryRowBytes(payload, entryOffset);
     boolean deleted = IndexedWalCodec.vacuumEntryDeleted(payload, entryOffset);
     if (!OrderedKey.isFiniteSpace(space)
         || (compactedRowId > 1
             && !OrderedKey.lessThan(lastSpace, lastKey, space, key))
-        || table.rowLength(oldRowId) != rowBytes
-        || table.isDeletedRow(oldRowId) != deleted) {
+        || oldRowId <= 0) {
       return StatusCode.CORRUPTION;
     }
-    StatusCode status = table.validateVacuumHead(space, key, oldRowId);
+    StatusCode status = table.validateVacuumHead(
+        space, key, oldRowId, compactedRowId);
     if (!status.isOk()) return status;
-    ByteBuffer leaf = pages.stageExisting(
-        table.validatedLeafPageId(), IndexedTableLimits.MAX_PAGES);
-    if (leaf == null) return StatusCode.RESOURCE_EXHAUSTED;
-    ByteBuffer heap = pages.operationPayload(heapPageId);
-    if (!HeapPage.canInsert(heap, rowBytes)) {
-      heapPageId = nextHeapPageId(heapPageId);
-      heap = heapPageId == 0 ? null : pages.operationPayload(heapPageId);
-      if (heap == null) return StatusCode.RESOURCE_EXHAUSTED;
-    }
+    ByteBuffer heap = shadow.heap(rowBytes);
+    if (heap == null) return shadow.lastStatus();
     status = HeapPage.insertFrom(
         heap,
         payload,
@@ -215,37 +146,32 @@ final class IndexedTableVacuum {
         rowBytes,
         heapInsert);
     if (status.isOk()) {
+      ByteBuffer leaf = shadow.leaf(table.validatedLeafPageId());
+      if (leaf == null) return shadow.lastStatus();
       status = BTreePage.updateLeaf(leaf, space, key, compactedRowId);
     }
     if (status.isOk()) {
-      versions.recordVacuumDeleted(compactedRowId, deleted);
+      status = versions.recordVacuumDeleted(compactedRowId, deleted);
+    }
+    if (status.isOk()) {
       lastSpace = space;
       lastKey = key;
     }
     return status;
   }
 
+  StatusCode finishApply() {
+    return shadow.finish();
+  }
+
+  StatusCode publish(long start, long end) {
+    return shadow.publish(start, end);
+  }
+
   void resetApply() {
-    heapPageId = 0;
+    shadow.reset();
     lastSpace = 0;
     lastKey = 0;
   }
 
-  private ByteBuffer leafPayload(int pageId) {
-    if (!pages.isPresent(pageId) || pageId == IndexedTableKernel.ROOT_META_PAGE_ID) {
-      return null;
-    }
-    ByteBuffer page = pages.currentPayloadUnchecked(pageId);
-    return !HeapPage.isHeap(page) && BTreePage.type(page) == BTreePage.TYPE_LEAF
-        ? page : null;
-  }
-
-  private int nextHeapPageId(int afterPageId) {
-    for (int pageId = afterPageId + 1; pageId <= pages.highestPageId(); pageId++) {
-      if (pages.isPresent(pageId) && HeapPage.isHeap(pages.currentPayloadUnchecked(pageId))) {
-        return pageId;
-      }
-    }
-    return 0;
-  }
 }

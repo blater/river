@@ -43,7 +43,9 @@ final class SqlPostAggregatePrimary {
     if (command == null) return false;
     int start = input.position();
     int kind = aggregateKind(sql);
-    boolean result = kind != 0 || selectedAlias(sql) >= 0;
+    int slot = kind == 0 ? selectedAlias(sql) : -1;
+    boolean result = kind != 0
+        || SqlGroupExpressions.resolves(command, grouped, slot, identifier);
     input.position(start);
     return result;
   }
@@ -56,12 +58,15 @@ final class SqlPostAggregatePrimary {
     if (command == null) return StatusCode.FEATURE_NOT_SUPPORTED;
     int kind = aggregateKind(sql);
     int slot = kind == 0 ? aliasSlot(sql) : -1;
-    boolean groupValue = kind == 0 && grouped && slot == 0;
+    int groupOutputs = command.columnCount() - command.aggregateOutputCount();
+    int groupKey = kind == 0
+        ? SqlGroupExpressions.groupKey(command, grouped, slot, identifier) : -1;
+    boolean groupValue = groupKey >= 0;
     int operand = kind == 0
-        ? selectedInvocation(slot)
+        ? selectedInvocation(slot, groupOutputs)
         : repeatedInvocation(sql, kind);
     if (!status.isOk()) return status;
-    if (groupValue) operand = 0;
+    if (groupValue) operand = groupKey;
     int operator = groupValue
         ? SqlScalarExpression.GROUP_VALUE : SqlScalarExpression.AGGREGATE_VALUE;
     if (operand < 0 || !expressions.hasStackCapacity()
@@ -78,9 +83,9 @@ final class SqlPostAggregatePrimary {
     return !expression.hasColumnReference();
   }
 
-  private int selectedInvocation(int slot) {
-    if (slot < 0 || grouped && slot == 0) return slot;
-    int output = grouped ? slot - 1 : slot;
+  private int selectedInvocation(int slot, int groupOutputs) {
+    if (slot < 0 || grouped && slot < groupOutputs) return slot;
+    int output = grouped ? slot - groupOutputs : slot;
     return output < command.aggregateOutputCount()
         ? command.aggregateOutputInvocation(output) : -1;
   }
@@ -89,7 +94,10 @@ final class SqlPostAggregatePrimary {
     if (!input.consumeCharacter(sql, '(')) return invalid();
     boolean countStar = requestedKind == SqlAggregateKind.COUNT
         && input.consumeCharacter(sql, '*');
+    boolean countDistinct = requestedKind == SqlAggregateKind.COUNT
+        && !countStar && input.consumeKeyword(sql, "DISTINCT");
     int kind = countStar ? SqlAggregateKind.COUNT
+        : countDistinct ? SqlAggregateKind.COUNT_DISTINCT
         : requestedKind == SqlAggregateKind.COUNT
             ? SqlAggregateKind.COUNT_VALUE : requestedKind;
     if (!countStar) {
@@ -121,7 +129,7 @@ final class SqlPostAggregatePrimary {
 
   private int freeOperandProjection() {
     int first = grouped ? 1 : 0;
-    for (int candidate = first; candidate < SqlCommand.MAXIMUM_COLUMNS; candidate++) {
+    for (int candidate = first; candidate < SqlCommand.MAXIMUM_PROJECTIONS; candidate++) {
       boolean occupied = false;
       for (int invocation = 0;
           invocation < command.aggregateInvocationCount(); invocation++) {

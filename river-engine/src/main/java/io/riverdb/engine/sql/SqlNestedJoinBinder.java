@@ -32,9 +32,10 @@ final class SqlNestedJoinBinder {
       BoundSqlQuery.Block block) {
     if (block.joinChain() == null) return StatusCode.OK;
     SqlBoundJoinContext context = bound.joinContext(blockIndex);
-    context.borrowRoles(blockIndex, block);
+    StatusCode status = context.borrowRoles(blockIndex, block);
+    if (!status.isOk()) return status;
     for (int role = 0; role < block.roleCount(); role++) {
-      StatusCode status = session.resolveStatistics(
+      status = session.resolveStatistics(
           context.table(role), context.statistics(role));
       if (status != StatusCode.CONFLICT && !status.isOk()) return status;
     }

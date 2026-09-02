@@ -51,8 +51,10 @@ final class SqlTransactionState {
       return StatusCode.CONFLICT;
     }
     StatusCode status = session.commit(outcome);
-    explicit = false;
-    clearUserSavepointsFrom(0);
+    if (!session.transactionActive()) {
+      explicit = false;
+      clearUserSavepointsFrom(0);
+    }
     return status;
   }
 
@@ -61,8 +63,10 @@ final class SqlTransactionState {
       return StatusCode.CONFLICT;
     }
     StatusCode status = session.abort(outcome);
-    explicit = false;
-    clearUserSavepointsFrom(0);
+    if (!session.transactionActive()) {
+      explicit = false;
+      clearUserSavepointsFrom(0);
+    }
     return status;
   }
 

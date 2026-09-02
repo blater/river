@@ -1,21 +1,13 @@
 package io.riverdb.protocol;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
-import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.api.CommandResult;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
-/** Reusable decoded response with at most the engine API's bounded value count. */
-public final class ProtocolResponse {
-  private final long[] values = new long[CommandResult.MAXIMUM_COLUMNS];
-  private final char[][] textValues =
-      new char[CommandResult.MAXIMUM_COLUMNS][CommandResult.MAXIMUM_TEXT_CHARACTERS];
-  private final int[] textLengths = new int[CommandResult.MAXIMUM_COLUMNS];
-  private final int[] typeDescriptors = new int[CommandResult.MAXIMUM_COLUMNS];
-  private final char[][] columnNames =
-      new char[CommandResult.MAXIMUM_COLUMNS][ProtocolFrameCodec.MAXIMUM_COLUMN_NAME_BYTES];
-  private final int[] columnNameLengths = new int[CommandResult.MAXIMUM_COLUMNS];
+/** Reusable decoded response whose retained storage follows the admitted shape. */
+public final class ProtocolResponse implements ProtocolResponseValuesView {
+  private final ProtocolResponseValues values = new ProtocolResponseValues();
+  private long[] nullableWords = new long[1];
   private StatusCode status;
   private int flags;
   private int affectedRows;
@@ -25,9 +17,11 @@ public final class ProtocolResponse {
   private long rowsReturned;
   private long challengeHigh;
   private long challengeLow;
-  private long nullMask;
+  private int nullableWordCount;
 
   public void reset() {
+    values.reset(columnCount);
+    Arrays.fill(nullableWords, 0, nullableWordCount, 0L);
     status = null;
     flags = 0;
     affectedRows = 0;
@@ -37,25 +31,43 @@ public final class ProtocolResponse {
     rowsReturned = 0;
     challengeHigh = 0;
     challengeLow = 0;
-    nullMask = 0;
-    for (int index = 0; index < columnNameLengths.length; index++) {
-      columnNameLengths[index] = 0;
-      textLengths[index] = 0;
-      typeDescriptors[index] = 0;
+    nullableWordCount = 0;
+  }
+
+  StatusCode reserve(int columns, int textBytes, int nameBytes) {
+    StatusCode status = values.reserve(columns, textBytes, nameBytes);
+    if (!status.isOk()) return status;
+    int words = (columns + Long.SIZE - 1) >>> 6;
+    if (words <= nullableWords.length) return StatusCode.OK;
+    try {
+      nullableWords = Arrays.copyOf(nullableWords, words);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError failure) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
   }
 
-  void complete(
-      StatusCode responseStatus,
-      int responseFlags,
-      int rows,
-      int columns,
-      long committedAt,
-      long rowKey,
-      long returned,
-      long nonceHigh,
-      long nonceLow,
-      long responseNullMask) {
+  StatusCode beginNulls(int columns) {
+    return values.beginNulls(columns);
+  }
+
+  boolean nullWordAt(int word, long value) {
+    return values.nullWordAt(word, value);
+  }
+
+  void beginNullable(int columns) {
+    nullableWordCount = (columns + Long.SIZE - 1) >>> 6;
+    Arrays.fill(nullableWords, 0, nullableWordCount, 0L);
+  }
+
+  boolean nullableWordAt(int word, long value) {
+    if (word < 0 || word >= nullableWordCount) return false;
+    nullableWords[word] = value;
+    return true;
+  }
+
+  void complete(StatusCode responseStatus, int responseFlags, int rows, int columns,
+      long committedAt, long rowKey, long returned, long nonceHigh, long nonceLow) {
     status = responseStatus;
     flags = responseFlags;
     affectedRows = rows;
@@ -65,120 +77,62 @@ public final class ProtocolResponse {
     rowsReturned = returned;
     challengeHigh = nonceHigh;
     challengeLow = nonceLow;
-    nullMask = responseNullMask;
   }
 
-  void typeDescriptorAt(int index, int descriptor) {
-    typeDescriptors[index] = descriptor;
-  }
-
-  void valueAt(int index, long value) {
-    values[index] = value;
-  }
+  void typeDescriptorAt(int index, int descriptor) { values.descriptor(index, descriptor); }
+  void valueAt(int index, long value) { values.value(index, value); }
+  void decimalHighAt(int index, long value) { values.decimalHigh(index, value); }
 
   boolean textAt(int index, ByteBuffer source, int offset, int length) {
-    int chars = Utf8Text.decode(source, offset, length, textValues[index], 0);
-    textLengths[index] = Math.max(0, chars);
-    return chars >= 0;
+    return values.textAt(index, source, offset, length);
   }
 
-  void columnNameAt(int index, ByteBuffer source, int offset, int length) {
-    for (int character = 0; character < length; character++) {
-      columnNames[index][character] = (char) (source.get(offset + character) & 0xff);
-    }
-    columnNameLengths[index] = length;
+  boolean columnNameAt(int index, ByteBuffer source, int offset, int length) {
+    return values.nameAt(index, source, offset, length);
   }
 
-  public StatusCode status() {
-    return status;
-  }
-
-  public int flags() {
-    return flags;
-  }
-
-  public boolean rowAvailable() {
-    return (flags & ProtocolFrameCodec.FLAG_ROW_AVAILABLE) != 0;
-  }
-
-  public boolean transactionActive() {
-    return (flags & ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE) != 0;
-  }
-
-  public boolean queryActive() {
-    return (flags & ProtocolFrameCodec.FLAG_QUERY_ACTIVE) != 0;
-  }
-
-  public int affectedRows() {
-    return affectedRows;
-  }
-
-  public int columnCount() {
-    return columnCount;
-  }
-
-  public long commitSequence() {
-    return commitSequence;
-  }
-
-  public long key() {
-    return key;
-  }
-
-  public long rowsReturned() {
-    return rowsReturned;
-  }
-
-  public long challengeHigh() {
-    return challengeHigh;
-  }
-
-  public long challengeLow() {
-    return challengeLow;
-  }
-
+  public StatusCode status() { return status; }
+  public int flags() { return flags; }
+  public int affectedRows() { return affectedRows; }
+  public int columnCount() { return columnCount; }
+  public long commitSequence() { return commitSequence; }
+  public long key() { return key; }
+  public long rowsReturned() { return rowsReturned; }
+  public long challengeHigh() { return challengeHigh; }
+  public long challengeLow() { return challengeLow; }
   public long valueAt(int index) {
-    return index >= 0 && index < columnCount && !isVarchar(index)
-        ? values[index] : 0;
+    return validIndex(index) && !isVarchar(index) ? values.value(index) : 0;
   }
-
-  public boolean isNull(int index) {
-    return index >= 0 && index < columnCount && (nullMask & 1L << index) != 0;
+  @Override
+  public long decimalUnscaledHighAt(int index) {
+    return validIndex(index) && ProtocolDecimal128.isWide(typeDescriptorAt(index))
+        ? values.decimalHigh(index)
+        : ProtocolResponseValuesView.super.decimalUnscaledHighAt(index);
   }
-
-  public long nullMask() {
-    return nullMask;
-  }
-
-  public boolean isVarchar(int index) {
-    return index >= 0
-        && index < columnCount
-        && SqlTypeDescriptor.typeId(typeDescriptors[index])
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
-  }
-
+  public boolean isNull(int index) { return validIndex(index) && values.isNull(index); }
+  public long nullMask() { return values.nullWord(0); }
+  public long nullWord(int word) { return values.nullWord(word); }
+  public int nullWordCount() { return values.nullWordCount(); }
   public int typeDescriptorAt(int index) {
-    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
+    return validIndex(index) ? values.descriptor(index) : 0;
   }
-
   public int textLengthAt(int index) {
-    return isVarchar(index) && !isNull(index) ? textLengths[index] : -1;
+    return isVarchar(index) && !isNull(index) ? values.textLength(index) : -1;
   }
-
+  public int textByteLengthAt(int index) {
+    return isVarchar(index) && !isNull(index) ? values.textByteLength(index) : -1;
+  }
+  public int textBytesUsed() { return values.textBytesUsed(); }
   public int copyTextAt(int index, char[] destination, int offset) {
-    int length = textLengthAt(index);
-    if (length < 0
-        || destination == null
-        || offset < 0
-        || offset > destination.length - length) {
-      return -1;
-    }
-    System.arraycopy(textValues[index], 0, destination, offset, length);
-    return length;
+    return isVarchar(index) && !isNull(index) ? values.copyText(index, destination, offset) : -1;
+  }
+  public String columnName(int index) {
+    return validIndex(index) ? values.name(index) : null;
+  }
+  public boolean columnIsNullable(int index) {
+    return validIndex(index)
+        && (nullableWords[index >>> 6] & 1L << (index & 63)) != 0;
   }
 
-  public String columnName(int index) {
-    return index >= 0 && index < columnCount && columnNameLengths[index] > 0
-        ? new String(columnNames[index], 0, columnNameLengths[index]) : null;
-  }
+  private boolean validIndex(int index) { return index >= 0 && index < columnCount; }
 }

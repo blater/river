@@ -6,12 +6,16 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.key.OrderedKey;
+import io.riverdb.format.FormatBytes;
 import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
-import io.riverdb.storage.heap.HeapInsertResult;
 import io.riverdb.storage.heap.HeapRowResult;
+import io.riverdb.tx.TransactionManager;
+import io.riverdb.tx.api.IsolationLevel;
+import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.wal.local.LocalWalReadResult;
@@ -27,34 +31,18 @@ final class IndexedTableStoreDifferentialRecoveryTest {
   private static final int ROW_STRIDE = Long.BYTES;
 
   @Test
-  void compactMutationReopensThroughPublicTablePath(@TempDir Path root)
+  void logicalMutationReopensThroughTransactionPath(@TempDir Path root)
       throws Exception {
     Fixture compact = createFixture(root.resolve("compact"));
     seed(compact.table);
-    int[] operations = {
-        IndexedWalCodec.MUTATION_UPDATE,
-        IndexedWalCodec.MUTATION_DELETE,
-        IndexedWalCodec.MUTATION_INSERT
-    };
-    int[] spaces = {4, 5, 5};
-    long[] keys = {10, 10, 30};
-    int[] previousRowIds = {1, 2, 0};
-    int[] rowLengths = {Long.BYTES, 1, Long.BYTES};
-    ByteBuffer rows = mutationRows();
-    assertEquals(
-        StatusCode.OK,
-        compact.table.commitMutations(
-            3,
-            operations, spaces,
-            keys,
-            previousRowIds,
-            rows,
-            ROW_STRIDE,
-            rowLengths,
-            operations.length,
-            new IndexedCommitResult()));
-    assertLastOperationType(
-        compact.wal, IndexedWalCodec.OPERATION_TYPE_MUTATION_BATCH);
+    TransactionWriter writer = new TransactionWriter(compact.table, ROW_STRIDE);
+    assertEquals(StatusCode.OK, writer.session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.session.update(4, 10, row(101)));
+    assertEquals(StatusCode.OK, writer.session.delete(5, 10));
+    assertEquals(StatusCode.OK, writer.session.insert(5, 30, row(300)));
+    assertEquals(StatusCode.OK, writer.session.commit(writer.outcome));
+    assertEquals(StatusCode.OK, writer.session.close());
+    assertLastRelationalRecord(compact.wal);
     assertCompactState(compact.table);
     compact = crashAndReopen(compact);
     assertCompactState(compact.table);
@@ -62,57 +50,66 @@ final class IndexedTableStoreDifferentialRecoveryTest {
   }
 
   @Test
-  void naturalLeafSplitPageImagesReopenThroughPublicTablePath(@TempDir Path root)
+  void naturalLeafSplitReopensThroughTransactionPath(@TempDir Path root)
       throws Exception {
     Fixture split = createFixture(root.resolve("split"));
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
-    HeapInsertResult inserted = new HeapInsertResult();
+    TransactionWriter writer = new TransactionWriter(split.table, Long.BYTES);
     for (int key = 0; key < 256; key++) {
       row.putLong(0, key * 10L);
       row.position(0);
       row.limit(Long.BYTES);
-      assertEquals(StatusCode.OK, split.table.insert(2L + key, 0, key, row, inserted));
+      writer.insert(0, key, row);
     }
     row.putLong(0, 2560L);
     row.position(0);
     row.limit(Long.BYTES);
-    assertEquals(StatusCode.OK, split.table.insert(258, 0, 256, row, inserted));
-    assertLastOperationType(split.wal, IndexedWalCodec.OPERATION_TYPE_PAGE_IMAGES);
+    writer.insert(0, 256, row);
+    assertEquals(StatusCode.OK, writer.session.close());
+    assertLastRelationalRecord(split.wal);
     assertSplitState(split.table);
     split = crashAndReopen(split);
     assertSplitState(split.table);
     close(split);
   }
 
-  private static void seed(IndexedTable table) {
-    int[] spaces = {4, 5};
-    long[] keys = {10, 10};
-    int[] rowLengths = {Long.BYTES, Long.BYTES};
-    ByteBuffer rows = ByteBuffer.allocateDirect(2 * Long.BYTES);
-    rows.putLong(0, 100);
-    rows.putLong(Long.BYTES, 200);
-    rows.position(0);
-    rows.limit(rows.capacity());
-    assertEquals(
-        StatusCode.OK,
-        table.commitInserts(
-            2, spaces,
-            keys,
-            rows,
-            ROW_STRIDE,
-            rowLengths,
-            keys.length,
-            new IndexedCommitResult()));
+  @Test
+  void longMaximumSpaceSurvivesWalRecoveryAndOrderedScan(@TempDir Path root)
+      throws Exception {
+    Fixture fixture = createFixture(root.resolve("long-space"));
+    TransactionWriter writer = new TransactionWriter(fixture.table, Long.BYTES);
+    writer.insert(Long.MAX_VALUE, 41, row(901));
+    assertEquals(StatusCode.OK, writer.session.close());
+    fixture = crashAndReopen(fixture);
+    assertVisibleValue(fixture.table, Long.MAX_VALUE, 41, 901);
+    IndexedScanCursor cursor = new IndexedScanCursor();
+    IndexedScanResult result = new IndexedScanResult();
+    assertEquals(StatusCode.OK, fixture.table.beginScan(
+        fixture.table.currentCommitSequence(), Long.MAX_VALUE, Long.MIN_VALUE,
+        OrderedKey.INFINITY_SPACE, 0, cursor));
+    assertEquals(StatusCode.OK, fixture.table.nextScan(cursor, result));
+    assertEquals(Long.MAX_VALUE, result.keySpace());
+    assertEquals(41, result.key());
+    assertEquals(StatusCode.CONFLICT, fixture.table.nextScan(cursor, result));
+    assertEquals(StatusCode.OK, fixture.table.closeScan(cursor));
+    close(fixture);
   }
 
-  private static ByteBuffer mutationRows() {
-    ByteBuffer rows = ByteBuffer.allocateDirect(3 * ROW_STRIDE);
-    rows.putLong(0, 101);
-    rows.put(ROW_STRIDE, (byte) 1);
-    rows.putLong(2 * ROW_STRIDE, 300);
-    rows.position(0);
-    rows.limit(rows.capacity());
-    return rows;
+  private static void seed(IndexedTable table) {
+    TransactionWriter writer = new TransactionWriter(table, ROW_STRIDE);
+    assertEquals(StatusCode.OK, writer.session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.session.insert(4, 10, row(100)));
+    assertEquals(StatusCode.OK, writer.session.insert(5, 10, row(200)));
+    assertEquals(StatusCode.OK, writer.session.commit(writer.outcome));
+    assertEquals(StatusCode.OK, writer.session.close());
+  }
+
+  private static ByteBuffer row(long value) {
+    ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
+    row.putLong(0, value);
+    row.position(0);
+    row.limit(Long.BYTES);
+    return row;
   }
 
   private static void assertCompactState(IndexedTable table) {
@@ -133,7 +130,7 @@ final class IndexedTableStoreDifferentialRecoveryTest {
   }
 
   private static void assertVisibleValue(
-      IndexedTable table, int space, long key, long expected) {
+      IndexedTable table, long space, long key, long expected) {
     HeapRowResult row = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey(space, key, row));
     ByteBuffer copied = ByteBuffer.allocate(row.length());
@@ -158,14 +155,17 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     assertEquals(StatusCode.OK, table.closeScan(cursor));
   }
 
-  private static void assertLastOperationType(LocalWal wal, int expectedType) {
+  private static void assertLastRelationalRecord(LocalWal wal) {
     long offset = WalFileHeaderCodec.HEADER_BYTES;
     LocalWalReadResult record = new LocalWalReadResult();
     while (offset < wal.tailEnd()) {
       assertEquals(StatusCode.OK, wal.read(offset, record));
       offset = record.nextOffset();
     }
-    assertEquals(expectedType, IndexedWalCodec.operationType(record.payload()));
+    assertEquals(IndexedRelationalWalCodec.WAL_FORMAT_ID, record.header().formatId());
+    assertEquals(IndexedRelationalWalCodec.WAL_FORMAT_VERSION, record.header().formatVersion());
+    assertEquals(IndexedRelationalWalCodec.MAGIC, FormatBytes.getLong(record.payload(), 0));
+    assertEquals(IndexedRelationalWalCodec.VERSION, FormatBytes.getInt(record.payload(), 8));
   }
 
   private static Fixture createFixture(Path root) throws Exception {
@@ -227,5 +227,22 @@ final class IndexedTableStoreDifferentialRecoveryTest {
       LocalWal wal,
       IndexedTableStore store,
       IndexedTable table) {
+  }
+
+  private static final class TransactionWriter {
+    private final IndexedTransactionSession session;
+    private final TransactionOutcome outcome = new TransactionOutcome();
+
+    private TransactionWriter(IndexedTable table, int maximumRowBytes) {
+      TransactionManager manager = new TransactionManager(
+          DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+      session = new IndexedTransactionSession(manager, table, maximumRowBytes);
+    }
+
+    private void insert(long space, long key, ByteBuffer value) {
+      assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+      assertEquals(StatusCode.OK, session.insert(space, key, value));
+      assertEquals(StatusCode.OK, session.commit(outcome));
+    }
   }
 }

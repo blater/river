@@ -314,7 +314,8 @@ final class SqlNestedScopeTest {
     SqlCommand command = bound.query.block(root);
     StatusCode status;
     if (command.joinChain() == null) {
-      status = session.resolveTable(command.tableName(), bound.table);
+      status = new SqlBindingTableResolver().resolve(
+          session, command.tableName(), bound.table);
     } else {
       status = binder.resolveJoinRoles(
           session, command, bound.joinContext(root), null, true);
@@ -341,8 +342,9 @@ final class SqlNestedScopeTest {
     assertEquals(StatusCode.OK, relational.begin(IsolationLevel.REPEATABLE_READ));
     TableDefinition left = new TableDefinition();
     TableDefinition right = new TableDefinition();
-    assertEquals(StatusCode.OK, relational.resolveTable("join_scope_a", left));
-    assertEquals(StatusCode.OK, relational.resolveTable("join_scope_b", right));
+    SqlBindingTableResolver tables = new SqlBindingTableResolver();
+    assertEquals(StatusCode.OK, tables.resolve(relational, "join_scope_a", left));
+    assertEquals(StatusCode.OK, tables.resolve(relational, "join_scope_b", right));
 
     SqlParser parser = new SqlParser();
     SqlCommand command = new SqlCommand();
@@ -374,6 +376,9 @@ final class SqlNestedScopeTest {
     assertEquals(255, SqlNestedRowProvider.scope(31, 7));
     assertEquals(31, SqlNestedRowProvider.block(255));
     assertEquals(7, SqlNestedRowProvider.role(255));
+    assertEquals(2_016, SqlNestedRowProvider.scope(0, 63));
+    assertEquals(0, SqlNestedRowProvider.block(2_016));
+    assertEquals(63, SqlNestedRowProvider.role(2_016));
     assertEquals(StatusCode.OK, relational.commit(new TransactionOutcome()));
   }
 

@@ -1,6 +1,6 @@
 package io.riverdb.format.btree;
 
-/** Caller-owned typed leaf slot from a validated inline-tuple page. */
+/** Caller-owned leaf slot whose logical identity is the physical-key suffix. */
 public final class TupleBTreeLeafEntry {
   private int keyOffset;
   private int keyLength;

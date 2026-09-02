@@ -30,6 +30,8 @@ final class SqlJoinChainSource {
       new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private final long[] nullExtensions =
       new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
+  private final boolean[] copiedFallback =
+      new boolean[SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private long rootCandidates;
   private long whereTrue;
   private int stage = -1;
@@ -37,10 +39,11 @@ final class SqlJoinChainSource {
 
   SqlJoinChainSource(
       io.riverdb.engine.relational.RelationalSession session,
-      SqlExpressionEvaluator evaluator) {
+      SqlExpressionEvaluator evaluator,
+      SqlSessionShapeBudget budget) {
     expressions = evaluator;
     cursors = new SqlJoinChainCursors(session);
-    physical = new SqlJoinStageCandidates(session);
+    physical = new SqlJoinStageCandidates(session, budget);
     rows = new SqlJoinRoleRows();
   }
 
@@ -56,9 +59,11 @@ final class SqlJoinChainSource {
     context = joinContext;
     command = canonicalCommand;
     predicates = predicateCallback;
-    cursors.configure(context, command);
+    int roles = command.joinChain().roleCount();
+    StatusCode status = cursors.configure(context, command);
+    if (status.isOk()) status = rows.configure(context, roles);
+    if (!status.isOk()) return status;
     physical.configure(context, command);
-    rows.configure(context);
     return predicates.configureJoin(command, context, where);
   }
 
@@ -71,6 +76,17 @@ final class SqlJoinChainSource {
   }
 
   void resetMetrics() { resetCounters(); }
+
+  void copyMetrics(SqlUniversalJoinSource source) {
+    rootCandidates = source.rootCandidates();
+    whereTrue = source.whereTrue();
+    for (int current = 0; current < candidates.length; current++) {
+      candidates[current] = source.stageAccessRows(current);
+      onTrue[current] = source.stageOnTrue(current);
+      nullExtensions[current] = source.stageNullExtensions(current);
+      copiedFallback[current] = source.stageFallback(current);
+    }
+  }
 
   StatusCode next() {
     while (true) {
@@ -210,7 +226,7 @@ final class SqlJoinChainSource {
   }
   long whereTrue() { return whereTrue; }
   boolean stageFallback(int current) {
-    return physical.fallback(current);
+    return copiedFallback[current] || physical.fallback(current);
   }
   boolean hasResources() {
     return physical.hasResources() || cursors.hasResources();
@@ -239,6 +255,7 @@ final class SqlJoinChainSource {
       candidates[current] = 0;
       onTrue[current] = 0;
       nullExtensions[current] = 0;
+      copiedFallback[current] = false;
     }
     physical.resetMetrics();
   }

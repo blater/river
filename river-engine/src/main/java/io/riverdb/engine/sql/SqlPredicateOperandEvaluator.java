@@ -37,6 +37,7 @@ final class SqlPredicateOperandEvaluator {
       status = machine.predicateOperandNode(
           command,
           programs.operator(leaf, program, node),
+          programs.operandHigh(leaf, program, node),
           programs.operand(leaf, program, node),
           programs.descriptor(leaf, program, node),
           zone,
@@ -66,20 +67,27 @@ final class SqlPredicateOperandEvaluator {
       int block = SqlNestedRowProvider.block(scope);
       int role = SqlNestedRowProvider.role(scope);
       int operator = programs.operator(leaf, program, node);
-      HeapRowResult row = rows.row(block, role);
-      if (operator == SqlScalarExpression.COLUMN && row == null) {
-        status = machine.predicateNullColumnNode(
+      if (operator == SqlScalarExpression.COLUMN) {
+        status = SqlNestedColumnValue.evaluate(
+            machine,
+            command,
+            zone,
+            rows,
+            block,
+            role,
+            (int) programs.operand(leaf, program, node),
             programs.descriptor(leaf, program, node));
       } else {
         status = machine.predicateOperandNode(
             command,
             operator,
+            programs.operandHigh(leaf, program, node),
             programs.operand(leaf, program, node),
             programs.descriptor(leaf, program, node),
             zone,
-            rows.key(block, role),
-            row,
-            rows.table(block, role),
+            0,
+            null,
+            null,
             null);
       }
     }
@@ -95,10 +103,7 @@ final class SqlPredicateOperandEvaluator {
       int program,
       SqlTemporalZonePlan zone,
       SqlAggregateAccumulatorSet aggregates,
-      long groupValue,
-      boolean groupNull,
-      byte[] groupText,
-      int groupTextLength,
+      SqlHavingGroup group,
       SqlPredicateOperand result) {
     int count = programs.nodeCount(leaf, program);
     if (count == 1) {
@@ -118,24 +123,23 @@ final class SqlPredicateOperandEvaluator {
               aggregates.textLength(invocation),
               descriptor);
         }
-        result.setValue(aggregates.value(invocation), descriptor, false);
+        result.setValue(
+            aggregates.highValue(invocation),
+            aggregates.value(invocation), descriptor, false);
         return StatusCode.OK;
       }
-      if (operator == io.riverdb.sql.SqlScalarExpression.GROUP_VALUE
-          && io.riverdb.base.type.SqlTypeDescriptor.typeId(descriptor)
-              == io.riverdb.base.type.SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        if (groupNull) result.setNull(descriptor);
-        else return result.setUtf8(groupText, 0, groupTextLength, descriptor);
-        return StatusCode.OK;
+      if (operator == io.riverdb.sql.SqlScalarExpression.GROUP_VALUE) {
+        return group.publish((int) programs.operand(leaf, program, 0), descriptor, result);
       }
     }
     machine.beginHavingPredicateOperand(
-        aggregates.values(), aggregates.nulls(), groupValue, groupNull);
+        aggregates.highs(), aggregates.values(), aggregates.nulls(), group);
     StatusCode status = StatusCode.OK;
     for (int node = 0; status.isOk() && node < count; node++) {
       status = machine.predicateHavingOperandNode(
           command,
           programs.operator(leaf, program, node),
+          programs.operandHigh(leaf, program, node),
           programs.operand(leaf, program, node),
           programs.descriptor(leaf, program, node),
           zone);
@@ -168,12 +172,52 @@ final class SqlPredicateOperandEvaluator {
         status = machine.predicateOperandNode(
             command,
             operator,
+            programs.operandHigh(leaf, program, node),
             programs.operand(leaf, program, node),
             programs.descriptor(leaf, program, node),
             zone,
             rows.key(scope),
             row,
             rows.table(scope),
+            null);
+      }
+    }
+    if (status.isOk()) return machine.finishPredicateOperand(result);
+    machine.reset();
+    return status;
+  }
+
+  StatusCode evaluateUniversalJoin(
+      SqlCommand command,
+      SqlBoundBooleanPredicateProgram programs,
+      int leaf,
+      int program,
+      SqlTemporalZonePlan zone,
+      SqlUniversalJoinRows rows,
+      SqlPredicateOperand result) {
+    machine.beginPredicateOperand();
+    StatusCode status = StatusCode.OK;
+    for (int node = 0;
+        status.isOk() && node < programs.nodeCount(leaf, program); node++) {
+      int scope = programs.scope(leaf, program, node);
+      int operator = programs.operator(leaf, program, node);
+      int descriptor = programs.descriptor(leaf, program, node);
+      if (operator == SqlScalarExpression.COLUMN) {
+        status = rows.nullRole(scope)
+            ? machine.predicateNullColumnNode(descriptor)
+            : machine.predicateBlockColumnNode(
+                rows.row(scope), (int) programs.operand(leaf, program, node), descriptor);
+      } else {
+        status = machine.predicateOperandNode(
+            command,
+            operator,
+            programs.operandHigh(leaf, program, node),
+            programs.operand(leaf, program, node),
+            descriptor,
+            zone,
+            0,
+            null,
+            null,
             null);
       }
     }

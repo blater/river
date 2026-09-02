@@ -75,7 +75,9 @@ final class RelationalDatabaseTest {
     TableSchema schema = new TableSchema();
     assertEquals(StatusCode.OK, schema.addBigint("account_id", false));
     assertEquals(StatusCode.OK, schema.addVarchar7("region", true));
-    assertEquals(StatusCode.OK, schema.addBigint("balance", true));
+    assertEquals(
+        StatusCode.OK,
+        schema.addColumn("balance", SqlTypeDescriptor.INTEGER, true));
     TableDefinition created = new TableDefinition();
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
@@ -83,7 +85,7 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, session.commit(outcome));
     assertEquals(SqlTypeDescriptor.BIGINT, created.typeDescriptor(0));
     assertEquals(SqlTypeDescriptor.varchar(7), created.typeDescriptor(1));
-    assertEquals(SqlTypeDescriptor.BIGINT, created.typeDescriptor(2));
+    assertEquals(SqlTypeDescriptor.INTEGER, created.typeDescriptor(2));
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(
@@ -97,7 +99,7 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, session.resolveTable("typed_accounts", reopened));
     assertEquals(SqlTypeDescriptor.BIGINT, reopened.typeDescriptor(0));
     assertEquals(SqlTypeDescriptor.varchar(7), reopened.typeDescriptor(1));
-    assertEquals(SqlTypeDescriptor.BIGINT, reopened.typeDescriptor(2));
+    assertEquals(SqlTypeDescriptor.INTEGER, reopened.typeDescriptor(2));
     assertEquals(StatusCode.OK, session.commit(outcome));
 
     ByteBuffer encoded = ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES);
@@ -110,24 +112,26 @@ final class RelationalDatabaseTest {
         "corrupt_types",
         schema);
     int encodedBytes = encoded.remaining();
-    encoded.putInt(CatalogRecord.TABLE_TYPE_DESCRIPTORS_OFFSET + Integer.BYTES, 9);
+    encoded.putInt(columnDescriptorOffset(encoded, 1), 13);
     HeapRowResult corrupted = new HeapRowResult();
     corrupted.set(encoded, 1, 0, encodedBytes);
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             corrupted,
             ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES),
             "corrupt_types",
             new RelationalSchemaGate(),
             new TableDefinition()));
     encoded.putInt(
-        CatalogRecord.TABLE_TYPE_DESCRIPTORS_OFFSET + Integer.BYTES,
+        columnDescriptorOffset(encoded, 1),
         SqlTypeDescriptor.TYPE_ID_DECIMAL | 19 << 8 | 20 << 16);
     corrupted.set(encoded, 1, 0, encodedBytes);
     assertEquals(
         StatusCode.CORRUPTION,
         CatalogRecord.decodeTable(
+            new CatalogTableDecoder(),
             corrupted,
             ByteBuffer.allocateDirect(CatalogRecord.MAXIMUM_BYTES),
             "corrupt_types",
@@ -264,7 +268,8 @@ final class RelationalDatabaseTest {
     long committedAt = outcome.commitSequence();
     CheckpointResult checkpoint = new CheckpointResult();
     assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
-    assertEquals(5, checkpoint.rowCount());
+    assertEquals(6, checkpoint.rowCount());
+    assertEquals(2, checkpoint.rowsReclaimed());
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(
@@ -625,11 +630,23 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  private static int columnDescriptorOffset(ByteBuffer encoded, int target) {
+    int columns = encoded.getInt(20);
+    int offset = CatalogTableEncoder.HEADER_BYTES + encoded.getInt(16);
+    for (int column = 0; column < columns; column++) {
+      int nameBytes = encoded.getInt(offset);
+      int descriptor = offset + Integer.BYTES + nameBytes;
+      if (column == target) return descriptor;
+      offset = descriptor + 42 + encoded.getInt(descriptor + 14);
+    }
+    throw new AssertionError("missing column " + target);
+  }
+
   private static ByteBuffer row(long value) {
-    ByteBuffer row = ByteBuffer.allocateDirect(2 * Long.BYTES);
+    ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES + 1);
     row.putLong(0, value);
     row.position(0);
-    row.limit(2 * Long.BYTES);
+    row.limit(Long.BYTES + 1);
     return row;
   }
 

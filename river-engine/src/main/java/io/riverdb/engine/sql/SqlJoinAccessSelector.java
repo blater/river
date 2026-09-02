@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlComparison;
 
@@ -59,8 +60,7 @@ final class SqlJoinAccessSelector {
     if (SqlTypeDescriptor.comparisonFamily(outerDescriptor)
             != SqlTypeDescriptor.comparisonFamily(innerDescriptor)
         || outerDescriptor != innerDescriptor
-            && SqlTypeDescriptor.comparisonFamily(innerDescriptor)
-                == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC
+            && SqlNumericTypeRules.isNumeric(innerDescriptor)
         || SqlTypeDescriptor.typeId(innerDescriptor)
             == SqlTypeDescriptor.TYPE_ID_VARCHAR) return;
     int score = inner == 0 || context.table(rightRole).hasUniqueIndexOn(inner)

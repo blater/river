@@ -11,64 +11,82 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Ordered cursor or existing-store sort feeding one merge right input. */
 final class SqlJoinMergeRightRows {
   private final RelationalSession session;
-  private final SqlBlockRowStore store = new SqlBlockRowStore();
+  private final SqlBlockRowStore store;
   private final SqlBlockSchema schema = new SqlBlockSchema();
-  private final SqlBlockRow right = new SqlBlockRow();
-  private final SqlBlockRow candidate = new SqlBlockRow();
-  private final SqlBlockPhysicalRowReader reader = new SqlBlockPhysicalRowReader();
-  private final SqlBlockPhysicalRowWriter writer = new SqlBlockPhysicalRowWriter();
+  private final SqlBlockRow right;
+  private final SqlBlockRow candidate;
+  private final SqlBlockPhysicalRowReader reader;
+  private final SqlBlockPhysicalRowWriter writer;
+  private final SqlBlockRowValueComparator comparator = new SqlBlockRowValueComparator();
+  private final SqlJoinMergeKey runKey;
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult scan = new RelationalScanResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private TableDefinition table;
   private int column = -1;
   private int descriptor;
-  private long runValue;
-  private int position;
-  private int runStart;
-  private int runEnd;
-  private int runNext;
+  private long position;
+  private long runStart;
+  private long runEnd;
+  private long runNext;
   private boolean valueIndex;
   private boolean sorted;
   private boolean active;
   private boolean available;
   private boolean finished;
-  private boolean runAvailable;
   private boolean probeEmpty;
 
-  SqlJoinMergeRightRows(RelationalSession relationalSession) {
-    session = relationalSession;
+  SqlJoinMergeRightRows(
+      RelationalSession relationalSession, SqlSessionShapeBudget budget) {
+    this(relationalSession, SqlRetainedArrayAllocator.STANDARD, budget);
   }
 
-  StatusCode begin(TableDefinition definition, int keyColumn) {
+  SqlJoinMergeRightRows(
+      RelationalSession relationalSession, SqlRetainedArrayAllocator retainedAllocator,
+      SqlSessionShapeBudget budget) {
+    session = relationalSession;
+    store = new SqlBlockRowStore(budget);
+    right = new SqlBlockRow(retainedAllocator);
+    candidate = new SqlBlockRow(retainedAllocator);
+    reader = new SqlBlockPhysicalRowReader(retainedAllocator);
+    writer = new SqlBlockPhysicalRowWriter(retainedAllocator);
+    runKey = new SqlJoinMergeKey(budget);
+  }
+
+  StatusCode begin(TableDefinition definition, int keyColumn, int outerDescriptor) {
     StatusCode status = close();
+    if (!status.isOk()) return status;
+    boolean needsSort = keyColumn > 0 && !definition.hasIndexOn(keyColumn);
+    boolean usesIndex = !needsSort && keyColumn > 0;
+    status = SqlJoinMergeAdmission.prepare(
+        definition, schema, reader, right, candidate, writer);
     if (!status.isOk()) return status;
     table = definition;
     column = keyColumn;
     descriptor = table.typeDescriptor(column);
-    sorted = column > 0 && !table.hasIndexOn(column);
-    valueIndex = !sorted && column > 0;
-    prepareSchema();
-    writer.prepare();
+    status = runKey.prepare(outerDescriptor);
+    if (!status.isOk()) return failBegin(status);
+    sorted = needsSort;
+    valueIndex = usesIndex;
     status = sorted ? materialize() : valueIndex
         ? session.beginValueScan(table, column, cursor)
         : session.beginScan(table, cursor);
     active = status.isOk();
-    return status;
+    return status.isOk() ? status : failBegin(status);
   }
 
   StatusCode beginProbe(
-      long value, int outerDescriptor, SqlExpressionEvaluator expressions) {
+      SqlBlockRow probe, int probeColumn, int outerDescriptor) {
     if (!active) return StatusCode.INVALID_EXTERNAL_INPUT;
     probeEmpty = true;
-    if (runAvailable && expressions.compareExact(
-        value, outerDescriptor, runValue, outerDescriptor) == 0) {
+    if (runKey.available()
+        && runKey.compare(probe, probeColumn, outerDescriptor, comparator) == 0) {
       if (sorted) runNext = runStart; else store.rewind();
       probeEmpty = false;
       return StatusCode.OK;
     }
-    runAvailable = false;
-    if (sorted) return captureSorted(value, outerDescriptor, expressions);
+    runKey.invalidate();
+    if (sorted) return captureSorted(probe, probeColumn, outerDescriptor);
     while (true) {
       StatusCode status = ensure();
       if (status == StatusCode.CONFLICT) return StatusCode.OK;
@@ -77,13 +95,13 @@ final class SqlJoinMergeRightRows {
         available = false;
         continue;
       }
-      int compared = compare(value, outerDescriptor, expressions);
+      int compared = compare(probe, probeColumn, outerDescriptor);
       if (compared < 0) {
         available = false;
         continue;
       }
       if (compared > 0) return StatusCode.OK;
-      return captureRun(value, outerDescriptor, expressions);
+      return captureRun(probe, probeColumn, outerDescriptor);
     }
   }
 
@@ -121,7 +139,7 @@ final class SqlJoinMergeRightRows {
     table = null;
     column = -1;
     descriptor = 0;
-    runValue = 0;
+    runKey.reset();
     position = 0;
     runStart = 0;
     runEnd = 0;
@@ -131,13 +149,12 @@ final class SqlJoinMergeRightRows {
     active = false;
     available = false;
     finished = false;
-    runAvailable = false;
     probeEmpty = true;
     return StatusCode.OK;
   }
 
   private StatusCode captureRun(
-      long value, int outerDescriptor, SqlExpressionEvaluator expressions) {
+      SqlBlockRow probe, int probeColumn, int outerDescriptor) {
     StatusCode status = store.begin(schema, -1, false);
     while (status.isOk()) {
       if (!available) {
@@ -149,17 +166,17 @@ final class SqlJoinMergeRightRows {
         available = false;
         continue;
       }
-      if (compare(value, outerDescriptor, expressions) != 0) break;
+      if (compare(probe, probeColumn, outerDescriptor) != 0) break;
       status = store.append(right);
       available = false;
     }
     if (status.isOk()) status = store.finish();
-    if (status.isOk()) publishRun(value);
+    if (status.isOk()) status = publishRun(probe, probeColumn);
     return status;
   }
 
   private StatusCode captureSorted(
-      long value, int outerDescriptor, SqlExpressionEvaluator expressions) {
+      SqlBlockRow probe, int probeColumn, int outerDescriptor) {
     while (position < store.rowCount()) {
       StatusCode status = store.readAt(position, right);
       if (!status.isOk()) return status;
@@ -167,7 +184,7 @@ final class SqlJoinMergeRightRows {
         position++;
         continue;
       }
-      int compared = compare(value, outerDescriptor, expressions);
+      int compared = compare(probe, probeColumn, outerDescriptor);
       if (compared < 0) {
         position++;
         continue;
@@ -180,19 +197,18 @@ final class SqlJoinMergeRightRows {
         status = store.readAt(position, right);
         if (!status.isOk()) return status;
       } while (!right.nullValue(column)
-          && compare(value, outerDescriptor, expressions) == 0);
+          && compare(probe, probeColumn, outerDescriptor) == 0);
       runEnd = position;
       runNext = runStart;
-      publishRun(value);
-      return StatusCode.OK;
+      return publishRun(probe, probeColumn);
     }
     return StatusCode.OK;
   }
 
   private int compare(
-      long value, int outerDescriptor, SqlExpressionEvaluator expressions) {
-    return expressions.compareExact(
-        right.value(column), descriptor, value, outerDescriptor);
+      SqlBlockRow probe, int probeColumn, int outerDescriptor) {
+    return comparator.compare(
+        right, column, descriptor, probe, probeColumn, outerDescriptor);
   }
 
   private StatusCode ensure() {
@@ -236,29 +252,14 @@ final class SqlJoinMergeRightRows {
     return closed.isOk() ? store.finish() : closed;
   }
 
-  private void publishRun(long value) {
-    runValue = value;
-    runAvailable = true;
-    probeEmpty = false;
+  private StatusCode publishRun(SqlBlockRow probe, int probeColumn) {
+    StatusCode status = runKey.capture(probe, probeColumn);
+    probeEmpty = !status.isOk();
+    return status;
   }
 
-  private void prepareSchema() {
-    schema.set(table.columnCount());
-    prepareRow(right, table);
-    prepareRow(candidate, table);
-    for (int current = 0; current < table.columnCount(); current++) {
-      schema.setColumn(
-          current,
-          table.columnName(current),
-          table.typeDescriptor(current),
-          table.isNullable(current));
-    }
-  }
-
-  private static void prepareRow(SqlBlockRow row, TableDefinition table) {
-    row.reset(table.columnCount());
-    for (int current = 0; current < table.columnCount(); current++) {
-      if (table.isVarchar(current)) row.prepareText(current);
-    }
+  private StatusCode failBegin(StatusCode failure) {
+    StatusCode closed = close();
+    return failure.isOk() ? closed : failure;
   }
 }

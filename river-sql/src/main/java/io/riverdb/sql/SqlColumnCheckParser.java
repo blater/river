@@ -37,7 +37,8 @@ final class SqlColumnCheckParser {
     status = input.literal(sql, literal);
     if (status.isOk()) status = input.requireCharacter(sql, ')');
     if (status.isOk()) {
-      command.markLastColumnCheck(comparison, literal.value, literal.typeDescriptor);
+      command.markLastColumnCheck(
+          comparison, literal.high, literal.value, literal.typeDescriptor);
     }
     return status;
   }

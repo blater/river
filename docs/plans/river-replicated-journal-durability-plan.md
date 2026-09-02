@@ -486,7 +486,7 @@ Phase 0 establishes numeric budgets for:
 - Accepted-to-durable lag in time, bytes, and operations.
 - State-apply lag and follower catch-up rate.
 - Checkpoint and compaction write amplification.
-- Recovery time per GiB and maximum restart objective.
+- Recovery time per GB and maximum restart objective.
 
 The volatile tier proceeds only if durable-quorum benchmarks show a material workload benefit that cannot be achieved through batching, pipelining, faster stable media, or flexible persistence quorums.
 

@@ -3,6 +3,7 @@ package io.riverdb.storage.btree;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.key.OrderedKey;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
@@ -59,12 +60,52 @@ final class BTreePageTest {
   void allocatesAndPublishesRootMetadata() {
     ByteBuffer metadata = ByteBuffer.allocate(PAGE_BYTES);
     assertEquals(StatusCode.OK, BTreeRootPage.initialize(metadata, 3, 4));
-    assertEquals(4, BTreeRootPage.allocatePage(metadata));
-    assertEquals(5, BTreeRootPage.allocatePage(metadata));
+    assertEquals(StatusCode.OK, BTreeRootPage.allocatePage(metadata, 4, -1));
+    assertEquals(StatusCode.OK, BTreeRootPage.allocatePage(metadata, 5, -1));
     BTreeRootPage.publishRoot(metadata, 5);
     assertEquals(5, BTreeRootPage.rootPageId(metadata));
     assertEquals(6, BTreeRootPage.nextPageId(metadata));
     assertEquals(StatusCode.OK, BTreeRootPage.validate(metadata));
+  }
+
+  @Test
+  void intrusiveFreeStackScalesAndReusesLifo() {
+    ByteBuffer metadata = ByteBuffer.allocate(BTreeRootPage.BYTES);
+    ByteBuffer fourth = ByteBuffer.allocate(64);
+    ByteBuffer fifth = ByteBuffer.allocate(64);
+    ByteBuffer sixth = ByteBuffer.allocate(64);
+    assertEquals(StatusCode.OK, BTreeRootPage.initialize(metadata, 3, 7));
+    assertEquals(StatusCode.OK, BTreeRootPage.releasePage(metadata, 4, fourth));
+    assertEquals(StatusCode.OK, BTreeRootPage.releasePage(metadata, 5, fifth));
+    assertEquals(StatusCode.OK, BTreeRootPage.releasePage(metadata, 6, sixth));
+    assertEquals(3, BTreeRootPage.freePageCount(metadata));
+    assertEquals(6, BTreeRootPage.nextAllocationPage(metadata));
+    assertEquals(StatusCode.OK, BTreeRootPage.allocatePage(metadata, 6, 5));
+    assertEquals(StatusCode.OK, BTreeRootPage.allocatePage(metadata, 5, 4));
+    assertEquals(StatusCode.OK, BTreeRootPage.allocatePage(metadata, 4, 0));
+    assertEquals(StatusCode.OK, BTreeRootPage.allocatePage(metadata, 7, -1));
+    assertEquals(8, BTreeRootPage.nextPageId(metadata));
+    assertEquals(StatusCode.OK, BTreeRootPage.validate(metadata));
+  }
+
+  @Test
+  void intrusiveFreeStackExceedsFormerRootArrayCapacity() {
+    int nextPageId = 4_200;
+    ByteBuffer metadata = ByteBuffer.allocate(BTreeRootPage.BYTES);
+    ByteBuffer[] freePages = new ByteBuffer[nextPageId];
+    assertEquals(StatusCode.OK, BTreeRootPage.initialize(metadata, 3, nextPageId));
+    for (int pageId = 4; pageId < nextPageId; pageId++) {
+      freePages[pageId] = ByteBuffer.allocate(BTreeFreePage.BYTES);
+      assertEquals(StatusCode.OK,
+          BTreeRootPage.releasePage(metadata, pageId, freePages[pageId]));
+    }
+    assertEquals(nextPageId - 4, BTreeRootPage.freePageCount(metadata));
+    for (int pageId = nextPageId - 1; pageId >= 4; pageId--) {
+      assertEquals(pageId, BTreeRootPage.nextAllocationPage(metadata));
+      assertEquals(StatusCode.OK, BTreeRootPage.allocatePage(
+          metadata, pageId, BTreeFreePage.nextPageId(freePages[pageId])));
+    }
+    assertEquals(0, BTreeRootPage.freePageCount(metadata));
   }
 
   @Test
@@ -88,7 +129,7 @@ final class BTreePageTest {
     assertEquals(2000, BTreePage.childForKey(right, 5, 257));
     assertEquals(2000, BTreePage.firstChildPageId(right));
     assertEquals(257, BTreePage.highKey(left));
-    assertEquals(Integer.MAX_VALUE, BTreePage.highSpace(right));
+    assertEquals(OrderedKey.INFINITY_SPACE, BTreePage.highSpace(right));
     assertEquals(0, BTreePage.highKey(right));
     assertEquals(StatusCode.OK, BTreePage.validate(left));
     assertEquals(StatusCode.OK, BTreePage.validate(right));
@@ -136,8 +177,29 @@ final class BTreePageTest {
     assertEquals(split.separatorKey(), BTreePage.highKey(left));
     assertEquals(BTreePage.spaceAt(right, 0), BTreePage.highSpace(left));
     assertEquals(BTreePage.keyAt(right, 0), BTreePage.highKey(left));
-    assertEquals(Integer.MAX_VALUE, BTreePage.highSpace(right));
+    assertEquals(OrderedKey.INFINITY_SPACE, BTreePage.highSpace(right));
     assertEquals(0, BTreePage.highKey(right));
+    assertEquals(StatusCode.OK, BTreePage.validate(left));
+    assertEquals(StatusCode.OK, BTreePage.validate(right));
+  }
+
+  @Test
+  void preservesLongMaximumSpaceThroughLookupAndSplit() {
+    ByteBuffer left = ByteBuffer.allocate(PAGE_BYTES);
+    ByteBuffer right = ByteBuffer.allocate(PAGE_BYTES);
+    assertEquals(StatusCode.OK, BTreePage.initializeLeaf(left, 0));
+    for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
+      assertEquals(StatusCode.OK,
+          BTreePage.insertLeaf(left, Long.MAX_VALUE, index * 2L, index + 1));
+    }
+    BTreeSplitResult split = new BTreeSplitResult();
+    assertEquals(StatusCode.OK, BTreePage.splitLeaf(
+        left, right, 4, Long.MAX_VALUE, 257, 258, split));
+    assertEquals(Long.MAX_VALUE, split.separatorSpace());
+    BTreeLookupResult lookup = new BTreeLookupResult();
+    assertEquals(StatusCode.OK,
+        BTreePage.lookupLeaf(right, Long.MAX_VALUE, 257, lookup));
+    assertEquals(258, lookup.rowId());
     assertEquals(StatusCode.OK, BTreePage.validate(left));
     assertEquals(StatusCode.OK, BTreePage.validate(right));
   }

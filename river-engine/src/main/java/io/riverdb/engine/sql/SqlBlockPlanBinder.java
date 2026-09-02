@@ -1,20 +1,32 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.error.StatusDetail;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.schema.cache.SchemaPin;
 
 /** Bottom-up binder for compact cardinality-changing query-block plans. */
 final class SqlBlockPlanBinder {
   private final SqlBinder binder;
   private final SqlBlockPlanStages stages;
+  private final SchemaPin accessPin = new SchemaPin();
+  private final StatusDetail accessDetail = new StatusDetail(128);
+  private final SqlBlockColumnLineage accessLineage = new SqlBlockColumnLineage();
 
   SqlBlockPlanBinder(SqlTemporalContext temporal) {
-    this(temporal, null);
+    this(temporal, null, new SqlSessionShapeBudget(null));
   }
 
   SqlBlockPlanBinder(SqlTemporalContext temporal, SqlBinder sharedBinder) {
+    this(temporal, sharedBinder, new SqlSessionShapeBudget(null));
+  }
+
+  SqlBlockPlanBinder(
+      SqlTemporalContext temporal,
+      SqlBinder sharedBinder,
+      SqlSessionShapeBudget shapeBudget) {
     binder = sharedBinder;
-    stages = new SqlBlockPlanStages(temporal, sharedBinder);
+    stages = new SqlBlockPlanStages(temporal, sharedBinder, shapeBudget);
   }
 
   StatusCode bind(
@@ -39,7 +51,9 @@ final class SqlBlockPlanBinder {
     status = bindNestedQueries(session, bound);
     if (!status.isOk()) return status;
     physicalSchema(bound, plans.count() - 1);
-    return activateBlocks(bound, evaluator, plans);
+    status = activateBlocks(bound, evaluator, plans);
+    if (status.isOk()) plans.prepareProjectionLiveness();
+    return status.isOk() ? prepareRootAccess(session, bound, plans) : status;
   }
 
   private StatusCode bindNestedQueries(
@@ -59,7 +73,9 @@ final class SqlBlockPlanBinder {
       if (!status.isOk()) return status;
       child = plans.schema(block);
     }
-    return activate(bound, 0, plans.schema(1));
+    StatusCode status = plans.count() == 1
+        ? StatusCode.OK : activate(bound, 0, plans.schema(1));
+    return status;
   }
 
   StatusCode validateTail(
@@ -98,6 +114,35 @@ final class SqlBlockPlanBinder {
           table.typeDescriptor(column),
           table.isNullable(column));
     }
+  }
+
+  private StatusCode prepareRootAccess(
+      RelationalSession session, BoundSqlStatement bound, SqlBoundBlockPlans plans) {
+    plans.setRootAccessColumn(-1);
+    if (!plans.descriptorSource()
+        || plans.command(0).type() == io.riverdb.sql.SqlCommandType.JOIN_SCAN) {
+      return StatusCode.OK;
+    }
+    accessDetail.reset();
+    StatusCode status = session.resolveDescriptor(
+        plans.command(plans.count() - 1).tableName(), accessPin, accessDetail);
+    if (status.isOk()) {
+      SqlUniversalDescriptorIndexAccess rootAccess = plans.rootAccess();
+      if (plans.count() > 1) accessLineage.prepare(plans);
+      rootAccess.prepare(
+          plans.command(0), accessPin.descriptor(), 0, null, bound.whereBoolean,
+          plans.count() > 1 ? accessLineage : null);
+      if (rootAccess.active()) {
+        status = rootAccess.bind(null);
+        if (status == StatusCode.CONFLICT) {
+          rootAccess.markEmpty();
+          status = StatusCode.OK;
+        }
+      }
+      if (status.isOk()) plans.setRootAccessColumn(rootAccess.accessColumn());
+    }
+    StatusCode released = accessPin.isActive() ? accessPin.release() : StatusCode.OK;
+    return status.isOk() ? released : status;
   }
 
 }

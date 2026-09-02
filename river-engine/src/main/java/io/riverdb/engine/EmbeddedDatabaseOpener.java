@@ -8,6 +8,10 @@ import io.riverdb.engine.checkpoint.CheckpointControlStore;
 import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.engine.control.DatabaseControlResult;
 import io.riverdb.engine.control.DatabaseControlStore;
+import io.riverdb.engine.runtime.DatabaseResourceGovernor;
+import io.riverdb.engine.runtime.DatabaseResourceEnvelope;
+import io.riverdb.engine.runtime.DatabaseResourcePlan;
+import io.riverdb.engine.runtime.RuntimeResourceRoot;
 import io.riverdb.engine.table.IndexedTable;
 import io.riverdb.engine.table.IndexedTableOpenResult;
 import io.riverdb.engine.table.IndexedTableStore;
@@ -32,10 +36,12 @@ final class EmbeddedDatabaseOpener {
   private final DatabaseIncarnation database;
   private final WalGeneration generation;
   private final int maximumActiveTransactions;
+  private final long lockWaitTimeoutNanos;
   private final boolean create;
   private final Path[] followerDirectoryPaths;
   private final int requiredDurableNodes;
   private final boolean replicated;
+  private final DatabaseResourceGovernor resourceGovernor;
   private final DatabaseControlResult databaseControl = new DatabaseControlResult();
   private final CheckpointControlStore checkpointControl = new CheckpointControlStore();
   private final CheckpointState checkpointState = new CheckpointState();
@@ -53,17 +59,21 @@ final class EmbeddedDatabaseOpener {
       DatabaseIncarnation requestedDatabase,
       WalGeneration requestedGeneration,
       int requestedMaximumTransactions,
+      long requestedLockWaitTimeoutNanos,
       boolean requestedCreate,
       Path[] requestedFollowerPaths,
-      int requestedDurableNodes) {
+      int requestedDurableNodes,
+      DatabaseResourceGovernor governor) {
     directoryPath = requestedDirectory;
     database = requestedDatabase;
     generation = requestedGeneration;
     maximumActiveTransactions = requestedMaximumTransactions;
+    lockWaitTimeoutNanos = requestedLockWaitTimeoutNanos;
     create = requestedCreate;
     followerDirectoryPaths = requestedFollowerPaths;
     requiredDurableNodes = requestedDurableNodes;
     replicated = requestedFollowerPaths != null;
+    resourceGovernor = governor;
   }
 
   static StatusCode open(
@@ -71,31 +81,94 @@ final class EmbeddedDatabaseOpener {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      long lockWaitTimeoutNanos,
       boolean create,
       Path[] followerDirectoryPaths,
       int requiredDurableNodes,
       EmbeddedDatabaseOpenResult result) {
     boolean replicated = followerDirectoryPaths != null;
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
     if (!validRequest(
         directoryPath,
         database,
         generation,
         maximumActiveTransactions,
+        lockWaitTimeoutNanos,
         followerDirectoryPaths,
         requiredDurableNodes,
-        replicated)
-        || result == null) {
+        replicated)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    DatabaseResourceEnvelope.Result resources = new DatabaseResourceEnvelope.Result();
+    StatusCode status = DatabaseResourceEnvelope.create(
+        Runtime.getRuntime().maxMemory(), maximumActiveTransactions, 0, resources);
+    if (!status.isOk()) return status;
+    return open(
+        resources.root(), resources.plan(), directoryPath, database, generation,
+        maximumActiveTransactions, lockWaitTimeoutNanos, create,
+        followerDirectoryPaths, requiredDurableNodes, result);
+  }
+
+  static StatusCode open(
+      RuntimeResourceRoot resourceRoot,
+      DatabaseResourcePlan resourcePlan,
+      Path directoryPath,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      long lockWaitTimeoutNanos,
+      boolean create,
+      Path[] followerDirectoryPaths,
+      int requiredDurableNodes,
+      EmbeddedDatabaseOpenResult result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    return new EmbeddedDatabaseOpener(
-        directoryPath,
-        database,
-        generation,
-        maximumActiveTransactions,
-        create,
-        followerDirectoryPaths,
-        requiredDurableNodes).open(result);
+    boolean replicated = followerDirectoryPaths != null;
+    if (resourceRoot == null || resourcePlan == null
+        || resourcePlan.maximumOwners() < maximumActiveTransactions
+        || !validRequest(
+        directoryPath, database, generation, maximumActiveTransactions,
+        lockWaitTimeoutNanos, followerDirectoryPaths, requiredDurableNodes, replicated)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    RuntimeResourceRoot.DatabaseResult admitted = new RuntimeResourceRoot.DatabaseResult();
+    StatusCode status = resourceRoot.admit(resourcePlan, admitted);
+    if (!status.isOk()) return status;
+    status = admitted.governor().retainDatabaseAccountedBytes(
+        resourcePlan.lockProviderBytes());
+    if (!status.isOk()) {
+      admitted.governor().abandonAfterOpenFailure();
+      return status;
+    }
+    return constructOpener(
+        directoryPath, database, generation, maximumActiveTransactions,
+        lockWaitTimeoutNanos, create, followerDirectoryPaths, requiredDurableNodes,
+        admitted.governor(), result);
+  }
+
+  private static StatusCode constructOpener(
+      Path directoryPath,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      long lockWaitTimeoutNanos,
+      boolean create,
+      Path[] followerDirectoryPaths,
+      int requiredDurableNodes,
+      DatabaseResourceGovernor governor,
+      EmbeddedDatabaseOpenResult result) {
+    EmbeddedDatabaseOpener opener = null;
+    try {
+      opener = new EmbeddedDatabaseOpener(
+          directoryPath, database, generation, maximumActiveTransactions,
+          lockWaitTimeoutNanos, create, followerDirectoryPaths, requiredDurableNodes, governor);
+      return opener.open(result);
+    } catch (OutOfMemoryError failure) {
+      if (opener != null) opener.closeAcquiredResources();
+      if (governor != null) governor.close();
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   private static boolean validRequest(
@@ -103,6 +176,7 @@ final class EmbeddedDatabaseOpener {
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
+      long lockWaitTimeoutNanos,
       Path[] followerDirectoryPaths,
       int requiredDurableNodes,
       boolean replicated) {
@@ -115,6 +189,7 @@ final class EmbeddedDatabaseOpener {
         || maximumActiveTransactions > MAXIMUM_ACTIVE_TRANSACTIONS) {
       return false;
     }
+    if (lockWaitTimeoutNanos <= 0) return false;
     if (!replicated) {
       return requiredDurableNodes == 1;
     }
@@ -139,6 +214,9 @@ final class EmbeddedDatabaseOpener {
       status = openStore();
     }
     if (status.isOk()) {
+      status = enableFollowers();
+    }
+    if (status.isOk()) {
       status = openTable();
     }
     if (status.isOk()) {
@@ -146,9 +224,10 @@ final class EmbeddedDatabaseOpener {
     }
     if (!status.isOk()) {
       closeAcquiredResources();
+      if (resourceGovernor != null) resourceGovernor.close();
       return status;
     }
-    result.set(new EmbeddedDatabase(
+    status = EmbeddedDatabaseConstruction.construct(
         directory,
         followerDirectories,
         wal,
@@ -156,9 +235,13 @@ final class EmbeddedDatabaseOpener {
         storeResult.store(),
         tableResult.table(),
         maximumActiveTransactions,
+        lockWaitTimeoutNanos,
         checkpointControl,
-        checkpointAvailable ? checkpointState.checkpointId() : 0));
-    return StatusCode.OK;
+        checkpointState,
+        checkpointAvailable ? checkpointState.checkpointId() : 0,
+        resourceGovernor,
+        result);
+    return status;
   }
 
   private StatusCode openDirectory() {
@@ -256,6 +339,25 @@ final class EmbeddedDatabaseOpener {
       if (!status.isOk()) {
         return status;
       }
+    }
+    return StatusCode.OK;
+  }
+
+  private StatusCode enableFollowers() {
+    if (!replicated) return StatusCode.OK;
+    for (LocalWal follower : followerWals) {
+      StatusCode status;
+      if (follower.tailEnd() == wal.tailEnd()
+          && follower.nextJournalSequence() == wal.nextJournalSequence()) {
+        status = follower.completeRecovery();
+      } else if (follower.tailEnd() > wal.tailEnd()
+          && follower.nextJournalSequence() > wal.nextJournalSequence()) {
+        status = follower.truncateDecisionlessRecoveredSuffix(
+            wal.tailEnd(), wal.nextJournalSequence());
+      } else {
+        return StatusCode.CORRUPTION;
+      }
+      if (!status.isOk()) return status;
     }
     return wal.enableDurableQuorum(followerWals, requiredDurableNodes);
   }

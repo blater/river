@@ -15,6 +15,8 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
   private long automaticDeferrals;
   private long automaticPressureRejections;
   private long automaticRowsReclaimed;
+  private boolean automaticDeferred;
+  private boolean pressureRejected;
 
   public IndexedVacuum(TransactionManager transactionManager, IndexedTable indexedTable) {
     manager = transactionManager;
@@ -39,13 +41,18 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
     if (status.isOk()) {
       automaticRuns++;
       automaticRowsReclaimed += result.rowsReclaimed();
+      automaticDeferred = false;
+      pressureRejected = false;
     } else if (status == StatusCode.RETRY || status == StatusCode.RESOURCE_EXHAUSTED) {
-      automaticDeferrals++;
-      if (status == StatusCode.RETRY && rejectAdmissionWhenDeferred) {
-        automaticPressureRejections++;
-      }
+      recordAutomaticDeferral(status == StatusCode.RETRY && rejectAdmissionWhenDeferred);
     }
     return status;
+  }
+
+  /** Coalesces a known-busy automatic request without performing vacuum preflight. */
+  synchronized StatusCode deferAutomatic(boolean rejectAdmission) {
+    recordAutomaticDeferral(rejectAdmission);
+    return rejectAdmission ? StatusCode.RETRY : StatusCode.OK;
   }
 
   public synchronized long automaticRuns() {
@@ -68,6 +75,17 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
     committedSequence = 0;
     result.reset();
     return manager.commitMaintenance(this, outcome);
+  }
+
+  private void recordAutomaticDeferral(boolean rejectAdmission) {
+    if (!automaticDeferred) {
+      automaticDeferred = true;
+      automaticDeferrals++;
+    }
+    if (rejectAdmission && !pressureRejected) {
+      pressureRejected = true;
+      automaticPressureRejections++;
+    }
   }
 
   public IndexedVacuumResult result() {

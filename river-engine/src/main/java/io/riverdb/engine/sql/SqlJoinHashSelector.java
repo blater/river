@@ -70,7 +70,8 @@ final class SqlJoinHashSelector {
   private static boolean indexed(SqlBoundJoinContext context, int stage) {
     int column = context.accessInnerColumn(stage);
     return column >= 0
-        && (column == 0 || context.table(stage + 1).hasIndexOn(column));
+        && (context.table(stage + 1).hasPrimaryIndexOn(column)
+            || context.table(stage + 1).hasIndexOn(column));
   }
 
 }

@@ -39,12 +39,14 @@ final class SqlJoinStrategyPlan {
     int strategy = context.strategy(stage);
     if (strategy == SqlJoinStrategy.HASH || inner < 0) return 0;
     if (strategy == SqlJoinStrategy.MERGE) {
-      if (inner == 0) return 0;
+      if (context.table(stage + 1).hasPrimaryIndexOn(inner)) return 0;
       return context.table(stage + 1).hasIndexOn(inner) ? 1 : 3;
     }
-    boolean indexed = inner == 0 || context.table(stage + 1).hasIndexOn(inner);
+    boolean indexed = context.table(stage + 1).hasPrimaryIndexOn(inner)
+        || context.table(stage + 1).hasIndexOn(inner);
     if (!indexed) return 0;
-    return inner == 0 || context.table(stage + 1).hasUniqueIndexOn(inner) ? 2 : 1;
+    return context.table(stage + 1).hasPrimaryIndexOn(inner)
+        || context.table(stage + 1).hasUniqueIndexOn(inner) ? 2 : 1;
   }
 
   long access(int strategy, int access) {
@@ -66,12 +68,15 @@ final class SqlJoinStrategyPlan {
       int stage,
       long planned,
       boolean analyzed,
-      SqlJoinChainSource source) {
+      SqlJoinChainSource source,
+      SqlUniversalJoinSource universal) {
     if (Byte.toUnsignedInt(strategies[step]) != SqlJoinStrategy.HASH
-        || !analyzed || source == null) {
+        || !analyzed || source == null && universal == null) {
       return planned;
     }
-    if (!source.stageFallback(stage)) return planned;
+    boolean fallback = source != null
+        ? source.stageFallback(stage) : universal.stageFallback(stage);
+    if (!fallback) return planned;
     return left[step] ? FALL_LEFT : FALLBACK;
   }
 }

@@ -64,12 +64,13 @@ final class SqlDataChangeParser {
       status = StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (status.isOk()) {
-      result.appendInsert(
+      if (!result.appendInsert(
+          rowResult.highs,
           rowResult.values,
-          rowResult.nullMask,
-          rowResult.defaultMask,
+          rowResult.nulls,
+          rowResult.defaults,
           rowResult.typeDescriptors,
-          rowResult.count);
+          rowResult.count)) return StatusCode.RESOURCE_EXHAUSTED;
     }
     return status;
   }
@@ -132,17 +133,20 @@ final class SqlDataChangeParser {
   }
 
   private static void resetRow(LongRow result) {
+    int previous = result.count;
     result.count = 0;
-    result.nullMask = 0;
-    result.defaultMask = 0;
-    for (int index = 0; index < result.typeDescriptors.length; index++) {
+    for (int index = 0; index < previous; index++) {
       result.typeDescriptors[index] = 0;
+      result.highs[index] = 0;
+      result.nulls[index] = false;
+      result.defaults[index] = false;
     }
   }
 
   private StatusCode appendRowValue(
       CharSequence sql, SqlCommand command, LongRow result) {
     boolean defaultValue = consumeKeyword(sql, "DEFAULT");
+    if (!result.ensure(result.count + 1)) return StatusCode.RESOURCE_EXHAUSTED;
     StatusCode status = parseRowValue(sql, command, defaultValue);
     if (!status.isOk()) {
       return status;
@@ -150,11 +154,12 @@ final class SqlDataChangeParser {
     boolean nullValue = !defaultValue && numberResult.nullValue;
     int index = result.count++;
     result.values[index] = nullValue ? 0 : numberResult.value;
+    result.highs[index] = nullValue ? 0 : numberResult.high;
     if (nullValue) {
-      result.nullMask |= 1L << index;
+      result.nulls[index] = true;
       result.typeDescriptors[index] = numberResult.typeDescriptor;
     } else if (defaultValue) {
-      result.defaultMask |= 1L << index;
+      result.defaults[index] = true;
     } else {
       result.typeDescriptors[index] = numberResult.typeDescriptor;
     }
@@ -202,11 +207,32 @@ final class SqlDataChangeParser {
   }
 
   private static final class LongRow {
-    private final long[] values = new long[SqlCommand.MAXIMUM_COLUMNS];
-    private final int[] typeDescriptors = new int[SqlCommand.MAXIMUM_COLUMNS];
+    private long[] values = new long[8];
+    private long[] highs = new long[8];
+    private int[] typeDescriptors = new int[8];
+    private boolean[] nulls = new boolean[8];
+    private boolean[] defaults = new boolean[8];
     private final SqlIdentifier identifier = new SqlIdentifier();
     private int count;
-    private long nullMask;
-    private long defaultMask;
+
+    private boolean ensure(int required) {
+      if (required <= values.length) return true;
+      int capacity = Math.min(SqlCommand.MAXIMUM_COLUMNS, values.length * 2);
+      try {
+        long[] nextValues = java.util.Arrays.copyOf(values, capacity);
+        long[] nextHighs = java.util.Arrays.copyOf(highs, capacity);
+        int[] nextTypes = java.util.Arrays.copyOf(typeDescriptors, capacity);
+        boolean[] nextNulls = java.util.Arrays.copyOf(nulls, capacity);
+        boolean[] nextDefaults = java.util.Arrays.copyOf(defaults, capacity);
+        values = nextValues;
+        highs = nextHighs;
+        typeDescriptors = nextTypes;
+        nulls = nextNulls;
+        defaults = nextDefaults;
+        return true;
+      } catch (OutOfMemoryError error) {
+        return false;
+      }
+    }
   }
 }

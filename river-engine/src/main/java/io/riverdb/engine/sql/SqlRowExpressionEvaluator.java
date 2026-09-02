@@ -3,7 +3,9 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.LocalTemporal;
 import io.riverdb.base.type.LocalTemporalCast;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
@@ -12,22 +14,23 @@ import io.riverdb.storage.heap.HeapRowResult;
 /** Evaluates one bound temporal row-expression program into caller-owned storage. */
 final class SqlRowExpressionEvaluator {
   private final long[] values = new long[SqlScalarExpression.MAXIMUM_NODES];
+  private final long[] highs = new long[SqlScalarExpression.MAXIMUM_NODES];
   private final int[] descriptors = new int[SqlScalarExpression.MAXIMUM_NODES];
   private final boolean[] nulls = new boolean[SqlScalarExpression.MAXIMUM_NODES];
   private final SqlRowTextScratch text = new SqlRowTextScratch();
   private final LocalTemporal.Value temporalValue = new LocalTemporal.Value();
   private final LocalTemporalCast.TextResult textResult = new LocalTemporalCast.TextResult();
   private final SqlTemporalContext.LongResult longResult = new SqlTemporalContext.LongResult();
-  private final SqlExactExpressionEvaluator exact = new SqlExactExpressionEvaluator();
+  private final SqlNumericExpressionEvaluator exact = new SqlNumericExpressionEvaluator();
   private final SqlExpressionEvaluator columns;
   private final SqlTemporalContext temporal;
   private int size;
   private long aggregateValue;
   private boolean aggregateNull;
   private long[] aggregateValues;
+  private long[] aggregateHighs;
   private boolean[] aggregateNulls;
-  private long groupValue;
-  private boolean groupNull;
+  private SqlHavingGroup havingGroup;
 
   SqlRowExpressionEvaluator(
       SqlExpressionEvaluator columnReader, SqlTemporalContext temporalContext) {
@@ -47,13 +50,16 @@ final class SqlRowExpressionEvaluator {
     StatusCode status = evaluate(
         command, programs, projection, zone, primaryKey, source, definition);
     if (!status.isOk()) return status;
-    if (nulls[0]) result.setNull(projection); else result.setValue(projection, values[0]);
+    if (nulls[0]) result.setNull(projection);
+    else if (SqlTypeDescriptor.isWideDecimal(descriptors[0])) {
+      result.setDecimal128(projection, highs[0], values[0]);
+    } else result.setValue(projection, values[0]);
     if (!nulls[0]
         && SqlTypeDescriptor.typeId(descriptors[0]) == SqlTypeDescriptor.TYPE_ID_VARCHAR
         && programs.rawColumn(projection) < 0) {
       result.setText(projection, text.writableCharacters(), text.length());
     }
-    return StatusCode.OK;
+    return result.status();
   }
 
   StatusCode evaluateOperand(
@@ -77,29 +83,8 @@ final class SqlRowExpressionEvaluator {
       SqlNestedRowProvider rows,
       SqlPredicateOperand result) {
     beginPredicateOperand();
-    StatusCode status = StatusCode.OK;
-    for (int node = 0;
-        status.isOk() && node < programs.nodeCount(0); node++) {
-      int operator = programs.operator(0, node);
-      int scope = programs.scope(0, node);
-      int block = SqlNestedRowProvider.block(scope);
-      int role = SqlNestedRowProvider.role(scope);
-      HeapRowResult row = rows.row(block, role);
-      if (operator == SqlScalarExpression.COLUMN && row == null) {
-        status = predicateNullColumnNode(programs.descriptor(0, node));
-      } else {
-        status = predicateOperandNode(
-            command,
-            operator,
-            programs.operand(0, node),
-            programs.descriptor(0, node),
-            zone,
-            rows.key(block, role),
-            row,
-            rows.table(block, role),
-            null);
-      }
-    }
+    StatusCode status = SqlNestedProjectionNodes.evaluate(
+        this, command, programs, zone, rows);
     if (status.isOk()) return finishPredicateOperand(result);
     reset();
     return status;
@@ -120,11 +105,27 @@ final class SqlRowExpressionEvaluator {
       HeapRowResult source,
       TableDefinition definition,
       SqlBlockRow blockSource) {
+    return predicateOperandNode(
+        command, operator, operand >> 63, operand, descriptor, zone,
+        primaryKey, source, definition, blockSource);
+  }
+
+  StatusCode predicateOperandNode(
+      SqlCommand command,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor,
+      SqlTemporalZonePlan zone,
+      long primaryKey,
+      HeapRowResult source,
+      TableDefinition definition,
+      SqlBlockRow blockSource) {
     if (operator == SqlScalarExpression.COLUMN && blockSource != null) {
       return blockColumn(blockSource, (int) operand, descriptor);
     }
     return leaf(operator)
-        ? leaf(command, operator, operand, descriptor,
+        ? leaf(command, operator, operandHigh, operand, descriptor,
             primaryKey, source, definition)
         : binaryOperator(operator) ? binary(operator, descriptor)
         : unary(operator, operand, descriptor, zone);
@@ -133,9 +134,15 @@ final class SqlRowExpressionEvaluator {
   StatusCode predicateNullColumnNode(int descriptor) {
     if (size >= values.length) return StatusCode.RESOURCE_EXHAUSTED;
     values[size] = 0;
+    highs[size] = 0;
     descriptors[size] = descriptor;
     nulls[size++] = true;
     return StatusCode.OK;
+  }
+
+  StatusCode predicateBlockColumnNode(
+      SqlBlockRow source, int column, int descriptor) {
+    return blockColumn(source, column, descriptor);
   }
 
   StatusCode finishPredicateOperand(SqlPredicateOperand result) {
@@ -164,11 +171,13 @@ final class SqlRowExpressionEvaluator {
         node++) {
       int operator = programs.mutationOperator(expression, node);
       long operand = programs.mutationOperand(expression, node);
+      long operandHigh = programs.mutationOperandHigh(expression, node);
       int descriptor = programs.mutationDescriptor(expression, node);
       status = leaf(operator)
           ? leaf(
               command,
               operator,
+              operandHigh,
               operand,
               descriptor,
               primaryKey,
@@ -177,6 +186,34 @@ final class SqlRowExpressionEvaluator {
           : binaryOperator(operator)
               ? binary(operator, descriptor)
               : unary(operator, operand, descriptor, zone);
+    }
+    return !status.isOk() || size == 1
+        ? status : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  StatusCode evaluateDescriptorMutation(
+      SqlCommand command,
+      SqlBoundProjectionPrograms programs,
+      int expression,
+      SqlTemporalZonePlan zone,
+      SqlValueBuffer source) {
+    size = 0;
+    text.clear();
+    StatusCode status = StatusCode.OK;
+    for (int node = 0;
+        status.isOk() && node < programs.mutationNodeCount(expression); node++) {
+      int operator = programs.mutationOperator(expression, node);
+      long operand = programs.mutationOperand(expression, node);
+      int descriptor = programs.mutationDescriptor(expression, node);
+      status = operator == SqlScalarExpression.COLUMN
+          ? descriptorColumn(source, (int) operand, descriptor)
+          : leaf(operator)
+              ? leaf(
+                  command, operator, programs.mutationOperandHigh(expression, node),
+                  operand, descriptor, 0, null, null)
+              : binaryOperator(operator)
+                  ? binary(operator, descriptor)
+                  : unary(operator, operand, descriptor, zone);
     }
     return !status.isOk() || size == 1
         ? status : StatusCode.INVALID_EXTERNAL_INPUT;
@@ -202,6 +239,7 @@ final class SqlRowExpressionEvaluator {
               ? leaf(
                   command,
                   operator,
+                  programs.operandHigh(projection, node),
                   programs.operand(projection, node),
                   programs.descriptor(projection, node),
                   0,
@@ -218,7 +256,10 @@ final class SqlRowExpressionEvaluator {
     if (!status.isOk() || size != 1) {
       return status.isOk() ? StatusCode.INVALID_EXTERNAL_INPUT : status;
     }
-    if (nulls[0]) result.setNull(projection); else result.setValue(projection, values[0]);
+    if (nulls[0]) result.setNull(projection);
+    else if (SqlTypeDescriptor.isWideDecimal(descriptors[0])) {
+      result.setDecimal128(projection, highs[0], values[0]);
+    } else result.setValue(projection, values[0]);
     if (!nulls[0]
         && SqlTypeDescriptor.typeId(descriptors[0]) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       result.setText(projection, text.writableCharacters(), 0, text.length());
@@ -242,7 +283,9 @@ final class SqlRowExpressionEvaluator {
           ? blockColumn(source, (int) programs.operand(projection, node),
               programs.descriptor(projection, node))
           : leaf(operator)
-              ? leaf(command, operator, programs.operand(projection, node),
+              ? leaf(
+                  command, operator, programs.operandHigh(projection, node),
+                  programs.operand(projection, node),
                   programs.descriptor(projection, node), 0, null, null)
               : binaryOperator(operator)
                   ? binary(operator, programs.descriptor(projection, node))
@@ -258,10 +301,28 @@ final class SqlRowExpressionEvaluator {
         || size >= values.length) return StatusCode.INVALID_EXTERNAL_INPUT;
     nulls[size] = source.nullValue(column);
     values[size] = source.value(column);
+    highs[size] = source.highValue(column);
     descriptors[size] = descriptor;
     if (!nulls[size]
         && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       StatusCode status = text.loadBlock(source, column);
+      if (!status.isOk()) return status;
+    }
+    size++;
+    return StatusCode.OK;
+  }
+
+  private StatusCode descriptorColumn(
+      SqlValueBuffer source, int column, int descriptor) {
+    if (source == null || column < 0 || column >= source.count()
+        || size >= values.length) return StatusCode.INVALID_EXTERNAL_INPUT;
+    nulls[size] = source.isNull(column);
+    values[size] = source.valueAt(column);
+    highs[size] = source.highValueAt(column);
+    descriptors[size] = descriptor;
+    if (!nulls[size]
+        && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
+      StatusCode status = text.loadValueBuffer(source, column);
       if (!status.isOk()) return status;
     }
     size++;
@@ -281,31 +342,36 @@ final class SqlRowExpressionEvaluator {
   }
 
   void beginHavingPredicateOperand(
+      long[] finalizedHighs,
       long[] finalizedValues,
       boolean[] finalizedNulls,
-      long finalizedGroup,
-      boolean finalizedGroupNull) {
+      SqlHavingGroup group) {
     beginPredicateOperand();
+    aggregateHighs = finalizedHighs;
     aggregateValues = finalizedValues;
     aggregateNulls = finalizedNulls;
-    groupValue = finalizedGroup;
-    groupNull = finalizedGroupNull;
+    havingGroup = group;
   }
 
   StatusCode predicateHavingOperandNode(
       SqlCommand command,
       int operator,
+      long operandHigh,
       long operand,
       int descriptor,
       SqlTemporalZonePlan zone) {
     return leaf(operator)
-        ? havingLeaf(command, operator, operand, descriptor)
+        ? havingLeaf(command, operator, operandHigh, operand, descriptor)
         : binaryOperator(operator) ? binary(operator, descriptor)
         : unary(operator, operand, descriptor, zone);
   }
 
   private StatusCode havingLeaf(
-      SqlCommand command, int operator, long operand, int descriptor) {
+      SqlCommand command,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor) {
     if (operator == SqlScalarExpression.AGGREGATE_VALUE) {
       int invocation = (int) operand;
       if (aggregateValues == null || invocation < 0
@@ -313,16 +379,29 @@ final class SqlRowExpressionEvaluator {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       return pushSeed(
-          aggregateValues[invocation], descriptor, aggregateNulls[invocation]);
+          aggregateHighs[invocation], aggregateValues[invocation],
+          descriptor, aggregateNulls[invocation]);
     }
     if (operator == SqlScalarExpression.GROUP_VALUE) {
-      return pushSeed(groupValue, descriptor, groupNull);
+      int ordinal = (int) operand;
+      return havingGroup == null || !havingGroup.valid(ordinal)
+          ? StatusCode.INVALID_EXTERNAL_INPUT
+          : pushSeed(
+              havingGroup.highValue(ordinal), havingGroup.value(ordinal),
+              descriptor, havingGroup.nullValue(ordinal));
     }
-    return leaf(command, operator, operand, descriptor, 0, null, null);
+    return leaf(
+        command, operator, operandHigh, operand, descriptor, 0, null, null);
   }
 
   private StatusCode pushSeed(long value, int descriptor, boolean nullValue) {
+    return pushSeed(value >> 63, value, descriptor, nullValue);
+  }
+
+  private StatusCode pushSeed(
+      long high, long value, int descriptor, boolean nullValue) {
     if (size >= values.length) return StatusCode.RESOURCE_EXHAUSTED;
+    highs[size] = high;
     values[size] = value;
     descriptors[size] = descriptor;
     nulls[size++] = nullValue;
@@ -360,11 +439,17 @@ final class SqlRowExpressionEvaluator {
 
   boolean resultNull() { return nulls[0]; }
   long resultValue() { return values[0]; }
+  long resultHighValue() { return highs[0]; }
   int resultDescriptor() { return descriptors[0]; }
   int resultTextLength() { return text.length(); }
   char resultTextCharacter(int index) { return text.charAt(index); }
 
   void seedResult(long value, int descriptor, boolean nullValue) {
+    seedResult(value >> 63, value, descriptor, nullValue);
+  }
+
+  void seedResult(long high, long value, int descriptor, boolean nullValue) {
+    highs[0] = high;
     values[0] = value;
     descriptors[0] = descriptor;
     nulls[0] = nullValue;
@@ -381,15 +466,18 @@ final class SqlRowExpressionEvaluator {
       HeapRowResult source,
       TableDefinition definition) {
     int operator = programs.operator(projection, node);
+    long operandHigh = programs.operandHigh(projection, node);
     long operand = programs.operand(projection, node);
     int descriptor = programs.descriptor(projection, node);
     return leaf(
-        command, operator, operand, descriptor, primaryKey, source, definition);
+        command, operator, operandHigh, operand, descriptor,
+        primaryKey, source, definition);
   }
 
   private StatusCode leaf(
       SqlCommand command,
       int operator,
+      long operandHigh,
       long operand,
       int descriptor,
       long primaryKey,
@@ -398,20 +486,29 @@ final class SqlRowExpressionEvaluator {
     if (size >= values.length) return StatusCode.RESOURCE_EXHAUSTED;
     nulls[size] = operator == SqlScalarExpression.NULL;
     values[size] = 0;
+    highs[size] = 0;
     descriptors[size] = descriptor;
     StatusCode status = StatusCode.OK;
     if (operator == SqlScalarExpression.AGGREGATE_VALUE) {
       nulls[size] = aggregateNull;
       values[size] = aggregateValue;
+      highs[size] = aggregateValue >> 63;
     } else if (operator == SqlScalarExpression.COLUMN) {
       int column = (int) operand;
       nulls[size] = columns.isNull(source, definition, column);
-      if (!nulls[size]) values[size] = columns.readColumn(primaryKey, source, column);
+      if (!nulls[size]) {
+        values[size] = columns.readColumn(primaryKey, source, definition, column);
+        highs[size] = SqlTypeDescriptor.isWideDecimal(descriptor)
+            ? columns.readColumnHigh(primaryKey, source, definition, column)
+            : values[size] >> 63;
+      }
     } else if (operator == SqlScalarExpression.LITERAL) {
       values[size] = operand;
+      highs[size] = operandHigh;
     } else if (operator != SqlScalarExpression.NULL) {
       status = temporal.currentValue(operator, descriptor, longResult);
       values[size] = longResult.value;
+      highs[size] = longResult.value >> 63;
     }
     if (status.isOk()
         && !nulls[size]
@@ -440,8 +537,8 @@ final class SqlRowExpressionEvaluator {
           SqlScalarExpression.FLOOR,
           SqlScalarExpression.ROUND,
           SqlScalarExpression.TRUNCATE ->
-          exact.unary(operator, values[slot], source, target);
-      case SqlScalarExpression.CAST -> cast(values[slot], source, target);
+          exact.unary(operator, highs[slot], values[slot], source, target, operand);
+      case SqlScalarExpression.CAST -> cast(highs[slot], values[slot], source, target);
       case SqlScalarExpression.AT_TIME_ZONE -> temporal.atTimeZone(
           values[slot], source, zone, longResult);
       case SqlScalarExpression.EXTRACT -> extract(values[slot], source, operand);
@@ -449,21 +546,25 @@ final class SqlRowExpressionEvaluator {
     };
     if (status.isOk()) {
       values[slot] = operator == SqlScalarExpression.EXTRACT
-          ? temporalValue.value : SqlExactExpressionEvaluator.unaryOperator(operator)
+          ? temporalValue.value : SqlNumericExpressionEvaluator.unaryOperator(operator)
               ? exact.value() : longResult.value;
+      boolean numeric = SqlNumericExpressionEvaluator.unaryOperator(operator)
+          || operator == SqlScalarExpression.CAST
+              && SqlNumericTypeRules.isNumeric(source)
+              && SqlNumericTypeRules.isNumeric(target);
+      highs[slot] = numeric
+          ? exact.highValue() : values[slot] >> 63;
       descriptors[slot] = target;
     }
     return status;
   }
 
-  private StatusCode cast(long value, int source, int target) {
+  private StatusCode cast(long high, long value, int source, int target) {
     int sourceType = SqlTypeDescriptor.typeId(source);
     int targetType = SqlTypeDescriptor.typeId(target);
-    if (SqlTypeDescriptor.comparisonFamily(source)
-            == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC
-        && SqlTypeDescriptor.comparisonFamily(target)
-            == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) {
-      StatusCode status = exact.cast(value, source, target);
+    if (SqlNumericTypeRules.isNumeric(source)
+        && SqlNumericTypeRules.isNumeric(target)) {
+      StatusCode status = exact.cast(high, value, source, target);
       longResult.value = exact.value();
       return status;
     }
@@ -513,13 +614,14 @@ final class SqlRowExpressionEvaluator {
                     values[left], values[right], temporalValue)
         : exact.binary(
             operator,
-            values[left],
+            highs[left], values[left],
             leftDescriptor,
-            values[right],
+            highs[right], values[right],
             rightDescriptor,
             target);
     if (status.isOk()) {
       values[left] = date ? temporalValue.value : exact.value();
+      highs[left] = date ? values[left] >> 63 : exact.highValue();
       descriptors[left] = target;
     }
     return status;
@@ -544,7 +646,9 @@ final class SqlRowExpressionEvaluator {
     text.clear();
     size = 0;
     aggregateValues = null;
+    aggregateHighs = null;
     aggregateNulls = null;
+    havingGroup = null;
   }
 
 }

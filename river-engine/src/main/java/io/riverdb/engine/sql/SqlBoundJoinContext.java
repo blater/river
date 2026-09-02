@@ -1,75 +1,43 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.TableStatistics;
 import io.riverdb.sql.SqlJoinChain;
 
 /** Reusable catalog, predicate, access, and strategy state for one JOIN block. */
 final class SqlBoundJoinContext extends SqlBoundAccess {
-  private final TableDefinition[] tables =
-      new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final TableDefinition[] ownedRoleTables =
-      new TableDefinition[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final boolean[] ownedTables =
-      new boolean[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final TableStatistics[] statistics =
-      new TableStatistics[SqlJoinChain.MAXIMUM_JOIN_ROLES];
-  private final SqlBoundBooleanPredicateProgram[] onBooleans =
-      new SqlBoundBooleanPredicateProgram[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final byte[] accessOuterRoles =
-      new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final int[] accessOuterColumns =
-      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final int[] accessInnerColumns =
-      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final byte[] strategies =
-      new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final byte[] strategyOuterRoles =
-      new byte[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final int[] strategyOuterColumns =
-      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final int[] strategyInnerColumns =
-      new int[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private final long[] estimatedRows =
-      new long[SqlJoinChain.MAXIMUM_JOIN_STAGES];
-  private int roleCount;
-  private int queryBlock = -1;
+  final SqlJoinContextAllocator allocator;
+  TableDefinition[] tables = new TableDefinition[0];
+  TableDefinition[] ownedRoleTables = new TableDefinition[0];
+  boolean[] ownedTables = new boolean[0];
+  TableStatistics[] statistics = new TableStatistics[0];
+  SqlBoundBooleanPredicateProgram[] onBooleans =
+      new SqlBoundBooleanPredicateProgram[0];
+  byte[] accessOuterRoles = new byte[0];
+  int[] accessOuterColumns = new int[0];
+  int[] accessInnerColumns = new int[0];
+  byte[] strategies = new byte[0];
+  byte[] strategyOuterRoles = new byte[0];
+  int[] strategyOuterColumns = new int[0];
+  int[] strategyInnerColumns = new int[0];
+  long[] estimatedRows = new long[0];
+  int roleCount;
+  int queryBlock = -1;
   private boolean estimatesAvailable;
 
-  void beginRoles(int roles, TableDefinition borrowedRoot) {
-    queryBlock = -1;
-    roleCount = roles;
-    for (int role = 0; role < roles; role++) {
-      activateRole(role, borrowedRoot);
-      if (statistics[role] == null) statistics[role] = new TableStatistics();
-    }
+  SqlBoundJoinContext() { this(SqlJoinContextAllocator.STANDARD); }
+
+  SqlBoundJoinContext(SqlJoinContextAllocator contextAllocator) {
+    allocator = contextAllocator;
   }
 
-  private void activateRole(int role, TableDefinition borrowedRoot) {
-    if (role == 0 && borrowedRoot != null) {
-      if (ownedTables[role] && tables[role] != null) tables[role].reset();
-      tables[role] = borrowedRoot;
-      ownedTables[role] = false;
-      return;
-    }
-    if (ownedRoleTables[role] == null) {
-      ownedRoleTables[role] = new TableDefinition();
-    } else if (!ownedTables[role]) {
-      ownedRoleTables[role].reset();
-    }
-    tables[role] = ownedRoleTables[role];
-    ownedTables[role] = true;
+  StatusCode beginRoles(int roles, TableDefinition borrowedRoot) {
+    return SqlBoundJoinContextAdmission.begin(this, roles, borrowedRoot);
   }
 
-  void borrowRoles(int block, BoundSqlQuery.Block schemas) {
-    reset();
-    queryBlock = block;
-    roleCount = schemas == null ? 0 : schemas.roleCount();
-    for (int role = 0; role < roleCount; role++) {
-      tables[role] = schemas.table(role);
-      ownedTables[role] = false;
-      if (statistics[role] == null) statistics[role] = new TableStatistics();
-    }
+  StatusCode borrowRoles(int block, BoundSqlQuery.Block schemas) {
+    return SqlBoundJoinContextAdmission.borrow(this, block, schemas);
   }
 
   void usePackedScopes(int block) { queryBlock = block; }
@@ -89,11 +57,7 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
   }
 
   SqlBoundBooleanPredicateProgram onBoolean(int stage) {
-    if (stage < 0 || stage >= onBooleans.length) return null;
-    if (onBooleans[stage] == null) {
-      onBooleans[stage] = new SqlBoundBooleanPredicateProgram();
-    }
-    return onBooleans[stage];
+    return stage < 0 || stage >= roleCount - 1 ? null : onBooleans[stage];
   }
 
   boolean hasOnBoolean(int stage) {
@@ -194,4 +158,8 @@ final class SqlBoundJoinContext extends SqlBoundAccess {
   }
 
   boolean hasPhysicalStrategy() { return physicalStrategyStage() >= 0; }
+
+  StatusCode prepare(int roles) {
+    return SqlBoundJoinContextAdmission.prepare(this, roles);
+  }
 }

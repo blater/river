@@ -7,6 +7,7 @@ final class SqlBlockProjectionStage {
   private final BoundSqlStatement bound;
   private final SqlBlockSource source;
   private final SqlBlockStageProjector projector;
+  private final SqlBlockOutputOrder outputOrder;
   private final SqlBlockStageProjector.Projected projected =
       new SqlBlockStageProjector.Projected();
   private final SqlBlockRow sourceRow = new SqlBlockRow();
@@ -16,18 +17,19 @@ final class SqlBlockProjectionStage {
   SqlBlockProjectionStage(
       BoundSqlStatement statement,
       SqlBlockSource blockSource,
-      SqlBlockStageProjector stageProjector) {
+      SqlBlockStageProjector stageProjector,
+      SqlBlockOutputOrder blockOutputOrder) {
     bound = statement;
     source = blockSource;
     projector = stageProjector;
+    outputOrder = blockOutputOrder;
   }
 
   StatusCode materialize(
-      int block, SqlBlockRowStore input, SqlBlockRowStore output, int sortKey) {
-    StatusCode status = output.begin(
-        bound.blockPlans().operandSchema(block), sortKey,
-        bound.command.isDescendingOrder());
-    if (status.isOk()) status = source.begin(input);
+      int block, SqlBlockRowStore input, SqlBlockRowStore output) {
+    StatusCode status = outputOrder.beginOperands(
+        bound.command, bound.blockPlans().operandSchema(block), output);
+    if (status.isOk()) status = source.begin(input, sourceRow);
     while (status.isOk()) {
       status = source.next(input, sourceRow);
       if (status == StatusCode.CONFLICT) {
@@ -53,10 +55,9 @@ final class SqlBlockProjectionStage {
         break;
       }
       if (!status.isOk()) break;
-      if (!available || !same(sourceRow, distinctRow)) {
-        distinctRow.copyFrom(sourceRow);
-        status = output.append(sourceRow);
-        available = true;
+      if (!available || !SqlBlockRowEquality.same(sourceRow, distinctRow, 0)) {
+        status = SqlBlockDistinctPublisher.append(sourceRow, distinctRow, output);
+        available = status.isOk();
       }
     }
     StatusCode closed = sorted.close();
@@ -68,16 +69,5 @@ final class SqlBlockProjectionStage {
     sourceRow.reset(0);
     projectedRow.reset(0);
     distinctRow.reset(0);
-  }
-
-  private static boolean same(SqlBlockRow left, SqlBlockRow right) {
-    if (left.nullValue(0) != right.nullValue(0)) return false;
-    if (left.nullValue(0)) return true;
-    if (left.textLength(0) != right.textLength(0)) return false;
-    if (left.textLength(0) == 0) return left.value(0) == right.value(0);
-    for (int index = 0; index < left.textLength(0); index++) {
-      if (left.textCharacter(0, index) != right.textCharacter(0, index)) return false;
-    }
-    return true;
   }
 }

@@ -10,8 +10,12 @@ final class SqlBoundBlockPlans {
   private final SqlBlockSchema[] schemas = new SqlBlockSchema[SqlQuery.MAXIMUM_QUERY_BLOCKS];
   private final SqlBlockSchema[] operandSchemas =
       new SqlBlockSchema[SqlQuery.MAXIMUM_QUERY_BLOCKS];
-  private final SqlBlockSchema baseSchema = new SqlBlockSchema();
+  private final SqlBlockSchema baseSchema;
+  private final SqlBlockProjectionLiveness liveness = new SqlBlockProjectionLiveness();
+  private final SqlUniversalDescriptorIndexAccess rootAccess =
+      new SqlUniversalDescriptorIndexAccess();
   private int joinBlock = -1;
+  private int rootAccessColumn = -1;
   private int joinRootAccessColumn = -1;
   private int joinStageCount;
   private final int[] joinRightColumns =
@@ -29,12 +33,14 @@ final class SqlBoundBlockPlans {
   private final long[] joinEstimatedRows =
       new long[io.riverdb.sql.SqlJoinChain.MAXIMUM_JOIN_STAGES];
   private boolean joinEstimatesAvailable;
+  private boolean descriptorSource;
   private int count;
 
-  SqlBoundBlockPlans() {
+  SqlBoundBlockPlans(SqlSessionShapeBudget budget) {
+    baseSchema = new SqlBlockSchema(budget);
     for (int index = 0; index < schemas.length; index++) {
-      schemas[index] = new SqlBlockSchema();
-      operandSchemas[index] = new SqlBlockSchema();
+      schemas[index] = new SqlBlockSchema(budget);
+      operandSchemas[index] = new SqlBlockSchema(budget);
     }
   }
 
@@ -50,7 +56,9 @@ final class SqlBoundBlockPlans {
     reset();
     int sourceBlocks = query == null ? 0 : query.sourceBlockCount();
     if (query == null || requirePipeline && !query.isBlockPipeline()
-        || sourceBlocks < 2 || sourceBlocks > commands.length) {
+        || sourceBlocks < 1 || sourceBlocks == 1
+            && !query.isBlockPipeline() && !query.hasNestedTopology()
+        || sourceBlocks > commands.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     count = sourceBlocks;
@@ -61,6 +69,7 @@ final class SqlBoundBlockPlans {
   }
 
   void reset() {
+    liveness.reset(count);
     for (int index = 0; index < count; index++) {
       commands[index] = null;
       schemas[index].reset();
@@ -69,6 +78,8 @@ final class SqlBoundBlockPlans {
     count = 0;
     baseSchema.reset();
     joinBlock = -1;
+    rootAccessColumn = -1;
+    rootAccess.reset();
     joinRootAccessColumn = -1;
     joinStageCount = 0;
     for (int stage = 0; stage < joinRightColumns.length; stage++) {
@@ -83,13 +94,28 @@ final class SqlBoundBlockPlans {
       joinStatisticsSampled[role] = false;
     }
     joinEstimatesAvailable = false;
+    descriptorSource = false;
   }
+
+  void setDescriptorSource(boolean descriptor) { descriptorSource = descriptor; }
+  boolean descriptorSource() { return descriptorSource; }
+  void setRootAccessColumn(int column) { rootAccessColumn = column; }
+  int rootAccessColumn() { return rootAccessColumn; }
+  SqlUniversalDescriptorIndexAccess rootAccess() { return rootAccess; }
 
   int count() { return count; }
   SqlCommand command(int block) { return commands[block]; }
   SqlBlockSchema schema(int block) { return schemas[block]; }
   SqlBlockSchema operandSchema(int block) { return operandSchemas[block]; }
   SqlBlockSchema baseSchema() { return baseSchema; }
+
+  void prepareProjectionLiveness() {
+    liveness.prepare(commands, schemas, count);
+  }
+
+  boolean projectionLive(int block, int projection) {
+    return liveness.live(block, projection, schemas, count);
+  }
 
   void setJoinAccess(
       int block,

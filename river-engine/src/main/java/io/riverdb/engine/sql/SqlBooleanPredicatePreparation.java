@@ -12,10 +12,17 @@ final class SqlBooleanPredicatePreparation {
   private final SqlTemporalContext temporal;
   private final SqlTemporalContext.LongResult current =
       new SqlTemporalContext.LongResult();
-  private SqlTemporalZonePlan[] zones;
+  private final SqlTemporalZoneSet zones;
 
   SqlBooleanPredicatePreparation(SqlTemporalContext temporalContext) {
+    this(temporalContext, new SqlSessionShapeBudget(null));
+  }
+
+  SqlBooleanPredicatePreparation(
+      SqlTemporalContext temporalContext, SqlSessionShapeBudget budget) {
     temporal = temporalContext;
+    zones = new SqlTemporalZoneSet(
+        budget, SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF);
   }
 
   StatusCode prepare(
@@ -25,9 +32,10 @@ final class SqlBooleanPredicatePreparation {
     if (!bound.available()) {
       return StatusCode.OK;
     }
+    StatusCode status = StatusCode.OK;
     for (int leaf = 0; leaf < bound.leafCount(); leaf++) {
       for (int program = 0; program < PROGRAMS_PER_LEAF; program++) {
-        StatusCode status = prepareProgram(source, bound, leaf, program);
+        status = prepareProgram(source, bound, leaf, program);
         if (!status.isOk()) {
           return status;
         }
@@ -59,15 +67,12 @@ final class SqlBooleanPredicatePreparation {
       if (++zoneNodes > 1) {
         return StatusCode.FEATURE_NOT_SUPPORTED;
       }
-      if (zones == null) {
-        zones = new SqlTemporalZonePlan[
-            SqlBooleanPredicateProgram.MAXIMUM_LEAVES * PROGRAMS_PER_LEAF];
-      }
-      if (zones[slot] == null) {
-        zones[slot] = new SqlTemporalZonePlan();
-      }
-      StatusCode status = temporal.prepareZone(
-          source, bound.operand(leaf, program, node), zones[slot]);
+      StatusCode status = zones.reserve(slot + 1);
+      if (!status.isOk()) return status;
+      status = zones.ensure(slot);
+      if (!status.isOk()) return status;
+      status = temporal.prepareZone(
+          source, bound.operand(leaf, program, node), zones.get(slot));
       if (!status.isOk()) {
         return status;
       }
@@ -76,20 +81,11 @@ final class SqlBooleanPredicatePreparation {
   }
 
   SqlTemporalZonePlan zone(int leaf, int program) {
-    return zones == null ? null : zones[programSlot(leaf, program)];
+    return zones.get(programSlot(leaf, program));
   }
 
   void reset() {
-    if (zones == null) {
-      return;
-    }
-    for (int index = 0; index < zones.length; index++) {
-      if (zones[index] != null) {
-        zones[index].reset();
-        zones[index] = null;
-      }
-    }
-    zones = null;
+    zones.reset();
   }
 
   private static int programSlot(int leaf, int program) {

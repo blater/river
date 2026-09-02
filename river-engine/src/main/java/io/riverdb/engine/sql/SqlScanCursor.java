@@ -1,18 +1,18 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.relational.TableSchema;
+import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Caller-owned capability for one SQL scan generation. */
 public final class SqlScanCursor {
-  static final int MAXIMUM_PLAN_STEPS = 8;
+  static final int MAXIMUM_PLAN_STEPS = SqlShapeLimits.MAX_PLAN_STEPS;
+  private static final int[] PLAN_PROJECTION = {0};
 
-  private final int[] projectedColumns = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final SqlScanProjectionColumns projectedColumns = new SqlScanProjectionColumns();
   private SqlQueryExecution owner;
   private long generation;
   private long maximumRows = Long.MAX_VALUE;
   private long rowsReturned;
-  private int projectedColumnCount;
   private boolean active;
 
   public StatusCode reset() {
@@ -23,7 +23,7 @@ public final class SqlScanCursor {
     generation = 0;
     maximumRows = Long.MAX_VALUE;
     rowsReturned = 0;
-    projectedColumnCount = 0;
+    projectedColumns.reset();
     return StatusCode.OK;
   }
 
@@ -33,23 +33,20 @@ public final class SqlScanCursor {
       int[] projections,
       int projectionCount,
       long rowLimit) {
-    if (active
-        || execution == null
-        || scanGeneration <= 0
-        || projections == null
-        || projectionCount <= 0
-        || projectionCount > projectedColumns.length
-        || rowLimit < 0) {
-      return StatusCode.CONFLICT;
-    }
+    StatusCode reserved = SqlScanProjectionColumns.validateClaim(
+        active, execution, scanGeneration, projections, projectionCount, rowLimit);
+    if (reserved.isOk()) reserved = projectedColumns.set(projections, projectionCount);
+    if (!reserved.isOk()) return reserved;
     owner = execution;
     generation = scanGeneration;
     maximumRows = rowLimit;
-    projectedColumnCount = projectionCount;
-    System.arraycopy(projections, 0, projectedColumns, 0, projectionCount);
     rowsReturned = 0;
     active = true;
     return StatusCode.OK;
+  }
+
+  StatusCode claimPlan(SqlQueryExecution execution, long scanGeneration) {
+    return claim(execution, scanGeneration, PLAN_PROJECTION, 1, Long.MAX_VALUE);
   }
 
   boolean isOwnedBy(SqlQueryExecution execution, long scanGeneration) {
@@ -69,11 +66,11 @@ public final class SqlScanCursor {
   }
 
   public int projectedColumn(int index) {
-    return index >= 0 && index < projectedColumnCount ? projectedColumns[index] : -1;
+    return projectedColumns.get(index);
   }
 
   public int projectedColumnCount() {
-    return projectedColumnCount;
+    return projectedColumns.count();
   }
 
   public long rowsReturned() {

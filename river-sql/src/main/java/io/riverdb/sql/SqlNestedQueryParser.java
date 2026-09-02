@@ -6,11 +6,15 @@ import io.riverdb.base.error.StatusCode;
 final class SqlNestedQueryParser {
   private final SqlParser statements;
   private final SqlNestedSubquerySource source = new SqlNestedSubquerySource();
-  private final int[] offsets = new int[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private final int[] kinds = new int[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
-  private final int[] edges = new int[SqlBooleanPredicateProgram.MAXIMUM_LEAVES];
+  private final int[] offsets = new int[SqlQuery.MAXIMUM_EDGES];
+  private final int[] kinds = new int[SqlQuery.MAXIMUM_EDGES];
+  private final int[] edges = new int[SqlQuery.MAXIMUM_EDGES];
 
   SqlNestedQueryParser(SqlParser parser) { statements = parser; }
+
+  void parameterMarkers(SqlParameterMarkers markers) {
+    source.parameterMarkers(markers);
+  }
 
   boolean hasPredicateSubquery(CharSequence sql, int start, int end) {
     return source.contains(sql, start, end);

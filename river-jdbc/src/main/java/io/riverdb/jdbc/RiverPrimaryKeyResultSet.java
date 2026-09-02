@@ -10,7 +10,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 
-/** The single-column primary key of one durable River table. */
+/** Ordered JDBC primary-key parts backed by River's durable index catalog. */
 final class RiverPrimaryKeyResultSet extends AbstractResultSet {
   private static final String TABLE = "TABLE";
   private static final String[] COLUMN_NAMES = {
@@ -55,9 +55,10 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
   private final String requestedTable;
   private RiverQuery query;
   private String primaryColumn;
+  private String primaryName;
   private boolean resolved;
   private boolean rowAvailable;
-  private boolean rowReturned;
+  private short keySequence;
   private boolean completed;
   private boolean closed;
   private boolean lastValueRead;
@@ -84,13 +85,27 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
     if (!resolved) {
       resolvePrimaryKey();
     }
-    if (primaryColumn == null || rowReturned) {
-      finishLocal();
-      return false;
+    while (query != null && query.isActive()) {
+      source.reset();
+      JdbcExceptions.require(query.next(source), "fetch primary-key parts");
+      if (!source.isAvailable()) {
+        closeQuery("close primary-key parts");
+        break;
+      }
+      if (source.valueAt(3) == 0) continue;
+      int length = source.copyTextAt(1, catalogName, 0);
+      if (length < 1) {
+        throw JdbcExceptions.failure(
+            StatusCode.INVARIANT_BROKEN, "decode primary-key column");
+      }
+      primaryColumn = new String(catalogName, 0, length);
+      primaryName = source.isNull(0) ? null : copyText(0);
+      keySequence++;
+      rowAvailable = true;
+      return true;
     }
-    rowAvailable = true;
-    rowReturned = true;
-    return true;
+    finishLocal();
+    return false;
   }
 
   @Override
@@ -105,6 +120,7 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
     completed = true;
     rowAvailable = false;
     primaryColumn = null;
+    primaryName = null;
     connection.metadataResultClosed(this);
   }
 
@@ -242,13 +258,13 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
   @Override
   public int getFetchSize() throws SQLException {
     requireOpen();
-    return 1;
+    return io.riverdb.base.sql.SqlShapeLimits.MAX_KEY_PARTS;
   }
 
   @Override
   public void setFetchSize(int rows) throws SQLException {
     requireOpen();
-    if (rows < 0 || rows > 1) {
+    if (rows < 0 || rows > io.riverdb.base.sql.SqlShapeLimits.MAX_KEY_PARTS) {
       throw JdbcExceptions.unsupported();
     }
   }
@@ -262,25 +278,25 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
   @Override
   public int getRow() throws SQLException {
     requireOpen();
-    return rowAvailable ? 1 : 0;
+    return rowAvailable ? keySequence : 0;
   }
 
   @Override
   public boolean isBeforeFirst() throws SQLException {
     requireOpen();
-    return !rowReturned && !completed;
+    return keySequence == 0 && !completed;
   }
 
   @Override
   public boolean isAfterLast() throws SQLException {
     requireOpen();
-    return completed && rowReturned;
+    return completed && keySequence > 0;
   }
 
   @Override
   public boolean isFirst() throws SQLException {
     requireOpen();
-    return rowAvailable;
+    return rowAvailable && keySequence == 1;
   }
 
   @Override
@@ -326,14 +342,7 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
       closeQuery("close primary-key catalog");
     }
     if (tableFound) {
-      query = connection.openColumnDescription(requestedTable);
-      if (query.columnCount() <= 0 || query.columnName(0) == null) {
-        throw JdbcExceptions.failure(
-            StatusCode.INVARIANT_BROKEN,
-            "decode primary-key column");
-      }
-      primaryColumn = query.columnName(0).toString();
-      closeQuery("close primary-key description");
+      query = connection.openIndexDescription(requestedTable);
     }
     resolved = true;
   }
@@ -350,7 +359,8 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
     Object value = switch (column) {
       case 3 -> requestedTable;
       case 4 -> primaryColumn;
-      case 5 -> Short.valueOf((short) 1);
+      case 5 -> Short.valueOf(keySequence);
+      case 6 -> primaryName;
       default -> null;
     };
     lastValueRead = true;
@@ -362,7 +372,17 @@ final class RiverPrimaryKeyResultSet extends AbstractResultSet {
     completed = true;
     rowAvailable = false;
     primaryColumn = null;
+    primaryName = null;
     connection.metadataResultClosed(this);
+  }
+
+  private String copyText(int column) throws SQLException {
+    int length = source.copyTextAt(column, catalogName, 0);
+    if (length < 1) {
+      throw JdbcExceptions.failure(
+          StatusCode.INVARIANT_BROKEN, "decode primary-key name");
+    }
+    return new String(catalogName, 0, length);
   }
 
   private void requireRow(int column) throws SQLException {

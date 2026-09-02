@@ -211,6 +211,11 @@ final class SessionEndpointAuthenticationTest {
     }
 
     @Override
+    public StatusCode deferTerminalClose(io.riverdb.engine.api.RiverSession session) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+
+    @Override
     public StatusCode close() {
       return StatusCode.INVARIANT_BROKEN;
     }

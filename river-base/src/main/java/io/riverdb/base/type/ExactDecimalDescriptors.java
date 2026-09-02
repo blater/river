@@ -9,8 +9,9 @@ final class ExactDecimalDescriptors {
     if (!exactNumeric(left) || !exactNumeric(right)) {
       return 0;
     }
-    if (left == SqlTypeDescriptor.BIGINT && right == SqlTypeDescriptor.BIGINT) {
-      return SqlTypeDescriptor.BIGINT;
+    if (SqlNumericTypeRules.isIntegral(left) && SqlNumericTypeRules.isIntegral(right)) {
+      return SqlNumericTypeRules.integralRank(left) >= SqlNumericTypeRules.integralRank(right)
+          ? left : right;
     }
     int leftScale = scale(left);
     int rightScale = scale(right);
@@ -39,8 +40,8 @@ final class ExactDecimalDescriptors {
         || targetScale > SqlTypeDescriptor.MAXIMUM_DECIMAL_PRECISION) {
       return 0;
     }
-    if (SqlTypeDescriptor.typeId(source) == SqlTypeDescriptor.TYPE_ID_BIGINT) {
-      return targetScale == 0 ? SqlTypeDescriptor.BIGINT : 0;
+    if (SqlNumericTypeRules.isIntegral(source)) {
+      return targetScale == 0 ? source : 0;
     }
     return bounded(precision(source) - scale(source), targetScale);
   }
@@ -51,10 +52,7 @@ final class ExactDecimalDescriptors {
   }
 
   static boolean exactNumeric(int descriptor) {
-    int type = SqlTypeDescriptor.typeId(descriptor);
-    return SqlTypeDescriptor.isValid(descriptor)
-        && (type == SqlTypeDescriptor.TYPE_ID_BIGINT
-            || type == SqlTypeDescriptor.TYPE_ID_DECIMAL);
+    return SqlNumericTypeRules.isExact(descriptor);
   }
 
   static boolean validOperation(
@@ -68,8 +66,9 @@ final class ExactDecimalDescriptors {
   }
 
   static boolean valueFitsDescriptor(long value, int descriptor) {
-    return descriptor == SqlTypeDescriptor.BIGINT
-        || ExactDecimal.fits(value, SqlTypeDescriptor.parameterOne(descriptor));
+    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
+        ? ExactDecimal.fits(value, SqlTypeDescriptor.parameterOne(descriptor))
+        : SqlValueDomain.validFixed(descriptor, value);
   }
 
   private static int bounded(int integerDigits, int naturalScale) {
@@ -85,7 +84,12 @@ final class ExactDecimalDescriptors {
   }
 
   private static int precision(int descriptor) {
-    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_DECIMAL
-        ? SqlTypeDescriptor.parameterOne(descriptor) : 19;
+    return switch (SqlTypeDescriptor.typeId(descriptor)) {
+      case SqlTypeDescriptor.TYPE_ID_SMALLINT -> 5;
+      case SqlTypeDescriptor.TYPE_ID_INTEGER -> 10;
+      case SqlTypeDescriptor.TYPE_ID_BIGINT -> 19;
+      case SqlTypeDescriptor.TYPE_ID_DECIMAL -> SqlTypeDescriptor.parameterOne(descriptor);
+      default -> 0;
+    };
   }
 }

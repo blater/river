@@ -22,6 +22,33 @@ public final class SqlParser {
       new SqlCatalogCommandParser(input);
   private final SqlCreateTableParser creates =
       new SqlCreateTableParser(this, input, catalogCommands, scalarExpressions);
+  private final SqlParameterMarkers markerIndex = new SqlParameterMarkers();
+
+  /** Parses marker-bearing syntax without reading invocation values. */
+  public StatusCode parseTemplate(String sql, SqlQuery query, SqlCommand result) {
+    if (query != null) query.reset();
+    if (result != null) result.reset();
+    if (sql == null || query == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = markerIndex.scan(sql);
+    if (!status.isOk()) return status;
+    input.beginParameterMarkers(markerIndex);
+    queryParser.parameterMarkers(markerIndex);
+    try {
+      status = queryParser.parse(sql, query, result);
+      if (!status.isOk()) {
+        query.discardJoinChains();
+        query.reset();
+      }
+      return status;
+    } finally {
+      queryParser.parameterMarkers(null);
+      input.clearParameters();
+    }
+  }
+
+  public int templateParameterCount() { return markerIndex.count(); }
 
   public StatusCode parse(String sql, SqlCommand result) {
     if (result == null) {
@@ -89,8 +116,11 @@ public final class SqlParser {
     if (sql == null || parameters == null || query == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    StatusCode status = markerIndex.scan(sql);
+    if (!status.isOk()) return status;
+    queryParser.parameterMarkers(markerIndex);
     try {
-      StatusCode status = SqlParameterAdmission.beginQuery(parameters, input);
+      status = SqlParameterAdmission.beginQuery(parameters, input);
       if (status.isOk()) status = queryParser.parse(sql, query, result);
       status = SqlParameterAdmission.finish(status, input);
       if (!status.isOk()) {
@@ -99,6 +129,7 @@ public final class SqlParser {
       }
       return status;
     } finally {
+      queryParser.parameterMarkers(null);
       input.clearParameters();
     }
   }
@@ -127,6 +158,10 @@ public final class SqlParser {
   StatusCode parseQueryBlock(CharSequence sql, SqlCommand result) {
     predicateParser.beginStandard();
     return parseText(sql, result);
+  }
+
+  StatusCode parseSetOperand(CharSequence sql, SqlQuery query) {
+    return queryParser.parseSetOperand(sql, query);
   }
 
   StatusCode parseSubqueryBlock(
@@ -486,9 +521,11 @@ public final class SqlParser {
   }
 
   static final class LongResult {
+    long high;
     long value;
     boolean varchar;
     boolean nullValue;
+    boolean parameter;
     int textScalars;
     int typeDescriptor;
   }

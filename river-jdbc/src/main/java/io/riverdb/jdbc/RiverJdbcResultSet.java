@@ -20,8 +20,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
   private final RiverQuery query;
   private final RowResult row = new RowResult();
   private final CommandResult completion = new CommandResult();
-  private final char[] textCharacters =
-      new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  private char[] textCharacters = RiverJdbcTextScratch.EMPTY;
   private final RiverResultSetMetaData metadata;
   private final RiverJdbcObjectConversion objectConversion =
       new RiverJdbcObjectConversion(this);
@@ -54,7 +53,12 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     row.reset();
     lastValueRead = false;
     lastWasNull = false;
-    JdbcExceptions.require(query.next(row), "fetch row");
+    try {
+      JdbcExceptions.require(query.next(row), "fetch row");
+    } catch (SQLException failure) {
+      completeAfterFailure(failure);
+      throw failure;
+    }
     rowAvailable = row.isAvailable();
     if (!rowAvailable) {
       completeQuery();
@@ -97,30 +101,44 @@ final class RiverJdbcResultSet extends AbstractResultSet {
       return Boolean.toString(value != 0);
     }
     if (metadata.isDecimal(column)) {
-      return BigDecimal.valueOf(value, metadata.decimalScale(column)).toPlainString();
+      return decimalValue(column, value).toPlainString();
     }
     int descriptor = metadata.typeDescriptor(column);
+    if (metadata.isApproximate(column)) {
+      return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_REAL
+          ? Float.toString(Float.intBitsToFloat((int) value))
+          : Double.toString(Double.longBitsToDouble(value));
+    }
     if (RiverJdbcTemporalValues.isTemporal(descriptor)) {
+      textCharacters = RiverJdbcTextScratch.require(
+          textCharacters, RiverJdbcTextScratch.TEMPORAL_CHARACTERS);
       return RiverJdbcTemporalValues.string(value, descriptor, textCharacters);
     }
     if (!metadata.isVarchar(column)) {
       return Long.toString(value);
     }
-    int length = row.copyTextAt(column - 1, textCharacters, 0);
+    int bytes = row.textLengthAt(column - 1);
+    char[] characters = RiverJdbcTextScratch.require(textCharacters, bytes);
+    textCharacters = characters;
+    int length = row.copyTextAt(column - 1, characters, 0);
     if (length < 0) {
       throw JdbcExceptions.invalid("VARCHAR value is invalid");
     }
-    return new String(textCharacters, 0, length);
+    return new String(characters, 0, length);
   }
 
   @Override
   public boolean getBoolean(int column) throws SQLException {
-    return primitiveNumericValue(column) != 0;
+    long value = numericValue(column);
+    if (lastWasNull) return false;
+    if (metadata.isDecimal(column)) return decimalValue(column, value).signum() != 0;
+    return metadata.isApproximate(column)
+        ? approximateValue(value, metadata.typeDescriptor(column)) != 0.0d : value != 0;
   }
 
   @Override
   public byte getByte(int column) throws SQLException {
-    long value = primitiveNumericValue(column);
+    long value = integralNumericValue(column);
     if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
       throw numericOverflow();
     }
@@ -129,7 +147,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public short getShort(int column) throws SQLException {
-    long value = primitiveNumericValue(column);
+    long value = integralNumericValue(column);
     if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
       throw numericOverflow();
     }
@@ -138,7 +156,7 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public int getInt(int column) throws SQLException {
-    long value = primitiveNumericValue(column);
+    long value = integralNumericValue(column);
     if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
       throw numericOverflow();
     }
@@ -147,24 +165,31 @@ final class RiverJdbcResultSet extends AbstractResultSet {
 
   @Override
   public long getLong(int column) throws SQLException {
-    return primitiveNumericValue(column);
+    return integralNumericValue(column);
   }
 
   @Override
   public float getFloat(int column) throws SQLException {
-    return primitiveNumericValue(column);
+    double value = floatingNumericValue(column);
+    if (value > Float.MAX_VALUE || value < -Float.MAX_VALUE) throw numericOverflow();
+    return (float) value;
   }
 
   @Override
   public double getDouble(int column) throws SQLException {
-    return primitiveNumericValue(column);
+    return floatingNumericValue(column);
   }
 
   @Override
   public BigDecimal getBigDecimal(int column) throws SQLException {
     long value = numericValue(column);
-    return lastWasNull ? null : BigDecimal.valueOf(
-        value, metadata.isDecimal(column) ? metadata.decimalScale(column) : 0);
+    if (lastWasNull) return null;
+    if (metadata.isDecimal(column)) {
+      return decimalValue(column, value);
+    }
+    return metadata.isApproximate(column)
+        ? BigDecimal.valueOf(approximateValue(value, metadata.typeDescriptor(column)))
+        : BigDecimal.valueOf(value);
   }
 
   @Override
@@ -177,9 +202,18 @@ final class RiverJdbcResultSet extends AbstractResultSet {
       return getString(column);
     }
     if (metadata.isDecimal(column)) {
-      return BigDecimal.valueOf(value, metadata.decimalScale(column));
+      return decimalValue(column, value);
     }
     int descriptor = metadata.typeDescriptor(column);
+    int type = SqlTypeDescriptor.typeId(descriptor);
+    if (type == SqlTypeDescriptor.TYPE_ID_SMALLINT) return Short.valueOf((short) value);
+    if (type == SqlTypeDescriptor.TYPE_ID_INTEGER) return Integer.valueOf((int) value);
+    if (type == SqlTypeDescriptor.TYPE_ID_REAL) {
+      return Float.valueOf(Float.intBitsToFloat((int) value));
+    }
+    if (type == SqlTypeDescriptor.TYPE_ID_DOUBLE) {
+      return Double.valueOf(Double.longBitsToDouble(value));
+    }
     if (RiverJdbcTemporalValues.isTemporal(descriptor)) {
       return RiverJdbcTemporalValues.object(value, descriptor);
     }
@@ -427,10 +461,39 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     return result;
   }
 
-  private long primitiveNumericValue(int column) throws SQLException {
+  private long integralNumericValue(int column) throws SQLException {
+    long value = numericValue(column);
+    if (lastWasNull) return 0;
+    if (!metadata.isDecimal(column)) {
+      if (!metadata.isApproximate(column)) return value;
+      double converted = approximateValue(value, metadata.typeDescriptor(column));
+      if (converted < Long.MIN_VALUE || converted > Long.MAX_VALUE) throw numericOverflow();
+      return (long) converted;
+    }
+    try {
+      return decimalValue(column, value).longValueExact();
+    } catch (ArithmeticException failure) {
+      throw numericOverflow();
+    }
+  }
+
+  private double floatingNumericValue(int column) throws SQLException {
     long result = numericValue(column);
-    if (metadata.isDecimal(column)) throw JdbcExceptions.unsupported();
-    return result;
+    if (metadata.isDecimal(column)) {
+      return lastWasNull ? 0.0d : decimalValue(column, result).doubleValue();
+    }
+    return lastWasNull ? 0.0d : metadata.isApproximate(column)
+        ? approximateValue(result, metadata.typeDescriptor(column)) : result;
+  }
+
+  private static double approximateValue(long bits, int descriptor) {
+    return SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_REAL
+        ? Float.intBitsToFloat((int) bits) : Double.longBitsToDouble(bits);
+  }
+
+  private BigDecimal decimalValue(int column, long low) throws SQLException {
+    return RiverJdbcDecimal128.value(
+        row.decimalUnscaledHighAt(column - 1), low, metadata.decimalScale(column));
   }
 
   SQLException numericOverflow() {
@@ -442,7 +505,9 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     return metadata;
   }
 
-  char[] textCharacters() {
+  char[] textCharacters() throws SQLException {
+    textCharacters = RiverJdbcTextScratch.require(
+        textCharacters, RiverJdbcTextScratch.TEMPORAL_CHARACTERS);
     return textCharacters;
   }
 
@@ -458,6 +523,24 @@ final class RiverJdbcResultSet extends AbstractResultSet {
     lastValueRead = false;
     lastWasNull = false;
     statement.queryCompleted(this, completion);
+  }
+
+  private void completeAfterFailure(SQLException failure) {
+    completion.reset();
+    StatusCode status = query.close(completion);
+    if (status.isOk() || !query.isActive()) {
+      completed = true;
+      rowAvailable = false;
+      lastValueRead = false;
+      lastWasNull = false;
+      try {
+        statement.queryCompleted(this, completion);
+      } catch (SQLException cleanupFailure) {
+        failure.addSuppressed(cleanupFailure);
+      }
+    } else {
+      failure.addSuppressed(JdbcExceptions.failure(status, "close failed query"));
+    }
   }
 
   private void requireRow() throws SQLException {

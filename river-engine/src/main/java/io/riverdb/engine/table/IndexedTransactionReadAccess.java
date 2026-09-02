@@ -8,6 +8,7 @@ import io.riverdb.tx.api.IsolationLevel;
 /** Handles session reads and the automatic version-maintenance policy. */
 final class IndexedTransactionReadAccess {
   private final IndexedTransactionSession session;
+  private final IndexedVersionedRowResult visible = new IndexedVersionedRowResult();
 
   IndexedTransactionReadAccess(IndexedTransactionSession session) {
     this.session = session;
@@ -22,8 +23,9 @@ final class IndexedTransactionReadAccess {
     long reservedRows = (long) (session.manager().activeTransactionCount() + 1)
         * session.automaticVacuumCapacityReserve();
     boolean pressure = session.table().remainingVersionCapacity() < reservedRows;
-    if (obsoleteVersions < session.automaticVacuumThreshold() && !pressure) {
-      return StatusCode.OK;
+    if (!pressure) return StatusCode.OK;
+    if (session.manager().activeTransactionCount() != 0) {
+      return automaticVacuum.deferAutomatic(pressure);
     }
     StatusCode status = automaticVacuum.runAutomatic(
         session.maintenanceOutcome(), pressure);
@@ -37,7 +39,7 @@ final class IndexedTransactionReadAccess {
     return status;
   }
 
-  StatusCode fetchByKey(int space, long key, HeapRowResult result) {
+  StatusCode fetchByKey(long space, long key, HeapRowResult result) {
     if (session.transaction().state() != io.riverdb.tx.api.TransactionState.ACTIVE
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -67,5 +69,45 @@ final class IndexedTransactionReadAccess {
     }
     return session.table().fetchByKeyAt(
         session.transaction().snapshot().visibleCommitSequence(), space, key, result);
+  }
+
+  StatusCode fetchCandidateByKey(long space, long key, IndexedRowCandidate result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    result.reset();
+    if (session.transaction().state() != io.riverdb.tx.api.TransactionState.ACTIVE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int pending = session.pendingMutations().findLatestIndex(space, key);
+    if (pending >= 0) {
+      int operation = session.pendingMutations().operationAt(pending);
+      if (operation == IndexedWalCodec.MUTATION_DELETE
+          || operation == IndexedTransactionSession.MUTATION_NONE) {
+        return StatusCode.CONFLICT;
+      }
+      session.pendingMutations().setRowResult(pending, result.row());
+      result.setPending(
+          session, session.transaction().transactionGeneration(), space, key,
+          session.pendingMutations().previousRowIdAt(pending), pending);
+      return StatusCode.OK;
+    }
+    if (session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE) {
+      StatusCode status = session.protectKey(space, key);
+      if (!status.isOk()) return status;
+    }
+    if (session.transaction().isolationLevel() == IsolationLevel.READ_COMMITTED
+        && !session.statementActive()) {
+      StatusCode status = session.manager().refreshReadCommitted(
+          session.transaction(), session.table());
+      if (!status.isOk()) return status;
+    }
+    StatusCode status = session.table().fetchVersionedByKeyAt(
+        session.transaction().snapshot().visibleCommitSequence(), space, key, visible);
+    if (status.isOk()) {
+      result.row().copyFrom(visible.row());
+      result.setCommitted(
+          session, session.transaction().transactionGeneration(),
+          space, key, visible.versionRowId());
+    }
+    return status;
   }
 }

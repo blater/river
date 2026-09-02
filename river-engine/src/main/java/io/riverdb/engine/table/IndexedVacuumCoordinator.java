@@ -4,12 +4,14 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.wal.local.LocalWal;
 
-/** Owns bounded vacuum admission and delegates its WAL rewrite protocol. */
+/** Owns vacuum admission and delegates its bounded-batch WAL rewrite protocol. */
 final class IndexedVacuumCoordinator {
   private final IndexedTableKernel kernel;
   private final IndexedPageSet pages;
   private final IndexedStorePhase phase;
   private final IndexedVacuumWriter writer;
+  private final IndexedVacuumPublicationAdmission publicationAdmission;
+  private final IndexedCountResult count = new IndexedCountResult();
 
   IndexedVacuumCoordinator(
       LocalWal wal,
@@ -21,6 +23,7 @@ final class IndexedVacuumCoordinator {
     pages = pageSet;
     phase = storePhase;
     writer = new IndexedVacuumWriter(wal, kernel, recovery);
+    publicationAdmission = new IndexedVacuumPublicationAdmission(pages);
   }
 
   StatusCode commit(
@@ -41,24 +44,29 @@ final class IndexedVacuumCoordinator {
   }
 
   StatusCode status() {
-    if (phase.operationActive()
-        || phase.preparedInsertGroupActive()
-        || !pages.isPresent(IndexedTableKernel.HEAP_PAGE_ID)) {
+    if (unavailable()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    int retainedRows = kernel.indexedEntryCount();
-    if (retainedRows < 0 || retainedRows > kernel.rowCount()) {
-      return StatusCode.CORRUPTION;
-    }
+    StatusCode status = kernel.indexedEntryCount(count);
+    if (!status.isOk()) return status;
+    long retainedRows = count.value();
+    if (retainedRows > kernel.rowCount()) return StatusCode.CORRUPTION;
     if (retainedRows == kernel.rowCount()) {
       return StatusCode.CONFLICT;
     }
-    int chunkCount = kernel.vacuumChunkCount();
-    if (chunkCount < 0) {
-      return StatusCode.CORRUPTION;
-    }
-    return chunkCount > 0 && chunkCount < LocalWal.MAX_PENDING_RECORDS
+    status = publicationAdmission.admit();
+    if (!status.isOk()) return status;
+    status = kernel.vacuumChunkCount(count);
+    if (!status.isOk()) return status;
+    long chunkCount = count.value();
+    return chunkCount > 0 && chunkCount <= Integer.MAX_VALUE
         ? StatusCode.OK : StatusCode.RESOURCE_EXHAUSTED;
+  }
+
+  private boolean unavailable() {
+    return phase.operationActive()
+        || phase.commitGroupActive()
+        || !pages.isPresent(IndexedTableKernel.HEAP_PAGE_ID);
   }
 
   boolean failureFences() {

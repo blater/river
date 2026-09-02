@@ -19,7 +19,7 @@ final class ProtocolRequestAdmission {
       codec.eraseRequestPayload(request);
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (response.capacity() < ProtocolFrameCodec.MAXIMUM_RESPONSE_BYTES) {
+    if (response.capacity() < ProtocolFrameCodec.HEADER_BYTES + 64) {
       codec.eraseRequestPayload(request);
       empty(response);
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -30,7 +30,8 @@ final class ProtocolRequestAdmission {
 
   static StatusCode decode(
       ProtocolFrameCodec codec, ByteBuffer request, ProtocolFrame frame) {
-    StatusCode status = codec.decode(request, frame);
+    StatusCode status = request.remaining() > ProtocolFrameCodec.MAXIMUM_FRAME_BYTES
+        ? codec.decodeAssembledRequest(request, frame) : codec.decode(request, frame);
     if (status.isOk()) return status;
     StatusCode erased = codec.eraseRequestPayload(request);
     return erased.isOk() ? status : erased;

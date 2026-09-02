@@ -14,6 +14,7 @@ final class SqlPointSelectExecution {
   private final BoundSqlStatement bound;
   private final SqlBoundPredicateEvaluator predicates;
   private final SqlRowProjectionEvaluator projections;
+  private final SqlCurrentRowProtection currentRows;
   private final SqlProjectionResultWriter results = new SqlProjectionResultWriter();
   private final SqlProjectedRow projected = new SqlProjectedRow();
   private final HeapRowResult fetched = new HeapRowResult();
@@ -25,18 +26,21 @@ final class SqlPointSelectExecution {
       RelationalSession relationalSession,
       BoundSqlStatement statement,
       SqlBoundPredicateEvaluator predicateEvaluator,
-      SqlRowProjectionEvaluator projectionEvaluator) {
+      SqlRowProjectionEvaluator projectionEvaluator,
+      SqlCurrentRowProtection currentRowProtection) {
     session = relationalSession;
     bound = statement;
     predicates = predicateEvaluator;
     projections = projectionEvaluator;
+    currentRows = currentRowProtection;
   }
 
   StatusCode execute(SqlExecutionResult result) {
     BoundSqlQuery.Block command = bound.executableQuery.root();
     boolean safePointAccess = safePointAccess(command);
     if (!selectCommand(command)
-        || !safePointAccess && bound.executableQuery.edgeCount() == 0) {
+        || !safePointAccess && bound.executableQuery.edgeCount() == 0
+            && !bound.expandedView) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (!safePointAccess || bound.pointTextColumn > 0) {
@@ -58,12 +62,19 @@ final class SqlPointSelectExecution {
     if (status.isOk()) status = validateRow(source);
     if (status.isOk()) status = predicates.evaluate(primaryKey, source);
     if (status.isOk() && !predicates.matched()) status = StatusCode.CONFLICT;
-    if (status.isOk()) {
-      source = predicates.evaluatedRow(source);
-      status = project(result, primaryKey, source);
+    if (!status.isOk()) {
+      return status == StatusCode.CONFLICT ? releasePredicates(status) : status;
     }
-    if (status.isOk() || status == StatusCode.CONFLICT) predicates.releaseEvaluatedRow();
-    return status;
+    if (bound.command.isSelectForUpdate()) {
+      status = currentRows.lockAndRecheck(primaryKey);
+      if (!status.isOk()) return status;
+      source = predicates.evaluatedRow(currentRows.row());
+      status = project(result, primaryKey, source);
+      return currentRows.finish(status);
+    }
+    source = predicates.evaluatedRow(source);
+    status = project(result, primaryKey, source);
+    return releasePredicates(status);
   }
 
   boolean hasResources() {
@@ -91,9 +102,16 @@ final class SqlPointSelectExecution {
       if (status.isOk()) status = validateRow(source);
       if (status.isOk()) status = predicates.evaluate(row.key(), source);
       if (status.isOk() && predicates.matched()) {
+        if (bound.command.isSelectForUpdate()) {
+          status = currentRows.lockAndRecheck(row.key());
+          if (status == StatusCode.CONFLICT) continue;
+          if (!status.isOk()) break;
+          source = currentRows.row();
+        }
         source = predicates.evaluatedRow(source);
         status = project(result, row.key(), source);
-        predicates.releaseEvaluatedRow();
+        status = bound.command.isSelectForUpdate()
+            ? currentRows.finish(status) : releasePredicates(status);
         found = status.isOk();
         break;
       }
@@ -145,5 +163,10 @@ final class SqlPointSelectExecution {
     return source.length() >= bound.table.fixedRowBytes()
             && source.length() <= bound.table.maximumRowBytes()
         ? StatusCode.OK : StatusCode.CORRUPTION;
+  }
+
+  private StatusCode releasePredicates(StatusCode status) {
+    predicates.releaseEvaluatedRow();
+    return status;
   }
 }

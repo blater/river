@@ -26,8 +26,8 @@ final class BTreePageCodecTest {
         BTreePageCodec.encodeLeaf(leafBytes, 56, 7, Long.MIN_VALUE, Long.MAX_VALUE));
     assertArrayEquals(
         HexFormat.of().parseHex(
-            "5054425245564952030000000100000001000000180000000000000000000000"
-                + "0000000000000000ffffff7f000000000000000000000080ffffffffffffff7f"
+            "5054425245564952040000000100000001000000180000000000000000000000"
+                + "0000000000000000ffffffffffffffff0000000000000080ffffffffffffff7f"
                 + "0700000000000000"),
         Arrays.copyOfRange(leafBytes.array(), 8, 80));
     BTreePageHeader header = new BTreePageHeader();
@@ -42,7 +42,7 @@ final class BTreePageCodecTest {
         StatusCode.INVALID_EXTERNAL_INPUT,
         BTreePageCodec.decodeInternal(leafBytes, 8, header, 0, new BTreeInternalEntry()));
 
-    ByteBuffer bytes = ByteBuffer.allocate(72).order(ByteOrder.BIG_ENDIAN);
+    ByteBuffer bytes = ByteBuffer.allocate(80).order(ByteOrder.BIG_ENDIAN);
     assertEquals(
         StatusCode.OK,
         BTreePageCodec.encodeHeader(
@@ -52,9 +52,10 @@ final class BTreePageCodecTest {
         BTreePageCodec.encodeInternal(bytes, 56, 8, Long.MAX_VALUE, Integer.MAX_VALUE));
     assertArrayEquals(
         HexFormat.of().parseHex(
-            "5054425245564952030000000200000001000000100000000100000000000000"
-                + "64000000000000000900000000000000ffffffffffffff7fffffff7f08000000"),
-        Arrays.copyOfRange(bytes.array(), 8, 72));
+            "5054425245564952040000000200000001000000180000000100000000000000"
+                + "64000000000000000900000000000000ffffffffffffff7fffffff7f00000000"
+                + "0800000000000000"),
+        Arrays.copyOfRange(bytes.array(), 8, 80));
     BTreeInternalEntry internal = new BTreeInternalEntry();
     assertEquals(StatusCode.OK, BTreePageCodec.decodeHeader(bytes, 8, header));
     assertEquals(StatusCode.OK, BTreePageCodec.decodeInternal(bytes, 8, header, 0, internal));
@@ -64,6 +65,21 @@ final class BTreePageCodecTest {
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
         BTreePageCodec.decodeLeaf(bytes, 8, header, 0, new BTreeLeafEntry()));
+  }
+
+  @Test
+  void preservesLongMaximumSpacesInEntriesAndFences() {
+    ByteBuffer bytes = ByteBuffer.allocate(72);
+    assertEquals(StatusCode.OK, BTreePageCodec.encodeHeader(
+        bytes, 0, BTreePageCodec.TYPE_LEAF, 1, 7, Long.MAX_VALUE, 91));
+    assertEquals(StatusCode.OK,
+        BTreePageCodec.encodeLeaf(bytes, 48, Long.MAX_VALUE, 90, 11));
+    BTreePageHeader header = new BTreePageHeader();
+    assertEquals(StatusCode.OK, BTreePageCodec.validatePage(bytes, 0, header));
+    assertEquals(Long.MAX_VALUE, header.highSpace());
+    BTreeLeafEntry entry = new BTreeLeafEntry();
+    assertEquals(StatusCode.OK, BTreePageCodec.decodeLeaf(bytes, 0, header, 0, entry));
+    assertEquals(Long.MAX_VALUE, entry.space());
   }
 
   @Test

@@ -21,6 +21,17 @@ final class SqlCommandTextStore {
     return handle;
   }
 
+  static long store(SqlCommand command, byte[] source, int offset, int length) {
+    if (source == null || offset < 0 || length < 0 || offset > source.length - length
+        || length > command.textBytes.length - command.textBytesUsed) {
+      return SqlCommand.INVALID_TEXT_HANDLE;
+    }
+    int destination = command.textBytesUsed;
+    System.arraycopy(source, offset, command.textBytes, destination, length);
+    command.textBytesUsed += length;
+    return (long) destination << 32 | Integer.toUnsignedLong(length);
+  }
+
   static long copyFrom(SqlCommand command, SqlCommand source, long handle) {
     int length = source == null ? -1 : length(source, handle);
     if (length < 0 || length > command.textBytes.length - command.textBytesUsed) {

@@ -10,25 +10,30 @@ final class SqlCommandColumnConstraints {
 
   static void markNotNull(SqlCommand command) {
     if (command.columnCount > 0) {
-      command.columnNotNullMask |= 1L << command.columnCount - 1;
+      command.columnNotNull[command.columnCount - 1] = true;
     }
   }
 
-  static void markIdentity(SqlCommand command) { command.primaryKeyIdentity = true; }
+  static void markIdentity(SqlCommand command) {
+    command.primaryKeyIdentity = true;
+    command.primaryKeyIdentityColumn = command.columnCount - 1;
+  }
 
-  static void markDefault(SqlCommand command, long value) {
-    if (command.columnCount > 1) {
+  static void markDefault(SqlCommand command, long high, long value) {
+    if (command.columnCount > 0) {
       int column = command.columnCount - 1;
-      command.columnDefaultMask |= 1L << column;
+      command.columnDefaults[column] = true;
+      command.columnDefaultHighs[column] = high;
       command.columnDefaultValues[column] = value;
       command.columnDefaultKinds[column] = SqlDefaultKind.LITERAL;
     }
   }
 
   static void markCurrentDefault(SqlCommand command, int kind) {
-    if (command.columnCount > 1) {
+    if (command.columnCount > 0) {
       int column = command.columnCount - 1;
-      command.columnDefaultMask |= 1L << column;
+      command.columnDefaults[column] = true;
+      command.columnDefaultHighs[column] = 0;
       command.columnDefaultValues[column] = 0;
       command.columnDefaultKinds[column] = (byte) kind;
     }
@@ -45,52 +50,41 @@ final class SqlCommandColumnConstraints {
   }
 
   static StatusCode markUnique(SqlCommand command) {
-    long bit = command.columnCount <= 0 ? 0 : 1L << command.columnCount - 1;
-    if (command.columnCount <= 1
-        || Long.bitCount(command.columnUniqueMask | command.columnReferenceMask | bit)
-            > SqlCommand.MAXIMUM_CONSTRAINT_INDEXES
-        || (command.columnUniqueMask & bit) != 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    command.columnUniqueMask |= bit;
-    return StatusCode.OK;
+    return SqlColumnConstraintAdmission.unique(command);
   }
 
   static SqlIdentifier referenceTable(SqlCommand command) {
-    return command.columnCount > 1
+    return command.columnCount > 0
         ? command.columnReferenceTableNames[command.columnCount - 1] : null;
   }
 
   static SqlIdentifier referenceColumn(SqlCommand command) {
-    return command.columnCount > 1
+    return command.columnCount > 0
         ? command.columnReferenceColumnNames[command.columnCount - 1] : null;
   }
 
   static StatusCode markReference(SqlCommand command) {
-    long bit = command.columnCount <= 0 ? 0 : 1L << command.columnCount - 1;
-    if (command.columnCount <= 1
-        || command.columnIsVarchar(command.columnCount - 1)
-        || Long.bitCount(command.columnUniqueMask | command.columnReferenceMask | bit)
-            > SqlCommand.MAXIMUM_CONSTRAINT_INDEXES
-        || (command.columnReferenceMask & bit) != 0
-        || command.columnReferenceTableNames[command.columnCount - 1].length() == 0
-        || command.columnReferenceColumnNames[command.columnCount - 1].length() == 0) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    command.columnReferenceMask |= bit;
-    return StatusCode.OK;
+    return SqlColumnConstraintAdmission.reference(command);
   }
 
   static void markCheck(
       SqlCommand command,
       SqlComparison comparison,
+      long high,
       long value,
       int descriptor) {
     if (command.columnCount > 0) {
       int column = command.columnCount - 1;
       command.columnCheckComparisons[column] = comparison;
+      command.columnCheckHighs[column] = high;
       command.columnCheckValues[column] = value;
       command.columnCheckTypeDescriptors[column] = descriptor;
     }
   }
+
+  static boolean any(boolean[] constraints, int columns) {
+    for (int index = 0; index < columns; index++) if (constraints[index]) return true;
+    return false;
+  }
+
 }

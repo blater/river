@@ -13,6 +13,11 @@ final class SqlNestedSubquerySource implements CharSequence, SqlParameterOrdinal
   private int firstEdge;
   private int count;
   private int length;
+  private SqlParameterMarkers parameterMarkers;
+
+  void parameterMarkers(SqlParameterMarkers markers) {
+    parameterMarkers = markers;
+  }
 
   boolean contains(CharSequence sql, int from, int to) {
     return SqlNestedSubqueryScanner.firstSelectOpening(sql, from, to) >= 0;
@@ -67,7 +72,7 @@ final class SqlNestedSubquerySource implements CharSequence, SqlParameterOrdinal
   @Override public int parameterOrdinal(int offset) {
     int original = originalOffset(offset);
     return original < 0 || source.charAt(original) != '?' ? -1
-        : SqlParameterOrdinalSource.ordinal(source, original);
+        : SqlParameterOrdinalSource.originalOrdinal(source, original, parameterMarkers);
   }
 
   @Override public CharSequence subSequence(int from, int to) {

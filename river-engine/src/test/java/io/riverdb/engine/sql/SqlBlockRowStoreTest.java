@@ -9,32 +9,52 @@ import org.junit.jupiter.api.Test;
 
 final class SqlBlockRowStoreTest {
   @Test
-  void enforcesRowBoundAndReusesWarmStoreAfterSpill() {
+  void textCopyReturnsResourcePressureAndCanRetry() {
+    SqlBlockRow source = new SqlBlockRow();
+    assertEquals(StatusCode.OK, source.reset(1));
+    char[] text = "retained".toCharArray();
+    assertEquals(StatusCode.OK, source.setText(0, text, 0, text.length));
+    FailingCharacters allocator = new FailingCharacters();
+    SqlBlockRow target = new SqlBlockRow(allocator);
+    allocator.fail = true;
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, target.copyFrom(source));
+    allocator.fail = false;
+    assertEquals(StatusCode.OK, target.copyFrom(source));
+    assertEquals(text.length, target.textLength(0));
+  }
+
+  @Test
+  void codecDecodesWideUtf8IntoExactUtf16Scratch() {
     SqlBlockSchema schema = new SqlBlockSchema();
     schema.set(1);
-    schema.setColumn(0, "id", SqlTypeDescriptor.BIGINT, false);
-    SqlBlockRow row = new SqlBlockRow();
-    row.reset(1);
-    SqlBlockRowStore store = new SqlBlockRowStore();
-    assertEquals(StatusCode.OK, store.begin(schema, -1, false));
-    for (int value = 0; value < SqlBlockRowStore.MAXIMUM_ROWS; value++) {
-      row.setValue(0, value);
-      assertEquals(StatusCode.OK, store.append(row));
+    schema.setColumn(0, "value", SqlTypeDescriptor.varchar(8_192), false);
+    char[] text = new char[7_000];
+    for (int index = 0; index < 5_000; index++) text[index] = '猫';
+    for (int index = 5_000; index < text.length; index += 2) {
+      text[index] = Character.highSurrogate(0x1f30a);
+      text[index + 1] = Character.lowSurrogate(0x1f30a);
     }
-    assertTrue(store.spilled());
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, store.append(row));
-    assertEquals(StatusCode.OK, store.finish());
-    assertEquals(StatusCode.OK, store.next(row));
-    assertEquals(0, row.value(0));
-    assertEquals(StatusCode.OK, store.close());
+    SqlBlockRow source = new SqlBlockRow();
+    SqlBlockRow decoded = new SqlBlockRow();
+    assertEquals(StatusCode.OK, source.reset(1));
+    assertEquals(StatusCode.OK, source.setText(0, text, 0, text.length));
+    SqlBlockRowCodec codec = new SqlBlockRowCodec();
 
-    assertEquals(StatusCode.OK, store.begin(schema, -1, false));
-    row.setValue(0, 7);
-    assertEquals(StatusCode.OK, store.append(row));
-    assertEquals(StatusCode.OK, store.finish());
-    assertEquals(StatusCode.OK, store.next(row));
-    assertEquals(7, row.value(0));
-    assertEquals(StatusCode.CONFLICT, store.next(row));
-    assertEquals(StatusCode.OK, store.close());
+    assertEquals(StatusCode.OK, codec.encode(source, schema, 0));
+    assertTrue(codec.buffer().remaining() > 8_192);
+    assertEquals(StatusCode.OK, codec.decode(decoded, schema, 0));
+    assertEquals(text.length, decoded.textLength(0));
+    for (int index = 0; index < text.length; index++) {
+      assertEquals(text[index], decoded.textCharacter(0, index));
+    }
+  }
+
+  private static final class FailingCharacters extends SqlRetainedArrayAllocator {
+    private boolean fail;
+
+    @Override char[] characters(int capacity) {
+      if (fail) throw new OutOfMemoryError("injected");
+      return super.characters(capacity);
+    }
   }
 }

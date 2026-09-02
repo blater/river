@@ -1,43 +1,18 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
-/** Current catalog encoding for bounded relational schemas and index-build state. */
+/** Current catalog encoding for relational schemas and index-build state. */
 final class CatalogRecord {
-  private static final CatalogTableScanDecoder TABLE_SCAN_DECODER =
-      new CatalogTableScanDecoder();
-  static final int MAXIMUM_BYTES =
-      240 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES
-          + TableSchema.MAXIMUM_COLUMNS
-          + 44 + TableSchema.MAXIMUM_CHECK_NODES * 13
-          + TableDefinition.MAXIMUM_INDEXES * 16
-          + 64 + TableSchema.MAXIMUM_COLUMNS * (Integer.BYTES + 64)
-          + TableSchema.MAXIMUM_ROW_BYTES;
+  /** The schema-shape budget bounds one durable table definition record. */
+  static final int MAXIMUM_BYTES = SqlShapeLimits.MAX_ENCODED_SCHEMA_BYTES;
 
   static final long TABLE_MAGIC = 0x524956455254424cL; // RIVERTBL
   static final long DROPPING_TABLE_MAGIC = 0x524956455244524fL; // RIVERDRO
-  static final int TABLE_VERSION = 14;
-  static final int TABLE_CHECK_MASK_OFFSET = 60;
-  static final int TABLE_CHECKS_OFFSET = 68;
-  static final int TABLE_CHECK_VALUES_OFFSET = 104;
-  static final int TABLE_DEFAULTS_OFFSET = 168;
-  static final int TABLE_REFERENCE_MASK_OFFSET = 232;
-  static final int TABLE_REFERENCE_IDS_OFFSET = 240;
-  static final int TABLE_TYPE_DESCRIPTORS_OFFSET =
-      TABLE_REFERENCE_IDS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
-  static final int TABLE_DEFAULT_KINDS_OFFSET =
-      TABLE_TYPE_DESCRIPTORS_OFFSET + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
-  static final int TABLE_CHECK_TYPE_DESCRIPTORS_OFFSET =
-      TABLE_DEFAULT_KINDS_OFFSET + TableSchema.MAXIMUM_COLUMNS;
-  static final int TABLE_CHECK_NODE_COUNTS_OFFSET =
-      TABLE_CHECK_TYPE_DESCRIPTORS_OFFSET
-          + TableSchema.MAXIMUM_COLUMNS * Integer.BYTES;
-  static final int TABLE_CHECK_NODE_TOTAL_OFFSET =
-      TABLE_CHECK_NODE_COUNTS_OFFSET + TableSchema.MAXIMUM_COLUMNS;
-  static final int TABLE_INDEXES_OFFSET =
-      TABLE_CHECK_NODE_TOTAL_OFFSET + Integer.BYTES;
+  static final int TABLE_VERSION = 15;
 
   private CatalogRecord() {
   }
@@ -159,22 +134,24 @@ final class CatalogRecord {
   }
 
   static StatusCode decodeTable(
+      CatalogTableDecoder decoder,
       HeapRowResult source,
       ByteBuffer scratch,
       CharSequence expectedName,
       RelationalSchemaGate schemaGate,
       TableDefinition result) {
-    return decodeTable(
+    return decoder.decode(
         source, scratch, expectedName, schemaGate, result, TABLE_MAGIC);
   }
 
   static StatusCode decodeDroppingTable(
+      CatalogTableDecoder decoder,
       HeapRowResult source,
       ByteBuffer scratch,
       CharSequence expectedName,
       RelationalSchemaGate schemaGate,
       TableDefinition result) {
-    return decodeTable(
+    return decoder.decode(
         source, scratch, expectedName, schemaGate, result, DROPPING_TABLE_MAGIC);
   }
 
@@ -186,12 +163,13 @@ final class CatalogRecord {
   }
 
   static StatusCode decodeTableForScan(
+      CatalogTableScanDecoder decoder,
       HeapRowResult source,
       ByteBuffer scratch,
       RelationalSchemaGate schemaGate,
       TableSchema.ColumnName name,
       TableDefinition result) {
-    return TABLE_SCAN_DECODER.decode(
+    return decoder.decode(
         source, scratch, schemaGate, name, result);
   }
 
@@ -201,17 +179,6 @@ final class CatalogRecord {
       CharSequence name,
       TableDefinition schema) {
     CatalogTableEncoder.encodeDropping(target, tableId, name, schema);
-  }
-
-  private static StatusCode decodeTable(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      CharSequence expectedName,
-      RelationalSchemaGate schemaGate,
-      TableDefinition result,
-      long expectedMagic) {
-    return CatalogTableDecoder.decode(
-        source, scratch, expectedName, schemaGate, result, expectedMagic);
   }
 
 }

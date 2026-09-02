@@ -26,6 +26,9 @@ final class LocalWalAppender {
     if (!status.isOk()) {
       return status;
     }
+    if (wal.hasOpenLogicalStream()) {
+      return StatusCode.CONFLICT;
+    }
     if (!wal.ownsReservation(reservation)
         || reservation.writablePayload().position() != reservation.payloadBytes()) {
       return wal.ownsReservation(reservation)

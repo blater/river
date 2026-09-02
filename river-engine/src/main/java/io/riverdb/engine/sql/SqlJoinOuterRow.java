@@ -7,12 +7,26 @@ import java.nio.ByteBuffer;
 
 /** Owns one bounded encoded outer row while an inner JOIN cursor advances. */
 final class SqlJoinOuterRow {
+  private final SqlJoinResourceAllocator allocator;
   private final HeapRowResult row = new HeapRowResult();
   private ByteBuffer bytes;
   private int highWater;
 
-  void prepare() {
-    if (bytes == null) bytes = ByteBuffer.allocateDirect(TableSchema.MAXIMUM_ROW_BYTES);
+  SqlJoinOuterRow() { this(SqlJoinResourceAllocator.STANDARD); }
+
+  SqlJoinOuterRow(SqlJoinResourceAllocator resourceAllocator) {
+    allocator = resourceAllocator;
+  }
+
+  StatusCode prepare() {
+    if (bytes != null) return StatusCode.OK;
+    try {
+      ByteBuffer next = allocator.rowBytes(TableSchema.MAXIMUM_ROW_BYTES);
+      bytes = next;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   StatusCode capture(HeapRowResult source) {
@@ -20,12 +34,13 @@ final class SqlJoinOuterRow {
         || source.length() > TableSchema.MAXIMUM_ROW_BYTES) {
       return StatusCode.CORRUPTION;
     }
-    prepare();
+    StatusCode status = prepare();
+    if (!status.isOk()) return status;
     erase();
     bytes.clear();
     bytes.limit(source.length());
     highWater = source.length();
-    StatusCode status = source.copyTo(bytes);
+    status = source.copyTo(bytes);
     if (status.isOk()) {
       bytes.flip();
       row.set(bytes, source.rowId(), 0, source.length());

@@ -19,8 +19,11 @@ final class SqlSubqueryResultCache {
   private final short[] scalarTextLengths = new short[SqlQuery.MAXIMUM_EDGES];
   private final boolean[] scalarNulls = new boolean[SqlQuery.MAXIMUM_EDGES];
   private final boolean[] cacheable = new boolean[SqlQuery.MAXIMUM_EDGES];
+  private final boolean[] correlated = new boolean[SqlQuery.MAXIMUM_EDGES];
   private final char[][] scalarText = new char[SqlQuery.MAXIMUM_EDGES][];
   private final SqlPredicateOperand operand = new SqlPredicateOperand();
+  private final SqlSubqueryHighValueLane scalarHighValues = new SqlSubqueryHighValueLane();
+  private final SqlSubqueryHighValueLane highValues = new SqlSubqueryHighValueLane();
   private long[] values;
   private int[] descriptors;
   private short[] textLengths;
@@ -30,20 +33,22 @@ final class SqlSubqueryResultCache {
   private int used;
 
   SqlSubqueryResultCache(BoundSqlQuery boundQuery, SqlExpressionEvaluator evaluator) {
-    query = boundQuery;
-    expressions = evaluator;
+    query = boundQuery; expressions = evaluator;
   }
 
   void prepare() {
     clear();
     for (int edge = 0; edge < query.edgeCount(); edge++) {
-      cacheable[edge] = !correlated(edge);
+      correlated[edge] = detectCorrelation(edge);
+      cacheable[edge] = !correlated[edge];
       if (!cacheable[edge]) continue;
       int child = query.edgeChild(edge);
       int type = query.block(child).projectionType();
       int kind = query.edgeKind(edge);
+      scalarHighValues.prepareScalar(kind, type, SqlQuery.MAXIMUM_EDGES);
       if (kind == SqlQuery.SUBQUERY_MEMBERSHIP) {
         prepareMembership(text(type));
+        highValues.prepare(type, MAXIMUM_RESULTS);
       } else if (kind == SqlQuery.SUBQUERY_SCALAR && text(type)) {
         if (scalarText[edge] == null) scalarText[edge] = new char[510];
         operand.prepareText();
@@ -53,10 +58,12 @@ final class SqlSubqueryResultCache {
 
   boolean enabled(int edge) { return cacheable[edge]; }
   boolean available(int edge) { return states[edge] != 0; }
-  void start(int edge) {
-    heads[edge] = -1;
-    tails[edge] = -1;
+  void markCorrelated(int edge) {
+    if (edge < 0 || edge >= correlated.length) return;
+    correlated[edge] = true;
+    cacheable[edge] = false;
   }
+  void start(int edge) { heads[edge] = -1; tails[edge] = -1; }
 
   boolean append(int edge, SqlPredicateOperand source) {
     if (query.edgeKind(edge) == SqlQuery.SUBQUERY_SCALAR) {
@@ -69,6 +76,8 @@ final class SqlSubqueryResultCache {
     if (tails[edge] < 0) heads[edge] = slot;
     else next[tails[edge]] = slot;
     tails[edge] = slot;
+    highValues.set(
+        slot, source.highValue(), source.descriptor(), MAXIMUM_RESULTS);
     values[slot] = source.value();
     descriptors[slot] = source.descriptor();
     nulls[slot] = source.nullValue();
@@ -83,15 +92,9 @@ final class SqlSubqueryResultCache {
     return true;
   }
 
-  void completeValues(int edge, int count) {
-    counts[edge] = count;
-    states[edge] = 1;
-  }
+  void completeValues(int edge, int count) { counts[edge] = count; states[edge] = 1; }
 
-  void completeTruth(int edge, int truth) {
-    truths[edge] = truth;
-    states[edge] = 1;
-  }
+  void completeTruth(int edge, int truth) { truths[edge] = truth; states[edge] = 1; }
 
   int truth(int edge, SqlPredicateOperand left) {
     int kind = query.edgeKind(edge);
@@ -108,7 +111,8 @@ final class SqlSubqueryResultCache {
     }
     SqlPredicateOperand right = loadScalar(edge);
     if (right.nullValue()) return SqlBooleanPredicateEvaluator.UNKNOWN;
-    return compare(left, right, query.edgeComparison(edge))
+    return SqlSubqueryValueComparison.matches(
+        expressions, left, right, query.edgeComparison(edge))
         ? SqlBooleanPredicateEvaluator.TRUE : SqlBooleanPredicateEvaluator.FALSE;
   }
 
@@ -121,7 +125,8 @@ final class SqlSubqueryResultCache {
     for (int index = 0; index < count; index++, slot = next[slot]) {
       SqlPredicateOperand candidate = load(slot);
       if (candidate.nullValue()) unknown = true;
-      else if (compare(left, candidate, SqlComparison.EQUAL)) {
+      else if (SqlSubqueryValueComparison.matches(
+          expressions, left, candidate, SqlComparison.EQUAL)) {
         return SqlBooleanPredicateEvaluator.TRUE;
       }
     }
@@ -152,6 +157,7 @@ final class SqlSubqueryResultCache {
       if (scalarText[edge] != null) {
         for (int index = 0; index < scalarLength; index++) scalarText[edge][index] = 0;
       }
+      scalarHighValues.clear(edge);
       scalarValues[edge] = 0;
       scalarDescriptors[edge] = 0;
       scalarTextLengths[edge] = 0;
@@ -172,7 +178,9 @@ final class SqlSubqueryResultCache {
           slot * 510,
           Short.toUnsignedInt(textLengths[slot]),
           descriptors[slot]);
-    } else operand.setValue(values[slot], descriptors[slot], false);
+    } else operand.setValue(
+        highValues.value(slot, values[slot]),
+        values[slot], descriptors[slot], false);
     return operand;
   }
 
@@ -183,6 +191,7 @@ final class SqlSubqueryResultCache {
   }
 
   private void clearSlot(int slot) {
+    highValues.clear(slot);
     values[slot] = 0;
     descriptors[slot] = 0;
     nulls[slot] = false;
@@ -215,6 +224,8 @@ final class SqlSubqueryResultCache {
       for (int index = 0; index < prior; index++) scalarText[edge][index] = 0;
     }
     scalarTextLengths[edge] = 0;
+    scalarHighValues.set(
+        edge, source.highValue(), source.descriptor(), SqlQuery.MAXIMUM_EDGES);
     scalarValues[edge] = source.value();
     scalarDescriptors[edge] = source.descriptor();
     scalarNulls[edge] = source.nullValue();
@@ -235,12 +246,16 @@ final class SqlSubqueryResultCache {
           0,
           Short.toUnsignedInt(scalarTextLengths[edge]),
           scalarDescriptors[edge]);
-    } else operand.setValue(scalarValues[edge], scalarDescriptors[edge], false);
+    } else operand.setValue(
+        scalarHighValues.value(edge, scalarValues[edge]),
+        scalarValues[edge], scalarDescriptors[edge], false);
     return operand;
   }
 
 
-  boolean correlated(int edge) {
+  boolean correlated(int edge) { return correlated[edge]; }
+
+  private boolean detectCorrelation(int edge) {
     int child = query.edgeChild(edge);
     for (int block = child; block < query.blockCount(); block++) {
       if (!descendant(block, child)) continue;
@@ -254,23 +269,6 @@ final class SqlSubqueryResultCache {
     int current = block;
     while (current >= 0 && current != ancestor) current = query.blockParent(current);
     return current == ancestor;
-  }
-
-  private boolean compare(
-      SqlPredicateOperand left, SqlPredicateOperand right, SqlComparison comparison) {
-    int compared = text(left.descriptor())
-        ? SqlBooleanTextComparator.compare(left, right)
-        : expressions.compareExact(
-            left.value(), left.descriptor(), right.value(), right.descriptor());
-    return switch (comparison) {
-      case EQUAL -> compared == 0;
-      case NOT_EQUAL -> compared != 0;
-      case LESS_THAN -> compared < 0;
-      case LESS_OR_EQUAL -> compared <= 0;
-      case GREATER_THAN -> compared > 0;
-      case GREATER_OR_EQUAL -> compared >= 0;
-      case HALF_OPEN_RANGE, IN, NOT_IN -> false;
-    };
   }
 
   private static boolean text(int descriptor) {

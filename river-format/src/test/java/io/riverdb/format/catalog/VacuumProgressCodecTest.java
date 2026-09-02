@@ -15,10 +15,9 @@ import org.junit.jupiter.api.Test;
 final class VacuumProgressCodecTest {
   @Test
   void freezesASeparateSystemKeyAndLongResumableWatermark() {
-    assertEquals(CatalogContinuationKey.SPACE, 1);
-    assertTrue(CatalogContinuationKey.VACUUM_PROGRESS_KEY >
-        CatalogContinuationKey.ALLOCATION_WATERMARK_KEY);
-    assertTrue(CatalogContinuationKey.VACUUM_PROGRESS_KEY < -0x7fffL);
+    assertEquals(Long.MAX_VALUE - 3, CatalogKeyspace.SYSTEM_SPACE);
+    assertTrue(CatalogKeyspace.VACUUM_PROGRESS_KEY >
+        CatalogKeyspace.ALLOCATION_WATERMARK_KEY);
     ByteBuffer bytes = validProgress(VacuumProgressCodec.STATE_COMPLETE);
     assertArrayEquals(
         HexFormat.of().parseHex(

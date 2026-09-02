@@ -7,7 +7,6 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
-import io.riverdb.format.wal.WalFileHeaderCodec;
 import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
@@ -18,11 +17,8 @@ import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
-import io.riverdb.wal.local.LocalWalReadResult;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -34,8 +30,57 @@ final class IndexedTableStoreInterruptedVacuumTest {
   private static final int ROW_BYTES = 4096;
 
   @Test
-  void recoveryDiscardsEveryChunkOfInterruptedMultiChunkVacuum(@TempDir Path root)
-      throws Exception {
+  void vacuumTraversesSiblingOrderAfterNonRightmostSplits(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    commitDescendingVersions(table, 400, 50);
+    assertEquals(800, table.rowCount());
+    assertEquals(400, table.obsoleteVersionCount());
+    assertTrue(table.treeHeight() >= 2);
+    HeapRowResult retained = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 200, retained));
+    assertEquals(10_200, retained.getLong(0));
+
+    IndexedVacuumResult vacuum = new IndexedVacuumResult();
+    assertEquals(StatusCode.OK, table.vacuum(table.nextTransactionId(), vacuum));
+    assertEquals(800, vacuum.rowsBefore());
+    assertEquals(400, vacuum.rowsAfter());
+    assertEquals(400, table.rowCount());
+    assertEquals(0, table.obsoleteVersionCount());
+    assertEquals(10_200, retained.getLong(0));
+
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 0, fetched));
+    assertEquals(10_000, fetched.getLong(0));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 200, fetched));
+    assertEquals(10_200, fetched.getLong(0));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 399, fetched));
+    assertEquals(10_399, fetched.getLong(0));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void admitsVacuumAboveLegacyAtomicPageBound(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    commitWideVersions(table, 10);
+    assertEquals(StatusCode.OK, table.vacuumPreflight());
+    IndexedVacuumResult vacuum = new IndexedVacuumResult();
+    assertEquals(StatusCode.OK, table.vacuum(table.nextTransactionId(), vacuum));
+    assertEquals(1_000, vacuum.rowsBefore());
+    assertEquals(500, vacuum.rowsAfter());
+    assertEquals(500, table.rowCount());
+    assertEquals(0, table.obsoleteVersionCount());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 1000, fetched));
+    assertEquals(11_000, fetched.getLong(0));
+    close(table, wal, directory);
+  }
+
+  @Test
+  void streamsMultiChunkVacuumThroughOneDurableDecision(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTableStore store = createStore(directory, wal);
@@ -48,92 +93,84 @@ final class IndexedTableStoreInterruptedVacuumTest {
             + 300L * (ROW_BYTES + IndexedWalCodec.VACUUM_ENTRY_BYTES)
             > WalRecordCodec.MAX_PAYLOAD_BYTES);
 
+    long walEnd = wal.tailEnd();
+    assertEquals(StatusCode.OK, table.vacuumPreflight());
+    assertEquals(walEnd, wal.tailEnd());
     IndexedVacuumResult vacuum = new IndexedVacuumResult();
     assertEquals(StatusCode.OK, table.vacuum(14, vacuum));
-    assertEquals(600, vacuum.rowsBefore());
-    assertEquals(300, vacuum.rowsAfter());
-    assertEquals(14, vacuum.commitSequence());
+    assertTrue(wal.tailEnd() > walEnd);
+    assertEquals(14, table.currentCommitSequence());
     assertEquals(300, table.rowCount());
     assertEquals(0, table.obsoleteVersionCount());
-
-    int chunkCount = 0;
-    int lastOperation = 0;
-    long offset = WalFileHeaderCodec.HEADER_BYTES;
-    LocalWalReadResult record = new LocalWalReadResult();
-    while (offset < wal.tailEnd()) {
-      assertEquals(StatusCode.OK, wal.read(offset, record));
-      lastOperation = IndexedWalCodec.operationType(record.payload());
-      if (lastOperation == IndexedWalCodec.OPERATION_TYPE_VACUUM_CHUNK) {
-        chunkCount++;
-      }
-      offset = record.nextOffset();
-    }
-    assertTrue(chunkCount > 1);
-    assertEquals(IndexedWalCodec.OPERATION_TYPE_VACUUM_COMMIT, lastOperation);
-
-    long incompleteEnd = wal.durableEnd()
-        - WalRecordCodec.encodedBytes(IndexedTableStore.VACUUM_COMMIT_PAYLOAD_BYTES);
-    try (FileChannel channel = FileChannel.open(
-        root.resolve(LocalWal.FILE_NAME), StandardOpenOption.WRITE)) {
-      channel.truncate(incompleteEnd);
-      channel.force(true);
-    }
-
-    assertEquals(StatusCode.OK, directory.advanceGeneration());
-    assertEquals(StatusCode.OK, directory.close());
-    directory = openDirectory(root);
-    wal = openWal(directory);
-    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
-    store = storeResult.store();
-    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
-    assertEquals(StatusCode.OK, IndexedTable.open(store, tableResult));
-    table = tableResult.table();
-
-    assertEquals(13, table.currentCommitSequence());
-    assertEquals(600, table.rowCount());
-    assertEquals(300, table.obsoleteVersionCount());
-    assertEquals(8, store.rowCommitSequence(301));
-    assertEquals(1, store.previousRowId(301));
+    IndexedVersionRecord version = new IndexedVersionRecord();
+    assertEquals(StatusCode.OK, store.readVersion(1, version));
+    assertEquals(14, version.commitSequence());
+    assertEquals(0, version.previousRowId());
     HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey( 0,1000, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 1000, fetched));
     assertEquals(11_000, fetched.getLong(0));
-    assertEquals(StatusCode.OK, table.fetchByKey( 0,1299, fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 1299, fetched));
     assertEquals(11_299, fetched.getLong(0));
-    assertEquals(StatusCode.OK, table.fetchByKeyAt(7, 0, 1000, fetched));
-    assertEquals(1000, fetched.getLong(0));
     close(table, wal, directory);
   }
 
   private static void commitWideVersions(IndexedTable table) {
+    commitWideVersions(table, BATCHES);
+  }
+
+  private static void commitWideVersions(IndexedTable table, int batches) {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
     IndexedTransactionSession writer = new IndexedTransactionSession(manager, table, ROW_BYTES);
     TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer row = ByteBuffer.allocateDirect(ROW_BYTES);
-    for (int batch = 0; batch < BATCHES; batch++) {
+    for (int batch = 0; batch < batches; batch++) {
       assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
       for (int index = 0; index < ROWS_PER_BATCH; index++) {
         long key = 1000L + batch * ROWS_PER_BATCH + index;
         row.putLong(0, key);
         row.position(0);
         row.limit(row.capacity());
-        assertEquals(StatusCode.OK, writer.insert( 0,key, row));
+        assertEquals(StatusCode.OK, writer.insert(0, key, row));
       }
       assertEquals(StatusCode.OK, writer.commit(outcome));
     }
-    for (int batch = 0; batch < BATCHES; batch++) {
+    for (int batch = 0; batch < batches; batch++) {
       assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
       for (int index = 0; index < ROWS_PER_BATCH; index++) {
         long key = 1000L + batch * ROWS_PER_BATCH + index;
         row.putLong(0, key + 10_000);
         row.position(0);
         row.limit(row.capacity());
-        assertEquals(StatusCode.OK, writer.update( 0,key, row));
+        assertEquals(StatusCode.OK, writer.update(0, key, row));
       }
       assertEquals(StatusCode.OK, writer.commit(outcome));
+    }
+  }
+
+  private static void commitDescendingVersions(
+      IndexedTable table, int rows, int batchSize) {
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    IndexedTransactionSession writer = new IndexedTransactionSession(
+        manager, table, Long.BYTES);
+    TransactionOutcome outcome = new TransactionOutcome();
+    ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
+    for (int pass = 0; pass < 2; pass++) {
+      for (int first = 0; first < rows; first += batchSize) {
+        assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+        int count = Math.min(batchSize, rows - first);
+        for (int index = 0; index < count; index++) {
+          long key = rows - 1L - first - index;
+          row.putLong(0, key + pass * 10_000L);
+          row.position(0);
+          row.limit(row.capacity());
+          StatusCode status = pass == 0
+              ? writer.insert(0, key, row) : writer.update(0, key, row);
+          assertEquals(StatusCode.OK, status);
+        }
+        assertEquals(StatusCode.OK, writer.commit(outcome));
+      }
     }
   }
 

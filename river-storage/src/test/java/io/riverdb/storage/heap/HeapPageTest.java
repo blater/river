@@ -46,6 +46,24 @@ final class HeapPageTest {
   }
 
   @Test
+  void retainedRowSurvivesSourceReuse() {
+    ByteBuffer page = ByteBuffer.allocate(128);
+    assertEquals(StatusCode.OK, HeapPage.initialize(page));
+    assertEquals(
+        StatusCode.OK,
+        HeapPage.insert(
+            page, ByteBuffer.wrap(new byte[] {1, 2, 3}), new HeapInsertResult()));
+    HeapRowResult row = new HeapRowResult();
+    assertEquals(StatusCode.OK, HeapPage.fetch(page, 1, row));
+    assertEquals(StatusCode.OK, row.retainBytes());
+
+    assertEquals(StatusCode.OK, HeapPage.initialize(page));
+
+    assertEquals(3, row.length());
+    assertEquals(2, row.getByte(1));
+  }
+
+  @Test
   void rejectsSlotCorruption() {
     ByteBuffer page = ByteBuffer.allocate(128);
     assertEquals(StatusCode.OK, HeapPage.initialize(page));

@@ -2,7 +2,7 @@ package io.riverdb.sql;
 
 import io.riverdb.base.error.StatusCode;
 
-/** Parses bounded row projections and the two-column grouped aggregate shape. */
+/** Parses bounded row and aggregate SELECT items into one actual-count list. */
 final class SqlSelectProjectionParser {
   private final SqlParserInput input;
   private final SqlSelectAggregateParser aggregates;
@@ -23,16 +23,12 @@ final class SqlSelectProjectionParser {
       result.setSelectAll();
       return StatusCode.OK;
     }
-    StatusCode status = rows.parse(sql, result);
-    if (distinct || !status.isOk() || !input.consumeCharacter(sql, ',')) {
-      return status;
-    }
-    int kind = aggregateKind(sql);
-    if (kind != 0) return aggregates.groupedList(sql, result, kind);
-    status = rows.parse(sql, result);
-    while (status.isOk() && input.consumeCharacter(sql, ',')) {
-      status = rows.parse(sql, result);
-    }
+    StatusCode status = StatusCode.OK;
+    do {
+      int kind = distinct ? 0 : aggregateKind(sql);
+      status = kind == 0
+          ? rows.parse(sql, result) : aggregates.groupedList(sql, result, kind);
+    } while (status.isOk() && input.consumeCharacter(sql, ','));
     return status;
   }
 

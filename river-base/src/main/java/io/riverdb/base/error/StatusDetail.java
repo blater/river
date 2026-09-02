@@ -85,6 +85,16 @@ public final class StatusDetail implements CharSequence {
     return this;
   }
 
+  /** Replaces this detail with the bounded state of another caller-owned detail. */
+  public StatusDetail copyFrom(StatusDetail source) {
+    if (source == this) return this;
+    code = source.code;
+    length = Math.min(source.length, characters.length);
+    System.arraycopy(source.characters, 0, characters, 0, length);
+    truncated = source.truncated || source.length > characters.length;
+    return this;
+  }
+
   private static int decimalDigits(long value) {
     int digits = 1;
     while (value >= 10) {

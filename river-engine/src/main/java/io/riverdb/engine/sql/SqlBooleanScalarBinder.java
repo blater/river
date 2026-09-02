@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
@@ -61,6 +62,7 @@ final class SqlBooleanScalarBinder {
       BoundSqlQuery nested,
       int nestedBlock) {
     int operator = source.programOperator(leaf, program, node);
+    long operandHigh = source.programOperandHigh(leaf, program, node);
     long operand = source.programOperand(leaf, program, node);
     int descriptor = source.programDescriptor(leaf, program, node);
     if (operator == SqlScalarExpression.AGGREGATE_VALUE) {
@@ -69,7 +71,7 @@ final class SqlBooleanScalarBinder {
           operator, operand, having);
     }
     if (operator == SqlScalarExpression.GROUP_VALUE) {
-      return group(source, target, statement, leaf, program, operator, having);
+      return group(source, target, statement, leaf, program, operator, operand, having);
     }
     if (operator == SqlScalarExpression.COLUMN) {
       if (nested != null) {
@@ -87,7 +89,9 @@ final class SqlBooleanScalarBinder {
     }
     if (SqlRowExpressionTypes.leaf(operator)) {
       return SqlTypeDescriptor.isValid(descriptor)
-          ? push(target, leaf, program, operator, operand, descriptor, false)
+          ? push(
+              target, leaf, program, operator,
+              operandHigh, operand, descriptor, false)
           : StatusCode.DATATYPE_MISMATCH;
     }
     if (SqlRowExpressionTypes.unary(operator)
@@ -159,13 +163,18 @@ final class SqlBooleanScalarBinder {
       int leaf,
       int program,
       int operator,
+      long operand,
       boolean having) {
-    if (!having) return StatusCode.INVALID_EXTERNAL_INPUT;
-    int descriptor = statement.projectedTypeDescriptors[0];
+    int ordinal = (int) operand;
+    if (!having || ordinal < 0
+        || ordinal >= statement.command.groupExpressionCount()) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int descriptor = statement.projectionPrograms.resultDescriptor(ordinal);
     if (directTextOnly(source, leaf, program, descriptor)) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    return push(target, leaf, program, operator, 0, descriptor, false);
+    return push(target, leaf, program, operator, ordinal, descriptor, false);
   }
 
   private static boolean directTextOnly(
@@ -255,8 +264,7 @@ final class SqlBooleanScalarBinder {
     boolean leftNull = untyped[size - 1];
     if (rightNull == leftNull) return false;
     int known = rightNull ? stack[size - 1] : right;
-    int family = SqlTypeDescriptor.comparisonFamily(known);
-    if (family == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) {
+    if (SqlNumericTypeRules.isNumeric(known)) {
       stack[rightNull ? size : size - 1] = known;
       untyped[size] = false;
       untyped[size - 1] = false;
@@ -281,7 +289,8 @@ final class SqlBooleanScalarBinder {
       int descriptor,
       boolean untypedNull) {
     return push(
-        target, leaf, program, operator, operand, descriptor, untypedNull,
+        target, leaf, program, operator,
+        operand >> 63, operand, descriptor, untypedNull,
         SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
   }
 
@@ -294,10 +303,41 @@ final class SqlBooleanScalarBinder {
       int descriptor,
       boolean untypedNull,
       int scope) {
+    return push(
+        target, leaf, program, operator,
+        operand >> 63, operand, descriptor, untypedNull, scope);
+  }
+
+  private StatusCode push(
+      SqlBoundBooleanPredicateProgram target,
+      int leaf,
+      int program,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor,
+      boolean untypedNull) {
+    return push(
+        target, leaf, program, operator,
+        operandHigh, operand, descriptor, untypedNull,
+        SqlBoundBooleanPredicateProgram.SCOPE_LEFT);
+  }
+
+  private StatusCode push(
+      SqlBoundBooleanPredicateProgram target,
+      int leaf,
+      int program,
+      int operator,
+      long operandHigh,
+      long operand,
+      int descriptor,
+      boolean untypedNull,
+      int scope) {
     if (size >= stack.length) return StatusCode.RESOURCE_EXHAUSTED;
     stack[size] = descriptor;
     untyped[size++] = untypedNull;
-    target.append(leaf, program, operator, operand, descriptor, scope);
+    target.append(
+        leaf, program, operator, operandHigh, operand, descriptor, scope);
     return StatusCode.OK;
   }
 

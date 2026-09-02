@@ -62,6 +62,9 @@ final class EmbeddedRiverApiTest {
             queryResult));
     RiverQuery query = queryResult.query();
     RowResult row = new RowResult();
+    assertEquals(query.metadata(), queryResult.metadata());
+    assertEquals(StatusCode.OK, row.reserve(query.metadata(), null));
+    assertEquals(true, row.isReservedFor(query.metadata()));
     assertRow(query, row, 1, 1, 100);
     assertRow(query, row, 2, 2, 250);
     assertRow(query, row, 3, 3, 300);
@@ -77,6 +80,7 @@ final class EmbeddedRiverApiTest {
             "SELECT id, NULL FROM accounts WHERE id >= 1 AND id < 2",
             queryResult));
     query = queryResult.query();
+    assertEquals(false, row.isReservedFor(query.metadata()));
     assertEquals("null", query.columnName(1).toString());
     assertEquals(StatusCode.OK, query.next(row));
     assertEquals(1, row.valueAt(0));

@@ -16,6 +16,10 @@ final class SqlParserInput {
     literals.beginParameters(source);
   }
 
+  void beginParameterMarkers(SqlParameterMarkers markers) {
+    literals.beginParameterMarkers(markers);
+  }
+
   StatusCode finishParameters() {
     return literals.finishParameters();
   }

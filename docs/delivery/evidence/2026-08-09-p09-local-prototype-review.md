@@ -17,7 +17,7 @@ for all five P09 evidence families:
 - a preallocated direct WAL reservation, encode, checksum, publication, and
   consume ring;
 - primitive column vectors with a reusable selection vector;
-- positional 8/16/32 KiB temporary-file reads, writes, and force calls;
+- positional 8/16/32 KB temporary-file reads, writes, and force calls;
 - repeated-epoch FPI-versus-double-write byte, copy, and force accounting; and
 - a fixed-layout direct version store with append, read, and visibility scans.
 

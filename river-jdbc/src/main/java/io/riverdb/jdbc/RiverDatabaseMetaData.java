@@ -7,9 +7,8 @@ import java.sql.RowIdLifetime;
 import java.sql.SQLException;
 
 /** Truthful metadata for the deliberately small pre-V1 JDBC surface. */
-final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
+final class RiverDatabaseMetaData extends RiverShapeDatabaseMetaData {
   private static final String PRODUCT_VERSION = "0.1-pre-v1";
-  private static final int MAXIMUM_COLUMNS = 8;
   private static final int MAXIMUM_IDENTIFIER_LENGTH = 64;
   private static final int MAXIMUM_TABLE_PATTERN_LENGTH = 128;
   private static final int MAXIMUM_TABLE_TYPES = 16;
@@ -18,6 +17,7 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   private final String url;
 
   RiverDatabaseMetaData(RiverJdbcConnection jdbcConnection, String jdbcUrl) {
+    super(jdbcConnection);
     connection = jdbcConnection;
     url = jdbcUrl;
   }
@@ -361,18 +361,6 @@ final class RiverDatabaseMetaData extends AbstractDatabaseMetaData {
   public int getResultSetHoldability() throws SQLException {
     connection.requireOpen();
     return ResultSet.CLOSE_CURSORS_AT_COMMIT;
-  }
-
-  @Override
-  public int getMaxColumnsInSelect() throws SQLException {
-    connection.requireOpen();
-    return MAXIMUM_COLUMNS;
-  }
-
-  @Override
-  public int getMaxColumnsInTable() throws SQLException {
-    connection.requireOpen();
-    return MAXIMUM_COLUMNS;
   }
 
   @Override

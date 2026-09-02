@@ -104,7 +104,8 @@ final class SqlSubqueryAccess {
   int column(int block) { return columns[block]; }
 
   private void select(int block, SqlBoundBooleanPredicateProgram predicates) {
-    if (query.block(block).joinChain() != null
+    if (query.block(block).descriptorRole(0)
+        || query.block(block).joinChain() != null
         || predicates == null || !predicates.available()) return;
     collect(block, predicates, predicates.root());
   }

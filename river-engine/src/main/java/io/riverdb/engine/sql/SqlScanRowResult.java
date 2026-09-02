@@ -3,158 +3,180 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.relational.RelationalScanResult;
-import io.riverdb.engine.relational.TableSchema;
 
-/** Caller-owned decoded `KEY`, `VALUE` row returned by an SQL scan. */
+/** Caller-owned reusable decoded SQL scan row. */
 public final class SqlScanRowResult {
   private final RelationalScanResult relational = new RelationalScanResult();
-  private final long[] values = new long[TableSchema.MAXIMUM_COLUMNS];
-  private final char[][] textValues =
-      new char[TableSchema.MAXIMUM_COLUMNS][CommandResult.MAXIMUM_TEXT_CHARACTERS];
-  private final int[] textLengths = new int[TableSchema.MAXIMUM_COLUMNS];
-  private final int[] typeDescriptors = new int[TableSchema.MAXIMUM_COLUMNS];
+  private final SqlResultLanes lanes = new SqlResultLanes();
+  private final char[] pendingText = new char[io.riverdb.engine.api.CommandResult.MAXIMUM_TEXT_CHARACTERS];
   private long key;
   private long value;
-  private long nullMask;
-  private int columnCount;
+  private int pendingTextIndex = -1;
+  private int pendingTextLength;
   private boolean available;
+
+  StatusCode admit(
+      SqlScanCursor cursor,
+      SqlQueryExecution owner,
+      long generation,
+      SqlPhysicalPlan plan) {
+    return cursor.isOwnedBy(owner, generation) ? plan.reserve(this) : StatusCode.CONFLICT;
+  }
 
   public void reset() {
     relational.reset();
-    clearProjected();
+    lanes.reset();
     key = 0;
     value = 0;
-    nullMask = 0;
-    columnCount = 0;
+    pendingTextIndex = -1;
+    pendingTextLength = 0;
     available = false;
   }
 
-  RelationalScanResult relational() {
-    return relational;
+  RelationalScanResult relational() { return relational; }
+
+  StatusCode prepare(int[] descriptors, int columns) {
+    return lanes.prepare(descriptors, columns);
   }
 
-  void set(
+  StatusCode set(
       long rowKey,
       long[] projectedValues,
       long projectedNullMask,
-      int[] projectedTypeDescriptors,
-      int projectedColumnCount) {
-    key = rowKey;
-    columnCount = projectedColumnCount;
-    nullMask = projectedNullMask;
-    for (int index = 0; index < projectedColumnCount; index++) {
-      values[index] = projectedValues[index];
-      typeDescriptors[index] = projectedTypeDescriptors[index];
-      textLengths[index] = 0;
+      int[] descriptors,
+      int columns) {
+    if (columns > Long.SIZE) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = beginProjected(rowKey, descriptors, columns);
+    for (int index = 0; status.isOk() && index < columns; index++) {
+      if ((projectedNullMask >>> index & 1) != 0) setProjectedNull(index);
+      else setProjectedValue(index, projectedValues[index]);
     }
-    value = projectedColumnCount == 0 ? 0 : values[projectedColumnCount - 1];
-    available = true;
+    if (!status.isOk()) reset();
+    return status;
   }
 
-  void beginProjected(
-      long rowKey, int[] projectedTypeDescriptors, int projectedColumnCount) {
-    clearProjected();
+  StatusCode setWords(
+      long rowKey,
+      long[] projectedValues,
+      SqlNullWords projectedNulls,
+      int[] descriptors,
+      int columns) {
+    if (projectedNulls == null
+        || projectedNulls.nullWordCount() != (columns + Long.SIZE - 1) >>> 6) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = beginProjected(rowKey, descriptors, columns);
+    for (int index = 0; status.isOk() && index < columns; index++) {
+      if (projectedNulls.nullAt(index)) setProjectedNull(index);
+      else setProjectedValue(index, projectedValues[index]);
+    }
+    if (!status.isOk()) reset();
+    return status;
+  }
+
+  StatusCode setWords(
+      long rowKey,
+      long[] projectedHighs,
+      long[] projectedValues,
+      SqlNullWords projectedNulls,
+      int[] descriptors,
+      int columns) {
+    if (projectedHighs == null
+        || projectedValues == null
+        || projectedHighs.length < columns
+        || projectedValues.length < columns
+        || projectedNulls == null
+        || projectedNulls.nullWordCount() != (columns + Long.SIZE - 1) >>> 6) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode status = beginProjected(rowKey, descriptors, columns);
+    for (int index = 0; status.isOk() && index < columns; index++) {
+      if (projectedNulls.nullAt(index)) setProjectedNull(index);
+      else if (SqlTypeDescriptor.isWideDecimal(descriptors[index])) {
+        setProjectedDecimal128(
+            index, projectedHighs[index], projectedValues[index]);
+      } else setProjectedValue(index, projectedValues[index]);
+    }
+    if (!status.isOk()) reset();
+    return status;
+  }
+
+  StatusCode beginProjected(long rowKey, int[] descriptors, int columns) {
+    StatusCode status = lanes.begin(descriptors, columns);
+    if (!status.isOk()) return status;
     key = rowKey;
     value = 0;
-    nullMask = 0;
-    columnCount = projectedColumnCount;
-    for (int index = 0; index < projectedColumnCount; index++) {
-      values[index] = 0;
-      typeDescriptors[index] = projectedTypeDescriptors[index];
-      textLengths[index] = 0;
-    }
+    pendingTextIndex = -1;
+    pendingTextLength = 0;
     available = true;
-  }
-
-  private void clearProjected() {
-    for (int index = 0; index < textLengths.length; index++) {
-      for (int character = 0; character < textLengths[index]; character++) {
-        textValues[index][character] = 0;
-      }
-      values[index] = 0;
-      textLengths[index] = 0;
-      typeDescriptors[index] = 0;
-    }
+    return StatusCode.OK;
   }
 
   void setProjectedValue(int index, long projectedValue) {
-    values[index] = projectedValue;
-    nullMask &= ~(1L << index);
-    if (index == columnCount - 1) value = projectedValue;
+    lanes.setValue(index, projectedValue);
+    if (index == lanes.count() - 1) value = projectedValue;
+  }
+
+  void setProjectedDecimal128(int index, long high, long low) {
+    lanes.setValue(index, high, low);
+    if (index == lanes.count() - 1) value = low;
   }
 
   void setProjectedNull(int index) {
-    values[index] = 0;
-    nullMask |= 1L << index;
-    if (index == columnCount - 1) value = 0;
+    lanes.setNull(index);
+    if (index == lanes.count() - 1) value = 0;
   }
 
   StatusCode setTextAt(int index, CharSequence source) {
-    if (!available
-        || index < 0
-        || index >= columnCount
-        || source == null
-        || source.length() > CommandResult.MAXIMUM_TEXT_CHARACTERS
-        || !isVarchar(index)) {
+    if (source == null || source.length() > pendingText.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int character = 0; character < source.length(); character++) {
-      char value = source.charAt(character);
-      if (value < 0x20 || value > 0x7e) {
-        return StatusCode.INVALID_EXTERNAL_INPUT;
-      }
-      textValues[index][character] = value;
+      pendingText[character] = source.charAt(character);
     }
-    textLengths[index] = source.length();
-    return StatusCode.OK;
+    return lanes.setText(index, pendingText, 0, source.length());
   }
 
   StatusCode setTextAt(int index, char[] source, int length) {
-    return setTextAt(index, source, 0, length);
+    return lanes.setText(index, source, 0, length);
   }
 
   StatusCode setTextAt(int index, char[] source, int offset, int length) {
-    if (!available
-        || index < 0
-        || index >= columnCount
-        || source == null
-        || offset < 0
-        || length < 0
-        || offset > source.length - length
-        || length > CommandResult.MAXIMUM_TEXT_CHARACTERS
-        || !isVarchar(index)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    System.arraycopy(source, offset, textValues[index], 0, length);
-    textLengths[index] = length;
-    return StatusCode.OK;
+    return lanes.setText(index, source, offset, length);
   }
 
   StatusCode beginTextAt(int index, int length) {
-    if (!available || index < 0 || index >= columnCount
-        || length < 0 || length > textValues[index].length || !isVarchar(index)) {
+    if (!available || !lanes.isText(index) || length < 0 || length > pendingText.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    textLengths[index] = length;
+    pendingTextIndex = index;
+    pendingTextLength = length;
     return StatusCode.OK;
   }
 
-  void setTextCharacterAt(int index, int character, char value) {
-    textValues[index][character] = value;
+  void setTextCharacterAt(int index, int character, char textCharacter) {
+    if (index == pendingTextIndex && character >= 0 && character < pendingTextLength) {
+      pendingText[character] = textCharacter;
+    }
+  }
+
+  StatusCode finishTextAt(int index) {
+    if (index != pendingTextIndex) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = lanes.setText(index, pendingText, 0, pendingTextLength);
+    pendingTextIndex = -1;
+    pendingTextLength = 0;
+    return status;
   }
 
   StatusCode setPackedTextAt(int index, long packed) {
-    if (!available || index < 0 || index >= columnCount || !isVarchar(index)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     int length = PackedText.length(packed);
     for (int character = 0; character < length; character++) {
-      textValues[index][character] = PackedText.charAt(packed, character);
+      pendingText[character] = PackedText.charAt(packed, character);
     }
-    textLengths[index] = length;
-    return StatusCode.OK;
+    StatusCode status = lanes.setText(index, pendingText, 0, length);
+    if (status.isOk()) lanes.setValue(index, packed);
+    return status;
   }
 
   StatusCode setUtf8At(
@@ -162,76 +184,27 @@ public final class SqlScanRowResult {
       io.riverdb.storage.heap.HeapRowResult source,
       int offset,
       int length) {
-    if (!available
-        || index < 0
-        || index >= columnCount
-        || source == null
-        || offset < 0
-        || length < 0
-        || !isVarchar(index)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    int decoded = Utf8RowText.decode(
-        source, offset, length, textValues[index]);
-    if (decoded < 0) {
-      return StatusCode.CORRUPTION;
-    }
-    textLengths[index] = decoded;
-    return StatusCode.OK;
+    return lanes.setUtf8(index, source, offset, length);
   }
 
-  public long key() {
-    return key;
-  }
-
-  public long value() {
-    return value;
-  }
-
-  public int columnCount() {
-    return columnCount;
-  }
-
-  public long valueAt(int index) {
-    return index >= 0 && index < columnCount ? values[index] : 0;
-  }
-
-  public boolean isNull(int index) {
-    return index >= 0 && index < columnCount && (nullMask & 1L << index) != 0;
-  }
-
-  public long nullMask() {
-    return nullMask;
-  }
-
-  public boolean isVarchar(int index) {
-    return index >= 0
-        && index < columnCount
-        && SqlTypeDescriptor.typeId(typeDescriptors[index])
-            == SqlTypeDescriptor.TYPE_ID_VARCHAR;
-  }
-
-  public int typeDescriptorAt(int index) {
-    return index >= 0 && index < columnCount ? typeDescriptors[index] : 0;
-  }
-
-  public int textLengthAt(int index) {
-    return isVarchar(index) && !isNull(index) ? textLengths[index] : -1;
-  }
-
+  /** Legacy scalar row-key field; descriptor composite/keyless rows report zero. */
+  public long key() { return key; }
+  public long value() { return value; }
+  public int columnCount() { return lanes.count(); }
+  public long valueAt(int index) { return lanes.value(index); }
+  public long highValueAt(int index) { return lanes.highValue(index); }
+  public boolean isNull(int index) { return lanes.isNull(index); }
+  public long nullMask() { return lanes.nullWord(0); }
+  public long nullWord(int word) { return lanes.nullWord(word); }
+  public int nullWordCount() { return lanes.nullWordCount(); }
+  public boolean isVarchar(int index) { return lanes.isText(index); }
+  public int typeDescriptorAt(int index) { return lanes.descriptor(index); }
+  public int textLengthAt(int index) { return lanes.textLength(index); }
   public int copyTextAt(int index, char[] destination, int offset) {
-    int length = textLengthAt(index);
-    if (length < 0
-        || destination == null
-        || offset < 0
-        || offset > destination.length - length) {
-      return -1;
-    }
-    System.arraycopy(textValues[index], 0, destination, offset, length);
-    return length;
+    return lanes.copyText(index, destination, offset);
   }
-
-  public boolean isAvailable() {
-    return available;
+  public char textCharacterAt(int index, int character) {
+    return lanes.textCharacter(index, character);
   }
+  public boolean isAvailable() { return available; }
 }

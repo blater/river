@@ -1,98 +1,113 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.storage.heap.HeapRowResult;
+import io.riverdb.format.FormatBytes;
 import java.nio.ByteBuffer;
 
-/** Canonical fixed record for one table's bounded ANALYZE statistics. */
+/** Canonical little-endian payload for one bounded statistics child record. */
 final class CatalogStatisticsCodec {
-  static final int BYTES = 56 + TableSchema.MAXIMUM_COLUMNS * Long.BYTES * 4;
-  private static final long MAGIC = 0x5249564552535441L; // RIVERSTA
-  private static final int VERSION = 1;
-  private static final int NULLS = 56;
-  private static final int DISTINCT = NULLS + TableSchema.MAXIMUM_COLUMNS * Long.BYTES;
-  private static final int MINIMUM = DISTINCT + TableSchema.MAXIMUM_COLUMNS * Long.BYTES;
-  private static final int MAXIMUM = MINIMUM + TableSchema.MAXIMUM_COLUMNS * Long.BYTES;
+  static final long MAGIC = 0x5249564552535443L; // RIVERSTC
+  static final int VERSION = 3;
+  static final int HEADER_BYTES = 32;
+  static final int COLUMN_BYTES = 33;
+  private static final int SAMPLED = 1;
+  private static final int MIN_MAX = 2;
 
-  private CatalogStatisticsCodec() {
+  private CatalogStatisticsCodec() { }
+
+  static int payloadBytes(int columns) {
+    return HEADER_BYTES + columns * COLUMN_BYTES;
   }
 
-  static void encode(ByteBuffer target, TableStatistics source) {
+  static StatusCode encode(
+      ByteBuffer target, TableStatistics source, int firstColumn, int columns) {
+    int bytes = payloadBytes(columns);
+    if (target == null || target.isReadOnly() || source == null
+        || firstColumn < 0 || columns <= 0
+        || firstColumn > source.columnCount() - columns
+        || target.capacity() < bytes) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     target.clear();
-    for (int index = 0; index < BYTES; index++) target.put(index, (byte) 0);
-    target.putLong(0, MAGIC);
-    target.putInt(8, VERSION);
-    target.putInt(12, source.tableId());
-    target.putInt(16, source.columnCount());
-    target.putInt(20, 0);
-    target.putLong(24, source.epoch());
-    target.putLong(32, source.rowCount());
-    target.putLong(40, source.minMaxMask());
-    target.putLong(48, source.sampledMask());
-    for (int column = 0; column < source.columnCount(); column++) {
-      target.putLong(NULLS + column * Long.BYTES, source.nullCount(column));
-      target.putLong(DISTINCT + column * Long.BYTES, source.distinctCount(column));
-      target.putLong(MINIMUM + column * Long.BYTES, source.minimumValue(column));
-      target.putLong(MAXIMUM + column * Long.BYTES, source.maximumValue(column));
+    target.limit(bytes);
+    FormatBytes.putLong(target, 0, MAGIC);
+    FormatBytes.putInt(target, 8, VERSION);
+    FormatBytes.putInt(target, 12, 0);
+    FormatBytes.putLong(target, 16, source.epoch());
+    FormatBytes.putLong(target, 24, source.rowCount());
+    int offset = HEADER_BYTES;
+    for (int index = 0; index < columns; index++) {
+      int column = firstColumn + index;
+      int flags = (source.sampled(column) ? SAMPLED : 0)
+          | (source.hasMinMax(column) ? MIN_MAX : 0);
+      target.put(offset, (byte) flags);
+      FormatBytes.putLong(target, offset + 1, source.nullCount(column));
+      FormatBytes.putLong(target, offset + 9, source.distinctCount(column));
+      FormatBytes.putLong(target, offset + 17, source.minimumValue(column));
+      FormatBytes.putLong(target, offset + 25, source.maximumValue(column));
+      offset += COLUMN_BYTES;
     }
     target.position(0);
-    target.limit(BYTES);
+    return StatusCode.OK;
   }
 
   static StatusCode decode(
-      HeapRowResult source,
-      ByteBuffer scratch,
-      TableDefinition table,
-      TableStatistics result) {
-    result.reset();
-    scratch.clear();
-    StatusCode status = source.copyTo(scratch);
+      ByteBuffer source, int start, int bytes, TableDefinition table,
+      int firstColumn, int columns, TableStatistics result) {
+    if (!validEnvelope(source, start, bytes, firstColumn, columns, table)) {
+      return StatusCode.CORRUPTION;
+    }
+    long epoch = FormatBytes.getLong(source, start + 16);
+    long rows = FormatBytes.getLong(source, start + 24);
+    if (epoch < 0 || rows < 0) return StatusCode.CORRUPTION;
+    StatusCode status = firstColumn == 0
+        ? result.begin(table.tableId(), table.columnCount(), epoch)
+        : matchingSnapshot(result, table, epoch, rows);
     if (!status.isOk()) return status;
-    if (source.length() != BYTES
-        || scratch.getLong(0) != MAGIC
-        || scratch.getInt(8) != VERSION
-        || scratch.getInt(12) != table.tableId()
-        || scratch.getInt(16) != table.columnCount()
-        || scratch.getInt(20) != 0) return StatusCode.CORRUPTION;
-    int columns = scratch.getInt(16);
-    long epoch = scratch.getLong(24);
-    long rows = scratch.getLong(32);
-    long mask = (1L << columns) - 1;
-    long minMaxMask = scratch.getLong(40);
-    long sampledMask = scratch.getLong(48);
-    if (epoch < 0 || rows < 0
-        || (minMaxMask & ~mask) != 0
-        || (sampledMask & ~mask) != 0) return StatusCode.CORRUPTION;
-    result.begin(table.tableId(), columns, epoch);
-    result.setRowCount(rows);
-    for (int column = 0; column < TableSchema.MAXIMUM_COLUMNS; column++) {
-      long nulls = scratch.getLong(NULLS + column * Long.BYTES);
-      long distinct = scratch.getLong(DISTINCT + column * Long.BYTES);
-      long minimum = scratch.getLong(MINIMUM + column * Long.BYTES);
-      long maximum = scratch.getLong(MAXIMUM + column * Long.BYTES);
-      boolean used = column < columns;
-      boolean hasRange = (minMaxMask & 1L << column) != 0;
-      long nonNull = rows - nulls;
-      if (!used && (nulls != 0 || distinct != 0 || minimum != 0 || maximum != 0)
-          || used && (nulls < 0 || nulls > rows
-              || distinct < 0 || distinct > nonNull
-              || (distinct == 0) != (nonNull == 0)
-              || nonNull == 0 && hasRange)
-          || !hasRange && (minimum != 0 || maximum != 0)) {
-        result.reset();
-        return StatusCode.CORRUPTION;
-      }
-      if (used) {
-        result.setColumn(
-            column,
-            nulls,
-            distinct,
-            (sampledMask & 1L << column) != 0,
-            hasRange,
-            minimum,
-            maximum);
-      }
+    if (firstColumn == 0) result.setRowCount(rows);
+    int offset = start + HEADER_BYTES;
+    for (int index = 0; index < columns; index++) {
+      status = decodeColumn(source, offset, firstColumn + index, rows, result);
+      if (!status.isOk()) return status;
+      offset += COLUMN_BYTES;
     }
     return StatusCode.OK;
+  }
+
+  private static StatusCode decodeColumn(
+      ByteBuffer source, int offset, int column, long rows, TableStatistics result) {
+    int flags = Byte.toUnsignedInt(source.get(offset));
+    long nulls = FormatBytes.getLong(source, offset + 1);
+    long distinct = FormatBytes.getLong(source, offset + 9);
+    long minimum = FormatBytes.getLong(source, offset + 17);
+    long maximum = FormatBytes.getLong(source, offset + 25);
+    boolean sampled = (flags & SAMPLED) != 0;
+    boolean range = (flags & MIN_MAX) != 0;
+    long nonNull = rows - nulls;
+    if ((flags & ~(SAMPLED | MIN_MAX)) != 0 || nulls < 0 || nulls > rows
+        || distinct < 0 || distinct > nonNull
+        || (distinct == 0) != (nonNull == 0) || nonNull == 0 && range
+        || !range && (minimum != 0 || maximum != 0)) {
+      return StatusCode.CORRUPTION;
+    }
+    result.setColumn(column, nulls, distinct, sampled, range, minimum, maximum);
+    return StatusCode.OK;
+  }
+
+  private static boolean validEnvelope(
+      ByteBuffer source, int start, int bytes,
+      int first, int columns, TableDefinition table) {
+    return source != null && table != null && start >= 0 && columns > 0 && first >= 0
+        && first <= table.columnCount() - columns && bytes == payloadBytes(columns)
+        && start <= source.limit() - bytes
+        && FormatBytes.getLong(source, start) == MAGIC
+        && FormatBytes.getInt(source, start + 8) == VERSION
+        && FormatBytes.getInt(source, start + 12) == 0;
+  }
+
+  private static StatusCode matchingSnapshot(
+      TableStatistics result, TableDefinition table, long epoch, long rows) {
+    return result.availableFor(table) && result.epoch() == epoch && result.rowCount() == rows
+        ? StatusCode.OK : StatusCode.CORRUPTION;
   }
 }

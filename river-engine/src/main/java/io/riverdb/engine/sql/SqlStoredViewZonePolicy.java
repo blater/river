@@ -70,8 +70,9 @@ final class SqlStoredViewZonePolicy {
 
   private static StatusCode aggregates(
       SqlCommand command, SqlTemporalZoneNames zones) {
-    for (int lane = 0; lane < SqlCommand.MAXIMUM_COLUMNS; lane++) {
-      SqlScalarExpression expression = command.aggregateOperandExpression(lane);
+    for (int invocation = 0;
+        invocation < command.aggregateInvocationCount(); invocation++) {
+      SqlScalarExpression expression = command.aggregateOperandExpression(invocation);
       if (expression == null || !expression.isAvailable()) continue;
       StatusCode status = expression(command, expression, zones);
       if (!status.isOk()) return status;

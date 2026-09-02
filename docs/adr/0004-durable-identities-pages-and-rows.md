@@ -22,7 +22,7 @@ dependency-neutral value type lives in `river-base`. It fences one
 process/storage-node lifetime and is not encoded into logical row identity.
 Phase 0 freezes both incarnation semantics; Phase 1 first persists them.
 
-Propose one 16 KiB canonical v1 page size with no mixed page sizes inside a
+Propose one 16 KB canonical v1 page size with no mixed page sizes inside a
 database. Every durable file/page/row carries format version and database/file
 identity where applicable. Pages use a canonical byte order, page type,
 `PageId`, generation, free-space/slot bounds, checksum, and a
@@ -58,13 +58,13 @@ until an upgrade ADR and fixtures select it.
 ## Consequences
 
 A single page size simplifies buffer, WAL, recovery, and access-method code.
-The 16 KiB value and tuple header are provisional: K02 may implement codecs and
+The 16 KB value and tuple header are provisional: K02 may implement codecs and
 fixtures for prototypes, but compatibility is not frozen before P09 review.
 
 ## Alternatives
 
-- Mixed 2–64 KiB pages were rejected for v1 complexity without evidence.
-- An 8 KiB or 32 KiB canonical page remains a P09 comparison candidate.
+- Mixed 2–64 KB pages were rejected for v1 complexity without evidence.
+- An 8 KB or 32 KB canonical page remains a P09 comparison candidate.
 - Java object serialization was rejected as unstable and allocation-heavy.
 
 ## Required evidence

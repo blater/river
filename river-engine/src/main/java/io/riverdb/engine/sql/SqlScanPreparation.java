@@ -1,10 +1,11 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.sql.SqlComparison;
+import io.riverdb.sql.SqlAggregateKind;
 import io.riverdb.sql.SqlCommandType;
+import io.riverdb.sql.SqlGroupExpressions;
 
 /** Selects and opens the physical operator for one fully bound SQL scan. */
 final class SqlScanPreparation {
@@ -39,15 +40,12 @@ final class SqlScanPreparation {
 
   StatusCode begin(boolean explainOnly) {
     BoundSqlQuery.Block command = query.root();
-    if (!query.isExecutable()
-        && command.type() != SqlCommandType.NEXT_SEQUENCE_VALUE
-        && command.type() != SqlCommandType.SCALAR_EXPRESSION
-        && !isScalarAggregate(command.type())) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     SqlCommandType type = command.type();
+    StatusCode shape = SqlScanResultAdmission.prepare(query, plan, bound, type);
+    if (!shape.isOk()) return shape;
     if (type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE
+        || type == SqlCommandType.COUNT_DISTINCT
         || type == SqlCommandType.NEXT_SEQUENCE_VALUE
         || type == SqlCommandType.SCALAR_EXPRESSION
         || isValueAggregate(type)) {
@@ -69,18 +67,20 @@ final class SqlScanPreparation {
   }
 
   private StatusCode beginScalar(BoundSqlQuery.Block command) {
+    StatusCode reserved = bound.reserveProjectionColumns(1);
+    if (!reserved.isOk()) return reserved;
     plan.setHavingCount(bound.command.booleanHavingPredicates().leafCount());
     plan.setAccessColumn(bound.accessPredicate >= 0
         ? bound.predicateColumn == 0 || bound.table.hasIndexOn(bound.predicateColumn)
             ? bound.predicateColumn : -1
         : -1);
-    plan.setAggregate(command.type() == SqlCommandType.COUNT
-            || command.type() == SqlCommandType.SCALAR_EXPRESSION
-        ? -1 : bound.projectedColumns[0]);
+    boolean boundAggregate = isScalarAggregate(command.type())
+        && bound.projectedColumnCount > 0;
+    plan.setAggregate(boundAggregate ? bound.projectedColumns[0] : -1);
     plan.setResultColumn(
         0,
         bound.projectedColumnCount > 0 ? bound.projectedColumns[0] : -1,
-        isScalarAggregate(command.type())
+        boundAggregate
             ? bound.projectedTypeDescriptors[0]
             : aggregate.typeDescriptorAt(0),
         aggregateColumnName(command));
@@ -95,14 +95,15 @@ final class SqlScanPreparation {
     plan.setFilterCount(bound.predicateCount);
     int groupedColumn = distinct ? bound.distinctColumn : bound.groupColumn;
     int aggregateColumn = distinct ? -1 : bound.groupAggregateColumn;
-    boolean ordered = groupedColumn == 0
+    boolean ordered = bound.command.groupExpressionCount() == 1
+        && (groupedColumn == 0
         || groupedColumn > 0
             && bound.table.hasIndexOn(groupedColumn)
             && !bound.table.isVarchar(groupedColumn)
-            && !bound.table.isNullable(groupedColumn);
+            && !bound.table.isNullable(groupedColumn));
     plan.setSort(!ordered);
     plan.setAccessColumn(ordered ? groupedColumn : -1);
-    int sortedRows = -1;
+    long sortedRows = -1;
     StatusCode status = ordered
         ? beginOrdered(command, groupedColumn, groupedColumn > 0)
         : beginMaterialized(groupedColumn, aggregateColumn, distinct, explainOnly);
@@ -119,30 +120,34 @@ final class SqlScanPreparation {
       boolean distinct) {
     if (distinct) plan.setDistinct(groupedColumn);
     else plan.setGroupAggregate(groupedColumn, aggregateColumn);
-    plan.setResultColumn(
-        0,
-        groupedColumn,
-        SqlPrimitiveSortKey.descriptor(bound, groupedColumn),
-        SqlPrimitiveSortKey.outputName(command, groupedColumn));
-    plan.setResultNullable(
-        0,
-        groupedColumn == SqlBoundProjectionPrograms.COMPUTED_PROJECTION
-            ? SqlResultNullability.program(bound, 0)
-            : bound.table.isNullable(groupedColumn));
-    if (!distinct) {
-      int inputDescriptor = aggregateColumn
-              == SqlBoundProjectionPrograms.COMPUTED_PROJECTION
-          ? bound.projectedTypeDescriptors[1]
-          : aggregateColumn < 0 ? SqlTypeDescriptor.BIGINT
-              : bound.table.typeDescriptor(aggregateColumn);
-      int type = SqlProjectionBinder.aggregateResultDescriptor(
-          command.type(), inputDescriptor);
-      plan.setResultColumn(
-          1, aggregateColumn, type, groupAggregateColumnName(command));
-      plan.setResultNullable(
-          1,
-          command.type() != SqlCommandType.GROUP_COUNT
-              && command.type() != SqlCommandType.GROUP_COUNT_VALUE);
+    if (distinct) {
+      plan.setResultShape(
+          bound.projectedColumns, bound.projectedTypeDescriptors,
+          bound.projectedColumnCount, command);
+      for (int output = 0; output < bound.projectedColumnCount; output++) {
+        plan.setResultNullable(
+            output, SqlResultNullability.projection(bound, output));
+      }
+      return;
+    }
+    plan.setResultShape(
+        bound.projectedColumns, bound.projectedTypeDescriptors,
+        bound.projectedColumnCount, command);
+    int groupOutputs = bound.command.columnCount()
+        - bound.command.aggregateOutputCount();
+    for (int output = 0; output < groupOutputs; output++) {
+      int key = SqlGroupExpressions.groupKey(bound.command, output);
+      int column = bound.projectionPrograms.rawColumn(key);
+      plan.setResultNullable(output, column >= 0
+          ? bound.table.isNullable(column)
+          : SqlResultNullability.program(bound, key));
+    }
+    for (int output = 0; output < bound.command.aggregateOutputCount(); output++) {
+      int invocation = bound.command.aggregateOutputInvocation(output);
+      int kind = bound.aggregates.kind(invocation);
+      plan.setResultNullable(groupOutputs + output,
+          kind != SqlAggregateKind.COUNT && kind != SqlAggregateKind.COUNT_VALUE
+              && kind != SqlAggregateKind.COUNT_DISTINCT);
     }
   }
 
@@ -158,12 +163,6 @@ final class SqlScanPreparation {
         ? indexColumn : bounded && bound.predicateColumn == 0 ? 0 : -1);
     StatusCode status = openRowSource(query.root(), indexColumn);
     if (!status.isOk() || explainOnly) return status;
-    bound.projectedColumns[0] = groupedColumn;
-    bound.projectedColumnCount = distinct ? 1 : 2;
-    if (!distinct) {
-      bound.projectedColumns[1] = aggregateColumn == -1
-          ? NULL_PROJECTION : aggregateColumn;
-    }
     return sorts.materialize(valueIndex, groupedColumn);
   }
 
@@ -304,7 +303,7 @@ final class SqlScanPreparation {
   }
 
   private static CharSequence aggregateColumnName(BoundSqlQuery.Block command) {
-    CharSequence alias = command.columnAlias(0);
+    CharSequence alias = command.columnCount() > 0 ? command.columnAlias(0) : "";
     if (alias.length() > 0) return alias;
     return command.type() == SqlCommandType.SUM ? "sum"
         : command.type() == SqlCommandType.AVG ? "avg"
@@ -331,12 +330,14 @@ final class SqlScanPreparation {
 
   private static boolean isScalarAggregate(SqlCommandType type) {
     return type == SqlCommandType.COUNT || type == SqlCommandType.COUNT_VALUE
+        || type == SqlCommandType.COUNT_DISTINCT
         || isValueAggregate(type);
   }
 
   private static boolean isGroupAggregate(SqlCommandType type) {
     return type == SqlCommandType.GROUP_COUNT
         || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_COUNT_DISTINCT
         || type == SqlCommandType.GROUP_SUM
         || type == SqlCommandType.GROUP_AVG
         || type == SqlCommandType.GROUP_MIN

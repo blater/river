@@ -1,7 +1,7 @@
 package io.riverdb.sql;
 
-import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.LocalTemporal;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
 
 /** Field extraction and temporal arithmetic descriptor rules. */
@@ -45,9 +45,9 @@ final class SqlTemporalFieldRules {
     int leftType = SqlTypeDescriptor.typeId(left);
     int rightType = SqlTypeDescriptor.typeId(right);
     if (leftType != SqlTypeDescriptor.TYPE_ID_DATE) {
-      return ExactDecimal.addResultDescriptor(left, right);
+      return SqlNumericExpressionTypes.binary(operator, left, right);
     }
-    if (rightType == SqlTypeDescriptor.TYPE_ID_BIGINT) return SqlTypeDescriptor.DATE;
+    if (SqlNumericTypeRules.isIntegral(right)) return SqlTypeDescriptor.DATE;
     return operator == SqlScalarExpression.SUBTRACT
             && rightType == SqlTypeDescriptor.TYPE_ID_DATE
         ? SqlTypeDescriptor.BIGINT : 0;

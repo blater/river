@@ -17,6 +17,11 @@ final class SqlJoinMergeSelector {
       int outerRole = context.accessOuterRole(stage);
       int outerColumn = context.accessOuterColumn(stage);
       int innerColumn = context.accessInnerColumn(stage);
+      if (selected == stage && context.strategy(stage) == SqlJoinStrategy.HASH) {
+        outerRole = context.strategyOuterRole(stage);
+        outerColumn = context.strategyOuterColumn(stage);
+        innerColumn = context.strategyInnerColumn(stage);
+      }
       boolean ordered = outerRole >= 0 && innerColumn >= 0
           && orderedColumns[outerRole] == outerColumn;
       boolean selectableOrder = ordered || stage == 0
@@ -24,7 +29,8 @@ final class SqlJoinMergeSelector {
           && context.accessPredicate < 0
           && outerRole == 0
           && outerColumn >= 0
-          && (outerColumn == 0 || context.table(0).hasIndexOn(outerColumn));
+          && (context.table(0).hasPrimaryIndexOn(outerColumn)
+              || context.table(0).hasIndexOn(outerColumn));
       if (selectableOrder
           && selectable(
               command, context, stage, selected, outerRole, outerColumn)) {
@@ -47,6 +53,10 @@ final class SqlJoinMergeSelector {
     if (selected == stage && context.strategy(stage) != SqlJoinStrategy.HASH) {
       return false;
     }
+    int innerColumn = context.accessInnerColumn(stage);
+    if (innerColumn >= 0
+        && (context.table(stage + 1).hasPrimaryIndexOn(innerColumn)
+            || context.table(stage + 1).hasUniqueIndexOn(innerColumn))) return false;
     return !(stage == 0 && context.accessPredicate >= 0)
         && !(stage == 0
         && command.joinChain().isLeft(stage)
@@ -56,6 +66,7 @@ final class SqlJoinMergeSelector {
   private static int rootOrder(SqlBoundJoinContext context) {
     if (context.accessPredicate < 0) return 0;
     int column = context.predicateColumn;
-    return column == 0 || context.table(0).hasIndexOn(column) ? column : 0;
+    return context.table(0).hasPrimaryIndexOn(column)
+        || context.table(0).hasIndexOn(column) ? column : 0;
   }
 }

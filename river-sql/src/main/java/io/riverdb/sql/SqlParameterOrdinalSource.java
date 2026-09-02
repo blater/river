@@ -4,20 +4,11 @@ package io.riverdb.sql;
 interface SqlParameterOrdinalSource {
   int parameterOrdinal(int offset);
 
-  static int ordinal(CharSequence source, int marker) {
-    int ordinal = 0;
-    boolean quoted = false;
-    for (int index = 0; index < marker; index++) {
-      char character = source.charAt(index);
-      if (character == '\'' && quoted && index + 1 < marker
-          && source.charAt(index + 1) == '\'') {
-        index++;
-      } else if (character == '\'') {
-        quoted = !quoted;
-      } else if (!quoted && character == '?') {
-        ordinal++;
-      }
+  static int originalOrdinal(
+      CharSequence source, int marker, SqlParameterMarkers markers) {
+    if (source instanceof SqlParameterOrdinalSource mapped) {
+      return mapped.parameterOrdinal(marker);
     }
-    return ordinal;
+    return markers == null ? -1 : markers.ordinalAt(marker);
   }
 }

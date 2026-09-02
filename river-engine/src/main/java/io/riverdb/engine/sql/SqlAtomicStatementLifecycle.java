@@ -99,9 +99,7 @@ final class SqlAtomicStatementLifecycle {
     StatusCode terminal = pendingBodyStatus.isOk()
         ? transactions.commitImplicit() : transactions.abortImplicit();
     StatusCode status = terminal.isOk() ? pendingBodyStatus : terminal;
-    // A RelationalSession terminal attempt releases its registration even
-    // when a later terminal cleanup step reports a non-OK status.
-    clear();
+    if (!session.transactionActive()) clear();
     return status;
   }
 

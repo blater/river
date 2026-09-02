@@ -8,7 +8,7 @@ import java.nio.ByteBuffer;
 /** Durable encoding for one bounded catalog view definition. */
 final class CatalogViewCodec {
   private static final long MAGIC = 0x5249564552564945L; // RIVERVIE
-  private static final int VERSION = 4;
+  private static final int VERSION = 5;
   private static final int LINEAGE_OFFSET = 24;
   private static final int HEADER_BYTES = LINEAGE_OFFSET
       + ViewDefinition.MAXIMUM_LINEAGE_TABLES * Integer.BYTES;

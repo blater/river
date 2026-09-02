@@ -4,49 +4,52 @@ package io.riverdb.sql;
 final class SqlCommandInsertView {
   private SqlCommandInsertView() { }
 
-  static void append(
+  static boolean append(
       SqlCommand command,
+      long[] highs,
       long[] values,
-      long nullMask,
-      long defaultMask,
+      boolean[] nulls,
+      boolean[] defaults,
       int[] typeDescriptors,
       int count) {
-    int destination = command.insertRowCount * SqlCommand.MAXIMUM_COLUMNS;
-    for (int index = 0; index < count; index++) {
-      command.insertValues[destination + index] = values[index];
-      command.insertTypeDescriptors[destination + index] = typeDescriptors[index];
+    if (command.inserts.append(
+        highs, values, nulls, defaults, typeDescriptors, count)) {
+      command.insertColumnCount = count;
+      command.insertRowCount++;
+      return true;
     }
-    command.insertColumnCount = count;
-    command.insertNullMasks[command.insertRowCount] = nullMask;
-    command.insertDefaultMasks[command.insertRowCount] = defaultMask;
-    command.insertRowCount++;
+    return false;
   }
 
   static void setInsert(SqlCommand command) {
     command.type = SqlCommandType.INSERT;
-    command.key = command.insertValues[0];
-    command.value = command.insertValues[1];
+    command.key = command.inserts.value(0, 0);
+    command.value = command.inserts.value(0, 1);
   }
 
   static long value(SqlCommand command, int rowIndex, int columnIndex) {
     return valid(command, rowIndex, columnIndex)
-        ? command.insertValues[rowIndex * SqlCommand.MAXIMUM_COLUMNS + columnIndex] : 0;
+        ? command.inserts.value(rowIndex, columnIndex) : 0;
+  }
+
+  static long high(SqlCommand command, int rowIndex, int columnIndex) {
+    return valid(command, rowIndex, columnIndex)
+        ? command.inserts.high(rowIndex, columnIndex) : 0;
   }
 
   static boolean isNull(SqlCommand command, int rowIndex, int columnIndex) {
     return valid(command, rowIndex, columnIndex)
-        && (command.insertNullMasks[rowIndex] & 1L << columnIndex) != 0;
+        && command.inserts.isNull(rowIndex, columnIndex);
   }
 
   static boolean isDefault(SqlCommand command, int rowIndex, int columnIndex) {
     return valid(command, rowIndex, columnIndex)
-        && (command.insertDefaultMasks[rowIndex] & 1L << columnIndex) != 0;
+        && command.inserts.isDefault(rowIndex, columnIndex);
   }
 
   static int typeDescriptor(SqlCommand command, int rowIndex, int columnIndex) {
     return valid(command, rowIndex, columnIndex)
-        ? command.insertTypeDescriptors[
-            rowIndex * SqlCommand.MAXIMUM_COLUMNS + columnIndex] : 0;
+        ? command.inserts.typeDescriptor(rowIndex, columnIndex) : 0;
   }
 
   private static boolean valid(SqlCommand command, int rowIndex, int columnIndex) {

@@ -1,6 +1,7 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -54,7 +55,7 @@ final class RelationalIndexSchemaLifecycle {
     }
     if (!status.isOk()) return status;
     if (indexedTable.hasIndexOn(indexColumn)) return StatusCode.CONFLICT;
-    if (indexedTable.uniqueIndexCount() >= TableDefinition.MAXIMUM_INDEXES
+    if (indexedTable.uniqueIndexCount() >= SqlShapeLimits.MAX_SECONDARY_INDEXES
         && !indexedTable.hasBuildingUniqueValueIndex()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -171,13 +172,10 @@ final class RelationalIndexSchemaLifecycle {
           session, indexName, tableName, indexTableId, indexColumn, unique);
     }
     if (status.isOk()) {
-      indexedTable.set(
-          schemaGate,
-          indexedTable.tableId(),
+      status = indexedTable.upsertIndex(
           indexTableId,
           TableDefinition.INDEX_BUILDING,
           indexColumn,
-          indexedTable,
           unique);
     }
     return status;

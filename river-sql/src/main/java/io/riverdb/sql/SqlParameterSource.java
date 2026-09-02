@@ -10,5 +10,9 @@ public interface SqlParameterSource {
 
   long valueAt(int index);
 
+  default long highValueAt(int index) {
+    return valueAt(index) >> 63;
+  }
+
   int copyTextAt(int index, char[] target, int offset);
 }

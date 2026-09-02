@@ -98,12 +98,13 @@ final class EmbeddedRiverGeneralizedHavingTest {
         new long[] {1, 2},
         new long[] {2, 2},
         0);
-    assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
-        session.beginQuery(
-            groupedCapacity.replace(
-                " ORDER BY grp", " AND MIN(label)>='' ORDER BY grp"),
-            new QueryOpenResult()));
+    assertNumericGroups(
+        session,
+        groupedCapacity.replace(
+            " ORDER BY grp", " AND MIN(label)>='' ORDER BY grp"),
+        new long[] {1, 2},
+        new long[] {2, 2},
+        0);
     assertEquals(
         StatusCode.FEATURE_NOT_SUPPORTED,
         session.beginQuery(

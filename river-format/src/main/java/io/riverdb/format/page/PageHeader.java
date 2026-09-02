@@ -1,6 +1,6 @@
 package io.riverdb.format.page;
 
-/** Caller-owned decoded v1 page metadata. */
+/** Caller-owned decoded v2 page metadata. */
 public final class PageHeader {
   private long databaseHigh;
   private long databaseLow;
@@ -9,6 +9,8 @@ public final class PageHeader {
   private long pageGeneration;
   private long recordStart;
   private long recordEnd;
+  private int payloadKind;
+  private long ownerKeyId;
   private int payloadBytes;
 
   public long databaseHigh() {
@@ -39,6 +41,14 @@ public final class PageHeader {
     return recordEnd;
   }
 
+  public int payloadKind() {
+    return payloadKind;
+  }
+
+  public long ownerKeyId() {
+    return ownerKeyId;
+  }
+
   public int payloadBytes() {
     return payloadBytes;
   }
@@ -51,6 +61,8 @@ public final class PageHeader {
       long physicalPageGeneration,
       long walRecordStart,
       long walRecordEnd,
+      int bodyKind,
+      long bodyOwnerKeyId,
       int bodyBytes) {
     databaseHigh = databaseIncarnationHigh;
     databaseLow = databaseIncarnationLow;
@@ -59,10 +71,12 @@ public final class PageHeader {
     pageGeneration = physicalPageGeneration;
     recordStart = walRecordStart;
     recordEnd = walRecordEnd;
+    payloadKind = bodyKind;
+    ownerKeyId = bodyOwnerKeyId;
     payloadBytes = bodyBytes;
   }
 
   public void reset() {
-    set(0, 0, 0, 0, 0, 0, 0, 0);
+    set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
   }
 }

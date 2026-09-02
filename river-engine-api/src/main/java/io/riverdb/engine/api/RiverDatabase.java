@@ -21,5 +21,11 @@ public interface RiverDatabase {
     return StatusCode.ACCESS_DENIED;
   }
 
+  /**
+   * Transfers exact ownership of an unreachable session for database-owned terminal cleanup.
+   * OK means the caller must never access the session again; every failure leaves it caller-owned.
+   */
+  StatusCode deferTerminalClose(RiverSession session);
+
   StatusCode close();
 }

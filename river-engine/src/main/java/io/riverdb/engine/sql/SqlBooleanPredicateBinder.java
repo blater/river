@@ -101,7 +101,8 @@ final class SqlBooleanPredicateBinder {
       target.reset();
       return StatusCode.OK;
     }
-    target.begin(source);
+    StatusCode admission = target.begin(source);
+    if (!admission.isOk()) return admission;
     for (int leaf = 0; leaf < source.leafCount(); leaf++) {
       for (int program = 0; program < 4; program++) {
         if (source.programNodeCount(leaf, program) == 0) continue;

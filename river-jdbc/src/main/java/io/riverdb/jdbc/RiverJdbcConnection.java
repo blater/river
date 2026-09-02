@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.concurrent.Executor;
 
 /** One JDBC connection owns one ordered remote River session. */
-final class RiverJdbcConnection extends AbstractConnection {
+final class RiverJdbcConnection extends AbstractConnection implements RiverConnectionMetrics {
   private static final int MAXIMUM_SAVEPOINT_NAME_LENGTH = 64;
   private static final int MAXIMUM_SAVEPOINTS = 3;
 
@@ -26,10 +26,11 @@ final class RiverJdbcConnection extends AbstractConnection {
   final RiverSession session;
   private final RiverDatabaseMetaData metadata;
   private final CommandResult transactionResult = new CommandResult();
+  private final RiverJdbcPrograms programs;
   private final QueryOpenResult metadataQuery = new QueryOpenResult();
   private final RiverJdbcSavepoint[] savepoints =
       new RiverJdbcSavepoint[MAXIMUM_SAVEPOINTS];
-  RiverJdbcStatement statement;
+  final RiverJdbcStatementRegistry statements = new RiverJdbcStatementRegistry();
   AbstractResultSet metadataResult;
   private boolean autoCommit = true;
   private boolean transactionActive;
@@ -44,6 +45,7 @@ final class RiverJdbcConnection extends AbstractConnection {
       String url) {
     client = remoteClient;
     session = remoteSession;
+    programs = new RiverJdbcPrograms(this, session);
     metadata = new RiverDatabaseMetaData(this, url);
   }
 
@@ -72,10 +74,13 @@ final class RiverJdbcConnection extends AbstractConnection {
         || holdability != ResultSet.CLOSE_CURSORS_AT_COMMIT) {
       throw JdbcExceptions.unsupported();
     }
-    if (statement != null) {
-      throw JdbcExceptions.failure(StatusCode.CONFLICT, "create statement");
+    RiverJdbcStatement statement = new RiverJdbcStatement(this, session);
+    try {
+      statements.register(statement);
+    } catch (SQLException failure) {
+      statement.close();
+      throw failure;
     }
-    statement = new RiverJdbcStatement(this, session);
     return statement;
   }
 
@@ -92,12 +97,15 @@ final class RiverJdbcConnection extends AbstractConnection {
         && generatedKeys != Statement.RETURN_GENERATED_KEYS) {
       throw JdbcExceptions.unsupported();
     }
-    if (statement != null) {
-      throw JdbcExceptions.failure(StatusCode.CONFLICT, "prepare statement");
-    }
-    statement = new RiverJdbcPreparedStatement(
+    RiverJdbcPreparedStatement statement = new RiverJdbcPreparedStatement(
         this, session, sql, generatedKeys == Statement.RETURN_GENERATED_KEYS);
-    return (PreparedStatement) statement;
+    try {
+      statements.register(statement);
+    } catch (SQLException failure) {
+      statement.close();
+      throw failure;
+    }
+    return statement;
   }
 
   @Override
@@ -314,12 +322,28 @@ final class RiverJdbcConnection extends AbstractConnection {
     if (type != null && type.isInstance(this)) {
       return type.cast(this);
     }
+    if (type != null && type.isInstance(programs)) return type.cast(programs);
     throw JdbcExceptions.unsupported();
   }
 
   @Override
   public boolean isWrapperFor(Class<?> type) {
-    return type != null && type.isInstance(this);
+    return type != null && (type.isInstance(this) || type.isInstance(programs));
+  }
+
+  @Override
+  public long completedRequests() {
+    return client.completedRequests();
+  }
+
+  @Override
+  public long bytesSent() {
+    return client.bytesSent();
+  }
+
+  @Override
+  public long bytesReceived() {
+    return client.bytesReceived();
   }
 
   void beforeExecution() throws SQLException {
@@ -340,9 +364,7 @@ final class RiverJdbcConnection extends AbstractConnection {
   }
 
   void statementClosed(RiverJdbcStatement closedStatement) {
-    if (statement == closedStatement) {
-      statement = null;
-    }
+    statements.unregister(closedStatement);
   }
 
   void cancelCurrentOperation() throws SQLException {
@@ -485,9 +507,11 @@ final class RiverJdbcConnection extends AbstractConnection {
 
   private void finishTransaction(String sql, String operation) throws SQLException {
     transactionResult.reset();
-    JdbcExceptions.require(session.execute(sql, transactionResult), operation);
+    StatusCode status = session.execute(sql, transactionResult);
     transactionActive = transactionResult.transactionActive();
-    completeSavepointsFrom(0);
+    if (!transactionActive) completeSavepointsFrom(0);
+    if (status == StatusCode.CONFLICT && "ROLLBACK".equals(sql)) return;
+    JdbcExceptions.require(status, operation);
   }
 
   private Savepoint createSavepoint(String name) throws SQLException {
@@ -565,9 +589,7 @@ final class RiverJdbcConnection extends AbstractConnection {
     if (currentMetadata != null) {
       currentMetadata.close();
     }
-    if (statement != null) {
-      statement.closeOpenResult();
-    }
+    statements.closeOpenResults();
   }
 
   private void requireManualTransaction(String operation) throws SQLException {
@@ -575,6 +597,15 @@ final class RiverJdbcConnection extends AbstractConnection {
     if (autoCommit) {
       throw JdbcExceptions.failure(StatusCode.CONFLICT, operation + " in auto-commit mode");
     }
+  }
+
+  void requireProgramBoundary(String operation) throws SQLException {
+    requireOpen();
+    if (transactionActive) {
+      throw JdbcExceptions.failure(
+          StatusCode.CONFLICT, operation + " requires an idle connection");
+    }
+    closeTransactionResult();
   }
 
   void requireOpen() throws SQLException {

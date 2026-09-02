@@ -190,21 +190,13 @@ final class EmbeddedRiverTemporalPredicateTest {
                 + "'Europe/London'>=TIMESTAMP WITH TIME ZONE "
                 + "'0001-01-01 00:00:00+00:00'",
             new QueryOpenResult()));
-    QueryOpenResult opened = new QueryOpenResult();
     assertEquals(
-        StatusCode.OK,
+        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
         session.beginQuery(
             "SELECT id, COUNT(*) FROM events WHERE observed AT TIME ZONE "
                 + "'Europe/London'>=TIMESTAMP WITH TIME ZONE "
                 + "'0001-01-01 00:00:00+00:00' GROUP BY id ORDER BY id",
-            opened));
-    RiverQuery query = opened.query();
-    RowResult row = new RowResult();
-    assertEquals(StatusCode.OK, query.next(row));
-    assertEquals(1, row.valueAt(0));
-    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
-    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
-    assertEquals(StatusCode.OK, query.close(result));
+            new QueryOpenResult()));
     assertEquals(StatusCode.OK, session.execute("SELECT id FROM events WHERE id=1", result));
     assertSpilledComputedGroup(session, result);
   }
@@ -409,13 +401,19 @@ final class EmbeddedRiverTemporalPredicateTest {
 
   private static void assertOrderedFailureCleanup(
       RiverSession session, CommandResult result) {
+    QueryOpenResult opened = new QueryOpenResult();
     assertEquals(
-        StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
+        StatusCode.OK,
         session.beginQuery(
             "SELECT id FROM events WHERE observed AT TIME ZONE 'Europe/London'>="
                 + "TIMESTAMP WITH TIME ZONE '0001-01-01 00:00:00+00:00' "
                 + "ORDER BY day DESC",
-            new QueryOpenResult()));
+            opened));
+    RiverQuery query = opened.query();
+    RowResult row = new RowResult();
+    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
+    assertEquals(StatusCode.INVALID_TIME_ZONE_DISPLACEMENT, query.next(row));
+    assertEquals(StatusCode.OK, query.close(result));
     assertEquals(StatusCode.OK, session.execute("SELECT id FROM events WHERE id=2", result));
   }
 
@@ -440,7 +438,7 @@ final class EmbeddedRiverTemporalPredicateTest {
 
   private static void assertPlan(RiverSession session, String sql, String expected) {
     QueryOpenResult opened = new QueryOpenResult();
-    assertEquals(StatusCode.OK, session.beginQuery("EXPLAIN " + sql, opened));
+    assertEquals(StatusCode.OK, session.beginQuery("EXPLAIN " + sql, opened), sql);
     RiverQuery query = opened.query();
     RowResult row = new RowResult();
     boolean found = false;

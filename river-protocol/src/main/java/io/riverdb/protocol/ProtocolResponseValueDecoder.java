@@ -27,42 +27,51 @@ final class ProtocolResponseValueDecoder {
       if (offset >= end) return StatusCode.INVALID_EXTERNAL_INPUT;
       int length = bytes.get(offset++) & 0xff;
       if (!validColumnName(bytes, offset, length, end)) return StatusCode.INVALID_EXTERNAL_INPUT;
-      result.columnNameAt(index, bytes, offset, length);
+      if (!result.columnNameAt(index, bytes, offset, length)) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
       offset += length;
     }
     return offset == end ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
-  static StatusCode values(ByteBuffer bytes, int offset, int end, int columns, long nullMask,
+  static StatusCode values(ByteBuffer bytes, int offset, int end, int columns,
       ProtocolResponse result) {
     for (int index = 0; index < columns; index++) {
       int next = result.isVarchar(index)
-          ? text(bytes, offset, end, index, nullMask, result)
-          : fixed(bytes, offset, end, index, nullMask, result);
+          ? text(bytes, offset, end, index, result)
+          : fixed(bytes, offset, end, index, result);
       if (next < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
       offset = next;
     }
     return offset == end ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
-  private static int text(ByteBuffer bytes, int offset, int end, int index, long nullMask,
+  private static int text(ByteBuffer bytes, int offset, int end, int index,
       ProtocolResponse result) {
     if (offset > end - Short.BYTES) return -1;
     int length = Short.toUnsignedInt(bytes.getShort(offset));
     offset += Short.BYTES;
     int maximumScalars = SqlTypeDescriptor.parameterOne(result.typeDescriptorAt(index));
-    if (length > Utf8Text.MAXIMUM_BYTES || (nullMask & 1L << index) != 0 && length != 0
+    if (length > Utf8Text.MAXIMUM_BYTES || result.isNull(index) && length != 0
         || offset > end - length || Utf8Text.validate(bytes, offset, length, maximumScalars) < 0
         || !result.textAt(index, bytes, offset, length)) return -1;
     return offset + length;
   }
 
-  private static int fixed(ByteBuffer bytes, int offset, int end, int index, long nullMask,
+  private static int fixed(ByteBuffer bytes, int offset, int end, int index,
       ProtocolResponse result) {
-    if (offset > end - Long.BYTES) return -1;
+    int descriptor = result.typeDescriptorAt(index);
+    int width = ProtocolDecimal128.bytes(descriptor);
+    if (offset > end - width) return -1;
+    long high = ProtocolDecimal128.isWide(descriptor) ? bytes.getLong(offset) : 0;
+    if (width > Long.BYTES) offset += Long.BYTES;
     long value = bytes.getLong(offset);
-    if ((nullMask & 1L << index) == 0
-        && !SqlValueDomain.validFixed(result.typeDescriptorAt(index), value)) return -1;
+    if (!result.isNull(index)
+        && (ProtocolDecimal128.isWide(descriptor)
+            ? !ProtocolDecimal128.valid(descriptor, high, value)
+            : !SqlValueDomain.validFixed(descriptor, value))) return -1;
+    result.decimalHighAt(index, high);
     result.valueAt(index, value);
     return offset + Long.BYTES;
   }

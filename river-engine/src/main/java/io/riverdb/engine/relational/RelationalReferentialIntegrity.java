@@ -13,6 +13,7 @@ final class RelationalReferentialIntegrity {
   private final IndexedScanCursor catalogCursor = new IndexedScanCursor();
   private final IndexedScanResult catalogRow = new IndexedScanResult();
   private final TableDefinition referencingTable = new TableDefinition();
+  private final CatalogTableScanDecoder tableScanDecoder = new CatalogTableScanDecoder();
   private final TableSchema.ColumnName scannedName = new TableSchema.ColumnName();
   private final RelationalScanCursor referenceCursor = new RelationalScanCursor();
   private final ValueIndexLookupResult reference = new ValueIndexLookupResult();
@@ -58,7 +59,7 @@ final class RelationalReferentialIntegrity {
 
   private StatusCode checkCandidate(
       RelationalSession session, int tableId, long key) {
-    StatusCode status = CatalogRecord.decodeTableForScan(
+    StatusCode status = CatalogRecord.decodeTableForScan(tableScanDecoder,
         catalogRow.row(),
         catalogScratch,
         schemaGate,

@@ -49,6 +49,20 @@ final class Utf8TextDecoding {
     return output - targetOffset;
   }
 
+  static int decodedLength(ByteBuffer source, int offset, int length) {
+    if (!validRange(source, offset, length)) return -1;
+    int end = offset + length;
+    int characters = 0;
+    int index = offset;
+    while (index < end) {
+      int decoded = decodeScalar(source, index, end);
+      if (decoded < 0) return -1;
+      characters += (decoded & 0x00ff_ffff) >= Character.MIN_SUPPLEMENTARY_CODE_POINT ? 2 : 1;
+      index += decoded >>> 24;
+    }
+    return characters;
+  }
+
   private static boolean validRange(ByteBuffer source, int offset, int length) {
     return source != null && offset >= 0 && length >= 0 && offset <= source.limit() - length;
   }

@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
 
@@ -27,6 +28,8 @@ final class SqlBlockExpressionBinder {
       StatusCode status = node(command, expression, lane, node, child, bound);
       if (!status.isOk()) return status;
     }
+    StatusCode status = bound.projectionPrograms.status();
+    if (!status.isOk()) return status;
     if (size != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
     int raw = expression.isDirectColumnReference()
         ? (int) bound.projectionPrograms.operand(lane, 0) : -1;
@@ -34,7 +37,7 @@ final class SqlBlockExpressionBinder {
         && SqlTypeDescriptor.typeId(descriptors[0]) == SqlTypeDescriptor.TYPE_ID_VARCHAR
         && !generatedText) return StatusCode.FEATURE_NOT_SUPPORTED;
     bound.projectionPrograms.finish(lane, descriptors[0], raw);
-    return StatusCode.OK;
+    return bound.projectionPrograms.status();
   }
 
   boolean nullable(
@@ -97,7 +100,7 @@ final class SqlBlockExpressionBinder {
     descriptors[slot] = descriptor;
     if (operator == SqlScalarExpression.CAST) untypedNulls[slot] = false;
     bound.projectionPrograms.append(lane, operator, expression.operand(node), descriptor);
-    return StatusCode.OK;
+    return bound.projectionPrograms.status();
   }
 
   private StatusCode binary(
@@ -114,7 +117,7 @@ final class SqlBlockExpressionBinder {
     descriptors[left] = descriptor;
     bound.projectionPrograms.append(
         lane, expression.operator(node), expression.operand(node), descriptor);
-    return StatusCode.OK;
+    return bound.projectionPrograms.status();
   }
 
   private boolean resolveNulls(int operator, int left, int right) {
@@ -128,8 +131,7 @@ final class SqlBlockExpressionBinder {
     }
     if (untypedNulls[left] == untypedNulls[right]) return false;
     int known = untypedNulls[right] ? descriptors[left] : descriptors[right];
-    if (SqlTypeDescriptor.comparisonFamily(known)
-        != SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC) return false;
+    if (!SqlNumericTypeRules.isNumeric(known)) return false;
     descriptors[untypedNulls[right] ? right : left] = known;
     untypedNulls[left] = false;
     untypedNulls[right] = false;
@@ -144,9 +146,11 @@ final class SqlBlockExpressionBinder {
       int descriptor,
       boolean untyped) {
     if (size >= descriptors.length) return StatusCode.RESOURCE_EXHAUSTED;
+    bound.projectionPrograms.append(lane, operator, operand, descriptor);
+    StatusCode status = bound.projectionPrograms.status();
+    if (!status.isOk()) return status;
     descriptors[size] = descriptor;
     untypedNulls[size++] = untyped;
-    bound.projectionPrograms.append(lane, operator, operand, descriptor);
     return StatusCode.OK;
   }
 

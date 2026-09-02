@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlScalarExpression;
 
@@ -20,7 +21,8 @@ final class SqlPrimitiveSortKey {
     if (family == SqlTypeDescriptor.COMPARISON_TEXT) {
       return StatusCode.FEATURE_NOT_SUPPORTED;
     }
-    return family == SqlTypeDescriptor.COMPARISON_EXACT_NUMERIC
+    return SqlNumericTypeRules.isNumeric(
+            bound.projectionPrograms.resultDescriptor(projection))
             || family == SqlTypeDescriptor.COMPARISON_LOCAL_TEMPORAL
             || family == SqlTypeDescriptor.COMPARISON_INSTANT
         ? StatusCode.OK : StatusCode.DATATYPE_MISMATCH;

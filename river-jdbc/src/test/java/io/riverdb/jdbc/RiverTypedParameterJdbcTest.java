@@ -77,6 +77,8 @@ final class RiverTypedParameterJdbcTest {
     try (connection) {
       createSchema(connection);
       insertTypedRows(connection);
+      assertWideTextParameterRoundTrip(connection);
+      assertConcurrentPreparedStatements(connection);
       assertTypedValuesAndBorrowLifetime(connection);
       assertStrictStatusBoundaries(connection);
       assertBatchSnapshots(connection);
@@ -98,6 +100,34 @@ final class RiverTypedParameterJdbcTest {
               + "captured TIMESTAMP(6) WITH TIME ZONE)"));
       assertEquals(0, statement.executeUpdate(
           "CREATE TABLE typed_batch (id BIGINT PRIMARY KEY, day DATE)"));
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE typed_concurrent (id BIGINT PRIMARY KEY, day DATE)"));
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE typed_customer (id BIGINT PRIMARY KEY, "
+              + "c_data VARCHAR(500), state CHAR(2))"));
+      assertEquals(0, statement.executeUpdate(
+          "CREATE UNIQUE INDEX typed_customer_data ON typed_customer(c_data)"));
+    }
+  }
+
+  private static void assertWideTextParameterRoundTrip(Connection connection)
+      throws SQLException {
+    String customerData = "x".repeat(500);
+    try (PreparedStatement insert = connection.prepareStatement(
+            "INSERT INTO typed_customer VALUES (?,?,?)");
+        PreparedStatement select = connection.prepareStatement(
+            "SELECT c_data,state FROM typed_customer WHERE c_data=?")) {
+      insert.setLong(1, 1);
+      insert.setString(2, customerData);
+      insert.setString(3, "GC");
+      assertEquals(1, insert.executeUpdate());
+      select.setString(1, customerData);
+      try (ResultSet rows = select.executeQuery()) {
+        assertTrue(rows.next());
+        assertEquals(customerData, rows.getString(1));
+        assertEquals("GC", rows.getString(2));
+        assertFalse(rows.next());
+      }
     }
   }
 
@@ -128,6 +158,37 @@ final class RiverTypedParameterJdbcTest {
       insert.setTimestamp(7, null);
       insert.setObject(8, null, Types.TIMESTAMP_WITH_TIMEZONE);
       assertEquals(1, insert.executeUpdate());
+    }
+  }
+
+  private static void assertConcurrentPreparedStatements(Connection connection)
+      throws SQLException {
+    try (PreparedStatement first = connection.prepareStatement(
+            "INSERT INTO typed_concurrent VALUES (?,?)");
+        PreparedStatement second = connection.prepareStatement(
+            "INSERT INTO typed_concurrent VALUES (?,?)");
+        PreparedStatement nested = connection.prepareStatement(
+            "SELECT id FROM typed_parameters WHERE id IN "
+                + "(SELECT id FROM typed_parameters WHERE flag=true) ORDER BY id")) {
+      first.setLong(1, 1);
+      first.setDate(2, Date.valueOf("2024-01-01"));
+      first.addBatch();
+      first.setLong(1, 2);
+      first.setDate(2, Date.valueOf("2024-01-02"));
+      first.addBatch();
+      second.setLong(1, 3);
+      second.setDate(2, Date.valueOf("2024-01-03"));
+      second.addBatch();
+      second.setLong(1, 4);
+      second.setDate(2, Date.valueOf("2024-01-04"));
+      second.addBatch();
+      assertArrayEquals(new int[] {1, 1}, first.executeBatch());
+      assertArrayEquals(new int[] {1, 1}, second.executeBatch());
+      try (ResultSet rows = nested.executeQuery()) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong(1));
+        assertFalse(rows.next());
+      }
     }
   }
 
@@ -220,16 +281,16 @@ final class RiverTypedParameterJdbcTest {
       assertEquals("22009", offset.getSQLState());
       SQLException text = assertThrows(
           SQLException.class,
-          () -> mismatch.setString(1, "x".repeat(256)));
+          () -> mismatch.setString(1, "x".repeat(65_536)));
       assertEquals("22001", text.getSQLState());
       SQLException decimal = assertThrows(
           SQLException.class,
           () -> mismatch.setBigDecimal(
-              1, new BigDecimal("1234567890123456789")));
+              1, new BigDecimal("123456789012345678901234567890123456789")));
       assertEquals("22003", decimal.getSQLState());
       SQLException negativeScale = assertThrows(
           SQLException.class,
-          () -> mismatch.setBigDecimal(1, new BigDecimal("1E+18")));
+          () -> mismatch.setBigDecimal(1, new BigDecimal("1E+38")));
       assertEquals("22003", negativeScale.getSQLState());
     }
     try (PreparedStatement normalized = connection.prepareStatement("SELECT ?")) {

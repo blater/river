@@ -61,6 +61,25 @@ final class SqlSubqueryPipelineConsumerTest {
         acceptedValue,
         acceptedNull,
         acceptedLabel);
+    String computedDirect = "SELECT o.id,o.value,o.label FROM outer_rows o WHERE "
+        + TABLE_GRAPH + " AND o.value+0>=40";
+    String computedPipelined = "SELECT d.id,d.value,d.label FROM "
+        + "(SELECT o.id,o.value,o.label FROM outer_rows o WHERE "
+        + TABLE_GRAPH + ") d WHERE d.value+0>=40";
+    assertRows(
+        fixture,
+        computedDirect,
+        acceptedId,
+        acceptedValue,
+        acceptedNull,
+        acceptedLabel);
+    assertRows(
+        fixture,
+        computedPipelined,
+        acceptedId,
+        acceptedValue,
+        acceptedNull,
+        acceptedLabel);
 
     fixture.close();
   }
@@ -132,15 +151,22 @@ final class SqlSubqueryPipelineConsumerTest {
     String pipelinedGroup = "SELECT region+10 AS bucket,COUNT(*) FROM "
         + "(SELECT o.region FROM outer_rows o WHERE " + TABLE_GRAPH + ") d "
         + "GROUP BY region+10 HAVING COUNT(*)=1";
-    assertPairs(fixture, directGroup, new long[] {11, 13}, 1);
-    assertPairs(fixture, pipelinedGroup, new long[] {11, 13}, 1);
+    assertUnorderedPairs(
+        fixture,
+        "SELECT region+10 AS bucket,COUNT(*) FROM outer_rows o WHERE "
+            + TABLE_GRAPH + " GROUP BY region+10",
+        new long[] {11, 12, 13},
+        new long[] {1, 2, 1});
+    assertUnorderedPairs(fixture, directGroup, new long[] {11, 13}, new long[] {1, 1});
+    assertUnorderedPairs(fixture, pipelinedGroup, new long[] {11, 13}, new long[] {1, 1});
 
     String directDistinct = "SELECT DISTINCT region+10 AS bucket "
-        + "FROM outer_rows o WHERE " + TABLE_GRAPH;
+        + "FROM outer_rows o WHERE " + TABLE_GRAPH + " ORDER BY bucket";
     String pipelinedDistinct = "SELECT DISTINCT region+10 AS bucket FROM "
-        + "(SELECT o.region FROM outer_rows o WHERE " + TABLE_GRAPH + ") d";
-    fixture.assertRows(directDistinct, 11, 12, 13);
-    fixture.assertRows(pipelinedDistinct, 11, 12, 13);
+        + "(SELECT o.region FROM outer_rows o WHERE " + TABLE_GRAPH + ") d "
+        + "ORDER BY bucket";
+    fixture.assertSyntheticRows(directDistinct, 11, 12, 13);
+    fixture.assertSyntheticRows(pipelinedDistinct, 11, 12, 13);
 
     fixture.close();
   }
@@ -275,18 +301,25 @@ final class SqlSubqueryPipelineConsumerTest {
     assertEquals(StatusCode.OK, fixture.session().closeScan(cursor, fixture.result()), sql);
   }
 
-  private static void assertPairs(
+  private static void assertUnorderedPairs(
       SqlSubqueryAcceptanceFixture fixture,
       String sql,
       long[] keys,
-      long expectedValue) {
+      long[] expectedValues) {
     SqlScanCursor cursor = new SqlScanCursor();
     SqlScanRowResult row = new SqlScanRowResult();
+    boolean[] seen = new boolean[keys.length];
     assertEquals(StatusCode.OK, fixture.session().beginScan(sql, cursor), sql);
-    for (long key : keys) {
+    for (int rowIndex = 0; rowIndex < keys.length; rowIndex++) {
       assertEquals(StatusCode.OK, fixture.session().nextScan(cursor, row), sql);
-      assertEquals(key, row.valueAt(0), sql);
-      assertEquals(expectedValue, row.valueAt(1), sql);
+      long actual = row.valueAt(0);
+      int match = -1;
+      for (int keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+        if (!seen[keyIndex] && actual == keys[keyIndex]) match = keyIndex;
+      }
+      assertEquals(true, match >= 0, sql);
+      seen[match] = true;
+      assertEquals(expectedValues[match], row.valueAt(1), sql + " key=" + actual);
     }
     assertEquals(StatusCode.CONFLICT, fixture.session().nextScan(cursor, row), sql);
     assertEquals(StatusCode.OK, fixture.session().closeScan(cursor, fixture.result()), sql);

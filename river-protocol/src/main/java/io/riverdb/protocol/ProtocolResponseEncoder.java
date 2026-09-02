@@ -3,7 +3,7 @@ package io.riverdb.protocol;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
-import io.riverdb.engine.api.RiverQuery;
+import io.riverdb.engine.api.PreparedOpenResult;
 import io.riverdb.engine.api.RowResult;
 import java.nio.ByteBuffer;
 
@@ -34,53 +34,83 @@ final class ProtocolResponseEncoder {
         0, 0, 0, 0, 0, 0, challengeHigh, challengeLow, null, null);
   }
 
-  StatusCode encodeQueryOpen(
+  StatusCode encodePrepared(
       ByteBuffer target,
       long requestId,
       StatusCode status,
-      RiverQuery query) {
-    if (status == null
-        || status.isOk() && (query == null || !query.isActive())
-        || !status.isOk() && query != null) {
+      PreparedOpenResult prepared) {
+    if (status == null || status.isOk() && (prepared == null || prepared.handle() <= 0)) {
+      return ProtocolFrameWire.invalidTarget(target);
+    }
+    return encode(
+        target, ProtocolMessageType.PREPARE, requestId, status,
+        status.isOk() && prepared.query() ? ProtocolFrameCodec.FLAG_PREPARED_QUERY : 0,
+        status.isOk() ? prepared.parameterCount() : 0,
+        0, 0, status.isOk() ? prepared.handle() : 0,
+        0, 0, 0, null, null);
+  }
+
+  StatusCode encodeQueryOpen(
+      ByteBuffer target,
+      ProtocolMessageType type,
+      long requestId,
+      StatusCode status,
+      ProtocolQueryMetadata metadata,
+      RowResult row,
+      long rowsReturned,
+      CommandResult completion,
+      boolean queryActive) {
+    if ((type != ProtocolMessageType.BEGIN_QUERY
+            && type != ProtocolMessageType.BEGIN_PREPARED_QUERY)
+        || status == null
+        || status.isOk() && (metadata == null
+            || row == null
+            || queryActive == (completion != null))
+        || !status.isOk() && (metadata != null || row != null || completion != null)) {
       return ProtocolFrameWire.invalidTarget(target);
     }
     if (!status.isOk()) {
       return encodeStatus(
-          target, ProtocolMessageType.BEGIN_QUERY, requestId, status, false);
+          target, type, requestId, status, queryActive);
     }
-    int columns = query.columnCount();
-    int metadataBytes = metadataBytes(query, columns);
-    if (metadataBytes < 0) {
+    int columns = metadata.columnCount();
+    int metadataBytes = metadataBytes(metadata, columns);
+    int valueBytes = row.isAvailable() ? valueBytes(null, row, columns) : 0;
+    if (metadataBytes < 0 || valueBytes < 0 || !matches(metadata, row, columns)
+        || queryActive && !row.isAvailable()
+        || rowsReturned != (row.isAvailable() ? 1 : 0)) {
       return ProtocolFrameWire.invalidTarget(target);
     }
-    int payloadBytes = FIXED_BYTES + metadataBytes;
-    long nullableMask = nullableMask(query, columns);
+    int rowNullBytes = row.isAvailable() ? bitmapBytes(columns) : 0;
+    int payloadBytes = FIXED_BYTES + metadataBytes + rowNullBytes + valueBytes;
     StatusCode encoded = ProtocolFrameWire.begin(
         target,
-        ProtocolMessageType.BEGIN_QUERY,
+        type,
         requestId,
         payloadBytes,
         ProtocolFrameWire.FRAME_RESPONSE);
     if (!encoded.isOk()) {
       return encoded;
     }
-    writeFixed(
-        target,
-        status,
-        ProtocolFrameCodec.FLAG_QUERY_ACTIVE
-            | ProtocolFrameCodec.FLAG_COLUMN_METADATA,
-        0,
-        columns,
-        0,
-        0,
-        0,
-        0,
-        0,
-        nullableMask);
-    writeMetadata(target, query, columns);
-    target.position(0);
-    target.limit(ProtocolFrameCodec.HEADER_BYTES + payloadBytes);
-    return StatusCode.OK;
+    int flags = ProtocolFrameCodec.FLAG_COLUMN_METADATA
+        | (queryActive ? ProtocolFrameCodec.FLAG_QUERY_ACTIVE
+            : ProtocolFrameCodec.FLAG_END_OF_STREAM)
+        | (row.isAvailable() ? ProtocolFrameCodec.FLAG_ROW_AVAILABLE : 0);
+    if (completion != null && completion.transactionActive()) {
+      flags |= ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE;
+    }
+    writeFixed(target, status, flags,
+        completion == null ? 0 : completion.affectedRows(), columns,
+        completion == null ? 0 : completion.commitSequence(),
+        row.isAvailable() ? row.key() : 0, rowsReturned, 0, 0,
+        rowNullBytes, metadataBytes);
+    int offset = writeMetadata(target, metadata, columns);
+    if (row.isAvailable()) {
+      offset = writeNulls(target, offset, null, row, columns);
+      writeValues(target, offset, null, row, columns);
+    }
+    return ProtocolResponseSegmenter.finish(
+        target, type, requestId, payloadBytes);
   }
 
   StatusCode encodeCommand(
@@ -121,18 +151,31 @@ final class ProtocolResponseEncoder {
       StatusCode status,
       RowResult row,
       long rowsReturned,
+      CommandResult completion,
       boolean queryActive) {
+    if (type != ProtocolMessageType.FETCH || status == null || row == null
+        || status.isOk() && queryActive == (completion != null)
+        || !status.isOk() && queryActive && completion != null) {
+      return ProtocolFrameWire.invalidTarget(target);
+    }
+    if (!status.isOk() && completion == null) {
+      return encodeStatus(target, type, requestId, status, queryActive);
+    }
     int flags = (row.isAvailable() ? ProtocolFrameCodec.FLAG_ROW_AVAILABLE : 0)
-        | (queryActive ? ProtocolFrameCodec.FLAG_QUERY_ACTIVE : 0);
+        | (queryActive ? ProtocolFrameCodec.FLAG_QUERY_ACTIVE
+            : ProtocolFrameCodec.FLAG_END_OF_STREAM);
+    if (completion != null && completion.transactionActive()) {
+      flags |= ProtocolFrameCodec.FLAG_TRANSACTION_ACTIVE;
+    }
     return encode(
         target,
         type,
         requestId,
         status,
         flags,
-        0,
+        completion == null ? 0 : completion.affectedRows(),
         row.columnCount(),
-        0,
+        completion == null ? 0 : completion.commitSequence(),
         row.key(),
         rowsReturned,
         0,
@@ -159,15 +202,12 @@ final class ProtocolResponseEncoder {
     if (status == null || columns < 0 || columns > CommandResult.MAXIMUM_COLUMNS) {
       return ProtocolFrameWire.invalidTarget(target);
     }
-    long nullMask = nullMask(command, row);
-    if ((nullMask & ~((1L << columns) - 1)) != 0) {
-      return ProtocolFrameWire.invalidTarget(target);
-    }
-    int valueBytes = valueBytes(command, row, columns, nullMask);
+    int valueBytes = valueBytes(command, row, columns);
     if (valueBytes < 0) {
       return ProtocolFrameWire.invalidTarget(target);
     }
-    int payloadBytes = FIXED_BYTES + columns * Integer.BYTES + valueBytes;
+    int payloadBytes = FIXED_BYTES + bitmapBytes(columns)
+        + columns * Integer.BYTES + valueBytes;
     StatusCode encoded = ProtocolFrameWire.begin(
         target, type, requestId, payloadBytes, ProtocolFrameWire.FRAME_RESPONSE);
     if (!encoded.isOk()) {
@@ -175,59 +215,61 @@ final class ProtocolResponseEncoder {
     }
     writeFixed(
         target, status, flags, rows, columns, commitSequence, key, returned,
-        challengeHigh, challengeLow, nullMask);
-    int offset = writeTypes(target, command, row, columns);
-    writeValues(target, offset, command, row, columns, nullMask);
-    target.position(0);
-    target.limit(ProtocolFrameCodec.HEADER_BYTES + payloadBytes);
-    return StatusCode.OK;
+        challengeHigh, challengeLow, bitmapBytes(columns), 0);
+    int offset = writeNulls(target, command, row, columns);
+    offset = writeTypes(target, offset, command, row, columns);
+    writeValues(target, offset, command, row, columns);
+    return ProtocolResponseSegmenter.finish(target, type, requestId, payloadBytes);
   }
 
-  private static int metadataBytes(RiverQuery query, int columns) {
+  private static int metadataBytes(ProtocolQueryMetadata query, int columns) {
     if (columns <= 0 || columns > CommandResult.MAXIMUM_COLUMNS) {
       return -1;
     }
-    int bytes = 0;
+    int bytes = bitmapBytes(columns);
     for (int index = 0; index < columns; index++) {
-      CharSequence name = query.columnName(index);
-      if (!validColumnName(name)
-          || !SqlTypeDescriptor.isValid(query.columnTypeDescriptor(index))) {
+      int nameLength = query.nameLengthAt(index);
+      if (nameLength <= 0 || nameLength > ProtocolFrameCodec.MAXIMUM_COLUMN_NAME_BYTES
+          || !SqlTypeDescriptor.isValid(query.typeDescriptorAt(index))) {
         return -1;
       }
-      bytes += Integer.BYTES + 1 + name.length();
+      bytes += Integer.BYTES + 1 + nameLength;
     }
     return bytes;
   }
 
-  private static long nullableMask(RiverQuery query, int columns) {
-    long mask = 0;
-    for (int index = 0; index < columns; index++) {
-      if (query.columnIsNullable(index)) mask |= 1L << index;
-    }
-    return mask;
-  }
-
-  private static void writeMetadata(
-      ByteBuffer target, RiverQuery query, int columns) {
+  private static int writeMetadata(
+      ByteBuffer target, ProtocolQueryMetadata query, int columns) {
     int offset = ProtocolFrameCodec.HEADER_BYTES + FIXED_BYTES;
+    offset = writeNullable(target, offset, query, columns);
     for (int index = 0; index < columns; index++) {
-      target.putInt(offset, query.columnTypeDescriptor(index));
+      target.putInt(offset, query.typeDescriptorAt(index));
       offset += Integer.BYTES;
     }
     for (int index = 0; index < columns; index++) {
-      CharSequence name = query.columnName(index);
-      target.put(offset++, (byte) name.length());
-      for (int character = 0; character < name.length(); character++) {
-        target.put(offset++, (byte) name.charAt(character));
+      int length = query.nameLengthAt(index);
+      target.put(offset++, (byte) length);
+      for (int character = 0; character < length; character++) {
+        target.put(offset++, (byte) query.nameCharacterAt(index, character));
       }
     }
+    return offset;
+  }
+
+  private static boolean matches(
+      ProtocolQueryMetadata metadata, RowResult row, int columns) {
+    if (!row.isAvailable()) return row.columnCount() == 0;
+    if (row.columnCount() != columns) return false;
+    for (int index = 0; index < columns; index++) {
+      if (row.typeDescriptorAt(index) != metadata.typeDescriptorAt(index)) return false;
+    }
+    return true;
   }
 
   private static int valueBytes(
       CommandResult command,
       RowResult row,
-      int columns,
-      long nullMask) {
+      int columns) {
     int bytes = 0;
     for (int index = 0; index < columns; index++) {
       int descriptor = descriptor(command, row, index);
@@ -236,10 +278,10 @@ final class ProtocolResponseEncoder {
       }
       if (SqlTypeDescriptor.typeId(descriptor)
           != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        bytes += Long.BYTES;
+        bytes += ProtocolDecimal128.bytes(descriptor);
         continue;
       }
-      int characters = (nullMask & 1L << index) != 0
+      int characters = isNull(command, row, index)
           ? 0 : textLength(command, row, index);
       int length = encodedTextBytes(command, row, index, characters, descriptor);
       if (length < 0) {
@@ -252,10 +294,10 @@ final class ProtocolResponseEncoder {
 
   private static int writeTypes(
       ByteBuffer target,
+      int offset,
       CommandResult command,
       RowResult row,
       int columns) {
-    int offset = ProtocolFrameCodec.HEADER_BYTES + FIXED_BYTES;
     for (int index = 0; index < columns; index++) {
       target.putInt(offset, descriptor(command, row, index));
       offset += Integer.BYTES;
@@ -268,13 +310,12 @@ final class ProtocolResponseEncoder {
       int offset,
       CommandResult command,
       RowResult row,
-      int columns,
-      long nullMask) {
+      int columns) {
     for (int index = 0; index < columns; index++) {
       int descriptor = descriptor(command, row, index);
       if (SqlTypeDescriptor.typeId(descriptor)
           == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        int characters = (nullMask & 1L << index) != 0
+        int characters = isNull(command, row, index)
             ? 0 : textLength(command, row, index);
         int length = encodedTextBytes(
             command, row, index, characters, descriptor);
@@ -282,6 +323,10 @@ final class ProtocolResponseEncoder {
         offset = writeText(
             target, offset + Short.BYTES, command, row, index, characters);
       } else {
+        if (ProtocolDecimal128.isWide(descriptor)) {
+          target.putLong(offset, decimalHigh(command, row, index));
+          offset += Long.BYTES;
+        }
         target.putLong(offset, value(command, row, index));
         offset += Long.BYTES;
       }
@@ -334,8 +379,11 @@ final class ProtocolResponseEncoder {
         ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
   }
 
-  private static long nullMask(CommandResult command, RowResult row) {
-    return command != null ? command.nullMask() : row == null ? 0 : row.nullMask();
+  private static long decimalHigh(
+      CommandResult command, RowResult row, int index) {
+    return command != null
+        ? command.decimalUnscaledHighAt(index)
+        : row == null ? 0 : row.decimalUnscaledHighAt(index);
   }
 
   private static void writeFixed(
@@ -349,7 +397,8 @@ final class ProtocolResponseEncoder {
       long returned,
       long challengeHigh,
       long challengeLow,
-      long nullMask) {
+      int nullBitmapBytes,
+      int metadataBytes) {
     int offset = ProtocolFrameCodec.HEADER_BYTES;
     target.putInt(offset, status.stableCode());
     target.putInt(offset + 4, flags);
@@ -360,29 +409,49 @@ final class ProtocolResponseEncoder {
     target.putLong(offset + 32, returned);
     target.putLong(offset + 40, challengeHigh);
     target.putLong(offset + 48, challengeLow);
-    target.putLong(offset + 56, nullMask);
+    target.putInt(offset + 56, nullBitmapBytes);
+    target.putInt(offset + 60, metadataBytes);
   }
 
-  private static boolean validColumnName(CharSequence name) {
-    if (name == null || name.length() <= 0
-        || name.length() > ProtocolFrameCodec.MAXIMUM_COLUMN_NAME_BYTES
-        || !identifierStart(name.charAt(0))) {
-      return false;
+  private static int writeNulls(
+      ByteBuffer target, CommandResult command, RowResult row, int columns) {
+    return writeNulls(
+        target, ProtocolFrameCodec.HEADER_BYTES + FIXED_BYTES,
+        command, row, columns);
+  }
+
+  private static int writeNulls(
+      ByteBuffer target, int offset,
+      CommandResult command, RowResult row, int columns) {
+    for (int index = 0; index < bitmapBytes(columns); index++) {
+      long word = command != null
+          ? command.nullWord(index >>> 3) : row == null ? 0 : row.nullWord(index >>> 3);
+      target.put(offset++, (byte) (word >>> ((index & 7) << 3)));
     }
-    for (int index = 1; index < name.length(); index++) {
-      if (!identifierPart(name.charAt(index))) {
-        return false;
+    return offset;
+  }
+
+  private static int writeNullable(
+      ByteBuffer target, int offset, ProtocolQueryMetadata query, int columns) {
+    int bytes = bitmapBytes(columns);
+    for (int byteIndex = 0; byteIndex < bytes; byteIndex++) {
+      int value = 0;
+      int first = byteIndex << 3;
+      int end = Math.min(columns, first + Byte.SIZE);
+      for (int index = first; index < end; index++) {
+        if (query.columnIsNullable(index)) value |= 1 << (index & 7);
       }
+      target.put(offset++, (byte) value);
     }
-    return true;
+    return offset;
   }
 
-  private static boolean identifierStart(char value) {
-    return value >= 'a' && value <= 'z'
-        || value >= 'A' && value <= 'Z' || value == '_';
+  private static boolean isNull(CommandResult command, RowResult row, int index) {
+    return command != null ? command.isNull(index) : row != null && row.isNull(index);
   }
 
-  private static boolean identifierPart(char value) {
-    return identifierStart(value) || value >= '0' && value <= '9';
+  private static int bitmapBytes(int columns) {
+    return (columns + Byte.SIZE - 1) >>> 3;
   }
+
 }

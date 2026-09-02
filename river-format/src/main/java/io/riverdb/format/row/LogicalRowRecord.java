@@ -2,21 +2,21 @@ package io.riverdb.format.row;
 
 /** Caller-owned decoded stable logical-row directory record. */
 public final class LogicalRowRecord {
-  private int tableId;
+  private long objectId;
   private long logicalRowId;
-  private long headVersionId;
+  private long headHeapVersionId;
   private boolean keyless;
 
-  void set(int ownerTableId, long rowId, long versionId, boolean hiddenKey) {
-    tableId = ownerTableId;
-    logicalRowId = rowId;
-    headVersionId = versionId;
+  void set(long ownerObjectId, long stableLogicalRowId, long heapVersionId, boolean hiddenKey) {
+    objectId = ownerObjectId;
+    logicalRowId = stableLogicalRowId;
+    headHeapVersionId = heapVersionId;
     keyless = hiddenKey;
   }
 
   public void reset() { set(0, 0, 0, false); }
-  public int tableId() { return tableId; }
+  public long objectId() { return objectId; }
   public long logicalRowId() { return logicalRowId; }
-  public long headVersionId() { return headVersionId; }
+  public long headHeapVersionId() { return headHeapVersionId; }
   public boolean keyless() { return keyless; }
 }

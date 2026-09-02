@@ -10,6 +10,9 @@ final class SqlMutationBinder {
   private final SqlInsertMutationBinder inserts = new SqlInsertMutationBinder();
 
   StatusCode bindUpdate(SqlCommand command, BoundSqlStatement bound) {
+    int capacity = Math.max(command.updateColumnCount(), command.mutationExpressionCount());
+    StatusCode reserved = bound.reserveMutationColumns(capacity);
+    if (!reserved.isOk()) return reserved;
     bound.projectionPrograms.beginMutations(command.mutationExpressionCount());
     for (int index = 0; index < command.updateColumnCount(); index++) {
       StatusCode status = bindUpdateColumn(command, bound, index);
@@ -18,11 +21,22 @@ final class SqlMutationBinder {
       }
     }
     bound.updatedColumnCount = command.updateColumnCount();
-    return StatusCode.OK;
+    return bound.projectionPrograms.status();
   }
 
   StatusCode bindInsert(SqlCommand command, BoundSqlStatement bound) {
     return inserts.bind(command, bound);
+  }
+
+  StatusCode bindDescriptorExpressions(
+      SqlCommand command, BoundSqlStatement bound, boolean columnsAllowed) {
+    int count = command.mutationExpressionCount();
+    StatusCode status = bound.reserveMutationColumns(count);
+    if (status.isOk()) bound.projectionPrograms.beginMutations(count);
+    for (int expression = 0; status.isOk() && expression < count; expression++) {
+      status = expressions.bind(command, bound, expression, columnsAllowed);
+    }
+    return status.isOk() ? bound.projectionPrograms.status() : status;
   }
 
   private StatusCode bindUpdateColumn(
@@ -48,7 +62,8 @@ final class SqlMutationBinder {
     StatusCode status = bindLiteralUpdate(command, bound, index, column);
     if (!status.isOk()) return status;
     if (command.updateIsNull(index) && !bound.table.isNullable(column)
-        || command.updateIsDefault(index) && !bound.table.hasDefault(column)) {
+        || command.updateIsDefault(index) && !bound.table.hasDefault(column)
+            && !bound.table.isNullable(column)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return SqlMutationAssignmentTypes.compatible(

@@ -2,7 +2,6 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.EmbeddedDatabase;
-import io.riverdb.engine.EmbeddedSessionOpenResult;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -11,11 +10,11 @@ import java.nio.ByteBuffer;
 
 /** Owns explicit-session entry to table and index schema lifecycle operations. */
 final class RelationalSchemaLifecycle {
-  private static final int CATALOG_ROW_BYTES = CatalogRecord.MAXIMUM_BYTES;
   private static final int INDEX_BUILD_BATCH_ROWS = 48;
 
   private final EmbeddedDatabase embedded;
   private final RelationalSchemaGate schemaGate;
+  private final RelationalSessionFactory sessions;
   private final RelationalTableLifecycle tables;
   private final RelationalIndexBuilder indexBuilder;
   private final RelationalIndexRemoval indexRemoval;
@@ -38,9 +37,13 @@ final class RelationalSchemaLifecycle {
   private long buildLastKey;
   private boolean buildBatchFull;
 
-  RelationalSchemaLifecycle(EmbeddedDatabase database, RelationalSchemaGate gate) {
+  RelationalSchemaLifecycle(
+      EmbeddedDatabase database,
+      RelationalSchemaGate gate,
+      RelationalDatabaseServices services) {
     embedded = database;
     schemaGate = gate;
+    sessions = new RelationalSessionFactory(database, gate, services);
     tables = new RelationalTableLifecycle(gate);
     indexBuilder = new RelationalIndexBuilder(gate);
     indexRemoval = new RelationalIndexRemoval(gate);
@@ -56,6 +59,10 @@ final class RelationalSchemaLifecycle {
         nextTableId);
     indexCreationFlow = new RelationalIndexCreationFlow(
         this, indexRemoval, indexStorageTable);
+  }
+
+  StatusCode close() {
+    return sessions.close();
   }
 
   StatusCode renameTable(
@@ -94,6 +101,10 @@ final class RelationalSchemaLifecycle {
       RelationalSession session,
       CharSequence name) {
     return tables.markDropping(session, name);
+  }
+
+  StatusCode checkViewReferences(RelationalSession session, int tableId) {
+    return tables.checkViewReferences(session, tableId);
   }
 
   StatusCode finishDroppingTable(
@@ -267,12 +278,12 @@ final class RelationalSchemaLifecycle {
     if (status.isOk()) {
       status = scanUniqueIndexBatch(session, indexBuildBatchState);
     }
-    status = closeIndexBuildCursor(session, status);
+    status = RelationalIndexBuildCursorClose.close(session, indexBuildCursor, status);
     indexBuildCursor.reset();
     buildBatchFull = status.isOk()
         && !indexBuildBatchState.exhausted
         && indexBuildBatchState.rows == INDEX_BUILD_BATCH_ROWS;
-    return completeIndexBuildBatch(session, outcome, status);
+    return RelationalIndexBuildCompletion.finish(session, outcome, status);
   }
 
   private StatusCode beginUniqueIndexBatch(
@@ -321,8 +332,7 @@ final class RelationalSchemaLifecycle {
       return status;
     }
     int column = indexedTable.uniqueValueIndexColumn();
-    boolean nullValue = (catalogScratch.getLong(indexedTable.nullMaskOffset())
-        & 1L << column) != 0;
+    boolean nullValue = indexedTable.isNull(catalogScratch, column);
     return nullValue ? StatusCode.OK : indexBuildValue(session, column);
   }
 
@@ -355,7 +365,7 @@ final class RelationalSchemaLifecycle {
           indexBuildRow.key(),
           unique);
     } else {
-      long value = catalogScratch.getLong((column - 1) * Long.BYTES);
+      long value = catalogScratch.getLong(indexedTable.valueOffset(column));
       status = unique
           ? session.ensureIndexedValue(indexStorageTable, value, indexBuildRow.key())
           : session.ensureNonUniqueIndexedValue(
@@ -363,30 +373,6 @@ final class RelationalSchemaLifecycle {
     }
     return status == StatusCode.CONFLICT && indexedTable.indexIsConstraint(slot)
         ? StatusCode.UNIQUE_VIOLATION : status;
-  }
-
-  private StatusCode closeIndexBuildCursor(
-      RelationalSession session,
-      StatusCode status) {
-    if (!indexBuildCursor.isActive()) {
-      return status;
-    }
-    StatusCode close = session.closeScan(indexBuildCursor);
-    return status.isOk() ? close : status;
-  }
-
-  private StatusCode completeIndexBuildBatch(
-      RelationalSession session,
-      TransactionOutcome outcome,
-      StatusCode status) {
-    if (status.isOk()) {
-      return session.commitBuildPhase(outcome);
-    }
-    if (session.indexedSession().transaction().state() != TransactionState.ACTIVE) {
-      return status;
-    }
-    StatusCode abort = session.abortBuildPhase(outcome);
-    return abort.isOk() ? status : abort;
   }
 
   StatusCode publishUniqueValueIndex(
@@ -419,22 +405,16 @@ final class RelationalSchemaLifecycle {
 
 
   RelationalSession newSession() {
-    EmbeddedSessionOpenResult result = new EmbeddedSessionOpenResult();
-    StatusCode status = embedded.createSession(CATALOG_ROW_BYTES, result);
-    return status.isOk()
-        ? new RelationalSession(this, schemaGate, result.session()) : null;
+    return sessions.openOrNull(this);
+  }
+
+  StatusCode openSession(RelationalSessionOpenResult result) {
+    return sessions.open(this, result);
   }
 
   private StatusCode publishBuildingSchema(RelationalSession owner) {
-    StatusCode status = schemaGate.publishOwnedSchema(owner);
-    if (status.isOk()) {
-      indexStorageTable.set(
-          schemaGate,
-          indexedTable.uniqueValueIndexTableId(),
-          0,
-          TableDefinition.INDEX_NONE);
-    }
-    return status;
+    return RelationalSchemaPublication.publish(
+        schemaGate, owner, indexedTable, indexStorageTable);
   }
 
   private static final class IndexBuildBatchState {

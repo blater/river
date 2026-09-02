@@ -8,19 +8,26 @@ V1.
 
 Frames are big-endian and contain a 32-byte header: magic, protocol version,
 message type, flags, positive request ID, payload length, and a zero reserved
-field. Payloads are limited to 16 KiB before use. Requests are ordered and one
-session may own at most one active query. Each `FETCH` grants credit for one
-bounded row, so the server does not buffer unread results.
+field. Payloads are limited to 16 KB before use. Requests are ordered and one
+session may own at most one active query. Query open and each subsequent
+`FETCH` grant credit for one bounded row. The server retains exactly one
+lookahead row so the response carrying the final row can also carry end of
+stream and transaction completion.
 
 Responses carry the stable River status code, result flags, affected-row and
-column counts, commit sequence, key, rows returned, and at most eight `BIGINT`
-values. Encoding writes directly into caller-owned output storage; decoding
-uses caller-owned reusable carriers. Statement decoding creates the one
+column counts, commit sequence, key, rows returned, and the bounded typed
+result shape. Fixed values use one big-endian 64-bit word, except
+`DECIMAL(19..38)`, whose signed unscaled value uses a descriptor-selected
+big-endian high/low pair. Encoding writes directly into caller-owned output
+storage; decoding uses caller-owned reusable carriers. Statement decoding creates the one
 `String` currently required by the embedded engine API, while fetch and
 response paths are allocation-free after warmup.
 
-A successful query-open response carries the bounded ASCII projection names and
-column count before the first fetch.
+A successful query-open response carries the bounded ASCII projection names,
+column count, and first row when one exists. Empty and singleton results close
+their engine query during open; longer results close while producing the final
+fetch response. A client that receives end of stream completes query close
+locally rather than sending an EOF fetch or `CLOSE_QUERY`.
 
 Authenticated connections negotiate protocol version inside TLS 1.3, verify
 the server hostname, and use a fresh server challenge plus TLS exporter keying

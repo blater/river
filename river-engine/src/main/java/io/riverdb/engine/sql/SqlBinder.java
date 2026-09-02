@@ -12,6 +12,7 @@ import io.riverdb.sql.SqlQuery;
 /** Resolves parser-owned names and literals into reusable execution state. */
 final class SqlBinder {
   private final SqlQueryBlockBinder queryBlocks = new SqlQueryBlockBinder();
+  private final SqlBindingTableResolver tables = new SqlBindingTableResolver();
   private final SqlPredicateBinder predicates = new SqlPredicateBinder();
   private final SqlMutationBinder mutations = new SqlMutationBinder();
   private final SqlProjectionBinder projections =
@@ -46,13 +47,18 @@ final class SqlBinder {
     bound.projectedColumnCount = 0;
     return switch (command.type()) {
       case DELETE -> predicates.bind(command, query, bound);
-      case COUNT, COUNT_VALUE, SUM, AVG, MIN, MAX ->
+      case COUNT, COUNT_VALUE, COUNT_DISTINCT, SUM, AVG, MIN, MAX ->
           bindValueAggregate(command, query, bound);
       case INSERT -> mutations.bindInsert(command, bound);
       case SELECT, SCAN -> bindProjectedCommand(command, query, bound);
       case UPDATE -> bindUpdate(command, query, bound);
       default -> StatusCode.INVALID_EXTERNAL_INPUT;
     };
+  }
+
+  StatusCode bindDescriptorMutationExpressions(
+      SqlCommand command, BoundSqlStatement bound, boolean columnsAllowed) {
+    return mutations.bindDescriptorExpressions(command, bound, columnsAllowed);
   }
 
   private StatusCode bindValueAggregate(
@@ -108,7 +114,8 @@ final class SqlBinder {
     SqlJoinChain joins = command.joinChain();
     if (joins == null) return StatusCode.FEATURE_NOT_SUPPORTED;
     StatusCode status = predicates.bindJoin(command, bound, context);
-    return status.isOk() ? bindJoinProjection(command, bound, context) : status;
+    if (status.isOk()) status = bindJoinProjection(command, bound, context);
+    return status;
   }
 
   StatusCode bindJoinProjection(
@@ -128,11 +135,12 @@ final class SqlBinder {
       boolean resolveLeft) {
     SqlJoinChain joins = command.joinChain();
     if (joins == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    context.beginRoles(joins.roleCount(), resolveLeft ? null : root);
+    StatusCode status = context.beginRoles(
+        joins.roleCount(), resolveLeft ? null : root);
+    if (!status.isOk()) return status;
     int first = resolveLeft ? 0 : 1;
-    StatusCode status = StatusCode.OK;
     for (int role = first; status.isOk() && role < joins.roleCount(); role++) {
-      status = session.resolveTable(joins.tableName(role), context.table(role));
+      status = tables.resolve(session, joins.tableName(role), context.table(role));
     }
     for (int role = 0; status.isOk() && role < joins.roleCount(); role++) {
       status = session.resolveStatistics(
@@ -150,14 +158,16 @@ final class SqlBinder {
   }
 
   static boolean isScalarAggregate(SqlCommandType type) {
-    return type == SqlCommandType.COUNT
+      return type == SqlCommandType.COUNT
         || type == SqlCommandType.COUNT_VALUE
+        || type == SqlCommandType.COUNT_DISTINCT
         || isValueAggregate(type);
   }
 
   static boolean isGroupAggregate(SqlCommandType type) {
     return type == SqlCommandType.GROUP_COUNT
         || type == SqlCommandType.GROUP_COUNT_VALUE
+        || type == SqlCommandType.GROUP_COUNT_DISTINCT
         || type == SqlCommandType.GROUP_SUM
         || type == SqlCommandType.GROUP_AVG
         || type == SqlCommandType.GROUP_MIN

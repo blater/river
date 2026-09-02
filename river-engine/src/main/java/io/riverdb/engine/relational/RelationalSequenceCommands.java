@@ -3,13 +3,14 @@ package io.riverdb.engine.relational;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
-import io.riverdb.tx.api.TransactionState;
 
 /** Owns implicit sequence DDL and schema-gated value allocation entry. */
 final class RelationalSequenceCommands {
   private final RelationalSchemaLifecycle lifecycle;
   private final RelationalSchemaGate schemaGate;
   private final RelationalSequenceService sequences;
+  private final RelationalInternalSessionOwner sessions =
+      new RelationalInternalSessionOwner();
   private final RelationalKey.KeyResult catalogKey = new RelationalKey.KeyResult();
 
   RelationalSequenceCommands(
@@ -22,6 +23,8 @@ final class RelationalSequenceCommands {
   }
 
   synchronized StatusCode create(CharSequence name, long start, long increment) {
+    StatusCode cleanup = sessions.retry();
+    if (!cleanup.isOk()) return cleanup;
     RelationalSession session = lifecycle.newSession();
     if (session == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -31,10 +34,12 @@ final class RelationalSequenceCommands {
     if (status.isOk()) {
       status = session.createSequence(name, start, increment);
     }
-    return finish(session, outcome, status);
+    return sessions.finish(session, outcome, status);
   }
 
   synchronized StatusCode drop(CharSequence name) {
+    StatusCode cleanup = sessions.retry();
+    if (!cleanup.isOk()) return cleanup;
     RelationalSession session = lifecycle.newSession();
     if (session == null) {
       return StatusCode.RESOURCE_EXHAUSTED;
@@ -44,7 +49,7 @@ final class RelationalSequenceCommands {
     if (status.isOk()) {
       status = session.dropSequence(name);
     }
-    return finish(session, outcome, status);
+    return sessions.finish(session, outcome, status);
   }
 
   StatusCode next(CharSequence name, SequenceValueResult result) {
@@ -84,7 +89,8 @@ final class RelationalSequenceCommands {
 
   private synchronized StatusCode nextAdmitted(
       CharSequence name, SequenceValueResult result) {
-    StatusCode status = RelationalKey.catalogTableKey(name, catalogKey);
+    StatusCode status = sessions.retry();
+    if (status.isOk()) status = RelationalKey.catalogTableKey(name, catalogKey);
     return status.isOk()
         ? allocate(
             catalogKey.space(),
@@ -99,18 +105,19 @@ final class RelationalSequenceCommands {
 
   private synchronized StatusCode nextIdentityAdmitted(
       TableDefinition table, SequenceValueResult result) {
-    return allocate(
+    StatusCode status = sessions.retry();
+    return status.isOk() ? allocate(
         RelationalKey.CATALOG_SEQUENCE_SPACE,
         RelationalKey.identitySequenceKey(table.tableId()),
         null,
         table.tableId(),
         1,
         Long.MAX_VALUE,
-        result);
+        result) : status;
   }
 
   private StatusCode allocate(
-      int sequenceSpace,
+      long sequenceSpace,
       long sequenceKey,
       CharSequence name,
       int identityTableId,
@@ -131,18 +138,9 @@ final class RelationalSequenceCommands {
             identityTableId,
             minimum,
             maximum,
-            result);
+            result,
+            sessions);
   }
 
-  private static StatusCode finish(
-      RelationalSession session, TransactionOutcome outcome, StatusCode status) {
-    if (status.isOk()) {
-      return session.commit(outcome);
-    }
-    if (session.indexedSession().transaction().state() == TransactionState.ACTIVE) {
-      StatusCode abort = session.abort(outcome);
-      return abort.isOk() ? status : abort;
-    }
-    return status;
-  }
+  StatusCode close() { return sessions.retry(); }
 }
