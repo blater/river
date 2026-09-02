@@ -2,6 +2,7 @@ package io.riverdb.tx;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.api.lock.LockExecutionLane;
@@ -22,6 +23,7 @@ final class LockWaitObservabilityTest {
 
     Wait granted = enqueue(fixture, 2, 1, 2, key(10, LockMode.EXCLUSIVE));
     assertEquals(1, fixture.table.lockWaitsEntered());
+    assertEquals(1, fixture.table.lockWaitsActuallyBlocked());
     assertEquals(0, fixture.table.lockWaitsGranted());
     assertEquals(StatusCode.OK, fixture.table.release(owner));
     assertEquals(1, fixture.table.lockWaitsGranted());
@@ -39,6 +41,8 @@ final class LockWaitObservabilityTest {
         fixture.table.cancel(cancelled.lane, cancelled.handle, StatusCode.CANCELLED));
 
     assertEquals(3, fixture.table.lockWaitsEntered());
+    assertEquals(3, fixture.table.lockWaitsActuallyBlocked());
+    assertTrue(fixture.table.lockWaitBlockedNanos() > 0);
     assertEquals(1, fixture.table.lockWaitsGranted());
     assertEquals(1, fixture.table.lockWaitsTimedOut());
     assertEquals(0, fixture.table.lockWaitsDeadlocked());
@@ -61,6 +65,7 @@ final class LockWaitObservabilityTest {
 
     assertEquals(StatusCode.DEADLOCK, victim.status());
     assertEquals(2, fixture.table.lockWaitsEntered());
+    assertEquals(1, fixture.table.lockWaitsActuallyBlocked());
     assertEquals(1, fixture.table.lockWaitsGranted());
     assertEquals(1, fixture.table.lockWaitsDeadlocked());
     assertFalse(LockWaitCounters.escalationSupported());
@@ -71,7 +76,8 @@ final class LockWaitObservabilityTest {
       Fixture fixture, long transaction, long generation, long laneId, LockRequest request) {
     Wait wait = new Wait();
     StatusCode status = fixture.table.enqueue(
-        transaction, generation, transaction, laneId, 1, request, wait.lane, wait.handle);
+        transaction, generation, transaction, laneId, 1,
+        request, wait.lane, wait.handle, 1);
     if (status != StatusCode.RETRY && status != StatusCode.OK
         && status != StatusCode.DEADLOCK) {
       throw new AssertionError("unexpected enqueue status: " + status);

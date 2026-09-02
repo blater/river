@@ -5,12 +5,21 @@ import io.riverdb.base.error.StatusCode;
 /** Bounded, allocation-free counters for the lock wait lifecycle. */
 final class LockWaitCounters {
   private long entered;
+  private long actuallyBlocked;
+  private long blockedNanos;
   private long granted;
   private long timedOut;
   private long deadlock;
   private long cancelled;
 
   void entered() { entered = increment(entered); }
+
+  void blocked() { actuallyBlocked = increment(actuallyBlocked); }
+
+  void completeBlocked(long startedNanos, long completedNanos) {
+    long elapsed = completedNanos - startedNanos;
+    if (elapsed > 0) blockedNanos = add(blockedNanos, elapsed);
+  }
 
   void granted() { granted = increment(granted); }
 
@@ -21,6 +30,10 @@ final class LockWaitCounters {
   }
 
   long enteredCount() { return entered; }
+
+  long actuallyBlockedCount() { return actuallyBlocked; }
+
+  long blockedNanos() { return blockedNanos; }
 
   long grantedCount() { return granted; }
 
@@ -36,5 +49,9 @@ final class LockWaitCounters {
 
   private static long increment(long value) {
     return value == Long.MAX_VALUE ? Long.MAX_VALUE : value + 1;
+  }
+
+  private static long add(long value, long delta) {
+    return delta > Long.MAX_VALUE - value ? Long.MAX_VALUE : value + delta;
   }
 }

@@ -145,6 +145,9 @@ final class LockExactScheduler {
     table.holdingLifecycle.grant(resource, qc.holdings[qo], qc.modes[qo]);
     qc.states[qo] = (byte) LockWaitState.GRANTED.ordinal();
     table.waitCounters.granted();
+    if (qc.actuallyBlocked[qo] != 0) {
+      table.waitCounters.completeBlocked(qc.blockedAtNanos[qo], System.nanoTime());
+    }
     LockWaitHandle handle = qc.handles[qo];
     handle.transition(table.authority, LockExactTable.PROVIDER_GENERATION,
         table.lifecycle.transactionId(transaction), table.lifecycle.transactionGeneration(transaction),

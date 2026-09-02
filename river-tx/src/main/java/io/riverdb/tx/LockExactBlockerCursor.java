@@ -13,6 +13,11 @@ final class LockExactBlockerCursor {
   private final LockExactTable table;
   private final LockExactConversionBlockers conversions;
   private final LockExactFairnessBlockers fairness;
+  private long edgeRequest = -1;
+  private long edgeBlockerRecord = -1;
+  private long edgeBlockingResource = -1;
+  private byte edgeKind;
+  private byte edgePrecondition;
 
   LockExactBlockerCursor(LockExactTable owner) {
     table = owner;
@@ -32,6 +37,12 @@ final class LockExactBlockerCursor {
     chunk.framePhases[offset] = EXACT_OWNERS;
   }
 
+  long edgeRequest() { return edgeRequest; }
+  long edgeBlockerRecord() { return edgeBlockerRecord; }
+  long edgeBlockingResource() { return edgeBlockingResource; }
+  byte edgeKind() { return edgeKind; }
+  byte edgePrecondition() { return edgePrecondition; }
+
   long next(long transaction) {
     LockExactTransactionStore.Chunk frame = table.state.transactions.record(transaction);
     int frameOffset = LockTypedSlots.offset(transaction);
@@ -47,19 +58,22 @@ final class LockExactBlockerCursor {
       boolean conversion = table.state.requests.conversion(request);
       long resource = requests.resources[offset];
       frame.frameActiveRequests[frameOffset] = LockTypedSlots.encode(request);
+      boolean conversionPriority = !conversion && conversionQueued(resource);
       if (interval(resource)) {
         frame.frameOwners[frameOffset] = 0;
         frame.frameIntervals[frameOffset] = LockIntervalCursor.INITIAL;
         frame.frameFairnessCandidates[frameOffset] = 0;
         frame.frameModes[frameOffset] = 0;
-        frame.framePhases[frameOffset] = INTERVAL_OWNERS;
+        frame.framePhases[frameOffset] = conversionPriority
+            ? INTERVAL_CONVERSIONS : INTERVAL_OWNERS;
       } else {
         LockExactResourceStore.Chunk resources = table.state.resources.record(resource);
         int resourceOffset = LockTypedSlots.offset(resource);
         frame.frameOwners[frameOffset] = resources.ownerHeads[resourceOffset];
         frame.frameFairnessCandidates[frameOffset] = conversion ? 0
             : resources.conversionHeads[resourceOffset];
-        frame.framePhases[frameOffset] = EXACT_OWNERS;
+        frame.framePhases[frameOffset] = conversionPriority
+            ? EXACT_CONVERSIONS : EXACT_OWNERS;
       }
     }
   }
@@ -70,13 +84,16 @@ final class LockExactBlockerCursor {
     if (request < 0) return -1;
     boolean conversion = table.state.requests.conversion(request);
     if (frame.framePhases[frameOffset] == EXACT_OWNERS) {
-      long blocker = nextOwner(transaction, request, frame, frameOffset);
+      long blocker = nextOwner(
+          transaction, request, requestResource(request), frame, frameOffset);
       if (blocker >= 0) return blocker;
       frame.framePhases[frameOffset] = conversion ? EXACT_FAIRNESS : EXACT_CONVERSIONS;
     }
     if (frame.framePhases[frameOffset] == EXACT_CONVERSIONS) {
       long blocker = conversions.nextExact(transaction, frame, frameOffset);
-      if (blocker >= 0) return blocker;
+      if (blocker >= 0) return requestBlocker(request, blocker,
+          LockDeadlockEdgeKind.CONVERSION_PRIORITY,
+          LockGrantPrecondition.CONVERSION_QUEUE_EMPTY);
       frame.framePhases[frameOffset] = EXACT_FAIRNESS;
     }
     if (frame.framePhases[frameOffset] == EXACT_FAIRNESS) {
@@ -94,7 +111,9 @@ final class LockExactBlockerCursor {
     if (frame.framePhases[frameOffset] == INTERVAL_CONVERSIONS) {
       long blocker = conversions.nextInterval(
           transaction, requestResource(request), frame, frameOffset);
-      if (blocker >= 0) return blocker;
+      if (blocker >= 0) return requestBlocker(request, blocker,
+          LockDeadlockEdgeKind.CONVERSION_PRIORITY,
+          LockGrantPrecondition.CONVERSION_QUEUE_EMPTY);
       frame.frameIntervals[frameOffset] = LockIntervalCursor.INITIAL;
       frame.framePhases[frameOffset] = INTERVAL_FAIRNESS;
     }
@@ -102,6 +121,9 @@ final class LockExactBlockerCursor {
       long blocker = conversion
           ? exactFairness(transaction, request, true)
           : fairness.next(transaction, request, frame, frameOffset);
+      if (blocker >= 0 && !conversion) return requestBlocker(request, blocker,
+          LockDeadlockEdgeKind.FIFO_FAIRNESS,
+          LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER);
       if (blocker >= 0) return blocker;
       frame.frameActiveRequests[frameOffset] = 0;
       return -1;
@@ -113,10 +135,12 @@ final class LockExactBlockerCursor {
       long transaction, long request,
       LockExactTransactionStore.Chunk frame, int frameOffset) {
     long requestedResource = requestResource(request);
+    long overlap = frame.frameIntervals[frameOffset];
     while (true) {
-      long blocker = nextOwner(transaction, request, frame, frameOffset);
-      if (blocker >= 0) return blocker;
-      long overlap = frame.frameIntervals[frameOffset];
+      if (overlap != LockIntervalCursor.INITIAL) {
+        long blocker = nextOwner(transaction, request, overlap, frame, frameOffset);
+        if (blocker >= 0) return blocker;
+      }
       overlap = overlap == LockIntervalCursor.INITIAL
           ? table.state.intervals.firstOverlap(requestedResource)
           : table.state.intervals.nextOverlap(requestedResource, overlap);
@@ -128,7 +152,7 @@ final class LockExactBlockerCursor {
   }
 
   private long nextOwner(
-      long transaction, long request,
+      long transaction, long request, long blockingResource,
       LockExactTransactionStore.Chunk frame, int frameOffset) {
     long owner = LockTypedSlots.decode(frame.frameOwners[frameOffset]);
     while (owner >= 0) {
@@ -138,6 +162,11 @@ final class LockExactBlockerCursor {
       long ownerTransaction = holdings.transactions[offset];
       if (ownerTransaction != transaction && request >= 0
           && LockExactCompatibility.conflicts(requestMode(request), holdings.modes[offset])) {
+        edgeRequest = request;
+        edgeBlockerRecord = owner;
+        edgeBlockingResource = blockingResource;
+        edgeKind = (byte) LockDeadlockEdgeKind.ACTIVE_OWNER.ordinal();
+        edgePrecondition = (byte) LockGrantPrecondition.NO_INCOMPATIBLE_ACTIVE_OWNER.ordinal();
         return ownerTransaction;
       }
       owner = LockTypedSlots.decode(frame.frameOwners[frameOffset]);
@@ -149,13 +178,38 @@ final class LockExactBlockerCursor {
     return table.state.requests.record(request).transactions[LockTypedSlots.offset(request)];
   }
 
+  private boolean conversionQueued(long requestedResource) {
+    if (!interval(requestedResource)) {
+      LockExactResourceStore.Chunk resources = table.state.resources.record(requestedResource);
+      return resources.conversionHeads[LockTypedSlots.offset(requestedResource)] != 0;
+    }
+    for (long overlap = table.state.intervals.firstOverlap(requestedResource);
+        overlap >= 0; overlap = table.state.intervals.nextOverlap(requestedResource, overlap)) {
+      LockExactResourceStore.Chunk resources = table.state.resources.record(overlap);
+      if (resources.conversionHeads[LockTypedSlots.offset(overlap)] != 0) return true;
+    }
+    return false;
+  }
+
   private long exactFairness(long transaction, long request, boolean conversion) {
     LockExactRequestStore.Chunk requests = table.state.requests.record(request);
     int offset = LockTypedSlots.offset(request);
     long predecessor = LockTypedSlots.decode(conversion
         ? requests.previousConversion[offset] : requests.previousResource[offset]);
     if (predecessor < 0 || requestTransaction(predecessor) == transaction) return -1;
-    return requestTransaction(predecessor);
+    return requestBlocker(request, predecessor, LockDeadlockEdgeKind.FIFO_FAIRNESS,
+        LockGrantPrecondition.FIFO_QUEUE_HEAD);
+  }
+
+  private long requestBlocker(
+      long request, long blockerRequest,
+      LockDeadlockEdgeKind kind, LockGrantPrecondition precondition) {
+    edgeRequest = request;
+    edgeBlockerRecord = blockerRequest;
+    edgeBlockingResource = requestResource(blockerRequest);
+    edgeKind = (byte) kind.ordinal();
+    edgePrecondition = (byte) precondition.ordinal();
+    return requestTransaction(blockerRequest);
   }
 
   private int requestMode(long request) {

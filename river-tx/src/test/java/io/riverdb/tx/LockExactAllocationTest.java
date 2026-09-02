@@ -30,7 +30,9 @@ final class LockExactAllocationTest {
     Assumptions.assumeTrue(bean.isThreadAllocatedMemorySupported());
     bean.setThreadAllocatedMemoryEnabled(true);
 
-    LockManager locks = new LockManager(new LockMemoryEnvelope(8L << 20));
+    LockDeadlockDiagnosticsConfig diagnostics =
+        LockDeadlockDiagnosticsConfig.bounded(1, 4, 12_000, 1, 4);
+    LockManager locks = new LockManager(new LockMemoryEnvelope(8L << 20), diagnostics);
     LockService service = locks;
     TransactionContext owner = context(locks, 1);
     TransactionContext waiter = context(locks, 2);
@@ -74,6 +76,11 @@ final class LockExactAllocationTest {
     assertEquals(retained, locks.accountedBytes());
     assertEquals(0, locks.activeLockCount());
     assertEquals(0, locks.waitingCount());
+    LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(diagnostics);
+    assertEquals(StatusCode.OK, locks.snapshotDeadlockDiagnostics(snapshot));
+    assertEquals(11_000, snapshot.totalVictimSelections());
+    assertEquals(1, snapshot.signatureCount());
+    assertEquals(0, snapshot.victimEventOverflows());
   }
 
   private static void exercise(

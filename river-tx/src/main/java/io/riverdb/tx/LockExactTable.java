@@ -13,6 +13,7 @@ import io.riverdb.tx.api.lock.LockWaitState;
 final class LockExactTable {
   static final LockWaitState[] WAIT_STATES = LockWaitState.values();
   static final LockMode[] LOCK_MODES = LockMode.values();
+  static final LockScope[] LOCK_SCOPES = LockScope.values();
   static final long PROVIDER_GENERATION = 2;
   final Object authority;
   final LockExactState state;
@@ -21,6 +22,7 @@ final class LockExactTable {
   final LockExactConflicts conflicts;
   final LockExactScheduler scheduler;
   final LockExactAdmissionController admissions;
+  final LockExactTransactionAdmission transactionAdmission;
   final LockExactHoldingLifecycle holdingLifecycle;
   final LockExactRequestLifecycle requestLifecycle;
   final LockExactLifecycle lifecycle;
@@ -33,16 +35,23 @@ final class LockExactTable {
   long waitingCount;
 
   LockExactTable(Object providerAuthority, long seed, LockSegmentArena arena) {
+    this(providerAuthority, seed, arena, LockDeadlockDiagnosticsConfig.disabled());
+  }
+
+  LockExactTable(
+      Object providerAuthority, long seed, LockSegmentArena arena,
+      LockDeadlockDiagnosticsConfig diagnosticsConfig) {
     authority = providerAuthority;
     state = new LockExactState(arena, seed);
     unlink = new LockExactUnlink(state);
     conflicts = new LockExactConflicts(this);
     scheduler = new LockExactScheduler(this);
     admissions = new LockExactAdmissionController(this);
+    transactionAdmission = new LockExactTransactionAdmission(this);
     holdingLifecycle = new LockExactHoldingLifecycle(this);
     requestLifecycle = new LockExactRequestLifecycle(this);
     lifecycle = new LockExactLifecycle(this);
-    deadlocks = new LockExactDeadlockDetector(this);
+    deadlocks = new LockExactDeadlockDetector(this, diagnosticsConfig);
   }
 
   StatusCode tryAcquire(
@@ -86,6 +95,16 @@ final class LockExactTable {
     if (!blocked.isOk()) return blocked;
     return admissions.enqueue(transactionId, transactionGeneration, transactionStartOrder,
         laneId, laneGeneration, request, lane, handle);
+  }
+
+  StatusCode enqueue(
+      long transactionId, long transactionGeneration, long transactionStartOrder,
+      long laneId, long laneGeneration, LockRequest request,
+      LockExecutionLane lane, LockWaitHandle handle, long blockedClockNanos) {
+    StatusCode blocked = lifecycle.blockedStatus(transactionId, transactionGeneration);
+    if (!blocked.isOk()) return blocked;
+    return admissions.enqueue(transactionId, transactionGeneration, transactionStartOrder,
+        laneId, laneGeneration, request, lane, handle, blockedClockNanos);
   }
 
   StatusCode consume(
@@ -151,10 +170,19 @@ final class LockExactTable {
   long overlapSearches() { return scheduler.overlapSearches(); }
   long deadlockVictimSelections() { return deadlocks.victimSelections(); }
   long lockWaitsEntered() { return waitCounters.enteredCount(); }
+  long lockWaitsActuallyBlocked() { return waitCounters.actuallyBlockedCount(); }
+  long lockWaitBlockedNanos() { return waitCounters.blockedNanos(); }
   long lockWaitsGranted() { return waitCounters.grantedCount(); }
   long lockWaitsTimedOut() { return waitCounters.timedOutCount(); }
   long lockWaitsDeadlocked() { return waitCounters.deadlockCount(); }
   long lockWaitsCancelled() { return waitCounters.cancelledCount(); }
+  StatusCode activateTransaction(
+      long id, long generation, long startOrder, long diagnosticTag, long metricsEpoch) {
+    return transactionAdmission.activate(id, generation, startOrder, diagnosticTag, metricsEpoch);
+  }
+  void snapshotDeadlocks(LockDeadlockDiagnosticsSnapshot target) {
+    deadlocks.snapshot(target);
+  }
   boolean deadlocked(long transactionId, long transactionGeneration) {
     return lifecycle.deadlocked(transactionId, transactionGeneration);
   }

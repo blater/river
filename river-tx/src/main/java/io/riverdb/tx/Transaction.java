@@ -16,6 +16,8 @@ public final class Transaction {
   private long transactionId;
   private long transactionGeneration;
   private long transactionStartOrder;
+  private long diagnosticTag;
+  private long metricsEpoch;
   private long commitSequence;
   private IsolationLevel isolationLevel = IsolationLevel.READ_COMMITTED;
   private TransactionState state = TransactionState.ABORTED;
@@ -33,6 +35,20 @@ public final class Transaction {
   public long transactionGeneration() { return transactionGeneration; }
 
   public long transactionStartOrder() { return transactionStartOrder; }
+
+  /** Opaque session-owned correlation value copied into lock state at begin. */
+  public long diagnosticTag() { return diagnosticTag; }
+
+  /** Generic caller-defined metrics epoch copied into lock state at begin. */
+  public long metricsEpoch() { return metricsEpoch; }
+
+  /** Configures diagnostics for the next begin without introducing benchmark-specific types. */
+  public StatusCode configureDiagnostics(long opaqueTag, long epoch) {
+    if (activeHandle) return StatusCode.CONFLICT;
+    diagnosticTag = opaqueTag;
+    metricsEpoch = epoch;
+    return StatusCode.OK;
+  }
 
   /** Borrowed operation context; valid only while this transaction handle is active. */
   public TransactionContext context() { return context; }
@@ -68,6 +84,8 @@ public final class Transaction {
     owner = null;
     transactionId = 0;
     transactionStartOrder = 0;
+    diagnosticTag = 0;
+    metricsEpoch = 0;
     commitSequence = 0;
     isolationLevel = IsolationLevel.READ_COMMITTED;
     state = TransactionState.ABORTED;

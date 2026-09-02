@@ -23,13 +23,23 @@ public final class LockManager implements LockService {
   final LockTransactionLifecycle lifecycle;
   private final LockServiceOperations operations;
   private final LockServiceWaits waits;
+  private final LockDeadlockDiagnosticsConfig diagnosticsConfig;
 
   public LockManager(LockMemoryEnvelope envelope) {
+    this(envelope, LockDeadlockDiagnosticsConfig.disabled());
+  }
+
+  public LockManager(
+      LockMemoryEnvelope envelope, LockDeadlockDiagnosticsConfig diagnosticConfig) {
+    if (diagnosticConfig == null) {
+      throw new IllegalArgumentException("deadlock diagnostic config is required");
+    }
     arena = new LockSegmentArena(envelope);
     if (!arena.reserve(FIXED_PROVIDER_BYTES).isOk()) {
       throw new IllegalArgumentException("lock memory envelope too small");
     }
-    exact = new LockExactTable(authority, ownerLow, arena);
+    diagnosticsConfig = diagnosticConfig;
+    exact = new LockExactTable(authority, ownerLow, arena, diagnosticConfig);
     lifecycle = new LockTransactionLifecycle(this);
     operations = new LockServiceOperations(this);
     waits = new LockServiceWaits(this);
@@ -41,6 +51,10 @@ public final class LockManager implements LockService {
     return exact.deadlockVictimSelections();
   }
   public synchronized long lockWaitsEntered() { return exact.lockWaitsEntered(); }
+  public synchronized long lockWaitsActuallyBlocked() {
+    return exact.lockWaitsActuallyBlocked();
+  }
+  public synchronized long lockWaitBlockedNanos() { return exact.lockWaitBlockedNanos(); }
   public synchronized long lockWaitsGranted() { return exact.lockWaitsGranted(); }
   public synchronized long lockWaitsTimedOut() { return exact.lockWaitsTimedOut(); }
   public synchronized long lockWaitsDeadlocked() { return exact.lockWaitsDeadlocked(); }
@@ -49,6 +63,20 @@ public final class LockManager implements LockService {
   public long lockEscalationCount() { return LockWaitCounters.escalationCount(); }
   synchronized long accountedBytes() { return arena.accountedBytes(); }
   synchronized long targetedWakes() { return exact.targetedWakes(); }
+  boolean deadlockDiagnosticsEnabled() { return diagnosticsConfig.enabled(); }
+
+  public LockDeadlockDiagnosticsSnapshot newDeadlockDiagnosticsSnapshot() {
+    return new LockDeadlockDiagnosticsSnapshot(diagnosticsConfig);
+  }
+
+  public synchronized StatusCode snapshotDeadlockDiagnostics(
+      LockDeadlockDiagnosticsSnapshot target) {
+    if (target == null || !target.compatible(diagnosticsConfig)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    exact.snapshotDeadlocks(target);
+    return StatusCode.OK;
+  }
 
   @Override
   public StatusCode tryAcquire(

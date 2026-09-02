@@ -164,10 +164,11 @@ final class LockExactHoldingLifecycle {
     if (recycleNow) table.lifecycle.recycle(resource, transaction);
   }
 
-  void releaseAll(long transaction) {
+  int releaseAll(long transaction) {
     LockExactTransactionStore.Chunk tc = table.state.transactions.record(transaction);
     int to = LockTypedSlots.offset(transaction);
     long holding = LockTypedSlots.decode(tc.holdingHeads[to]);
+    int released = 0;
     while (holding >= 0) {
       LockExactHoldingStore.Chunk hc = table.state.holdings.record(holding);
       int ho = LockTypedSlots.offset(holding);
@@ -179,10 +180,12 @@ final class LockExactHoldingLifecycle {
           table.lifecycle.transactionGeneration(transaction)));
       table.state.holdings.free(holding);
       table.holdingCount--;
+      if (released != Integer.MAX_VALUE) released++;
       table.scheduler.schedule(resource);
       table.lifecycle.recycleResource(resource);
       holding = next;
     }
+    return released;
   }
 
   private boolean validToken(LockToken token) {

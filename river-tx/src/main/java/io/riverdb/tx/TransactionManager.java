@@ -65,10 +65,24 @@ public final class TransactionManager {
       int maximumActive,
       LockMemoryEnvelope lockMemory,
       long lockWaitTimeoutNanos) {
+    this(databaseIncarnationHigh, databaseIncarnationLow, firstTransactionId,
+        maximumActive, lockMemory, lockWaitTimeoutNanos,
+        LockDeadlockDiagnosticsConfig.disabled());
+  }
+
+  /** Constructs a manager with fixed deadlock diagnostic capacities. */
+  public TransactionManager(
+      long databaseIncarnationHigh,
+      long databaseIncarnationLow,
+      long firstTransactionId,
+      int maximumActive,
+      LockMemoryEnvelope lockMemory,
+      long lockWaitTimeoutNanos,
+      LockDeadlockDiagnosticsConfig diagnosticsConfig) {
     if (maximumActive <= 0) {
       throw new IllegalArgumentException("invalid active transaction capacity");
     }
-    if (lockMemory == null || lockWaitTimeoutNanos <= 0) {
+    if (lockMemory == null || lockWaitTimeoutNanos <= 0 || diagnosticsConfig == null) {
       throw new IllegalArgumentException("invalid lock memory or wait timeout");
     }
     databaseHigh = databaseIncarnationHigh;
@@ -76,7 +90,7 @@ public final class TransactionManager {
     nextTransactionId = firstTransactionId;
     snapshots = new TransactionSnapshotLifecycle(
         databaseIncarnationHigh, databaseIncarnationLow, maximumActive);
-    locks = new LockManager(lockMemory);
+    locks = new LockManager(lockMemory, diagnosticsConfig);
     this.lockWaitTimeoutNanos = lockWaitTimeoutNanos;
     completion = new TransactionCompletion(this);
   }
@@ -108,6 +122,10 @@ public final class TransactionManager {
 
   public long lockWaitsEntered() { return locks.lockWaitsEntered(); }
 
+  public long lockWaitsActuallyBlocked() { return locks.lockWaitsActuallyBlocked(); }
+
+  public long lockWaitBlockedNanos() { return locks.lockWaitBlockedNanos(); }
+
   public long lockWaitsGranted() { return locks.lockWaitsGranted(); }
 
   public long lockWaitsTimedOut() { return locks.lockWaitsTimedOut(); }
@@ -119,6 +137,14 @@ public final class TransactionManager {
   public boolean lockEscalationSupported() { return locks.lockEscalationSupported(); }
 
   public long lockEscalationCount() { return locks.lockEscalationCount(); }
+
+  public LockDeadlockDiagnosticsSnapshot newDeadlockDiagnosticsSnapshot() {
+    return locks.newDeadlockDiagnosticsSnapshot();
+  }
+
+  public StatusCode snapshotDeadlockDiagnostics(LockDeadlockDiagnosticsSnapshot target) {
+    return locks.snapshotDeadlockDiagnostics(target);
+  }
 
   /** Intended authenticated lock boundary; callers pair it with {@link Transaction#context()}. */
   public LockService lockService() { return locks; }

@@ -137,10 +137,11 @@ final class LockExactRequestLifecycle {
         chunk.laneIds[offset], chunk.laneGenerations[offset]));
   }
 
-  void cancelAll(long transaction, StatusCode outcome) {
+  int cancelAll(long transaction, StatusCode outcome) {
     LockExactTransactionStore.Chunk tc = table.state.transactions.record(transaction);
     int to = LockTypedSlots.offset(transaction);
     long request = LockTypedSlots.decode(tc.requestHeads[to]);
+    int queuedCancelled = 0;
     while (request >= 0) {
       LockExactRequestStore.Chunk qc = table.state.requests.record(request);
       int qo = LockTypedSlots.offset(request);
@@ -148,7 +149,10 @@ final class LockExactRequestLifecycle {
       LockWaitState waitState = LockExactTable.WAIT_STATES[qc.states[qo]];
       long resource = qc.resources[qo];
       table.unlink.request(resource, transaction, request, waitState == LockWaitState.QUEUED);
-      if (waitState == LockWaitState.QUEUED) table.waitingCount--;
+      if (waitState == LockWaitState.QUEUED) {
+        table.waitingCount--;
+        if (queuedCancelled != Integer.MAX_VALUE) queuedCancelled++;
+      }
       table.holdingLifecycle.releaseReference(qc.holdings[qo], false);
       publishTerminal(qc, qo, request, outcome);
       removeIndex(request, qc, qo);
@@ -157,6 +161,7 @@ final class LockExactRequestLifecycle {
       table.lifecycle.recycleResource(resource);
       request = next;
     }
+    return queuedCancelled;
   }
 
   private void completeGranted(
@@ -180,6 +185,9 @@ final class LockExactRequestLifecycle {
         : status == StatusCode.CANCELLED ? LockWaitState.CANCELLED
         : status == StatusCode.DEADLOCK ? LockWaitState.DEADLOCK : LockWaitState.FAILED;
     table.waitCounters.terminal(status);
+    if (chunk.actuallyBlocked[offset] != 0) {
+      table.waitCounters.completeBlocked(chunk.blockedAtNanos[offset], System.nanoTime());
+    }
     chunk.states[offset] = (byte) terminal.ordinal();
     LockWaitHandle handle = chunk.handles[offset];
     long transaction = chunk.transactions[offset];

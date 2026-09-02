@@ -6,12 +6,17 @@ import io.riverdb.base.error.StatusCode;
 final class LockExactDeadlockDetector {
   private final LockExactTable table;
   private final LockExactBlockerCursor blockers;
+  private final LockDeadlockDiagnostics diagnostics;
   private long nextEpoch = 1;
   private long victimSelections;
+  private long cycleAncestor = -1;
+  private long cycleCurrent = -1;
 
-  LockExactDeadlockDetector(LockExactTable owner) {
+  LockExactDeadlockDetector(
+      LockExactTable owner, LockDeadlockDiagnosticsConfig diagnosticsConfig) {
     table = owner;
     blockers = new LockExactBlockerCursor(owner);
+    diagnostics = new LockDeadlockDiagnostics(owner, diagnosticsConfig);
   }
 
   StatusCode canAdmit(
@@ -38,15 +43,38 @@ final class LockExactDeadlockDetector {
     if (!table.state.transactions.occupied(start) || table.lifecycle.frozen(start)) return;
     long victim = cycleVictim(start);
     if (victim < 0) return;
+    long selectionSequence = victimSelections == Long.MAX_VALUE
+        ? Long.MAX_VALUE : victimSelections + 1;
+    if (!diagnostics.prepareSelection(
+        cycleAncestor, cycleCurrent, blockers, victim, selectionSequence)) return;
     table.lifecycle.deadlock(victim);
     if (victimSelections != Long.MAX_VALUE) victimSelections++;
-    table.requestLifecycle.cancelAll(victim, StatusCode.DEADLOCK);
-    table.holdingLifecycle.releaseAll(victim);
+    int cancelled = table.requestLifecycle.cancelAll(victim, StatusCode.DEADLOCK);
+    int released = table.holdingLifecycle.releaseAll(victim);
+    diagnostics.completeCleanup(victim, cancelled, released, cleanupValid(victim));
   }
 
   long victimSelections() { return victimSelections; }
 
+  void snapshot(LockDeadlockDiagnosticsSnapshot target) { diagnostics.snapshot(target); }
+
+  void transactionOutcome(long transaction, StatusCode status) {
+    diagnostics.transactionOutcome(transaction, status);
+  }
+
+  boolean selfValidEdge(
+      long waiter, long request, long blocker, long blockingResource,
+      LockDeadlockEdgeKind kind, LockGrantPrecondition precondition) {
+    return diagnostics.selfValidEdge(
+        waiter, request, blocker, blockingResource, kind, precondition);
+  }
+
+  int admitSignatureForTest(long epoch, long fingerprint, long guard) {
+    return diagnostics.admitSignatureForTest(epoch, fingerprint, guard);
+  }
+
   private long cycleVictim(long start) {
+    cycleAncestor = cycleCurrent = -1;
     long epoch = nextEpoch++;
     begin(start, -1, epoch);
     long current = start;
@@ -56,7 +84,11 @@ final class LockExactDeadlockDetector {
         finish(current, epoch);
         current = parent(current);
       } else if (visited(blocker, epoch)) {
-        if (!finished(blocker, epoch)) return youngest(blocker, current);
+        if (!finished(blocker, epoch)) {
+          cycleAncestor = blocker;
+          cycleCurrent = current;
+          return youngest(blocker, current);
+        }
       } else {
         begin(blocker, current, epoch);
         current = blocker;
@@ -71,6 +103,13 @@ final class LockExactDeadlockDetector {
     chunk.visitEpochs[offset] = epoch;
     chunk.finishEpochs[offset] = 0;
     chunk.parents[offset] = LockTypedSlots.encode(parent);
+    if (parent >= 0) {
+      chunk.parentRequests[offset] = blockers.edgeRequest();
+      chunk.parentBlockerRecords[offset] = blockers.edgeBlockerRecord();
+      chunk.parentBlockingResources[offset] = blockers.edgeBlockingResource();
+      chunk.parentEdgeKinds[offset] = blockers.edgeKind();
+      chunk.parentPreconditions[offset] = blockers.edgePrecondition();
+    }
     blockers.begin(transaction);
   }
 
@@ -116,5 +155,12 @@ final class LockExactDeadlockDetector {
       return left.transactionIds[lo] > right.transactionIds[ro];
     }
     return left.transactionGenerations[lo] > right.transactionGenerations[ro];
+  }
+
+  private boolean cleanupValid(long transaction) {
+    LockExactTransactionStore.Chunk chunk = table.state.transactions.record(transaction);
+    int offset = LockTypedSlots.offset(transaction);
+    return chunk.requestHeads[offset] == 0 && chunk.holdingHeads[offset] == 0
+        && chunk.lifecycleStates[offset] == LockExactLifecycle.DEADLOCK;
   }
 }

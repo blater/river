@@ -10,9 +10,16 @@ final class LockExactTransactionStore extends LockTypedSlots {
     final long[] holdingHeads = new long[256];
     final long[] requestHeads = new long[256];
     final long[] startOrders = new long[256];
+    final long[] diagnosticTags = new long[256];
+    final long[] metricsEpochs = new long[256];
     final long[] visitEpochs = new long[256];
     final long[] finishEpochs = new long[256];
     final long[] parents = new long[256];
+    final long[] parentRequests = new long[256];
+    final long[] parentBlockerRecords = new long[256];
+    final long[] parentBlockingResources = new long[256];
+    final long[] selectedSignatureIndexes = new long[256];
+    final long[] selectedEventIndexes = new long[256];
     final long[] frameRequests = new long[256];
     final long[] frameOwners = new long[256];
     final long[] frameActiveRequests = new long[256];
@@ -20,6 +27,9 @@ final class LockExactTransactionStore extends LockTypedSlots {
     final long[] frameFairnessCandidates = new long[256];
     final long[] deadlockWorkNext = new long[256];
     final byte[] lifecycleStates = new byte[256];
+    final byte[] transactionActive = new byte[256];
+    final byte[] parentEdgeKinds = new byte[256];
+    final byte[] parentPreconditions = new byte[256];
     final byte[] frameModes = new byte[256];
     final byte[] framePhases = new byte[256];
     final long[] occupied = new long[4];
@@ -28,7 +38,7 @@ final class LockExactTransactionStore extends LockTypedSlots {
   }
 
   // Includes all retained DFS workspace; detection never grows storage after admission.
-  LockExactTransactionStore(LockSegmentArena arena) { super(arena, 34_592); }
+  LockExactTransactionStore(LockSegmentArena arena) { super(arena, 49_696); }
   Chunk record(long slot) { return (Chunk) chunk(slot); }
   @Override Object newChunk(long index) { return new Chunk(); }
   @Override long generation(long slot) { return record(slot).generations[offset(slot)]; }
@@ -51,12 +61,18 @@ final class LockExactTransactionStore extends LockTypedSlots {
     int offset = offset(slot);
     chunk.transactionIds[offset] = chunk.transactionGenerations[offset] = 0;
     chunk.holdingHeads[offset] = chunk.requestHeads[offset] = chunk.free[offset] = 0;
-    chunk.startOrders[offset] = chunk.visitEpochs[offset] = chunk.finishEpochs[offset] = 0;
-    chunk.parents[offset] = chunk.frameRequests[offset] = chunk.frameOwners[offset] = 0;
+    chunk.startOrders[offset] = chunk.diagnosticTags[offset] = chunk.metricsEpochs[offset] = 0;
+    chunk.visitEpochs[offset] = chunk.finishEpochs[offset] = 0;
+    chunk.parents[offset] = chunk.parentRequests[offset] = 0;
+    chunk.parentBlockerRecords[offset] = chunk.parentBlockingResources[offset] = 0;
+    chunk.selectedSignatureIndexes[offset] = chunk.selectedEventIndexes[offset] = 0;
+    chunk.frameRequests[offset] = chunk.frameOwners[offset] = 0;
     chunk.frameActiveRequests[offset] = chunk.frameIntervals[offset] = 0;
     chunk.frameFairnessCandidates[offset] = 0;
     chunk.deadlockWorkNext[offset] = 0;
     chunk.deadlockScheduled[offset >>> 6] &= ~(1L << offset);
-    chunk.lifecycleStates[offset] = chunk.frameModes[offset] = chunk.framePhases[offset] = 0;
+    chunk.lifecycleStates[offset] = chunk.transactionActive[offset] = 0;
+    chunk.parentEdgeKinds[offset] = chunk.parentPreconditions[offset] = 0;
+    chunk.frameModes[offset] = chunk.framePhases[offset] = 0;
   }
 }

@@ -84,8 +84,14 @@ final class LockExactLifecycle {
   void releaseAll(long id, long generation, StatusCode outcome) {
     long transaction = table.state.directory.transaction(id, generation);
     if (transaction < 0) return;
+    StatusCode diagnosticOutcome = table.state.transactions.record(transaction)
+        .lifecycleStates[LockTypedSlots.offset(transaction)] == DEADLOCK
+            ? StatusCode.DEADLOCK : outcome;
+    table.deadlocks.transactionOutcome(transaction, diagnosticOutcome);
     table.requestLifecycle.cancelAll(transaction, outcome);
     table.holdingLifecycle.releaseAll(transaction);
+    LockExactTransactionStore.Chunk chunk = table.state.transactions.record(transaction);
+    chunk.transactionActive[LockTypedSlots.offset(transaction)] = 0;
     recycleTransaction(transaction);
   }
 
@@ -112,7 +118,8 @@ final class LockExactLifecycle {
     if (!table.state.transactions.occupied(transaction)) return;
     LockExactTransactionStore.Chunk chunk = table.state.transactions.record(transaction);
     int offset = LockTypedSlots.offset(transaction);
-    if ((chunk.deadlockScheduled[offset >>> 6] & (1L << offset)) != 0
+    if (chunk.transactionActive[offset] != 0
+        || (chunk.deadlockScheduled[offset >>> 6] & (1L << offset)) != 0
         || chunk.holdingHeads[offset] != 0 || chunk.requestHeads[offset] != 0) return;
     table.state.directory.transactionIndex.remove(transaction,
         LockExactDirectory.transactionHash(

@@ -32,7 +32,7 @@ final class LockServiceWaits {
               ? StatusCode.TIMEOUT
           : manager.exact.enqueue(context.transactionId(), generation,
               context.transactionStartOrder(), laneId, laneGeneration,
-              request, lane, handle);
+              request, lane, handle, System.nanoTime());
       detail.set(status);
       return status;
     }

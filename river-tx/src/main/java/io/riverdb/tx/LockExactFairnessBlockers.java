@@ -17,7 +17,7 @@ final class LockExactFairnessBlockers {
     }
     while (overlap >= 0) {
       long blocker = nextOverlap(transaction, request, overlap, frame, frameOffset);
-      if (blocker >= 0) return blocker;
+        if (blocker >= 0) return blocker;
       overlap = table.state.intervals.nextOverlap(requestedResource, overlap);
       frame.frameIntervals[frameOffset] = overlap;
       frame.frameModes[frameOffset] = 0;
@@ -64,7 +64,7 @@ final class LockExactFairnessBlockers {
           frame.frameFairnessCandidates[frameOffset] = 0;
           frame.frameModes[frameOffset] = (byte) (mode + 1);
         }
-        return candidates.transactions[offset];
+        return candidate;
       }
       candidate = next;
     }

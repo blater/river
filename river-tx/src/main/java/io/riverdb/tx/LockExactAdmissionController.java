@@ -24,6 +24,14 @@ final class LockExactAdmissionController {
   StatusCode enqueue(
       long id, long generation, long startOrder, long laneId, long laneGeneration,
       LockRequest request, LockExecutionLane lane, LockWaitHandle handle) {
+    return enqueue(id, generation, startOrder, laneId, laneGeneration,
+        request, lane, handle, System.nanoTime());
+  }
+
+  StatusCode enqueue(
+      long id, long generation, long startOrder, long laneId, long laneGeneration,
+      LockRequest request, LockExecutionLane lane, LockWaitHandle handle,
+      long blockedClockNanos) {
     StatusCode status = validate(
         id, generation, startOrder, laneId, laneGeneration, request, lane, handle);
     if (!status.isOk()) return status;
@@ -64,6 +72,7 @@ final class LockExactAdmissionController {
     boolean createdHolding = a.newHolding;
     long affectedResource = a.resourceSlot;
     long affectedTransaction = a.transactionSlot;
+    long admittedRequest = a.requestSlot;
     commitSlots();
     table.nextRequest++;
     table.nextReference++;
@@ -71,6 +80,15 @@ final class LockExactAdmissionController {
     table.waitingCount++;
     table.waitCounters.entered();
     table.scheduler.schedule(affectedResource, affectedTransaction);
+    if (table.state.requests.occupied(admittedRequest)) {
+      LockExactRequestStore.Chunk requests = table.state.requests.record(admittedRequest);
+      int offset = LockTypedSlots.offset(admittedRequest);
+      if (LockExactTable.WAIT_STATES[requests.states[offset]] == LockWaitState.QUEUED) {
+        requests.blockedAtNanos[offset] = blockedClockNanos;
+        requests.actuallyBlocked[offset] = 1;
+        table.waitCounters.blocked();
+      }
+    }
     return handle.status();
   }
 

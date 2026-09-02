@@ -13,7 +13,7 @@ final class LockExactConversionBlockers {
       LockExactRequestStore.Chunk requests = table.state.requests.record(candidate);
       int offset = LockTypedSlots.offset(candidate);
       frame.frameFairnessCandidates[frameOffset] = requests.nextConversion[offset];
-      if (requests.transactions[offset] != transaction) return requests.transactions[offset];
+      if (requests.transactions[offset] != transaction) return candidate;
       candidate = LockTypedSlots.decode(frame.frameFairnessCandidates[frameOffset]);
     }
     return -1;
@@ -36,7 +36,7 @@ final class LockExactConversionBlockers {
         if (requests.transactions[offset] != transaction) {
           frame.frameIntervals[frameOffset] = requests.nextConversion[offset] == 0
               ? table.state.intervals.nextOverlap(requestedResource, overlap) : overlap;
-          return requests.transactions[offset];
+          return candidate;
         }
         candidate = LockTypedSlots.decode(frame.frameFairnessCandidates[frameOffset]);
       }

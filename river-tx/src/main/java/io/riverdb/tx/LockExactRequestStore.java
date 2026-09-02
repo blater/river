@@ -15,6 +15,7 @@ final class LockExactRequestStore extends LockTypedSlots {
     final long[] requestGenerations = new long[256];
     final long[] referenceGenerations = new long[256];
     final long[] deadlines = new long[256];
+    final long[] blockedAtNanos = new long[256];
     final long[] deadlinePresence = new long[4];
     final long[] holdings = new long[256];
     final long[] nextResource = new long[256];
@@ -28,12 +29,13 @@ final class LockExactRequestStore extends LockTypedSlots {
     final LockWaitHandle[] handles = new LockWaitHandle[256];
     final byte[] modes = new byte[256];
     final byte[] states = new byte[256];
+    final byte[] actuallyBlocked = new byte[256];
     final long[] occupied = new long[4];
     final long[] conversions = new long[4];
     int used;
   }
 
-  LockExactRequestStore(LockSegmentArena arena) { super(arena, 43_136); }
+  LockExactRequestStore(LockSegmentArena arena) { super(arena, 45_440); }
   Chunk record(long slot) { return (Chunk) chunk(slot); }
   @Override Object newChunk(long index) { return new Chunk(); }
   @Override long generation(long slot) { return record(slot).generations[offset(slot)]; }
@@ -58,7 +60,7 @@ final class LockExactRequestStore extends LockTypedSlots {
     chunk.transactionRecordGenerations[offset] = 0;
     chunk.laneIds[offset] = chunk.laneGenerations[offset] = 0;
     chunk.requestGenerations[offset] = chunk.referenceGenerations[offset] = 0;
-    chunk.deadlines[offset] = chunk.holdings[offset] = 0;
+    chunk.deadlines[offset] = chunk.blockedAtNanos[offset] = chunk.holdings[offset] = 0;
     chunk.deadlinePresence[offset >>> 6] &= ~(1L << offset);
     chunk.conversions[offset >>> 6] &= ~(1L << offset);
     chunk.nextResource[offset] = chunk.previousResource[offset] = 0;
@@ -66,7 +68,7 @@ final class LockExactRequestStore extends LockTypedSlots {
     chunk.nextMode[offset] = chunk.previousMode[offset] = 0;
     chunk.nextTransaction[offset] = chunk.previousTransaction[offset] = 0;
     chunk.handles[offset] = null;
-    chunk.modes[offset] = chunk.states[offset] = 0;
+    chunk.modes[offset] = chunk.states[offset] = chunk.actuallyBlocked[offset] = 0;
     chunk.free[offset] = 0;
   }
 

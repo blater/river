@@ -10,7 +10,18 @@ final class LockTransactionLifecycle {
 
   StatusCode activate(Transaction transaction, long databaseHigh, long databaseLow) {
     synchronized (manager) {
-      return transaction.activateContext(manager.authority, databaseHigh, databaseLow);
+      if (!manager.deadlockDiagnosticsEnabled()) {
+        return transaction.activateContext(manager.authority, databaseHigh, databaseLow);
+      }
+      StatusCode status = manager.exact.activateTransaction(
+          transaction.transactionId(), transaction.transactionGeneration(),
+          transaction.transactionStartOrder(), transaction.diagnosticTag(),
+          transaction.metricsEpoch());
+      if (!status.isOk()) return status;
+      status = transaction.activateContext(manager.authority, databaseHigh, databaseLow);
+      if (!status.isOk()) manager.exact.lifecycle.releaseAll(
+          transaction.transactionId(), transaction.transactionGeneration(), StatusCode.CANCELLED);
+      return status;
     }
   }
 
