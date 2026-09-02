@@ -14,6 +14,7 @@ public final class SqlExecutionResult {
   private int affectedRows;
   private boolean hasValue;
   private boolean transactionActive;
+  private boolean emptyResult;
 
   public void reset() {
     lanes.reset();
@@ -23,6 +24,7 @@ public final class SqlExecutionResult {
     affectedRows = 0;
     hasValue = false;
     transactionActive = false;
+    emptyResult = false;
   }
 
   StatusCode beginProjection(
@@ -61,6 +63,8 @@ public final class SqlExecutionResult {
   }
 
   void setGeneratedKey(long generatedKey) { key = generatedKey; }
+
+  void markEmptyResult() { emptyResult = true; }
 
   void setProjection(
       long selectedKey,
@@ -150,4 +154,5 @@ public final class SqlExecutionResult {
   }
   public long commitSequence() { return commitSequence; }
   public boolean transactionActive() { return transactionActive; }
+  public boolean isEmptyResult() { return emptyResult; }
 }

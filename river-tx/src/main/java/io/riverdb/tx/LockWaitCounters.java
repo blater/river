@@ -1,0 +1,40 @@
+package io.riverdb.tx;
+
+import io.riverdb.base.error.StatusCode;
+
+/** Bounded, allocation-free counters for the lock wait lifecycle. */
+final class LockWaitCounters {
+  private long entered;
+  private long granted;
+  private long timedOut;
+  private long deadlock;
+  private long cancelled;
+
+  void entered() { entered = increment(entered); }
+
+  void granted() { granted = increment(granted); }
+
+  void terminal(StatusCode status) {
+    if (status == StatusCode.TIMEOUT) timedOut = increment(timedOut);
+    else if (status == StatusCode.DEADLOCK) deadlock = increment(deadlock);
+    else if (status == StatusCode.CANCELLED) cancelled = increment(cancelled);
+  }
+
+  long enteredCount() { return entered; }
+
+  long grantedCount() { return granted; }
+
+  long timedOutCount() { return timedOut; }
+
+  long deadlockCount() { return deadlock; }
+
+  long cancelledCount() { return cancelled; }
+
+  static boolean escalationSupported() { return false; }
+
+  static long escalationCount() { return 0; }
+
+  private static long increment(long value) {
+    return value == Long.MAX_VALUE ? Long.MAX_VALUE : value + 1;
+  }
+}

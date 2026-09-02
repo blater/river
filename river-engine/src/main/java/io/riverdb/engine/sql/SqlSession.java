@@ -67,6 +67,15 @@ public final class SqlSession implements SqlRetainedBudget {
     return coordinator.beginPreparedScan(plan, parameters, cursor);
   }
 
+  public StatusCode executePreparedSingleton(
+      SqlPreparedPlan plan,
+      ParameterSet parameters,
+      SqlScanCursor cursor,
+      SqlExecutionResult result,
+      SqlPreparedQueryPath path) {
+    return coordinator.executePreparedSingleton(plan, parameters, cursor, result, path);
+  }
+
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
     return coordinator.nextScan(cursor, result);
   }
@@ -102,6 +111,10 @@ public final class SqlSession implements SqlRetainedBudget {
 
   public boolean programTransactionActive() {
     return coordinator.programTransactionActive();
+  }
+
+  public boolean matchesCatalogGeneration(long expected) {
+    return coordinator.matchesCatalogGeneration(expected);
   }
 
   public StatusCode close() {

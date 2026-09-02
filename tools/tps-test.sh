@@ -101,6 +101,19 @@ for required_class in "${required_classes[@]}"; do
     break
   fi
 done
+if [[ $build_required == false ]]; then
+  build_marker=${required_classes[0]}
+  for source_root in "$river_root"/river-*/src/main; do
+    if [[ ! -d $source_root ]]; then
+      continue
+    fi
+    newer_source=$(find "$source_root" -type f -newer "$build_marker" -print -quit)
+    if [[ -n $newer_source ]]; then
+      build_required=true
+      break
+    fi
+  done
+fi
 if [[ $build_required == true ]]; then
   if [[ ${RIVER_TPS_SKIP_BUILD:-false} == true ]]; then
     echo "error: compiled River TPS classes are missing and RIVER_TPS_SKIP_BUILD=true" >&2
@@ -201,6 +214,7 @@ fi
 server_ready="$temp_dir/server.ready"
 server_log="$temp_dir/server.log"
 server_stop="$temp_dir/server.stop"
+server_metrics="$temp_dir/server-metrics.log"
 maximum_connections=$((terminals + 4))
 if ((maximum_connections < 16)); then
   maximum_connections=16
@@ -213,6 +227,7 @@ server_args=(
   "--maximum-connections=$maximum_connections"
   "--ready-file=$server_ready"
   "--stop-file=$server_stop"
+  "--metrics-file=$server_metrics"
 )
 if [[ -n ${server_jfr} ]]; then
   server_args+=("--jfr=$server_jfr")
@@ -294,6 +309,12 @@ if ((runner_status != 0)); then
 fi
 
 stop_server
+
+if [[ -f $server_metrics ]]; then
+  echo
+  echo "=== managed server lock metrics ==="
+  sed -n '1,40p' "$server_metrics"
+fi
 
 if [[ -n ${jfr} && -f ${jfr} ]]; then
   echo

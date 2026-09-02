@@ -14,6 +14,7 @@ final class TpccReport {
         + " batch_rows=" + config.batchRows()
         + " maximum_attempts=" + config.maximumAttempts()
         + " scheduling=" + config.scheduling() + " phase=" + config.phase()
+        + " evidence=" + config.evidence()
         + " jfr=" + (config.jfr() == null ? "disabled" : config.jfr().toAbsolutePath()));
     System.out.println("bounded_metrics=5 transaction types x 64 latency buckets per terminal");
   }
@@ -26,7 +27,17 @@ final class TpccReport {
     System.out.println("engineering_committed_transactions_per_second="
         + String.format(java.util.Locale.ROOT, "%.3f", metrics.totalCommitted() / seconds));
     System.out.println("whole_transaction_retries=" + metrics.retries());
+    System.out.println("started_transactions=" + metrics.started());
+    System.out.println("completed_transactions=" + metrics.total());
+    System.out.println("transaction_attempts=" + metrics.transactionAttempts());
+    System.out.println("in_flight_at_cutoff=" + metrics.inFlightAtCutoff());
+    System.out.println("completed_transactions_at_cutoff=" + metrics.total());
+    System.out.println("maximum_latency_us=" + metrics.maximumLatencyMicros());
     System.out.println("protocol_requests=" + metrics.protocolRequests());
+    System.out.println("logical_exchanges=" + metrics.protocolRequests()
+        + " boundary=jdbc_statement");
+    System.out.println("physical_request_frames=unavailable_via_jdbc");
+    System.out.println("physical_response_frames=unavailable_via_jdbc");
     System.out.println("protocol_bytes_sent=" + metrics.protocolBytesSent());
     System.out.println("protocol_bytes_received=" + metrics.protocolBytesReceived());
     System.out.println("protocol_requests_per_commit=" + String.format(
@@ -50,7 +61,9 @@ final class TpccReport {
               java.util.Locale.ROOT, "%.1f", metrics.protocolRequestsPerAttempt(type))
           + " p50_us_upper_bound=" + metrics.percentileMicros(type, 50)
           + " p95_us_upper_bound=" + metrics.percentileMicros(type, 95)
-          + " p99_us_upper_bound=" + metrics.percentileMicros(type, 99));
+          + " p99_us_upper_bound=" + metrics.percentileMicros(type, 99)
+          + " p99_9_us_upper_bound=" + metrics.percentileMicrosPermille(type, 999)
+          + " maximum_us=" + metrics.maximumLatencyMicros(type));
     }
     for (int kind = 0; kind < TpccRiverNewOrder.FAILURE_KINDS; kind++) {
       long failures = metrics.newOrderProgramFailures(kind);

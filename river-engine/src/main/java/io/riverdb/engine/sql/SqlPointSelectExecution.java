@@ -37,13 +37,14 @@ final class SqlPointSelectExecution {
 
   StatusCode execute(SqlExecutionResult result) {
     BoundSqlQuery.Block command = bound.executableQuery.root();
-    boolean safePointAccess = safePointAccess(command);
+    SqlPhysicalStepKind physicalKind =
+        SqlPhysicalStepClassifier.classifySingleton(bound);
     if (!selectCommand(command)
-        || !safePointAccess && bound.executableQuery.edgeCount() == 0
-            && !bound.expandedView) {
+        || !physicalKind.point() && bound.executableQuery.edgeCount() == 0
+            && !bound.expandedView && bound.pointTextColumn < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (!safePointAccess || bound.pointTextColumn > 0) {
+    if (!physicalKind.point()) {
       return executeScan(result);
     }
     long primaryKey;
@@ -61,8 +62,12 @@ final class SqlPointSelectExecution {
     }
     if (status.isOk()) status = validateRow(source);
     if (status.isOk()) status = predicates.evaluate(primaryKey, source);
-    if (status.isOk() && !predicates.matched()) status = StatusCode.CONFLICT;
+    if (status.isOk() && !predicates.matched()) {
+      result.markEmptyResult();
+      status = StatusCode.CONFLICT;
+    }
     if (!status.isOk()) {
+      if (status == StatusCode.CONFLICT) result.markEmptyResult();
       return status == StatusCode.CONFLICT ? releasePredicates(status) : status;
     }
     if (bound.command.isSelectForUpdate()) {
@@ -118,7 +123,11 @@ final class SqlPointSelectExecution {
       if (status.isOk()) predicates.releaseEvaluatedRow();
     }
     status = finishScan(active, status);
-    return status.isOk() && !found ? StatusCode.CONFLICT : status;
+    if (status.isOk() && !found) {
+      result.markEmptyResult();
+      return StatusCode.CONFLICT;
+    }
+    return status;
   }
 
   private StatusCode project(
@@ -139,24 +148,9 @@ final class SqlPointSelectExecution {
     return bodyStatus.isOk() ? close : bodyStatus;
   }
 
-  private boolean hasEqualityAccess(BoundSqlQuery.Block command) {
-    return bound.pointTextColumn > 0 || bound.accessPredicate >= 0
-        && bound.accessComparison == io.riverdb.sql.SqlComparison.EQUAL;
-  }
-
-  private boolean safePointAccess(BoundSqlQuery.Block command) {
-    if (!hasEqualityAccess(command)) return false;
-    int column = accessColumn();
-    return column == 0 || bound.table.hasUniqueIndexOn(column);
-  }
-
   private static boolean selectCommand(BoundSqlQuery.Block command) {
     return command.type() == SqlCommandType.SELECT
         || command.type() == SqlCommandType.SCAN;
-  }
-
-  private int accessColumn() {
-    return bound.pointTextColumn > 0 ? bound.pointTextColumn : bound.predicateColumn;
   }
 
   private StatusCode validateRow(HeapRowResult source) {

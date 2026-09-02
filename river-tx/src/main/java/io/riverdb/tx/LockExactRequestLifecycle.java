@@ -179,6 +179,7 @@ final class LockExactRequestLifecycle {
     LockWaitState terminal = status == StatusCode.TIMEOUT ? LockWaitState.TIMED_OUT
         : status == StatusCode.CANCELLED ? LockWaitState.CANCELLED
         : status == StatusCode.DEADLOCK ? LockWaitState.DEADLOCK : LockWaitState.FAILED;
+    table.waitCounters.terminal(status);
     chunk.states[offset] = (byte) terminal.ordinal();
     LockWaitHandle handle = chunk.handles[offset];
     long transaction = chunk.transactions[offset];

@@ -40,6 +40,13 @@ public final class LockManager implements LockService {
   public synchronized long deadlockVictimSelections() {
     return exact.deadlockVictimSelections();
   }
+  public synchronized long lockWaitsEntered() { return exact.lockWaitsEntered(); }
+  public synchronized long lockWaitsGranted() { return exact.lockWaitsGranted(); }
+  public synchronized long lockWaitsTimedOut() { return exact.lockWaitsTimedOut(); }
+  public synchronized long lockWaitsDeadlocked() { return exact.lockWaitsDeadlocked(); }
+  public synchronized long lockWaitsCancelled() { return exact.lockWaitsCancelled(); }
+  public boolean lockEscalationSupported() { return LockWaitCounters.escalationSupported(); }
+  public long lockEscalationCount() { return LockWaitCounters.escalationCount(); }
   synchronized long accountedBytes() { return arena.accountedBytes(); }
   synchronized long targetedWakes() { return exact.targetedWakes(); }
 

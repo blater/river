@@ -18,6 +18,7 @@ final class TpccTerminal implements AutoCloseable {
   private final TpccInputs.CustomerOrder orderStatus = new TpccInputs.CustomerOrder();
   private final TpccInputs.Delivery delivery = new TpccInputs.Delivery();
   private final TpccInputs.StockLevel stockLevel = new TpccInputs.StockLevel();
+  private volatile boolean transactionActive;
 
   TpccTerminal(TpccConfig configuration, int terminal) throws SQLException {
     config = configuration;
@@ -52,12 +53,16 @@ final class TpccTerminal implements AutoCloseable {
         ? TpccTransactionType.values()[(homeDistrict - 1) % 5] : choose();
     waitFor(type, true, deadline);
     if (System.nanoTime() >= deadline) return;
-    TpccAttempt attempt = prepare(type);
+    if (metrics != null) {
+      metrics.markStarted(type);
+      transactionActive = true;
+    }
     long requestsBefore = metrics == null ? 0 : session.completedRequests();
     long sentBefore = metrics == null ? 0 : session.bytesSent();
     long receivedBefore = metrics == null ? 0 : session.bytesReceived();
     long start = System.nanoTime();
     try {
+      TpccAttempt attempt = prepare(type);
       TpccRetry.Result result = TpccRetry.execute(attempt, config, deadline);
       long completed = System.nanoTime();
       if (metrics != null && completed <= deadline) {
@@ -71,9 +76,13 @@ final class TpccTerminal implements AutoCloseable {
         recordProtocol(metrics, type, requestsBefore, sentBefore, receivedBefore);
       }
       throw failure;
+    } finally {
+      transactionActive = false;
     }
     waitFor(type, false, deadline);
   }
+
+  boolean transactionActive() { return transactionActive; }
 
   private void recordProtocol(
       TpccMetrics metrics, TpccTransactionType type,

@@ -15,12 +15,18 @@ final class TpccRunPhase {
       throw new IllegalStateException("refusing to overwrite acceptance artifact " + config.artifact());
     }
     loadAndVerify(config);
+    System.out.println("phase_complete=load");
+    System.out.println("phase_start=preflight");
     TpccConflictProbe.run(config.url());
     TpccAcceptanceProbes.Result probes = TpccAcceptanceProbes.run(config);
+    System.out.println("phase_complete=preflight");
     TpccProcessObservation before = TpccProcessObservation.capture();
     TpccMetrics metrics = TpccTerminalRunner.run(config);
     TpccProcessObservation after = TpccProcessObservation.capture();
-    TpccPromotionGates.verify(metrics, probes.rollbacks(), probes.retries());
+    System.out.println("phase_complete=measured");
+    TpccPromotionGates.verify(metrics, probes.rollbacks(), probes.retries(), config);
+    System.out.println("phase_complete=drain");
+    System.out.println("phase_start=checkpoint");
     TpccDatabaseIdentity identity = checkpointAndIdentify(config);
     String runId = TpccArtifact.write(config, metrics, identity, before, after,
         probes.rollbacks(), probes.retries());

@@ -32,6 +32,9 @@ final class TransactionProgramExecutor {
     values.reset();
     StatusCode status = values.validateArguments(program, arguments);
     if (!status.isOk()) return rejected(status, result);
+    if (!session.matchesCatalogGeneration(retained.catalogGeneration())) {
+      return rejected(StatusCode.PROGRAM_STALE, result);
+    }
     status = session.beginProgram(execution);
     if (!status.isOk()) return rejected(status, result);
     int step = 0;

@@ -69,6 +69,7 @@ final class LockExactAdmissionController {
     table.nextReference++;
     if (createdHolding) table.nextCapability++;
     table.waitingCount++;
+    table.waitCounters.entered();
     table.scheduler.schedule(affectedResource, affectedTransaction);
     return handle.status();
   }

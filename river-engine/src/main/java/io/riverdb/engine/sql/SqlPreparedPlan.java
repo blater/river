@@ -26,6 +26,9 @@ public final class SqlPreparedPlan {
 
   public boolean query() { return query; }
 
+  /** Catalog publication at which this plan was validated. */
+  public long catalogGeneration() { return catalogGeneration; }
+
   /** Whether this relational plan and result policy are safe inside one program transaction. */
   public boolean acceptsProgramAction(int action) {
     if (!programSafe()) return false;

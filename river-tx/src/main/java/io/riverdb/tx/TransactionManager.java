@@ -106,6 +106,20 @@ public final class TransactionManager {
     return locks.deadlockVictimSelections();
   }
 
+  public long lockWaitsEntered() { return locks.lockWaitsEntered(); }
+
+  public long lockWaitsGranted() { return locks.lockWaitsGranted(); }
+
+  public long lockWaitsTimedOut() { return locks.lockWaitsTimedOut(); }
+
+  public long lockWaitsDeadlocked() { return locks.lockWaitsDeadlocked(); }
+
+  public long lockWaitsCancelled() { return locks.lockWaitsCancelled(); }
+
+  public boolean lockEscalationSupported() { return locks.lockEscalationSupported(); }
+
+  public long lockEscalationCount() { return locks.lockEscalationCount(); }
+
   /** Intended authenticated lock boundary; callers pair it with {@link Transaction#context()}. */
   public LockService lockService() { return locks; }
 

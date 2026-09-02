@@ -105,6 +105,81 @@ final class EmbeddedTransactionProgramTest {
   }
 
   @Test
+  void rollsBackMutatingProgramWhenLargeResultExceedsAdmissionBudget(@TempDir Path root) {
+    Fixture fixture = open(root);
+    int payload = SqlTypeDescriptor.varchar(1_800);
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "CREATE TABLE payload_account (id INTEGER PRIMARY KEY,payload VARCHAR(1800))",
+        new CommandResult()));
+    long insert = fixture.prepare("INSERT INTO payload_account VALUES (?,?)");
+    long read = fixture.prepare(
+        "SELECT payload FROM payload_account WHERE id=?");
+    TransactionProgram program = new TransactionProgram();
+    command(program, insert, 0, SqlTypeDescriptor.INTEGER, 1, payload);
+    query(program, read, 2, SqlTypeDescriptor.INTEGER);
+    assertEquals(StatusCode.OK, program.freeze());
+    TransactionProgramArguments arguments = new TransactionProgramArguments();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.INTEGER, 11));
+    assertEquals(StatusCode.OK, arguments.setText(1, payload, "x".repeat(1_800)));
+    assertEquals(StatusCode.OK, arguments.setFixed(2, SqlTypeDescriptor.INTEGER, 11));
+    int[] publishedCharacters = {0};
+    TransactionProgramResult result = new TransactionProgramResult(
+        io.riverdb.engine.api.RetainedMemoryLease.unbounded(), candidate -> {
+          publishedCharacters[0] = candidate.textLengthAt(candidate.firstRow(1), 0);
+          return publishedCharacters[0] > 1_024
+              ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;
+        });
+
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, fixture.session.executeProgram(
+        fixture.prepareProgram(program), arguments, result));
+    assertTrue(publishedCharacters[0] > 1_024);
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, result.primaryStatus());
+    assertEquals(StatusCode.OK, result.rollbackStatus());
+    CommandResult count = new CommandResult();
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "SELECT COUNT(*) FROM payload_account", count));
+    assertEquals(0, count.valueAt(0));
+    fixture.close();
+  }
+
+  @Test
+  void commitsContinuationSizedResultExactlyOnce(@TempDir Path root) {
+    Fixture fixture = open(root);
+    int payload = SqlTypeDescriptor.varchar(1_800);
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "CREATE TABLE payload_account (id INTEGER PRIMARY KEY,payload VARCHAR(1800))",
+        new CommandResult()));
+    long insert = fixture.prepare("INSERT INTO payload_account VALUES (?,?)");
+    long read = fixture.prepare(
+        "SELECT payload FROM payload_account WHERE id=?");
+    TransactionProgram program = new TransactionProgram();
+    command(program, insert, 0, SqlTypeDescriptor.INTEGER, 1, payload);
+    query(program, read, 2, SqlTypeDescriptor.INTEGER);
+    assertEquals(StatusCode.OK, program.freeze());
+    TransactionProgramArguments arguments = new TransactionProgramArguments();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.INTEGER, 12));
+    assertEquals(StatusCode.OK, arguments.setText(1, payload, "x".repeat(1_800)));
+    assertEquals(StatusCode.OK, arguments.setFixed(2, SqlTypeDescriptor.INTEGER, 12));
+    int[] admissions = {0};
+    TransactionProgramResult result = new TransactionProgramResult(
+        io.riverdb.engine.api.RetainedMemoryLease.unbounded(), candidate -> {
+          admissions[0]++;
+          return StatusCode.OK;
+        });
+
+    assertEquals(StatusCode.OK, fixture.session.executeProgram(
+        fixture.prepareProgram(program), arguments, result));
+    assertEquals(1, admissions[0]);
+    assertTrue(result.commitSequence() > 0);
+    assertEquals(1_800, result.textLengthAt(result.firstRow(1), 0));
+    CommandResult count = new CommandResult();
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "SELECT COUNT(*) FROM payload_account", count));
+    assertEquals(1, count.valueAt(0));
+    fixture.close();
+  }
+
+  @Test
   void rollsBackWhenCommandAffectedRowsViolateItsContract(@TempDir Path root) {
     Fixture fixture = open(root);
     long update = fixture.prepare("UPDATE account SET balance=balance+1 WHERE id=7");
@@ -182,6 +257,32 @@ final class EmbeddedTransactionProgramTest {
         program, arguments, new TransactionProgramResult()));
     assertEquals(StatusCode.OK, fixture.session.closeProgram(program));
     assertEquals(StatusCode.OK, fixture.session.closePrepared(insert));
+    fixture.close();
+  }
+
+  @Test
+  void rejectsProgramAfterCatalogInvalidationBeforeBeginningTransaction(@TempDir Path root) {
+    Fixture fixture = open(root);
+    long insert = fixture.prepare("INSERT INTO account VALUES (?,?)");
+    TransactionProgram program = new TransactionProgram();
+    command(program, insert, 0, SqlTypeDescriptor.INTEGER, 1, SqlTypeDescriptor.BIGINT);
+    assertEquals(StatusCode.OK, program.freeze());
+    long programHandle = fixture.prepareProgram(program);
+
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "CREATE TABLE unrelated (id INTEGER PRIMARY KEY)", new CommandResult()));
+    TransactionProgramArguments arguments = new TransactionProgramArguments();
+    assertEquals(StatusCode.OK, arguments.setFixed(0, SqlTypeDescriptor.INTEGER, 23));
+    assertEquals(StatusCode.OK, arguments.setFixed(1, SqlTypeDescriptor.BIGINT, 230));
+    TransactionProgramResult result = new TransactionProgramResult();
+
+    assertEquals(StatusCode.PROGRAM_STALE,
+        fixture.session.executeProgram(programHandle, arguments, result));
+    assertEquals(StatusCode.PROGRAM_STALE, result.primaryStatus());
+    assertEquals(StatusCode.OK, result.rollbackStatus());
+    assertEquals(StatusCode.OK, fixture.session.execute(
+        "INSERT INTO account VALUES (23,230)", new CommandResult()));
+    assertEquals(StatusCode.OK, fixture.session.closeProgram(programHandle));
     fixture.close();
   }
 

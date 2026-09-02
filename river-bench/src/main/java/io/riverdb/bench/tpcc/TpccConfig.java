@@ -24,7 +24,8 @@ public record TpccConfig(
     Duration retryBase,
     Duration retryMaximum,
     Path artifact,
-    Path jfr) {
+    Path jfr,
+    TpccEvidenceMode evidence) {
   public TpccConfig {
     if (url == null || !url.startsWith("jdbc:river:") || warehouses < 1 || warehouses > 100
         || districts < 1 || districts > 10
@@ -35,7 +36,7 @@ public record TpccConfig(
         || warmup.isNegative() || warmup.isZero() || measured.isNegative() || measured.isZero()
         || retryBase.isNegative() || retryBase.isZero() || retryMaximum.compareTo(retryBase) < 0
         || retryMaximum.compareTo(Duration.ofSeconds(10)) > 0
-        || artifact == null || phase == null || scheduling == null) {
+        || artifact == null || phase == null || scheduling == null || evidence == null) {
       throw new IllegalArgumentException("invalid TPC-C acceptance configuration");
     }
     if (itemCount == 100_000 && terminals != warehouses * districts) {

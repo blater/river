@@ -7,6 +7,21 @@ import io.riverdb.base.error.StatusCode;
  * Close returns CONFLICT while an API session remains open.
  */
 public interface RiverDatabase {
+  /** Lock-wait counters are available for an embedded managed-server diagnostic. */
+  default long lockWaitsEntered() { return -1; }
+
+  default long lockWaitsGranted() { return -1; }
+
+  default long lockWaitsTimedOut() { return -1; }
+
+  default long lockWaitsDeadlocked() { return -1; }
+
+  default long lockWaitsCancelled() { return -1; }
+
+  default boolean lockEscalationSupported() { return false; }
+
+  default long lockEscalationCount() { return -1; }
+
   StatusCode createSession(SessionOpenResult result);
 
   default StatusCode createSession(

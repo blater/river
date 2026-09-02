@@ -25,6 +25,7 @@ final class LockExactTable {
   final LockExactRequestLifecycle requestLifecycle;
   final LockExactLifecycle lifecycle;
   final LockExactDeadlockDetector deadlocks;
+  final LockWaitCounters waitCounters = new LockWaitCounters();
   long nextCapability = 1;
   long nextReference = 1;
   long nextRequest = 1;
@@ -149,6 +150,11 @@ final class LockExactTable {
   long targetedWakes() { return scheduler.targetedWakes(); }
   long overlapSearches() { return scheduler.overlapSearches(); }
   long deadlockVictimSelections() { return deadlocks.victimSelections(); }
+  long lockWaitsEntered() { return waitCounters.enteredCount(); }
+  long lockWaitsGranted() { return waitCounters.grantedCount(); }
+  long lockWaitsTimedOut() { return waitCounters.timedOutCount(); }
+  long lockWaitsDeadlocked() { return waitCounters.deadlockCount(); }
+  long lockWaitsCancelled() { return waitCounters.cancelledCount(); }
   boolean deadlocked(long transactionId, long transactionGeneration) {
     return lifecycle.deadlocked(transactionId, transactionGeneration);
   }

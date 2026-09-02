@@ -84,6 +84,7 @@ final class TpccArtifact {
     values.setProperty("config.terminals", Integer.toString(config.terminals()));
     values.setProperty("config.terminal_homes", terminalHomes(config));
     values.setProperty("config.scheduling", config.scheduling().name());
+    values.setProperty("config.evidence", config.evidence().name());
     values.setProperty("config.warmup_seconds", Long.toString(config.warmup().toSeconds()));
     values.setProperty("config.measured_seconds", Long.toString(config.measured().toSeconds()));
     values.setProperty("config.batch_rows", Integer.toString(config.batchRows()));
@@ -131,8 +132,19 @@ final class TpccArtifact {
       int rollbackProbes,
       int retryProbes) {
     values.setProperty("measurement.retries", Long.toString(metrics.retries()));
+    values.setProperty("measurement.started_transactions", Long.toString(metrics.started()));
+    values.setProperty("measurement.completed_transactions_at_cutoff",
+        Long.toString(metrics.total()));
+    values.setProperty("measurement.in_flight_at_cutoff",
+        Long.toString(metrics.inFlightAtCutoff()));
+    values.setProperty("measurement.maximum_latency_us",
+        Long.toString(metrics.maximumLatencyMicros()));
     values.setProperty(
         "measurement.protocol_requests", Long.toString(metrics.protocolRequests()));
+    values.setProperty(
+        "measurement.logical_exchanges", Long.toString(metrics.protocolRequests()));
+    values.setProperty("measurement.physical_request_frames", "unavailable_via_jdbc");
+    values.setProperty("measurement.physical_response_frames", "unavailable_via_jdbc");
     values.setProperty(
         "measurement.protocol_bytes_sent", Long.toString(metrics.protocolBytesSent()));
     values.setProperty(
@@ -158,6 +170,13 @@ final class TpccArtifact {
       values.setProperty(prefix + "p50_us_upper", Long.toString(metrics.percentileMicros(type, 50)));
       values.setProperty(prefix + "p95_us_upper", Long.toString(metrics.percentileMicros(type, 95)));
       values.setProperty(prefix + "p99_us_upper", Long.toString(metrics.percentileMicros(type, 99)));
+      values.setProperty(prefix + "p99_9_us_upper",
+          Long.toString(metrics.percentileMicrosPermille(type, 999)));
+      values.setProperty(prefix + "maximum_us", Long.toString(metrics.maximumLatencyMicros(type)));
+      for (int bucket = 0; bucket < 64; bucket++) {
+        values.setProperty(prefix + "histogram." + bucket,
+            Long.toString(metrics.histogram(type, bucket)));
+      }
     }
     values.setProperty("process.heap_used_before", Long.toString(before.heapUsed()));
     values.setProperty("process.heap_used_after", Long.toString(after.heapUsed()));

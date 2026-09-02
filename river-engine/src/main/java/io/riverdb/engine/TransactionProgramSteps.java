@@ -10,6 +10,7 @@ import io.riverdb.engine.sql.SqlPreparedPlan;
 import io.riverdb.engine.sql.SqlScanCursor;
 import io.riverdb.engine.sql.SqlScanRowResult;
 import io.riverdb.engine.sql.SqlSession;
+import io.riverdb.engine.sql.SqlPreparedQueryPath;
 
 /** Executes command, singleton-query, and row-set steps over one shared value path. */
 final class TransactionProgramSteps {
@@ -18,6 +19,7 @@ final class TransactionProgramSteps {
   private final SqlExecutionResult execution;
   private final SqlScanCursor scan = new SqlScanCursor();
   private final SqlScanRowResult row = new SqlScanRowResult();
+  private final SqlPreparedQueryPath queryPath = new SqlPreparedQueryPath();
   private final TransactionSqlRowReader reader = new TransactionSqlRowReader();
   private StatusCode status = StatusCode.OK;
 
@@ -74,11 +76,44 @@ final class TransactionProgramSteps {
       TransactionProgram program, int step,
       SqlPreparedPlan plan, TransactionProgramResult result) {
     status = scan.reset();
-    if (status.isOk()) status = session.beginPreparedScan(plan, values.parameters(), scan);
+    queryPath.reset();
+    if (status.isOk() && program.action(step) == TransactionProgramAction.ROW_SET) {
+      status = session.beginPreparedScan(plan, values.parameters(), scan);
+    } else if (status.isOk()) {
+      status = session.executePreparedSingleton(
+          plan, values.parameters(), scan, execution, queryPath);
+    }
+    if (queryPath.point()) return executePointSingleton(program, step, result);
     if (!status.isOk()) return Integer.MIN_VALUE;
     return program.action(step) == TransactionProgramAction.ROW_SET
         ? executeRowSet(program, step, result)
         : executeSingleRow(program, step, result);
+  }
+
+  private int executePointSingleton(
+      TransactionProgram program, int step, TransactionProgramResult result) {
+    boolean available = status.isOk() && execution.hasValue();
+    if (status == StatusCode.CONFLICT && execution.isEmptyResult()) {
+      status = StatusCode.OK;
+    } else if (!status.isOk()) {
+      return Integer.MIN_VALUE;
+    }
+    int action = program.action(step);
+    status = result.beginStepResult(step, action, available ? 1 : 0);
+    if (status.isOk() && available) {
+      reader.pointTo(execution);
+      status = values.captureDataflow(program, step, reader, reader.columnCount());
+      if (status.isOk() && program.captureCount(step) > 0) {
+        status = values.captureOutput(
+            program, step, reader, reader.columnCount(), result);
+      }
+    }
+    if (status.isOk() && !available && action == TransactionProgramAction.EXACT_ONE) {
+      status = StatusCode.CARDINALITY_VIOLATION;
+    }
+    if (!status.isOk()) return Integer.MIN_VALUE;
+    return !available && program.emptyTarget(step) >= 0
+        ? program.emptyTarget(step) : step + 1;
   }
 
   private int executeSingleRow(

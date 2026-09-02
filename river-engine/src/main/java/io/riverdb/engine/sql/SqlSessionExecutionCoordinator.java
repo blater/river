@@ -116,6 +116,10 @@ final class SqlSessionExecutionCoordinator {
   long preparedExecutions() { return preparedExecutions; }
   long preparedRecompiles() { return preparedRecompiles; }
 
+  boolean matchesCatalogGeneration(long expected) {
+    return expected > 0 && session.matchesCatalogGeneration(expected);
+  }
+
   void claimDatabaseLease(io.riverdb.engine.runtime.SqlRuntimeLease lease) {
     runtimeLease.claim(lease);
   }
@@ -293,6 +297,46 @@ final class SqlSessionExecutionCoordinator {
     if (!status.isOk()) return status;
     long bindingCatalogGeneration = recompile ? session.catalogGeneration() : 0;
     preparedExecutions++;
+    status = beginCompiledScan(cursor);
+    return status.isOk()
+        ? publishPreparedBinding(plan, recompile, bindingCatalogGeneration) : status;
+  }
+
+  StatusCode executePreparedSingleton(
+      SqlPreparedPlan plan,
+      ParameterSet parameters,
+      SqlScanCursor cursor,
+      SqlExecutionResult result,
+      SqlPreparedQueryPath path) {
+    if (path == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    path.reset();
+    StatusCode status = admitScan(cursor);
+    if (!status.isOk()) return status;
+    if (plan == null || parameters == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (parameters.count() != plan.parameterCount()) {
+      return StatusCode.PARAMETER_COUNT_MISMATCH;
+    }
+    boolean recompile = plan.needsRecompile(session);
+    bound.reset();
+    status = plan.template().restore(bound.query, bound.command);
+    if (status.isOk()) status = loadParameters(parameters, plan.parameterCount());
+    if (status.isOk()) status = runtimeParameters.materialize(bound.query, bound.command);
+    runtimeParameters.reset();
+    if (status.isOk()) status = authorize(bound.command.type());
+    if (status.isOk()) status = binder.captureExecutableQuery(bound);
+    if (status.isOk() && !SqlSessionCommandKinds.query(bound.command.type())) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (!status.isOk()) return status;
+    SqlPhysicalStepKind physicalKind = SqlPhysicalStepClassifier.classifySingleton(bound);
+    long bindingCatalogGeneration = recompile ? session.catalogGeneration() : 0;
+    preparedExecutions++;
+    if (physicalKind.point()) {
+      path.point(true);
+      status = executePoint(result);
+      return status.isOk()
+          ? publishPreparedBinding(plan, recompile, bindingCatalogGeneration) : status;
+    }
     status = beginCompiledScan(cursor);
     return status.isOk()
         ? publishPreparedBinding(plan, recompile, bindingCatalogGeneration) : status;

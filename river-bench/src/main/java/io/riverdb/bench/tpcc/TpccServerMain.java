@@ -5,6 +5,7 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
 import io.riverdb.engine.api.DatabaseOpenResult;
+import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerOpenResult;
 import java.nio.charset.StandardCharsets;
@@ -42,6 +43,7 @@ public final class TpccServerMain {
     }
 
     LoopbackRiverServer server = listening.server();
+    RiverDatabase database = opened.database();
     TpccTraceRecording recording = null;
     try {
       Files.writeString(
@@ -70,7 +72,27 @@ public final class TpccServerMain {
       }
     } finally {
       if (recording != null) recording.close();
+      writeMetrics(configuration.metricsFile(), database);
       close(server, opened);
+    }
+  }
+
+  private static void writeMetrics(Path path, RiverDatabase database) {
+    if (path == null) return;
+    String metrics = "server_metrics_scope=server_lifetime\n"
+        + "server_lock_waits_entered=" + database.lockWaitsEntered() + "\n"
+        + "server_lock_waits_granted=" + database.lockWaitsGranted() + "\n"
+        + "server_lock_waits_timed_out=" + database.lockWaitsTimedOut() + "\n"
+        + "server_lock_waits_deadlocked=" + database.lockWaitsDeadlocked() + "\n"
+        + "server_lock_waits_cancelled=" + database.lockWaitsCancelled() + "\n"
+        + "server_lock_escalation_supported=" + database.lockEscalationSupported() + "\n"
+        + "server_lock_escalations=" + database.lockEscalationCount() + "\n";
+    try {
+      Files.writeString(
+          path, metrics, StandardCharsets.US_ASCII,
+          StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+    } catch (java.io.IOException failure) {
+      System.err.println("TPS server metrics write failed: " + failure.getMessage());
     }
   }
 
@@ -90,7 +112,8 @@ public final class TpccServerMain {
 
   private record ServerArguments(
       Path directory, int port, int maximumConnections, Path readyFile,
-      Path jfr, Path traceStartFile, Path traceStartedFile, Path stopFile) {
+      Path jfr, Path traceStartFile, Path traceStartedFile, Path stopFile,
+      Path metricsFile) {
     private static ServerArguments parse(String[] arguments) {
       Path directory = null;
       Path readyFile = null;
@@ -98,6 +121,7 @@ public final class TpccServerMain {
       Path traceStartFile = null;
       Path traceStartedFile = null;
       Path stopFile = null;
+      Path metricsFile = null;
       int port = -1;
       int maximumConnections = 16;
       for (String argument : arguments) {
@@ -118,6 +142,8 @@ public final class TpccServerMain {
           traceStartedFile = Path.of(argument.substring("--trace-started-file=".length()));
         } else if (argument.startsWith("--stop-file=")) {
           stopFile = Path.of(argument.substring("--stop-file=".length()));
+        } else if (argument.startsWith("--metrics-file=")) {
+          metricsFile = Path.of(argument.substring("--metrics-file=".length()));
         } else {
           throw new IllegalArgumentException("unknown TPS server argument: " + argument);
         }
@@ -135,7 +161,7 @@ public final class TpccServerMain {
       }
       return new ServerArguments(
           directory, port, maximumConnections, readyFile, jfr,
-          traceStartFile, traceStartedFile, stopFile);
+          traceStartFile, traceStartedFile, stopFile, metricsFile);
     }
   }
 }

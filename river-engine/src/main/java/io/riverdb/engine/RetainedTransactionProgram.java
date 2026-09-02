@@ -18,6 +18,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
   private int retainedReferences;
   private long graphBytes;
   private long referenceBytes;
+  private long catalogGeneration;
 
   RetainedTransactionProgram(
       SqlRetainedBudget budget, RetainedPreparedStatements retainedPrepared) {
@@ -48,6 +49,11 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
       retainedReferences++;
       plans[step] = plan;
       statementHandles[step] = handle;
+      if (plan.catalogGeneration() <= 0
+          || step > 0 && plan.catalogGeneration() != catalogGeneration) {
+        return failed(StatusCode.PROGRAM_STALE);
+      }
+      if (step == 0) catalogGeneration = plan.catalogGeneration();
       if (!plan.acceptsProgramAction(source.action(step))) {
         return failed(StatusCode.INVALID_EXTERNAL_INPUT);
       }
@@ -61,6 +67,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
 
   TransactionProgram program() { return program; }
   SqlPreparedPlan plan(int step) { return plans[step]; }
+  long catalogGeneration() { return catalogGeneration; }
 
   StatusCode close() {
     StatusCode status = program.release();
@@ -71,6 +78,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
     if (!status.isOk()) return status;
     plans = new SqlPreparedPlan[0];
     statementHandles = new long[0];
+    catalogGeneration = 0;
     referenceBytes = 0;
     return StatusCode.OK;
   }
@@ -92,6 +100,7 @@ final class RetainedTransactionProgram implements RetainedMemoryLease {
     StatusCode released = releaseReferences();
     plans = new SqlPreparedPlan[0];
     statementHandles = new long[0];
+    catalogGeneration = 0;
     StatusCode memoryStatus = memory.resize(0);
     referenceBytes = memoryStatus.isOk() ? 0 : referenceBytes;
     if (!released.isOk()) return released;

@@ -25,6 +25,7 @@ public enum StatusCode {
   STRING_DATA_RIGHT_TRUNCATION(3012, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   FEATURE_NOT_SUPPORTED(3013, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   PARAMETER_COUNT_MISMATCH(3014, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
+  PROGRAM_STALE(3015, StatusFamily.INVALID_EXTERNAL_INPUT, false, false),
   CONFLICT(4000, StatusFamily.CONFLICT, true, false),
   NOT_OWNER(4001, StatusFamily.CONFLICT, false, false),
   DEADLOCK(4002, StatusFamily.CONFLICT, true, false),

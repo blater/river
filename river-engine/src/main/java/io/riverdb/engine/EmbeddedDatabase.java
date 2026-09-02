@@ -323,6 +323,20 @@ public final class EmbeddedDatabase {
     return wal.replicatedPayloadBytes();
   }
 
+  public long lockWaitsEntered() { return transactions.lockWaitsEntered(); }
+
+  public long lockWaitsGranted() { return transactions.lockWaitsGranted(); }
+
+  public long lockWaitsTimedOut() { return transactions.lockWaitsTimedOut(); }
+
+  public long lockWaitsDeadlocked() { return transactions.lockWaitsDeadlocked(); }
+
+  public long lockWaitsCancelled() { return transactions.lockWaitsCancelled(); }
+
+  public boolean lockEscalationSupported() { return transactions.lockEscalationSupported(); }
+
+  public long lockEscalationCount() { return transactions.lockEscalationCount(); }
+
   public int activeTransactionCount() {
     return transactions.activeTransactionCount();
   }

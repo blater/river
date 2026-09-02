@@ -144,7 +144,8 @@ final class ProtocolResponsePayloadDecoder {
       case 3008 -> StatusCode.DIVISION_BY_ZERO; case 3009 -> StatusCode.INVALID_DATETIME_FORMAT;
       case 3010 -> StatusCode.DATETIME_FIELD_OVERFLOW; case 3011 -> StatusCode.INVALID_TIME_ZONE_DISPLACEMENT;
       case 3012 -> StatusCode.STRING_DATA_RIGHT_TRUNCATION; case 3013 -> StatusCode.FEATURE_NOT_SUPPORTED;
-      case 3014 -> StatusCode.PARAMETER_COUNT_MISMATCH; case 4000 -> StatusCode.CONFLICT;
+      case 3014 -> StatusCode.PARAMETER_COUNT_MISMATCH; case 3015 -> StatusCode.PROGRAM_STALE;
+      case 4000 -> StatusCode.CONFLICT;
       case 4001 -> StatusCode.NOT_OWNER; case 4002 -> StatusCode.DEADLOCK;
       case 5000 -> StatusCode.RESOURCE_EXHAUSTED;
       case 5001 -> StatusCode.QUERY_TOO_COMPLEX; case 6000 -> StatusCode.TIMEOUT;

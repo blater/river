@@ -29,5 +29,7 @@ final class TpccMetricsTest {
     assertEquals(3.6, first.protocolRequestsPerAttempt(TpccTransactionType.NEW_ORDER));
     assertEquals(5, first.transactionAttempts());
     assertEquals(4, first.percentileMicros(TpccTransactionType.NEW_ORDER, 99));
+    assertEquals(4, first.maximumLatencyMicros(TpccTransactionType.NEW_ORDER));
+    assertEquals(0, first.maximumLatencyMicros(TpccTransactionType.PAYMENT));
   }
 }

@@ -540,7 +540,8 @@ final class ProtocolFrameCodecTest {
         StatusCode.INVALID_TIME_ZONE_DISPLACEMENT,
         StatusCode.STRING_DATA_RIGHT_TRUNCATION,
         StatusCode.FEATURE_NOT_SUPPORTED,
-        StatusCode.PARAMETER_COUNT_MISMATCH
+        StatusCode.PARAMETER_COUNT_MISMATCH,
+        StatusCode.PROGRAM_STALE
     };
     for (StatusCode status : statuses) {
       assertEquals(

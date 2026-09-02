@@ -144,6 +144,7 @@ final class LockExactScheduler {
     table.waitingCount--;
     table.holdingLifecycle.grant(resource, qc.holdings[qo], qc.modes[qo]);
     qc.states[qo] = (byte) LockWaitState.GRANTED.ordinal();
+    table.waitCounters.granted();
     LockWaitHandle handle = qc.handles[qo];
     handle.transition(table.authority, LockExactTable.PROVIDER_GENERATION,
         table.lifecycle.transactionId(transaction), table.lifecycle.transactionGeneration(transaction),

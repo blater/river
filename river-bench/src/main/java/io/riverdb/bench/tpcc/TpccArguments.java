@@ -23,6 +23,7 @@ final class TpccArguments {
   private boolean attemptsExplicit;
   private long retryBaseMicros = 250;
   private long retryMaximumMillis = 100;
+  private TpccEvidenceMode evidence = TpccEvidenceMode.DIAGNOSTIC;
 
   private TpccArguments() {}
 
@@ -42,6 +43,7 @@ final class TpccArguments {
       case "--scheduling" -> scheduling = TpccScheduling.parse(value);
       case "--artifact" -> artifact = Path.of(value);
       case "--jfr" -> jfr = Path.of(value);
+      case "--evidence" -> evidence = TpccEvidenceMode.parse(value);
       case "--tiny" -> tiny = Boolean.parseBoolean(value);
       case "--fresh-load" -> load = Boolean.parseBoolean(value);
       case "--warmup-seconds" -> warmup = Long.parseLong(value);
@@ -76,6 +78,6 @@ final class TpccArguments {
         Duration.ofSeconds(warmup), Duration.ofSeconds(measured), batch, configuredAttempts,
         seed, load,
         phase, scheduling, Duration.ofNanos(Math.multiplyExact(retryBaseMicros, 1_000L)),
-        Duration.ofMillis(retryMaximumMillis), artifact, jfr);
+        Duration.ofMillis(retryMaximumMillis), artifact, jfr, evidence);
   }
 }

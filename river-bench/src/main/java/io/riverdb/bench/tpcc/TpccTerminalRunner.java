@@ -34,7 +34,10 @@ final class TpccTerminalRunner {
   private static TpccMetrics execute(TpccConfig config, List<TpccTerminal> terminals)
       throws Exception {
     try (ExecutorService executor = Executors.newFixedThreadPool(config.terminals())) {
+      System.out.println("phase_start=warmup");
       executeWarmup(config, terminals, executor);
+      System.out.println("phase_complete=warmup");
+      System.out.println("phase_start=measured");
       return executeMeasured(config, terminals, executor);
     }
   }
@@ -71,9 +74,14 @@ final class TpccTerminalRunner {
       deadline.set(measuredDeadline);
       start.countDown();
       awaitDeadline(measuredDeadline);
+      long inFlightAtCutoff = 0;
+      for (TpccTerminal terminal : terminals) {
+        if (terminal.transactionActive()) inFlightAtCutoff++;
+      }
       profile.close();
       TpccMetrics combined = new TpccMetrics();
       for (Future<TpccMetrics> future : futures) combined.add(result(future));
+      combined.inFlightAtCutoff(inFlightAtCutoff);
       return combined;
     } finally {
       start.countDown();

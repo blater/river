@@ -130,6 +130,20 @@ public final class RelationalDatabase {
     return embedded.replicatedWalPayloadBytes();
   }
 
+  public long lockWaitsEntered() { return embedded.lockWaitsEntered(); }
+
+  public long lockWaitsGranted() { return embedded.lockWaitsGranted(); }
+
+  public long lockWaitsTimedOut() { return embedded.lockWaitsTimedOut(); }
+
+  public long lockWaitsDeadlocked() { return embedded.lockWaitsDeadlocked(); }
+
+  public long lockWaitsCancelled() { return embedded.lockWaitsCancelled(); }
+
+  public boolean lockEscalationSupported() { return embedded.lockEscalationSupported(); }
+
+  public long lockEscalationCount() { return embedded.lockEscalationCount(); }
+
   boolean resourceGoverned() { return embedded.resourceGoverned(); }
 
   long resourceWriteEntryCapacity() { return embedded.resourceWriteEntryCapacity(); }

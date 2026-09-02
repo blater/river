@@ -121,6 +121,27 @@ public final class EmbeddedRiver {
     }
 
     @Override
+    public long lockWaitsEntered() { return database.lockWaitsEntered(); }
+
+    @Override
+    public long lockWaitsGranted() { return database.lockWaitsGranted(); }
+
+    @Override
+    public long lockWaitsTimedOut() { return database.lockWaitsTimedOut(); }
+
+    @Override
+    public long lockWaitsDeadlocked() { return database.lockWaitsDeadlocked(); }
+
+    @Override
+    public long lockWaitsCancelled() { return database.lockWaitsCancelled(); }
+
+    @Override
+    public boolean lockEscalationSupported() { return database.lockEscalationSupported(); }
+
+    @Override
+    public long lockEscalationCount() { return database.lockEscalationCount(); }
+
+    @Override
     public synchronized StatusCode createSession(SessionOpenResult result) {
       return createSession(null, result);
     }
