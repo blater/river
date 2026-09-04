@@ -12,6 +12,7 @@ dependencies {
   annotationProcessor("org.openjdk.jmh:jmh-generator-annprocess:1.37")
   implementation("org.openjdk.jol:jol-core:0.17")
   testImplementation(project(":river-engine"))
+  testImplementation(testFixtures(project(":river-engine")))
   testImplementation(project(":river-engine-api"))
   testImplementation(project(":river-server"))
 }

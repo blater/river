@@ -12,6 +12,8 @@ tags:
     - build
     - test
     - architecture
+deps:
+    - tic-2828
 created: 2026-09-04T19:40:20.526765Z
 ---
 # Restore clean test compilation after explicit resource and protocol contracts

@@ -1,6 +1,6 @@
 package io.riverdb.bench.tpcc;
 
-import static io.riverdb.bench.tpcc.TpccTestDatabaseResources.databaseRequest;
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

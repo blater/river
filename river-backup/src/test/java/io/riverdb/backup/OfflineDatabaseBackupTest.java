@@ -1,5 +1,6 @@
 package io.riverdb.backup;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -39,7 +40,8 @@ final class OfflineDatabaseBackupTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(source, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(
+            databaseRequest(8), source, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
@@ -144,7 +146,8 @@ final class OfflineDatabaseBackupTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(restored, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(
+            databaseRequest(8), restored, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
     session = sessionResult.session();

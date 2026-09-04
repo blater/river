@@ -1,5 +1,6 @@
 package io.riverdb.client;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -54,7 +55,9 @@ final class RiverClientConnectionTest {
   @Test
   void publishesRemoteQueryMetadataAndAdmitsRowsBeforeFetch(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
@@ -110,7 +113,9 @@ final class RiverClientConnectionTest {
   @Test
   void executesPreparedTransactionProgramInOneRequest(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
@@ -170,7 +175,9 @@ final class RiverClientConnectionTest {
   @Test
   void returnsProgramFailureAndKeepsRolledBackSessionUsable(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
@@ -220,7 +227,9 @@ final class RiverClientConnectionTest {
   @Test
   void admitsContinuedProgramResponseBeforeCommit(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
@@ -272,7 +281,9 @@ final class RiverClientConnectionTest {
   @Test
   void preservesCommittedOutcomeWhenCallerResultMemoryIsExhausted(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     RiverClientConnection client = connect(server);
@@ -337,7 +348,8 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult engineResult = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, engineResult));
+        EmbeddedRiver.create(
+            databaseRequest(8), root, DATABASE, GENERATION, 8, engineResult));
     RiverDatabase engine = engineResult.database();
     LoopbackRiverServer server = start(engine);
     RiverClientConnection client = connect(server);
@@ -483,7 +495,8 @@ final class RiverClientConnectionTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, engineResult));
+        EmbeddedRiver.openExisting(
+            databaseRequest(8), root, DATABASE, GENERATION, 8, engineResult));
     engine = engineResult.database();
     server = start(engine);
     client = connect(server);
@@ -519,7 +532,8 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult engineResult = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.create(
+            databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     RiverDatabase engine = engineResult.database();
     LoopbackRiverServer server = start(engine);
     RiverClientConnection client = connect(server);
@@ -560,7 +574,8 @@ final class RiverClientConnectionTest {
     DatabaseOpenResult engineResult = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, engineResult));
+        EmbeddedRiver.create(
+            databaseRequest(8), root, DATABASE, GENERATION, 8, engineResult));
     RiverDatabase engine = engineResult.database();
     LoopbackRiverServer server = start(engine, 2);
     RiverClientConnection first = connect(server);

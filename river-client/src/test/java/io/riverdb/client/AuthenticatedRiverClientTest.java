@@ -1,5 +1,6 @@
 package io.riverdb.client;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -44,7 +45,8 @@ final class AuthenticatedRiverClientTest {
     DatabaseOpenResult engineResult = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.create(
+            databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     RiverDatabase engine = engineResult.database();
     LoopbackRiverServer wrongHostnameServer = start(
         engine,
@@ -113,7 +115,8 @@ final class AuthenticatedRiverClientTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.openExisting(
+            databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     engine = engineResult.database();
     server = start(engine, root, serverContext, authResult.authenticator());
     assertEquals(
@@ -154,7 +157,8 @@ final class AuthenticatedRiverClientTest {
     DatabaseOpenResult engineResult = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.create(
+            databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     RiverDatabase engine = engineResult.database();
     SessionOpenResult localResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, engine.createSession(localResult));

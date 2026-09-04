@@ -48,7 +48,8 @@ final class SqlWideNullPropagationTest {
     SqlProjectedRow projected = projected();
     assertEquals(StatusCode.OK, workspace.begin(
         new TableDefinition(), false, COLUMNS, false, false, false, 0));
-    for (int row = 0; row < 1_025; row++) {
+    int rowCount = workspace.configuredRunRows() + 1;
+    for (int row = 0; row < rowCount; row++) {
       projected.reset(COLUMNS);
       projected.setValue(0, row);
       if (row == 0) {
@@ -82,7 +83,8 @@ final class SqlWideNullPropagationTest {
     int descriptor = SqlTypeDescriptor.decimal(22, 18);
     assertEquals(StatusCode.OK, workspace.begin(
         new TableDefinition(), false, 1, false, false, false, descriptor));
-    for (int row = 0; row < 1_024; row++) {
+    int residentRows = workspace.configuredRunRows();
+    for (int row = 0; row < residentRows; row++) {
       projected.setDecimal128(0, 0, row);
       assertEquals(StatusCode.OK, workspace.append(
           0, row, false, row + 1L,
@@ -90,15 +92,16 @@ final class SqlWideNullPropagationTest {
     }
     projected.setDecimal128(0, -1, -1);
     assertEquals(StatusCode.OK, workspace.append(
-        -1, -1, false, 2_000,
+        -1, -1, false, residentRows + 1L,
         projected.highs(), projected.values(), projected, null, projected));
     assertEquals(StatusCode.OK, workspace.finish());
+    assertTrue(workspace.isSpilled());
     long[] highs = new long[1];
     long[] values = new long[1];
     assertEquals(StatusCode.OK, workspace.nextSpilled(1, highs, values));
     assertEquals(-1, highs[0]);
     assertEquals(-1, values[0]);
-    assertEquals(2_000, workspace.outputPrimaryKey());
+    assertEquals(residentRows + 1L, workspace.outputPrimaryKey());
     assertEquals(StatusCode.OK, workspace.close());
     runtime.close();
   }

@@ -148,7 +148,6 @@ final class SqlBlockRowStore {
 
   long rowCount() { return Math.min(rowCount, readLimit); }
 
-  boolean spilled() { return rows != null; }
   boolean hasResources() { return schema != null || rows != null || index != null || keys != null; }
 
   StatusCode clearForReuse() {

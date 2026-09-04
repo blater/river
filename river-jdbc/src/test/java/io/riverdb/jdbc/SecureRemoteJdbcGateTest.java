@@ -1,6 +1,6 @@
 package io.riverdb.jdbc;
 
-import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
