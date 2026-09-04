@@ -42,47 +42,53 @@ Decision and attribution:
 
 ## Checkpoints
 
-### 2026-09-04 restored P1 prototype baseline
+### 2026-09-04 pre-launcher recovery source snapshot
 
-Status: final clean gate and integration identifiers pending.
+Status: recoverable source snapshot; **not an accepted performance feature
+checkpoint**.
 
-Purpose: preserve the restored no-argument TPS behavior and the current P1
-prototype as the baseline for subsequent isolated optimization features.
+- Source commit: `adccf7172e74450cf4518a561b3712c4e8927c0d`
+- Recovery branch: `origin/recovery/pre-launcher-auth-cutoff`
+- Contained by: `master`
+- Performance checkpoint tag: none
 
-Pre-checkpoint investigation evidence is recorded in `docs/perf_review.md` under
-“2026-09-04 apparent TPS regression investigation.” Restored no-argument
-`tools/tps-test.sh` samples after a clean `:river-bench:classes` build were 124.4
-and 123.9 committed TPS. After replacing the unsafe shell timestamp/sentinel
-freshness test with Gradle-owned incremental checking, matched samples were 125.1
-and 124.5 TPS. All four samples had zero retries and errors and valid complete
-captures. These adjacent results exonerate that tooling hardening as a throughput
-regression; they are diagnostic local evidence, not an external performance
-claim.
+Purpose: preserve the coherent pre-launcher/authentication River source that
+restored the no-argument TPS path after later workspace changes caused
+`RESOURCE_EXHAUSTED` and large throughput regressions. This is the safe source
+baseline from which the ticketed P0/P1 work proceeds; it is not proof that a P1
+optimization passed the feature-checkpoint workflow above.
 
-The clean gate exposed 80,896 bytes of warmed commit-path allocation across 64
-single-row transactions (1,264 bytes per transaction). Stage isolation placed
-all of it in page-frame acquisition. The cache selected an empty slot before a
-safe historical generation later in the probe ring, so a serial workload
-allocated one direct frame per commit until reaching cache capacity. The
-candidate now scans the ring for a reclaimable historical generation before
-using the first empty or evictable slot, and retains each frame's payload view
-for reuse. This changes neither the configured cache geometry nor its structural
-bounds. The warmed allocation guard and group-commit fault test pass, and a
-direct cache-policy regression test covers the selection order.
+The local diagnostic evidence recorded in `docs/perf_review.md` under
+“2026-09-04 apparent TPS regression investigation” remains useful but does not
+constitute a promotion result. After a clean `:river-bench:classes` build,
+no-argument `tools/tps-test.sh` samples were 124.4 and 123.9 committed TPS. After
+the script delegated freshness to Gradle's incremental task, adjacent samples
+were 125.1 and 124.5 TPS. All four reported zero retries and errors and complete
+captures. No immutable artifact paths or source-linked run IDs are recorded
+here, so the figures support recovery diagnosis only.
 
-The accompanying test-value pass removes two suites for superseded internal
-contracts (`EmbeddedRiverLegacyCompatibilityTest` and
-`DatabaseResourceDefaultsTest`), one tautological resource-default assertion,
-one assertion pinning a SQL test to the superseded legacy dispatch classifier,
-and one JVM-layout-dependent allocation threshold on the necessarily cold
-structural split. The SQL behavior and split test still require their semantic
-result, exact staged-page, and WAL copy behavior. Recovery, concurrency, WAL,
-protocol, fault-injection, security, durable-format, invariant, and meaningful
-warmed allocation coverage remain.
+No repository-wide clean test gate completed for this snapshot. A clean attempt
+was disrupted by concurrent authentication/server API and TLS dependency-
+verification changes. There are no accepted post-clean TPS samples, feature
+merge commit, slopmark comparison, or `perf-checkpoint-*` tag. Do not fill those
+fields retroactively or treat the recovery commit's name as performance
+certification.
 
-The first `./gradlew clean test` attempt after this slice was disrupted by the
-concurrent authentication/server migration: River-owned callers temporarily
-referenced removed client/server entry points and dependency verification did
-not yet admit the new server-app TLS artifacts. Those boundary failures are not
-accepted as evidence for or against this engine change. The isolated engine
-gate, a settled clean gate, and post-clean TPS samples remain pending.
+The previous version of this entry also described a completed page-frame
+allocation optimization. That was factually incorrect for the preserved source:
+at this snapshot, `IndexedPageFrame.prepare()` still creates a duplicate and
+slice payload view on each preparation. A constructor-owned reusable payload
+view exists only in the uncommitted `feature/billion-row-capacity` worktree. The
+recorded 80,896 bytes across 64 warmed single-row commits is retained as a
+candidate observation, not as proof that the mechanism or its fix was accepted.
+
+Likewise, the test deletions described previously are not an accepted feature:
+the deleted tests remain on `master`, and no settled clean gate proved that their
+coverage was redundant. The factual carry-over classification is in
+[`docs/plans/billion-row-capacity-carryover-review.md`](plans/billion-row-capacity-carryover-review.md).
+
+Decision: retain `adccf71` as an exact recovery boundary and starting source.
+The next performance checkpoint must be created prospectively by a ticketed
+feature that completes the clean gate, matched samples, evidence recording,
+merge, annotated tag, and push requirements. The P0 matrix in `tic-1dda` remains
+the immediate performance evidence priority.

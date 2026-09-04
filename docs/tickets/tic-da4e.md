@@ -13,6 +13,8 @@ tags:
     - profiling
 deps:
     - tic-af0a
+links:
+    - tic-32b3
 created: 2026-09-04T15:10:07.987949Z
 ---
 # Capture a measured-phase inclusive server profile
@@ -26,3 +28,9 @@ Profile measurement only, quantify profiler overhead, use inclusive stacks and a
 ## Acceptance Criteria
 
 The top material mechanism has a stable denominator and owning boundary; startup/load/checkpoint work is excluded; a specific follow-up story is created only when mechanism evidence and a candidate test are defined.
+
+## Notes
+
+### 2026-09-04T19:20:01Z
+
+Carry-over review docs/plans/billion-row-capacity-carryover-review.md records an unintegrated constructor-owned page-frame payload-view candidate. Reproduce and attribute the allocation on stable source before creating any P3 implementation story; the dirty code is not accepted evidence.
