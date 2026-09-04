@@ -1,12 +1,14 @@
 ---
 id: tic-700f
-status: in_progress
+status: closed
 type: story
 assignee: blater
 parent: tic-e1c9
 delivery: documentation
 base-commit: 11aa75c6c6adf885cdad6d130bcbb4f59b92eb1c
 branch: ticket/tic-700f-riverd-backlog
+delivered-commit: 820c7066a43514f85c60596cf203460722a6845f
+checkpoint-tag: riverd-benchmark-backlog-v1
 tags:
     - backlog
     - riverd
