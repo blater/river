@@ -1,10 +1,14 @@
 ---
 id: tic-1dda
-status: open
+status: in_progress
 type: investigation
 assignee: blater
 parent: tic-5db4
 delivery: evidence
+base-commit: 10acfa58664f715c0023b31280d75eabdcbfa5cd
+branch: ticket/tic-1dda-p0-revalidation
+evidence:
+    - docs/delivery/evidence/2026-09-04-tic-1dda-p0-revalidation.md
 tags:
     - performance
     - tpcc
@@ -23,3 +27,18 @@ Use the exact P0 correctness, failure-mode displacement, correlation, cleanup, a
 ## Acceptance Criteria
 
 Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references and the source tag are recorded.
+
+## Notes
+
+### 2026-09-04 P0 revalidation blocked
+
+The clean-source 40-run serializable matrix and blocked gate decision are
+recorded in
+`docs/delivery/evidence/2026-09-04-tic-1dda-p0-revalidation.md`. All runs were
+internally correct with zero retries, but the standard-mix 10:2-terminal ratio
+has an individual 95% interval wholly below 1.0. Current diagnostics also lack
+the required successful-block causal classification, retained-snapshot gauge,
+mixed-isolation artifact, and promotion-grade build/classpath/host-exclusion
+provenance. Keep this ticket `in_progress`; no clean gate or performance tag is
+accepted. The evidence proposes two disjoint P0 prerequisites for the
+integrator to create and link before the full rerun.
