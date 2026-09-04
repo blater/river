@@ -7,10 +7,14 @@ import java.nio.ByteBuffer;
 
 /** Session-owned strict decoder for one v4 SQL request payload. */
 public final class ProtocolSqlRequestDecoder {
-  private static final int REQUEST_HEADER_BYTES = Integer.BYTES + Short.BYTES * 2;
+  private static final int REQUEST_HEADER_BYTES = Integer.BYTES + Short.BYTES * 2
+      + ProtocolTransactionDiagnosticContext.BYTES;
   private final ProtocolUtf8Decoder text;
   private final ProtocolParameterDecoder parameterDecoder;
   private String sql;
+  private long diagnosticTag;
+  private long diagnosticStepTag;
+  private long metricsEpoch;
 
   public ProtocolSqlRequestDecoder() {
     this(RetainedMemoryLease.unbounded(), RetainedMemoryLease.unbounded());
@@ -47,8 +51,17 @@ public final class ProtocolSqlRequestDecoder {
     int parameterCount = Short.toUnsignedInt(source.getShort(input + Integer.BYTES));
     int reserved = Short.toUnsignedInt(
         source.getShort(input + Integer.BYTES + Short.BYTES));
+    diagnosticTag = source.getLong(input + Integer.BYTES + Short.BYTES * 2);
+    diagnosticStepTag = source.getLong(
+        input + Integer.BYTES + Short.BYTES * 2 + Long.BYTES);
+    metricsEpoch = source.getLong(
+        input + Integer.BYTES + Short.BYTES * 2 + Long.BYTES * 2);
     input += REQUEST_HEADER_BYTES;
     if (sqlBytes <= 0 || reserved != 0
+        || !ProtocolTransactionDiagnosticContext.valid(
+            diagnosticTag, diagnosticStepTag, metricsEpoch)
+        || frame.type() == ProtocolMessageType.PREPARE
+            && (diagnosticTag != 0 || diagnosticStepTag != 0 || metricsEpoch != 0)
         || frame.type() == ProtocolMessageType.PREPARE && parameterCount != 0
         || parameterCount > ParameterSet.MAXIMUM_PARAMETERS
         || input > end - sqlBytes) {
@@ -78,9 +91,18 @@ public final class ProtocolSqlRequestDecoder {
     return parameterDecoder.parameters();
   }
 
+  public long diagnosticTag() { return diagnosticTag; }
+
+  public long diagnosticStepTag() { return diagnosticStepTag; }
+
+  public long metricsEpoch() { return metricsEpoch; }
+
   /** Releases decoded user values after synchronous engine admission. */
   public void reset() {
     sql = null;
+    diagnosticTag = 0;
+    diagnosticStepTag = 0;
+    metricsEpoch = 0;
     text.reset();
     parameterDecoder.reset();
   }

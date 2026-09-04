@@ -29,9 +29,6 @@ final class LocalWalReservationAdmission {
     if (wal.hasActiveReservation() || wal.hasForcedBatch()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    if (wal.pendingRecordCountValue() >= LocalWal.MAX_PENDING_RECORDS) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
     if (wal.nextJournalSequenceValue() <= 0
         || wal.tailEnd() > Long.MAX_VALUE - recordBytes) {
       return StatusCode.RESOURCE_EXHAUSTED;

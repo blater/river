@@ -5,7 +5,9 @@ import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedDatabase;
 import io.riverdb.engine.EmbeddedDatabaseOpenResult;
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.runtime.DatabaseResourcePlan;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.runtime.DatabaseResourceEnvelope;
 import io.riverdb.engine.runtime.RiverRuntimeConfig;
 import io.riverdb.engine.runtime.RuntimeResourceRoot;
@@ -18,30 +20,44 @@ final class RelationalDatabaseFactory {
   private RelationalDatabaseFactory() {}
 
   static StatusCode create(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
-    if (result == null) {
+    return create(
+        resourceRequest, directory, database, generation, maximumActiveTransactions,
+        EmbeddedLockDiagnosticsConfig.disabled(), result);
+  }
+
+  static StatusCode create(
+      DatabaseResourcePlanRequest resourceRequest,
+      Path directory,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
+      RelationalDatabaseOpenResult result) {
+    if (resourceRequest == null || lockDiagnostics == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    long maximumBytes = Runtime.getRuntime().maxMemory();
     RiverRuntimeConfig.Result configResult = new RiverRuntimeConfig.Result();
     StatusCode status = RiverRuntimeConfig.load(
-        directory, maximumBytes, configResult, result.detail());
+        directory, resourceRequest.maximumAccountedBytes(), configResult, result.detail());
     if (!status.isOk()) return status;
     DatabaseResourceEnvelope.Result resources = new DatabaseResourceEnvelope.Result();
-    long retainedRuntime = DatabaseResourceEnvelope.retainedSqlRuntimeBytes(
-        configResult.config());
     status = DatabaseResourceEnvelope.create(
-        maximumBytes, maximumActiveTransactions, retainedRuntime, resources);
+        resourceRequest,
+        DatabaseResourceEnvelope.retainedSqlRuntimeBytes(configResult.config()),
+        resources);
     if (!status.isOk()) return status;
     EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
     status = EmbeddedDatabase.create(
         resources.root(), resources.plan(), directory, database, generation,
-        maximumActiveTransactions, configResult.config().lockWaitTimeoutNanos(), embeddedResult);
+        maximumActiveTransactions, configResult.config().lockWaitTimeoutNanos(),
+        lockDiagnostics, embeddedResult);
     return finish(embeddedResult, result, configResult.config(), status, true);
   }
 
@@ -69,6 +85,7 @@ final class RelationalDatabaseFactory {
   }
 
   static StatusCode createWithDurableWalQuorum(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       Path[] followerDirectories,
       int requiredDurableNodes,
@@ -76,16 +93,24 @@ final class RelationalDatabaseFactory {
       WalGeneration generation,
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
-    if (result == null) {
+    if (resourceRequest == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     RiverRuntimeConfig.Result configResult = new RiverRuntimeConfig.Result();
     StatusCode status = RiverRuntimeConfig.load(
-        directory, configResult, result.detail());
+        directory, resourceRequest.maximumAccountedBytes(), configResult, result.detail());
+    if (!status.isOk()) return status;
+    DatabaseResourceEnvelope.Result resources = new DatabaseResourceEnvelope.Result();
+    status = DatabaseResourceEnvelope.create(
+        resourceRequest,
+        DatabaseResourceEnvelope.retainedSqlRuntimeBytes(configResult.config()),
+        resources);
     if (!status.isOk()) return status;
     EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
     status = EmbeddedDatabase.createWithDurableWalQuorum(
+        resources.root(),
+        resources.plan(),
         directory,
         followerDirectories,
         requiredDurableNodes,
@@ -98,25 +123,25 @@ final class RelationalDatabaseFactory {
   }
 
   static StatusCode openExisting(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
-    if (result == null) {
+    if (resourceRequest == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    long maximumBytes = Runtime.getRuntime().maxMemory();
     RiverRuntimeConfig.Result configResult = new RiverRuntimeConfig.Result();
     StatusCode status = RiverRuntimeConfig.load(
-        directory, maximumBytes, configResult, result.detail());
+        directory, resourceRequest.maximumAccountedBytes(), configResult, result.detail());
     if (!status.isOk()) return status;
     DatabaseResourceEnvelope.Result resources = new DatabaseResourceEnvelope.Result();
-    long retainedRuntime = DatabaseResourceEnvelope.retainedSqlRuntimeBytes(
-        configResult.config());
     status = DatabaseResourceEnvelope.create(
-        maximumBytes, maximumActiveTransactions, retainedRuntime, resources);
+        resourceRequest,
+        DatabaseResourceEnvelope.retainedSqlRuntimeBytes(configResult.config()),
+        resources);
     if (!status.isOk()) return status;
     EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
     status = EmbeddedDatabase.openExisting(
@@ -149,6 +174,7 @@ final class RelationalDatabaseFactory {
   }
 
   static StatusCode openWithDurableWalQuorum(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       Path[] followerDirectories,
       int requiredDurableNodes,
@@ -156,16 +182,24 @@ final class RelationalDatabaseFactory {
       WalGeneration generation,
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
-    if (result == null) {
+    if (resourceRequest == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     RiverRuntimeConfig.Result configResult = new RiverRuntimeConfig.Result();
     StatusCode status = RiverRuntimeConfig.load(
-        directory, configResult, result.detail());
+        directory, resourceRequest.maximumAccountedBytes(), configResult, result.detail());
+    if (!status.isOk()) return status;
+    DatabaseResourceEnvelope.Result resources = new DatabaseResourceEnvelope.Result();
+    status = DatabaseResourceEnvelope.create(
+        resourceRequest,
+        DatabaseResourceEnvelope.retainedSqlRuntimeBytes(configResult.config()),
+        resources);
     if (!status.isOk()) return status;
     EmbeddedDatabaseOpenResult embeddedResult = new EmbeddedDatabaseOpenResult();
     status = EmbeddedDatabase.openWithDurableWalQuorum(
+        resources.root(),
+        resources.plan(),
         directory,
         followerDirectories,
         requiredDurableNodes,

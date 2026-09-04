@@ -75,13 +75,15 @@ final class ProtocolResponseEncoder {
     }
     int columns = metadata.columnCount();
     int metadataBytes = metadataBytes(metadata, columns);
-    int valueBytes = row.isAvailable() ? valueBytes(null, row, columns) : 0;
+    int valueBytes = row.isAvailable()
+        ? ProtocolResponseValueEncoder.bytes(null, row, columns) : 0;
     if (metadataBytes < 0 || valueBytes < 0 || !matches(metadata, row, columns)
         || queryActive && !row.isAvailable()
         || rowsReturned != (row.isAvailable() ? 1 : 0)) {
       return ProtocolFrameWire.invalidTarget(target);
     }
-    int rowNullBytes = row.isAvailable() ? bitmapBytes(columns) : 0;
+    int rowNullBytes = row.isAvailable()
+        ? ProtocolResponseValueEncoder.nullBitmapBytes(columns) : 0;
     int payloadBytes = FIXED_BYTES + metadataBytes + rowNullBytes + valueBytes;
     StatusCode encoded = ProtocolFrameWire.begin(
         target,
@@ -106,8 +108,12 @@ final class ProtocolResponseEncoder {
         rowNullBytes, metadataBytes);
     int offset = writeMetadata(target, metadata, columns);
     if (row.isAvailable()) {
-      offset = writeNulls(target, offset, null, row, columns);
-      writeValues(target, offset, null, row, columns);
+      offset = ProtocolResponseValueEncoder.writeNulls(
+          target, offset, null, row, columns);
+      if (!ProtocolResponseValueEncoder.writeValues(
+          target, offset, null, row, columns)) {
+        return ProtocolFrameWire.invalidTarget(target);
+      }
     }
     return ProtocolResponseSegmenter.finish(
         target, type, requestId, payloadBytes);
@@ -202,11 +208,12 @@ final class ProtocolResponseEncoder {
     if (status == null || columns < 0 || columns > CommandResult.MAXIMUM_COLUMNS) {
       return ProtocolFrameWire.invalidTarget(target);
     }
-    int valueBytes = valueBytes(command, row, columns);
+    int valueBytes = ProtocolResponseValueEncoder.bytes(command, row, columns);
     if (valueBytes < 0) {
       return ProtocolFrameWire.invalidTarget(target);
     }
-    int payloadBytes = FIXED_BYTES + bitmapBytes(columns)
+    int nullBitmapBytes = ProtocolResponseValueEncoder.nullBitmapBytes(columns);
+    int payloadBytes = FIXED_BYTES + nullBitmapBytes
         + columns * Integer.BYTES + valueBytes;
     StatusCode encoded = ProtocolFrameWire.begin(
         target, type, requestId, payloadBytes, ProtocolFrameWire.FRAME_RESPONSE);
@@ -215,10 +222,16 @@ final class ProtocolResponseEncoder {
     }
     writeFixed(
         target, status, flags, rows, columns, commitSequence, key, returned,
-        challengeHigh, challengeLow, bitmapBytes(columns), 0);
-    int offset = writeNulls(target, command, row, columns);
-    offset = writeTypes(target, offset, command, row, columns);
-    writeValues(target, offset, command, row, columns);
+        challengeHigh, challengeLow, nullBitmapBytes, 0);
+    int offset = ProtocolResponseValueEncoder.writeNulls(
+        target, ProtocolFrameCodec.HEADER_BYTES + FIXED_BYTES,
+        command, row, columns);
+    offset = ProtocolResponseValueEncoder.writeTypes(
+        target, offset, command, row, columns);
+    if (!ProtocolResponseValueEncoder.writeValues(
+        target, offset, command, row, columns)) {
+      return ProtocolFrameWire.invalidTarget(target);
+    }
     return ProtocolResponseSegmenter.finish(target, type, requestId, payloadBytes);
   }
 
@@ -226,7 +239,7 @@ final class ProtocolResponseEncoder {
     if (columns <= 0 || columns > CommandResult.MAXIMUM_COLUMNS) {
       return -1;
     }
-    int bytes = bitmapBytes(columns);
+    int bytes = ProtocolResponseValueEncoder.nullBitmapBytes(columns);
     for (int index = 0; index < columns; index++) {
       int nameLength = query.nameLengthAt(index);
       if (nameLength <= 0 || nameLength > ProtocolFrameCodec.MAXIMUM_COLUMN_NAME_BYTES
@@ -266,126 +279,6 @@ final class ProtocolResponseEncoder {
     return true;
   }
 
-  private static int valueBytes(
-      CommandResult command,
-      RowResult row,
-      int columns) {
-    int bytes = 0;
-    for (int index = 0; index < columns; index++) {
-      int descriptor = descriptor(command, row, index);
-      if (!SqlTypeDescriptor.isValid(descriptor)) {
-        return -1;
-      }
-      if (SqlTypeDescriptor.typeId(descriptor)
-          != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        bytes += ProtocolDecimal128.bytes(descriptor);
-        continue;
-      }
-      int characters = isNull(command, row, index)
-          ? 0 : textLength(command, row, index);
-      int length = encodedTextBytes(command, row, index, characters, descriptor);
-      if (length < 0) {
-        return -1;
-      }
-      bytes += Short.BYTES + length;
-    }
-    return bytes;
-  }
-
-  private static int writeTypes(
-      ByteBuffer target,
-      int offset,
-      CommandResult command,
-      RowResult row,
-      int columns) {
-    for (int index = 0; index < columns; index++) {
-      target.putInt(offset, descriptor(command, row, index));
-      offset += Integer.BYTES;
-    }
-    return offset;
-  }
-
-  private static void writeValues(
-      ByteBuffer target,
-      int offset,
-      CommandResult command,
-      RowResult row,
-      int columns) {
-    for (int index = 0; index < columns; index++) {
-      int descriptor = descriptor(command, row, index);
-      if (SqlTypeDescriptor.typeId(descriptor)
-          == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
-        int characters = isNull(command, row, index)
-            ? 0 : textLength(command, row, index);
-        int length = encodedTextBytes(
-            command, row, index, characters, descriptor);
-        target.putShort(offset, (short) length);
-        offset = writeText(
-            target, offset + Short.BYTES, command, row, index, characters);
-      } else {
-        if (ProtocolDecimal128.isWide(descriptor)) {
-          target.putLong(offset, decimalHigh(command, row, index));
-          offset += Long.BYTES;
-        }
-        target.putLong(offset, value(command, row, index));
-        offset += Long.BYTES;
-      }
-    }
-  }
-
-  private static int encodedTextBytes(
-      CommandResult command,
-      RowResult row,
-      int index,
-      int characters,
-      int descriptor) {
-    return ProtocolResponseTextEncoder.bytes(command, row, index, characters, descriptor);
-  }
-
-  private static int writeText(
-      ByteBuffer target,
-      int offset,
-      CommandResult command,
-      RowResult row,
-      int index,
-      int characters) {
-    return ProtocolResponseTextEncoder.write(target, offset, command, row, index, characters);
-  }
-
-  private static int descriptor(
-      CommandResult command, RowResult row, int index) {
-    return command != null
-        ? command.typeDescriptorAt(index)
-        : row == null ? 0 : row.typeDescriptorAt(index);
-  }
-
-  private static int textLength(
-      CommandResult command, RowResult row, int index) {
-    return command != null
-        ? command.textLengthAt(index)
-        : row == null ? -1 : row.textLengthAt(index);
-  }
-
-  private static char textCharacter(
-      CommandResult command, RowResult row, int index, int character) {
-    return command != null
-        ? command.textCharacterAt(index, character)
-        : row.textCharacterAt(index, character);
-  }
-
-  private static long value(
-      CommandResult command, RowResult row, int index) {
-    return command != null
-        ? command.valueAt(index) : row == null ? 0 : row.valueAt(index);
-  }
-
-  private static long decimalHigh(
-      CommandResult command, RowResult row, int index) {
-    return command != null
-        ? command.decimalUnscaledHighAt(index)
-        : row == null ? 0 : row.decimalUnscaledHighAt(index);
-  }
-
   private static void writeFixed(
       ByteBuffer target,
       StatusCode status,
@@ -413,27 +306,9 @@ final class ProtocolResponseEncoder {
     target.putInt(offset + 60, metadataBytes);
   }
 
-  private static int writeNulls(
-      ByteBuffer target, CommandResult command, RowResult row, int columns) {
-    return writeNulls(
-        target, ProtocolFrameCodec.HEADER_BYTES + FIXED_BYTES,
-        command, row, columns);
-  }
-
-  private static int writeNulls(
-      ByteBuffer target, int offset,
-      CommandResult command, RowResult row, int columns) {
-    for (int index = 0; index < bitmapBytes(columns); index++) {
-      long word = command != null
-          ? command.nullWord(index >>> 3) : row == null ? 0 : row.nullWord(index >>> 3);
-      target.put(offset++, (byte) (word >>> ((index & 7) << 3)));
-    }
-    return offset;
-  }
-
   private static int writeNullable(
       ByteBuffer target, int offset, ProtocolQueryMetadata query, int columns) {
-    int bytes = bitmapBytes(columns);
+    int bytes = ProtocolResponseValueEncoder.nullBitmapBytes(columns);
     for (int byteIndex = 0; byteIndex < bytes; byteIndex++) {
       int value = 0;
       int first = byteIndex << 3;
@@ -444,14 +319,6 @@ final class ProtocolResponseEncoder {
       target.put(offset++, (byte) value);
     }
     return offset;
-  }
-
-  private static boolean isNull(CommandResult command, RowResult row, int index) {
-    return command != null ? command.isNull(index) : row != null && row.isNull(index);
-  }
-
-  private static int bitmapBytes(int columns) {
-    return (columns + Byte.SIZE - 1) >>> 3;
   }
 
 }

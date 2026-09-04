@@ -146,8 +146,7 @@ final class IndexedWalCodec {
 
   static StatusCode validatePageOperation(
       ByteBuffer payload,
-      int maximumPageCount,
-      int maximumVersionCount) {
+      int maximumPageCount) {
     if (!hasOperationType(payload, OPERATION_TYPE_PAGE_IMAGES)) {
       return StatusCode.CORRUPTION;
     }
@@ -155,7 +154,6 @@ final class IndexedWalCodec {
     int versionCount = getInt(payload, PAGE_VERSION_COUNT_OFFSET);
     int expectedBytes = pageOperationBytes(pageCount, versionCount);
     if (pageCount > maximumPageCount
-        || versionCount > maximumVersionCount
         || expectedBytes == 0
         || payload.limit() != expectedBytes) {
       return StatusCode.CORRUPTION;

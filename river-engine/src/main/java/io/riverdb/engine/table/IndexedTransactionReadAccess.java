@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.api.IsolationLevel;
+import io.riverdb.tx.api.lock.LockMode;
 
 /** Handles session reads and the automatic version-maintenance policy. */
 final class IndexedTransactionReadAccess {
@@ -16,27 +17,15 @@ final class IndexedTransactionReadAccess {
 
   StatusCode maintainVersions() {
     IndexedVacuum automaticVacuum = session.automaticVacuum();
-    if (automaticVacuum == null) return StatusCode.OK;
-    int obsoleteVersions = session.table().obsoleteVersionCount();
-    if (obsoleteVersions < 0) return StatusCode.CORRUPTION;
-    if (obsoleteVersions == 0) return StatusCode.OK;
-    long reservedRows = (long) (session.manager().activeTransactionCount() + 1)
-        * session.automaticVacuumCapacityReserve();
-    boolean pressure = session.table().remainingVersionCapacity() < reservedRows;
-    if (!pressure) return StatusCode.OK;
+    StatusCode admission = session.table().transactionAdmissionStatus();
+    if (admission.isOk()) return StatusCode.OK;
+    if (admission != StatusCode.RETRY) return admission;
     if (session.manager().activeTransactionCount() != 0) {
-      return automaticVacuum.deferAutomatic(pressure);
+      return automaticVacuum.deferAutomatic(true);
     }
     StatusCode status = automaticVacuum.runAutomatic(
-        session.maintenanceOutcome(), pressure);
-    if (status == StatusCode.RETRY && pressure) return status;
-    if (status.isOk()
-        || status == StatusCode.CONFLICT
-        || status == StatusCode.RETRY
-        || status == StatusCode.RESOURCE_EXHAUSTED) {
-      return StatusCode.OK;
-    }
-    return status;
+        session.maintenanceOutcome(), true);
+    return status.isOk() ? session.table().transactionAdmissionStatus() : status;
   }
 
   StatusCode fetchByKey(long space, long key, HeapRowResult result) {
@@ -58,7 +47,8 @@ final class IndexedTransactionReadAccess {
       }
     }
     if (session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE) {
-      StatusCode status = session.protectKey(space, key);
+      StatusCode status = session.protectKey(space, key, LockMode.SHARED);
+      if (status.isOk()) status = session.refreshSerializableAfterProtection();
       if (!status.isOk()) return status;
     }
     if (session.transaction().isolationLevel() == IsolationLevel.READ_COMMITTED
@@ -71,8 +61,12 @@ final class IndexedTransactionReadAccess {
         session.transaction().snapshot().visibleCommitSequence(), space, key, result);
   }
 
-  StatusCode fetchCandidateByKey(long space, long key, IndexedRowCandidate result) {
-    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+  StatusCode fetchCandidateByKey(
+      long space, long key, LockMode protectionMode, IndexedRowCandidate result) {
+    if (result == null
+        || protectionMode != LockMode.SHARED && protectionMode != LockMode.UPDATE) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     result.reset();
     if (session.transaction().state() != io.riverdb.tx.api.TransactionState.ACTIVE) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -91,7 +85,8 @@ final class IndexedTransactionReadAccess {
       return StatusCode.OK;
     }
     if (session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE) {
-      StatusCode status = session.protectKey(space, key);
+      StatusCode status = session.protectKey(space, key, protectionMode);
+      if (status.isOk()) status = session.refreshSerializableAfterProtection();
       if (!status.isOk()) return status;
     }
     if (session.transaction().isolationLevel() == IsolationLevel.READ_COMMITTED

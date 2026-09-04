@@ -19,10 +19,11 @@ final class TpccRiverNewOrderGraph {
     TransactionProgram graph = new TransactionProgram();
     warehouse(graph, sql.warehouse);
     district(graph, sql.district);
-    customer(graph, sql.customer);
     advanceDistrict(graph, sql.advanceDistrict);
+    reserveNewOrder(graph, sql.reserveNewOrder);
     insertOrder(graph, sql.insertOrder);
     insertNewOrder(graph, sql.insertNewOrder);
+    customer(graph, sql.customer);
     for (int line = 0; line < lines; line++) addLine(graph, sql, line, lines);
     require(graph.freeze());
     return graph;
@@ -72,6 +73,15 @@ final class TpccRiverNewOrderGraph {
   private static void insertNewOrder(TransactionProgram graph, long handle)
       throws SQLException {
     beginOneRowCommand(graph, handle);
+    argument(graph, TpccRiverNewOrderLayout.WAREHOUSE, SqlTypeDescriptor.INTEGER);
+    argument(graph, TpccRiverNewOrderLayout.DISTRICT, SqlTypeDescriptor.INTEGER);
+    prior(graph, ORDER_ID_STEP, 1, SqlTypeDescriptor.INTEGER);
+    end(graph);
+  }
+
+  private static void reserveNewOrder(TransactionProgram graph, long handle)
+      throws SQLException {
+    begin(graph, handle, TransactionProgramAction.ZERO_OR_ONE);
     argument(graph, TpccRiverNewOrderLayout.WAREHOUSE, SqlTypeDescriptor.INTEGER);
     argument(graph, TpccRiverNewOrderLayout.DISTRICT, SqlTypeDescriptor.INTEGER);
     prior(graph, ORDER_ID_STEP, 1, SqlTypeDescriptor.INTEGER);

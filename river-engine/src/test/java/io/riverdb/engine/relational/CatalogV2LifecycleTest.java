@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -36,7 +37,7 @@ final class CatalogV2LifecycleTest {
   void wideDescriptorSurvivesWalOnlyAndCheckpointReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin created = new SchemaPin();
     StatusDetail detail = new StatusDetail(128);
@@ -52,7 +53,7 @@ final class CatalogV2LifecycleTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     SchemaPin walPin = new SchemaPin();
     assertEquals(StatusCode.OK,
@@ -65,7 +66,7 @@ final class CatalogV2LifecycleTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     SchemaPin checkpointPin = new SchemaPin();
     assertEquals(StatusCode.OK,
@@ -82,7 +83,7 @@ final class CatalogV2LifecycleTest {
   void committedPrivateDefinitionAndAbortedHeadRemainInvisible(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RelationalDatabase database = opened.database();
     RelationalSessionOpenResult sessions = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessions));
@@ -116,7 +117,7 @@ final class CatalogV2LifecycleTest {
   void corruptCommittedChildIsRejectedAfterReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.create(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
     RelationalDatabase database = opened.database();
     SchemaPin created = new SchemaPin();
     assertEquals(StatusCode.OK,
@@ -128,7 +129,7 @@ final class CatalogV2LifecycleTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.CORRUPTION,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
   }
 
   private static void corruptFirstChild(RelationalDatabase database, long objectId) {

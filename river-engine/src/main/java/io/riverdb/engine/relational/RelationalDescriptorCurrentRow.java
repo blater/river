@@ -6,6 +6,7 @@ import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.table.IndexedLockedRow;
 import io.riverdb.engine.table.IndexedRowCandidate;
 import io.riverdb.engine.table.IndexedTransactionSession;
+import io.riverdb.tx.api.lock.LockMode;
 
 /** Owns one reusable descriptor-row candidate and its lock-protected current successor. */
 final class RelationalDescriptorCurrentRow {
@@ -26,7 +27,8 @@ final class RelationalDescriptorCurrentRow {
     StatusCode status = reset();
     if (!status.isOk()) return status;
     status = session.fetchCandidateByKey(
-        RelationalDescriptorKeyspace.baseRows(table.tableId()), rowId, candidate);
+        RelationalDescriptorKeyspace.baseRows(table.tableId()), rowId,
+        LockMode.UPDATE, candidate);
     if (status.isOk()) status = session.lockCurrent(candidate, locked);
     return finish(table, rowId, destination, status);
   }
@@ -48,7 +50,8 @@ final class RelationalDescriptorCurrentRow {
     long rowId = cursor.logicalRowId();
     if (cursor.isTuplePhysical()) {
       status = session.fetchCandidateByKey(
-          RelationalDescriptorKeyspace.baseRows(table.tableId()), rowId, candidate);
+          RelationalDescriptorKeyspace.baseRows(table.tableId()), rowId,
+          LockMode.UPDATE, candidate);
       if (status.isOk()) status = session.lockCurrent(candidate, locked);
     } else {
       status = session.lockCurrent(cursor.row(), locked);

@@ -7,35 +7,44 @@ public final class ResourceDemand {
   private long accountedBytes;
   private long writeEntries;
   private long stagedPages;
+  private long versionOperations;
   private long walBytes;
 
   public StatusCode set(
       long requestedAccountedBytes,
       long requestedWriteEntries,
       long requestedStagedPages,
+      long requestedVersionOperations,
       long requestedWalBytes) {
     reset();
     if (requestedAccountedBytes < 0 || requestedWriteEntries < 0
-        || requestedStagedPages < 0 || requestedWalBytes < 0
+        || requestedStagedPages < 0 || requestedVersionOperations < 0
+        || requestedWalBytes < 0
         || requestedAccountedBytes == 0 && requestedWriteEntries == 0
-            && requestedStagedPages == 0 && requestedWalBytes == 0) {
+            && requestedStagedPages == 0 && requestedVersionOperations == 0
+            && requestedWalBytes == 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     accountedBytes = requestedAccountedBytes;
     writeEntries = requestedWriteEntries;
     stagedPages = requestedStagedPages;
+    versionOperations = requestedVersionOperations;
     walBytes = requestedWalBytes;
     return StatusCode.OK;
   }
 
-  public void reset() { accountedBytes = writeEntries = stagedPages = walBytes = 0; }
+  public void reset() {
+    accountedBytes = writeEntries = stagedPages = versionOperations = walBytes = 0;
+  }
   public long accountedBytes() { return accountedBytes; }
   public long writeEntries() { return writeEntries; }
   public long stagedPages() { return stagedPages; }
+  public long versionOperations() { return versionOperations; }
   public long walBytes() { return walBytes; }
 
   boolean valid() {
-    return accountedBytes >= 0 && writeEntries >= 0 && stagedPages >= 0 && walBytes >= 0
-        && (accountedBytes | writeEntries | stagedPages | walBytes) != 0;
+    return accountedBytes >= 0 && writeEntries >= 0 && stagedPages >= 0
+        && versionOperations >= 0 && walBytes >= 0
+        && (accountedBytes | writeEntries | stagedPages | versionOperations | walBytes) != 0;
   }
 }

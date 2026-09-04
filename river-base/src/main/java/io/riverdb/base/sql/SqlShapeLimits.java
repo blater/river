@@ -13,7 +13,6 @@ public final class SqlShapeLimits {
   public static final int MAX_TUPLE_PARTS = 1_664;
   public static final int MAX_INSERT_COLUMNS = 1_024;
   public static final int MAX_UPDATE_ASSIGNMENTS = 1_024;
-  public static final int MAX_INSERT_ROWS_PER_STATEMENT = 64;
 
   public static final int MAX_JOIN_ROLES = 64;
   public static final int MAX_QUERY_BLOCKS = 32;
@@ -36,7 +35,6 @@ public final class SqlShapeLimits {
   public static final int MAX_SCHEMA_CHUNKS = 160;
   public static final int MAX_INDEX_USER_KEY_BYTES = 3_072;
   public static final int MAX_PHYSICAL_INDEX_KEY_BYTES = 3_080;
-  public static final int MAX_STORED_ROW_BYTES = 8_192;
   public static final int MAX_ENCODED_RESULT_ROW_BYTES = 4 * 1_024 * 1_024;
   public static final int MAX_SQL_TEXT_BYTES = 1_024 * 1_024;
   public static final int MAX_STORED_VIEW_SQL_BYTES = 256 * 1_024;

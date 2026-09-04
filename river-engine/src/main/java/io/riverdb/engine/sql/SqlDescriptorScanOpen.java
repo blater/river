@@ -12,7 +12,9 @@ final class SqlDescriptorScanOpen {
     if (!context.matched || !context.pin.isActive()) return StatusCode.CONFLICT;
     StatusCode status = context.index.active()
         ? context.session.descriptorRows().beginIndexScan(
-            context.pin, context.index.bounds(), context.cursor)
+            context.pin, context.index.bounds(),
+            context.index.serializableSourceMode(context.forUpdate),
+            context.cursor)
         : context.session.descriptorRows().beginScan(context.pin, context.cursor);
     if (status.isOk() && context.scalarAggregate) status = aggregateRows();
     else if (status.isOk() && context.materialized) {

@@ -26,7 +26,7 @@ final class TupleBTreeLeafSearch {
       TupleBTreePageProvider provider, TupleBTreePageReference reference) {
     if (workspace == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         page, start, schemaId, shape, TupleBTreePageCodec.TYPE_LEAF, workspace,
         provider, reference);
     if (!status.isOk()) return status;
@@ -35,8 +35,11 @@ final class TupleBTreeLeafSearch {
     }
     int index = TupleBTreePageSupport.lowerBoundLeaf(
         page, start, key, keyOffset, keyLength, workspace);
+    if (index < 0) return StatusCode.INVARIANT_BROKEN;
     if (index >= workspace.header.entryCount()) return StatusCode.CONFLICT;
-    TupleBTreePageSupport.readLeaf(page, start, index, workspace);
+    if (!TupleBTreePageSupport.readLeaf(page, start, index, workspace)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     if (TupleKeyCodec.compare(
         page, start + workspace.leaf.keyOffset(), workspace.leaf.keyLength(),
         key, keyOffset, keyLength) != 0) return StatusCode.CONFLICT;
@@ -51,7 +54,7 @@ final class TupleBTreeLeafSearch {
       TupleBTreeWorkspace workspace, TupleBTreeRange result) {
     if (workspace == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         page, start, schemaId, shape, TupleBTreePageCodec.TYPE_LEAF, workspace);
     if (!status.isOk()) return status;
     if (!validPrefix(prefix, prefixOffset, prefixLength, prefixShape, shape)) {
@@ -63,6 +66,7 @@ final class TupleBTreeLeafSearch {
     int limit = prefixBound(
         page, start, prefix, prefixOffset, prefixLength,
         prefixShape.partCount(), workspace, true);
+    if (first < 0 || limit < 0) return StatusCode.INVARIANT_BROKEN;
     result.set(first, limit);
     return StatusCode.OK;
   }
@@ -74,7 +78,7 @@ final class TupleBTreeLeafSearch {
     int high = workspace.header.entryCount();
     while (low < high) {
       int middle = (low + high) >>> 1;
-      TupleBTreePageSupport.readLeaf(page, start, middle, workspace);
+      if (!TupleBTreePageSupport.readLeaf(page, start, middle, workspace)) return -1;
       int comparison = TupleKeyCodec.comparePrefix(
           page, start + workspace.leaf.keyOffset(), workspace.leaf.keyLength(),
           prefix, prefixOffset, prefixLength, prefixParts);

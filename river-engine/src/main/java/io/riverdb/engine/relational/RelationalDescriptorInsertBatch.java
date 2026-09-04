@@ -5,8 +5,6 @@ import io.riverdb.engine.schema.TableDescriptor;
 
 /** Caller-owned exact admission and logical-ID range for one descriptor INSERT statement. */
 public final class RelationalDescriptorInsertBatch {
-  private static final int MAXIMUM_ROWS =
-      io.riverdb.base.sql.SqlShapeLimits.MAX_INSERT_ROWS_PER_STATEMENT;
   private final RelationalDescriptorInsertReceipt receipt;
   private final RelationalDescriptorBatchUniqueKeys uniqueKeys;
   private TableDescriptor table;
@@ -49,8 +47,7 @@ public final class RelationalDescriptorInsertBatch {
     if (descriptor == null || rows <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (rows > MAXIMUM_ROWS) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = receipt.prepare();
+    StatusCode status = receipt.prepare(rows);
     if (!status.isOk()) return status;
     table = descriptor;
     expectedRows = rows;

@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -26,7 +27,7 @@ final class EmbeddedRiverVarcharTest {
   @Test
   void executesIndexedVarcharValuesAndReopens(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -119,7 +120,7 @@ final class EmbeddedRiverVarcharTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();

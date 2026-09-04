@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
@@ -14,7 +15,6 @@ final class RiverCatalogResultSet extends AbstractResultSet {
   private static final int TABLES = 1;
   private static final int TABLE_TYPES = 2;
   private static final int INITIAL_TABLE_CAPACITY = 16;
-  private static final int MAXIMUM_TABLES = 32_767;
   private static final String TABLE = "TABLE";
   private static final String VIEW = "VIEW";
   private static final String[] TABLE_COLUMNS = {
@@ -386,19 +386,31 @@ final class RiverCatalogResultSet extends AbstractResultSet {
   }
 
   void appendTable(byte type) throws SQLException {
-    if (tableCount >= MAXIMUM_TABLES) {
+    if (tableCount == Integer.MAX_VALUE) {
       throw JdbcExceptions.failure(
           StatusCode.RESOURCE_EXHAUSTED,
           "materialize table metadata");
     }
     if (tableCount >= tableNames.length) {
-      int capacity = Math.min(MAXIMUM_TABLES, tableNames.length << 1);
-      String[] expandedNames = new String[capacity];
-      byte[] expandedTypes = new byte[capacity];
-      System.arraycopy(tableNames, 0, expandedNames, 0, tableCount);
-      System.arraycopy(tableTypes, 0, expandedTypes, 0, tableCount);
-      tableNames = expandedNames;
-      tableTypes = expandedTypes;
+      int capacity = BoundedArrayGrowth.capacity(
+          tableNames.length, tableCount + 1, Integer.MAX_VALUE, INITIAL_TABLE_CAPACITY);
+      if (capacity < 0) {
+        throw JdbcExceptions.failure(
+            StatusCode.RESOURCE_EXHAUSTED,
+            "materialize table metadata");
+      }
+      try {
+        String[] expandedNames = new String[capacity];
+        byte[] expandedTypes = new byte[capacity];
+        System.arraycopy(tableNames, 0, expandedNames, 0, tableCount);
+        System.arraycopy(tableTypes, 0, expandedTypes, 0, tableCount);
+        tableNames = expandedNames;
+        tableTypes = expandedTypes;
+      } catch (OutOfMemoryError failure) {
+        throw JdbcExceptions.failure(
+            StatusCode.RESOURCE_EXHAUSTED,
+            "materialize table metadata");
+      }
     }
     tableNames[tableCount] = new String(tableNameCharacters, 0, tableNameLength);
     tableTypes[tableCount] = type;

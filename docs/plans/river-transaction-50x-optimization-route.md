@@ -7,6 +7,7 @@ benchmark, and performance reviewers
 
 Related plans:
 
+- [Current TPS diagnosis and implementation priority](../perf_review.md)
 - [River Performance Review and Benchmark Plan](river-performance-review-and-benchmark-plan.md)
 - [Alpha 3 TPC-C Schema and Capacity Plan](alpha3-tpcc-capacity.md)
 - [River Engineering Personas and Performance Charter](river-engineering-personas-and-performance-charter.md)
@@ -16,6 +17,14 @@ The lead-integrator review is accepted as part of this plan. In particular,
 the four steps below are optimisation work inside an already wired program
 protocol; they are not permission to add a parallel protocol or to treat a
 single TPS figure as proof of a 50x result.
+
+`docs/perf_review.md` is the controlling implementation priority. It applies
+the techniques catalogued in `tcpc-perf-notes.md` to current measurements:
+canonical lock and hot-resource ordering is P0, and shortening the serialized
+prepared-commit/durability window is P1. The protocol, singleton, encoding, and
+row-set work described below follows those gates. Generic buffer-pool, index,
+page-layout, worker, checkpoint, partitioning, and NUMA changes require their
+named evidence and are not implicit prerequisites of this route.
 
 ## 1. Decision in one page
 
@@ -55,6 +64,10 @@ establishes a declared ratio with a confidence interval.
 This is an execution plan, not permission to weaken durability, isolation,
 cardinality, retry, or bounded-resource contracts. A 50x result must be
 demonstrated with the named durability tier and the same correctness workload.
+Resource use is governed by configured memory, page, scratch, and concurrency
+budgets with explicit backpressure or failure outcomes. Prototype convenience
+is not a reason to add a low row, byte, cardinality, or transaction cap; every
+operator must retain a scale path from its first implementation.
 
 ## 2. Evidence and current constraints
 
@@ -291,7 +304,11 @@ committed, failed, and retryable attempts.
 - Cancellation is guaranteed only before the commit gate. The server checks
   cancellation at step boundaries and immediately before entering commit; an
   observed request returns `CANCELLED_BEFORE_COMMIT` and rolls back. Once the
-  commit gate is entered, cancellation cannot undo the commit: the server
+  commit gate is entered by transferring the transaction to the coordinator's
+  `PREPARED` ownership state. Generic session abort and thread interruption do
+  not cancel that work; the caller awaits its exact outcome. The coordinator
+  alone may abort it before `COMMITTING`. After the gate, cancellation cannot
+  undo the commit: the server
   completes the durability contract, and a lost response produces
   `INDETERMINATE`/`FENCED` rather than a replayable cancellation.
 - A program cannot acknowledge commit before the selected durability contract
@@ -737,8 +754,11 @@ Required rules:
 - write-bearing, point-only programs that satisfy the existing eligibility
   predicate use the bounded group coordinator;
 - row-set, ordered, aggregate, range-protected, active-scan, lock-conflict,
-  or otherwise ineligible programs use the existing direct fallback and are
-  counted as such;
+  or otherwise initially ineligible programs use the direct path and are
+  counted by their initial reason;
+- a transaction admitted to grouped commit is never re-executed through the
+  direct path: a pre-decision group preflight or admission failure aborts it
+  once with the exact stage and status;
 - read-only programs are reported separately and do not issue a WAL force;
 - no program-specific direct force bypass and no new unbounded commit queue;
 - no acknowledgement before the requested durability tier;
@@ -748,7 +768,7 @@ Required rules:
 - group membership, coalescing wait, append bytes, force count, force latency,
   and cohort size are recorded.
 
-Report `groupable_commits`, `direct_fallback_commits`, `read_only_commits`,
+Report `groupable_commits`, reason-tagged `direct_commits`, `read_only_commits`,
 cohort size, queue wait, force count, force time, append time, and WAL failure
 status separately. A one-terminal group of one is not evidence of amortised
 force cost.
@@ -1015,7 +1035,7 @@ The review amendments make the following questions implementation gates:
 3. Which exact copy is necessary for each value lifetime, and which copies are
    removed? Are bytes and allocations counted at the boundary?
 4. How does the encoder know response length without traversing text twice?
-5. Which programs are group-eligible, which use direct fallback, and which are
+5. Which programs are group-eligible, which are initially direct, and which are
    read-only? Does each preserve the existing durable acknowledgement point?
 6. What is the bounded behaviour when the program result, response buffer, WAL
    cohort, or lock queue is full?

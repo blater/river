@@ -5,6 +5,7 @@ import io.riverdb.base.key.OrderedKey;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.wal.WalRecordCodec;
 import io.riverdb.storage.btree.BTreePage;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.BTreeSplitResult;
 import io.riverdb.storage.heap.HeapInsertResult;
@@ -17,7 +18,6 @@ final class IndexedTableKernel extends IndexedKernelVersions {
   static final int HEAP_PAGE_ID = 1;
   static final int ROOT_META_PAGE_ID = 2;
   static final int INITIAL_LEAF_PAGE_ID = 3;
-  private static final int MAXIMUM_TREE_HEIGHT = 8;
 
   private final IndexedPageSet pages;
   private final HeapInsertResult heapInsert = new HeapInsertResult();
@@ -119,7 +119,7 @@ final class IndexedTableKernel extends IndexedKernelVersions {
       HeapInsertResult result) {
     return stageVersionRow(
         source, sourceOffset, rowBytes, previousRowId, deleted, result,
-        IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES);
+        pages.changedPageCapacity());
   }
 
   private StatusCode stageVersionRow(
@@ -542,13 +542,16 @@ final class IndexedTableKernel extends IndexedKernelVersions {
       return 0;
     }
     int pageId = BTreeRootPage.rootPageId(metadata);
-    for (int depth = 1; depth <= MAXIMUM_TREE_HEIGHT; depth++) {
+    for (int level = 0; BTreeStructuralLimits.canVisitLevel(level); level++) {
+      if (!BTreeStructuralLimits.validPageId(pageId)) {
+        return 0;
+      }
       ByteBuffer page = pages.currentPayload(pageId);
       if (page == null) {
         return 0;
       }
       if (BTreePage.type(page) == BTreePage.TYPE_LEAF) {
-        return depth;
+        return level + 1;
       }
       if (BTreePage.type(page) != BTreePage.TYPE_INTERNAL) {
         return 0;

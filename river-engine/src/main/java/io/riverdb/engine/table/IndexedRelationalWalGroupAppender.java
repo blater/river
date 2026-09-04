@@ -2,58 +2,67 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.wal.local.LocalWal;
+import io.riverdb.wal.local.LocalWalAppendDisposition;
+import io.riverdb.wal.local.LocalWalDecisionBatch;
+import io.riverdb.wal.local.LocalWalForceCause;
 import io.riverdb.wal.local.LocalWalForceResult;
 import io.riverdb.wal.local.LocalWalGroupAppendResult;
-import io.riverdb.wal.local.LocalWalGroupReservation;
+import java.nio.ByteBuffer;
 
-/** Atomically admits independent relational decisions and forces their shared batch once. */
-final class IndexedRelationalWalGroupAppender {
-  private final int[] payloadBytes = new int[LocalWal.MAX_PENDING_RECORDS];
-  private final int[] groupEnds = new int[LocalWal.MAX_PENDING_RECORDS];
-  private final long[] transactionIds = new long[LocalWal.MAX_PENDING_RECORDS];
-  private final long[] sequences = new long[LocalWal.MAX_PENDING_RECORDS];
-  private final LocalWalGroupReservation reservation = new LocalWalGroupReservation();
+/** Streams independent relational decisions and forces their admitted cohort once. */
+final class IndexedRelationalWalGroupAppender implements LocalWalDecisionBatch {
+  private int[] groupEnds = new int[0];
   private final LocalWalGroupAppendResult append = new LocalWalGroupAppendResult();
   private final LocalWalForceResult force = new LocalWalForceResult();
   private final LocalWal wal;
+  private IndexedRelationalWalPlan[] plans;
+  private long[] commitSequences;
   private long copiedPayloadBytes;
+  private int transactions;
+  private int records;
   private boolean appended;
   private boolean forced;
 
   IndexedRelationalWalGroupAppender(LocalWal localWal) { wal = localWal; }
 
+  StatusCode reserveTransactionCapacity(int required) {
+    if (required <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (groupEnds.length >= required) return StatusCode.OK;
+    try {
+      groupEnds = java.util.Arrays.copyOf(groupEnds, required);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError exhausted) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+  }
+
   StatusCode append(
-      IndexedRelationalWalPlan[] plans, long[] commitSequences, int count) {
-    if (appended || forced || plans == null || commitSequences == null
-        || count <= 0 || count > plans.length || count > commitSequences.length) {
+      IndexedRelationalWalPlan[] preparedPlans, long[] sequences, int count) {
+    if (appended || forced || plans != null || preparedPlans == null || sequences == null
+        || count <= 0 || count > preparedPlans.length || count > sequences.length) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int records = prepare(plans, commitSequences, count);
-    if (records <= 0) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = wal.reserveGroup(payloadBytes, records, reservation);
-    int record = 0;
-    for (int group = 0; status.isOk() && group < count; group++) {
-      IndexedRelationalWalPlan plan = plans[group];
-      for (int chunk = 0; status.isOk() && chunk < plan.batchChunkCount(); chunk++) {
-        status = IndexedRelationalWalCodec.encode(
-            plan, chunk, reservation.writablePayload(record++));
-        if (status.isOk()) {
-          copiedPayloadBytes += IndexedRelationalWalCodec.copiedPayloadBytes(plan, chunk);
-        }
-      }
+    StatusCode status = prepare(preparedPlans, sequences, count);
+    if (status.isOk()) {
+      status = wal.appendDecisionBatchUnforced(
+          this,
+          IndexedRelationalWalCodec.WAL_FORMAT_ID,
+          IndexedRelationalWalCodec.WAL_FORMAT_VERSION,
+          append);
     }
-    if (!status.isOk()) return cancel(status);
-    status = wal.appendDecisionBatchUnforced(
-        reservation, transactionIds, sequences, groupEnds, count,
-        IndexedRelationalWalCodec.WAL_FORMAT_ID,
-        IndexedRelationalWalCodec.WAL_FORMAT_VERSION, append);
-    if (status.isOk()) appended = true;
+    if (status.isOk()) {
+      for (int transaction = 0; transaction < count; transaction++) {
+        copiedPayloadBytes += preparedPlans[transaction].copiedPayloadBytes();
+      }
+      appended = true;
+    }
+    clearSource();
     return status;
   }
 
-  StatusCode force() {
-    if (!appended || forced) return StatusCode.CONFLICT;
-    StatusCode status = wal.forcePending(force);
+  StatusCode force(LocalWalForceCause cause) {
+    if (!appended || forced || cause == null) return StatusCode.CONFLICT;
+    StatusCode status = wal.forcePending(force, cause);
     if (status.isOk()) forced = true;
     return status;
   }
@@ -66,7 +75,7 @@ final class IndexedRelationalWalGroupAppender {
   }
 
   StatusCode fence() {
-    return appended ? wal.fencePendingBatch() : StatusCode.OK;
+    return storageMayHaveChanged() ? wal.fencePendingBatch() : StatusCode.OK;
   }
 
   void reset() {
@@ -78,31 +87,87 @@ final class IndexedRelationalWalGroupAppender {
   long start() { return appended ? append.startOffset() : 0; }
   long end() { return appended ? append.endOffset() : 0; }
   boolean appended() { return appended; }
+  boolean storageMayHaveChanged() {
+    return append.disposition() != LocalWalAppendDisposition.NOTHING_WRITTEN;
+  }
   boolean forced() { return forced; }
   long copiedPayloadBytes() { return copiedPayloadBytes; }
 
-  private int prepare(
-      IndexedRelationalWalPlan[] plans, long[] commitSequences, int count) {
-    int record = 0;
-    for (int group = 0; group < count; group++) {
-      IndexedRelationalWalPlan plan = plans[group];
-      if (plan == null || !plan.valid() || plan.hasMoreBatches()
-          || record > LocalWal.MAX_PENDING_RECORDS - plan.batchChunkCount()) return -1;
-      transactionIds[group] = plan.transactionId();
-      sequences[group] = commitSequences[group];
-      for (int chunk = 0; chunk < plan.batchChunkCount(); chunk++) {
-        payloadBytes[record++] = plan.payloadBytesAt(chunk);
-      }
-      groupEnds[group] = record;
-    }
-    return record;
+  @Override
+  public int recordCount() { return records; }
+
+  @Override
+  public int payloadBytes(int record) {
+    int transaction = transactionForRecord(record);
+    if (transaction < 0) return -1;
+    int first = transaction == 0 ? 0 : groupEnds[transaction - 1];
+    return plans[transaction].payloadBytesAt(record - first);
   }
 
-  private StatusCode cancel(StatusCode failure) {
-    if (reservation.isActive()) {
-      StatusCode status = wal.cancelGroup(reservation);
-      if (!status.isOk()) return status;
+  @Override
+  public StatusCode encodePayload(int record, ByteBuffer target) {
+    int transaction = transactionForRecord(record);
+    if (transaction < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    int first = transaction == 0 ? 0 : groupEnds[transaction - 1];
+    return IndexedRelationalWalCodec.encode(plans[transaction], record - first, target);
+  }
+
+  @Override
+  public int transactionCount() { return transactions; }
+
+  @Override
+  public int transactionEndRecord(int transaction) {
+    return transaction < 0 || transaction >= transactions ? -1 : groupEnds[transaction];
+  }
+
+  @Override
+  public long transactionId(int transaction) {
+    return transaction < 0 || transaction >= transactions
+        ? 0 : plans[transaction].transactionId();
+  }
+
+  @Override
+  public long commitSequence(int transaction) {
+    return transaction < 0 || transaction >= transactions
+        ? 0 : commitSequences[transaction];
+  }
+
+  private StatusCode prepare(
+      IndexedRelationalWalPlan[] preparedPlans, long[] sequences, int count) {
+    if (groupEnds.length < count) return StatusCode.RESOURCE_EXHAUSTED;
+    int total = 0;
+    for (int transaction = 0; transaction < count; transaction++) {
+      IndexedRelationalWalPlan plan = preparedPlans[transaction];
+      if (plan == null || !plan.valid()
+          || total > Integer.MAX_VALUE - plan.recordCount()) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      total += plan.recordCount();
+      groupEnds[transaction] = total;
     }
-    return failure;
+    plans = preparedPlans;
+    commitSequences = sequences;
+    transactions = count;
+    records = total;
+    return total > 0 ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
+  }
+
+  private int transactionForRecord(int record) {
+    if (record < 0 || record >= records) return -1;
+    int low = 0;
+    int high = transactions - 1;
+    while (low < high) {
+      int middle = (low + high) >>> 1;
+      if (record < groupEnds[middle]) high = middle;
+      else low = middle + 1;
+    }
+    return low;
+  }
+
+  private void clearSource() {
+    plans = null;
+    commitSequences = null;
+    transactions = 0;
+    records = 0;
   }
 }

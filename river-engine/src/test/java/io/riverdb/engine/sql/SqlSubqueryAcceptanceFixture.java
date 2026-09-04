@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -28,6 +29,7 @@ final class SqlSubqueryAcceptanceFixture {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.create(
+            databaseRequest(32),
             root, DATABASE, WalGeneration.of(1), 32, opened));
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(opened.database(), sessionResult));

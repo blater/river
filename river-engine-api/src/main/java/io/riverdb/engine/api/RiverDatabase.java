@@ -8,7 +8,17 @@ import io.riverdb.base.error.StatusCode;
  */
 public interface RiverDatabase {
   /** Lock-wait counters are available for an embedded managed-server diagnostic. */
+  default int activeTransactionCount() { return -1; }
+
+  default long activeLockCount() { return -1; }
+
+  default long waitingLockCount() { return -1; }
+
   default long lockWaitsEntered() { return -1; }
+
+  default long lockWaitsActuallyBlocked() { return -1; }
+
+  default long lockWaitBlockedNanos() { return -1; }
 
   default long lockWaitsGranted() { return -1; }
 

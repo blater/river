@@ -16,8 +16,9 @@ final class ProtocolProgramResultValueCodec {
       return ProtocolDecimal128.bytes(descriptor);
     }
     int characters = result.textLengthAt(row, column);
-    if (characters < 0 || characters > SqlTypeDescriptor.parameterOne(descriptor)) return -1;
+    if (characters < 0) return -1;
     int encoded = 0;
+    int scalars = 0;
     for (int index = 0; index < characters; index++) {
       char value = result.textCharacterAt(row, column, index);
       if (value < 0x80) encoded++;
@@ -27,7 +28,8 @@ final class ProtocolProgramResultValueCodec {
             result.textCharacterAt(row, column, index))) return -1;
         encoded += 4;
       } else if (Character.isLowSurrogate(value)) return -1;
-      if (encoded > 0xffff) return -1;
+      else encoded += 3;
+      if (++scalars > SqlTypeDescriptor.parameterOne(descriptor)) return -1;
     }
     return encoded;
   }
@@ -37,11 +39,8 @@ final class ProtocolProgramResultValueCodec {
     int descriptor = result.typeDescriptorAt(row, column);
     boolean isNull = result.isNull(row, column);
     int bytes = bytes(result, row, column);
-    target.putInt(offset, descriptor);
-    target.put(offset + 4, isNull ? (byte) 1 : 0);
-    target.put(offset + 5, (byte) 0);
-    target.putShort(offset + 6, (short) bytes);
-    offset += ProtocolProgramResultEncoder.VALUE_HEADER_BYTES;
+    offset = ProtocolValueHeader.write(
+        target, offset, descriptor, isNull ? 1 : 0, bytes);
     if (isNull) return offset;
     if (SqlTypeDescriptor.typeId(descriptor) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       if (ProtocolDecimal128.isWide(descriptor)) {

@@ -14,7 +14,7 @@ final class TupleBTreeGraphValidation {
     if (tree == null || !tree.isValid(workspace)) return StatusCode.INVALID_EXTERNAL_INPUT;
     workspace.resetPath();
     int root = tree.provider().rootPageId();
-    if (root <= 0) return StatusCode.CORRUPTION;
+    if (!BTreeStructuralLimits.validPageId(root)) return StatusCode.CORRUPTION;
     workspace.pathPageIds[0] = root;
     workspace.pathChildOrdinals[0] = -1;
     workspace.pathNextChildOrdinals[0] = -1;
@@ -52,9 +52,10 @@ final class TupleBTreeGraphValidation {
       }
       int child = TupleBTreeGraphPages.child(workspace, ordinal);
       workspace.pathNextChildOrdinals[depth] = ordinal + 1;
-      status = release(tree, workspace, child > 0 ? StatusCode.OK : StatusCode.CORRUPTION);
+      status = release(tree, workspace,
+          BTreeStructuralLimits.validPageId(child) ? StatusCode.OK : StatusCode.CORRUPTION);
       if (!status.isOk()) return status;
-      if (depth + 1 >= TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT
+      if (!BTreeStructuralLimits.canDescendFrom(depth)
           || TupleBTreeGraphPages.onPath(workspace, depth, child)) {
         return StatusCode.CORRUPTION;
       }
@@ -77,9 +78,10 @@ final class TupleBTreeGraphValidation {
   private static StatusCode pinAndValidate(
       TupleBTree tree, TupleBTreeTreeWorkspace workspace, int pageId) {
     StatusCode status = tree.provider().pin(pageId, false, workspace.current);
-    if (status.isOk()) status = TupleBTreePageCodec.validate(
+    if (status.isOk()) status = TupleBTreePageAdmission.validate(
         workspace.current.page(), workspace.current.start(),
-        tree.schemaId(), tree.shape(), workspace.page.header);
+        tree.schemaId(), tree.shape(), 0, workspace.page,
+        tree.provider(), workspace.current);
     return status.isOk() ? status
         : TupleBTreeProviderAccess.release(tree.provider(), workspace.current, status);
   }

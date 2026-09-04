@@ -12,7 +12,7 @@ final class TupleBTreeLeafSplitPoint {
     int total = workspace.header.entryCount() + 1;
     int totalKeyBytes = keyLength;
     for (int index = 0; index < total - 1; index++) {
-      TupleBTreePageSupport.readLeaf(source, start, index, workspace);
+      if (!TupleBTreePageSupport.readLeaf(source, start, index, workspace)) return -1;
       totalKeyBytes += workspace.leaf.keyLength();
     }
     int oldFenceBytes = workspace.header.highKeyLength();
@@ -20,10 +20,13 @@ final class TupleBTreeLeafSplitPoint {
     int selected = 0;
     int selectedImbalance = Integer.MAX_VALUE;
     for (int split = 1; split < total; split++) {
-      leftKeyBytes += mergedLength(
+      int leftLength = mergedLength(
           source, start, keyLength, insertion, split - 1, workspace);
+      if (leftLength < 0) return -1;
+      leftKeyBytes += leftLength;
       int fenceBytes = mergedLength(
           source, start, keyLength, insertion, split, workspace);
+      if (fenceBytes < 0) return -1;
       int leftBytes = TupleBTreeSplitOccupancy.bytes(split, leftKeyBytes, fenceBytes);
       int rightBytes = TupleBTreeSplitOccupancy.bytes(
           total - split, totalKeyBytes - leftKeyBytes, oldFenceBytes);
@@ -42,8 +45,10 @@ final class TupleBTreeLeafSplitPoint {
       ByteBuffer source, int start, int keyLength, int insertion,
       int mergedIndex, TupleBTreeWorkspace workspace) {
     if (mergedIndex == insertion) return keyLength;
-    TupleBTreePageSupport.readLeaf(
-        source, start, mergedIndex < insertion ? mergedIndex : mergedIndex - 1, workspace);
+    if (!TupleBTreePageSupport.readLeaf(
+        source, start, mergedIndex < insertion ? mergedIndex : mergedIndex - 1, workspace)) {
+      return -1;
+    }
     return workspace.leaf.keyLength();
   }
 }

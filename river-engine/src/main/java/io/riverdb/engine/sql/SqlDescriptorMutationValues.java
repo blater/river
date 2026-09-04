@@ -1,23 +1,22 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
 import java.nio.ByteBuffer;
 
 /** Reusable descriptor-shaped input, fetched row, and scalar-copy state. */
 final class SqlDescriptorMutationValues {
-  private static final int MAXIMUM_TEXT_CHARS = Utf8Text.MAXIMUM_BUFFER_CHARACTERS;
+  private static final ByteBuffer EMPTY_TEXT_BYTES = ByteBuffer.allocate(0);
+  private static final char[] EMPTY_TEXT_CHARACTERS = new char[0];
   private final SqlValueBuffer fetched = new SqlValueBuffer();
   private final SqlValueBuffer mutation = new SqlValueBuffer();
-  private final ByteBuffer commandText =
-      ByteBuffer.allocate(Utf8Text.MAXIMUM_BUFFER_BYTES);
-  private final char[] textChars = new char[MAXIMUM_TEXT_CHARS];
+  private ByteBuffer commandText = EMPTY_TEXT_BYTES;
+  private char[] textChars = EMPTY_TEXT_CHARACTERS;
   private final SqlDescriptorNumericAssignment numeric =
       new SqlDescriptorNumericAssignment();
 
@@ -139,6 +138,9 @@ final class SqlDescriptorMutationValues {
     if (SqlTypeDescriptor.typeId(target) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       return mutation.setFixed(column, target, value);
     }
+    int required = command.textByteLength(value);
+    StatusCode capacity = reserveCommandText(required);
+    if (!capacity.isOk()) return capacity;
     commandText.clear();
     int bytes = command.copyText(value, commandText);
     return bytes < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
@@ -188,6 +190,8 @@ final class SqlDescriptorMutationValues {
     if (SqlTypeDescriptor.typeId(descriptor) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       return mutation.setFixed(column, descriptor, fetched.valueAt(column));
     }
+    StatusCode capacity = reserveTextCharacters(fetched.textByteLengthAt(column));
+    if (!capacity.isOk()) return capacity;
     int chars = fetched.copyTextChars(column, textChars, 0);
     return chars < 0 ? StatusCode.CORRUPTION
         : mutation.setText(column, descriptor, textChars, 0, chars);
@@ -199,10 +203,32 @@ final class SqlDescriptorMutationValues {
       int descriptor = table.typeDescriptorAt(index);
       if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         bytes += SqlTypeDescriptor.parameterOne(descriptor) * 4L;
-        if (bytes > SqlShapeLimits.MAX_STORED_ROW_BYTES) return -1;
+        if (bytes > TableSchema.MAXIMUM_ROW_BYTES) return -1;
       }
     }
     return (int) bytes;
+  }
+
+  private StatusCode reserveCommandText(int required) {
+    if (required < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (required <= commandText.capacity()) return StatusCode.OK;
+    try {
+      commandText = ByteBuffer.allocate(required);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+  }
+
+  private StatusCode reserveTextCharacters(int required) {
+    if (required < 0) return StatusCode.CORRUPTION;
+    if (required <= textChars.length) return StatusCode.OK;
+    try {
+      textChars = new char[required];
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
 }

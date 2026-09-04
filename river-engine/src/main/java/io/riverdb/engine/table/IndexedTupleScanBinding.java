@@ -7,6 +7,7 @@ import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.TupleBTree;
 import io.riverdb.storage.btree.TupleBTreeCursor;
 import io.riverdb.storage.btree.TupleBTreeScanBounds;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.TupleBTreeTreeWorkspace;
 import java.nio.ByteBuffer;
 
@@ -19,7 +20,7 @@ final class IndexedTupleScanBinding {
   private IndexedPageSet pages;
 
   IndexedTupleScanBinding() {
-    int height = TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT;
+    int height = BTreeStructuralLimits.MAXIMUM_LEVELS;
     workspace = new TupleBTreeTreeWorkspace(
         ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES),
         ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES),

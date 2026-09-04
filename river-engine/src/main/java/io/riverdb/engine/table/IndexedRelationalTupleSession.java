@@ -7,6 +7,7 @@ import io.riverdb.format.btree.TupleKeyCodec;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.TupleBTree;
 import io.riverdb.storage.btree.TupleBTreeInsertPreflightResult;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.TupleBTreeTreeWorkspace;
 import io.riverdb.storage.btree.TupleBTreeValidationResult;
 import java.nio.ByteBuffer;
@@ -25,7 +26,7 @@ final class IndexedRelationalTupleSession {
     root = new IndexedTupleRootState(1, 1, 0);
     provider = new IndexedTuplePageProvider(pages, root);
     tree = new TupleBTree(provider, 1, null);
-    int height = TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT;
+    int height = BTreeStructuralLimits.MAXIMUM_LEVELS;
     workspace = new TupleBTreeTreeWorkspace(
         ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES),
         ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES),

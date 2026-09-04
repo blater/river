@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlCommand;
@@ -30,6 +31,15 @@ final class SqlUniversalDescriptorIndexAccess {
       SqlCommand source, TableDescriptor descriptor, int role,
       SqlBoundJoinContext context, SqlBoundBooleanPredicateProgram where,
       SqlBlockColumnLineage lineage) {
+    prepare(
+        source, descriptor, role, context, where, lineage,
+        context == null ? -1 : context.queryBlock);
+  }
+
+  void prepare(
+      SqlCommand source, TableDescriptor descriptor, int role,
+      SqlBoundJoinContext context, SqlBoundBooleanPredicateProgram where,
+      SqlBlockColumnLineage lineage, int queryBlock) {
     reset();
     table = descriptor;
     command = source;
@@ -39,12 +49,18 @@ final class SqlUniversalDescriptorIndexAccess {
       catalogGeneration = descriptor.catalogGeneration();
     }
     SqlUniversalDescriptorIndexSelector.select(
-        table, role, context, where, lineage, choice);
+        table, role, context, where, lineage, queryBlock, choice);
   }
 
   StatusCode bind(SqlUniversalJoinRows rows) {
+    return bind(rows, null);
+  }
+
+  StatusCode bind(
+      SqlUniversalJoinRows rows, SqlNestedRowProvider ancestors) {
     if (!active()) return StatusCode.CONFLICT;
-    return preparedBounds.bind(table, command, choice, rows, direction);
+    return preparedBounds.bind(
+        table, command, choice, rows, ancestors, direction);
   }
 
   boolean active() { return choice.key != null; }
@@ -58,6 +74,39 @@ final class SqlUniversalDescriptorIndexAccess {
   }
   boolean exact() { return choice.exact(); }
   boolean unique() { return choice.unique(); }
+
+  int exactUniqueOuterColumns(
+      int sourceRole, io.riverdb.engine.relational.TableDefinition source,
+      int projectedInnerColumn, int[] target) {
+    if (!exact() || !unique() || choice.key.kind() != KeyDescriptor.KIND_PRIMARY
+        || source == null || target == null
+        || target.length < choice.equalParts) {
+      return -1;
+    }
+    int count = 0;
+    boolean projectedKeyPart = false;
+    for (int part = 0; part < choice.equalParts; part++) {
+      if (choice.key.columnOrdinalAt(part) == projectedInnerColumn) {
+        projectedKeyPart = true;
+      }
+      SqlUniversalDescriptorIndexBinding binding = choice.equal[part];
+      if (binding.literal()) continue;
+      if (!binding.outerFrom(sourceRole)) return -1;
+      int column = binding.outerColumn();
+      int descriptor = choice.key.typeDescriptorAt(part);
+      int type = SqlTypeDescriptor.typeId(descriptor);
+      if (column < 0 || column >= source.columnCount()
+          || source.typeDescriptor(column) != descriptor
+          || type != SqlTypeDescriptor.TYPE_ID_SMALLINT
+              && type != SqlTypeDescriptor.TYPE_ID_INTEGER
+              && type != SqlTypeDescriptor.TYPE_ID_BIGINT) {
+        return -1;
+      }
+      target[count++] = column;
+    }
+    return projectedKeyPart ? count : -1;
+  }
+
   int accessColumn() {
     if (!active()) return -1;
     if (choice.key.kind() == KeyDescriptor.KIND_PRIMARY) return 0;

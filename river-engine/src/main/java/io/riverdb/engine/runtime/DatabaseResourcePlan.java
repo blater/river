@@ -10,15 +10,19 @@ public final class DatabaseResourcePlan {
   private final long maximumDeliveryAccountedBytes;
   private final int maximumOwners;
   private final long writeEntryCapacity;
+  private final DatabaseVersionWorkspacePlan versionWorkspace;
   private final long lockProviderBytes;
-  private final long stagedPageCapacity;
+  private final DatabasePageCachePlan indexedPageCache;
   private final long walByteCapacity;
   private final long maximumDeliveryWriteEntries;
   private final long maximumDeliveryStagedPages;
   private final long maximumDeliveryWalBytes;
 
   DatabaseResourcePlan(
-      DatabaseResourcePlanRequest request, long accountedCapacity) {
+      DatabaseResourcePlanRequest request,
+      long accountedCapacity,
+      DatabasePageCachePlan pageCache,
+      DatabaseVersionWorkspacePlan compiledVersionWorkspace) {
     long maximumBytes = request.maximumAccountedBytes;
     maximumAccountedBytes = maximumBytes;
     accountedCapacityBytes = accountedCapacity;
@@ -26,8 +30,9 @@ public final class DatabaseResourcePlan {
     maximumDeliveryAccountedBytes = request.maximumDeliveryAccountedBytes;
     maximumOwners = request.maximumOwners;
     writeEntryCapacity = request.writeEntryCapacity;
+    versionWorkspace = compiledVersionWorkspace;
     lockProviderBytes = request.lockProviderBytes;
-    stagedPageCapacity = request.stagedPageCapacity;
+    indexedPageCache = pageCache;
     walByteCapacity = request.walByteCapacity;
     maximumDeliveryWriteEntries = request.maximumDeliveryWriteEntries;
     maximumDeliveryStagedPages = request.maximumDeliveryStagedPages;
@@ -46,9 +51,13 @@ public final class DatabaseResourcePlan {
   public long maximumDeliveryAccountedBytes() { return maximumDeliveryAccountedBytes; }
   public int maximumOwners() { return maximumOwners; }
   public long writeEntryCapacity() { return writeEntryCapacity; }
+  public long versionOperationCapacity() { return versionWorkspace.maximumOperations(); }
+  public DatabaseVersionWorkspacePlan versionWorkspace() { return versionWorkspace; }
   /** Database-lifetime retained bytes for the lazily growing canonical lock provider. */
   public long lockProviderBytes() { return lockProviderBytes; }
-  public long stagedPageCapacity() { return stagedPageCapacity; }
+  public long stagedPageCapacity() { return indexedPageCache.activeStagedPages(); }
+  /** Physical cache authority admitted before the indexed store opens. */
+  public DatabasePageCachePlan indexedPageCache() { return indexedPageCache; }
   public long walByteCapacity() { return walByteCapacity; }
   public long maximumDeliveryWriteEntries() { return maximumDeliveryWriteEntries; }
   public long maximumDeliveryStagedPages() { return maximumDeliveryStagedPages; }

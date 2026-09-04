@@ -6,12 +6,12 @@ import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.relational.SequenceValueResult;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
-import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
+import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.storage.heap.HeapRowResult;
 
-/** Coordinates bounded INSERT, UPDATE, and DELETE execution. */
+/** Coordinates resource-governed INSERT, UPDATE, and DELETE execution. */
 final class SqlDmlExecutor {
   private final RelationalDatabase database;
   private final RelationalSession session;
@@ -20,22 +20,23 @@ final class SqlDmlExecutor {
   private final HeapRowResult fetched = new HeapRowResult();
   private final ValueIndexLookupResult indexed = new ValueIndexLookupResult();
   private final SequenceValueResult sequenceValue = new SequenceValueResult();
-  private final long[] generatedInsertKeys =
-      new long[SqlCommand.MAXIMUM_INSERT_ROWS];
 
   private int matchedRowCount;
   private long directKey;
+  private long generatedInsertKey;
+  private long firstGeneratedInsertKey;
 
   SqlDmlExecutor(
       RelationalDatabase relationalDatabase,
       RelationalSession relationalSession,
       SqlTemporalContext temporal,
       SqlRowProjectionEvaluator rowExpressions,
-      SqlBoundPredicateEvaluator predicates) {
+      SqlBoundPredicateEvaluator predicates,
+      SqlSessionShapeBudget shapeBudget) {
     database = relationalDatabase;
     session = relationalSession;
     rows = new SqlMutationRowEncoder(temporal, rowExpressions);
-    matches = new SqlMutationKeyCollector(relationalSession, predicates);
+    matches = new SqlMutationKeyCollector(relationalSession, predicates, shapeBudget);
   }
 
   boolean handles(SqlCommandType type) {
@@ -67,22 +68,27 @@ final class SqlDmlExecutor {
   }
 
   StatusCode closeResources() {
-    return matches.close();
+    StatusCode status = matches.close();
+    matches.finish();
+    return status;
   }
 
   private StatusCode executeInsert(
       SqlCommand command,
       BoundSqlStatement bound,
       SqlExecutionResult result) {
-    StatusCode status = bound.table.hasIdentity()
-        ? allocateIdentityKeys(command, bound.table) : StatusCode.OK;
+    StatusCode status = StatusCode.OK;
     for (int index = 0;
         status.isOk() && index < command.insertRowCount();
         index++) {
-      status = insertRow(command, bound, index);
+      if (bound.table.hasIdentity()) {
+        status = allocateIdentityKey(bound.table);
+        if (status.isOk() && index == 0) firstGeneratedInsertKey = generatedInsertKey;
+      }
+      if (status.isOk()) status = insertRow(command, bound, index);
     }
     if (status.isOk() && bound.table.hasIdentity()) {
-      result.setGeneratedKey(generatedInsertKeys[0]);
+      result.setGeneratedKey(firstGeneratedInsertKey);
     }
     return status;
   }
@@ -98,7 +104,7 @@ final class SqlDmlExecutor {
       return status;
     }
     long key = bound.table.hasIdentity()
-        ? generatedInsertKeys[index] : rows.insertKey();
+        ? generatedInsertKey : rows.insertKey();
     return session.insertRow(bound.table, key, rows.insertRow());
   }
 
@@ -109,6 +115,7 @@ final class SqlDmlExecutor {
       for (int index = 0; status.isOk() && index < matchedRowCount; index++) {
         status = updatePrimaryKey(command, bound, matches.key(index));
       }
+      matches.finish();
       return status;
     }
     StatusCode status = resolveDirectKey(command, bound);
@@ -126,6 +133,7 @@ final class SqlDmlExecutor {
       for (int index = 0; status.isOk() && index < matchedRowCount; index++) {
         status = session.deleteLong(bound.table, matches.key(index));
       }
+      matches.finish();
       return status;
     }
     StatusCode status = resolveDirectKey(command, bound);
@@ -157,21 +165,16 @@ final class SqlDmlExecutor {
     return status;
   }
 
-  private StatusCode allocateIdentityKeys(
-      SqlCommand command, TableDefinition table) {
-    for (int index = 0; index < command.insertRowCount(); index++) {
-      StatusCode status = database.nextIdentityValue(table, sequenceValue);
-      if (!status.isOk()) {
-        return status;
-      }
-      generatedInsertKeys[index] = sequenceValue.value();
-    }
-    return StatusCode.OK;
+  private StatusCode allocateIdentityKey(TableDefinition table) {
+    StatusCode status = database.nextIdentityValue(table, sequenceValue);
+    if (status.isOk()) generatedInsertKey = sequenceValue.value();
+    return status;
   }
 
   private StatusCode updatePrimaryKey(
       SqlCommand command, BoundSqlStatement bound, long primaryKey) {
-    StatusCode status = session.fetch(bound.table, primaryKey, fetched);
+    StatusCode status = session.lockCurrentRowCurrent(bound.table, primaryKey, fetched);
+    if (status.isOk()) status = retainCurrentRow();
     if (status.isOk()) {
       status = rows.encodeUpdate(command, bound, fetched, primaryKey);
     }
@@ -179,6 +182,13 @@ final class SqlDmlExecutor {
       status = session.updateRow(bound.table, primaryKey, rows.updatedRow());
     }
     return status;
+  }
+
+  private StatusCode retainCurrentRow() {
+    StatusCode status = session.retainCurrentRow();
+    if (status.isOk()) return status;
+    StatusCode released = session.releaseCurrentRow();
+    return released.isOk() ? status : released;
   }
 
   private static boolean requiresScan(

@@ -1,25 +1,29 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.runtime.DatabasePageCachePlan;
 import io.riverdb.format.page.PageCodec;
 
 /** Bounded metadata for pages participating in active staging or dirty publication. */
 final class IndexedPageStateValues {
+  private static final int[] DETACHED_INTS = new int[1];
+  private static final byte[] DETACHED_BYTES = new byte[1];
+  private static final long[] DETACHED_LONGS = new long[1];
   private static final byte STAGED = 1;
   private static final byte DIRTY = 2;
 
   private final int limit;
-  private final int mask;
-  private final int[] pageIds;
-  private final byte[] flags;
-  private final long[] starts;
-  private final long[] ends;
-  private final int[] kinds;
-  private final long[] owners;
+  private int mask;
+  private int[] pageIds;
+  private byte[] flags;
+  private long[] starts;
+  private long[] ends;
+  private int[] kinds;
+  private long[] owners;
   private int count;
   private int dirtyCount;
 
-  IndexedPageStateValues(IndexedPageCacheConfig config) {
+  IndexedPageStateValues(DatabasePageCachePlan config) {
     limit = config.activeMetadataEntries();
     int capacity = config.metadataMapCapacity();
     mask = capacity - 1;
@@ -44,6 +48,20 @@ final class IndexedPageStateValues {
   int count() { return count; }
   int capacity() { return limit; }
   boolean hasDirtyPages() { return dirtyCount != 0; }
+
+  StatusCode detach() {
+    if (count != 0 || dirtyCount != 0) return StatusCode.CONFLICT;
+    abandon();
+    return StatusCode.OK;
+  }
+
+  void abandon() {
+    mask = 0;
+    pageIds = kinds = DETACHED_INTS;
+    flags = DETACHED_BYTES;
+    starts = ends = owners = DETACHED_LONGS;
+    count = dirtyCount = 0;
+  }
 
   StatusCode reserve(int pageId) {
     return ensure(pageId) < 0 ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.OK;

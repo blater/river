@@ -3,7 +3,9 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.wal.local.LocalWal;
+import io.riverdb.wal.local.LocalWalForceCause;
 import io.riverdb.wal.local.LocalWalForceResult;
+import io.riverdb.wal.local.LocalWalForcedCursor;
 import io.riverdb.wal.local.LocalWalGroupAppendResult;
 import io.riverdb.wal.local.LocalWalLogicalStream;
 import io.riverdb.wal.local.LocalWalReadResult;
@@ -14,6 +16,7 @@ final class IndexedVacuumWriter {
   private final LocalWalForceResult forceResult = new LocalWalForceResult();
   private final LocalWalLogicalStream stream = new LocalWalLogicalStream();
   private final LocalWalReadResult readResult = new LocalWalReadResult();
+  private final LocalWalForcedCursor forcedCursor = new LocalWalForcedCursor();
   private final IndexedCountResult count = new IndexedCountResult();
   private final IndexedVacuumBatch batch;
   private final LocalWal wal;
@@ -30,7 +33,7 @@ final class IndexedVacuumWriter {
     wal = localWal;
     kernel = tableKernel;
     recovery = walRecovery;
-    batch = new IndexedVacuumBatch(wal, kernel);
+    batch = new IndexedVacuumBatch(kernel);
   }
 
   StatusCode commit(
@@ -92,11 +95,9 @@ final class IndexedVacuumWriter {
     long firstRow = 0;
     while (true) {
       int remaining = chunkCount - firstChunk;
-      boolean finalBatch = remaining < LocalWal.MAX_PENDING_RECORDS;
-      int batchChunks = finalBatch ? remaining : LocalWal.MAX_PENDING_RECORDS;
+      boolean finalBatch = remaining == 1;
       StatusCode status = batch.prepare(
-          stream,
-          retainedRows, rowsBefore, firstRow, firstChunk, batchChunks, chunkCount, finalBatch);
+          retainedRows, rowsBefore, firstRow, firstChunk, chunkCount, finalBatch);
       if (!status.isOk()) return status;
       long batchRows = batch.rows();
       if (batchRows > retainedRows || firstRow > retainedRows - batchRows
@@ -105,11 +106,12 @@ final class IndexedVacuumWriter {
       }
       status = finalBatch
           ? wal.appendLogicalStreamFinal(
-              stream, batch.reservation(), commitSequence, appendResult)
-          : wal.appendLogicalStreamContinuation(stream, batch.reservation(), appendResult);
+              stream, batch, commitSequence, appendResult)
+          : wal.appendLogicalStreamContinuation(stream, batch, appendResult);
       if (!status.isOk()) return status;
       appended = true;
-      status = wal.forceLogicalStreamBatch(stream, forceResult);
+      status = wal.forceLogicalStreamBatch(
+          stream, forceResult, LocalWalForceCause.RECOVERY_MAINTENANCE);
       if (status.isOk() && finalBatch) decisionDurable = true;
       if (status.isOk()) {
         status = applyForcedBatch(
@@ -119,7 +121,7 @@ final class IndexedVacuumWriter {
       status = wal.releaseLogicalStreamBatch(stream);
       if (!status.isOk()) return status;
       if (finalBatch) return StatusCode.OK;
-      firstChunk += batchChunks;
+      firstChunk++;
       firstRow += batchRows;
     }
   }
@@ -129,19 +131,21 @@ final class IndexedVacuumWriter {
       long lastCommitSequence,
       WalGeneration generation) {
     long recordStart = start;
-    for (int record = 0; record < forceResult.recordCount(); record++) {
-      StatusCode status = wal.readForcedRecord(record, readResult);
-      if (!status.isOk()) return status;
-      status = recovery.applyOperation(
-          recordStart, readResult, generation, lastCommitSequence, Long.MAX_VALUE);
-      if (!status.isOk()) return status;
-      recordStart = readResult.nextOffset();
+    StatusCode status = wal.openForcedCursor(forcedCursor);
+    for (long record = 0; status.isOk() && record < forceResult.recordCount(); record++) {
+      status = forcedCursor.next(readResult);
+      if (status.isOk()) {
+        status = recovery.applyOperation(
+            recordStart, readResult, generation, lastCommitSequence, Long.MAX_VALUE);
+      }
+      if (status.isOk()) recordStart = readResult.nextOffset();
     }
-    return StatusCode.OK;
+    forcedCursor.reset();
+    return status;
   }
 
   private StatusCode fail(StatusCode failure) {
-    StatusCode status = batch.cancel(stream, failure);
+    StatusCode status = failure;
     StatusCode cancel = recovery.cancelVacuumOperation();
     if (!cancel.isOk() && cancel != StatusCode.CONFLICT) status = cancel;
     if (decisionDurable) {

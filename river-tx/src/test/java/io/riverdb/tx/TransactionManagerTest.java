@@ -28,6 +28,75 @@ import org.junit.jupiter.api.Test;
 
 final class TransactionManagerTest {
   @Test
+  void sourceAdmissionIsCheckedBeforeClaimingATransactionIdentity() {
+    TransactionManager manager = new TransactionManager(3, 5, 2, 1, lockMemory());
+    Transaction transaction = new Transaction(1);
+    AdmissionSource source = new AdmissionSource();
+    source.status = StatusCode.RETRY;
+    source.sequence = 11;
+
+    assertEquals(
+        StatusCode.RETRY,
+        manager.begin(IsolationLevel.REPEATABLE_READ, source, transaction));
+    assertFalse(transaction.isActiveHandle());
+
+    source.status = StatusCode.OK;
+    assertEquals(
+        StatusCode.OK,
+        manager.begin(IsolationLevel.REPEATABLE_READ, source, transaction));
+    assertEquals(2, transaction.transactionId());
+    assertEquals(11, transaction.snapshot().visibleCommitSequence());
+    assertEquals(StatusCode.OK, manager.abort(transaction, new TransactionOutcome()));
+  }
+
+  @Test
+  void invalidBeginDoesNotConsultAdmissionSourceAndInvalidSourceStateIsInvariantFailure() {
+    TransactionManager manager = new TransactionManager(3, 5, 2, 1, lockMemory());
+    Transaction transaction = new Transaction(1);
+    AdmissionSource source = new AdmissionSource();
+    source.status = StatusCode.RETRY;
+    source.sequence = 11;
+
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        manager.begin(null, source, transaction));
+    assertEquals(0, source.admissionCalls);
+    assertEquals(
+        StatusCode.INVALID_EXTERNAL_INPUT,
+        manager.begin(IsolationLevel.REPEATABLE_READ, source, null));
+    assertEquals(0, source.admissionCalls);
+
+    source.status = null;
+    assertEquals(
+        StatusCode.INVARIANT_BROKEN,
+        manager.begin(IsolationLevel.REPEATABLE_READ, source, transaction));
+    assertEquals(1, source.admissionCalls);
+    assertFalse(transaction.isActiveHandle());
+
+    source.status = StatusCode.OK;
+    source.sequence = -1;
+    assertEquals(
+        StatusCode.INVARIANT_BROKEN,
+        manager.begin(IsolationLevel.REPEATABLE_READ, source, transaction));
+    assertEquals(2, source.admissionCalls);
+    assertFalse(transaction.isActiveHandle());
+  }
+
+  @Test
+  void admitsDiagnosticIdentityWithoutDetailedDeadlockEvidence() {
+    TransactionManager manager = new TransactionManager(5, 7, 2, 1, lockMemory());
+    Transaction transaction = new Transaction(1);
+    assertEquals(StatusCode.OK, transaction.configureDiagnostics(101, 11, 13));
+    assertEquals(
+        StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 17, transaction));
+
+    assertEquals(StatusCode.OK, transaction.updateDiagnosticStep(19));
+    assertEquals(StatusCode.OK, manager.abort(transaction, new TransactionOutcome()));
+    assertEquals(0, manager.activeTransactionCount());
+  }
+
+  @Test
   void oldestVisibleCommitSequenceTracksBeginRefreshAndCompletion() {
     TransactionManager manager = new TransactionManager(7, 11, 2, 3, lockMemory());
     Transaction first = new Transaction(3);
@@ -74,6 +143,37 @@ final class TransactionManagerTest {
     assertEquals(17, context.databaseIncarnationLow());
     assertEquals(41, context.snapshot().visibleCommitSequence());
     assertSame(transaction.snapshot(), context.snapshot());
+    assertEquals(StatusCode.OK, manager.abort(transaction, new TransactionOutcome()));
+  }
+
+  @Test
+  void quiescentBoundaryExcludesTransactionAdmission() throws Exception {
+    TransactionManager manager = new TransactionManager(17, 19, 2, 1, lockMemory());
+    BlockingQuiescentParticipant participant = new BlockingQuiescentParticipant();
+    StatusCode[] boundaryStatus = new StatusCode[1];
+    StatusCode[] beginStatus = new StatusCode[1];
+    Transaction transaction = new Transaction(1);
+    Thread boundary = new Thread(() ->
+        boundaryStatus[0] = manager.atQuiescentBoundary(participant));
+    Thread begin = new Thread(() ->
+        beginStatus[0] = manager.begin(IsolationLevel.SERIALIZABLE, 1, transaction));
+
+    boundary.start();
+    assertTrue(participant.entered.await(5, TimeUnit.SECONDS));
+    begin.start();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (begin.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+      Thread.onSpinWait();
+    }
+    assertEquals(Thread.State.BLOCKED, begin.getState());
+
+    participant.release.countDown();
+    boundary.join(TimeUnit.SECONDS.toMillis(5));
+    begin.join(TimeUnit.SECONDS.toMillis(5));
+    assertFalse(boundary.isAlive());
+    assertFalse(begin.isAlive());
+    assertEquals(StatusCode.OK, boundaryStatus[0]);
+    assertEquals(StatusCode.OK, beginStatus[0]);
     assertEquals(StatusCode.OK, manager.abort(transaction, new TransactionOutcome()));
   }
 
@@ -127,6 +227,145 @@ final class TransactionManagerTest {
   }
 
   @Test
+  void prepareFreezesTransactionButRetainsSnapshotAndLocksUntilCompletion() {
+    TransactionManager manager = new TransactionManager(21, 25, 2, 2, lockMemory());
+    Transaction transaction = new Transaction(2);
+    Transaction peer = new Transaction(2);
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 17, transaction));
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 19, peer));
+    LockToken held = new LockToken();
+    assertEquals(StatusCode.OK, manager.tryAcquireKey(transaction, 33, 34, held));
+
+    long snapshotSequence = transaction.snapshot().snapshotSequence();
+    long visibleCommitSequence = transaction.snapshot().visibleCommitSequence();
+    int snapshotActiveCount = transaction.snapshot().activeTransactionCount();
+    assertEquals(0, snapshotActiveCount);
+    assertEquals(1, manager.activeLockCount());
+
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, manager.prepareCommit(transaction, outcome));
+    assertEquals(TransactionState.PREPARED, transaction.state());
+    assertFalse(transaction.context().isActive());
+    assertEquals(2, manager.activeTransactionCount());
+    assertEquals(1, manager.activeLockCount());
+    assertSame(transaction.snapshot(), transaction.context().snapshot());
+    assertEquals(snapshotSequence, transaction.snapshot().snapshotSequence());
+    assertEquals(visibleCommitSequence, transaction.snapshot().visibleCommitSequence());
+    assertEquals(snapshotActiveCount, transaction.snapshot().activeTransactionCount());
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        manager.tryAcquireKey(transaction, 33, 35, new LockToken()));
+    assertEquals(StatusCode.RETRY,
+        manager.tryAcquireKey(peer, 33, 34, new LockToken()));
+
+    assertEquals(StatusCode.OK, manager.abortPreparedCommitGroup(
+        new Transaction[] {transaction}, new TransactionOutcome[] {new TransactionOutcome()},
+        1, StatusCode.CANCELLED));
+    assertEquals(StatusCode.OK, manager.abort(peer, new TransactionOutcome()));
+  }
+
+  @Test
+  void commitGroupRejectsActiveOrUnpreparedMembers() {
+    TransactionManager manager = new TransactionManager(26, 30, 2, 2, lockMemory());
+    Transaction prepared = new Transaction(2);
+    Transaction active = new Transaction(2);
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 1, prepared));
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 1, active));
+    assertEquals(StatusCode.OK, manager.prepareCommit(prepared, new TransactionOutcome()));
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        manager.beginCommitGroup(new Transaction[] {active}, 1));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        manager.beginCommitGroup(new Transaction[] {prepared, active}, 2));
+    assertEquals(TransactionState.PREPARED, prepared.state());
+    assertEquals(TransactionState.ACTIVE, active.state());
+    assertTrue(prepared.isOwnedBy(manager));
+
+    assertEquals(StatusCode.OK, manager.abortPreparedCommitGroup(
+        new Transaction[] {prepared}, new TransactionOutcome[] {new TransactionOutcome()},
+        1, StatusCode.CANCELLED));
+    assertEquals(StatusCode.OK, manager.abort(active, new TransactionOutcome()));
+  }
+
+  @Test
+  void abortPreparedCleansLocksAndSnapshotExactlyOnce() {
+    TransactionManager manager = new TransactionManager(31, 35, 2, 1, lockMemory());
+    Transaction transaction = new Transaction(1);
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 7, transaction));
+    LockToken held = new LockToken();
+    assertEquals(StatusCode.OK, manager.tryAcquireKey(transaction, 37, 38, held));
+    assertEquals(StatusCode.OK, manager.prepareCommit(transaction, new TransactionOutcome()));
+    assertEquals(1, manager.activeTransactionCount());
+    assertEquals(1, manager.activeLockCount());
+
+    TransactionOutcome outcome = new TransactionOutcome();
+    StatusCode failure = StatusCode.RESOURCE_EXHAUSTED;
+    assertEquals(StatusCode.OK, manager.abortPreparedCommitGroup(
+        new Transaction[] {transaction}, new TransactionOutcome[] {outcome}, 1, failure));
+    assertEquals(TransactionState.ABORTED, outcome.state());
+    assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(0, manager.waitingLockCount());
+    assertEquals(Long.MAX_VALUE, manager.oldestVisibleCommitSequence());
+    assertFalse(transaction.context().isActive());
+    assertEquals(StatusCode.NOT_OWNER, manager.release(transaction, held));
+
+    TransactionOutcome secondOutcome = new TransactionOutcome();
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, manager.abortPreparedCommitGroup(
+        new Transaction[] {transaction}, new TransactionOutcome[] {secondOutcome}, 1, failure));
+    assertFalse(secondOutcome.isAvailable());
+    assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.activeLockCount());
+
+    Transaction reusable = new Transaction(1);
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 7, reusable));
+    assertEquals(StatusCode.OK, manager.abort(reusable, new TransactionOutcome()));
+  }
+
+  @Test
+  void abortPreparedCommitGroupPropagatesPreDecisionFailureToEveryOutcome() {
+    TransactionManager manager = new TransactionManager(39, 43, 2, 2, lockMemory());
+    Transaction first = new Transaction(2);
+    Transaction second = new Transaction(2);
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 11, first));
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 11, second));
+    LockToken firstLock = new LockToken();
+    LockToken secondLock = new LockToken();
+    assertEquals(StatusCode.OK, manager.tryAcquireKey(first, 45, 46, firstLock));
+    assertEquals(StatusCode.OK, manager.tryAcquireKey(second, 45, 47, secondLock));
+    assertEquals(StatusCode.OK, manager.prepareCommit(first, new TransactionOutcome()));
+    assertEquals(StatusCode.OK, manager.prepareCommit(second, new TransactionOutcome()));
+    assertEquals(2, manager.activeTransactionCount());
+    assertEquals(2, manager.activeLockCount());
+
+    TransactionOutcome firstOutcome = new TransactionOutcome();
+    TransactionOutcome secondOutcome = new TransactionOutcome();
+    StatusCode failure = StatusCode.RESOURCE_EXHAUSTED;
+    assertEquals(StatusCode.OK, manager.abortPreparedCommitGroup(
+        new Transaction[] {first, second},
+        new TransactionOutcome[] {firstOutcome, secondOutcome}, 2, failure));
+    assertEquals(TransactionState.ABORTED, first.state());
+    assertEquals(TransactionState.ABORTED, second.state());
+    assertEquals(TransactionState.ABORTED, firstOutcome.state());
+    assertEquals(TransactionState.ABORTED, secondOutcome.state());
+    assertEquals(first.transactionId(), firstOutcome.transactionId());
+    assertEquals(second.transactionId(), secondOutcome.transactionId());
+    assertEquals(0, firstOutcome.commitSequence());
+    assertEquals(0, secondOutcome.commitSequence());
+    assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(StatusCode.NOT_OWNER, manager.release(first, firstLock));
+    assertEquals(StatusCode.NOT_OWNER, manager.release(second, secondLock));
+  }
+
+  @Test
   void queuedExactRequestRejectsCommitBeforeParticipantRuns() {
     TransactionManager manager = new TransactionManager(29, 31, 2, 2, lockMemory());
     Transaction owner = new Transaction(2);
@@ -168,6 +407,7 @@ final class TransactionManagerTest {
     assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, contender));
     LockToken held = new LockToken();
     assertEquals(StatusCode.OK, manager.tryAcquireSharedKey(owner, 4, 5, held));
+    assertEquals(StatusCode.OK, manager.prepareCommit(owner, new TransactionOutcome()));
     assertEquals(StatusCode.OK,
         manager.beginCommitGroup(new Transaction[] {owner}, 1));
     assertEquals(TransactionState.COMMITTING, owner.state());
@@ -176,7 +416,7 @@ final class TransactionManagerTest {
     assertEquals(StatusCode.RETRY,
         manager.tryAcquireKey(contender, 4, 5, new LockToken()));
     TransactionOutcome ownerOutcome = new TransactionOutcome();
-    assertEquals(StatusCode.CONFLICT, manager.failCommitGroup(
+    assertEquals(StatusCode.OK, manager.failCommitGroup(
         new Transaction[] {owner}, new TransactionOutcome[] {ownerOutcome},
         1, StatusCode.CONFLICT));
     assertEquals(StatusCode.NOT_OWNER, manager.release(owner, held));
@@ -231,7 +471,7 @@ final class TransactionManagerTest {
   }
 
   @Test
-  void pendingExactRequestRejectsWholeCommitGroupWithoutFreezingMembers() {
+  void pendingExactRequestRejectsPreparationWithoutFreezingPeer() {
     TransactionManager manager = new TransactionManager(43, 47, 2, 3, lockMemory());
     Transaction owner = new Transaction(3);
     Transaction blocked = new Transaction(3);
@@ -250,13 +490,13 @@ final class TransactionManagerTest {
         blocked.context(), blocked.transactionGeneration(), 1, 1, request, 0,
         new LockExecutionLane(), new LockWaitHandle(), detail));
 
-    assertEquals(StatusCode.CONFLICT,
-        manager.beginCommitGroup(new Transaction[] {blocked, peer}, 2));
-    assertEquals(TransactionState.ACTIVE, blocked.state());
+    TransactionOutcome blockedOutcome = new TransactionOutcome();
+    assertEquals(StatusCode.CONFLICT, manager.prepareCommit(blocked, blockedOutcome));
+    assertEquals(TransactionState.ABORTED, blocked.state());
+    assertEquals(TransactionState.ABORTED, blockedOutcome.state());
     assertEquals(TransactionState.ACTIVE, peer.state());
-    assertTrue(blocked.context().isActive());
+    assertFalse(blocked.context().isActive());
     assertTrue(peer.context().isActive());
-    assertEquals(StatusCode.OK, manager.abort(blocked, new TransactionOutcome()));
     assertEquals(StatusCode.OK, manager.abort(peer, new TransactionOutcome()));
     assertEquals(StatusCode.OK, manager.abort(owner, new TransactionOutcome()));
   }
@@ -326,6 +566,7 @@ final class TransactionManagerTest {
     LockToken memberToken = new LockToken();
     assertEquals(StatusCode.OK, locks.tryAcquire(
         member.context(), member.transactionGeneration(), request, 0, memberToken, detail));
+    assertEquals(StatusCode.OK, manager.prepareCommit(member, new TransactionOutcome()));
     assertEquals(StatusCode.OK,
         manager.beginCommitGroup(new Transaction[] {member}, 1));
     assertFalse(member.context().isActive());
@@ -335,7 +576,7 @@ final class TransactionManagerTest {
         request, 0, new LockToken(), detail));
 
     TransactionOutcome outcome = new TransactionOutcome();
-    assertEquals(StatusCode.CONFLICT, manager.failCommitGroup(
+    assertEquals(StatusCode.OK, manager.failCommitGroup(
         new Transaction[] {member}, new TransactionOutcome[] {outcome},
         1, StatusCode.CONFLICT));
     assertEquals(TransactionState.ABORTED, outcome.state());
@@ -345,6 +586,49 @@ final class TransactionManagerTest {
         contender.context(), contender.transactionGeneration(), request, 0, acquired, detail));
     assertEquals(StatusCode.OK, manager.abort(contender, new TransactionOutcome()));
     assertEquals(StatusCode.NOT_OWNER, locks.acknowledge(acquired, detail));
+  }
+
+  @Test
+  void commitGroupValidationRejectsAliasedOutcomesWithoutMutatingThem() {
+    TransactionManager manager = new TransactionManager(57, 61, 2, 2, lockMemory());
+    Transaction first = new Transaction(2);
+    Transaction second = new Transaction(2);
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 1, first));
+    assertEquals(StatusCode.OK,
+        manager.begin(IsolationLevel.SERIALIZABLE, 1, second));
+    assertEquals(StatusCode.OK, manager.prepareCommit(first, new TransactionOutcome()));
+    assertEquals(StatusCode.OK, manager.prepareCommit(second, new TransactionOutcome()));
+    Transaction[] transactions = {first, second};
+    assertEquals(StatusCode.OK, manager.beginCommitGroup(transactions, 2));
+
+    TransactionOutcome aliased = new TransactionOutcome().set(
+        701, 703, 709, TransactionState.COMMITTED, 711);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, manager.publishCommitGroup(
+        transactions, new TransactionOutcome[] {aliased, aliased},
+        new long[] {2, 3}, 2, () -> StatusCode.OK,
+        new TransactionGroupCompletionTimings()));
+    assertEquals(701, aliased.databaseIncarnationHigh());
+    assertEquals(709, aliased.transactionId());
+    assertEquals(711, aliased.commitSequence());
+    assertEquals(TransactionState.COMMITTING, first.state());
+    assertEquals(TransactionState.COMMITTING, second.state());
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, manager.failCommitGroup(
+        transactions, new TransactionOutcome[] {aliased, aliased},
+        2, StatusCode.CONFLICT));
+    assertEquals(701, aliased.databaseIncarnationHigh());
+    assertEquals(709, aliased.transactionId());
+    assertEquals(711, aliased.commitSequence());
+
+    TransactionOutcome firstOutcome = new TransactionOutcome();
+    TransactionOutcome secondOutcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, manager.failCommitGroup(
+        transactions, new TransactionOutcome[] {firstOutcome, secondOutcome},
+        2, StatusCode.CONFLICT));
+    assertEquals(TransactionState.ABORTED, firstOutcome.state());
+    assertEquals(TransactionState.ABORTED, secondOutcome.state());
+    assertEquals(0, manager.activeTransactionCount());
   }
 
   @Test
@@ -946,6 +1230,21 @@ final class TransactionManagerTest {
     }
   }
 
+  private static final class AdmissionSource implements TransactionAdmissionSource {
+    private StatusCode status;
+    private long sequence;
+    private int admissionCalls;
+
+    @Override
+    public StatusCode transactionAdmissionStatus() {
+      admissionCalls++;
+      return status;
+    }
+
+    @Override
+    public long currentCommitSequence() { return sequence; }
+  }
+
   private static final class BlockingParticipant implements TransactionCommitParticipant {
     final CountDownLatch entered = new CountDownLatch(1);
     final CountDownLatch release = new CountDownLatch(1);
@@ -966,5 +1265,22 @@ final class TransactionManagerTest {
 
     @Override
     public long committedSequence() { return sequence; }
+  }
+
+  private static final class BlockingQuiescentParticipant
+      implements TransactionQuiescentParticipant {
+    final CountDownLatch entered = new CountDownLatch(1);
+    final CountDownLatch release = new CountDownLatch(1);
+
+    @Override
+    public StatusCode execute() {
+      entered.countDown();
+      try {
+        return release.await(5, TimeUnit.SECONDS) ? StatusCode.OK : StatusCode.TIMEOUT;
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        return StatusCode.CANCELLED;
+      }
+    }
   }
 }

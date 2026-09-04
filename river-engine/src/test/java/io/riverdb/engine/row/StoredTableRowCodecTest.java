@@ -12,6 +12,7 @@ import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
+import io.riverdb.storage.heap.HeapPage;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -204,33 +205,32 @@ final class StoredTableRowCodecTest {
   }
 
   @Test
-  void encodesAndDecodesTheExactEightKilobyteBoundary() {
-    int[] types = new int[10];
-    boolean[] nullable = new boolean[10];
-    types[0] = SqlTypeDescriptor.varchar(238);
-    for (int index = 1; index < 8; index++) types[index] = SqlTypeDescriptor.varchar(255);
-    types[8] = SqlTypeDescriptor.BOOLEAN;
-    types[9] = SqlTypeDescriptor.BOOLEAN;
+  void encodesAndDecodesTheExactSingleHeapRowBoundary() {
+    int[] types = {
+      SqlTypeDescriptor.varchar(4_043),
+      SqlTypeDescriptor.BOOLEAN,
+      SqlTypeDescriptor.BOOLEAN,
+      SqlTypeDescriptor.BOOLEAN
+    };
+    boolean[] nullable = new boolean[types.length];
     TableDescriptor table = table(types, nullable);
-    assertEquals(8_192, table.encodedMaximumRowBytes());
-    SqlValueBuffer input = values(10, 8_092);
-    for (int index = 0; index < 8; index++) {
-      int scalars = index == 0 ? 238 : 255;
-      assertEquals(StatusCode.OK,
-          input.setText(index, types[index], supplementaryText(scalars), 0, scalars * 2));
-    }
-    assertEquals(StatusCode.OK, input.setFixed(8, SqlTypeDescriptor.BOOLEAN, 0));
-    assertEquals(StatusCode.OK, input.setFixed(9, SqlTypeDescriptor.BOOLEAN, 1));
-    byte[] bytes = new byte[8_192];
+    assertEquals(HeapPage.MAXIMUM_ROW_BYTES, table.encodedMaximumRowBytes());
+    SqlValueBuffer input = values(types.length, 4_043 * 4);
+    assertEquals(StatusCode.OK, input.setText(
+        0, types[0], supplementaryText(4_043), 0, 4_043 * 2));
+    assertEquals(StatusCode.OK, input.setFixed(1, SqlTypeDescriptor.BOOLEAN, 0));
+    assertEquals(StatusCode.OK, input.setFixed(2, SqlTypeDescriptor.BOOLEAN, 1));
+    assertEquals(StatusCode.OK, input.setFixed(3, SqlTypeDescriptor.BOOLEAN, 0));
+    byte[] bytes = new byte[HeapPage.MAXIMUM_ROW_BYTES];
     StoredTableRowEncodeResult result = new StoredTableRowEncodeResult();
     assertEquals(StatusCode.OK, new StoredTableRowCodec().encode(
         table, 71, input, ByteBuffer.wrap(bytes), 0, result));
-    assertEquals(8_192, result.length());
-    SqlValueBuffer output = values(10, 8_092);
+    assertEquals(HeapPage.MAXIMUM_ROW_BYTES, result.length());
+    SqlValueBuffer output = values(types.length, 4_043 * 4);
     assertEquals(StatusCode.OK, new StoredTableRowCodec().decode(
         table, 71, ByteBuffer.wrap(bytes), 0, result.length(), output));
-    assertEquals(1, output.valueAt(9));
-    assertEquals(1_020, output.textByteLengthAt(7));
+    assertEquals(1, output.valueAt(2));
+    assertEquals(4_043 * 4, output.textByteLengthAt(0));
   }
 
   @Test

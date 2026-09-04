@@ -9,7 +9,7 @@ import java.nio.ByteBuffer;
 
 /** Reusable decoder for the typed parameter entries in one SQL request. */
 final class ProtocolParameterDecoder {
-  static final int HEADER_BYTES = Integer.BYTES + Byte.BYTES * 2 + Short.BYTES;
+  static final int HEADER_BYTES = ProtocolValueHeader.BYTES;
   private static final int NULL_FLAG = 1;
   private final ParameterSet parameters;
   private int next;
@@ -49,9 +49,9 @@ final class ProtocolParameterDecoder {
       int descriptor = source.getInt(next);
       int flags = Byte.toUnsignedInt(source.get(next + Integer.BYTES));
       int reserved = Byte.toUnsignedInt(source.get(next + Integer.BYTES + Byte.BYTES));
-      int bytes = Short.toUnsignedInt(
-          source.getShort(next + Integer.BYTES + Byte.BYTES * 2));
-      if ((flags & ~NULL_FLAG) != 0 || reserved != 0 || next + HEADER_BYTES > end - bytes
+      int bytes = ProtocolValueHeader.length(source, next);
+      if (bytes < 0 || (flags & ~NULL_FLAG) != 0 || reserved != 0
+          || next + HEADER_BYTES > end - bytes
           || !validWidth(descriptor, flags == NULL_FLAG, bytes)
           || flags == NULL_FLAG && !SqlTypeDescriptor.isValid(descriptor)) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
@@ -83,10 +83,9 @@ final class ProtocolParameterDecoder {
       int descriptor = source.getInt(next);
       int flags = Byte.toUnsignedInt(source.get(next + Integer.BYTES));
       int reserved = Byte.toUnsignedInt(source.get(next + Integer.BYTES + Byte.BYTES));
-      int bytes = Short.toUnsignedInt(
-          source.getShort(next + Integer.BYTES + Byte.BYTES * 2));
+      int bytes = ProtocolValueHeader.length(source, next);
       next += HEADER_BYTES;
-      if ((flags & ~NULL_FLAG) != 0 || reserved != 0 || next > end - bytes
+      if (bytes < 0 || (flags & ~NULL_FLAG) != 0 || reserved != 0 || next > end - bytes
           || !validWidth(descriptor, flags == NULL_FLAG, bytes)) return -1;
       if (flags != NULL_FLAG
           && SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
@@ -111,9 +110,9 @@ final class ProtocolParameterDecoder {
     int descriptor = source.getInt(next);
     int flags = Byte.toUnsignedInt(source.get(next + Integer.BYTES));
     int reserved = Byte.toUnsignedInt(source.get(next + Integer.BYTES + Byte.BYTES));
-    int bytes = Short.toUnsignedInt(source.getShort(next + Integer.BYTES + Byte.BYTES * 2));
+    int bytes = ProtocolValueHeader.length(source, next);
     next += HEADER_BYTES;
-    if ((flags & ~NULL_FLAG) != 0 || reserved != 0 || next > end - bytes) {
+    if (bytes < 0 || (flags & ~NULL_FLAG) != 0 || reserved != 0 || next > end - bytes) {
       invalid();
       return;
     }

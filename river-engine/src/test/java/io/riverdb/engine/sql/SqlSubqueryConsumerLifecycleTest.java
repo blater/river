@@ -181,28 +181,23 @@ final class SqlSubqueryConsumerLifecycleTest {
   }
 
   @Test
-  void latchesCorrelatedCardinalityAndReusesAfterClose(@TempDir Path root) {
+  void reportsCorrelatedCardinalityDuringMaterializationAndReuses(
+      @TempDir Path root) {
     SqlSubqueryAcceptanceFixture fixture =
         SqlSubqueryAcceptanceFixture.create(root);
     SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
     String query = "SELECT o.id FROM outer_rows o WHERE o.value="
         + "(SELECT s.value FROM scalar_rows s WHERE s.owner=o.id)";
 
-    assertEquals(StatusCode.OK, fixture.session().beginScan(query, cursor));
-    assertEquals(StatusCode.OK, fixture.session().nextScan(cursor, row));
-    assertEquals(1, row.valueAt(0));
     assertEquals(
         StatusCode.CARDINALITY_VIOLATION,
-        fixture.session().nextScan(cursor, row));
-    assertFalse(row.isAvailable());
+        fixture.session().beginScan(query, cursor));
+    assertFalse(cursor.isActive());
+    assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(
         StatusCode.CARDINALITY_VIOLATION,
-        fixture.session().nextScan(cursor, row));
-    assertFalse(row.isAvailable());
-    assertEquals(
-        StatusCode.OK,
-        fixture.session().closeScan(cursor, fixture.result()));
+        fixture.session().beginScan(query, cursor));
+    assertFalse(cursor.isActive());
     fixture.assertRows("SELECT id FROM outer_rows", 1, 2, 3, 4);
 
     fixture.close();

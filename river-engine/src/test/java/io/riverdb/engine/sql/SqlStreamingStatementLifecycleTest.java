@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -126,7 +127,7 @@ final class SqlStreamingStatementLifecycleTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RelationalDatabase database = opened.database();
     RelationalSessionOpenResult sessionResult =
         new RelationalSessionOpenResult();

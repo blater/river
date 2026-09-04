@@ -1,6 +1,8 @@
 package io.riverdb.engine.table;
 
+import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import java.nio.ByteBuffer;
 
 /** One reusable direct page frame and its borrowed payload view. */
@@ -23,10 +25,7 @@ final class IndexedPageFrame {
   long ownerKeyId = PageCodec.SCALAR_OWNER_KEY_ID;
   int previousPayloadKind = PageCodec.PAYLOAD_KIND_SCALAR_BTREE;
   long previousOwnerKeyId = PageCodec.SCALAR_OWNER_KEY_ID;
-  volatile long validatedPageGeneration;
-  long validatedSchemaId;
-  long validatedDescriptorHash;
-  int validatedType;
+  final IndexedPageValidationState validation = new IndexedPageValidationState();
 
   IndexedPageFrame() {
     prepare();
@@ -48,37 +47,65 @@ final class IndexedPageFrame {
   }
 
   void invalidatePageValidation() {
-    validatedSchemaId = 0;
-    validatedDescriptorHash = 0;
-    validatedType = 0;
-    validatedPageGeneration = 0;
+    validation.invalidate();
   }
 
-  boolean pageValidationMatches(
-      long generation, long schemaId, long descriptorHash, int expectedType) {
-    return generation > 0 && generation == pageGeneration
-        && validatedPageGeneration == pageGeneration
-        && validatedSchemaId == schemaId
-        && validatedDescriptorHash == descriptorHash
-        && (expectedType <= 0 || validatedType == expectedType);
+  boolean beginWritableBorrow() {
+    return validation.beginWritable(payload, pageGeneration);
   }
 
-  void rememberPageValidation(long schemaId, long descriptorHash, int pageType) {
-    validatedSchemaId = schemaId;
-    validatedDescriptorHash = descriptorHash;
-    validatedType = pageType;
-    validatedPageGeneration = pageGeneration;
+  StatusCode consumeMutationInputValidation(
+      long generation, long schemaId, long descriptorHash, int pageType,
+      TupleBTreePageValidationProof target) {
+    return validation.consumeMutationInput(
+        payload, pageGeneration, generation,
+        schemaId, descriptorHash, pageType, target);
   }
 
-  void copyPageValidationFrom(IndexedPageFrame source) {
-    if (source == null || source.validatedPageGeneration != source.pageGeneration) {
+  StatusCode endWritableBorrow() {
+    return validation.endWritable(payload, pageGeneration);
+  }
+
+  StatusCode restorePageValidation(
+      long generation, long schemaId, long descriptorHash, int expectedType,
+      TupleBTreePageValidationProof target) {
+    return validation.restore(
+        payload, pageGeneration, generation,
+        schemaId, descriptorHash, expectedType, target);
+  }
+
+  StatusCode rememberPageValidation(
+      long schemaId, long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    return validation.remember(
+        payload, pageGeneration, schemaId, descriptorHash, pageType, source);
+  }
+
+  StatusCode sealMutationValidation(
+      long generation, long schemaId, long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    return validation.sealMutation(
+        payload, pageGeneration, generation,
+        schemaId, descriptorHash, pageType, source);
+  }
+
+  void copyPageFrom(IndexedPageFrame source) {
+    if (source == null) {
       invalidatePageValidation();
       return;
     }
-    validatedSchemaId = source.validatedSchemaId;
-    validatedDescriptorHash = source.validatedDescriptorHash;
-    validatedType = source.validatedType;
-    validatedPageGeneration = pageGeneration;
+    page.put(0, source.page, 0, PageCodec.HEADER_BYTES);
+    StatusCode copied = validation.copyPayloadFrom(
+        source.validation, source.pageGeneration,
+        payload, pageGeneration);
+    if (!copied.isOk()) {
+      page.put(
+          PageCodec.HEADER_BYTES, source.page,
+          PageCodec.HEADER_BYTES, PageCodec.MAX_PAYLOAD_BYTES);
+      validation.invalidateReadable();
+    }
+    page.position(0);
+    page.limit(PageCodec.PAGE_BYTES);
   }
 
   void identity(int kind, long owner) {

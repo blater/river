@@ -6,9 +6,10 @@ record TpccTerminalHome(int warehouse, int district) {
     if (config == null || terminal < 0 || terminal >= config.terminals()) {
       throw new IllegalArgumentException("invalid terminal home request");
     }
-    int slot = terminal % (config.warehouses() * config.districts());
+    long homeCount = (long) config.warehouses() * config.districts();
+    long slot = terminal % homeCount;
     return new TpccTerminalHome(
-        slot / config.districts() + 1,
-        slot % config.districts() + 1);
+        (int) (slot / config.districts() + 1),
+        (int) (slot % config.districts() + 1));
   }
 }

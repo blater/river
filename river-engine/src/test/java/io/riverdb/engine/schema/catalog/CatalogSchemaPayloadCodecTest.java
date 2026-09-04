@@ -18,6 +18,7 @@ import io.riverdb.format.catalog.CatalogDefinitionRecord;
 import io.riverdb.format.catalog.CatalogDefinitionRecordCodec;
 import io.riverdb.format.catalog.CatalogObjectHead;
 import io.riverdb.format.catalog.CatalogObjectHeadCodec;
+import io.riverdb.storage.heap.HeapPage;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -222,13 +223,13 @@ final class CatalogSchemaPayloadCodecTest {
   }
 
   @Test
-  void exactEightKilobyteRowPublishesAndOversizeRemainsPrivate() {
-    ColumnDescriptorSet exact = rowBoundaryColumns(2);
+  void exactSingleHeapRowPublishesAndOversizeRemainsPrivate() {
+    ColumnDescriptorSet exact = rowBoundaryColumns(3);
     EncodedCatalog exactCatalog = encode(exact, null);
     TableDescriptor exactTable = assemble(exactCatalog);
-    assertEquals(8_192, exactTable.encodedMaximumRowBytes());
+    assertEquals(HeapPage.MAXIMUM_ROW_BYTES, exactTable.encodedMaximumRowBytes());
 
-    ColumnDescriptorSet over = rowBoundaryColumns(3);
+    ColumnDescriptorSet over = rowBoundaryColumns(4);
     EncodedCatalog overCatalog = encode(over, null);
     CatalogTableAssemblyBuilder builder = new CatalogTableAssemblyBuilder();
     assertEquals(StatusCode.OK,
@@ -522,15 +523,13 @@ final class CatalogSchemaPayloadCodecTest {
   }
 
   private static ColumnDescriptorSet rowBoundaryColumns(int trailingBooleans) {
-    int count = 8 + trailingBooleans;
+    int count = 1 + trailingBooleans;
     int[] types = new int[count];
     CharSequence[] names = new CharSequence[count];
     boolean[] nullable = new boolean[count];
-    for (int index = 0; index < 8; index++) {
-      types[index] = SqlTypeDescriptor.varchar(index == 0 ? 238 : 255);
-      names[index] = "v" + index;
-    }
-    for (int index = 8; index < count; index++) {
+    types[0] = SqlTypeDescriptor.varchar(4_043);
+    names[0] = "v0";
+    for (int index = 1; index < count; index++) {
       types[index] = SqlTypeDescriptor.BOOLEAN;
       names[index] = "b" + index;
     }

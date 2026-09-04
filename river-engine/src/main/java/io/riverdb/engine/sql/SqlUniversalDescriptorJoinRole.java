@@ -63,8 +63,14 @@ final class SqlUniversalDescriptorJoinRole {
 
   void configureRoot(
       io.riverdb.sql.SqlCommand command, SqlBoundBooleanPredicateProgram where) {
+    configureRoot(command, where, -1);
+  }
+
+  void configureRoot(
+      io.riverdb.sql.SqlCommand command, SqlBoundBooleanPredicateProgram where,
+      int queryBlock) {
     fixedAccess = null;
-    access.prepare(command, descriptor, 0, null, where);
+    access.prepare(command, descriptor, 0, null, where, null, queryBlock);
   }
 
   void configureRoot(SqlUniversalDescriptorIndexAccess prepared) {
@@ -72,20 +78,32 @@ final class SqlUniversalDescriptorJoinRole {
   }
 
   StatusCode open(SqlUniversalJoinRows rows) {
-    return open(rows, false);
+    return open(rows, null, false);
+  }
+
+  StatusCode open(
+      SqlUniversalJoinRows rows, SqlNestedRowProvider ancestors) {
+    return open(rows, ancestors, false);
+  }
+
+  StatusCode open(SqlNestedRowProvider ancestors) {
+    return open(null, ancestors, false);
   }
 
   StatusCode openFullScan() {
-    return open(null, true);
+    return open(null, null, true);
   }
 
-  private StatusCode open(SqlUniversalJoinRows rows, boolean fullScan) {
+  private StatusCode open(
+      SqlUniversalJoinRows rows, SqlNestedRowProvider ancestors,
+      boolean fullScan) {
     if (descriptor == null) return StatusCode.CONFLICT;
     return scan.open(
-        name, descriptor, access, fixedAccess, rows, fullScan, mergeColumn, mergeBounds);
+        name, descriptor, access, fixedAccess, rows, ancestors,
+        fullScan, mergeColumn, mergeBounds);
   }
 
-  StatusCode open() { return open(null); }
+  StatusCode open() { return open((SqlUniversalJoinRows) null); }
 
   StatusCode next() {
     return scan.next(current, descriptor);
@@ -118,8 +136,15 @@ final class SqlUniversalDescriptorJoinRole {
   }
   boolean exact() { return fixedAccess == null ? access.exact() : fixedAccess.exact(); }
   boolean unique() { return fixedAccess == null ? access.unique() : fixedAccess.unique(); }
+  int exactUniqueOuterColumns(
+      int sourceRole, TableDefinition source, int projectedInnerColumn, int[] target) {
+    SqlUniversalDescriptorIndexAccess selected = fixedAccess == null ? access : fixedAccess;
+    return selected.exactUniqueOuterColumns(
+        sourceRole, source, projectedInnerColumn, target);
+  }
   int accessColumn() {
     return mergeColumn >= 0 ? mergeColumn
         : fixedAccess == null ? access.accessColumn() : fixedAccess.accessColumn();
   }
+  boolean hasResources() { return scan.hasResources() || bindingPin.isActive(); }
 }

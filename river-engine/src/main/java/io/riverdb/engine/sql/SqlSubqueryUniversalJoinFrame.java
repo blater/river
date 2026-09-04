@@ -22,7 +22,7 @@ final class SqlSubqueryUniversalJoinFrame {
       SqlNestedRowProvider ancestors,
       SqlSubqueryPlan plan,
       SqlSessionShapeBudget shapeBudget) {
-    rows = new SqlUniversalJoinRows(session);
+    rows = new SqlUniversalJoinRows(session, ancestors);
     source = new SqlUniversalJoinSource(session, shapeBudget);
     provider = new SqlUniversalJoinedRowProvider(block, ancestors);
     predicates = new SqlUniversalJoinPredicates(
@@ -32,13 +32,15 @@ final class SqlSubqueryUniversalJoinFrame {
   StatusCode prepare(
       SqlCommand command,
       SqlBoundJoinContext joinContext,
-      SqlBoundBooleanPredicateProgram where) {
+      SqlBoundBooleanPredicateProgram where,
+      int orderedInnerColumn) {
     context = joinContext;
     StatusCode status = rows.resolveBound(command, context);
     if (status.isOk()) status = predicates.prepare(command, context, where);
     if (status.isOk()) {
       rows.configureAccess(command, context, where);
-      source.configure(command, context, where, rows, predicates);
+      source.configure(
+          command, context, where, rows, predicates, orderedInnerColumn);
     }
     return status;
   }
@@ -81,4 +83,5 @@ final class SqlSubqueryUniversalJoinFrame {
   void publishMetrics(SqlBlockSource target) { target.publishJoinMetrics(source); }
   SqlNestedRowProvider provider() { return provider; }
   boolean active() { return active; }
+  boolean hasResources() { return active || source.hasResources() || rows.hasResources(); }
 }

@@ -77,6 +77,16 @@ public final class SqlSession implements SqlRetainedBudget {
     return coordinator.executePreparedSingleton(plan, parameters, cursor, result, path);
   }
 
+  public StatusCode configureTransactionDiagnostics(
+      long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+    return coordinator.configureTransactionDiagnostics(
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
+  }
+
+  public StatusCode updateTransactionDiagnosticStep(long diagnosticStepTag) {
+    return coordinator.updateTransactionDiagnosticStep(diagnosticStepTag);
+  }
+
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
     return coordinator.nextScan(cursor, result);
   }

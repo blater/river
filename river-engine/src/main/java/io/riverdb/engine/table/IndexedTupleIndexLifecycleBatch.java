@@ -26,6 +26,7 @@ final class IndexedTupleIndexLifecycleBatch {
   private int[] cleanupEnds = new int[0];
   private TupleShape[] shapes = new TupleShape[0];
   private int count;
+  private long generation = 1;
 
   IndexedTupleIndexLifecycleBatch() {
     this(IndexedTupleIntentJournal.MAX_DESCRIPTORS);
@@ -109,6 +110,7 @@ final class IndexedTupleIndexLifecycleBatch {
     shapes[count] = shape;
     cleanupEnds[count] = cleanupEnd;
     count++;
+    changeGeneration();
     return StatusCode.OK;
   }
 
@@ -117,6 +119,7 @@ final class IndexedTupleIndexLifecycleBatch {
   }
 
   void release() {
+    boolean changed = count != 0;
     operations = null;
     owners = null;
     keyIds = null;
@@ -126,14 +129,17 @@ final class IndexedTupleIndexLifecycleBatch {
     shapes = null;
     ordinalByKey.release();
     count = 0;
+    if (changed) changeGeneration();
   }
 
   void truncate(int retained) {
     if (retained < 0 || retained > count) return;
+    boolean changed = retained != count;
     for (int index = retained; index < count; index++) shapes[index] = null;
     count = retained;
     ordinalByKey.clear();
     for (int index = 0; index < retained; index++) ordinalByKey.add(keyIds[index], index);
+    if (changed) changeGeneration();
   }
 
   boolean active() { return count > 0; }
@@ -172,6 +178,7 @@ final class IndexedTupleIndexLifecycleBatch {
         && shapes[index].sameDescriptors(shape);
   }
   int count() { return count; }
+  long generation() { return generation; }
   int operationAt(int index) { return operations[index]; }
   long ownerAt(int index) { return owners[index]; }
   long keyIdAt(int index) { return keyIds[index]; }
@@ -197,5 +204,9 @@ final class IndexedTupleIndexLifecycleBatch {
         && shape.maximumPhysicalEncodedBytes() <= TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
         && (operation == RECLAIM_DROPPING || operation == FINISH_DROPPING
             ? cleanupEnd >= 4 : cleanupEnd == 0);
+  }
+
+  private void changeGeneration() {
+    generation = generation == Long.MAX_VALUE ? 0 : generation + 1;
   }
 }

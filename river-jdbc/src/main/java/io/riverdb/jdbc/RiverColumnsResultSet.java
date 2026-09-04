@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
@@ -15,7 +16,6 @@ import java.sql.Types;
 /** JDBC column rows resolved through River's SQL binder without reading table rows. */
 final class RiverColumnsResultSet extends AbstractResultSet {
   private static final int INITIAL_RELATION_CAPACITY = 16;
-  private static final int MAXIMUM_RELATIONS = 32_767;
   private static final String[] COLUMN_NAMES = {
       "TABLE_CAT",
       "TABLE_SCHEM",
@@ -440,17 +440,30 @@ final class RiverColumnsResultSet extends AbstractResultSet {
     connection.metadataQueryClosed(completion);
   }
 
-  private void appendRelation(String relation) throws SQLException {
-    if (relationCount >= MAXIMUM_RELATIONS) {
+  void appendRelation(String relation) throws SQLException {
+    if (relationCount == Integer.MAX_VALUE) {
       throw JdbcExceptions.failure(
           StatusCode.RESOURCE_EXHAUSTED,
           "materialize column catalog");
     }
     if (relationCount >= relationNames.length) {
-      int capacity = Math.min(MAXIMUM_RELATIONS, relationNames.length << 1);
-      String[] expanded = new String[capacity];
-      System.arraycopy(relationNames, 0, expanded, 0, relationCount);
-      relationNames = expanded;
+      int capacity = BoundedArrayGrowth.capacity(
+          relationNames.length, relationCount + 1, Integer.MAX_VALUE,
+          INITIAL_RELATION_CAPACITY);
+      if (capacity < 0) {
+        throw JdbcExceptions.failure(
+            StatusCode.RESOURCE_EXHAUSTED,
+            "materialize column catalog");
+      }
+      try {
+        String[] expanded = new String[capacity];
+        System.arraycopy(relationNames, 0, expanded, 0, relationCount);
+        relationNames = expanded;
+      } catch (OutOfMemoryError failure) {
+        throw JdbcExceptions.failure(
+            StatusCode.RESOURCE_EXHAUSTED,
+            "materialize column catalog");
+      }
     }
     relationNames[relationCount++] = relation;
   }

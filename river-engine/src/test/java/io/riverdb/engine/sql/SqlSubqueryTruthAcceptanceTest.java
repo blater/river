@@ -71,19 +71,13 @@ final class SqlSubqueryTruthAcceptanceTest {
         "SELECT o.id FROM outer_rows o WHERE o.id<>o.id AND "
             + "o.value=(SELECT i.value FROM inner_rows i)");
     SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
     assertEquals(
-        StatusCode.OK,
+        StatusCode.CARDINALITY_VIOLATION,
         fixture.session().beginScan(
             "SELECT o.id FROM outer_rows o WHERE o.value="
                 + "(SELECT i.value FROM inner_rows i)",
             cursor));
-    assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
-        fixture.session().nextScan(cursor, row));
-    assertEquals(
-        StatusCode.OK,
-        fixture.session().closeScan(cursor, fixture.result()));
+    assertFalse(cursor.isActive());
     fixture.assertRows("SELECT id FROM outer_rows", 1, 2, 3, 4);
 
     fixture.close();
@@ -265,17 +259,12 @@ final class SqlSubqueryTruthAcceptanceTest {
 
   private static void assertRepeatedTerminal(
       SqlSubqueryAcceptanceFixture fixture, String sql, StatusCode expected) {
-    SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
-    assertEquals(StatusCode.OK, fixture.session().beginScan(sql, cursor), sql);
-    assertEquals(expected, fixture.session().nextScan(cursor, row), sql);
-    assertFalse(row.isAvailable(), sql);
-    assertEquals(expected, fixture.session().nextScan(cursor, row), sql);
-    assertFalse(row.isAvailable(), sql);
-    assertEquals(
-        StatusCode.OK,
-        fixture.session().closeScan(cursor, fixture.result()),
-        sql);
+    for (int attempt = 0; attempt < 2; attempt++) {
+      SqlScanCursor cursor = new SqlScanCursor();
+      assertEquals(expected, fixture.session().beginScan(sql, cursor), sql);
+      assertFalse(cursor.isActive(), sql);
+      assertEquals(StatusCode.OK, cursor.reset(), sql);
+    }
   }
 
   private static void insertRange(

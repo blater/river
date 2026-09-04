@@ -7,6 +7,7 @@ import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
 import io.riverdb.engine.table.IndexedLogicalRowIdReservation;
 import io.riverdb.tx.api.TransactionState;
+import io.riverdb.tx.api.lock.LockMode;
 
 /** Per-session allocation-free row access for catalog-v2 descriptor tables. */
 public final class RelationalDescriptorTableAccess {
@@ -220,14 +221,16 @@ public final class RelationalDescriptorTableAccess {
         : scanAccess.begin(this, pin, table, cursor);
   }
 
-  /** Opens a tuple-index scan and transfers the supplied schema pin into the cursor. */
+  /** Opens a tuple-index scan with its serializable source mode and transfers the pin. */
   public StatusCode beginIndexScan(
       SchemaPin pin, RelationalDescriptorIndexBounds bounds,
+      LockMode serializableSourceMode,
       RelationalDescriptorScanCursor cursor) {
     TableDescriptor table = validDescriptor(pin);
     return !active() || table == null || bounds == null || bounds.key() == null
         ? StatusCode.INVALID_EXTERNAL_INPUT
-        : scanAccess.beginIndex(this, pin, table, bounds, cursor);
+        : scanAccess.beginIndex(
+            this, pin, table, bounds, serializableSourceMode, cursor);
   }
 
   /** Decodes the next scanned row into caller-owned values and publishes its stable identity. */

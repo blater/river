@@ -44,6 +44,14 @@ final class TpccRunPhase {
         System.out.println("load_seconds=" + TpccReport.secondsSince(start));
       }
       TpccInvariants.verifyLoaded(connection, config);
+      if (config.freshLoad()) {
+        try (Statement statement = connection.createStatement()) {
+          if (statement.executeUpdate("CHECKPOINT") != 0) {
+            throw new SQLException("load checkpoint changed rows");
+          }
+        }
+        System.out.println("load_checkpoint=completed");
+      }
     }
     System.out.println("pre_run_invariants=passed");
   }

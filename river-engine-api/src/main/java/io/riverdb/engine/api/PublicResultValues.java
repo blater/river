@@ -7,6 +7,7 @@ import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.text.Utf8TextArena;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import java.nio.ByteBuffer;
 
 /** Reusable packed values shared by command and streaming-row result carriers. */
 final class PublicResultValues {
@@ -19,6 +20,8 @@ final class PublicResultValues {
   private final Utf8TextArena text = new Utf8TextArena();
   private final RetainedMemoryLease memory;
   private char[] characterScratch = EMPTY_CHARACTERS;
+  private int characterScratchIndex = -1;
+  private int characterScratchLength;
   private int count;
 
   PublicResultValues() {
@@ -113,6 +116,8 @@ final class PublicResultValues {
     lanes.reset(count);
     nulls.reset();
     text.reset();
+    characterScratchIndex = -1;
+    characterScratchLength = 0;
     count = 0;
   }
 
@@ -123,12 +128,15 @@ final class PublicResultValues {
     }
     int maximumScalars = SqlTypeDescriptor.parameterOne(lanes.descriptor(index));
     int scalars = Utf8Text.scalarCount(source, offset, length);
-    if (scalars < 0 || scalars > maximumScalars) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (scalars < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (scalars > maximumScalars) return StatusCode.STRING_DATA_RIGHT_TRUNCATION;
     StatusCode status = reserveScratch(length);
     if (!status.isOk()) return status;
     status = text.append(source, offset, length, maximumScalars);
     if (!status.isOk()) return status;
     lanes.text(index, text.lastOffset(), text.lastLength());
+    characterScratchIndex = -1;
+    characterScratchLength = 0;
     return StatusCode.OK;
   }
 
@@ -154,8 +162,18 @@ final class PublicResultValues {
 
   int textLengthAt(int index) {
     if (!isText(index) || isNull(index)) return -1;
-    return text.copyChars(
-        lanes.textOffset(index), lanes.textLength(index), characterScratch, 0);
+    return text.decodedLength(lanes.textOffset(index), lanes.textLength(index));
+  }
+
+  int encodedTextLengthAt(int index) {
+    return isText(index) && !isNull(index) ? lanes.textLength(index) : -1;
+  }
+
+  int copyEncodedTextAt(int index, ByteBuffer destination, int offset) {
+    int length = encodedTextLengthAt(index);
+    return length < 0 || !text.copyBytes(
+        lanes.textOffset(index), length, destination, offset).isOk()
+        ? -1 : length;
   }
 
   int copyTextAt(int index, char[] destination, int offset) {
@@ -165,8 +183,14 @@ final class PublicResultValues {
   }
 
   char textCharacterAt(int index, int character) {
-    int length = textLengthAt(index);
-    return character >= 0 && character < length ? characterScratch[character] : 0;
+    if (!isText(index) || isNull(index)) return 0;
+    if (characterScratchIndex != index) {
+      characterScratchLength = text.copyChars(
+          lanes.textOffset(index), lanes.textLength(index), characterScratch, 0);
+      characterScratchIndex = characterScratchLength < 0 ? -1 : index;
+    }
+    return character >= 0 && character < characterScratchLength
+        ? characterScratch[character] : 0;
   }
 
   StatusCode releaseHighWater() {
@@ -198,7 +222,7 @@ final class PublicResultValues {
         SqlShapeLimits.MAX_RESULT_COLUMNS,
         SqlShapeLimits.MAX_RESULT_COLUMNS,
         SqlShapeLimits.MAX_ENCODED_RESULT_ROW_BYTES,
-        CommandResult.MAXIMUM_TEXT_CHARACTERS);
+        Utf8Text.MAXIMUM_UTF16_CODE_UNITS);
   }
   static long retainedFloorBytes() {
     return retainedBytes(
@@ -222,7 +246,7 @@ final class PublicResultValues {
   private StatusCode reserveScratch(int required) {
     if (required <= characterScratch.length) return StatusCode.OK;
     int capacity = BoundedArrayGrowth.capacity(
-        characterScratch.length, required, CommandResult.MAXIMUM_TEXT_CHARACTERS, 8);
+        characterScratch.length, required, Utf8Text.MAXIMUM_UTF16_CODE_UNITS, 8);
     StatusCode admitted = memory.resize(retainedBytes(
         lanes.capacity(), nulls.capacity(), text.capacity(), capacity));
     if (!admitted.isOk()) return admitted;

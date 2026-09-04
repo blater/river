@@ -1,7 +1,7 @@
 package io.riverdb.jdbc;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.api.CommandResult;
+import io.riverdb.base.text.Utf8Text;
 import java.sql.SQLException;
 import java.util.Arrays;
 
@@ -13,12 +13,12 @@ final class RiverJdbcTextScratch {
   private RiverJdbcTextScratch() { }
 
   static char[] require(char[] current, int required) throws SQLException {
-    if (required < 0 || required > CommandResult.MAXIMUM_TEXT_CHARACTERS) {
+    if (required < 0 || required > Utf8Text.MAXIMUM_UTF16_CODE_UNITS) {
       throw JdbcExceptions.invalid("text result exceeds the JDBC scratch bound");
     }
     if (required <= current.length) return current;
     int capacity = Math.min(
-        CommandResult.MAXIMUM_TEXT_CHARACTERS,
+        Utf8Text.MAXIMUM_UTF16_CODE_UNITS,
         Math.max(required, Math.max(TEMPORAL_CHARACTERS, current.length << 1)));
     try {
       return Arrays.copyOf(current, capacity);

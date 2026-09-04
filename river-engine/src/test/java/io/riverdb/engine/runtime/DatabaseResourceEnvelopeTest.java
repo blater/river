@@ -10,27 +10,38 @@ import org.junit.jupiter.api.Test;
 
 final class DatabaseResourceEnvelopeTest {
   @Test
-  void derivesTypedCapacityBeyondTheLegacyTransactionLimit() {
+  void admitsOnlyTheCallerSuppliedPhysicalBudgets() {
     DatabaseResourceEnvelope.Result result = new DatabaseResourceEnvelope.Result();
+    DatabaseResourcePlanRequest request = new DatabaseResourcePlanRequest()
+        .memory(128_000_000L, 0, 0, 0, 40_000_000L)
+        .lockProviderBytes(8_000_000L)
+        .versionWorkspaceBytes(4_000_000L)
+        .indexedPageCache(32_000_000L, 8_000_000L)
+        .capacity(8, Integer.MAX_VALUE, 600, 40_000_000L)
+        .maximumDelivery(Integer.MAX_VALUE, 512, 40_000_000L);
     assertEquals(StatusCode.OK,
-        DatabaseResourceEnvelope.create(128_000_000L, 8, 40_000_000L, result));
+        DatabaseResourceEnvelope.create(request, 0, result));
 
-    assertTrue(result.plan().writeEntryCapacity() > 384);
-    assertTrue(result.plan().lockProviderBytes() >= 1L << 20);
+    assertEquals(Integer.MAX_VALUE, result.plan().writeEntryCapacity());
+    assertEquals(8_000_000L, result.plan().lockProviderBytes());
     assertTrue(result.plan().lockProviderBytes() < result.plan().accountedCapacityBytes());
-    assertEquals(result.plan().accountedCapacityBytes(),
-        40_000_000L + result.plan().lockProviderBytes()
-            + result.plan().maximumDeliveryAccountedBytes());
-    assertTrue(result.plan().stagedPageCapacity() > 0);
-    assertTrue(result.plan().walByteCapacity() > 0);
+    assertEquals(600, result.plan().stagedPageCapacity());
+    assertEquals(40_000_000L, result.plan().walByteCapacity());
     assertEquals(128_000_000L, result.root().maximumAccountedBytes());
   }
 
   @Test
-  void rejectsAnEnvelopeWhoseRetainedRuntimeConsumesDeliveryProgress() {
+  void rejectsAnEnvelopeWhoseExplicitProvidersAndDeliveryExceedTheRoot() {
     DatabaseResourceEnvelope.Result result = new DatabaseResourceEnvelope.Result();
+    DatabaseResourcePlanRequest request = new DatabaseResourcePlanRequest()
+        .memory(32_000_000L, 0, 0, 0, 20_000_000L)
+        .lockProviderBytes(8_000_000L)
+        .versionWorkspaceBytes(4_000_000L)
+        .indexedPageCache(16_000_000L, 4_000_000L)
+        .capacity(8, 1_000, 600, 20_000_000L)
+        .maximumDelivery(1_000, 128, 20_000_000L);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED,
-        DatabaseResourceEnvelope.create(32_000_000L, 8, 31_000_000L, result));
+        DatabaseResourceEnvelope.create(request, 0, result));
     assertNull(result.plan());
     assertNull(result.root());
   }

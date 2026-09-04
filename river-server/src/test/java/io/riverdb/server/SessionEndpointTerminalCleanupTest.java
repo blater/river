@@ -69,6 +69,12 @@ final class SessionEndpointTerminalCleanupTest {
     private int closeAttempts;
 
     @Override
+    public StatusCode configureTransactionDiagnostics(
+        long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+      return StatusCode.OK;
+    }
+
+    @Override
     public StatusCode close() { closeAttempts++; return StatusCode.RETRY; }
     @Override
     public StatusCode prepare(String sql, PreparedOpenResult result) { return StatusCode.CLOSED; }

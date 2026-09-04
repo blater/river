@@ -4,7 +4,7 @@ package io.riverdb.engine.table;
 final class PendingMutationMetadataChunk {
   final int[] operations;
   final int[] rowLengths;
-  final int[] rowOffsets;
+  final long[] rowAddresses;
   final long[] keys;
   final long[] spaces;
   final long[] previousRowIds;
@@ -13,7 +13,7 @@ final class PendingMutationMetadataChunk {
   PendingMutationMetadataChunk(int entries) {
     operations = new int[entries];
     rowLengths = new int[entries];
-    rowOffsets = new int[entries];
+    rowAddresses = new long[entries];
     keys = new long[entries];
     spaces = new long[entries];
     previousRowIds = new long[entries];

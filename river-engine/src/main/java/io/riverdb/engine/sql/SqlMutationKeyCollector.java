@@ -9,22 +9,24 @@ import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlComparison;
 import io.riverdb.storage.heap.HeapRowResult;
 
-/** Collects a bounded stable key set for scan-based UPDATE and DELETE. */
+/** Collects a session-budgeted stable key set for scan-based UPDATE and DELETE. */
 final class SqlMutationKeyCollector {
   private final RelationalSession session;
   private final SqlBoundPredicateEvaluator predicates;
   private final RelationalScanCursor cursor = new RelationalScanCursor();
   private final RelationalScanResult scanRow = new RelationalScanResult();
   private final ValueIndexLookupResult indexRow = new ValueIndexLookupResult();
-  private final long[] keys = new long[SqlCommand.MAXIMUM_INSERT_ROWS];
+  private final SqlRetainedLongPages keys;
 
-  private int count;
   private boolean indexedScan;
 
   SqlMutationKeyCollector(
-      RelationalSession relationalSession, SqlBoundPredicateEvaluator evaluator) {
+      RelationalSession relationalSession,
+      SqlBoundPredicateEvaluator evaluator,
+      SqlSessionShapeBudget shapeBudget) {
     session = relationalSession;
     predicates = evaluator;
+    keys = new SqlRetainedLongPages(shapeBudget);
   }
 
   StatusCode collect(SqlCommand command, BoundSqlStatement bound) {
@@ -32,8 +34,8 @@ final class SqlMutationKeyCollector {
     if (!status.isOk()) {
       return status;
     }
-    count = 0;
-    status = begin(command, bound);
+    status = keys.begin();
+    if (status.isOk()) status = begin(command, bound);
     boolean active = status.isOk();
     while (status.isOk()) {
       status = next(command, bound);
@@ -46,12 +48,14 @@ final class SqlMutationKeyCollector {
   }
 
   int count() {
-    return count;
+    return keys.count();
   }
 
   long key(int index) {
-    return keys[index];
+    return keys.get(index);
   }
+
+  void finish() { keys.finish(); }
 
   boolean hasOpenResources() {
     return cursor.isActive();
@@ -103,11 +107,8 @@ final class SqlMutationKeyCollector {
     if (!status.isOk() || !predicates.matched()) {
       return status;
     }
-    if (count >= keys.length) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
-    keys[count++] = key;
-    return StatusCode.OK;
+    status = keys.append(key);
+    return status;
   }
 
   private StatusCode closeAfter(StatusCode body) {

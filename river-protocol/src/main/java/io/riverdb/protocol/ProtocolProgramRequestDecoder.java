@@ -9,7 +9,8 @@ import java.nio.ByteBuffer;
 
 /** Reusable strict decoder for all program lifecycle requests. */
 public final class ProtocolProgramRequestDecoder {
-  private static final int EXECUTE_HEADER_BYTES = Long.BYTES + Integer.BYTES * 2;
+  private static final int EXECUTE_HEADER_BYTES = Long.BYTES + Integer.BYTES * 2
+      + ProtocolTransactionDiagnosticContext.BYTES;
   private static final int CLOSE_HEADER_BYTES = Long.BYTES;
   private final ProtocolPartitionedLease memory;
   private final TransactionProgram program;
@@ -17,6 +18,9 @@ public final class ProtocolProgramRequestDecoder {
   private final ProtocolProgramTextDecoder text;
   private long handle;
   private IsolationLevel isolationLevel;
+  private long diagnosticTag;
+  private long diagnosticStepTag;
+  private long metricsEpoch;
 
   public ProtocolProgramRequestDecoder() {
     this(RetainedMemoryLease.unbounded());
@@ -60,10 +64,16 @@ public final class ProtocolProgramRequestDecoder {
   public TransactionProgramArguments arguments() { return arguments; }
   public long handle() { return handle; }
   public IsolationLevel isolationLevel() { return isolationLevel; }
+  public long diagnosticTag() { return diagnosticTag; }
+  public long diagnosticStepTag() { return diagnosticStepTag; }
+  public long metricsEpoch() { return metricsEpoch; }
 
   public void reset() {
     handle = 0;
     isolationLevel = null;
+    diagnosticTag = 0;
+    diagnosticStepTag = 0;
+    metricsEpoch = 0;
     program.reset();
     arguments.reset();
     text.reset();
@@ -92,7 +102,16 @@ public final class ProtocolProgramRequestDecoder {
     int count = source.getInt(input + Long.BYTES);
     int isolationCode = source.getInt(input + Long.BYTES + Integer.BYTES);
     isolationLevel = ProtocolIsolationLevelCodec.decode(isolationCode);
-    if (handle <= 0 || isolationLevel == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    diagnosticTag = source.getLong(input + Long.BYTES + Integer.BYTES * 2);
+    diagnosticStepTag = source.getLong(
+        input + Long.BYTES + Integer.BYTES * 2 + Long.BYTES);
+    metricsEpoch = source.getLong(
+        input + Long.BYTES + Integer.BYTES * 2 + Long.BYTES * 2);
+    if (handle <= 0 || isolationLevel == null
+        || !ProtocolTransactionDiagnosticContext.valid(
+            diagnosticTag, diagnosticStepTag, metricsEpoch)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     return ProtocolParameterDecoder.decodeProgram(
         source, input + EXECUTE_HEADER_BYTES, end, count, arguments, text);
   }
@@ -107,6 +126,9 @@ public final class ProtocolProgramRequestDecoder {
     if (frame != null) frame.erasePayload();
     handle = 0;
     isolationLevel = null;
+    diagnosticTag = 0;
+    diagnosticStepTag = 0;
+    metricsEpoch = 0;
     program.reset();
     arguments.reset();
     text.reset();

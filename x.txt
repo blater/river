@@ -1,0 +1,77 @@
+The failure was partly technical, but mainly process failure: we merged infrastructure
+  and instrumentation as if they were performance work.
+
+  What actually happened:
+
+   Intended lever                                     What was delivered
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Collapse every TPC-C transaction to one request    Only New Order and Stock Level already used
+                                                      programs. Payment, Delivery, and Order Status
+                                                      remained JDBC statement loops.
+  ─────────────────────────────────────────────────  ─────────────────────────────────────────────────
+   Point-native singleton execution                   Implemented, but it affects only work inside
+                                                      already-collapsed programs and was never shown
+                                                      to move end-to-end TPS.
+  ─────────────────────────────────────────────────  ─────────────────────────────────────────────────
+   Fused result encoding                              Not implemented as a measured optimization.
+  ─────────────────────────────────────────────────  ─────────────────────────────────────────────────
+   Group commit improvement                           Only lock counters/diagnostics were added; no
+                                                      demonstrated group-commit throughput
+                                                      improvement.
+  ─────────────────────────────────────────────────  ─────────────────────────────────────────────────
+   50x evidence                                       No paired baseline/candidate run existed.
+
+  The measured workload proves the current limiter:
+
+  - One terminal: 61.4 TPS, zero retries.
+  - Ten terminals: approximately 56 TPS, about 1,100 retries and 1,200 deadlock outcomes.
+  - Current ten-terminal request mix:
+      - New Order: 1.0 request/attempt
+      - Stock Level: 1.0
+      - Payment: 10.1
+      - Order Status: 15.1
+      - Delivery: 44.4
+
+  Thus the new code did not attack most of the work. The benchmark was also a high-contention, one-
+  warehouse NO_WAIT_STRESS test, so it mainly measured retry/deadlock behavior. The documented 42.3
+  TPS baseline used different conditions and cannot be compared. The parent snapshot also failed
+  startup, so there was no runnable control.
+
+  The JFR evidence points to secondary engine costs—Buffer.checkIndex, HeapByteBuffer.get, tuple-key
+  validation, SqlValueDomain.validFixed, and group-commit preflight—but those must not be optimized
+  before the workload and contention problem is isolated. The client JFR was too sparse to support
+  conclusions.
+
+  What really needs to happen:
+
+  1. Make the benchmark a hard gate, not a smoke test:
+      - same seed, host, JDK, durability, isolation, terminals, and scheduling;
+      - runnable baseline and candidate;
+      - no JFR during canonical runs;
+      - 1-terminal CPU/protocol test separately from 10+ terminal contention tests;
+      - fail the change unless a declared metric improves.
+
+  2. Finish the actual protocol-collapse work:
+      - implement Payment as a River program first;
+      - then Delivery and Order Status;
+      - preserve business rollback, isolation, locking, and result semantics;
+      - require one EXECUTE_PROGRAM per attempt and report per-family counts.
+
+  3. Investigate lock contention independently:
+      - record wait duration and deadlock-cycle/victim details;
+      - audit lock acquisition order across Payment, New Order, and Delivery;
+      - compare normal-distribution and deliberately hot-key workloads;
+      - do not interpret retry-heavy TPS as CPU throughput.
+
+  4. Only after that, optimize the server hot paths:
+      - measure tuple validation and buffer bounds-check cost in an isolated mechanism benchmark;
+      - measure group-commit cohort size, preflight time, direct fallback, and force time;
+      - then change validation/copy/encoding with correctness tests.
+
+  5. Run the normative Alpha3 gate only after the above works: ten measured samples, at least 100,000
+     completed transactions per sample, and the required confidence bound.
+
+  The immediate high-value change is therefore not more singleton plumbing. It is completing the
+  Payment/Delivery/Order Status program adapters and fixing the lock-contention measurement. The
+  current commit should be treated as a prototype reliability/observability snapshot, not as a
+  performance milestone.

@@ -7,7 +7,6 @@ import io.riverdb.wal.local.LocalWal;
 /** Owns relational, hybrid, and vacuum commit strategies added above scalar mutations. */
 final class IndexedExtendedCommitCoordinator {
   private final IndexedRelationalLiveCommit relational;
-  private final IndexedHybridCommitCoordinator hybrid;
   private final IndexedHybridCommitGroup hybridGroup;
   private final IndexedVacuumCoordinator vacuum;
 
@@ -18,12 +17,13 @@ final class IndexedExtendedCommitCoordinator {
       IndexedPageSet pages,
       IndexedStorePhase phase,
       IndexedWalRecovery recovery,
-      IndexedLogicalRowIdRegistry logicalRowIds) {
+      IndexedLogicalRowIdRegistry logicalRowIds,
+      IndexedGroupCommitMetrics commitMetrics) {
     relational = new IndexedRelationalLiveCommit(
-        store, new IndexedRelationalCommitCoordinator(wal, kernel, pages, logicalRowIds));
-    hybrid = new IndexedHybridCommitCoordinator(store, kernel, pages, wal, logicalRowIds);
+        store, new IndexedRelationalCommitCoordinator(
+            wal, kernel, pages, logicalRowIds, commitMetrics));
     hybridGroup = new IndexedHybridCommitGroup(
-        store, kernel, pages, wal, logicalRowIds);
+        store, kernel, pages, wal, logicalRowIds, commitMetrics);
     vacuum = new IndexedVacuumCoordinator(wal, kernel, pages, phase, recovery);
   }
 
@@ -37,28 +37,30 @@ final class IndexedExtendedCommitCoordinator {
   }
 
   StatusCode commitHybrid(
-      long transactionId,
-      PendingMutationBuffer pending,
-      IndexedTupleIntentJournal intents,
-      IndexedTupleIndexLifecycleBatch lifecycle,
-      IndexedLogicalRowIdFloors logicalRowFloors,
+      IndexedPreparedLogicalCommit preparedCommit,
       long oldestVisibleCommitSequence,
       IndexedCommitResult result) {
-    return hybrid.commit(
-        transactionId, pending, intents, lifecycle, logicalRowFloors,
-        oldestVisibleCommitSequence, result);
+    return hybridGroup.commitDirect(
+        preparedCommit, oldestVisibleCommitSequence, result);
   }
 
   StatusCode preflightHybridGroup(
-      IndexedTransactionSession[] sessions, int count,
+      IndexedPreparedLogicalCommit[] prepared, int count,
       long oldestVisibleCommitSequence) {
     return hybridGroup.preflight(
-        sessions, count, oldestVisibleCommitSequence);
+        prepared, count, oldestVisibleCommitSequence);
+  }
+
+  StatusCode reserveHybridGroupCapacity(int required) {
+    return hybridGroup.reserveMemberCapacity(required);
   }
 
   StatusCode appendHybridGroup(
-      IndexedTransactionSession[] sessions, long[] commitSequences, int count) {
-    return hybridGroup.append(sessions, commitSequences, count);
+      IndexedPreparedLogicalCommit[] prepared,
+      long[] commitSequences,
+      long[] committedRows,
+      int count) {
+    return hybridGroup.append(prepared, commitSequences, committedRows, count);
   }
 
   StatusCode forceHybridGroup() { return hybridGroup.force(); }
@@ -67,6 +69,7 @@ final class IndexedExtendedCommitCoordinator {
   StatusCode cancelHybridGroup() { return hybridGroup.cancel(); }
   boolean hybridGroupActive() { return hybridGroup.active(); }
   boolean hybridDecisionAppended() { return hybridGroup.decisionAppended(); }
+  boolean hybridDurabilityUncertain() { return hybridGroup.durabilityUncertain(); }
 
   StatusCode commitVacuum(
       long transactionId,
@@ -82,11 +85,10 @@ final class IndexedExtendedCommitCoordinator {
   boolean vacuumFailureFences() { return vacuum.failureFences(); }
   long vacuumCopiedBytes() { return vacuum.copiedBytes(); }
   long compilationCopiedPayloadBytes() {
-    return hybrid.compilationCopiedPayloadBytes()
-        + hybridGroup.compilationCopiedPayloadBytes();
+    return hybridGroup.compilationCopiedPayloadBytes();
   }
   long walCopiedPayloadBytes() {
     return relational.walCopiedPayloadBytes()
-        + hybrid.walCopiedPayloadBytes() + hybridGroup.walCopiedPayloadBytes();
+        + hybridGroup.walCopiedPayloadBytes();
   }
 }

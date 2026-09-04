@@ -8,8 +8,9 @@ import java.nio.ByteBuffer;
 
 /** Encodes one v4 SQL text plus typed-parameter request without intermediate storage. */
 final class ProtocolSqlRequestEncoder {
-  private static final int REQUEST_HEADER_BYTES = Integer.BYTES + Short.BYTES * 2;
-  private static final int ENTRY_HEADER_BYTES = Integer.BYTES + Byte.BYTES * 2 + Short.BYTES;
+  private static final int REQUEST_HEADER_BYTES = Integer.BYTES + Short.BYTES * 2
+      + ProtocolTransactionDiagnosticContext.BYTES;
+  private static final int ENTRY_HEADER_BYTES = ProtocolValueHeader.BYTES;
   private static final int NULL_FLAG = 1;
 
   StatusCode encode(
@@ -17,9 +18,16 @@ final class ProtocolSqlRequestEncoder {
       ProtocolMessageType type,
       long requestId,
       String sql,
-      ParameterSet parameters) {
+      ParameterSet parameters,
+      long diagnosticTag,
+      long diagnosticStepTag,
+      long metricsEpoch) {
     if (target == null || !sqlType(type) || requestId <= 0
-        || sql == null || sql.isEmpty()) {
+        || sql == null || sql.isEmpty()
+        || !ProtocolTransactionDiagnosticContext.valid(
+            diagnosticTag, diagnosticStepTag, metricsEpoch)
+        || type == ProtocolMessageType.PREPARE
+            && (diagnosticTag != 0 || diagnosticStepTag != 0 || metricsEpoch != 0)) {
       return ProtocolFrameWire.invalidTarget(target);
     }
     int sqlBytes = utf8Length(sql);
@@ -52,7 +60,9 @@ final class ProtocolSqlRequestEncoder {
     target.putInt(output, sqlBytes);
     target.putShort(output + Integer.BYTES, (short) parameterCount);
     target.putShort(output + Integer.BYTES + Short.BYTES, (short) 0);
-    output += REQUEST_HEADER_BYTES;
+    output = ProtocolTransactionDiagnosticContext.write(
+        target, output + Integer.BYTES + Short.BYTES * 2,
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
     output = writeUtf8(target, output, sql);
     for (int index = 0; index < parameterCount; index++) {
       output = writeParameter(target, output, parameters, index);
@@ -70,8 +80,7 @@ final class ProtocolSqlRequestEncoder {
     }
     int bytes = SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
         ? parameters.textLengthAt(index) : ProtocolDecimal128.bytes(descriptor);
-    /* The v4 entry carries a 16-bit byte length; reject before narrowing. */
-    return bytes >= 0 && bytes <= 0xffff ? bytes : -1;
+    return bytes;
   }
 
   static int writeParameter(
@@ -79,12 +88,8 @@ final class ProtocolSqlRequestEncoder {
     int descriptor = parameters.typeDescriptorAt(index);
     boolean nullValue = parameters.isNull(index);
     int valueBytes = valueBytes(parameters, index);
-    target.putInt(output, descriptor);
-    target.put(output + Integer.BYTES, nullValue ? (byte) NULL_FLAG : 0);
-    target.put(output + Integer.BYTES + Byte.BYTES, (byte) 0);
-    target.putShort(
-        output + Integer.BYTES + Byte.BYTES * 2, (short) valueBytes);
-    output += ENTRY_HEADER_BYTES;
+    output = ProtocolValueHeader.write(
+        target, output, descriptor, nullValue ? NULL_FLAG : 0, valueBytes);
     if (nullValue) {
       return output;
     }
@@ -111,7 +116,7 @@ final class ProtocolSqlRequestEncoder {
     if (!SqlTypeDescriptor.isValid(descriptor)) return -1;
     int bytes = SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR
         ? encodedTextBytes(parameters, index) : ProtocolDecimal128.bytes(descriptor);
-    return bytes >= 0 && bytes <= 0xffff ? bytes : -1;
+    return bytes;
   }
 
   static int writeParameter(
@@ -119,11 +124,8 @@ final class ProtocolSqlRequestEncoder {
     int descriptor = parameters.typeDescriptorAt(index);
     boolean nullValue = parameters.isNull(index);
     int valueBytes = valueBytes(parameters, index);
-    target.putInt(output, descriptor);
-    target.put(output + Integer.BYTES, nullValue ? (byte) NULL_FLAG : 0);
-    target.put(output + Integer.BYTES + Byte.BYTES, (byte) 0);
-    target.putShort(output + Integer.BYTES + Byte.BYTES * 2, (short) valueBytes);
-    output += ENTRY_HEADER_BYTES;
+    output = ProtocolValueHeader.write(
+        target, output, descriptor, nullValue ? NULL_FLAG : 0, valueBytes);
     if (nullValue) return output;
     if (SqlTypeDescriptor.typeId(descriptor) != SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       if (ProtocolDecimal128.isWide(descriptor)) {

@@ -14,7 +14,8 @@ final class SqlUniversalDescriptorScanAdmission {
       RelationalSession session, SqlUniversalDescriptorName name, SchemaPin pin,
       TableDescriptor expected, SqlUniversalDescriptorIndexAccess access,
       SqlUniversalDescriptorIndexAccess fixedAccess,
-      SqlUniversalJoinRows rows, boolean fullScan) {
+      SqlUniversalJoinRows rows, SqlNestedRowProvider ancestors,
+      boolean fullScan) {
     empty = false;
     selected = fixedAccess == null ? access : fixedAccess;
     StatusCode status = session.resolveDescriptor(name, pin, null);
@@ -28,14 +29,15 @@ final class SqlUniversalDescriptorScanAdmission {
       empty = true;
     }
     if (!fullScan && status.isOk() && fixedAccess == null && selected.active()) {
-      status = bind(access, rows);
+      status = bind(access, rows, ancestors);
     }
     return status;
   }
 
   private StatusCode bind(
-      SqlUniversalDescriptorIndexAccess access, SqlUniversalJoinRows rows) {
-    StatusCode status = access.bind(rows);
+      SqlUniversalDescriptorIndexAccess access, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors) {
+    StatusCode status = access.bind(rows, ancestors);
     if (status == StatusCode.CONFLICT) {
       empty = true;
       return StatusCode.OK;

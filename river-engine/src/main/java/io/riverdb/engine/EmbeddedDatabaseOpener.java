@@ -9,8 +9,8 @@ import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.engine.control.DatabaseControlResult;
 import io.riverdb.engine.control.DatabaseControlStore;
 import io.riverdb.engine.runtime.DatabaseResourceGovernor;
-import io.riverdb.engine.runtime.DatabaseResourceEnvelope;
 import io.riverdb.engine.runtime.DatabaseResourcePlan;
+import io.riverdb.engine.runtime.DatabaseProviderLease;
 import io.riverdb.engine.runtime.RuntimeResourceRoot;
 import io.riverdb.engine.table.IndexedTable;
 import io.riverdb.engine.table.IndexedTableOpenResult;
@@ -20,13 +20,13 @@ import io.riverdb.format.control.ControlFile;
 import io.riverdb.platform.file.nio.NioDirectoryOpenResult;
 import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
+import io.riverdb.tx.LockDeadlockDiagnosticsConfig;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.file.Path;
 
 /** Owns resources acquired while creating or reopening an embedded database. */
 final class EmbeddedDatabaseOpener {
-  private static final int MAXIMUM_ACTIVE_TRANSACTIONS = 1024;
   private static final int MAXIMUM_FOLLOWERS = 6;
   private static final NioDurableDirectory[] NO_FOLLOWER_DIRECTORIES =
       new NioDurableDirectory[0];
@@ -42,6 +42,8 @@ final class EmbeddedDatabaseOpener {
   private final int requiredDurableNodes;
   private final boolean replicated;
   private final DatabaseResourceGovernor resourceGovernor;
+  private final DatabaseProviderLease providerLease;
+  private final LockDeadlockDiagnosticsConfig lockDiagnostics;
   private final DatabaseControlResult databaseControl = new DatabaseControlResult();
   private final CheckpointControlStore checkpointControl = new CheckpointControlStore();
   private final CheckpointState checkpointState = new CheckpointState();
@@ -63,7 +65,9 @@ final class EmbeddedDatabaseOpener {
       boolean requestedCreate,
       Path[] requestedFollowerPaths,
       int requestedDurableNodes,
-      DatabaseResourceGovernor governor) {
+      DatabaseResourceGovernor governor,
+      DatabaseProviderLease databaseProviders,
+      LockDeadlockDiagnosticsConfig admittedLockDiagnostics) {
     directoryPath = requestedDirectory;
     database = requestedDatabase;
     generation = requestedGeneration;
@@ -74,40 +78,8 @@ final class EmbeddedDatabaseOpener {
     requiredDurableNodes = requestedDurableNodes;
     replicated = requestedFollowerPaths != null;
     resourceGovernor = governor;
-  }
-
-  static StatusCode open(
-      Path directoryPath,
-      DatabaseIncarnation database,
-      WalGeneration generation,
-      int maximumActiveTransactions,
-      long lockWaitTimeoutNanos,
-      boolean create,
-      Path[] followerDirectoryPaths,
-      int requiredDurableNodes,
-      EmbeddedDatabaseOpenResult result) {
-    boolean replicated = followerDirectoryPaths != null;
-    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    result.reset();
-    if (!validRequest(
-        directoryPath,
-        database,
-        generation,
-        maximumActiveTransactions,
-        lockWaitTimeoutNanos,
-        followerDirectoryPaths,
-        requiredDurableNodes,
-        replicated)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    DatabaseResourceEnvelope.Result resources = new DatabaseResourceEnvelope.Result();
-    StatusCode status = DatabaseResourceEnvelope.create(
-        Runtime.getRuntime().maxMemory(), maximumActiveTransactions, 0, resources);
-    if (!status.isOk()) return status;
-    return open(
-        resources.root(), resources.plan(), directoryPath, database, generation,
-        maximumActiveTransactions, lockWaitTimeoutNanos, create,
-        followerDirectoryPaths, requiredDurableNodes, result);
+    providerLease = databaseProviders;
+    lockDiagnostics = admittedLockDiagnostics;
   }
 
   static StatusCode open(
@@ -121,22 +93,34 @@ final class EmbeddedDatabaseOpener {
       boolean create,
       Path[] followerDirectoryPaths,
       int requiredDurableNodes,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       EmbeddedDatabaseOpenResult result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     boolean replicated = followerDirectoryPaths != null;
-    if (resourceRoot == null || resourcePlan == null
+    if (resourceRoot == null || resourcePlan == null || lockDiagnostics == null
         || resourcePlan.maximumOwners() < maximumActiveTransactions
         || !validRequest(
         directoryPath, database, generation, maximumActiveTransactions,
         lockWaitTimeoutNanos, followerDirectoryPaths, requiredDurableNodes, replicated)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    RuntimeResourceRoot.DatabaseResult admitted = new RuntimeResourceRoot.DatabaseResult();
-    StatusCode status = resourceRoot.admit(resourcePlan, admitted);
+    LockDeadlockDiagnosticsConfig.Result diagnosticResult;
+    try {
+      diagnosticResult = new LockDeadlockDiagnosticsConfig.Result();
+    } catch (OutOfMemoryError failure) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    StatusCode status = lockDiagnostics.admit(diagnosticResult);
     if (!status.isOk()) return status;
-    status = admitted.governor().retainDatabaseAccountedBytes(
-        resourcePlan.lockProviderBytes());
+    LockDeadlockDiagnosticsConfig admittedDiagnostics = diagnosticResult.config() == null
+        ? LockDeadlockDiagnosticsConfig.disabled() : diagnosticResult.config();
+    RuntimeResourceRoot.DatabaseResult admitted = new RuntimeResourceRoot.DatabaseResult();
+    status = resourceRoot.admit(resourcePlan, admitted);
+    if (!status.isOk()) return status;
+    DatabaseProviderLease providerLease = new DatabaseProviderLease();
+    status = admitted.governor().claimDatabaseProviders(
+        admittedDiagnostics.retainedPayloadBytes(), providerLease);
     if (!status.isOk()) {
       admitted.governor().abandonAfterOpenFailure();
       return status;
@@ -144,7 +128,7 @@ final class EmbeddedDatabaseOpener {
     return constructOpener(
         directoryPath, database, generation, maximumActiveTransactions,
         lockWaitTimeoutNanos, create, followerDirectoryPaths, requiredDurableNodes,
-        admitted.governor(), result);
+        admitted.governor(), providerLease, admittedDiagnostics, result);
   }
 
   private static StatusCode constructOpener(
@@ -157,16 +141,19 @@ final class EmbeddedDatabaseOpener {
       Path[] followerDirectoryPaths,
       int requiredDurableNodes,
       DatabaseResourceGovernor governor,
+      DatabaseProviderLease providerLease,
+      LockDeadlockDiagnosticsConfig lockDiagnostics,
       EmbeddedDatabaseOpenResult result) {
     EmbeddedDatabaseOpener opener = null;
     try {
       opener = new EmbeddedDatabaseOpener(
           directoryPath, database, generation, maximumActiveTransactions,
-          lockWaitTimeoutNanos, create, followerDirectoryPaths, requiredDurableNodes, governor);
+          lockWaitTimeoutNanos, create, followerDirectoryPaths, requiredDurableNodes,
+          governor, providerLease, lockDiagnostics);
       return opener.open(result);
     } catch (OutOfMemoryError failure) {
       if (opener != null) opener.closeAcquiredResources();
-      if (governor != null) governor.close();
+      if (governor != null) governor.abandonAfterOpenFailure();
       return StatusCode.RESOURCE_EXHAUSTED;
     }
   }
@@ -185,8 +172,7 @@ final class EmbeddedDatabaseOpener {
         || !database.isValid()
         || generation == null
         || !generation.isValid()
-        || maximumActiveTransactions <= 0
-        || maximumActiveTransactions > MAXIMUM_ACTIVE_TRANSACTIONS) {
+        || maximumActiveTransactions <= 0) {
       return false;
     }
     if (lockWaitTimeoutNanos <= 0) return false;
@@ -213,6 +199,11 @@ final class EmbeddedDatabaseOpener {
     if (status.isOk()) {
       status = openStore();
     }
+    if (status.isOk()
+        && storeResult.store().activeStagedPageCapacity()
+            != resourceGovernor.plan().stagedPageCapacity()) {
+      status = StatusCode.INVARIANT_BROKEN;
+    }
     if (status.isOk()) {
       status = enableFollowers();
     }
@@ -224,7 +215,7 @@ final class EmbeddedDatabaseOpener {
     }
     if (!status.isOk()) {
       closeAcquiredResources();
-      if (resourceGovernor != null) resourceGovernor.close();
+      if (resourceGovernor != null) resourceGovernor.abandonAfterOpenFailure();
       return status;
     }
     status = EmbeddedDatabaseConstruction.construct(
@@ -236,10 +227,11 @@ final class EmbeddedDatabaseOpener {
         tableResult.table(),
         maximumActiveTransactions,
         lockWaitTimeoutNanos,
+        lockDiagnostics,
         checkpointControl,
         checkpointState,
         checkpointAvailable ? checkpointState.checkpointId() : 0,
-        resourceGovernor,
+        providerLease,
         result);
     return status;
   }
@@ -402,13 +394,19 @@ final class EmbeddedDatabaseOpener {
 
   private StatusCode openStore() {
     if (create) {
-      return IndexedTableStore.create(directory, wal, database, generation, storeResult);
+      return IndexedTableStore.create(
+          directory, wal, database, generation, providerLease, storeResult);
     }
     if (checkpointAvailable) {
       return IndexedTableStore.openCheckpoint(
-          directory, wal, database, checkpointState, storeResult);
+          directory, wal, database, checkpointState, providerLease, storeResult);
     }
-    return IndexedTableStore.openExisting(directory, wal, database, generation, storeResult);
+    return IndexedTableStore.openExisting(
+        directory, wal, database, generation, providerLease, storeResult);
+  }
+
+  private static long add(long left, long right) {
+    return left < 0 || right < 0 || left > Long.MAX_VALUE - right ? -1 : left + right;
   }
 
   private StatusCode openTable() {

@@ -54,4 +54,5 @@ final class LockWaitCounters {
   private static long add(long value, long delta) {
     return delta > Long.MAX_VALUE - value ? Long.MAX_VALUE : value + delta;
   }
+
 }

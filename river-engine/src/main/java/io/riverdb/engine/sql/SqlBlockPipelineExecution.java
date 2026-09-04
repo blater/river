@@ -63,7 +63,8 @@ final class SqlBlockPipelineExecution {
       visibleColumns = visible;
       rows = 0;
     } else {
-      close();
+      StatusCode cleanup = close();
+      if (!cleanup.isOk()) status = cleanup;
     }
     return status;
   }

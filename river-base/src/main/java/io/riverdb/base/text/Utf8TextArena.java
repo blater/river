@@ -185,6 +185,19 @@ public final class Utf8TextArena {
     return StatusCode.OK;
   }
 
+  /** Copies raw UTF-8 bytes into an absolute caller-owned buffer range. */
+  public StatusCode copyBytes(
+      int offset, int length, ByteBuffer destination, int destinationOffset) {
+    if (!validRange(offset, length, used) || destination == null || destination.isReadOnly()
+        || destinationOffset < 0 || destinationOffset > destination.limit() - length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < length; index++) {
+      destination.put(destinationOffset + index, bytes[offset + index]);
+    }
+    return StatusCode.OK;
+  }
+
   /**
    * Decodes into caller-owned UTF-16 storage without allocating.
    *
@@ -195,6 +208,12 @@ public final class Utf8TextArena {
       return -1;
     }
     return Utf8Text.decode(byteView, offset, length, destination, destinationOffset);
+  }
+
+  /** Returns the decoded UTF-16 code-unit count without materializing the value. */
+  public int decodedLength(int offset, int length) {
+    return validRange(offset, length, used)
+        ? Utf8Text.decodedLength(byteView, offset, length) : -1;
   }
 
   /** Clears logical use while retaining the high-water byte array. */

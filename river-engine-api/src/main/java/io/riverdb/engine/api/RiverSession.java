@@ -7,6 +7,10 @@ import io.riverdb.base.error.StatusCode;
  * Closing aborts an explicit transaction that the session still owns.
  */
 public interface RiverSession {
+  /** Configures opaque attempt, operation, and phase tags without a protocol exchange. */
+  StatusCode configureTransactionDiagnostics(
+      long diagnosticTag, long diagnosticStepTag, long metricsEpoch);
+
   StatusCode prepare(String sql, PreparedOpenResult result);
 
   StatusCode executePrepared(

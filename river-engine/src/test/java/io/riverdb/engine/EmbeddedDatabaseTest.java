@@ -1,5 +1,7 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databasePlan;
+import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.concurrent.FatalStateFence;
@@ -32,7 +34,7 @@ final class EmbeddedDatabaseTest {
   @Test
   void createsTransactsClosesAndReopens(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
@@ -49,7 +51,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -63,20 +65,45 @@ final class EmbeddedDatabaseTest {
   }
 
   @Test
+  void capturesOneQuiescentTransactionWindowAndReconcilesWal(@TempDir Path root) {
+    EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+    EmbeddedDatabase database = opened.database();
+    EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(32, sessionResult));
+    IndexedTransactionSession session = sessionResult.session();
+    TransactionOutcome outcome = new TransactionOutcome();
+
+    assertEquals(StatusCode.OK, database.beginPerformanceCapture());
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.RETRY, database.endPerformanceCapture(new StringBuilder()));
+    assertEquals(StatusCode.OK, session.insert(0, 57, row(570)));
+    assertEquals(StatusCode.OK, session.commit(outcome));
+    StringBuilder metrics = new StringBuilder();
+    assertEquals(StatusCode.OK, database.endPerformanceCapture(metrics));
+    String captured = metrics.toString();
+    assertEquals(true, captured.contains("server_performance_capture_valid=true\n"));
+    assertEquals(true, captured.contains("server_capture_commit_submissions=1\n"));
+    assertEquals(true, captured.contains("server_capture_wal_force_count=1\n"));
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void strictCreateAndOpenDoNotInventOrReplaceDatabaseFiles(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(
         StatusCode.CONFLICT,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     EmbeddedDatabase database = opened.database();
     assertEquals(StatusCode.OK, database.close());
     assertEquals(
         StatusCode.CONFLICT,
-        EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     assertEquals(
         StatusCode.FENCED,
         EmbeddedDatabase.openExisting(
+            runtimeRoot(), databasePlan(2),
             root,
             DatabaseIncarnation.of(719, 727),
             GENERATION,
@@ -85,6 +112,7 @@ final class EmbeddedDatabaseTest {
     assertEquals(
         StatusCode.FENCED,
         EmbeddedDatabase.openExisting(
+            runtimeRoot(), databasePlan(2),
             root,
             DATABASE,
             WalGeneration.of(2),
@@ -92,14 +120,14 @@ final class EmbeddedDatabaseTest {
             opened));
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     assertEquals(StatusCode.OK, opened.database().close());
   }
 
   @Test
   void refusesDatabaseWithCorruptCompletionControl(@TempDir Path root) throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     assertEquals(StatusCode.OK, opened.database().close());
     Path controlPath = root.resolve(DatabaseControlStore.CONTROL_FILE_NAME);
     byte[] control = Files.readAllBytes(controlPath);
@@ -107,13 +135,13 @@ final class EmbeddedDatabaseTest {
     Files.write(controlPath, control);
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
   }
 
   @Test
   void checkpointsStablePagesRotatesWalAndReplaysNewSuffix(@TempDir Path root) throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
@@ -148,11 +176,11 @@ final class EmbeddedDatabaseTest {
     assertEquals(StatusCode.OK, database.close());
     assertEquals(
         StatusCode.CONFLICT,
-        EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.create(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -168,7 +196,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -194,7 +222,7 @@ final class EmbeddedDatabaseTest {
   @Test
   void rejectsTruncatedCheckpointAuthority(@TempDir Path root) throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     EmbeddedDatabase database = opened.database();
     CheckpointResult checkpoint = new CheckpointResult();
     assertEquals(StatusCode.OK, database.checkpoint(checkpoint));
@@ -204,13 +232,13 @@ final class EmbeddedDatabaseTest {
     Files.write(root.resolve(CheckpointControlStore.FILE_NAME), new byte[] {1});
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
   }
 
   @Test
   void rejectsMissingCheckpointBase(@TempDir Path root) throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     EmbeddedDatabase database = opened.database();
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
     assertEquals(StatusCode.OK, database.close());
@@ -218,14 +246,14 @@ final class EmbeddedDatabaseTest {
     Files.delete(root.resolve("river.indexed.pages.checkpoint.2"));
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
   }
 
   @Test
   void repairsTornCheckpointPageFromForcedPreRotationBase(@TempDir Path root)
       throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
@@ -244,7 +272,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -260,7 +288,7 @@ final class EmbeddedDatabaseTest {
     Files.write(root.resolve("river.indexed.pages"), mainBytes);
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     assertEquals(StatusCode.OK, opened.database().close());
   }
 
@@ -268,7 +296,7 @@ final class EmbeddedDatabaseTest {
   void refusesUnsafeCheckpointRepairFromPostCheckpointPage(@TempDir Path root)
       throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
@@ -289,13 +317,13 @@ final class EmbeddedDatabaseTest {
     Files.write(checkpointBase, checkpointBytes);
     assertEquals(
         StatusCode.CORRUPTION,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
   }
 
   @Test
   void checkpointsVacuumedRowsAcrossHeapPages(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 6, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(256, sessionResult));
@@ -324,7 +352,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(256, sessionResult));
     session = sessionResult.session();
@@ -343,7 +371,7 @@ final class EmbeddedDatabaseTest {
   @Test
   void checkpointsAndReopensBeyondLegacyPageAndRowLimits(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
@@ -371,7 +399,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -390,7 +418,7 @@ final class EmbeddedDatabaseTest {
   @Test
   void checkpointPreservesVacuumBeyondFormerPublicationBound(@TempDir Path root) {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 4, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(4096, sessionResult));
@@ -422,7 +450,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(4), root, DATABASE, GENERATION, 4, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(4096, sessionResult));
     session = sessionResult.session();
@@ -441,7 +469,7 @@ final class EmbeddedDatabaseTest {
   @Test
   void ignoresUnreferencedNextGenerationAndCompletesRetry(@TempDir Path root) throws Exception {
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedDatabase.create(root, DATABASE, GENERATION, 2, opened));
+    assertEquals(StatusCode.OK, EmbeddedDatabase.create(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     EmbeddedDatabase database = opened.database();
     EmbeddedSessionOpenResult sessionResult = new EmbeddedSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
@@ -468,7 +496,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -482,7 +510,7 @@ final class EmbeddedDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 2, opened));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(2), root, DATABASE, GENERATION, 2, opened));
     assertEquals(StatusCode.OK, opened.database().close());
   }
 

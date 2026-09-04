@@ -10,6 +10,7 @@ import io.riverdb.sql.SqlJoinChain;
 /** Retained role sources and rows for descriptor/mixed universal joins. */
 class SqlUniversalJoinRows {
   private final RelationalSession session;
+  private final SqlNestedRowProvider ancestors;
   private final StatusDetail detail = new StatusDetail(128);
   private SqlUniversalJoinRole[] roles = new SqlUniversalJoinRole[0];
   private boolean[] nulls = new boolean[0];
@@ -21,7 +22,13 @@ class SqlUniversalJoinRows {
   private boolean matched;
 
   SqlUniversalJoinRows(RelationalSession relationalSession) {
+    this(relationalSession, null);
+  }
+
+  SqlUniversalJoinRows(
+      RelationalSession relationalSession, SqlNestedRowProvider ancestorRows) {
     session = relationalSession;
+    ancestors = ancestorRows;
   }
 
   StatusCode resolve(SqlCommand command, SqlBoundJoinContext context) {
@@ -107,7 +114,7 @@ class SqlUniversalJoinRows {
   StatusCode open(int role) {
     clearCandidate(role);
     nulls[role] = false;
-    return roles[role].open(this);
+    return roles[role].open(this, ancestors);
   }
 
   StatusCode openFullScan(int role) {
@@ -135,7 +142,7 @@ class SqlUniversalJoinRows {
     return first;
   }
 
-  /** Borrows a hash-owned decoded row until the next candidate or stage reset. */
+  /** Borrows an operator-owned decoded row until the next candidate or stage reset. */
   void borrowCandidate(
       int role, SqlBlockRow row, long internalKey, long publicKey) {
     candidateRole = role;
@@ -175,7 +182,19 @@ class SqlUniversalJoinRows {
   boolean indexed(int role) { return roles[role].indexed(); }
   boolean exact(int role) { return roles[role].exact(); }
   boolean unique(int role) { return roles[role].unique(); }
+  int exactUniqueOuterColumns(
+      int role, int sourceRole, int projectedInnerColumn, int[] target) {
+    return roles[role].exactUniqueOuterColumns(
+        sourceRole, table(sourceRole), projectedInnerColumn, target);
+  }
+  boolean serializable() { return session.isSerializableTransaction(); }
   int accessColumn(int role) { return roles[role].accessColumn(); }
+  boolean hasResources() {
+    for (int role = 0; role < roleCount; role++) {
+      if (roles[role].hasResources()) return true;
+    }
+    return false;
+  }
 
   StatusCode reset(SqlBoundJoinContext context) {
     StatusCode first = StatusCode.OK;

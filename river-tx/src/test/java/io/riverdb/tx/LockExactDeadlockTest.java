@@ -113,6 +113,29 @@ final class LockExactDeadlockTest {
   }
 
   @Test
+  void ownerBypassesWaiterThatCannotAdvanceUntilOwnerReleases() {
+    Fixture fixture = new Fixture();
+    LockToken owner = acquireTuple(fixture, 1, 1, 101, 1, LockMode.EXCLUSIVE);
+    Wait writer = enqueueTuple(
+        fixture, 2, 2, 1, 101, 1, LockMode.EXCLUSIVE, StatusCode.RETRY);
+
+    Wait ownerRange = enqueueTupleRange(
+        fixture, 1, 1, 2, 101, 1, 1, LockMode.SHARED, StatusCode.OK);
+
+    assertEquals(LockWaitState.GRANTED, ownerRange.handle.state());
+    assertEquals(LockWaitState.QUEUED, writer.handle.state());
+    assertTrue(!fixture.table.lifecycle.deadlocked(1, 1));
+    assertTrue(!fixture.table.lifecycle.deadlocked(2, 1));
+    assertEquals(0, fixture.table.deadlockVictimSelections());
+    LockToken range = new LockToken();
+    assertEquals(StatusCode.OK,
+        fixture.table.consume(ownerRange.lane, ownerRange.handle, range));
+    assertEquals(StatusCode.OK, fixture.table.release(range));
+    assertEquals(StatusCode.OK, fixture.table.release(owner));
+    assertEquals(LockWaitState.GRANTED, writer.handle.state());
+  }
+
+  @Test
   void compatibleImmediatePredecessorRetainsTheFifoDependencyChain() {
     Fixture fixture = new Fixture();
     acquire(fixture, 1, 1, 10, LockMode.SHARED);
@@ -255,9 +278,27 @@ final class LockExactDeadlockTest {
     return wait;
   }
 
+  private static Wait enqueueTupleRange(
+      Fixture fixture, long transaction, long startOrder, long lane,
+      long namespace, int lower, int upper, LockMode mode, StatusCode expected) {
+    Wait wait = new Wait();
+    assertEquals(expected, fixture.table.enqueue(
+        transaction, 1, startOrder, lane, 1,
+        tupleRange(namespace, lower, upper, mode), wait.lane, wait.handle));
+    return wait;
+  }
+
   private static LockRequest tuple(long namespace, int value, LockMode mode) {
     ByteBuffer bytes = ByteBuffer.wrap(new byte[] {(byte) value});
     return new LockRequest().setTupleKey(namespace, bytes, 0, 1, mode, 0);
+  }
+
+  private static LockRequest tupleRange(
+      long namespace, int lower, int upper, LockMode mode) {
+    ByteBuffer lowerBytes = ByteBuffer.wrap(new byte[] {(byte) lower});
+    ByteBuffer upperBytes = ByteBuffer.wrap(new byte[] {(byte) upper});
+    return new LockRequest().setTupleRange(
+        namespace, lowerBytes, 0, 1, true, upperBytes, 0, 1, true, mode, 0);
   }
 
   private static final class Wait {

@@ -12,8 +12,9 @@ final class IndexedRelationalCommitCoordinator {
 
   IndexedRelationalCommitCoordinator(
       LocalWal localWal, IndexedTableKernel kernel, IndexedPageSet pages,
-      IndexedLogicalRowIdRegistry logicalRowIds) {
-    wal = new IndexedRelationalWalCommitter(localWal);
+      IndexedLogicalRowIdRegistry logicalRowIds,
+      IndexedGroupCommitMetrics commitMetrics) {
+    wal = new IndexedRelationalWalCommitter(localWal, commitMetrics);
     applier = new IndexedRelationalWalApplier(kernel, pages, logicalRowIds);
   }
 
@@ -38,7 +39,12 @@ final class IndexedRelationalCommitCoordinator {
       StatusCode cancel = wal.cancelPrepared();
       return cancel.isOk() ? status : cancel;
     }
+    long publicationStarted = System.nanoTime();
     status = applier.publish(wal.recordStart(), wal.recordEnd(), commitSequence, false);
+    metrics().recordStage(
+        IndexedCommitPath.DIRECT_COMMIT,
+        IndexedCommitStage.DIRECT_PUBLICATION,
+        System.nanoTime() - publicationStarted);
     StatusCode release = wal.releaseForced();
     if (!status.isOk() || !release.isOk()) failureFences = true;
     return status.isOk() ? release : status;
@@ -46,6 +52,8 @@ final class IndexedRelationalCommitCoordinator {
 
   boolean failureFences() { return failureFences; }
   long walCopiedPayloadBytes() { return wal.copiedPayloadBytes(); }
+
+  private IndexedGroupCommitMetrics metrics() { return wal.metrics(); }
 
   private StatusCode cancelPrepared(StatusCode failure) {
     applier.cancel();

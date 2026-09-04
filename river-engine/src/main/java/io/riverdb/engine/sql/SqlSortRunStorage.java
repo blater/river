@@ -7,7 +7,7 @@ import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
 /** Retained, exactly charged primitive storage for one configured sort run. */
-final class SqlSortRunStorage implements SqlNullWords {
+final class SqlSortRunStorage implements SqlNullWords, SqlRetainedReclaimer {
   private final SqlRetainedArrayAllocator allocator;
   private final SqlSessionShapeBudget budget;
   private final SqlSortNullWords nulls;
@@ -21,6 +21,8 @@ final class SqlSortRunStorage implements SqlNullWords {
   private int projections;
   private boolean textRows;
   private boolean generatedTextRows;
+  private boolean registered;
+  private boolean active;
 
   SqlSortRunStorage(SqlRetainedArrayAllocator retainedAllocator, SqlSessionShapeBudget shapeBudget) {
     allocator = retainedAllocator;
@@ -33,22 +35,43 @@ final class SqlSortRunStorage implements SqlNullWords {
   StatusCode prepare(
       int projectionCount, boolean containsText, boolean containsGeneratedText,
       long runPayloadBytes) {
+    if (!registered && budget != null) {
+      StatusCode registration = budget.registerReclaimer(this);
+      if (!registration.isOk()) return registration;
+      registered = true;
+    }
+    active = true;
     runRows = SqlSortRunCapacity.rows(
         projectionCount, containsText, containsGeneratedText, runPayloadBytes);
     projections = projectionCount;
     textRows = containsText;
     generatedTextRows = containsGeneratedText;
-    nulls.maximumRows(runRows);
     StatusCode status = reserveCharge();
-    if (status.isOk()) status = arrays.reserve(runRows, projections, nulls);
+    if (status == StatusCode.RESOURCE_EXHAUSTED && budget != null) {
+      long reclaimed = retainedBytes;
+      StatusCode release = reclaimed > 0 ? budget.release(reclaimed) : StatusCode.OK;
+      if (release.isOk()) {
+        releaseAllStorage();
+        status = reserveCharge();
+      } else {
+        status = release;
+      }
+    }
+    if (status.isOk()) status = nulls.reserve(
+        projections, SqlShapeLimits.MAX_RESULT_COLUMNS, runRows);
+    if (status.isOk()) status = arrays.reserve(runRows, projections);
     if (status.isOk()) status = ensureRows();
     if (status.isOk()) status = generatedText.reserve(
         runRows, projections, generatedTextRows);
+    if (!status.isOk()) {
+      adjustCharge(actualBytes());
+      active = false;
+    }
     return status;
   }
 
   StatusCode append(
-      int row, long keyHigh, long key, boolean keyNull, long primaryKey,
+      int row, long ordinal, long keyHigh, long key, boolean keyNull, long primaryKey,
       long[] highs, long[] values, SqlNullWords sourceNulls,
       HeapRowResult source, SqlProjectedRow projected) {
     if (highs == null || values == null || highs.length < projections
@@ -56,7 +79,8 @@ final class SqlSortRunStorage implements SqlNullWords {
         || sourceNulls.nullWordCount() != nulls.nullWordCount()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    arrays.append(row, projections, keyHigh, key, keyNull, primaryKey, highs, values);
+    arrays.append(
+        row, projections, ordinal, keyHigh, key, keyNull, primaryKey, highs, values);
     StatusCode status = textRows ? copyRow(row, source) : StatusCode.OK;
     if (status.isOk()) status = nulls.copyFrom(row, sourceNulls);
     if (status.isOk() && generatedTextRows) generatedText.copyFrom(row, projections, projected);
@@ -65,7 +89,8 @@ final class SqlSortRunStorage implements SqlNullWords {
 
   StatusCode write(SqlSortSpill spill, int count) {
     return spill.writeRun(
-        arrays.keyHighs(), arrays.keys(), arrays.keyNulls(), arrays.primaryKeys(),
+        arrays.keyHighs(), arrays.keys(), arrays.keyNulls(),
+        arrays.primaryKeys(), arrays.ordinals(),
         nulls, arrays.highs(), arrays.values(), arrays.rowSlots(), arrays.rowLengths(), rows,
         generatedText.lengths(), generatedText.text(), count);
   }
@@ -85,9 +110,18 @@ final class SqlSortRunStorage implements SqlNullWords {
   }
 
   void closeHighWater() {
-    arrays.shedOversizedProjections();
-    generatedText.shedOversized();
     adjustCharge(actualBytes());
+    active = false;
+  }
+
+  @Override
+  public long reclaimableRetainedBytes() {
+    return active ? 0 : retainedBytes;
+  }
+
+  @Override
+  public void releaseRetainedStorage() {
+    if (!active) releaseAllStorage();
   }
 
   int runRows() { return runRows; }
@@ -96,6 +130,30 @@ final class SqlSortRunStorage implements SqlNullWords {
   boolean generatedTextRows() { return generatedTextRows; }
   long retainedProjectionBytes() {
     return arrays.retainedProjectionBytes() + generatedText.retainedBytes();
+  }
+  long retainedBytes() { return retainedBytes; }
+
+  static long cleanRequiredBytes(
+      int projectionCount, boolean containsText, boolean containsGeneratedText,
+      long runPayloadBytes) {
+    int rows = SqlSortRunCapacity.rows(
+        projectionCount, containsText, containsGeneratedText, runPayloadBytes);
+    long required = SqlSortArrays.cleanRequiredBytes(rows, projectionCount);
+    required = SqlSortRunCapacity.add(required, SqlSortNullWords.cleanRequiredBytes(
+        projectionCount, SqlShapeLimits.MAX_RESULT_COLUMNS, rows));
+    required = SqlSortRunCapacity.add(required, SqlSortGeneratedText.cleanRequiredBytes(
+        rows, projectionCount, containsGeneratedText));
+    long rowBytes = containsText ? (long) rows * TableSchema.MAXIMUM_ROW_BYTES : 0;
+    return SqlSortRunCapacity.add(required, rowBytes);
+  }
+
+  long requiredBytes(
+      int projectionCount, boolean containsText, boolean containsGeneratedText,
+      long runPayloadBytes) {
+    int rows = SqlSortRunCapacity.rows(
+        projectionCount, containsText, containsGeneratedText, runPayloadBytes);
+    return requiredBytes(
+        rows, projectionCount, containsText, containsGeneratedText);
   }
   long primaryKey(int row) { return arrays.primaryKey(row); }
   void selectNulls(int row) { nulls.select(row); }
@@ -145,19 +203,29 @@ final class SqlSortRunStorage implements SqlNullWords {
   }
 
   private StatusCode reserveCharge() {
-    long required = arrays.requiredBytes(runRows, projections);
-    required = SqlSortRunCapacity.add(
-        required, nulls.requiredBytes(projections, SqlShapeLimits.MAX_RESULT_COLUMNS));
-    required = SqlSortRunCapacity.add(
-        required, generatedText.requiredBytes(runRows, projections, generatedTextRows));
-    long rowBytes = textRows ? (long) runRows * TableSchema.MAXIMUM_ROW_BYTES : 0;
-    required = SqlSortRunCapacity.add(
-        required, Math.max(rowBytes, rows == null ? 0 : rows.capacity()));
+    long required = requiredBytes(
+        runRows, projections, textRows, generatedTextRows);
     if (required == Long.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     if (required <= retainedBytes || budget == null) return StatusCode.OK;
     StatusCode status = budget.reserve(required - retainedBytes);
     if (status.isOk()) retainedBytes = required;
     return status;
+  }
+
+  private long requiredBytes(
+      int requiredRows, int projectionCount,
+      boolean containsText, boolean containsGeneratedText) {
+    long required = arrays.requiredBytes(requiredRows, projectionCount);
+    required = SqlSortRunCapacity.add(
+        required, nulls.requiredBytes(
+            projectionCount, SqlShapeLimits.MAX_RESULT_COLUMNS, requiredRows));
+    required = SqlSortRunCapacity.add(
+        required, generatedText.requiredBytes(
+            requiredRows, projectionCount, containsGeneratedText));
+    long rowBytes = containsText
+        ? (long) requiredRows * TableSchema.MAXIMUM_ROW_BYTES : 0;
+    return SqlSortRunCapacity.add(
+        required, Math.max(rowBytes, rows == null ? 0 : rows.capacity()));
   }
 
   private long actualBytes() {
@@ -169,5 +237,13 @@ final class SqlSortRunStorage implements SqlNullWords {
   private void adjustCharge(long retained) {
     if (budget != null && retained < retainedBytes) budget.rollback(retainedBytes - retained);
     retainedBytes = retained;
+  }
+
+  private void releaseAllStorage() {
+    arrays.release();
+    nulls.release();
+    generatedText.release();
+    rows = null;
+    retainedBytes = 0;
   }
 }

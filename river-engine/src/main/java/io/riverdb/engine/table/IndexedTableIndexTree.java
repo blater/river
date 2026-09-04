@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.BTreeSplitResult;
@@ -8,10 +9,10 @@ import java.nio.ByteBuffer;
 
 /** Owns indexed-table B-tree traversal and split propagation state. */
 final class IndexedTableIndexTree {
-  private static final int MAXIMUM_TREE_HEIGHT = 8;
   private final IndexedPageSet pages;
   private final BTreeSplitResult splitResult = new BTreeSplitResult();
-  private final int[] splitPathPageIds = new int[MAXIMUM_TREE_HEIGHT];
+  private final int[] splitPathPageIds =
+      new int[BTreeStructuralLimits.MAXIMUM_INTERNAL_LEVELS];
   private final IndexedTreeLookup lookup;
   private final IndexedSnapshotTreeLookup snapshotLookup;
   private final IndexedStagedPageAllocation stagedAllocation =

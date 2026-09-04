@@ -1,23 +1,25 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.runtime.DatabasePageCachePlan;
 
 /** Owns immutable page generations between semantic application and visibility publication. */
 final class IndexedPreparedPageBatch {
+  private static final int[] DETACHED = new int[0];
   private static final int IDLE = 0;
   private static final int BUILDING = 1;
   private static final int INSTALLING = 2;
   private static final int INSTALLED = 3;
 
-  private final int[] pageIds;
-  private final int[] frameSlots;
-  private final int[] previousFrameSlots;
-  private final int[] members;
-  private final IndexedPageFrameMap latest;
+  private int[] pageIds;
+  private int[] frameSlots;
+  private int[] previousFrameSlots;
+  private int[] members;
+  private IndexedPageFrameMap latest;
   private int count;
   private int state = IDLE;
 
-  IndexedPreparedPageBatch(IndexedPageCacheConfig config) {
+  IndexedPreparedPageBatch(DatabasePageCachePlan config) {
     pageIds = new int[config.currentFrames()];
     frameSlots = new int[config.currentFrames()];
     previousFrameSlots = new int[config.currentFrames()];
@@ -49,8 +51,16 @@ final class IndexedPreparedPageBatch {
       IndexedPageFrame staging = cache.stagingFrame(pageId);
       if (staging == null) return StatusCode.INVARIANT_BROKEN;
       int slot = reserve(cache, pageId, oldestVisibleCommitSequence);
-      if (slot < 0) return cache.lastStatus();
-      freeze(cache, slot, pageId, staging);
+      if (slot < 0) {
+        clear(cache, false);
+        return cache.lastStatus();
+      }
+      StatusCode frozen = freeze(cache, slot, pageId, staging);
+      if (!frozen.isOk()) {
+        releaseFrame(cache, slot, false);
+        clear(cache, false);
+        return frozen;
+      }
       pageIds[count] = pageId;
       frameSlots[count] = slot;
       int previous = latest.find(pageId);
@@ -107,6 +117,19 @@ final class IndexedPreparedPageBatch {
   boolean contains(int pageId) { return state != IDLE && latest.find(pageId) >= 0; }
   int slot(int pageId) { return state == IDLE ? -1 : latest.find(pageId); }
   boolean active() { return state != IDLE; }
+
+  StatusCode detach() {
+    if (state != IDLE || count != 0) return StatusCode.CONFLICT;
+    abandon();
+    return StatusCode.OK;
+  }
+
+  void abandon() {
+    latest.detach();
+    pageIds = frameSlots = previousFrameSlots = members = DETACHED;
+    count = 0;
+    state = IDLE;
+  }
 
   private StatusCode validate(
       IndexedPageFrameCache cache, long[] sequences,
@@ -171,19 +194,21 @@ final class IndexedPreparedPageBatch {
     return slot;
   }
 
-  private static void freeze(
+  private static StatusCode freeze(
       IndexedPageFrameCache cache, int slot, int pageId, IndexedPageFrame staging) {
     IndexedPageFrame frame = cache.currentFrames[slot];
+    long pageGeneration = cache.nextPageGeneration();
+    if (pageGeneration == 0) return cache.lastStatus();
     frame.pageId = pageId;
     frame.clearGeneration();
     frame.publicationReserved = true;
-    frame.beginPageGeneration(cache.nextPageGeneration());
-    IndexedPageSet.copyPage(staging.page, frame.page);
-    frame.copyPageValidationFrom(staging);
+    frame.beginPageGeneration(pageGeneration);
+    frame.copyPageFrom(staging);
     frame.identity(staging.payloadKind, staging.ownerKeyId);
     frame.recordStart = 0;
     frame.recordEnd = 0;
     frame.dirty = false;
+    return StatusCode.OK;
   }
 
   private static boolean validFrame(IndexedPageFrameCache cache, int slot, int pageId) {
@@ -235,4 +260,5 @@ final class IndexedPreparedPageBatch {
     frame.recordEnd = 0;
     frame.clearGeneration();
   }
+
 }

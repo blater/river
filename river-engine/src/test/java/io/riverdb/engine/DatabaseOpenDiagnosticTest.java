@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,6 +25,55 @@ final class DatabaseOpenDiagnosticTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void publicOpenDisablesRetainedDeadlockDiagnosticsByDefault(@TempDir Path root) {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
+    StringBuilder diagnostics = new StringBuilder();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.appendDeadlockDiagnostics(opened.database(), diagnostics));
+    assertTrue(diagnostics.toString().contains(
+        "server_deadlock_diagnostics_enabled=false\n"));
+    assertTrue(diagnostics.toString().contains(
+        "server_deadlock_diagnostics_budget_bytes=0\n"));
+    assertEquals(StatusCode.OK, opened.database().close());
+  }
+
+  @Test
+  void publicOpenAdmitsDiagnosticShapeBeforeCreatingDatabaseFiles(@TempDir Path root)
+      throws IOException {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    EmbeddedLockDiagnosticsConfig insufficient =
+        EmbeddedLockDiagnosticsConfig.bounded(269, 1, 1, 1, 0, 2);
+    assertEquals(
+        StatusCode.RESOURCE_EXHAUSTED,
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, insufficient, opened));
+    assertNull(opened.database());
+    try (Stream<Path> files = Files.list(root)) {
+      assertEquals(0, files.count());
+    }
+
+    EmbeddedLockDiagnosticsConfig admitted =
+        EmbeddedLockDiagnosticsConfig.bounded(270, 1, 1, 1, 0, 2);
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, admitted, opened));
+    StringBuilder diagnostics = new StringBuilder();
+    assertEquals(
+        StatusCode.OK,
+        EmbeddedRiver.appendDeadlockDiagnostics(opened.database(), diagnostics));
+    assertTrue(diagnostics.toString().contains(
+        "server_deadlock_diagnostics_enabled=true\n"));
+    assertTrue(diagnostics.toString().contains(
+        "server_deadlock_diagnostics_budget_bytes=270\n"));
+    assertTrue(diagnostics.toString().contains(
+        "server_deadlock_diagnostics_retained_payload_bytes=270\n"));
+    assertEquals(StatusCode.OK, opened.database().close());
+  }
+
+  @Test
   void publicOpenCopiesConfigurationDetailAndPublishesNoHandle(@TempDir Path root)
       throws IOException {
     Files.writeString(
@@ -34,7 +84,7 @@ final class DatabaseOpenDiagnosticTest {
 
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     assertNull(opened.database());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, opened.detail().code());
     assertTrue(opened.detail().asString().contains("materialized.page"));
@@ -45,7 +95,7 @@ final class DatabaseOpenDiagnosticTest {
     Files.delete(root.resolve("river.properties"));
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     assertEquals(StatusCode.OK, opened.detail().code());
     assertEquals(0, opened.detail().length());
     assertEquals(StatusCode.OK, opened.database().close());
@@ -63,14 +113,14 @@ final class DatabaseOpenDiagnosticTest {
 
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     assertNull(opened.database());
     assertTrue(opened.detail().length() > 0);
 
     Files.delete(properties);
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     assertEquals(StatusCode.OK, opened.detail().code());
     assertEquals(0, opened.detail().length());
     assertEquals(StatusCode.OK, opened.database().close());
@@ -82,7 +132,7 @@ final class DatabaseOpenDiagnosticTest {
 
     assertEquals(
         StatusCode.INVALID_EXTERNAL_INPUT,
-        RelationalDatabase.create(null, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), null, DATABASE, GENERATION, 4, opened));
     assertNull(opened.database());
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, opened.detail().code());
   }
@@ -108,6 +158,7 @@ final class DatabaseOpenDiagnosticTest {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.createWithDurableWalQuorum(
+            databaseRequest(4),
             primary,
             new Path[] {follower},
             2,

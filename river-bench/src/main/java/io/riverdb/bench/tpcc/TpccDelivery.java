@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import io.riverdb.jdbc.RiverTransactionDiagnostics;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -17,10 +18,18 @@ final class TpccDelivery implements AutoCloseable {
   private final PreparedStatement total;
   private final PreparedStatement deliverLines;
   private final PreparedStatement updateCustomer;
+  private final RiverTransactionDiagnostics diagnostics;
+  private final int[] selectedOrders;
 
-  TpccDelivery(Connection owner, int districtCount) throws SQLException {
+  TpccDelivery(
+      Connection owner,
+      RiverTransactionDiagnostics transactionDiagnostics,
+      int districtCount) throws SQLException {
+    if (districtCount <= 0) throw new SQLException("district count must be positive", "22003");
     connection = owner;
+    diagnostics = transactionDiagnostics;
     districts = districtCount;
+    selectedOrders = new int[districtCount];
     oldest = owner.prepareStatement("SELECT no_o_id FROM new_order WHERE no_w_id=? AND no_d_id=? ORDER BY no_o_id LIMIT 1 FOR UPDATE");
     remove = owner.prepareStatement("DELETE FROM new_order WHERE no_w_id=? AND no_d_id=? AND no_o_id=?");
     orderCustomer = owner.prepareStatement("SELECT o_c_id FROM orders WHERE o_w_id=? AND o_d_id=? AND o_id=?");
@@ -33,7 +42,11 @@ final class TpccDelivery implements AutoCloseable {
   boolean execute(TpccInputs.Delivery input) throws SQLException {
     try {
       for (int district = 1; district <= districts; district++) {
-        deliverDistrict(input, district);
+        selectedOrders[district - 1] = selectOldest(input, district);
+      }
+      for (int district = 1; district <= districts; district++) {
+        int order = selectedOrders[district - 1];
+        if (order != 0) deliverSelected(input, district, order);
       }
       connection.commit();
       return true;
@@ -43,17 +56,22 @@ final class TpccDelivery implements AutoCloseable {
     }
   }
 
-  private void deliverDistrict(TpccInputs.Delivery input, int district) throws SQLException {
+  private int selectOldest(TpccInputs.Delivery input, int district) throws SQLException {
+    diagnostics.diagnosticStep(step(district, 1));
     TpccSql.bindDistrict(oldest, input.warehouse, district);
-    int order;
     try (ResultSet rows = oldest.executeQuery()) {
-      if (!rows.next()) return;
-      order = rows.getInt(1);
+      return rows.next() ? rows.getInt(1) : 0;
     }
+  }
+
+  private void deliverSelected(TpccInputs.Delivery input, int district, int order)
+      throws SQLException {
     TpccSql.bindOrder(remove, input.warehouse, district, order);
+    diagnostics.diagnosticStep(step(district, 2));
     TpccSql.changedOne(remove, "delivery.remove-new-order");
     TpccSql.bindOrder(orderCustomer, input.warehouse, district, order);
     int customer;
+    diagnostics.diagnosticStep(step(district, 3));
     try (ResultSet rows = orderCustomer.executeQuery()) {
       customer = TpccSql.requiredInt(rows, 1, "delivery order lookup");
     }
@@ -61,9 +79,11 @@ final class TpccDelivery implements AutoCloseable {
     setCarrier.setInt(2, input.warehouse);
     setCarrier.setInt(3, district);
     setCarrier.setInt(4, order);
+    diagnostics.diagnosticStep(step(district, 4));
     TpccSql.changedOne(setCarrier, "delivery.set-carrier");
     TpccSql.bindOrder(total, input.warehouse, district, order);
     BigDecimal amount;
+    diagnostics.diagnosticStep(step(district, 5));
     try (ResultSet rows = total.executeQuery()) {
       if (!rows.next() || (amount = rows.getBigDecimal(1)) == null) {
         throw new SQLException("delivery order has no lines");
@@ -73,13 +93,19 @@ final class TpccDelivery implements AutoCloseable {
     deliverLines.setInt(2, input.warehouse);
     deliverLines.setInt(3, district);
     deliverLines.setInt(4, order);
+    diagnostics.diagnosticStep(step(district, 6));
     int changed = deliverLines.executeUpdate();
     if (changed < 5 || changed > 15) throw new SQLException("delivery changed " + changed + " lines");
     updateCustomer.setBigDecimal(1, amount);
     updateCustomer.setInt(2, input.warehouse);
     updateCustomer.setInt(3, district);
     updateCustomer.setInt(4, customer);
+    diagnostics.diagnosticStep(step(district, 7));
     TpccSql.changedOne(updateCustomer, "delivery.update-customer");
+  }
+
+  private static long step(int district, int operation) {
+    return (long) district * 16 + operation;
   }
 
   @Override

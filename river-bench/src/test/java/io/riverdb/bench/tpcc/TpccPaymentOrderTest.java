@@ -10,6 +10,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
+import io.riverdb.jdbc.RiverTransactionDiagnostics;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -28,7 +29,7 @@ final class TpccPaymentOrderTest {
     input.amount = new BigDecimal("12.34");
     input.date = new Timestamp(1);
 
-    try (TpccPayment payment = new TpccPayment(jdbc.connection())) {
+    try (TpccPayment payment = new TpccPayment(jdbc.connection(), jdbc.diagnostics())) {
       payment.execute(input);
     }
 
@@ -49,6 +50,11 @@ final class TpccPaymentOrderTest {
         case "rollback", "close" -> null;
         default -> defaultValue(method);
       });
+    }
+
+    RiverTransactionDiagnostics diagnostics() {
+      return proxy(RiverTransactionDiagnostics.class,
+          (ignored, method, arguments) -> null);
     }
 
     private PreparedStatement statement(String sql) {

@@ -18,6 +18,7 @@ public final class DatabaseResourceGovernor {
   private int waitingCount;
   private long nextLeaseToken = 1;
   private long retainedDatabaseAccountedBytes;
+  private DatabaseProviderLease providerLease;
   private boolean closed;
 
   DatabaseResourceGovernor(
@@ -111,60 +112,116 @@ public final class DatabaseResourceGovernor {
 
   public synchronized StatusCode close() {
     if (closed) return StatusCode.CLOSED;
-    if (!live.empty() || waitingCount != 0) return StatusCode.CONFLICT;
+    if (!live.empty() || waitingCount != 0 || providerLease != null
+        || retainedDatabaseAccountedBytes != 0) {
+      return StatusCode.CONFLICT;
+    }
     StatusCode status = root.release(databaseToken, plan.maximumAccountedBytes());
     if (status.isOk()) closed = true;
     return status;
   }
 
-  /** Permanently reserves database-global provider storage within this admitted envelope. */
-  public synchronized StatusCode retainDatabaseAccountedBytes(long total) {
+  /** Claims the plan's physical providers plus an optional admitted diagnostic payload. */
+  public synchronized StatusCode claimDatabaseProviders(
+      long additionalProviderBytes, DatabaseProviderLease lease) {
     if (closed) return StatusCode.CLOSED;
-    if (total < retainedDatabaseAccountedBytes || !live.empty() || waitingCount != 0) {
-      return StatusCode.CONFLICT;
+    if (additionalProviderBytes < 0 || lease == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    if (total > maximumRetainedAccountedBytes()) return StatusCode.RESOURCE_EXHAUSTED;
-    retainedDatabaseAccountedBytes = total;
-    return StatusCode.OK;
-  }
-
-  /** Grows retained database-global storage before allocation; the high-water is monotonic. */
-  public synchronized StatusCode growRetainedDatabaseAccountedBytes(long additional) {
-    if (closed) return StatusCode.CLOSED;
-    if (additional <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    long maximumRetained = maximumRetainedAccountedBytes();
-    if (retainedDatabaseAccountedBytes > maximumRetained - additional) {
+    if (providerLease != null || retainedDatabaseAccountedBytes != 0
+        || !live.empty() || waitingCount != 0) return StatusCode.CONFLICT;
+    long mandatory = add(
+        add(plan.lockProviderBytes(), plan.indexedPageCache().maximumRetainedBytes()),
+        plan.versionWorkspace().maximumRetainedBytes());
+    long total = add(mandatory, additionalProviderBytes);
+    if (total < 0 || total > maximumRetainedAccountedBytes()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
-    long next = retainedDatabaseAccountedBytes + additional;
-    long capacity = plan.accountedCapacityBytes();
-    long nextLendable = capacity - next;
-    if (live.accountedBytes > nextLendable || !waitingFits(nextLendable)) {
-      return StatusCode.RETRY;
+    StatusCode status = lease.claim(this, databaseToken, total);
+    if (status.isOk()) {
+      providerLease = lease;
+      retainedDatabaseAccountedBytes = total;
     }
-    retainedDatabaseAccountedBytes = next;
-    return StatusCode.OK;
+    return status;
   }
 
-  public synchronized StatusCode releaseRetainedDatabaseAccountedBytes(long bytes) {
+  public synchronized StatusCode releaseDatabaseProviders(DatabaseProviderLease lease) {
     if (closed) return StatusCode.CLOSED;
+    if (lease == null || lease != providerLease
+        || !lease.matches(this, databaseToken)) return StatusCode.NOT_OWNER;
+    if (lease.storeClaimed() || !live.empty() || waitingCount != 0
+        || retainedDatabaseAccountedBytes != lease.retainedBytes()) {
+      return StatusCode.CONFLICT;
+    }
+    long bytes = lease.retainedBytes();
     if (bytes <= 0 || bytes > retainedDatabaseAccountedBytes) {
       return StatusCode.INVARIANT_BROKEN;
     }
     retainedDatabaseAccountedBytes -= bytes;
+    providerLease = null;
+    lease.complete();
     return StatusCode.OK;
+  }
+
+  /** Ensures one authenticated component's absolute retained high-water before allocation. */
+  public synchronized StatusCode ensureRetainedDatabaseAccountedBytes(
+      long targetBytes, DatabaseRetainedLease lease) {
+    if (closed) return StatusCode.CLOSED;
+    if (targetBytes <= 0 || lease == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    synchronized (lease) {
+      if (lease.active() && !lease.matches(this, databaseToken)) return StatusCode.NOT_OWNER;
+      long current = lease.active() ? lease.retainedBytes() : 0;
+      if (targetBytes < current) return StatusCode.CONFLICT;
+      if (targetBytes == current) return StatusCode.OK;
+      long additional = targetBytes - current;
+      long maximumRetained = maximumRetainedAccountedBytes();
+      if (retainedDatabaseAccountedBytes > maximumRetained - additional) {
+        return StatusCode.RESOURCE_EXHAUSTED;
+      }
+      long next = retainedDatabaseAccountedBytes + additional;
+      long capacity = plan.accountedCapacityBytes();
+      long nextLendable = capacity - next;
+      if (live.accountedBytes > nextLendable || !waitingFits(nextLendable)) {
+        return StatusCode.RETRY;
+      }
+      StatusCode status = lease.active()
+          ? lease.grow(targetBytes) : lease.claim(this, databaseToken, targetBytes);
+      if (!status.isOk()) return status;
+      retainedDatabaseAccountedBytes = next;
+      return StatusCode.OK;
+    }
+  }
+
+  public synchronized StatusCode releaseRetainedDatabaseAccountedBytes(
+      DatabaseRetainedLease lease) {
+    if (closed) return StatusCode.CLOSED;
+    if (lease == null) return StatusCode.NOT_OWNER;
+    synchronized (lease) {
+      if (!lease.matches(this, databaseToken)) return StatusCode.NOT_OWNER;
+      long bytes = lease.retainedBytes();
+      if (bytes <= 0 || bytes > retainedDatabaseAccountedBytes) {
+        return StatusCode.INVARIANT_BROKEN;
+      }
+      retainedDatabaseAccountedBytes -= bytes;
+      lease.complete();
+      return StatusCode.OK;
+    }
   }
 
   /** Releases an unpublished database admission after every owner has become unreachable. */
   public synchronized StatusCode abandonAfterOpenFailure() {
     if (closed) return StatusCode.CLOSED;
-    for (int offset = 0; offset < waitingCount; offset++) {
-      ResourceLease lease = waiting[(waitingHead + offset) % waiting.length];
-      if (lease != null) lease.complete();
-      waiting[(waitingHead + offset) % waiting.length] = null;
+    long providerBytes = providerLease == null ? 0 : providerLease.retainedBytes();
+    if (!live.empty() || waitingCount != 0
+        || retainedDatabaseAccountedBytes != providerBytes
+        || providerLease != null && providerLease.storeClaimed()) {
+      return StatusCode.CONFLICT;
     }
-    waitingHead = waitingCount = 0;
-    live.reset();
+    if (providerLease != null) {
+      providerLease.complete();
+      providerLease = null;
+    }
+    retainedDatabaseAccountedBytes = 0;
     StatusCode status = root.release(databaseToken, plan.maximumAccountedBytes());
     if (status.isOk()) closed = true;
     return status;
@@ -178,6 +235,7 @@ public final class DatabaseResourceGovernor {
   }
   public synchronized long liveWriteEntries() { return live.writeEntries; }
   public synchronized long liveStagedPages() { return live.stagedPages; }
+  public synchronized long liveVersionOperations() { return live.versionOperations; }
   public synchronized long liveWalBytes() { return live.walBytes; }
   public synchronized long availableAccountedBytes() {
     return lendableAccountedBytes() - live.accountedBytes;
@@ -187,6 +245,9 @@ public final class DatabaseResourceGovernor {
   }
   public synchronized long availableStagedPages() {
     return plan.stagedPageCapacity() - live.stagedPages;
+  }
+  public synchronized long availableVersionOperations() {
+    return plan.versionOperationCapacity() - live.versionOperations;
   }
   public synchronized long availableWalBytes() {
     return plan.walByteCapacity() - live.walBytes;
@@ -264,6 +325,11 @@ public final class DatabaseResourceGovernor {
 
   private long maximumRetainedAccountedBytes() {
     return plan.accountedCapacityBytes();
+  }
+
+  private static long add(long left, long right) {
+    return left < 0 || right < 0 || left > Long.MAX_VALUE - right
+        ? -1 : left + right;
   }
 
   private boolean waitingFits(long lendableBytes) {

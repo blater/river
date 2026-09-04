@@ -40,7 +40,6 @@ final class SqlShapeLimitsTest {
     assertEquals(
         SqlShapeLimits.MAX_INDEX_USER_KEY_BYTES + Long.BYTES,
         SqlShapeLimits.MAX_PHYSICAL_INDEX_KEY_BYTES);
-    assertEquals(8_192, SqlShapeLimits.MAX_STORED_ROW_BYTES);
     assertEquals(4 * 1_024 * 1_024, SqlShapeLimits.MAX_ENCODED_RESULT_ROW_BYTES);
     assertEquals(1_024 * 1_024, SqlShapeLimits.MAX_SQL_TEXT_BYTES);
     assertEquals(256 * 1_024, SqlShapeLimits.MAX_STORED_VIEW_SQL_BYTES);

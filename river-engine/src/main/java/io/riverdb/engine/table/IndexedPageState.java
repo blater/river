@@ -1,19 +1,19 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.runtime.DatabasePageCachePlan;
 
 /** Bounded page publication metadata shared by the frame cache and facade. */
 final class IndexedPageState {
+  private static final int[] DETACHED_CHANGED_PAGES = new int[0];
   private final IndexedPageStateValues values;
-  private final int[] changedPageIds;
+  private int[] changedPageIds;
   private int changedPageCount;
   private int highestPageId;
   private long stagedCopyBytes;
   private boolean pageImageOperation;
 
-  IndexedPageState() { this(IndexedPageCacheConfig.DEFAULT); }
-
-  IndexedPageState(IndexedPageCacheConfig config) {
+  IndexedPageState(DatabasePageCachePlan config) {
     values = new IndexedPageStateValues(config);
     changedPageIds = new int[config.activeStagedPages()];
   }
@@ -35,6 +35,7 @@ final class IndexedPageState {
   int payloadKind(int pageId) { return values.kind(pageId); }
   long ownerKeyId(int pageId) { return values.owner(pageId); }
   int changedPageCount() { return changedPageCount; }
+  int changedPageCapacity() { return changedPageIds.length; }
   int changedPageId(int index) { return changedPageIds[index]; }
   int highestPageId() { return highestPageId; }
   long stagedCopyBytes() { return stagedCopyBytes; }
@@ -114,4 +115,21 @@ final class IndexedPageState {
   boolean hasDirtyPages() { return values.hasDirtyPages(); }
   int metadataEntryCount() { return values.count(); }
   int metadataCapacity() { return values.capacity(); }
+
+  StatusCode detach() {
+    if (changedPageCount != 0 || pageImageOperation || hasDirtyPages()) {
+      return StatusCode.CONFLICT;
+    }
+    StatusCode status = values.detach();
+    if (status.isOk()) changedPageIds = DETACHED_CHANGED_PAGES;
+    return status;
+  }
+
+  void abandon() {
+    values.abandon();
+    changedPageIds = DETACHED_CHANGED_PAGES;
+    changedPageCount = highestPageId = 0;
+    stagedCopyBytes = 0;
+    pageImageOperation = false;
+  }
 }

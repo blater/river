@@ -15,26 +15,30 @@ final class TupleBTreeInsertPreflightLeaf {
         || workspace.current.page() == workspace.keyScratch) {
       return StatusCode.INVARIANT_BROKEN;
     }
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         workspace.current.page(), workspace.current.start(), tree.schemaId(), tree.shape(),
-        TupleBTreePageCodec.TYPE_LEAF, workspace.page);
+        TupleBTreePageCodec.TYPE_LEAF, workspace.page,
+        tree.provider(), workspace.current);
     if (!status.isOk()) return status;
     int insertion = TupleBTreePageSupport.lowerBoundLeaf(
         workspace.current.page(), workspace.current.start(), workspace.keyScratch, 0,
         keyLength, workspace.page);
-    if (equalAt(workspace, insertion, keyLength)) {
+    if (insertion < 0) return StatusCode.INVARIANT_BROKEN;
+    int equality = equalAt(workspace, insertion, keyLength);
+    if (equality < 0) return StatusCode.INVARIANT_BROKEN;
+    if (equality > 0) {
       result.set(true, false, 0, 0, 0, workspace.pathDepth + 1);
       return StatusCode.OK;
     }
-    if (TupleBTreePageOccupancy.acceptsLeaf(
-        workspace.current.page(), workspace.current.start(), keyLength, workspace.page)) {
+    if (TupleBTreePageOccupancy.accepts(keyLength, workspace.page)) {
       result.set(false, false, 0, 1, 0, workspace.pathDepth + 1);
       return StatusCode.OK;
     }
     int splitAt = TupleBTreeLeafSplitPoint.choose(
         workspace.current.page(), workspace.current.start(), workspace.keyScratch, 0,
         keyLength, insertion, workspace.page);
-    if (splitAt <= 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (splitAt < 0) return StatusCode.INVARIANT_BROKEN;
+    if (splitAt == 0) return StatusCode.RESOURCE_EXHAUSTED;
     int separatorLength = TupleBTreePreflightSeparator.leaf(
         workspace.current.page(), workspace.current.start(), insertion, splitAt,
         workspace.keyScratch, keyLength, workspace.page);
@@ -46,14 +50,16 @@ final class TupleBTreeInsertPreflightLeaf {
     return StatusCode.OK;
   }
 
-  private static boolean equalAt(
+  private static int equalAt(
       TupleBTreeTreeWorkspace workspace, int insertion, int keyLength) {
-    if (insertion >= workspace.page.header.entryCount()) return false;
-    TupleBTreePageSupport.readLeaf(
-        workspace.current.page(), workspace.current.start(), insertion, workspace.page);
+    if (insertion >= workspace.page.header.entryCount()) return 0;
+    if (!TupleBTreePageSupport.readLeaf(
+        workspace.current.page(), workspace.current.start(), insertion, workspace.page)) {
+      return -1;
+    }
     return TupleKeyCodec.compare(
         workspace.current.page(),
         workspace.current.start() + workspace.page.leaf.keyOffset(),
-        workspace.page.leaf.keyLength(), workspace.keyScratch, 0, keyLength) == 0;
+        workspace.page.leaf.keyLength(), workspace.keyScratch, 0, keyLength) == 0 ? 1 : 0;
   }
 }

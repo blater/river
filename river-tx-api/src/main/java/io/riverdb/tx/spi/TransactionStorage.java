@@ -27,7 +27,8 @@ public interface TransactionStorage {
       StatusDetail detail);
 
   /**
-   * Persists a lifecycle view. Providers accept only ACTIVE -> COMMITTING -> COMMITTED or
+   * Persists a lifecycle view. PREPARED is a manager-only, non-persisted ownership state;
+   * providers accept only PREPARED -> COMMITTING -> COMMITTED or
    * ACTIVE -> ABORTING -> ABORTED, with INDETERMINATE reachable only from a decision state.
    */
   StatusCode storeRecoveryView(

@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import io.riverdb.format.FormatBytes;
 import io.riverdb.format.wal.WalRecordCodec;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
 /** Stateless structural validation for relational WAL headers and item framing. */
@@ -49,7 +50,7 @@ final class IndexedRelationalWalValidation {
         || totalStreamBytes > (long) chunks
             * (WalRecordCodec.MAX_PAYLOAD_BYTES - IndexedRelationalWalCodec.HEADER_BYTES)
         || payloadBytes < 0 || payloadBytes > totalStreamBytes
-        || payloadBytes > (long) mutations * io.riverdb.base.sql.SqlShapeLimits.MAX_STORED_ROW_BYTES
+        || payloadBytes > (long) mutations * HeapPage.MAXIMUM_ROW_BYTES
         || chunkStreamBytes <= 0
         || chunkStreamBytes > WalRecordCodec.MAX_PAYLOAD_BYTES
             - IndexedRelationalWalCodec.HEADER_BYTES

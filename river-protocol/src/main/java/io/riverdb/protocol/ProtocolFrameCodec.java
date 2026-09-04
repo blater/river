@@ -131,8 +131,12 @@ public final class ProtocolFrameCodec {
       ProtocolMessageType type,
       long requestId,
       String sql,
-      ParameterSet parameters) {
-    return sqlRequests.encode(target, type, requestId, sql, parameters);
+      ParameterSet parameters,
+      long diagnosticTag,
+      long diagnosticStepTag,
+      long metricsEpoch) {
+    return sqlRequests.encode(target, type, requestId, sql, parameters,
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
   }
 
   public StatusCode encodePreparedRequest(
@@ -140,8 +144,12 @@ public final class ProtocolFrameCodec {
       ProtocolMessageType type,
       long requestId,
       long handle,
-      ParameterSet parameters) {
-    return preparedRequests.encode(target, type, requestId, handle, parameters);
+      ParameterSet parameters,
+      long diagnosticTag,
+      long diagnosticStepTag,
+      long metricsEpoch) {
+    return preparedRequests.encode(target, type, requestId, handle, parameters,
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
   }
 
   public StatusCode encodeProgramPrepareRequest(
@@ -152,9 +160,13 @@ public final class ProtocolFrameCodec {
   public StatusCode encodeProgramExecuteRequest(
       ByteBuffer target, long requestId, long handle,
       IsolationLevel isolationLevel,
-      TransactionProgramArguments arguments) {
+      TransactionProgramArguments arguments,
+      long diagnosticTag,
+      long diagnosticStepTag,
+      long metricsEpoch) {
     return programRequests.execute(
-        target, requestId, handle, isolationLevel, arguments);
+        target, requestId, handle, isolationLevel, arguments,
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
   }
 
   public StatusCode encodeProgramCloseRequest(

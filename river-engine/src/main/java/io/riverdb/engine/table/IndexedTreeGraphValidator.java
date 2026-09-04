@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.base.key.OrderedKey;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.BTreePage;
@@ -9,7 +10,6 @@ import java.nio.ByteBuffer;
 
 /** Reusable depth-first validation of B-tree links and version-chain coverage. */
 final class IndexedTreeGraphValidator {
-  private static final int MAXIMUM_TREE_HEIGHT = 8;
   private final IndexedPageSet pages;
   private final IndexedVersionState versions;
   private final IndexedVersionRecord version = new IndexedVersionRecord();
@@ -19,6 +19,7 @@ final class IndexedTreeGraphValidator {
   private int chainVersionRows;
   private long versionRows;
   private long rowCount;
+  private int leafLevel;
 
   IndexedTreeGraphValidator(IndexedPageSet pageSet, IndexedVersionState versionState) {
     this(
@@ -41,6 +42,7 @@ final class IndexedTreeGraphValidator {
     visited.clear();
     previousLeafPageId = 0;
     versionRows = 0;
+    leafLevel = -1;
     StatusCode status = validateSubtree(
         rootPageId, 0, 0, false, OrderedKey.INFINITY_SPACE, 0, 0);
     if (!status.isOk() || versionRows != rowCount) {
@@ -57,14 +59,17 @@ final class IndexedTreeGraphValidator {
       boolean hasLowerBound,
       long upperSpace,
       long upperBound,
-    int depth) {
-    if (pageId <= 0 || pageId > IndexedTableLimits.MAX_PAGES) return StatusCode.CORRUPTION;
+      int depth) {
+    if (!BTreeStructuralLimits.validPageId(pageId)
+        || !BTreeStructuralLimits.canVisitLevel(depth)) {
+      return StatusCode.CORRUPTION;
+    }
     StatusCode reservation = visited.reserve(pageId);
     if (!reservation.isOk()) return reservation;
     StatusCode pinStatus = pages.pinCurrentPage(pageId);
     if (!pinStatus.isOk()) return pinStatus;
     try {
-      if (depth >= MAXIMUM_TREE_HEIGHT || visited.get(pageId)) return StatusCode.CORRUPTION;
+      if (visited.get(pageId)) return StatusCode.CORRUPTION;
       ByteBuffer page = pages.currentPayload(pageId);
       if (page == null || HeapPage.isHeap(page)
           || pages.payloadKind(pageId) != PageCodec.PAYLOAD_KIND_SCALAR_BTREE) {
@@ -92,6 +97,11 @@ final class IndexedTreeGraphValidator {
   private StatusCode validateLeaf(
       int pageId, ByteBuffer page, int entryCount, long lowerSpace, long lowerBound,
       boolean hasLowerBound, int depth) {
+    if (leafLevel < 0) {
+      leafLevel = depth;
+    } else if (leafLevel != depth) {
+      return StatusCode.CORRUPTION;
+    }
     if (entryCount == 0) {
       return depth == 0 && rowCount == 0 ? StatusCode.OK : StatusCode.CORRUPTION;
     }

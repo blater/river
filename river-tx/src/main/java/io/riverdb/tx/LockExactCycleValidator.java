@@ -89,7 +89,9 @@ final class LockExactCycleValidator {
         && resourcesOverlap(requestResource(request), blockingResource)
         && requestOrder(blockerRequest) < requestOrder(request)
         && LockExactCompatibility.conflicts(
-            requestMode(request), requestMode(blockerRequest));
+            requestMode(request), requestMode(blockerRequest))
+        && table.conflicts.fairnessPredecessorBlocks(
+            blockerRequest, requestTransaction(request));
   }
 
   private boolean resourcesOverlap(long requested, long blocking) {

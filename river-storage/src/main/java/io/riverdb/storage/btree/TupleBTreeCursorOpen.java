@@ -47,7 +47,7 @@ final class TupleBTreeCursorOpen {
   private static StatusCode attach(TupleBTreeCursor cursor, TupleBTree tree, int pageId) {
     StatusCode status = tree.provider().pin(pageId, false, cursor.reference);
     if (status.isOk()) cursor.tree = tree;
-    if (status.isOk()) status = TupleBTreePageSupport.validate(
+    if (status.isOk()) status = TupleBTreePageAdmission.validate(
         cursor.reference.page(), cursor.reference.start(), tree.schemaId(), tree.shape(),
         TupleBTreePageCodec.TYPE_LEAF, cursor.workspace,
         tree.provider(), cursor.reference);

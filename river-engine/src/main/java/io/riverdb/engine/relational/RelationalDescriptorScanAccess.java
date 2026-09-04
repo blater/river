@@ -7,6 +7,7 @@ import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.engine.table.IndexedTransactionSession;
+import io.riverdb.tx.api.lock.LockMode;
 
 /** Owns bounded allocation-free descriptor scans for its transaction session. */
 final class RelationalDescriptorScanAccess {
@@ -40,13 +41,21 @@ final class RelationalDescriptorScanAccess {
   StatusCode beginIndex(
       RelationalDescriptorTableAccess owner, SchemaPin pin,
       TableDescriptor table, RelationalDescriptorIndexBounds bounds,
+      LockMode serializableSourceMode,
       RelationalDescriptorScanCursor cursor) {
-    if (cursor == null || bounds == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (cursor == null || bounds == null
+        || serializableSourceMode == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (cursor.isActive()) return StatusCode.CONFLICT;
     StatusCode status = cursor.tupleBounds().prepare(bounds);
+    if (status.isOk() && serializableSourceMode == LockMode.EXCLUSIVE
+        && !cursor.tupleBounds().exactUnique()) {
+      status = StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (status.isOk() && !cursor.tupleBounds().empty()) status = session.beginTupleScan(
         table.tableId(), bounds.key().keyId(), bounds.key().keyId(), bounds.key().shape(),
-        cursor.tupleBounds().storage(), cursor.tupleIndexed());
+        cursor.tupleBounds().storage(), serializableSourceMode, cursor.tupleIndexed());
     if (!status.isOk()) {
       cursor.tupleBounds().clear();
       return status;
@@ -71,7 +80,7 @@ final class RelationalDescriptorScanAccess {
     StatusCode status = textBytes < 0 ? StatusCode.RESOURCE_EXHAUSTED
         : destination.reserve(
             table.columnCount(), SqlShapeLimits.MAX_TABLE_COLUMNS,
-            textBytes, SqlShapeLimits.MAX_STORED_ROW_BYTES);
+            textBytes, TableSchema.MAXIMUM_ROW_BYTES);
     if (status.isOk()) status = rowAccess.reserve(table);
     if (!status.isOk()) return status;
     while (true) {
@@ -144,7 +153,7 @@ final class RelationalDescriptorScanAccess {
       int descriptor = table.typeDescriptorAt(index);
       if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         bytes += SqlTypeDescriptor.parameterOne(descriptor) * 4L;
-        if (bytes > SqlShapeLimits.MAX_STORED_ROW_BYTES) return -1;
+        if (bytes > TableSchema.MAXIMUM_ROW_BYTES) return -1;
       }
     }
     return (int) bytes;

@@ -9,4 +9,5 @@ interface SqlBlockJoinRows {
   StatusCode finish(StatusCode body);
   StatusCode skip();
   StatusCode close();
+  boolean hasResources();
 }

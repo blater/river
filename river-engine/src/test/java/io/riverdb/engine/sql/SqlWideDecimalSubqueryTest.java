@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
@@ -24,7 +25,7 @@ final class SqlWideDecimalSubqueryTest {
       @TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessions = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
@@ -69,7 +70,7 @@ final class SqlWideDecimalSubqueryTest {
   void preservesBothDecimalLanesThroughDerivedConsumer(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessions = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessions));
@@ -137,12 +138,9 @@ final class SqlWideDecimalSubqueryTest {
 
   private static void assertCardinality(SqlSession session, String sql) {
     SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
-    SqlExecutionResult result = new SqlExecutionResult();
-    assertEquals(StatusCode.OK, session.beginScan(sql, cursor), sql);
-    assertEquals(StatusCode.CARDINALITY_VIOLATION, session.nextScan(cursor, row), sql);
-    assertFalse(row.isAvailable(), sql);
-    assertEquals(StatusCode.OK, session.closeScan(cursor, result), sql);
+    assertEquals(StatusCode.CARDINALITY_VIOLATION, session.beginScan(sql, cursor), sql);
+    assertFalse(cursor.isActive(), sql);
+    assertEquals(StatusCode.OK, cursor.reset(), sql);
   }
 
   private static void assertDecimalRows(

@@ -1,7 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.row.StoredTableRowCodec;
 import io.riverdb.engine.row.StoredTableRowEncodeResult;
@@ -19,12 +18,12 @@ final class RelationalDescriptorRowBuffer {
 
   StatusCode reserve(int requested) {
     if (requested <= bytes.capacity()) return StatusCode.OK;
-    if (requested <= 0 || requested > SqlShapeLimits.MAX_STORED_ROW_BYTES) {
+    if (requested <= 0 || requested > TableSchema.MAXIMUM_ROW_BYTES) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     int capacity = bytes.capacity();
     while (capacity < requested) capacity = Math.min(
-        SqlShapeLimits.MAX_STORED_ROW_BYTES, capacity << 1);
+        TableSchema.MAXIMUM_ROW_BYTES, capacity << 1);
     try {
       bytes = ByteBuffer.allocateDirect(capacity);
       return StatusCode.OK;

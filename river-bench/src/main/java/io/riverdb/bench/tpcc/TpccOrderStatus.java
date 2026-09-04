@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import io.riverdb.jdbc.RiverTransactionDiagnostics;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -12,9 +13,12 @@ final class TpccOrderStatus implements AutoCloseable {
   private final PreparedStatement customer;
   private final PreparedStatement latest;
   private final PreparedStatement lines;
+  private final RiverTransactionDiagnostics diagnostics;
 
-  TpccOrderStatus(Connection connection) throws SQLException {
+  TpccOrderStatus(Connection connection, RiverTransactionDiagnostics transactionDiagnostics)
+      throws SQLException {
     this.connection = connection;
+    diagnostics = transactionDiagnostics;
     names = new TpccCustomerLookup(connection);
     customer = connection.prepareStatement("SELECT c_balance,c_first,c_middle,c_last FROM customer WHERE c_w_id=? AND c_d_id=? AND c_id=?");
     latest = connection.prepareStatement("SELECT o_id,o_entry_d,o_carrier_id FROM orders WHERE o_w_id=? AND o_d_id=? AND o_c_id=? ORDER BY o_id DESC LIMIT 1");
@@ -24,7 +28,8 @@ final class TpccOrderStatus implements AutoCloseable {
   boolean execute(TpccInputs.CustomerOrder input) throws SQLException {
     try {
       int customerId = input.customer == 0
-          ? names.find(input.warehouse, input.district, input.last) : input.customer;
+          ? findCustomer(input) : input.customer;
+      diagnostics.diagnosticStep(2);
       customer.setInt(1, input.warehouse);
       customer.setInt(2, input.district);
       customer.setInt(3, customerId);
@@ -36,11 +41,13 @@ final class TpccOrderStatus implements AutoCloseable {
       latest.setInt(2, input.district);
       latest.setInt(3, customerId);
       int order;
+      diagnostics.diagnosticStep(3);
       try (ResultSet rows = latest.executeQuery()) {
         order = TpccSql.requiredInt(rows, 1, "latest order lookup");
       }
       TpccSql.bindOrder(lines, input.warehouse, input.district, order);
       int count = 0;
+      diagnostics.diagnosticStep(4);
       try (ResultSet rows = lines.executeQuery()) {
         while (rows.next()) count++;
       }
@@ -51,6 +58,11 @@ final class TpccOrderStatus implements AutoCloseable {
       connection.rollback();
       throw failure;
     }
+  }
+
+  private int findCustomer(TpccInputs.CustomerOrder input) throws SQLException {
+    diagnostics.diagnosticStep(1);
+    return names.find(input.warehouse, input.district, input.last);
   }
 
   @Override

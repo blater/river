@@ -20,15 +20,10 @@ abstract class IndexedRelationalTableAccess {
   }
 
   synchronized StatusCode commitHybrid(
-      long transactionId,
-      PendingMutationBuffer pending,
-      IndexedTupleIntentJournal intents,
-      IndexedTupleIndexLifecycleBatch lifecycle,
-      IndexedLogicalRowIdFloors logicalRowFloors,
+      IndexedPreparedLogicalCommit preparedCommit,
       long oldestVisibleCommitSequence,
       IndexedCommitResult result) {
     return store.commitHybrid(
-        transactionId, pending, intents, lifecycle, logicalRowFloors,
-        oldestVisibleCommitSequence, result);
+        preparedCommit, oldestVisibleCommitSequence, result);
   }
 }

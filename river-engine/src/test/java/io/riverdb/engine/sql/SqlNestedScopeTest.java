@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -387,6 +388,7 @@ final class SqlNestedScopeTest {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.create(
+            databaseRequest(16),
             root, DATABASE, WalGeneration.of(1), 16, opened));
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(opened.database(), sessionResult));

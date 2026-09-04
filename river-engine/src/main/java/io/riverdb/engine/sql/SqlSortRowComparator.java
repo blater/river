@@ -37,10 +37,8 @@ final class SqlSortRowComparator {
               arrays.keys()[left], keyDescriptor, arrays.keys()[right], keyDescriptor)
           : Long.compare(arrays.keys()[left], arrays.keys()[right]);
     }
-    if (comparison == 0) {
-      comparison = Long.compare(arrays.primaryKeys()[left], arrays.primaryKeys()[right]);
-    }
-    return descending ? -comparison : comparison;
+    if (comparison != 0) return descending ? -comparison : comparison;
+    return Long.compare(arrays.ordinals()[left], arrays.ordinals()[right]);
   }
 
   private static int compareText(

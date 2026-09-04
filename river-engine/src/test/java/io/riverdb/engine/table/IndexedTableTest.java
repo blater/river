@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.concurrent.FatalStateFence;
@@ -525,7 +526,8 @@ final class IndexedTableTest {
     IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, result));
+        IndexedTableStore.create(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(4), result));
     return result.store();
   }
 
@@ -535,7 +537,8 @@ final class IndexedTableTest {
     IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, result));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(4), result));
     return result.store();
   }
 
@@ -569,7 +572,17 @@ final class IndexedTableTest {
     private TransactionWriter(IndexedTable table, int maximumRowBytes) {
       TransactionManager manager = new TransactionManager(
           DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-      session = new IndexedTransactionSession(manager, table, maximumRowBytes);
+      IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+      IndexedSessionContext.Result contextResult = new IndexedSessionContext.Result();
+      assertEquals(
+          StatusCode.OK,
+          IndexedSessionContext.bind(manager, table, null, vacuum, contextResult));
+      IndexedTransactionSessionOpenResult sessionResult =
+          new IndexedTransactionSessionOpenResult();
+      assertEquals(
+          StatusCode.OK,
+          contextResult.context().openSession(maximumRowBytes, sessionResult));
+      session = sessionResult.session();
     }
 
     private void insert(long space, long key, ByteBuffer value) {

@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.storage.btree.BTreeRootPage;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
 /** Stages pending scalar rows and appends their exact grouped-WAL evidence. */
@@ -9,8 +10,7 @@ final class IndexedHybridScalarCompiler {
   private final IndexedTableKernel kernel;
   private final IndexedPageSet pages;
   private final IndexedRelationalScalarWriter scalar;
-  private final ByteBuffer row = ByteBuffer.allocate(
-      io.riverdb.base.sql.SqlShapeLimits.MAX_STORED_ROW_BYTES);
+  private final ByteBuffer row = ByteBuffer.allocate(HeapPage.MAXIMUM_ROW_BYTES);
 
   IndexedHybridScalarCompiler(IndexedTableKernel table, IndexedPageSet pageSet) {
     kernel = table;

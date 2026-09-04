@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -45,7 +46,8 @@ final class RiverDriverTest {
   void exposesAllocationFreeTransportCountersThroughJdbcUnwrap(@TempDir Path root)
       throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -67,7 +69,8 @@ final class RiverDriverTest {
   void preparedHandleSendsSqlOnceAndSurvivesCatalogChange(@TempDir Path root)
       throws SQLException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -106,7 +109,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     String url = url(server);
@@ -705,14 +708,13 @@ final class RiverDriverTest {
         assertEquals(3, correlated.getLong(1));
         assertFalse(correlated.next());
       }
-      try (ResultSet correlatedCardinality = statement.executeQuery(
+      SQLException cardinalityFailure = assertThrows(
+          SQLException.class,
+          () -> statement.executeQuery(
           "SELECT id FROM accounts WHERE region="
               + "(SELECT region FROM region_labels "
-              + "WHERE region_labels.region=accounts.region)")) {
-        SQLException cardinalityFailure = assertThrows(
-            SQLException.class, correlatedCardinality::next);
-        assertEquals("21000", cardinalityFailure.getSQLState());
-      }
+              + "WHERE region_labels.region=accounts.region)"));
+      assertEquals("21000", cardinalityFailure.getSQLState());
       try (ResultSet correlated = statement.executeQuery(
           "SELECT id FROM accounts WHERE region IN "
               + "(SELECT id FROM regions "
@@ -924,7 +926,8 @@ final class RiverDriverTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(
+            databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -986,7 +989,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     String query = "SELECT id FROM isolation_values WHERE value="
@@ -1046,7 +1049,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -1083,7 +1086,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -1121,10 +1124,9 @@ final class RiverDriverTest {
       try (ResultSet tables = metadata.getTables(null, null, null, null)) {
         assertFalse(tables.next());
       }
-      SQLException secondStatement = assertThrows(
-          SQLException.class,
-          connection::createStatement);
-      assertEquals("40001", secondStatement.getSQLState());
+      try (Statement secondStatement = connection.createStatement()) {
+        assertFalse(secondStatement.isClosed());
+      }
       SQLException invalidSql = assertThrows(
           SQLException.class,
           () -> statement.executeUpdate("NOT SQL"));
@@ -1142,7 +1144,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -1157,8 +1159,9 @@ final class RiverDriverTest {
           1,
           statement.executeUpdate(
               "INSERT INTO savepoint_rows VALUES (1, 10)"));
-      Savepoint named = connection.setSavepoint("before second row");
-      assertEquals("before second row", named.getSavepointName());
+      String longName = "before second row ".repeat(20);
+      Savepoint named = connection.setSavepoint(longName);
+      assertEquals(longName, named.getSavepointName());
       assertThrows(SQLException.class, named::getSavepointId);
       assertEquals(
           1,
@@ -1172,7 +1175,8 @@ final class RiverDriverTest {
           statement.executeUpdate(
               "INSERT INTO savepoint_rows VALUES (3, 30)"));
       Savepoint third = connection.setSavepoint("before fourth row");
-      assertThrows(SQLException.class, connection::setSavepoint);
+      Savepoint fourth = connection.setSavepoint();
+      assertTrue(fourth.getSavepointId() > 0);
       assertEquals(
           1,
           statement.executeUpdate(
@@ -1208,7 +1212,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -1605,7 +1609,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -1707,7 +1711,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -1804,7 +1808,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -1826,15 +1830,9 @@ final class RiverDriverTest {
         assertTrue(Arrays.equals(new int[] {1}, partial.getUpdateCounts()));
         assertEquals("23505", partial.getSQLState());
 
-        for (int index = 0;
-            index < RiverJdbcStatement.MAXIMUM_BATCH_STATEMENTS;
-            index++) {
+        for (int index = 0; index < 257; index++) {
           statement.addBatch("INSERT INTO batch_values VALUES (99, 99)");
         }
-        SQLException full = assertThrows(
-            SQLException.class,
-            () -> statement.addBatch("INSERT INTO batch_values VALUES (100, 100)"));
-        assertEquals("53000", full.getSQLState());
         statement.clearBatch();
       }
 
@@ -1869,7 +1867,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -1898,7 +1896,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -1932,7 +1930,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -1972,7 +1970,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -2026,6 +2024,9 @@ final class RiverDriverTest {
         assertFalse(keys.next());
       }
     }
+    assertEquals(0, database.activeTransactionCount());
+    assertEquals(0, database.activeLockCount());
+    assertEquals(0, database.waitingLockCount());
     try (Connection connection = DriverManager.getConnection(url(server));
         PreparedStatement insert = connection.prepareStatement(
             "INSERT INTO generated_events(payload) VALUES (?)",
@@ -2055,7 +2056,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = startAuthenticated(
         database, root, serverContext, authenticator.authenticator());
@@ -2106,7 +2107,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -2159,16 +2160,24 @@ final class RiverDriverTest {
         assertEquals("detail", metadata.getColumnName(2));
         assertEquals("rows", metadata.getColumnName(3));
         assertTrue(plan.next());
-        assertEquals("table", plan.getString("operator"));
+        assertEquals("filter", plan.getString("operator"));
         assertNull(plan.getObject("rows"));
-        assertEquals(-1, plan.getLong("detail"));
+        assertEquals(1, plan.getLong("detail"));
+        assertTrue(plan.next());
+        assertEquals("index", plan.getString("operator"));
+        assertNull(plan.getObject("rows"));
+        assertEquals(1, plan.getLong("detail"));
         assertFalse(plan.next());
       }
       try (ResultSet plan = statement.executeQuery(
           "EXPLAIN ANALYZE SELECT id FROM planned WHERE category=7")) {
         assertTrue(plan.next());
-        assertEquals("table", plan.getString(1));
+        assertEquals("filter", plan.getString(1));
         assertEquals(2, plan.getLong(3));
+        assertTrue(plan.next());
+        assertEquals("index", plan.getString(1));
+        assertNull(plan.getObject(3));
+        assertFalse(plan.next());
       }
       try (ResultSet selected = statement.executeQuery(
           "SELECT id FROM planned "
@@ -2215,7 +2224,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -2255,7 +2264,7 @@ final class RiverDriverTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -2501,18 +2510,18 @@ final class RiverDriverTest {
       assertEquals("40001", concurrentMetadata.getSQLState());
       held.close();
 
-      SQLException longPattern = assertThrows(
-          SQLException.class,
-          () -> metadata.getTables(null, null, "x".repeat(129), null));
-      assertEquals("22000", longPattern.getSQLState());
-      SQLException tooManyTypes = assertThrows(
-          SQLException.class,
-          () -> metadata.getTables(null, null, "%", new String[17]));
-      assertEquals("22000", tooManyTypes.getSQLState());
-      SQLException longColumnPattern = assertThrows(
-          SQLException.class,
-          () -> metadata.getColumns(null, null, "%", "x".repeat(129)));
-      assertEquals("22000", longColumnPattern.getSQLState());
+      try (ResultSet longPattern = metadata.getTables(
+          null, null, "x".repeat(257), null)) {
+        assertFalse(longPattern.next());
+      }
+      try (ResultSet manyTypes = metadata.getTables(
+          null, null, "%", new String[257])) {
+        assertFalse(manyTypes.next());
+      }
+      try (ResultSet longColumnPattern = metadata.getColumns(
+          null, null, "%", "x".repeat(257))) {
+        assertFalse(longColumnPattern.next());
+      }
       SQLException invalidPrimaryTable = assertThrows(
           SQLException.class,
           () -> metadata.getPrimaryKeys(null, null, ""));
@@ -2556,7 +2565,8 @@ final class RiverDriverTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(
+            databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     server = start(database);
     Connection connection = DriverManager.getConnection(url(server));

@@ -8,7 +8,8 @@ import java.nio.ByteBuffer;
 
 /** Emits PREPARE_PROGRAM, EXECUTE_PROGRAM, and CLOSE_PROGRAM requests. */
 final class ProtocolProgramRequestEncoder {
-  private static final int EXECUTE_HEADER_BYTES = Long.BYTES + Integer.BYTES * 2;
+  private static final int EXECUTE_HEADER_BYTES = Long.BYTES + Integer.BYTES * 2
+      + ProtocolTransactionDiagnosticContext.BYTES;
 
   StatusCode prepare(ByteBuffer target, long requestId, TransactionProgram program) {
     return ProtocolProgramGraphCodec.encode(target, requestId, program);
@@ -16,9 +17,12 @@ final class ProtocolProgramRequestEncoder {
 
   StatusCode execute(
       ByteBuffer target, long requestId, long handle,
-      IsolationLevel isolationLevel, TransactionProgramArguments arguments) {
+      IsolationLevel isolationLevel, TransactionProgramArguments arguments,
+      long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
     if (target == null || requestId <= 0 || handle <= 0
-        || isolationLevel == null || arguments == null) {
+        || isolationLevel == null || arguments == null
+        || !ProtocolTransactionDiagnosticContext.valid(
+            diagnosticTag, diagnosticStepTag, metricsEpoch)) {
       return ProtocolFrameWire.invalidTarget(target);
     }
     int argumentCount = arguments.slotCount();
@@ -34,11 +38,11 @@ final class ProtocolProgramRequestEncoder {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       if (payload > ProtocolFrameCodec.MAXIMUM_LOGICAL_REQUEST_PAYLOAD_BYTES
-          - EXECUTE_HEADER_BYTES - Integer.BYTES - Byte.BYTES * 2 - Short.BYTES - bytes) {
+          - EXECUTE_HEADER_BYTES - ProtocolValueHeader.BYTES - bytes) {
         ProtocolFrameWire.empty(target);
         return StatusCode.RESOURCE_EXHAUSTED;
       }
-      payload += Integer.BYTES + Byte.BYTES * 2 + Short.BYTES + bytes;
+      payload += ProtocolValueHeader.BYTES + bytes;
     }
     if (payload > ProtocolFrameCodec.MAXIMUM_LOGICAL_REQUEST_PAYLOAD_BYTES) {
       ProtocolFrameWire.empty(target);
@@ -56,7 +60,9 @@ final class ProtocolProgramRequestEncoder {
     target.putInt(
         output + Long.BYTES + Integer.BYTES,
         ProtocolIsolationLevelCodec.encode(isolationLevel));
-    output += EXECUTE_HEADER_BYTES;
+    output = ProtocolTransactionDiagnosticContext.write(
+        target, output + Long.BYTES + Integer.BYTES * 2,
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
     for (int index = 0; index < argumentCount; index++) {
       output = ProtocolSqlRequestEncoder.writeParameter(target, output, arguments, index);
     }

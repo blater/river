@@ -1,23 +1,40 @@
 package io.riverdb.jdbc;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import java.sql.SQLException;
+import java.util.Arrays;
 
-/** Fixed connection-owned registry for live JDBC statements. */
+/** Dynamically retained connection-owned registry for live JDBC statements. */
 final class RiverJdbcStatementRegistry {
-  static final int MAXIMUM_STATEMENTS = 64;
-  private final RiverJdbcStatement[] statements =
-      new RiverJdbcStatement[MAXIMUM_STATEMENTS];
+  private RiverJdbcStatement[] statements = new RiverJdbcStatement[0];
+  private int firstFree;
 
   void register(RiverJdbcStatement statement) throws SQLException {
     if (statement == null) throw JdbcExceptions.invalid("statement must not be null");
-    for (int index = 0; index < statements.length; index++) {
+    for (int index = firstFree; index < statements.length; index++) {
       if (statements[index] == null) {
         statements[index] = statement;
+        firstFree = index + 1;
         return;
       }
     }
-    throw JdbcExceptions.failure(StatusCode.RESOURCE_EXHAUSTED, "open statement");
+    int slot = statements.length;
+    if (slot == Integer.MAX_VALUE) {
+      throw JdbcExceptions.failure(StatusCode.RESOURCE_EXHAUSTED, "open statement");
+    }
+    int capacity = BoundedArrayGrowth.capacity(
+        statements.length, slot + 1, Integer.MAX_VALUE, 8);
+    if (capacity < 0) {
+      throw JdbcExceptions.failure(StatusCode.RESOURCE_EXHAUSTED, "open statement");
+    }
+    try {
+      statements = Arrays.copyOf(statements, capacity);
+      statements[slot] = statement;
+      firstFree = slot + 1;
+    } catch (OutOfMemoryError failure) {
+      throw JdbcExceptions.failure(StatusCode.RESOURCE_EXHAUSTED, "open statement");
+    }
   }
 
   void unregister(RiverJdbcStatement statement) {
@@ -25,6 +42,7 @@ final class RiverJdbcStatementRegistry {
     for (int index = 0; index < statements.length; index++) {
       if (statements[index] == statement) {
         statements[index] = null;
+        if (index < firstFree) firstFree = index;
         return;
       }
     }
@@ -59,6 +77,7 @@ final class RiverJdbcStatementRegistry {
         if (statements[index] == statement) statements[index] = null;
       }
     }
+    firstFree = 0;
     return failure;
   }
 }

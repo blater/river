@@ -4,33 +4,35 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.wal.WalRecordHeader;
 import java.nio.ByteBuffer;
 
-/** Owns follower capabilities and reusable storage for streamed quorum batches. */
+/** Replicates logical-stream records sequentially without retaining a record-count-sized batch. */
 final class DurableWalLogicalStreams {
   private final LocalWalLogicalStream[] streams =
       new LocalWalLogicalStream[DurableWalQuorum.MAXIMUM_FOLLOWERS];
-  private final LocalWalGroupReservation[] reservations =
-      new LocalWalGroupReservation[DurableWalQuorum.MAXIMUM_FOLLOWERS];
   private final LocalWalGroupAppendResult[] appendResults =
       new LocalWalGroupAppendResult[DurableWalQuorum.MAXIMUM_FOLLOWERS];
   private final LocalWalForceResult[] forceResults =
       new LocalWalForceResult[DurableWalQuorum.MAXIMUM_FOLLOWERS];
-  private final int[] payloadBytes = new int[LocalWal.MAX_PENDING_RECORDS];
   private final LocalWalReadResult read = new LocalWalReadResult();
+  private final LocalWalForcedCursor cursor = new LocalWalForcedCursor();
+  private final CopiedRecord copied = new CopiedRecord();
   private final DurableWalQuorum quorum;
-  private boolean finalBatch;
-  private long commitSequence;
+  private long transactionId;
+  private int formatId;
+  private int formatVersion;
 
   DurableWalLogicalStreams(DurableWalQuorum owner) {
     quorum = owner;
     for (int index = 0; index < owner.followerCount(); index++) {
       streams[index] = new LocalWalLogicalStream();
-      reservations[index] = new LocalWalGroupReservation();
       appendResults[index] = new LocalWalGroupAppendResult();
       forceResults[index] = new LocalWalForceResult();
     }
   }
 
-  StatusCode begin(long transactionId, int formatId, int formatVersion) {
+  StatusCode begin(long ownerTransactionId, int ownerFormatId, int ownerFormatVersion) {
+    transactionId = ownerTransactionId;
+    formatId = ownerFormatId;
+    formatVersion = ownerFormatVersion;
     for (int follower = 0; follower < quorum.followerCount(); follower++) {
       if (!quorum.followerAvailable(follower)) continue;
       StatusCode status = quorum.follower(follower).beginLogicalStream(
@@ -42,14 +44,49 @@ final class DurableWalLogicalStreams {
     return status;
   }
 
-  StatusCode replicate(LocalWal primary, int recordCount) {
+  StatusCode replicate(
+      LocalWal primary, long recordCount, LocalWalForceCause cause) {
     if (quorum.fenced() || primary == null || recordCount <= 0) {
       return StatusCode.FENCED;
     }
-    StatusCode status = inspect(primary, recordCount);
-    if (status.isOk()) status = reserveFollowers(recordCount);
-    if (status.isOk()) status = copyPayloads(primary, recordCount);
-    return status.isOk() ? publishFollowers(primary, recordCount) : quorum.fence(status);
+    StatusCode status = primary.openForcedCursor(cursor);
+    long payloadBytes = 0;
+    boolean finalBatch = false;
+    for (long record = 0; status.isOk() && record < recordCount; record++) {
+      status = cursor.next(read);
+      if (!status.isOk()) break;
+      WalRecordHeader header = read.header();
+      boolean decision = header.decisionCode() != 0;
+      if (header.transactionId() != transactionId
+          || header.formatId() != formatId
+          || header.formatVersion() != formatVersion
+          || decision && (record + 1 != recordCount || header.decisionCode() != 1)
+          || !decision && header.commitSequence() != 0) {
+        status = StatusCode.CORRUPTION;
+        break;
+      }
+      copied.set(read.payload(), header.payloadBytes());
+      payloadBytes = add(payloadBytes, header.payloadBytes());
+      if (payloadBytes < 0) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+        break;
+      }
+      finalBatch = decision;
+      for (int follower = 0; follower < quorum.followerCount(); follower++) {
+        if (!quorum.followerAvailable(follower)) continue;
+        LocalWal target = quorum.follower(follower);
+        StatusCode appended = decision
+            ? target.appendLogicalStreamFinal(
+                streams[follower], copied, header.commitSequence(), appendResults[follower])
+            : target.appendLogicalStreamContinuation(
+                streams[follower], copied, appendResults[follower]);
+        if (!appended.isOk()) retireAndFence(follower);
+      }
+      status = quorum.retainQuorum();
+    }
+    cursor.reset();
+    if (!status.isOk()) return quorum.fence(status);
+    return forceFollowers(primary, cause, payloadBytes, finalBatch);
   }
 
   StatusCode cancel() {
@@ -70,77 +107,33 @@ final class DurableWalLogicalStreams {
     quorum.fence(StatusCode.FENCED);
   }
 
-  private StatusCode inspect(LocalWal primary, int count) {
-    finalBatch = false;
-    commitSequence = 0;
-    for (int record = 0; record < count; record++) {
-      StatusCode status = primary.readForcedRecord(record, read);
-      if (!status.isOk()) return status;
-      WalRecordHeader header = read.header();
-      payloadBytes[record] = header.payloadBytes();
-      if (header.decisionCode() != 0) {
-        if (record + 1 != count || header.decisionCode() != 1) {
-          return StatusCode.CORRUPTION;
-        }
-        finalBatch = true;
-        commitSequence = header.commitSequence();
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private StatusCode reserveFollowers(int count) {
-    for (int follower = 0; follower < quorum.followerCount(); follower++) {
-      if (!quorum.followerAvailable(follower)) continue;
-      StatusCode status = quorum.follower(follower).reserveLogicalStreamBatch(
-          streams[follower], payloadBytes, count, reservations[follower]);
-      if (!status.isOk()) retireAndFence(follower);
-    }
-    return quorum.retainQuorum();
-  }
-
-  private StatusCode copyPayloads(LocalWal primary, int count) {
-    for (int record = 0; record < count; record++) {
-      StatusCode status = primary.readForcedRecord(record, read);
-      if (!status.isOk()) return status;
-      ByteBuffer source = read.payload();
-      for (int follower = 0; follower < quorum.followerCount(); follower++) {
-        if (!quorum.followerAvailable(follower)) continue;
-        source.position(0);
-        reservations[follower].writablePayload(record).put(source);
-      }
-    }
-    return StatusCode.OK;
-  }
-
-  private StatusCode publishFollowers(LocalWal primary, int count) {
+  private StatusCode forceFollowers(
+      LocalWal primary,
+      LocalWalForceCause cause,
+      long payloadBytes,
+      boolean finalBatch) {
     int durableNodes = 1;
-    long batchPayload = 0;
-    for (int record = 0; record < count; record++) batchPayload += payloadBytes[record];
     for (int follower = 0; follower < quorum.followerCount(); follower++) {
       if (!quorum.followerAvailable(follower)) continue;
-      StatusCode status = publishFollower(follower);
-      if (!status.isOk()) retireAndFence(follower);
-      else {
+      LocalWal target = quorum.follower(follower);
+      StatusCode status = target.forceLogicalStreamBatch(
+          streams[follower], forceResults[follower], cause);
+      if (status.isOk()) status = target.releaseLogicalStreamBatch(streams[follower]);
+      if (!status.isOk()) {
+        retireAndFence(follower);
+      } else {
         durableNodes++;
-        quorum.addReplicatedPayloadBytes(batchPayload);
+        quorum.addReplicatedPayloadBytes(payloadBytes);
+      }
+    }
+    if (!finalBatch) {
+      for (int follower = 0; follower < quorum.followerCount(); follower++) {
+        if (quorum.followerAvailable(follower) && !streams[follower].isActive()) {
+          return quorum.fence(StatusCode.INVARIANT_BROKEN);
+        }
       }
     }
     return quorum.acceptLogicalDurability(durableNodes, primary.currentCommitSequence());
-  }
-
-  private StatusCode publishFollower(int follower) {
-    LocalWal target = quorum.follower(follower);
-    StatusCode status = finalBatch
-        ? target.appendLogicalStreamFinal(
-            streams[follower], reservations[follower], commitSequence,
-            appendResults[follower])
-        : target.appendLogicalStreamContinuation(
-            streams[follower], reservations[follower], appendResults[follower]);
-    if (status.isOk()) {
-      status = target.forceLogicalStreamBatch(streams[follower], forceResults[follower]);
-    }
-    return status.isOk() ? target.releaseLogicalStreamBatch(streams[follower]) : status;
   }
 
   private void retireAndFence(int follower) {
@@ -148,5 +141,35 @@ final class DurableWalLogicalStreams {
       quorum.follower(follower).fenceLogicalStream(streams[follower]);
     }
     quorum.retireFollower(follower);
+  }
+
+  private static long add(long current, int value) {
+    return value < 0 || current > Long.MAX_VALUE - value ? -1 : current + value;
+  }
+
+  private static final class CopiedRecord implements LocalWalRecordBatch {
+    private ByteBuffer source;
+    private int bytes;
+
+    void set(ByteBuffer payload, int payloadBytes) {
+      source = payload;
+      bytes = payloadBytes;
+    }
+
+    @Override
+    public int recordCount() { return 1; }
+
+    @Override
+    public int payloadBytes(int record) { return record == 0 ? bytes : -1; }
+
+    @Override
+    public StatusCode encodePayload(int record, ByteBuffer target) {
+      if (record != 0 || source == null || target == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      source.position(0);
+      target.put(source);
+      return StatusCode.OK;
+    }
   }
 }

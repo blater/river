@@ -24,6 +24,10 @@ public final class TransactionManager {
   private long nextTransactionId;
   private long nextTransactionStartOrder = 1;
 
+  public boolean managesDatabase(long incarnationHigh, long incarnationLow) {
+    return databaseHigh == incarnationHigh && databaseLow == incarnationLow;
+  }
+
   public TransactionManager(
       long databaseIncarnationHigh,
       long databaseIncarnationLow,
@@ -57,6 +61,19 @@ public final class TransactionManager {
         lockWaitTimeoutNanos);
   }
 
+  /** Constructs a manager with default lock bytes and caller-admitted diagnostics. */
+  public TransactionManager(
+      long databaseIncarnationHigh,
+      long databaseIncarnationLow,
+      long firstTransactionId,
+      int maximumActive,
+      long lockWaitTimeoutNanos,
+      LockDeadlockDiagnosticsConfig diagnosticsConfig) {
+    this(databaseIncarnationHigh, databaseIncarnationLow, firstTransactionId,
+        maximumActive, new LockMemoryEnvelope(DEFAULT_LOCK_MEMORY_BYTES),
+        lockWaitTimeoutNanos, diagnosticsConfig);
+  }
+
   /** Constructs a manager with independently bounded lock bytes and wait duration. */
   public TransactionManager(
       long databaseIncarnationHigh,
@@ -70,7 +87,7 @@ public final class TransactionManager {
         LockDeadlockDiagnosticsConfig.disabled());
   }
 
-  /** Constructs a manager with fixed deadlock diagnostic capacities. */
+  /** Constructs a manager with independently bounded lock bytes and diagnostics. */
   public TransactionManager(
       long databaseIncarnationHigh,
       long databaseIncarnationLow,
@@ -138,12 +155,32 @@ public final class TransactionManager {
 
   public long lockEscalationCount() { return locks.lockEscalationCount(); }
 
+  /** Runs one cold boundary action while transaction admission remains quiescent. */
+  public synchronized StatusCode atQuiescentBoundary(
+      TransactionQuiescentParticipant participant) {
+    if (participant == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (snapshots.count() != 0
+        || locks.activeLockCount() != 0
+        || locks.waitingCount() != 0) {
+      return StatusCode.RETRY;
+    }
+    return participant.execute();
+  }
+
   public LockDeadlockDiagnosticsSnapshot newDeadlockDiagnosticsSnapshot() {
     return locks.newDeadlockDiagnosticsSnapshot();
   }
 
   public StatusCode snapshotDeadlockDiagnostics(LockDeadlockDiagnosticsSnapshot target) {
     return locks.snapshotDeadlockDiagnostics(target);
+  }
+
+  synchronized StatusCode updateDiagnosticStep(
+      Transaction transaction, long opaqueStepTag) {
+    if (!validActive(transaction)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = locks.lifecycle.updateDiagnosticStep(transaction, opaqueStepTag);
+    if (status.isOk()) transaction.acceptDiagnosticStep(opaqueStepTag);
+    return status;
   }
 
   /** Intended authenticated lock boundary; callers pair it with {@link Transaction#context()}. */
@@ -223,16 +260,40 @@ public final class TransactionManager {
     return validActive(transaction) && locks.lifecycle.hasCommitBlocker(transaction);
   }
 
+  /** True when the active transaction has been selected as a deadlock victim. */
+  public synchronized boolean isDeadlockVictim(Transaction transaction) {
+    return validActive(transaction) && locks.lifecycle.deadlocked(transaction);
+  }
+
   public synchronized StatusCode begin(
       IsolationLevel isolationLevel,
       long visibleCommitSequence,
       Transaction result) {
-    if (isolationLevel == null || visibleCommitSequence < 0 || result == null) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (result.isActiveHandle()) {
-      return StatusCode.CONFLICT;
-    }
+    StatusCode valid = validateBeginRequest(isolationLevel, result);
+    if (!valid.isOk()) return valid;
+    if (visibleCommitSequence < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return claimValidated(isolationLevel, visibleCommitSequence, result);
+  }
+
+  public synchronized StatusCode begin(
+      IsolationLevel isolationLevel,
+      TransactionAdmissionSource source,
+      Transaction result) {
+    StatusCode valid = validateBeginRequest(isolationLevel, result);
+    if (!valid.isOk()) return valid;
+    if (source == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode admission = source.transactionAdmissionStatus();
+    if (admission == null) return StatusCode.INVARIANT_BROKEN;
+    if (!admission.isOk()) return admission;
+    long visibleCommitSequence = source.currentCommitSequence();
+    if (visibleCommitSequence < 0) return StatusCode.INVARIANT_BROKEN;
+    return claimValidated(isolationLevel, visibleCommitSequence, result);
+  }
+
+  private StatusCode claimValidated(
+      IsolationLevel isolationLevel,
+      long visibleCommitSequence,
+      Transaction result) {
     if (snapshots.full()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -261,14 +322,12 @@ public final class TransactionManager {
     return status;
   }
 
-  public synchronized StatusCode begin(
-      IsolationLevel isolationLevel,
-      CommitSequenceSource source,
-      Transaction result) {
-    if (source == null) {
+  private static StatusCode validateBeginRequest(
+      IsolationLevel isolationLevel, Transaction result) {
+    if (isolationLevel == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return begin(isolationLevel, source.currentCommitSequence(), result);
+    return result.isActiveHandle() ? StatusCode.CONFLICT : StatusCode.OK;
   }
 
   public synchronized StatusCode refreshReadCommitted(
@@ -305,7 +364,22 @@ public final class TransactionManager {
       Transaction transaction,
       TransactionCommitParticipant participant,
       TransactionOutcome result) {
-    if (!validActive(transaction) || participant == null || result == null) {
+    if (participant == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode prepared = prepareCommit(transaction, result);
+    return prepared.isOk()
+        ? commitPrepared(transaction, participant, result) : prepared;
+  }
+
+  /**
+   * Freezes one complete logical transaction before it enters an asynchronous commit queue.
+   * Locks and the snapshot remain owned until a later commit or abort completes.
+   */
+  public synchronized StatusCode prepareCommit(
+      Transaction transaction,
+      TransactionOutcome result) {
+    if (!validActive(transaction) || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -314,6 +388,19 @@ public final class TransactionManager {
       return completion.abortFrozenForConflict(transaction, result);
     }
     if (!admission.isOk()) return admission;
+    transaction.transition(TransactionState.PREPARED, 0, false);
+    return StatusCode.OK;
+  }
+
+  /** Commits a previously frozen logical transaction through the canonical direct participant. */
+  public synchronized StatusCode commitPrepared(
+      Transaction transaction,
+      TransactionCommitParticipant participant,
+      TransactionOutcome result) {
+    if (!validPrepared(transaction) || participant == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    result.reset();
     transaction.transition(TransactionState.COMMITTING, 0, false);
     StatusCode status = participant.commit(transaction.transactionId());
     if (!status.isOk()) {
@@ -345,7 +432,7 @@ public final class TransactionManager {
     return StatusCode.OK;
   }
 
-  /** Moves a validated fixed group to COMMITTING while retaining it in captured active sets. */
+  /** Moves a validated prepared group to COMMITTING while retaining captured active sets. */
   public synchronized StatusCode beginCommitGroup(
       Transaction[] transactions,
       int count) {
@@ -353,7 +440,7 @@ public final class TransactionManager {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < count; index++) {
-      if (!validActive(transactions[index])) {
+      if (!validPrepared(transactions[index])) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
       for (int previous = 0; previous < index; previous++) {
@@ -362,8 +449,6 @@ public final class TransactionManager {
         }
       }
     }
-    StatusCode frozen = locks.lifecycle.freezeGroup(transactions, count);
-    if (!frozen.isOk()) return frozen;
     for (int index = 0; index < count; index++) {
       transactions[index].transition(TransactionState.COMMITTING, 0, false);
     }
@@ -376,9 +461,11 @@ public final class TransactionManager {
       TransactionOutcome[] results,
       long[] commitSequences,
       int count,
-      TransactionGroupCommitParticipant participant) {
-    if (!validCommitGroup(transactions, results, commitSequences, count)
-        || participant == null) {
+      TransactionGroupCommitParticipant participant,
+      TransactionGroupCompletionTimings timings) {
+    if (participant == null
+        || timings == null
+        || !validCommitGroup(transactions, results, commitSequences, count)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     long previousCommitSequence = 0;
@@ -386,23 +473,22 @@ public final class TransactionManager {
       long commitSequence = commitSequences[index];
       if (commitSequence <= previousCommitSequence
           || commitSequence <= transactions[index].snapshot().visibleCommitSequence()) {
-        return failForcedCommitGroup(
+        StatusCode terminal = failForcedCommitGroup(
             transactions,
             results,
             count,
             StatusCode.INVARIANT_BROKEN);
+        return terminal.isOk() ? StatusCode.INVARIANT_BROKEN : terminal;
       }
       previousCommitSequence = commitSequence;
     }
     StatusCode status = participant.installPreparedGroup();
     if (!status.isOk()) {
-      return failForcedCommitGroup(transactions, results, count, status);
+      StatusCode terminal = failForcedCommitGroup(transactions, results, count, status);
+      return terminal.isOk() ? status : terminal;
     }
-    for (int index = 0; index < count; index++) {
-      Transaction transaction = transactions[index];
-      completion.finish(transaction, results[index], TransactionState.COMMITTED,
-          commitSequences[index], StatusCode.CANCELLED);
-    }
+    completion.finishCommittedGroup(
+        transactions, results, commitSequences, count, timings);
     return StatusCode.OK;
   }
 
@@ -431,12 +517,48 @@ public final class TransactionManager {
           || results[index] == null) {
         return StatusCode.INVALID_EXTERNAL_INPUT;
       }
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transaction
+            || results[previous] == results[index]) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      }
     }
     for (int index = 0; index < count; index++) {
       Transaction transaction = transactions[index];
       completion.finish(transaction, results[index], state, 0, failure);
     }
-    return failure;
+    return StatusCode.OK;
+  }
+
+  /** Aborts a prepared group before any member enters COMMITTING or appends a decision. */
+  public synchronized StatusCode abortPreparedCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (failure == null || failure.isOk()
+        || transactions == null || results == null || count <= 0
+        || count > transactions.length || count > results.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < count; index++) {
+      if (!validPrepared(transactions[index]) || results[index] == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transactions[index]
+            || results[previous] == results[index]) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      }
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      completion.finish(
+          transaction, results[index], TransactionState.ABORTED, 0, failure);
+    }
+    return StatusCode.OK;
   }
 
   public synchronized StatusCode failForcedCommitGroup(
@@ -454,26 +576,61 @@ public final class TransactionManager {
       if (transaction == null || !transaction.isOwnedBy(this)
           || transaction.state() != TransactionState.COMMITTING
           || results[index] == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transaction
+            || results[previous] == results[index]) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      }
     }
     for (int index = 0; index < count; index++) {
       Transaction transaction = transactions[index];
       completion.finish(
           transaction, results[index], TransactionState.INDETERMINATE, 0, failure);
     }
-    return failure;
+    return StatusCode.OK;
+  }
+
+  /** Terminalizes accepted work after an unexpected commit-writer failure. */
+  public synchronized StatusCode terminalizeAcceptedCommitGroup(
+      Transaction[] transactions,
+      TransactionOutcome[] results,
+      int count,
+      StatusCode failure) {
+    if (failure == null || failure.isOk()
+        || transactions == null || results == null || count <= 0
+        || count > transactions.length || count > results.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      TransactionState state = transaction == null ? null : transaction.state();
+      if (transaction == null || !transaction.isOwnedBy(this)
+          || state != TransactionState.PREPARED && state != TransactionState.COMMITTING
+          || results[index] == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transaction
+            || results[previous] == results[index]) {
+          return StatusCode.INVALID_EXTERNAL_INPUT;
+        }
+      }
+    }
+    for (int index = 0; index < count; index++) {
+      completion.finish(
+          transactions[index], results[index], TransactionState.INDETERMINATE, 0, failure);
+    }
+    return StatusCode.OK;
   }
 
   public synchronized StatusCode commitReadOnly(
       Transaction transaction,
       TransactionOutcome result) {
-    if (!validActive(transaction) || result == null) {
+    if (result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    result.reset();
-    StatusCode admission = locks.lifecycle.freezeForCommit(transaction);
-    if (admission == StatusCode.CONFLICT) {
-      return completion.abortFrozenForConflict(transaction, result);
-    }
+    StatusCode admission = prepareCommit(transaction, result);
     if (!admission.isOk()) return admission;
     long commitSequence = transaction.snapshot().visibleCommitSequence();
     completion.finish(transaction, result, TransactionState.COMMITTED, commitSequence,
@@ -533,6 +690,12 @@ public final class TransactionManager {
         && transaction.state() == TransactionState.ACTIVE;
   }
 
+  private boolean validPrepared(Transaction transaction) {
+    return transaction != null
+        && transaction.isOwnedBy(this)
+        && transaction.state() == TransactionState.PREPARED;
+  }
+
   private boolean validCommitGroup(
       Transaction[] transactions,
       TransactionOutcome[] results,
@@ -555,8 +718,14 @@ public final class TransactionManager {
           || results[index] == null) {
         return false;
       }
-      results[index].reset();
+      for (int previous = 0; previous < index; previous++) {
+        if (transactions[previous] == transaction
+            || results[previous] == results[index]) {
+          return false;
+        }
+      }
     }
+    for (int index = 0; index < count; index++) results[index].reset();
     return true;
   }
 

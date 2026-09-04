@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import static io.riverdb.bench.tpcc.TpccTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,7 +49,8 @@ final class TpccLifecycleAcceptanceTest {
     Files.createDirectory(databaseRoot);
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedRiver.create(databaseRoot, DATABASE, GENERATION, 16, opened));
+        EmbeddedRiver.create(
+            databaseRequest(16), databaseRoot, DATABASE, GENERATION, 16, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try {
@@ -60,7 +62,8 @@ final class TpccLifecycleAcceptanceTest {
     }
     opened.reset();
     assertEquals(StatusCode.OK,
-        EmbeddedRiver.openExisting(databaseRoot, DATABASE, GENERATION, 16, opened));
+        EmbeddedRiver.openExisting(
+            databaseRequest(16), databaseRoot, DATABASE, GENERATION, 16, opened));
     database = opened.database();
     server = start(database);
     try {

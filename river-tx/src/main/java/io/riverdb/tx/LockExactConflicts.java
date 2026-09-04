@@ -6,6 +6,7 @@ import io.riverdb.tx.api.lock.LockRequest;
 final class LockExactConflicts {
   private final LockExactTable table;
   private final LockIntervalCursor cursor = new LockIntervalCursor();
+  private final LockIntervalCursor fairnessCursor = new LockIntervalCursor();
 
   LockExactConflicts(LockExactTable owner) { table = owner; }
 
@@ -62,7 +63,8 @@ final class LockExactConflicts {
         while (candidate >= 0 && requestOrder(candidate) < order) {
           LockExactRequestStore.Chunk candidates = table.state.requests.record(candidate);
           int candidateOffset = LockTypedSlots.offset(candidate);
-          if (candidate != request && candidates.transactions[candidateOffset] != transaction) {
+          if (candidate != request
+              && fairnessPredecessorBlocks(candidate, transaction)) {
             return true;
           }
           candidate = LockTypedSlots.decode(candidates.nextMode[candidateOffset]);
@@ -73,6 +75,7 @@ final class LockExactConflicts {
   }
 
   boolean earlierBlocked(LockRequest request, long id, long generation) {
+    long requestingTransaction = table.state.directory.transaction(id, generation);
     table.state.intervals.overlaps(request, cursor);
     for (long resource = cursor.next(); resource >= 0; resource = cursor.next()) {
       LockExactResourceStore.Chunk resources = table.state.resources.record(resource);
@@ -85,8 +88,10 @@ final class LockExactConflicts {
           LockExactRequestStore.Chunk candidates = table.state.requests.record(candidate);
           int candidateOffset = LockTypedSlots.offset(candidate);
           long transaction = candidates.transactions[candidateOffset];
-          if (table.lifecycle.transactionId(transaction) != id
-              || table.lifecycle.transactionGeneration(transaction) != generation) return true;
+          if ((table.lifecycle.transactionId(transaction) != id
+              || table.lifecycle.transactionGeneration(transaction) != generation)
+              && (requestingTransaction < 0
+              || fairnessPredecessorBlocks(candidate, requestingTransaction))) return true;
           candidate = LockTypedSlots.decode(candidates.nextMode[candidateOffset]);
         }
       }
@@ -106,9 +111,40 @@ final class LockExactConflicts {
         while (candidate >= 0) {
           LockExactRequestStore.Chunk candidates = table.state.requests.record(candidate);
           int candidateOffset = LockTypedSlots.offset(candidate);
-          if (candidates.transactions[candidateOffset] != transaction) return true;
+          if (fairnessPredecessorBlocks(candidate, transaction)) return true;
           candidate = LockTypedSlots.decode(candidates.nextMode[candidateOffset]);
         }
+      }
+    }
+    return false;
+  }
+
+  /** A waiter cannot enforce FIFO against an owner that it needs to release first. */
+  boolean fairnessPredecessorBlocks(long candidate, long requestingTransaction) {
+    LockExactRequestStore.Chunk requests = table.state.requests.record(candidate);
+    int offset = LockTypedSlots.offset(candidate);
+    return requests.transactions[offset] != requestingTransaction
+        && !activelyBlockedBy(candidate, requestingTransaction);
+  }
+
+  private boolean activelyBlockedBy(long request, long transaction) {
+    if (transaction < 0 || !table.state.transactions.occupied(transaction)) return false;
+    LockExactRequestStore.Chunk requests = table.state.requests.record(request);
+    int requestOffset = LockTypedSlots.offset(request);
+    table.state.intervals.overlaps(requests.resources[requestOffset], fairnessCursor);
+    for (long resource = fairnessCursor.next(); resource >= 0;
+        resource = fairnessCursor.next()) {
+      LockExactResourceStore.Chunk resources = table.state.resources.record(resource);
+      long holding = LockTypedSlots.decode(
+          resources.ownerHeads[LockTypedSlots.offset(resource)]);
+      while (holding >= 0) {
+        LockExactHoldingStore.Chunk holdings = table.state.holdings.record(holding);
+        int holdingOffset = LockTypedSlots.offset(holding);
+        if (holdings.active[holdingOffset] != 0
+            && holdings.transactions[holdingOffset] == transaction
+            && LockExactCompatibility.conflicts(
+                requests.modes[requestOffset], holdings.modes[holdingOffset])) return true;
+        holding = LockTypedSlots.decode(holdings.nextResource[holdingOffset]);
       }
     }
     return false;

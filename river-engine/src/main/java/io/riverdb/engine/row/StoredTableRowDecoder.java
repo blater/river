@@ -1,11 +1,11 @@
 package io.riverdb.engine.row;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.row.StoredTableRowHeader;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
 /** Validates a complete row before publishing values into caller-owned storage. */
@@ -23,7 +23,7 @@ final class StoredTableRowDecoder {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (length < StoredTableRowHeaderCodec.HEADER_BYTES
-        || length > SqlShapeLimits.MAX_STORED_ROW_BYTES
+        || length > HeapPage.MAXIMUM_ROW_BYTES
         || start > source.limit() - length) {
       return StatusCode.CORRUPTION;
     }

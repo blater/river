@@ -6,13 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlApproximateNumeric;
+import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RiverQuery;
 import io.riverdb.engine.api.RowResult;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 final class ProtocolFrameCodecTest {
@@ -32,17 +34,21 @@ final class ProtocolFrameCodecTest {
           encoded = codec.encodeBinaryRequest(bytes, type, 9, payload, payload.length);
         }
         case EXECUTE, BEGIN_QUERY, PREPARE -> {
-          payload = new byte[] {0, 0, 0, 1, 0, 0, 0, 0, 'A'};
-          encoded = codec.encodeSqlRequest(bytes, type, 9, "A", null);
+          payload = new byte[33];
+          payload[3] = 1;
+          payload[32] = 'A';
+          encoded = codec.encodeSqlRequest(bytes, type, 9, "A", null, 0, 0, 0);
         }
         case EXECUTE_PREPARED, BEGIN_PREPARED_QUERY -> {
-          payload = new byte[] {0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0};
+          payload = new byte[36];
+          payload[7] = 1;
           encoded = codec.encodePreparedRequest(
-              bytes, type, 9, 1, new io.riverdb.engine.api.ParameterSet(0, 0));
+              bytes, type, 9, 1, new io.riverdb.engine.api.ParameterSet(0, 0),
+              0, 0, 0);
         }
         case CLOSE_PREPARED -> {
           payload = new byte[] {0, 0, 0, 0, 0, 0, 0, 1};
-          encoded = codec.encodePreparedRequest(bytes, type, 9, 1, null);
+          encoded = codec.encodePreparedRequest(bytes, type, 9, 1, null, 0, 0, 0);
         }
         case HELLO, OPEN_SESSION, FETCH, CLOSE_QUERY, CLOSE_SESSION -> {
           payload = new byte[0];
@@ -89,7 +95,7 @@ final class ProtocolFrameCodecTest {
             bytes, ProtocolMessageType.BEGIN_QUERY, 12, StatusCode.OK,
             metadata(new MetadataQuery("id", "balance", "region")),
             row(7, 0b010, 7, 0, 1), 1, completion(), false));
-    byte[] metadataPayload = new byte[114];
+    byte[] metadataPayload = new byte[116];
     ByteBuffer metadata = ByteBuffer.wrap(metadataPayload).order(ByteOrder.BIG_ENDIAN);
     metadata.putInt(4, 41);
     metadata.putInt(12, 3);
@@ -108,11 +114,11 @@ final class ProtocolFrameCodecTest {
     metadata.put(offset++, (byte) 0b010);
     metadata.putLong(offset, 7);
     offset += Long.BYTES;
-    metadata.putShort(offset, (short) 0);
-    offset += Short.BYTES;
+    metadata.putInt(offset, 0);
+    offset += Integer.BYTES;
     metadata.putLong(offset, 1);
     offset += Long.BYTES;
-    assertEquals(114, offset);
+    assertEquals(116, offset);
     assertArrayEquals(goldenFrame(5, 1, 12, metadataPayload), encodedBytes(bytes));
   }
 
@@ -122,7 +128,8 @@ final class ProtocolFrameCodecTest {
     String sql = "SELECT 'λ😀'";
     assertEquals(
         StatusCode.OK,
-        codec.encodeSqlRequest(bytes, ProtocolMessageType.EXECUTE, 71, sql, null));
+        codec.encodeSqlRequest(
+            bytes, ProtocolMessageType.EXECUTE, 71, sql, null, 0, 0, 0));
     assertEquals(StatusCode.OK, codec.decode(bytes, frame));
     assertEquals(ProtocolMessageType.EXECUTE, frame.type());
     assertEquals(71, frame.requestId());
@@ -218,6 +225,51 @@ final class ProtocolFrameCodecTest {
             2,
             new int[] {SqlTypeDescriptor.BIGINT},
             1));
+  }
+
+  @Test
+  void decodesMaximumDescriptorVarcharResponseBeyondUnsignedShortLength() {
+    // Ordinary response text is bounded by the result-row byte contract and VARCHAR scalar
+    // declaration, independently of the 16 KiB physical frame and legacy u16 length width.
+    String value = "\u0800".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    ByteBuffer bytes = encodedTextResponse(value);
+    int utf8Bytes = bytes.getInt(responseTextLengthOffset());
+    assertTrue(utf8Bytes > Short.toUnsignedInt((short) -1));
+    assertTrue(utf8Bytes <= SqlShapeLimits.MAX_ENCODED_RESULT_ROW_BYTES);
+    assertTrue(bytes.remaining() - ProtocolFrameCodec.HEADER_BYTES
+        <= ProtocolFrameCodec.MAXIMUM_LOGICAL_RESPONSE_PAYLOAD_BYTES);
+
+    ProtocolResponse response = new ProtocolResponse();
+    assertEquals(StatusCode.OK,
+        new ProtocolResponseDecoder().decodeAssembled(bytes, frame, response));
+    assertEquals(utf8Bytes, response.textByteLengthAt(0));
+    char[] decoded = new char[value.length()];
+    assertEquals(value.length(), response.copyTextAt(0, decoded, 0));
+    assertEquals('\u0800', decoded[0]);
+    assertEquals('\u0800', decoded[decoded.length - 1]);
+  }
+
+  @Test
+  void rejectsNegativeAndEnvelopeOverrunU32ResponseTextLengths() {
+    // The decoder rejects both the signed-invalid u32 representation and a positive length that
+    // crosses the enclosing logical result boundary before exposing any columns.
+    String value = "\u0800".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    int length = responseTextLengthOffset();
+    ProtocolResponse response = new ProtocolResponse();
+    ProtocolResponseDecoder decoder = new ProtocolResponseDecoder();
+
+    ByteBuffer bytes = encodedTextResponse(value);
+    int utf8Bytes = bytes.getInt(length);
+    bytes.putInt(length, -1);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        decoder.decodeAssembled(bytes, frame, response));
+    assertEquals(0, response.columnCount());
+
+    bytes = encodedTextResponse(value);
+    bytes.putInt(length, utf8Bytes + 1);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        decoder.decodeAssembled(bytes, frame, response));
+    assertEquals(0, response.columnCount());
   }
 
   @Test
@@ -578,7 +630,7 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         codec.encodeSqlRequest(
-            tooSmall, ProtocolMessageType.EXECUTE, 1, "SELECT 1", null));
+            tooSmall, ProtocolMessageType.EXECUTE, 1, "SELECT 1", null, 0, 0, 0));
     assertEquals(0, tooSmall.remaining());
 
     ByteBuffer readOnly = ByteBuffer.allocate(128).asReadOnlyBuffer();
@@ -595,7 +647,7 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeSqlRequest(
-            bytes, ProtocolMessageType.EXECUTE, 41, "SELECT 1", null));
+            bytes, ProtocolMessageType.EXECUTE, 41, "SELECT 1", null, 0, 0, 0));
     int requestLimit = bytes.limit();
     bytes.limit(ProtocolFrameCodec.HEADER_BYTES);
     assertEquals(StatusCode.OK, codec.inspectRequestHeader(bytes, header));
@@ -630,7 +682,7 @@ final class ProtocolFrameCodecTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeSqlRequest(
-            encoded, ProtocolMessageType.EXECUTE, 17, "SELECT 1", null));
+            encoded, ProtocolMessageType.EXECUTE, 17, "SELECT 1", null, 0, 0, 0));
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.HEADER_BYTES + 7)
         .order(ByteOrder.LITTLE_ENDIAN);
     for (int index = 0; index < ProtocolFrameCodec.HEADER_BYTES; index++) {
@@ -743,8 +795,9 @@ final class ProtocolFrameCodecTest {
     ByteBuffer bytes = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(
         StatusCode.OK,
-        codec.encodeSqlRequest(bytes, ProtocolMessageType.EXECUTE, 1, "A", null));
-    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 8, (byte) 0xc0);
+        codec.encodeSqlRequest(
+            bytes, ProtocolMessageType.EXECUTE, 1, "A", null, 0, 0, 0));
+    bytes.put(ProtocolFrameCodec.HEADER_BYTES + 32, (byte) 0xc0);
     assertEquals(StatusCode.OK, codec.decode(bytes, frame));
     ProtocolSqlRequestDecoder request = new ProtocolSqlRequestDecoder();
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, request.decode(frame));
@@ -756,7 +809,8 @@ final class ProtocolFrameCodecTest {
             ProtocolMessageType.EXECUTE,
             2,
             String.valueOf((char) 0xd800),
-            null));
+            null,
+            0, 0, 0));
     assertEquals(0, bytes.remaining());
   }
 
@@ -838,6 +892,41 @@ final class ProtocolFrameCodecTest {
       assertEquals(StatusCode.OK, row.setTextAt(1, new char[] {'x'}, 0, 1));
     }
     return row;
+  }
+
+  private static ByteBuffer encodedTextResponse(String value) {
+    byte[] utf8 = value.getBytes(StandardCharsets.UTF_8);
+    int nullBytes = ProtocolResponseNullBitmap.bytes(1);
+    int payloadBytes = responseFixedBytes() + nullBytes
+        + Integer.BYTES + Integer.BYTES + utf8.length;
+    ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.HEADER_BYTES + payloadBytes);
+    assertEquals(StatusCode.OK, ProtocolFrameWire.begin(
+        response, ProtocolMessageType.EXECUTE, 81, payloadBytes,
+        ProtocolFrameWire.FRAME_RESPONSE));
+    int fixed = ProtocolFrameCodec.HEADER_BYTES;
+    response.putInt(fixed, StatusCode.OK.stableCode());
+    response.putInt(fixed + Integer.BYTES, ProtocolFrameCodec.FLAG_ROW_AVAILABLE);
+    response.putInt(fixed + Integer.BYTES * 3, 1);
+    response.putInt(fixed + Integer.BYTES * 4 + Long.BYTES * 5, nullBytes);
+    int descriptor = fixed + responseFixedBytes() + nullBytes;
+    response.putInt(descriptor,
+        SqlTypeDescriptor.varchar(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS));
+    int length = descriptor + Integer.BYTES;
+    response.putInt(length, utf8.length);
+    ByteBuffer text = response.duplicate();
+    text.position(length + Integer.BYTES);
+    text.put(utf8);
+    response.position(0);
+    return response;
+  }
+
+  private static int responseTextLengthOffset() {
+    return ProtocolFrameCodec.HEADER_BYTES + responseFixedBytes()
+        + ProtocolResponseNullBitmap.bytes(1) + Integer.BYTES;
+  }
+
+  private static int responseFixedBytes() {
+    return Integer.BYTES * 6 + Long.BYTES * 5;
   }
 
   private static CommandResult completion() {

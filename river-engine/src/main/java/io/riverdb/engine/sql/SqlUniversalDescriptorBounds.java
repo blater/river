@@ -20,12 +20,13 @@ final class SqlUniversalDescriptorBounds {
   StatusCode bind(
       TableDescriptor table, SqlCommand command,
       SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors,
       int direction) {
     int bytes = table.encodedMaximumRowBytes();
     StatusCode status = lower.begin(table.columnCount(), bytes, command);
     if (status.isOk()) status = upper.begin(table.columnCount(), bytes, command);
-    if (status.isOk()) status = equality(choice, rows);
-    if (status.isOk()) status = range(choice, rows);
+    if (status.isOk()) status = equality(choice, rows, ancestors);
+    if (status.isOk()) status = range(choice, rows, ancestors);
     return status.isOk() ? bounds.set(
         choice.key, lowParts == 0 ? null : lower.buffer(), lowParts,
         !lowerRange || choice.lowerComparison == SqlComparison.GREATER_OR_EQUAL,
@@ -35,58 +36,65 @@ final class SqlUniversalDescriptorBounds {
   }
 
   private StatusCode equality(
-      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows) {
+      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors) {
     for (int part = 0; part < choice.equalParts; part++) {
       int column = choice.key.columnOrdinalAt(part);
       int descriptor = choice.key.typeDescriptorAt(part);
-      StatusCode status = choice.equal[part].assign(lower, column, descriptor, rows);
+      StatusCode status = choice.equal[part].assign(
+          lower, column, descriptor, rows, ancestors);
       if (status.isOk()) status = choice.equal[part].assign(
-          upper, column, descriptor, rows);
+          upper, column, descriptor, rows, ancestors);
       if (!status.isOk()) return status;
     }
     return StatusCode.OK;
   }
 
   private StatusCode range(
-      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows) {
+      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors) {
     lowParts = choice.equalParts;
     highParts = choice.equalParts;
     lowerRange = false;
     upperRange = false;
-    StatusCode status = lower(choice, rows);
-    return status.isOk() ? upper(choice, rows) : status;
+    StatusCode status = lower(choice, rows, ancestors);
+    return status.isOk() ? upper(choice, rows, ancestors) : status;
   }
 
   private StatusCode lower(
-      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows) {
+      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors) {
     if (choice.lowerComparison == null) return StatusCode.OK;
-    StatusCode status = assign(choice.lower, lower, choice, rows);
+    StatusCode status = assign(choice.lower, lower, choice, rows, ancestors);
     if (status.isOk()) {
       lowParts++;
       lowerRange = true;
     }
-    return status == StatusCode.CONFLICT && !choice.lower.nullValue(rows)
+    return status == StatusCode.CONFLICT && !choice.lower.nullValue(rows, ancestors)
         ? StatusCode.OK : status;
   }
 
   private StatusCode upper(
-      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows) {
+      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors) {
     if (choice.upperComparison == null) return StatusCode.OK;
-    StatusCode status = assign(choice.upper, upper, choice, rows);
+    StatusCode status = assign(choice.upper, upper, choice, rows, ancestors);
     if (status.isOk()) {
       highParts++;
       upperRange = true;
     }
-    return status == StatusCode.CONFLICT && !choice.upper.nullValue(rows)
+    return status == StatusCode.CONFLICT && !choice.upper.nullValue(rows, ancestors)
         ? StatusCode.OK : status;
   }
 
   private static StatusCode assign(
       SqlUniversalDescriptorIndexBinding binding, SqlDescriptorPrimaryValues target,
-      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows) {
+      SqlUniversalDescriptorIndexChoice choice, SqlUniversalJoinRows rows,
+      SqlNestedRowProvider ancestors) {
     int part = choice.equalParts;
     return binding.assign(
-        target, choice.key.columnOrdinalAt(part), choice.key.typeDescriptorAt(part), rows);
+        target, choice.key.columnOrdinalAt(part), choice.key.typeDescriptorAt(part),
+        rows, ancestors);
   }
 
   RelationalDescriptorIndexBounds bounds() { return bounds; }

@@ -1,19 +1,19 @@
 package io.riverdb.engine.table;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.tx.Transaction;
 import io.riverdb.tx.api.TransactionState;
+import java.util.Arrays;
 
 /** Owns the bounded savepoint stack for one transaction session. */
 final class IndexedSessionSavepoints {
-  private static final int MAXIMUM_SAVEPOINTS = 4;
-
   private final IndexedTransactionSession owner;
   private final Transaction transaction;
   private final PendingMutationBuffer mutations;
   private final IndexedTupleIntentJournal tupleIntents;
   private final IndexedTupleIndexLifecycleBatch tupleLifecycle;
-  private final IndexedSavepoint[] savepoints = new IndexedSavepoint[MAXIMUM_SAVEPOINTS];
+  private IndexedSavepoint[] savepoints = new IndexedSavepoint[0];
   private int count;
 
   IndexedSessionSavepoints(
@@ -36,8 +36,9 @@ final class IndexedSessionSavepoints {
     if (transaction.state() != TransactionState.ACTIVE || activeScans) {
       return StatusCode.CONFLICT;
     }
-    if (count >= savepoints.length) return StatusCode.RESOURCE_EXHAUSTED;
-    StatusCode status = savepoint.claim(
+    StatusCode status = reserve();
+    if (!status.isOk()) return status;
+    status = savepoint.claim(
         owner, transaction.transactionId(), mutations.count(),
         tupleIntents.mutationCount(), tupleIntents.descriptorCount(),
         tupleIntents.payloadBytes(), tupleLifecycle.count());
@@ -71,6 +72,20 @@ final class IndexedSessionSavepoints {
   }
 
   void clear() { completeAfter(0); }
+
+  private StatusCode reserve() {
+    if (count < savepoints.length) return StatusCode.OK;
+    if (count == Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
+    int capacity = BoundedArrayGrowth.capacity(
+        savepoints.length, count + 1, Integer.MAX_VALUE, 4);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    try {
+      savepoints = Arrays.copyOf(savepoints, capacity);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError failure) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+  }
 
   private boolean validRollback(IndexedSavepoint savepoint, boolean activeScans) {
     return transaction.state() == TransactionState.ACTIVE

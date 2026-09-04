@@ -9,11 +9,11 @@ import java.sql.SQLException;
 
 /** River-native one-request implementation of the complete New-Order transaction. */
 final class TpccRiverNewOrder implements AutoCloseable {
-  static final int FAILURE_KINDS = 11;
+  static final int FAILURE_KINDS = 12;
 
   private final RiverTransactionPrograms programs;
   private final TpccRiverProgramResources resources;
-  private final TpccRiverNewOrderArguments arguments = new TpccRiverNewOrderArguments();
+  private final TpccRiverNewOrderArguments arguments;
   private final TransactionProgramResult result = new TransactionProgramResult();
   private final long[] programByLines = new long[
       TpccRiverNewOrderLayout.MAXIMUM_LINES - TpccRiverNewOrderLayout.MINIMUM_LINES + 1];
@@ -23,11 +23,14 @@ final class TpccRiverNewOrder implements AutoCloseable {
 
   TpccRiverNewOrder(Connection connection, int districtId, int maximumItemId)
       throws SQLException {
-    if (maximumItemId < 1) throw new SQLException("maximum item ID must be positive", "22003");
+    if (maximumItemId < 1 || maximumItemId == Integer.MAX_VALUE) {
+      throw new SQLException("maximum item ID cannot produce an invalid-item sentinel", "22003");
+    }
     programs = connection.unwrap(RiverTransactionPrograms.class);
     resources = new TpccRiverProgramResources(programs);
     district = districtId;
     maximumItem = maximumItemId;
+    arguments = new TpccRiverNewOrderArguments(maximumItemId);
     try {
       TpccRiverNewOrderStatements statements =
           new TpccRiverNewOrderStatements(resources, districtId);
@@ -52,6 +55,15 @@ final class TpccRiverNewOrder implements AutoCloseable {
     } catch (SQLException failure) {
       if (expectedInvalidItem(input, failure)) return false;
       recordFailure(input.lines, failure);
+      if (!result.primaryStatus().isOk()) {
+        throw new SQLException(
+            "New-Order program failed at step " + result.failingStep()
+                + " (" + failureName(failureKind(input.lines, result.failingStep())) + ")"
+                + ": primary=" + result.primaryStatus()
+                + " rollback=" + result.rollbackStatus()
+                + " fenced=" + result.sessionFenced(),
+            failure.getSQLState(), failure.getErrorCode(), failure);
+      }
       throw failure;
     }
     validateCommitted(input.lines);
@@ -107,12 +119,13 @@ final class TpccRiverNewOrder implements AutoCloseable {
       case 2 -> "customer-read";
       case 3 -> "district-update";
       case 4 -> "order-insert";
-      case 5 -> "new-order-insert";
-      case 6 -> "item-read";
-      case 7 -> "stock-lock";
-      case 8 -> "stock-update";
-      case 9 -> "order-line-insert";
-      case 10 -> "commit";
+      case 5 -> "new-order-reserve";
+      case 6 -> "new-order-insert";
+      case 7 -> "item-read";
+      case 8 -> "stock-lock";
+      case 9 -> "stock-update";
+      case 10 -> "order-line-insert";
+      case 11 -> "commit";
       default -> "unknown";
     };
   }
@@ -121,14 +134,14 @@ final class TpccRiverNewOrder implements AutoCloseable {
     StatusCode primary = result.primaryStatus();
     if (primary.isOk() || failure.getErrorCode() != primary.stableCode()) return;
     int step = result.failingStep();
-    int kind = step == TpccRiverNewOrderLayout.stepCount(lines)
-        ? 10 : step < 0 ? -1 : step < TpccRiverNewOrderLayout.HEADER_STEPS
-            ? step : TpccRiverNewOrderLayout.HEADER_STEPS
-                + (step - TpccRiverNewOrderLayout.HEADER_STEPS)
-                    % TpccRiverNewOrderLayout.STEPS_PER_LINE;
+    int kind = failureKind(lines, step);
     if (kind >= 0 && kind < failures.length && failures[kind] != Long.MAX_VALUE) {
       failures[kind]++;
     }
+  }
+
+  private static int failureKind(int lines, int step) {
+    return TpccRiverNewOrderLayout.failureKind(lines, step);
   }
 
   private void validateCommitted(int lines) throws SQLException {

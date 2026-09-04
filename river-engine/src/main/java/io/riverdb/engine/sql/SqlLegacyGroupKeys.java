@@ -5,6 +5,7 @@ import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlNumericValue;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
@@ -44,7 +45,7 @@ final class SqlLegacyGroupKeys {
     }
     if (status.isOk() && textual && text == null) {
       try {
-        text = allocator.direct(Utf8Text.MAXIMUM_BYTES);
+        text = allocator.direct(TableSchema.MAXIMUM_ROW_BYTES);
       } catch (OutOfMemoryError error) {
         status = StatusCode.RESOURCE_EXHAUSTED;
       }

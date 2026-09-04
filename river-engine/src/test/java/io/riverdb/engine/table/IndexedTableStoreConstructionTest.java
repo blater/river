@@ -7,6 +7,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
+import io.riverdb.engine.runtime.DatabaseStoreLease;
 import io.riverdb.platform.file.DirectoryDurability;
 import io.riverdb.platform.file.DirectoryListResult;
 import io.riverdb.platform.file.DirectoryOperationResult;
@@ -44,8 +45,11 @@ final class IndexedTableStoreConstructionTest {
 
     StatusCode status = IndexedTableStoreConstruction.construct(
         null, opened(pages), opened(rows), opened(versions), null, null, null, result,
-        IndexedPageCacheConfig.DEFAULT,
-        (directory, pageFile, rowFile, versionFile, wal, database, generation, config) -> {
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.providerLease(
+            io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(2, 2, 2), 1),
+        new DatabaseStoreLease(),
+        (directory, pageFile, rowFile, versionFile, wal, database, generation,
+            providerLease, storeLease) -> {
           throw new OutOfMemoryError("injected");
         });
 

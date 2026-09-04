@@ -63,8 +63,12 @@ final class SqlSortProjectionArrays {
     return capacity < 0 ? Long.MAX_VALUE : 2L * capacity * Long.BYTES;
   }
 
-  void shed(int maximumLanes) {
-    if (values == null || values.length <= maximumLanes) return;
+  static long cleanRequiredBytes(int rows, int projections) {
+    int capacity = capacity(0, rows, projections);
+    return capacity < 0 ? Long.MAX_VALUE : 2L * capacity * Long.BYTES;
+  }
+
+  void release() {
     values = null;
     highs = null;
   }

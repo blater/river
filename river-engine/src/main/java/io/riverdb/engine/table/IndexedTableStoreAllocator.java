@@ -2,6 +2,8 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.engine.runtime.DatabaseProviderLease;
+import io.riverdb.engine.runtime.DatabaseStoreLease;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.wal.local.LocalWal;
@@ -19,5 +21,6 @@ interface IndexedTableStoreAllocator {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration generation,
-      IndexedPageCacheConfig pageCacheConfig);
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease);
 }

@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -171,7 +172,7 @@ final class RiverRuntimeConfigTest {
         "river.sql.materialized.page=8KB\\\n",
         "river.sql.materialized.sort-run=1KB\n",
         "river.sql.join.hash-build-rows=0\n",
-        "river.sql.join.hash-build-rows=1048577\n",
+        "river.sql.join.hash-build-rows=2147483648\n",
         "river.sql.join.hash-buckets=3\n",
         "river.sql.materialized.cache=256KB\n"
             + "river.sql.join.hash-build-rows=10000\n",
@@ -258,6 +259,7 @@ final class RiverRuntimeConfigTest {
         "river.sql.schema-cache=16MB\n", StandardCharsets.UTF_8);
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(2),
         root, DatabaseIncarnation.of(8_101, 8_103), WalGeneration.of(1), 2, opened));
     assertEquals(16_000_000, opened.database().services().schemaCacheBudgetBytes());
     assertTrue(opened.database().services().schemaCacheMaximumBytes() < 16_000_000);

@@ -11,6 +11,7 @@ final class TpccRiverNewOrderStatements {
   final long item;
   final long stock;
   final long updateStock;
+  final long reserveNewOrder;
   final long insertOrder;
   final long insertNewOrder;
   final long insertLine;
@@ -38,6 +39,9 @@ final class TpccRiverNewOrderStatements {
     updateStock = resources.prepareStatement(
         "UPDATE stock SET s_quantity=?,s_ytd=s_ytd+?,s_order_cnt=s_order_cnt+1,"
             + "s_remote_cnt=s_remote_cnt+? WHERE s_w_id=? AND s_i_id=?");
+    reserveNewOrder = resources.prepareStatement(
+        "SELECT no_o_id FROM new_order WHERE no_w_id=? AND no_d_id=? AND no_o_id=? "
+            + "FOR UPDATE");
     insertOrder = resources.prepareStatement(
         "INSERT INTO orders VALUES (?,?,?,?,?,NULL,?,?)");
     insertNewOrder = resources.prepareStatement(

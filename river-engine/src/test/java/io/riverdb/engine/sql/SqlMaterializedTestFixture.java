@@ -27,10 +27,14 @@ final class SqlMaterializedTestFixture {
   }
 
   static SqlMaterializedTestFixture open(Path root) {
+    return open(root, 64_000_000L);
+  }
+
+  static SqlMaterializedTestFixture open(Path root, long maximumMemoryBytes) {
     StatusDetail detail = new StatusDetail(256);
     RiverRuntimeConfig.Result config = new RiverRuntimeConfig.Result();
     assertEquals(StatusCode.OK, RiverRuntimeConfig.load(
-        root, 64_000_000L, root.toString(), config, detail));
+        root, maximumMemoryBytes, root.toString(), config, detail));
     SqlDatabaseRuntime.OpenResult opened = new SqlDatabaseRuntime.OpenResult();
     assertEquals(StatusCode.OK, SqlDatabaseRuntime.create(
         config.config(), root, DatabaseIncarnation.of(700, 701), opened, detail));
@@ -41,6 +45,10 @@ final class SqlMaterializedTestFixture {
   }
 
   SqlSessionShapeBudget budget() { return budget; }
+  long leaseReservedBytes() { return lease.reservedBytes(); }
+  int pageBytes() { return lease.config().pageBytes(); }
+  int cachePages() { return lease.config().cachePages(); }
+  int configuredSortRunPages() { return lease.config().sortRunPages(); }
 
   void close() {
     StatusDetail detail = new StatusDetail(256);

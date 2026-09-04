@@ -59,6 +59,8 @@ final class SqlUniversalLegacyJoinRole {
     return status;
   }
 
+  boolean hasResources() { return cursor.isActive(); }
+
   long key() { return key; }
   SqlBlockRow row() { return row; }
 }

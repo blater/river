@@ -2,9 +2,10 @@ package io.riverdb.engine.table;
 
 /** Allocation-free open-addressed page-id to frame-slot map. */
 final class IndexedPageFrameMap {
-  private final int mask;
-  private final int[] keys;
-  private final int[] slots;
+  private static final int[] DETACHED = new int[1];
+  private int mask;
+  private int[] keys;
+  private int[] slots;
 
   IndexedPageFrameMap(int capacity) {
     mask = capacity - 1;
@@ -45,6 +46,11 @@ final class IndexedPageFrameMap {
       put(movedKey, movedSlot);
       index = (index + 1) & mask;
     }
+  }
+
+  void detach() {
+    mask = 0;
+    keys = slots = DETACHED;
   }
 
   static int mix(int value) {

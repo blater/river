@@ -29,7 +29,6 @@ import javax.net.ssl.SSLSocket;
  */
 public final class LoopbackRiverServer {
   public static final int DEFAULT_MAXIMUM_CONNECTIONS = 16;
-  public static final int MAXIMUM_CONNECTION_LIMIT = 1_024;
 
   private final RiverDatabase database;
   final ServerSocket listener;
@@ -387,7 +386,7 @@ public final class LoopbackRiverServer {
         && port >= 0
         && port <= 65_535
         && maximumConnections > 0
-        && maximumConnections <= MAXIMUM_CONNECTION_LIMIT
+        && ProtocolMemoryBudget.supportsServerConnections(maximumConnections)
         && result != null;
   }
 
@@ -413,12 +412,19 @@ public final class LoopbackRiverServer {
       LoopbackServerLimits limits,
       SecurityAuditLog audit,
       LoopbackServerOpenResult result) throws IOException {
-    LoopbackRiverServer server = new LoopbackRiverServer(
-        database,
-        socket,
-        authenticator,
-        limits,
-        audit);
+    LoopbackRiverServer server;
+    try {
+      server = new LoopbackRiverServer(
+          database,
+          socket,
+          authenticator,
+          limits,
+          audit);
+    } catch (OutOfMemoryError failure) {
+      socket.close();
+      if (audit != null) audit.close();
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     StatusCode completed = result.complete(server);
     if (!completed.isOk()) {
       socket.close();

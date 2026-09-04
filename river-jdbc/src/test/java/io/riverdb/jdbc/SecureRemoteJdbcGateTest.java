@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -270,7 +271,7 @@ final class SecureRemoteJdbcGateTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     return opened.database();
   }
 

@@ -202,35 +202,27 @@ final class SqlSubqueryGroupedConsumerTest {
     String failure = "o.id=1 OR o.amount=(SELECT e.value FROM group_error e "
         + "WHERE e.owner=o.id)";
     SqlScanCursor cursor = new SqlScanCursor();
-    SqlScanRowResult row = new SqlScanRowResult();
-
-    assertEquals(
-        StatusCode.OK,
-        fixture.session().beginScan(
-            "SELECT bucket, SUM(amount) FROM group_rows o WHERE " + failure
-                + " GROUP BY bucket",
-            cursor));
-    assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
-        fixture.session().nextScan(cursor, row));
-    assertFalse(row.isAvailable());
-    assertEquals(
-        StatusCode.CARDINALITY_VIOLATION,
-        fixture.session().nextScan(cursor, row));
-    assertFalse(row.isAvailable());
-    assertEquals(
-        StatusCode.OK,
-        fixture.session().closeScan(cursor, fixture.result()));
 
     for (int attempt = 0; attempt < 2; attempt++) {
-      assertEquals(StatusCode.OK, cursor.reset());
+      if (attempt > 0) assertEquals(StatusCode.OK, cursor.reset());
+      assertEquals(
+          StatusCode.CARDINALITY_VIOLATION,
+          fixture.session().beginScan(
+              "SELECT bucket, SUM(amount) FROM group_rows o WHERE " + failure
+                  + " GROUP BY bucket",
+              cursor));
+      assertFalse(cursor.isActive());
+    }
+
+    assertEquals(StatusCode.OK, cursor.reset());
+    for (int attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) assertEquals(StatusCode.OK, cursor.reset());
       assertEquals(
           StatusCode.CARDINALITY_VIOLATION,
           fixture.session().beginScan(
               "SELECT DISTINCT label FROM group_rows o WHERE " + failure,
               cursor));
       assertFalse(cursor.isActive());
-      assertFalse(row.isAvailable());
     }
     assertEquals(StatusCode.OK, cursor.reset());
 

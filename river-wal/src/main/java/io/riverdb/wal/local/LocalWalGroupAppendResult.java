@@ -5,17 +5,29 @@ public final class LocalWalGroupAppendResult {
   private long startOffset;
   private long endOffset;
   private long firstJournalSequence;
-  private int recordCount;
+  private long recordCount;
+  private LocalWalAppendDisposition disposition =
+      LocalWalAppendDisposition.NOTHING_WRITTEN;
 
   public long startOffset() { return startOffset; }
   public long endOffset() { return endOffset; }
   public long firstJournalSequence() { return firstJournalSequence; }
-  public int recordCount() { return recordCount; }
-  public void reset() { set(0, 0, 0, 0); }
-  void set(long start, long end, long sequence, int count) {
+  public long recordCount() { return recordCount; }
+  public LocalWalAppendDisposition disposition() { return disposition; }
+  public void reset() {
+    startOffset = endOffset = firstJournalSequence = recordCount = 0;
+    disposition = LocalWalAppendDisposition.NOTHING_WRITTEN;
+  }
+  void markStorageMayHaveChanged() {
+    if (disposition == LocalWalAppendDisposition.NOTHING_WRITTEN) {
+      disposition = LocalWalAppendDisposition.STORAGE_MAY_HAVE_CHANGED;
+    }
+  }
+  void set(long start, long end, long sequence, long count) {
     startOffset = start;
     endOffset = end;
     firstJournalSequence = sequence;
     recordCount = count;
+    disposition = LocalWalAppendDisposition.COMPLETE;
   }
 }

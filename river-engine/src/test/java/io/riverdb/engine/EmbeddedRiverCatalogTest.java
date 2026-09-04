@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -30,7 +31,7 @@ final class EmbeddedRiverCatalogTest {
   @Test
   void reportsFirstClassNumericTypeNames(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -55,7 +56,7 @@ final class EmbeddedRiverCatalogTest {
   @Test
   void streamsTransactionallyVisibleCatalogObjectsAndReopens(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -125,7 +126,7 @@ final class EmbeddedRiverCatalogTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();

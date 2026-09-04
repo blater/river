@@ -9,6 +9,15 @@ import java.time.LocalDateTime;
 /** Populates one reusable dense primitive argument arena for New-Order. */
 final class TpccRiverNewOrderArguments {
   private final TransactionProgramArguments values = new TransactionProgramArguments();
+  private final int[] executionOrder = new int[TpccRiverNewOrderLayout.MAXIMUM_LINES];
+  private final int invalidItem;
+
+  TpccRiverNewOrderArguments(int maximumItem) {
+    if (maximumItem <= 0 || maximumItem == Integer.MAX_VALUE) {
+      throw new IllegalArgumentException("invalid maximum item");
+    }
+    invalidItem = maximumItem + 1;
+  }
 
   TransactionProgramArguments bind(TpccInputs.NewOrder input) throws SQLException {
     if (input == null || !TpccRiverNewOrderLayout.validLines(input.lines)) {
@@ -21,17 +30,44 @@ final class TpccRiverNewOrderArguments {
     timestamp(TpccRiverNewOrderLayout.ENTRY, input.entry.toLocalDateTime());
     integer(TpccRiverNewOrderLayout.LINE_COUNT, input.lines);
     integer(TpccRiverNewOrderLayout.ALL_LOCAL, allLocal(input) ? 1 : 0);
-    for (int line = 0; line < input.lines; line++) {
-      integer(TpccRiverNewOrderLayout.item(line), input.item[line]);
-      integer(TpccRiverNewOrderLayout.quantity(line), input.quantity[line]);
-      integer(TpccRiverNewOrderLayout.supplyWarehouse(line), input.supplyWarehouse[line]);
-      integer(TpccRiverNewOrderLayout.lineNumber(line), line + 1);
+    order(input);
+    for (int executionLine = 0; executionLine < input.lines; executionLine++) {
+      int inputLine = executionOrder[executionLine];
+      integer(TpccRiverNewOrderLayout.item(executionLine), input.item[inputLine]);
+      integer(TpccRiverNewOrderLayout.quantity(executionLine), input.quantity[inputLine]);
+      integer(
+          TpccRiverNewOrderLayout.supplyWarehouse(executionLine),
+          input.supplyWarehouse[inputLine]);
+      integer(TpccRiverNewOrderLayout.lineNumber(executionLine), inputLine + 1);
     }
     integer(TpccRiverNewOrderLayout.ten(input.lines), 10);
     integer(TpccRiverNewOrderLayout.ninetyOne(input.lines), 91);
     integer(TpccRiverNewOrderLayout.one(input.lines), 1);
     integer(TpccRiverNewOrderLayout.zero(input.lines), 0);
     return values;
+  }
+
+  private void order(TpccInputs.NewOrder input) {
+    for (int line = 0; line < input.lines; line++) {
+      int insertion = line;
+      while (insertion > 0
+          && compare(input, line, executionOrder[insertion - 1]) < 0) {
+        executionOrder[insertion] = executionOrder[insertion - 1];
+        insertion--;
+      }
+      executionOrder[insertion] = line;
+    }
+  }
+
+  private int compare(TpccInputs.NewOrder input, int left, int right) {
+    boolean leftInvalid = input.item[left] == invalidItem;
+    boolean rightInvalid = input.item[right] == invalidItem;
+    if (leftInvalid != rightInvalid) return leftInvalid ? 1 : -1;
+    int warehouse = Integer.compare(
+        input.supplyWarehouse[left], input.supplyWarehouse[right]);
+    if (warehouse != 0) return warehouse;
+    int item = Integer.compare(input.item[left], input.item[right]);
+    return item != 0 ? item : Integer.compare(left, right);
   }
 
   void release() throws SQLException {

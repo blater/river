@@ -20,6 +20,7 @@ final class LockExactScheduler {
   LockExactScheduler(LockExactTable owner) { table = owner; }
 
   void schedule(long resource) {
+    if (table.waitingCount == 0) return;
     enqueueAffected(resource);
     drain();
   }

@@ -10,7 +10,7 @@ final class SqlSortRunCapacity {
       int projections, boolean textRows, boolean generatedTextRows, long payloadBytes) {
     long nullBytes = ((projections + Long.SIZE - 1L) >>> 6) * Long.BYTES;
     int lanes = roundedLanes(projections);
-    long bytes = 3L * Long.BYTES + 2L * Integer.BYTES + 1
+    long bytes = 4L * Long.BYTES + 2L * Integer.BYTES + 1
         + 2L * lanes * Long.BYTES + nullBytes;
     if (textRows) bytes += TableSchema.MAXIMUM_ROW_BYTES;
     if (generatedTextRows) {

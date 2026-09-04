@@ -20,11 +20,12 @@ final class IndexedRelationalStoreServices {
       IndexedPageSet pages,
       IndexedStorePhase phase,
       IndexedWalRecovery recovery,
-      IndexedLogicalRowIdRegistry logicalRowIds) {
+      IndexedLogicalRowIdRegistry logicalRowIds,
+      IndexedGroupCommitMetrics commitMetrics) {
     this.kernel = kernel;
     this.pages = pages;
     commits = new IndexedExtendedCommitCoordinator(
-        store, kernel, wal, pages, phase, recovery, logicalRowIds);
+        store, kernel, wal, pages, phase, recovery, logicalRowIds, commitMetrics);
     probes = new IndexedTuplePrefixProbe(kernel, pages);
   }
 
@@ -36,28 +37,30 @@ final class IndexedRelationalStoreServices {
   }
 
   StatusCode commitHybrid(
-      long transactionId,
-      PendingMutationBuffer pending,
-      IndexedTupleIntentJournal intents,
-      IndexedTupleIndexLifecycleBatch lifecycle,
-      IndexedLogicalRowIdFloors logicalRowFloors,
+      IndexedPreparedLogicalCommit preparedCommit,
       long oldestVisibleCommitSequence,
       IndexedCommitResult result) {
     return commits.commitHybrid(
-        transactionId, pending, intents, lifecycle, logicalRowFloors,
-        oldestVisibleCommitSequence, result);
+        preparedCommit, oldestVisibleCommitSequence, result);
   }
 
   StatusCode preflightHybridGroup(
-      IndexedTransactionSession[] sessions, int count,
+      IndexedPreparedLogicalCommit[] prepared, int count,
       long oldestVisibleCommitSequence) {
     return commits.preflightHybridGroup(
-        sessions, count, oldestVisibleCommitSequence);
+        prepared, count, oldestVisibleCommitSequence);
+  }
+
+  StatusCode reserveHybridGroupCapacity(int required) {
+    return commits.reserveHybridGroupCapacity(required);
   }
 
   StatusCode appendHybridGroup(
-      IndexedTransactionSession[] sessions, long[] commitSequences, int count) {
-    return commits.appendHybridGroup(sessions, commitSequences, count);
+      IndexedPreparedLogicalCommit[] prepared,
+      long[] commitSequences,
+      long[] committedRows,
+      int count) {
+    return commits.appendHybridGroup(prepared, commitSequences, committedRows, count);
   }
 
   StatusCode forceHybridGroup() { return commits.forceHybridGroup(); }
@@ -72,6 +75,7 @@ final class IndexedRelationalStoreServices {
   StatusCode cancelHybridGroup() { return commits.cancelHybridGroup(); }
   boolean hybridGroupActive() { return commits.hybridGroupActive(); }
   boolean hybridDecisionAppended() { return commits.hybridDecisionAppended(); }
+  boolean hybridDurabilityUncertain() { return commits.hybridDurabilityUncertain(); }
 
   StatusCode commitVacuum(
       long transactionId,

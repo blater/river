@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.BTreePage;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -11,7 +12,6 @@ import java.nio.ByteBuffer;
 
 /** Reusable cursor owning one scalar-leaf pin and, while published, one heap-row pin. */
 final class IndexedVacuumRowCursor {
-  private static final int MAXIMUM_TREE_HEIGHT = 8;
   private final IndexedTableKernel table;
   private final IndexedPageSet pages;
   private final IndexedRowPin rowPin = new IndexedRowPin();
@@ -127,7 +127,7 @@ final class IndexedVacuumRowCursor {
     } finally {
       pages.unpinCurrentPage(IndexedTableKernel.ROOT_META_PAGE_ID);
     }
-    for (int depth = 0; depth < MAXIMUM_TREE_HEIGHT; depth++) {
+    for (int depth = 0; BTreeStructuralLimits.canVisitLevel(depth); depth++) {
       if (!validPageId(pageId)) return StatusCode.CORRUPTION;
       status = pages.pinCurrentPage(pageId);
       if (!status.isOk()) return status;
@@ -148,7 +148,11 @@ final class IndexedVacuumRowCursor {
       int child = status.isOk() && BTreePage.type(payload) == BTreePage.TYPE_INTERNAL
           ? BTreePage.firstChildPageId(payload) : 0;
       pages.unpinCurrentPage(pageId);
-      if (!status.isOk() || child <= 0) return StatusCode.CORRUPTION;
+      if (!status.isOk()
+          || !BTreeStructuralLimits.canDescendFrom(depth)
+          || !BTreeStructuralLimits.validPageId(child)) {
+        return StatusCode.CORRUPTION;
+      }
       pageId = child;
     }
     return StatusCode.CORRUPTION;
@@ -156,7 +160,7 @@ final class IndexedVacuumRowCursor {
 
   private boolean validPageId(int candidate) {
     return candidate != IndexedTableKernel.ROOT_META_PAGE_ID
-        && candidate > 0
+        && BTreeStructuralLimits.validPageId(candidate)
         && candidate <= pages.highestPageId()
         && pages.isPresent(candidate)
         && pages.payloadKind(candidate) == PageCodec.PAYLOAD_KIND_SCALAR_BTREE;

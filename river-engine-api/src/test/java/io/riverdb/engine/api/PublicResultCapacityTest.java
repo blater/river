@@ -11,6 +11,7 @@ import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlApproximateNumeric;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
@@ -47,6 +48,14 @@ final class PublicResultCapacityTest {
     assertEquals(3, result.textLengthAt(columns - 2));
     assertEquals('A', result.textCharacterAt(columns - 2, 0));
     assertEquals(Character.highSurrogate(0x1f600), result.textCharacterAt(columns - 2, 1));
+    ByteBuffer encoded = ByteBuffer.allocate(5);
+    assertEquals(5, result.encodedTextLengthAt(columns - 2));
+    assertEquals(5, result.copyEncodedTextAt(columns - 2, encoded, 0));
+    assertEquals(0x41, Byte.toUnsignedInt(encoded.get(0)));
+    assertEquals(0xf0, Byte.toUnsignedInt(encoded.get(1)));
+    assertEquals(0x9f, Byte.toUnsignedInt(encoded.get(2)));
+    assertEquals(0x98, Byte.toUnsignedInt(encoded.get(3)));
+    assertEquals(0x80, Byte.toUnsignedInt(encoded.get(4)));
   }
 
   @Test
@@ -86,6 +95,29 @@ final class PublicResultCapacityTest {
     exercise(result, values, descriptors, text, 100_000);
     long allocated = bean.getThreadAllocatedBytes(thread) - before;
     assertTrue(allocated <= 256, "warmed public row operations allocated: " + allocated);
+  }
+
+  @Test
+  void carriesMaximumDeclaredVarcharWithoutAConvenienceScratchLimit() {
+    int scalars = io.riverdb.base.text.Utf8Text.MAXIMUM_SCALARS;
+    char[] value = "\ud83d\ude00".repeat(scalars).toCharArray();
+    int descriptor = SqlTypeDescriptor.varchar(scalars);
+    CommandResult result = new CommandResult();
+
+    assertEquals(StatusCode.OK, result.reserve(1, scalars * 4));
+    assertEquals(StatusCode.OK, result.complete(
+        1, 1, false, true, 0, new long[1], 0, new int[] {descriptor}, 1));
+    assertEquals(StatusCode.OK, result.setTextAt(0, value, 0, value.length));
+    assertEquals(value.length, result.textLengthAt(0));
+    assertEquals(scalars * 4, result.encodedTextLengthAt(0));
+    char[] decoded = new char[value.length];
+    assertEquals(value.length, result.copyTextAt(0, decoded, 0));
+    assertTrue(java.util.Arrays.equals(value, decoded));
+
+    char[] oversized = java.util.Arrays.copyOf(value, value.length + 1);
+    oversized[oversized.length - 1] = 'x';
+    assertEquals(StatusCode.STRING_DATA_RIGHT_TRUNCATION,
+        result.setTextAt(0, oversized, 0, oversized.length));
   }
 
   @Test

@@ -63,6 +63,13 @@ final class IndexedRelationalWalSizing {
   int items() { return items; }
   int chunks() { return chunks; }
 
+  static long encodedBytes(long streamBytes, int chunks) {
+    if (streamBytes < 0 || chunks <= 0) return -1;
+    long headerBytes = (long) chunks
+        * (IndexedRelationalWalCodec.HEADER_BYTES + WalRecordCodec.HEADER_BYTES);
+    return streamBytes > Long.MAX_VALUE - headerBytes ? -1 : streamBytes + headerBytes;
+  }
+
   static int maximumChunkStreamBytes() {
     return WalRecordCodec.MAX_PAYLOAD_BYTES - IndexedRelationalWalCodec.HEADER_BYTES;
   }

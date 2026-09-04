@@ -7,14 +7,16 @@ import io.riverdb.sql.SqlQuery;
 /** Actual-block descriptor frames kept separate from depth-shared legacy cursors. */
 final class SqlDescriptorSubqueryFrames {
   private final RelationalSession session;
+  private final BoundSqlStatement bound;
   private final BoundSqlQuery query;
   private final SqlDescriptorSubqueryRowFrame[] frames =
       new SqlDescriptorSubqueryRowFrame[SqlQuery.MAXIMUM_QUERY_BLOCKS];
 
   SqlDescriptorSubqueryFrames(
-      RelationalSession relationalSession, BoundSqlQuery boundQuery) {
+      RelationalSession relationalSession, BoundSqlStatement statement) {
     session = relationalSession;
-    query = boundQuery;
+    bound = statement;
+    query = statement.executableQuery;
   }
 
   StatusCode prepare(int block) {
@@ -26,15 +28,23 @@ final class SqlDescriptorSubqueryFrames {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
     }
-    return frames[block].prepare(query.block(block).tableName());
+    StatusCode status = frames[block].prepare(query.block(block).tableName());
+    if (status.isOk()) frames[block].configureRoot(
+        bound.query.block(block), bound.nestedBoolean(block), block);
+    return status;
   }
 
-  StatusCode begin(int block) { return frames[block].begin(); }
+  StatusCode begin(int block, SqlNestedRowProvider ancestors) {
+    return frames[block].begin(ancestors);
+  }
   StatusCode next(int block) { return frames[block].next(); }
   StatusCode closeScan(int block) { return frames[block].closeScan(); }
   long key(int block) { return frames[block].key(); }
   SqlBlockRow row(int block) {
     return contains(block) && frames[block].available() ? frames[block].row() : null;
+  }
+  int accessColumn(int block) {
+    return contains(block) ? frames[block].accessColumn() : -1;
   }
 
   boolean contains(int block) {

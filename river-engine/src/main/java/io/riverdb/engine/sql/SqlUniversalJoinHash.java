@@ -74,6 +74,7 @@ final class SqlUniversalJoinHash {
   int stage() { return core.stage(); }
   boolean handles(int stage) { return core.active && core.stage() == stage; }
   boolean fallback(int stage) { return handles(stage) && core.fallback(); }
+  boolean hasResources() { return core.hasResources() || identities.hasResources(); }
 
   StatusCode close() {
     StatusCode status = core.close();

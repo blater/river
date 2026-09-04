@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -36,7 +37,8 @@ final class RiverExactTypeJdbcTest {
   @Test
   void bindsAndReturnsBooleanAndScaledBigDecimal(@TempDir Path root) throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
     assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, listener));

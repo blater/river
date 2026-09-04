@@ -20,6 +20,28 @@ final class TupleBTreeInsertPreflightTest {
   private static final String LARGE = "q".repeat(240);
 
   @Test
+  void occupancyUsesTheExactValidatedPageBoundary() {
+    TupleShape shape = shape();
+    ByteBuffer page = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
+    ByteBuffer key = ByteBuffer.allocate(4_096);
+    int highLength = largeKey(key, 1_000);
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.initializeLeaf(
+        page, 0, 0, 2, shape, SCHEMA_ID, key, 0, highLength));
+    int firstLength = largeKey(key, 100);
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.appendLeaf(
+        page, 0, shape, key, 0, firstLength));
+    TupleBTreeWorkspace workspace = new TupleBTreeWorkspace();
+    assertEquals(StatusCode.OK, TupleBTreePageAdmission.validate(
+        page, 0, SCHEMA_ID, shape, TupleBTreePageCodec.TYPE_LEAF, workspace));
+
+    int exactRemainingKeyBytes = workspace.header.freeEnd()
+        - TupleBTreePageCodec.HEADER_BYTES
+        - (workspace.header.entryCount() + 1) * TupleBTreePageCodec.SLOT_BYTES;
+    assertTrue(TupleBTreePageOccupancy.accepts(exactRemainingKeyBytes, workspace));
+    assertFalse(TupleBTreePageOccupancy.accepts(exactRemainingKeyBytes + 1, workspace));
+  }
+
+  @Test
   void reportsDuplicateNoSplitAndRootLeafSplitWithoutWriting() {
     Fixture fixture = new Fixture(64);
     ByteBuffer key = ByteBuffer.allocate(4_096);
@@ -62,7 +84,7 @@ final class TupleBTreeInsertPreflightTest {
 
   @Test
   void modelsMaximumSuccessfulCascadeAndHeightExhaustion() {
-    Cascade successful = Cascade.build(TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT - 2);
+    Cascade successful = Cascade.build(BTreeStructuralLimits.MAXIMUM_LEVELS - 2);
     TupleBTreeInsertPreflightResult result = new TupleBTreeInsertPreflightResult();
     assertEquals(StatusCode.OK, successful.tree.preflightInsert(
         successful.key, 0, successful.keyLength, successful.workspace, result));
@@ -70,9 +92,9 @@ final class TupleBTreeInsertPreflightTest {
     assertEquals(TupleBTreeInsertPreflightResult.MAXIMUM_CHANGED_PAGES - 1,
         result.changedPageCount());
     assertTrue(result.createsRoot());
-    assertEquals(TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT, result.resultingHeight());
+    assertEquals(BTreeStructuralLimits.MAXIMUM_LEVELS, result.resultingHeight());
 
-    Cascade exhausted = Cascade.build(TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT - 1);
+    Cascade exhausted = Cascade.build(BTreeStructuralLimits.MAXIMUM_LEVELS - 1);
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, exhausted.tree.preflightInsert(
         exhausted.key, 0, exhausted.keyLength, exhausted.workspace, result));
     assertEquals(0, result.changedPageCount());
@@ -244,8 +266,8 @@ final class TupleBTreeInsertPreflightTest {
     return new TupleBTreeTreeWorkspace(
         ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES),
         ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES),
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT],
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT],
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT]);
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS],
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS],
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS]);
   }
 }

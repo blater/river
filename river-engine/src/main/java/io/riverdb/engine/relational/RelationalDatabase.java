@@ -4,8 +4,10 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedDatabase;
+import io.riverdb.engine.EmbeddedLockDiagnosticsConfig;
 import io.riverdb.engine.checkpoint.CheckpointResult;
 import io.riverdb.engine.runtime.DatabaseResourcePlan;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.runtime.RuntimeResourceRoot;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -33,13 +35,28 @@ public final class RelationalDatabase {
   }
 
   public static StatusCode create(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
+    return create(
+        resourceRequest, directory, database, generation, maximumActiveTransactions,
+        EmbeddedLockDiagnosticsConfig.disabled(), result);
+  }
+
+  public static StatusCode create(
+      DatabaseResourcePlanRequest resourceRequest,
+      Path directory,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
+      RelationalDatabaseOpenResult result) {
     return RelationalDatabaseFactory.create(
-        directory, database, generation, maximumActiveTransactions, result);
+        resourceRequest, directory, database, generation, maximumActiveTransactions,
+        lockDiagnostics, result);
   }
 
   public static StatusCode create(
@@ -56,6 +73,7 @@ public final class RelationalDatabase {
   }
 
   public static StatusCode createWithDurableWalQuorum(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       Path[] followerDirectories,
       int requiredDurableNodes,
@@ -64,6 +82,7 @@ public final class RelationalDatabase {
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
     return RelationalDatabaseFactory.createWithDurableWalQuorum(
+        resourceRequest,
         directory,
         followerDirectories,
         requiredDurableNodes,
@@ -74,13 +93,14 @@ public final class RelationalDatabase {
   }
 
   public static StatusCode openExisting(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
     return RelationalDatabaseFactory.openExisting(
-        directory, database, generation, maximumActiveTransactions, result);
+        resourceRequest, directory, database, generation, maximumActiveTransactions, result);
   }
 
   public static StatusCode openExisting(
@@ -97,6 +117,7 @@ public final class RelationalDatabase {
   }
 
   public static StatusCode openWithDurableWalQuorum(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       Path[] followerDirectories,
       int requiredDurableNodes,
@@ -105,6 +126,7 @@ public final class RelationalDatabase {
       int maximumActiveTransactions,
       RelationalDatabaseOpenResult result) {
     return RelationalDatabaseFactory.openWithDurableWalQuorum(
+        resourceRequest,
         directory,
         followerDirectories,
         requiredDurableNodes,
@@ -132,6 +154,16 @@ public final class RelationalDatabase {
 
   public long lockWaitsEntered() { return embedded.lockWaitsEntered(); }
 
+  public long lockWaitsActuallyBlocked() { return embedded.lockWaitsActuallyBlocked(); }
+
+  public long lockWaitBlockedNanos() { return embedded.lockWaitBlockedNanos(); }
+
+  public int activeTransactionCount() { return embedded.activeTransactionCount(); }
+
+  public long activeLockCount() { return embedded.activeLockCount(); }
+
+  public long waitingLockCount() { return embedded.waitingLockCount(); }
+
   public long lockWaitsGranted() { return embedded.lockWaitsGranted(); }
 
   public long lockWaitsTimedOut() { return embedded.lockWaitsTimedOut(); }
@@ -143,6 +175,26 @@ public final class RelationalDatabase {
   public boolean lockEscalationSupported() { return embedded.lockEscalationSupported(); }
 
   public long lockEscalationCount() { return embedded.lockEscalationCount(); }
+
+  public StatusCode appendDeadlockDiagnostics(StringBuilder target) {
+    return embedded.appendDeadlockDiagnostics(target);
+  }
+
+  public StatusCode appendCommitDiagnostics(StringBuilder target) {
+    return embedded.appendCommitDiagnostics(target);
+  }
+
+  public StatusCode beginPerformanceCapture() {
+    return embedded.beginPerformanceCapture();
+  }
+
+  public StatusCode endPerformanceCapture(StringBuilder target) {
+    return embedded.endPerformanceCapture(target);
+  }
+
+  public StatusCode cancelPerformanceCapture() {
+    return embedded.cancelPerformanceCapture();
+  }
 
   boolean resourceGoverned() { return embedded.resourceGoverned(); }
 

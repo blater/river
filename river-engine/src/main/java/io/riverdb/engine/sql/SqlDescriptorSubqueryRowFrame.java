@@ -25,16 +25,24 @@ final class SqlDescriptorSubqueryRowFrame {
     return status;
   }
 
-  StatusCode begin() {
+  StatusCode begin() { return begin(null); }
+
+  StatusCode begin(SqlNestedRowProvider ancestors) {
     available = false;
-    StatusCode status = rows.open();
+    StatusCode status = rows.open(ancestors);
     if (status.isOk()) active = true;
     return status;
   }
 
   void configureRoot(
       io.riverdb.sql.SqlCommand command, SqlBoundBooleanPredicateProgram where) {
-    rows.configureRoot(command, where);
+    configureRoot(command, where, -1);
+  }
+
+  void configureRoot(
+      io.riverdb.sql.SqlCommand command, SqlBoundBooleanPredicateProgram where,
+      int queryBlock) {
+    rows.configureRoot(command, where, queryBlock);
   }
 
   void configureRoot(SqlUniversalDescriptorIndexAccess access) {

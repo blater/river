@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -36,7 +37,7 @@ final class EmbeddedRiverTemporalContextTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -56,7 +57,7 @@ final class EmbeddedRiverTemporalContextTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();
@@ -70,7 +71,7 @@ final class EmbeddedRiverTemporalContextTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -407,8 +408,8 @@ final class EmbeddedRiverTemporalContextTest {
 
   private static void insertSpillRows(
       RiverSession session, CommandResult result) {
-    for (int first = 1; first <= SPILL_ROWS; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
-      int last = Math.min(SPILL_ROWS, first + SqlCommand.MAXIMUM_INSERT_ROWS - 1);
+    for (int first = 1; first <= SPILL_ROWS; first += SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS) {
+      int last = Math.min(SPILL_ROWS, first + SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS - 1);
       StringBuilder insert = new StringBuilder("INSERT INTO temporal_spill VALUES ");
       for (int id = first; id <= last; id++) {
         if (id > first) {

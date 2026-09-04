@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -20,9 +21,35 @@ final class EmbeddedRiverIdentityTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void generatesLargeMultiRowIdentityInsertWithoutARowCountWorkspace(@TempDir Path root) {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    SessionOpenResult sessionResult = new SessionOpenResult();
+    assertEquals(StatusCode.OK, database.createSession(sessionResult));
+    RiverSession session = sessionResult.session();
+    CommandResult result = new CommandResult();
+    assertEquals(StatusCode.OK, session.execute(
+        "CREATE TABLE generated_rows "
+            + "(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, payload BIGINT)",
+        result));
+    StringBuilder insert = new StringBuilder(
+        "INSERT INTO generated_rows(payload) VALUES ");
+    for (int row = 0; row < 257; row++) {
+      if (row > 0) insert.append(',');
+      insert.append('(').append(row).append(')');
+    }
+
+    assertGenerated(1, 257, insert.toString(), session, result);
+    assertRow(256, "SELECT payload FROM generated_rows WHERE id=257", session, result);
+    assertEquals(StatusCode.OK, session.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
   void generatesNonRollbackKeysAndRestartsBeyondDurableReservation(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -81,7 +108,7 @@ final class EmbeddedRiverIdentityTest {
     assertEquals(StatusCode.OK, database.close());
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();

@@ -23,9 +23,12 @@ final class IndexedOperationPagePins {
     IndexedPageFrame frame = frame(pageId, arena);
     int slot = slot(pageId, arena);
     if (frame == null || slot < 0) return cache.setStatus(StatusCode.INVARIANT_BROKEN);
+    if (writable && !frame.beginWritableBorrow()) {
+      return cache.setStatus(StatusCode.INVARIANT_BROKEN);
+    }
     frame.pinCount++;
-    if (writable) frame.invalidatePageValidation();
-    result.set(pageId, frame.payload, arena, slot, frame.pageGeneration);
+    result.set(
+        pageId, frame.payload, arena, slot, frame.pageGeneration, writable);
     return cache.setStatus(StatusCode.OK);
   }
 
@@ -43,11 +46,13 @@ final class IndexedOperationPagePins {
     int slot = cache.stagingMap.find(pageId);
     IndexedPageFrame frame = cache.stagingFrame(pageId);
     if (frame == null || slot < 0) return cache.setStatus(StatusCode.INVARIANT_BROKEN);
+    if (!frame.beginWritableBorrow()) {
+      return cache.setStatus(StatusCode.INVARIANT_BROKEN);
+    }
     frame.pinCount++;
-    frame.invalidatePageValidation();
     result.set(
         pageId, frame.payload, IndexedOperationPage.STAGING_ARENA,
-        slot, frame.pageGeneration);
+        slot, frame.pageGeneration, true);
     return cache.setStatus(StatusCode.OK);
   }
 
@@ -65,6 +70,10 @@ final class IndexedOperationPagePins {
         || frame.pageGeneration != page.pageGeneration()
         || frame.payload != page.payload() || frame.pinCount <= ownedPins) {
       return StatusCode.INVARIANT_BROKEN;
+    }
+    if (page.writable()) {
+      StatusCode status = frame.endWritableBorrow();
+      if (!status.isOk()) return cache.setStatus(status);
     }
     frame.pinCount--;
     page.reset();

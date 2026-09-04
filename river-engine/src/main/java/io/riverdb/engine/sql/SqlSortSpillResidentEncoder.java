@@ -9,7 +9,6 @@ final class SqlSortSpillResidentEncoder {
   private final SqlSortGeneratedTextSpill generatedText;
   private int projections;
   private boolean textRows;
-  private long nextOrdinal;
 
   SqlSortSpillResidentEncoder(
       SqlSortSpillRecordIO recordIO, SqlSortGeneratedTextSpill generated) {
@@ -20,11 +19,11 @@ final class SqlSortSpillResidentEncoder {
   void begin(int projectionCount, boolean containsText) {
     projections = projectionCount;
     textRows = containsText;
-    nextOrdinal = 0;
   }
 
   void encode(
-      long[] keyHighs, long[] keys, boolean[] keyNulls, long[] primaryKeys,
+      long[] keyHighs, long[] keys, boolean[] keyNulls,
+      long[] primaryKeys, long[] ordinals,
       SqlSortNullWords nulls, long[] highs, long[] values,
       int[] rowSlots, int[] rowLengths, ByteBuffer rows,
       byte[] textLengths, char[] text, int row, int fixedBytes) {
@@ -35,7 +34,7 @@ final class SqlSortSpillResidentEncoder {
     record.putLong(keyHighs[row]);
     record.putLong(keys[row]);
     record.putLong(primaryKeys[row]);
-    record.putLong(nextOrdinal++);
+    record.putLong(ordinals[row]);
     record.putLong(keyNulls[row] ? 1 : 0);
     nulls.write(record, row);
     int valueStart = row * projections;

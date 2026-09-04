@@ -4,7 +4,6 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.text.Utf8TextArena;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.api.CommandResult;
 import java.nio.ByteBuffer;
 
 /** Packed text, names, primitive values, descriptors, and nulls for one response. */
@@ -18,7 +17,6 @@ final class ProtocolResponseValues {
   private final Utf8TextArena text = new Utf8TextArena();
   private final Utf8TextArena names = new Utf8TextArena();
   private final char[] nameScratch = new char[ProtocolFrameCodec.MAXIMUM_COLUMN_NAME_BYTES];
-  private final char[] textScratch = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
 
   StatusCode reserve(int count, int textBytes, int nameBytes) {
     if (count < 0 || count > SqlShapeLimits.MAX_RESULT_COLUMNS
@@ -65,8 +63,8 @@ final class ProtocolResponseValues {
   }
 
   int textLength(int index) {
-    return text.copyChars(columns.lane(TEXT_OFFSET, index),
-        columns.lane(TEXT_LENGTH, index), textScratch, 0);
+    return text.decodedLength(
+        columns.lane(TEXT_OFFSET, index), columns.lane(TEXT_LENGTH, index));
   }
 
   int textByteLength(int index) { return columns.lane(TEXT_LENGTH, index); }

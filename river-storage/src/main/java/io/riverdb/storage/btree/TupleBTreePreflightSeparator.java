@@ -11,7 +11,7 @@ final class TupleBTreePreflightSeparator {
       ByteBuffer inserted, int insertedLength, TupleBTreeWorkspace workspace) {
     if (splitAt == insertion) return insertedLength;
     int sourceIndex = splitAt < insertion ? splitAt : splitAt - 1;
-    TupleBTreePageSupport.readLeaf(source, start, sourceIndex, workspace);
+    if (!TupleBTreePageSupport.readLeaf(source, start, sourceIndex, workspace)) return -1;
     int length = workspace.leaf.keyLength();
     return copy(source, start + workspace.leaf.keyOffset(), length, inserted) ? length : 0;
   }

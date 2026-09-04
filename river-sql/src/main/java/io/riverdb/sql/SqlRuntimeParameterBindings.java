@@ -117,7 +117,7 @@ public final class SqlRuntimeParameterBindings {
         if (!status.isOk()) return status;
         consumed[parameter] = true;
         long parameterValue = nulls[parameter] ? 0 : value(command, parameter);
-        if (parameterValue == SqlCommand.INVALID_TEXT_HANDLE) {
+        if (invalidTextHandle(parameter, parameterValue)) {
           return StatusCode.RESOURCE_EXHAUSTED;
         }
         command.inserts.setLiteral(
@@ -133,7 +133,7 @@ public final class SqlRuntimeParameterBindings {
       if (!status.isOk()) return status;
       consumed[parameter] = true;
       long parameterValue = nulls[parameter] ? 0 : value(command, parameter);
-      if (parameterValue == SqlCommand.INVALID_TEXT_HANDLE) {
+      if (invalidTextHandle(parameter, parameterValue)) {
         return StatusCode.RESOURCE_EXHAUSTED;
       }
       SqlCommandUpdateView.setLiteral(
@@ -201,7 +201,7 @@ public final class SqlRuntimeParameterBindings {
         program.memberValues[member] = 0;
       } else {
         long value = value(command, parameter);
-        if (value == SqlCommand.INVALID_TEXT_HANDLE) return StatusCode.RESOURCE_EXHAUSTED;
+        if (invalidTextHandle(parameter, value)) return StatusCode.RESOURCE_EXHAUSTED;
         program.memberValues[member] = value;
       }
     }
@@ -232,7 +232,7 @@ public final class SqlRuntimeParameterBindings {
       operands[node] = 0;
     } else {
       long value = value(command, parameter);
-      if (value == SqlCommand.INVALID_TEXT_HANDLE) return StatusCode.RESOURCE_EXHAUSTED;
+      if (invalidTextHandle(parameter, value)) return StatusCode.RESOURCE_EXHAUSTED;
       operands[node] = value;
     }
     types[node] = descriptors[parameter];
@@ -242,6 +242,12 @@ public final class SqlRuntimeParameterBindings {
   private StatusCode validate(int parameter) {
     return parameter >= 0 && parameter < count
         ? StatusCode.OK : StatusCode.PARAMETER_COUNT_MISMATCH;
+  }
+
+  private boolean invalidTextHandle(int parameter, long value) {
+    return SqlTypeDescriptor.typeId(descriptors[parameter])
+        == SqlTypeDescriptor.TYPE_ID_VARCHAR
+        && value == SqlCommand.INVALID_TEXT_HANDLE;
   }
 
   private long value(SqlCommand command, int parameter) {

@@ -16,10 +16,10 @@ final class ProtocolProgramResultValueDecoder {
     int descriptor = source.getInt(offset);
     int flags = Byte.toUnsignedInt(source.get(offset + 4));
     int reserved = Byte.toUnsignedInt(source.get(offset + 5));
-    int bytes = Short.toUnsignedInt(source.getShort(offset + 6));
+    int bytes = ProtocolValueHeader.length(source, offset);
     int value = offset + ProtocolProgramResultEncoder.VALUE_HEADER_BYTES;
     if ((flags & ~1) != 0 || reserved != 0 || !SqlTypeDescriptor.isValid(descriptor)
-        || value > end - bytes) return -1;
+        || bytes < 0 || value > end - bytes) return -1;
     if (flags == 1) return bytes == 0 ? value : -1;
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
       return Utf8Text.validate(source, value, bytes,
@@ -38,7 +38,7 @@ final class ProtocolProgramResultValueDecoder {
       ProtocolProgramTextDecoder text) {
     int descriptor = source.getInt(offset);
     int flags = Byte.toUnsignedInt(source.get(offset + 4));
-    int bytes = Short.toUnsignedInt(source.getShort(offset + 6));
+    int bytes = ProtocolValueHeader.length(source, offset);
     int value = offset + ProtocolProgramResultEncoder.VALUE_HEADER_BYTES;
     if (flags == 1) return result.appendNull(descriptor);
     if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
@@ -54,6 +54,6 @@ final class ProtocolProgramResultValueDecoder {
 
   static int next(ByteBuffer source, int offset) {
     return offset + ProtocolProgramResultEncoder.VALUE_HEADER_BYTES
-        + Short.toUnsignedInt(source.getShort(offset + 6));
+        + ProtocolValueHeader.length(source, offset);
   }
 }

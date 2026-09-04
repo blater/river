@@ -3,7 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
-import io.riverdb.base.text.Utf8Text;
+import io.riverdb.engine.relational.TableSchema;
 import java.nio.ByteBuffer;
 
 /** Transactionally admitted retained buffers for grouped execution. */
@@ -33,9 +33,9 @@ final class SqlGroupedBuffers {
       long[] nextHighs = capacity == highs.length
           ? highs : allocator.longs(capacity);
       ByteBuffer nextText = !textRequired || text != null
-          ? text : allocator.direct(Utf8Text.MAXIMUM_BYTES);
+          ? text : allocator.direct(TableSchema.MAXIMUM_ROW_BYTES);
       char[] nextCharacters = !textRequired || characters != null
-          ? characters : allocator.characters(Utf8Text.MAXIMUM_BUFFER_CHARACTERS);
+          ? characters : allocator.characters(TableSchema.MAXIMUM_ROW_TEXT_CHARACTERS);
       values = nextValues;
       highs = nextHighs;
       text = nextText;

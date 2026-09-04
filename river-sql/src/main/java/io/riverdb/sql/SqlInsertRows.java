@@ -1,5 +1,6 @@
 package io.riverdb.sql;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import java.util.Arrays;
 
 /** Geometric flat storage for parsed INSERT rows with wide null/default flags. */
@@ -18,7 +19,8 @@ final class SqlInsertRows {
       int[] sourceDescriptors, int count) {
     if (count <= 0 || count > SqlCommand.MAXIMUM_COLUMNS
         || rows > 0 && count != columns) return false;
-    int required = (rows + 1) * count;
+    int required = requiredCells(count);
+    if (required < 0) return false;
     if (!ensure(required)) return false;
     int destination = rows * count;
     System.arraycopy(sourceHighs, 0, highs, destination, count);
@@ -39,7 +41,8 @@ final class SqlInsertRows {
         || offset > sourceHighs.length - count || offset > sourceNulls.length - count
         || offset > sourceDefaults.length - count || offset > sourceDescriptors.length - count
         || count > SqlCommand.MAXIMUM_COLUMNS || rows > 0 && count != columns) return false;
-    int required = (rows + 1) * count;
+    int required = requiredCells(count);
+    if (required < 0) return false;
     if (!ensure(required)) return false;
     int destination = rows * count;
     System.arraycopy(sourceHighs, offset, highs, destination, count);
@@ -82,9 +85,9 @@ final class SqlInsertRows {
 
   private boolean ensure(int required) {
     if (required <= values.length) return true;
-    int capacity = values.length;
-    int maximum = SqlCommand.MAXIMUM_INSERT_ROWS * SqlCommand.MAXIMUM_COLUMNS;
-    while (capacity < required) capacity = Math.min(maximum, capacity * 2);
+    int capacity = BoundedArrayGrowth.capacity(
+        values.length, required, Integer.MAX_VALUE, 16);
+    if (capacity < 0) return false;
     try {
       long[] nextValues = Arrays.copyOf(values, capacity);
       long[] nextHighs = Arrays.copyOf(highs, capacity);
@@ -100,5 +103,10 @@ final class SqlInsertRows {
     } catch (OutOfMemoryError error) {
       return false;
     }
+  }
+
+  private int requiredCells(int rowColumns) {
+    long required = ((long) rows + 1) * rowColumns;
+    return required <= Integer.MAX_VALUE ? (int) required : -1;
   }
 }

@@ -6,36 +6,18 @@ import io.riverdb.base.type.SqlValueDomain;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.storage.heap.HeapRowResult;
-import java.nio.ByteBuffer;
 
 /** Copies one validated physical row into synchronous block evaluator scratch. */
 final class SqlBlockPhysicalRowDecoding {
-  private final SqlRetainedArrayAllocator allocator;
-  private ByteBuffer utf8;
+  SqlBlockPhysicalRowDecoding() { }
 
-  SqlBlockPhysicalRowDecoding() { this(SqlRetainedArrayAllocator.STANDARD); }
-
-  SqlBlockPhysicalRowDecoding(SqlRetainedArrayAllocator retainedAllocator) {
-    allocator = retainedAllocator;
-  }
+  SqlBlockPhysicalRowDecoding(SqlRetainedArrayAllocator retainedAllocator) { }
 
   StatusCode prepare(TableDefinition table, SqlBlockRow destination) {
     if (table == null || destination == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = destination.reset(table.columnCount());
     if (!status.isOk()) return status;
-    boolean text = false;
-    for (int column = 0; column < table.columnCount(); column++) {
-      if (!table.isVarchar(column)) continue;
-      text = true;
-    }
-    if (!text || utf8 != null) return StatusCode.OK;
-    try {
-      ByteBuffer next = allocator.direct(Utf8Text.MAXIMUM_BYTES);
-      utf8 = next;
-      return StatusCode.OK;
-    } catch (OutOfMemoryError error) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
+    return StatusCode.OK;
   }
 
   StatusCode read(
@@ -82,9 +64,7 @@ final class SqlBlockPhysicalRowDecoding {
       int length = (int) value;
       if (offset < table.fixedRowBytes()
           || length < 0
-          || length > Utf8Text.MAXIMUM_BYTES
           || offset > source.length() - length) return StatusCode.CORRUPTION;
-      if (utf8 == null) return StatusCode.INVARIANT_BROKEN;
       if (length == 0) {
         destination.setValue(column, 0);
         destination.setTextLength(column, 0);
@@ -92,31 +72,19 @@ final class SqlBlockPhysicalRowDecoding {
       }
       StatusCode prepared = destination.prepareText(column, length);
       if (!prepared.isOk()) return prepared;
-      utf8.clear();
-      for (int index = 0; index < length; index++) {
-        utf8.put(source.getByte(offset + index));
-      }
-      utf8.flip();
-      if (Utf8Text.validate(
-          utf8,
-          0,
-          length,
-          SqlTypeDescriptor.parameterOne(table.typeDescriptor(column))) < 0) {
+      int characters = Utf8RowText.decode(
+          source, offset, length, destination.text(column));
+      if (characters < 0) return StatusCode.CORRUPTION;
+      int scalars = Utf8Text.scalarCount(destination.text(column), 0, characters);
+      if (scalars < 0
+          || scalars > SqlTypeDescriptor.parameterOne(table.typeDescriptor(column))) {
         return StatusCode.CORRUPTION;
       }
-      int characters = Utf8Text.decode(
-          utf8, 0, length, destination.text(column), 0);
-      if (characters < 0) return StatusCode.CORRUPTION;
       destination.setValue(column, 0);
       destination.setTextLength(column, characters);
     }
     return StatusCode.OK;
   }
 
-  void reset() {
-    if (utf8 == null) return;
-    utf8.clear();
-    for (int index = 0; index < utf8.capacity(); index++) utf8.put(index, (byte) 0);
-    utf8.clear();
-  }
+  void reset() { }
 }

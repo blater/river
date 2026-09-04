@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -31,7 +32,7 @@ final class SqlAggregateCapacityExecutionTest {
   void executesAggregateBoundariesAfterReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = open(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -43,7 +44,7 @@ final class SqlAggregateCapacityExecutionTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.openExisting(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     database = opened.database();
     session = open(database);
     int[] boundaries = {8, 9, 63, 64, 65, SqlShapeLimits.MAX_AGGREGATES};
@@ -101,7 +102,7 @@ final class SqlAggregateCapacityExecutionTest {
   void groupsAndOrdersByCompleteTuple(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = open(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -211,7 +212,7 @@ final class SqlAggregateCapacityExecutionTest {
   void aggregatesJoinRowsOnceAndPublishesEverySelectedAggregate(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = open(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -342,7 +343,7 @@ final class SqlAggregateCapacityExecutionTest {
   void admitsWideGroupedJoinOutputs(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = open(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -373,7 +374,7 @@ final class SqlAggregateCapacityExecutionTest {
   void scalarJoinAggregateStreamsBeyondTheBlockStoreRowLimit(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = open(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -421,7 +422,7 @@ final class SqlAggregateCapacityExecutionTest {
   void distinctTupleSpillsAndReplaysAfterReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = open(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -433,7 +434,7 @@ final class SqlAggregateCapacityExecutionTest {
     assertEquals(StatusCode.OK, session.close());
     assertEquals(StatusCode.OK, database.close());
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.openExisting(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     database = opened.database();
     session = open(database);
     SqlScanCursor cursor = new SqlScanCursor();
@@ -473,7 +474,7 @@ final class SqlAggregateCapacityExecutionTest {
   void hiddenNullableAndTextGroupKeysDriveHaving(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = open(database);
     SqlExecutionResult result = new SqlExecutionResult();

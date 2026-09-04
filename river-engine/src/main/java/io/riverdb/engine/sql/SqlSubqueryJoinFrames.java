@@ -61,7 +61,8 @@ final class SqlSubqueryJoinFrames {
       return universal[block].prepare(
           bound.query.block(block),
           bound.existingJoinContext(block),
-          bound.nestedBoolean(block));
+          bound.nestedBoolean(block),
+          -1);
     }
     if (block != externalBlock && sources[frame] == null) {
       sources[frame] = new SqlJoinChainSource(session, expressions, budget);

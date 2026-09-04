@@ -18,7 +18,18 @@ public final class ProtocolMemoryBudget {
 
   /** One maximum-format connection may burst while all other slots retain their warm floor. */
   public static ProtocolMemoryBudget forServer(int connections) {
-    if (connections <= 0) throw new IllegalArgumentException("connections");
+    long maximum = serverMaximumBytes(connections);
+    if (maximum < 0) throw new IllegalArgumentException("connections");
+    return new ProtocolMemoryBudget(maximum);
+  }
+
+  /** Whether the configured connection admission fits this protocol's long-valued accounting. */
+  public static boolean supportsServerConnections(int connections) {
+    return serverMaximumBytes(connections) >= 0;
+  }
+
+  private static long serverMaximumBytes(int connections) {
+    if (connections <= 0) return -1;
     long sqlFloor = add(ProtocolUtf8Decoder.retainedFloorBytes(),
         multiply(ParameterSet.retainedFloorBytes(), 2));
     sqlFloor = add(sqlFloor, multiply(RowResult.retainedFloorBytes(), 3));
@@ -46,8 +57,7 @@ public final class ProtocolMemoryBudget {
     executeDelta = add(executeDelta, responseGrowth);
     long phaseDelta = Math.max(sqlDelta, Math.max(prepareDelta, executeDelta));
     long maximum = add(base, phaseDelta);
-    if (maximum < 0) throw new IllegalArgumentException("connections");
-    return new ProtocolMemoryBudget(maximum);
+    return maximum;
   }
 
   private static long multiply(long left, long right) {

@@ -43,6 +43,12 @@ final class RiverJdbcProgramIsolationTest {
     private IsolationLevel lastIsolationLevel;
 
     @Override
+    public StatusCode configureTransactionDiagnostics(
+        long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+      return StatusCode.OK;
+    }
+
+    @Override
     public StatusCode executeProgram(
         long handle,
         IsolationLevel isolationLevel,

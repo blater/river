@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -30,6 +31,7 @@ final class SqlMaterializedStatementTest {
   void lazilySharesOwnerAndRetainsItAcrossCleanupRetry(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(4),
         root, DatabaseIncarnation.of(901, 902), WalGeneration.of(1), 4, opened));
     SqlRuntimeLeaseResult leaseResult = new SqlRuntimeLeaseResult();
     assertEquals(StatusCode.OK, opened.database().services().acquireRuntime(leaseResult));
@@ -103,8 +105,8 @@ final class SqlMaterializedStatementTest {
     SqlMaterializedSortReservation outer = new SqlMaterializedSortReservation();
     SqlMaterializedSortReservation inner = new SqlMaterializedSortReservation();
 
-    assertEquals(StatusCode.OK, statement.reserveSortPages(outer));
-    assertEquals(StatusCode.OK, statement.reserveSortPages(inner));
+    assertEquals(StatusCode.OK, statement.reserveSortPages(outer, 2));
+    assertEquals(StatusCode.OK, statement.reserveSortPages(inner, 2));
     assertEquals(StatusCode.OK, statement.releaseSortPages(inner));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, statement.releaseSortPages(inner));
     assertEquals(StatusCode.OK, statement.releaseSortPages(outer));

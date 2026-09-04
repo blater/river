@@ -69,9 +69,7 @@ final class SqlDescriptorSubqueryBoundWriter {
       if (io.riverdb.base.type.SqlTypeDescriptor.typeId(descriptor)
           == io.riverdb.base.type.SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         bytes += io.riverdb.base.type.SqlTypeDescriptor.parameterOne(descriptor) * 4L;
-        if (bytes > io.riverdb.base.text.Utf8Text.MAXIMUM_BUFFER_BYTES) {
-          return io.riverdb.base.text.Utf8Text.MAXIMUM_BUFFER_BYTES;
-        }
+        if (bytes > Integer.MAX_VALUE) return -1;
       }
     }
     return (int) bytes;

@@ -2,7 +2,6 @@ package io.riverdb.engine.relational;
 
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.table.IndexedTransactionSession;
@@ -10,14 +9,13 @@ import java.nio.ByteBuffer;
 
 /** Exact retained user-key set used to reject duplicates before row-ID reservation. */
 final class RelationalDescriptorBatchUniqueKeys {
-  private static final int MAXIMUM_ENTRIES =
-      SqlShapeLimits.MAX_INSERT_ROWS_PER_STATEMENT * SqlShapeLimits.MAX_TABLE_INDEXES;
-  private static final int MAXIMUM_BYTES =
-      MAXIMUM_ENTRIES * SqlShapeLimits.MAX_INDEX_USER_KEY_BYTES;
   private static final int INITIAL_ENTRIES = 8;
   private static final int INITIAL_BYTES = 256;
   private static final int INITIAL_HASH_SLOTS = 16;
-  private static final int MAXIMUM_HASH_SLOTS = maximumHashSlots();
+  // Largest positive power-of-two Java array index space used by the slot mask.
+  private static final int MAXIMUM_HASH_SLOTS = 1 << 30;
+  // Open addressing requires a vacant slot; the 2x load policy is part of the hash geometry.
+  private static final int MAXIMUM_ENTRIES = MAXIMUM_HASH_SLOTS >>> 1;
   private final RelationalRetainedBudget budget;
   private final RelationalDescriptorBatchAllocator allocator;
   private long[] keyIds = new long[0];
@@ -44,6 +42,9 @@ final class RelationalDescriptorBatchUniqueKeys {
   StatusCode add(long keyId, ByteBuffer source, int length) {
     if (keyId <= 0 || source == null || length < 0 || length > source.limit()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (count == MAXIMUM_ENTRIES || length > Integer.MAX_VALUE - used) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
     int hash = hash(keyId, source, length);
     if (find(keyId, source, length, hash) >= 0) return StatusCode.UNIQUE_VIOLATION;
@@ -106,7 +107,7 @@ final class RelationalDescriptorBatchUniqueKeys {
 
   private StatusCode reserve(int requiredEntries, int requiredBytes) {
     if (requiredEntries <= 0 || requiredEntries > MAXIMUM_ENTRIES
-        || requiredBytes < used || requiredBytes > MAXIMUM_BYTES) {
+        || requiredBytes < used) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     int entryCapacity = entryCapacity(requiredEntries);
@@ -205,7 +206,7 @@ final class RelationalDescriptorBatchUniqueKeys {
 
   private int byteCapacity(int required) {
     return required <= bytes.length ? bytes.length : BoundedArrayGrowth.capacity(
-        bytes.length, required, MAXIMUM_BYTES, INITIAL_BYTES);
+        bytes.length, required, Integer.MAX_VALUE, INITIAL_BYTES);
   }
 
   private int slotCapacity(int required) {
@@ -249,12 +250,6 @@ final class RelationalDescriptorBatchUniqueKeys {
   }
 
   private static int spread(int hash) { return hash ^ (hash >>> 16); }
-
-  private static int maximumHashSlots() {
-    int capacity = 1;
-    while ((long) capacity < (long) MAXIMUM_ENTRIES * 2) capacity <<= 1;
-    return capacity;
-  }
 
   private static KeyDescriptor find(TableDescriptor table, long keyId) {
     int keys = RelationalDescriptorKeySet.count(table);

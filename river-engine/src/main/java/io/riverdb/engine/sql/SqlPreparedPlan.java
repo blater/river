@@ -43,7 +43,8 @@ public final class SqlPreparedPlan {
 
   static long estimateByteCharge(
       io.riverdb.sql.SqlCommand command, io.riverdb.sql.SqlQuery query) {
-    return charge(SqlStatementTemplate.estimateByteCharge(command, query));
+    long templateBytes = SqlStatementTemplate.estimateByteCharge(command, query);
+    return templateBytes <= 0 ? 0 : charge(templateBytes);
   }
 
   boolean needsRecompile(RelationalSession session) {

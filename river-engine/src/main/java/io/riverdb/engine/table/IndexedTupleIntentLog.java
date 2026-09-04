@@ -9,7 +9,7 @@ class IndexedTupleIntentLog extends IndexedTupleIntentView {
 
   IndexedTupleIntentLog() {
     this(IndexedTupleIntentJournal.MAX_MUTATIONS,
-        IndexedTupleIntentJournal.MAX_MUTATIONS * TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
+        Integer.MAX_VALUE);
   }
 
   IndexedTupleIntentLog(int maximumMutations, int maximumPayloadBytes) {

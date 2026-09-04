@@ -17,8 +17,10 @@ final class TupleBTreeGraphBounds {
     StatusCode status = parentFence(tree, workspace, depth);
     if (!status.isOk() || workspace.page.header.type() != TupleBTreePageCodec.TYPE_LEAF
         || workspace.page.header.entryCount() == 0) return status;
-    TupleBTreePageSupport.readLeaf(
-        workspace.current.page(), workspace.current.start(), 0, workspace.page);
+    if (!TupleBTreePageSupport.readLeaf(
+        workspace.current.page(), workspace.current.start(), 0, workspace.page)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     int firstOffset = workspace.current.start() + workspace.page.leaf.keyOffset();
     int firstLength = workspace.page.leaf.keyLength();
     for (int level = 1; status.isOk() && level <= depth; level++) {
@@ -72,9 +74,10 @@ final class TupleBTreeGraphBounds {
   private static StatusCode pinParent(
       TupleBTree tree, TupleBTreeTreeWorkspace workspace, int pageId) {
     StatusCode status = tree.provider().pin(pageId, false, workspace.other);
-    if (status.isOk()) status = TupleBTreePageCodec.validate(
+    if (status.isOk()) status = TupleBTreePageAdmission.validate(
         workspace.other.page(), workspace.other.start(), tree.schemaId(), tree.shape(),
-        workspace.otherPage.header);
+        TupleBTreePageCodec.TYPE_INTERNAL, workspace.otherPage,
+        tree.provider(), workspace.other);
     if (status.isOk() && workspace.otherPage.header.type()
         != TupleBTreePageCodec.TYPE_INTERNAL) status = StatusCode.CORRUPTION;
     return status.isOk() ? status

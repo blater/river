@@ -32,21 +32,25 @@ final class SqlBlockJoinStage {
         graph, projectionEvaluator, blockSource, shapeBudget);
   }
 
-  StatusCode prepare(int block) {
+  StatusCode prepare(int block, int orderedInnerColumn) {
     boolean nested = bound.executableQuery.edgeCount() > 0;
     SqlCommand command = bound.blockPlans().command(block);
     SqlBoundBooleanPredicateProgram where = nested
         ? bound.nestedBoolean(block) : bound.whereBoolean;
     rows = universalRows;
     StatusCode status = universalRows.prepare(
-        block, nested, command, bound.existingJoinContext(block), where);
+        block, nested, command, bound.existingJoinContext(block), where,
+        orderedInnerColumn);
     if (status == StatusCode.CONFLICT) {
       rows = legacyRows;
       status = legacyRows.prepare(
           bound.existingJoinContext(block), command, block, nested, where);
     }
     if (status.isOk()) status = projections.prepare(bound);
-    if (!status.isOk()) close();
+    if (!status.isOk()) {
+      StatusCode cleanup = close();
+      if (!cleanup.isOk()) status = cleanup;
+    }
     return status;
   }
 
@@ -120,5 +124,7 @@ final class SqlBlockJoinStage {
     rows = null;
     return status;
   }
+
+  boolean hasResources() { return rows != null && rows.hasResources(); }
 
 }

@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -33,24 +34,24 @@ final class IndexedWalCodecStructuralTest {
     IndexedWalCodec.encodePageOperationHeader(pages, 1, 1);
     int versionOffset = IndexedWalCodec.PAGE_OPERATION_HEADER_BYTES + PageCodec.PAGE_BYTES;
     IndexedWalCodec.encodePageOperationVersion(pages, versionOffset, 0, false);
-    assertEquals(StatusCode.OK, IndexedWalCodec.validatePageOperation(pages, 2, 2));
+    assertEquals(StatusCode.OK, IndexedWalCodec.validatePageOperation(pages, 2));
     assertTrue(IndexedWalCodec.validPageOperationVersion(pages, versionOffset));
 
     IndexedWalCodec.putLong(pages, 0, 0);
-    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2, 2));
+    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2));
     IndexedWalCodec.putLong(pages, 0, IndexedWalCodec.OPERATION_MAGIC);
     IndexedWalCodec.putInt(pages, 8, IndexedWalCodec.FORMAT_VERSION + 1);
-    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2, 2));
+    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2));
     IndexedWalCodec.putInt(pages, 8, IndexedWalCodec.FORMAT_VERSION);
     IndexedWalCodec.putInt(pages, 12, IndexedWalCodec.OPERATION_TYPE_VACUUM_CHUNK);
-    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2, 2));
+    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2));
     IndexedWalCodec.putInt(pages, 12, IndexedWalCodec.OPERATION_TYPE_PAGE_IMAGES);
 
     IndexedWalCodec.putInt(pages, 16, 0);
-    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2, 2));
+    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2));
     IndexedWalCodec.putInt(pages, 16, 1);
     IndexedWalCodec.putInt(pages, 20, 3);
-    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2, 2));
+    assertEquals(StatusCode.CORRUPTION, IndexedWalCodec.validatePageOperation(pages, 2));
     IndexedWalCodec.putInt(pages, 20, 1);
     IndexedWalCodec.putInt(pages, versionOffset, -1);
     assertFalse(IndexedWalCodec.validPageOperationVersion(pages, versionOffset));
@@ -134,7 +135,8 @@ final class IndexedWalCodecStructuralTest {
     LocalWal wal = walResult.wal();
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
-        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+        IndexedTableStore.create(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(1), created));
     assertEquals(StatusCode.OK, created.store().close());
 
     LocalWalReservation reservation = new LocalWalReservation();
@@ -146,7 +148,8 @@ final class IndexedWalCodecStructuralTest {
 
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.CORRUPTION,
-        IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+        IndexedTableStore.openExisting(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(1), reopened));
     assertNull(reopened.store());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());

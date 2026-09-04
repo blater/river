@@ -7,8 +7,6 @@ import java.nio.ByteBuffer;
 
 /** Validates the complete persisted page graph and version-chain coverage. */
 final class IndexedTableValidator {
-  private static final int MAXIMUM_TREE_HEIGHT = 8;
-
   private final IndexedPageSet pages;
   private final IndexedVersionState versions;
   private final IndexedTreeGraphValidator tree;

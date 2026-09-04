@@ -1,34 +1,33 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.runtime.DatabasePrimitiveChunkLayout.DIRECTORY_BITS;
+import static io.riverdb.engine.runtime.DatabasePrimitiveChunkLayout.DIRECTORY_MASK;
+import static io.riverdb.engine.runtime.DatabasePrimitiveChunkLayout.DIRECTORY_SIZE;
+import static io.riverdb.engine.runtime.DatabasePrimitiveChunkLayout.PAGE_MASK;
+import static io.riverdb.engine.runtime.DatabasePrimitiveChunkLayout.PAGE_SHIFT;
+import static io.riverdb.engine.runtime.DatabasePrimitiveChunkLayout.PAGE_SIZE;
+
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.engine.runtime.DatabasePrimitiveChunkLayout;
 
 /** Lazily retained radix-addressed primitive integer pages for a bounded owner. */
 final class IndexedIntChunks {
-  private static final int PAGE_SHIFT = 8;
-  private static final int PAGE_SIZE = 1 << PAGE_SHIFT;
-  private static final int PAGE_MASK = PAGE_SIZE - 1;
-  private static final int DIRECTORY_BITS = 8;
-  private static final int DIRECTORY_SIZE = 1 << DIRECTORY_BITS;
-  private static final int DIRECTORY_MASK = DIRECTORY_SIZE - 1;
   private final int maximum;
   private final int rootLength;
   private int[][][][] root;
   private int allocatedPages;
-  private int allocatedBranches;
-  private int allocatedDirectories;
 
   IndexedIntChunks(int maximumElements) {
     if (maximumElements < 0) throw new IllegalArgumentException("negative chunk capacity");
     maximum = maximumElements;
-    long maximumPages = ((long) maximumElements + PAGE_MASK) >>> PAGE_SHIFT;
-    rootLength = (int) ((maximumPages + 65_535L) >>> 16);
-    root = new int[rootLength][][][];
+    rootLength = DatabasePrimitiveChunkLayout.rootLength(maximumElements);
   }
 
   StatusCode reserve(int required) {
     if (required < 0 || required > maximum) return StatusCode.RESOURCE_EXHAUSTED;
     int pagesRequired = (int) (((long) required + PAGE_MASK) >>> PAGE_SHIFT);
     try {
+      if (pagesRequired > 0 && root == null) root = new int[rootLength][][][];
       while (allocatedPages < pagesRequired) {
         allocatePage(allocatedPages);
         allocatedPages++;
@@ -44,26 +43,19 @@ final class IndexedIntChunks {
     return (int) Math.min(maximum, (long) allocatedPages * PAGE_SIZE);
   }
   long allocatedBytes() {
-    return (long) allocatedPages * (PAGE_SIZE * Integer.BYTES + 16L)
-        + (long) allocatedBranches * (DIRECTORY_SIZE * 8L + 16L)
-        + (long) allocatedDirectories * (DIRECTORY_SIZE * 8L + 16L)
-        + (long) rootLength * 8L + 16L;
+    if (root == null) return 0;
+    return DatabasePrimitiveChunkLayout.retainedBytes(
+        maximum, allocatedCapacity(), Integer.BYTES);
   }
   long accountedBytesForCapacity(int required) {
-    if (required < 0 || required > maximum) return -1;
-    long pages = ((long) required + PAGE_MASK) >>> PAGE_SHIFT;
-    long branches = (pages + 65_535L) >>> 16;
-    long directories = (pages + DIRECTORY_MASK) >>> DIRECTORY_BITS;
-    return pages * (PAGE_SIZE * Integer.BYTES + 16L)
-        + branches * (DIRECTORY_SIZE * 8L + 16L)
-        + directories * (DIRECTORY_SIZE * 8L + 16L)
-        + (long) rootLength * 8L + 16L;
+    return DatabasePrimitiveChunkLayout.retainedBytes(
+        maximum, required, Integer.BYTES);
   }
   int get(int index) { return page(index)[index & PAGE_MASK]; }
   void set(int index, int value) { page(index)[index & PAGE_MASK] = value; }
   void release() {
     root = null;
-    allocatedPages = allocatedBranches = allocatedDirectories = 0;
+    allocatedPages = 0;
   }
 
   private void allocatePage(int page) {
@@ -71,11 +63,9 @@ final class IndexedIntChunks {
     int directory = (page >>> DIRECTORY_BITS) & DIRECTORY_MASK;
     if (root[branch] == null) {
       root[branch] = new int[DIRECTORY_SIZE][][];
-      allocatedBranches++;
     }
     if (root[branch][directory] == null) {
       root[branch][directory] = new int[DIRECTORY_SIZE][];
-      allocatedDirectories++;
     }
     root[branch][directory][page & DIRECTORY_MASK] = new int[PAGE_SIZE];
   }

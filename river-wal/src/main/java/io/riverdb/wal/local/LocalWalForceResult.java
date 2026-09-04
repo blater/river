@@ -5,7 +5,7 @@ public final class LocalWalForceResult {
   private long startOffset;
   private long durableEnd;
   private long commitSequence;
-  private int recordCount;
+  private long recordCount;
 
   public void reset() {
     startOffset = 0;
@@ -14,7 +14,7 @@ public final class LocalWalForceResult {
     recordCount = 0;
   }
 
-  public void set(long start, long end, int records, long committedAt) {
+  public void set(long start, long end, long records, long committedAt) {
     startOffset = start;
     durableEnd = end;
     recordCount = records;
@@ -29,7 +29,7 @@ public final class LocalWalForceResult {
     return durableEnd;
   }
 
-  public int recordCount() {
+  public long recordCount() {
     return recordCount;
   }
 

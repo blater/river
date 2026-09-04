@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.storage.btree.TupleBTreeScanBounds;
 import io.riverdb.tx.api.IsolationLevel;
+import io.riverdb.tx.api.lock.LockMode;
 import java.nio.ByteBuffer;
 
 /** Owns bounded transactional admission for persistent tuple-index cursors. */
@@ -15,14 +16,19 @@ final class IndexedTransactionTupleScans {
   StatusCode begin(
       long ownerObjectId, long keyId, long schemaId,
       io.riverdb.base.tuple.TupleShape shape, TupleBTreeScanBounds bounds,
+      LockMode serializableSourceMode,
       IndexedTupleScanCursor cursor) {
-    if (cursor == null || bounds == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (cursor == null || bounds == null
+        || serializableSourceMode == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     if (!session.activeTransaction()) return StatusCode.CONFLICT;
     StatusCode status = session.reserveTupleScan();
-    if (status.isOk()) status = session.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+    if (status.isOk()) status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     if (status.isOk()
         && session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE) {
-      status = protectRange(keyId, bounds);
+      status = protectRange(keyId, bounds, serializableSourceMode);
     }
     if (status.isOk()) status = session.selectScanSnapshot();
     long privateOwner = session.tupleLifecycle().publishingPrivateOwner(
@@ -33,15 +39,13 @@ final class IndexedTransactionTupleScans {
     if (status.isOk()) status = cursor.attach(session);
     if (status.isOk()) {
       session.registerTupleScan(cursor);
-      if (session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE) {
-        session.markSerializableScan();
-      }
     }
     else if (cursor.active()) session.table().closeTupleScan(cursor);
     return status;
   }
 
-  private StatusCode protectRange(long keyId, TupleBTreeScanBounds bounds) {
+  private StatusCode protectRange(
+      long keyId, TupleBTreeScanBounds bounds, LockMode serializableSourceMode) {
     ByteBuffer lower = bounds.lowerKey();
     ByteBuffer upper = bounds.upperKey();
     int lowerOffset = tupleOffset(lower, bounds.lowerOffset(), bounds.lowerLength());
@@ -52,10 +56,10 @@ final class IndexedTransactionTupleScans {
         || upper != null && (upperOffset < 0 || upperLength <= 0)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return session.acquireSharedTupleRangeForScan(
+    return session.acquireTupleRangeForScan(
         keyId,
         lower, lowerOffset, lowerLength, bounds.lowerInclusive(),
-        upper, upperOffset, upperLength, bounds.upperInclusive());
+        upper, upperOffset, upperLength, bounds.upperInclusive(), serializableSourceMode);
   }
 
   private static int tupleOffset(ByteBuffer key, int offset, int length) {

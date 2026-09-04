@@ -8,6 +8,8 @@ import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.engine.schema.cache.SchemaPin;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.sql.SqlCommandType;
+import io.riverdb.tx.api.lock.LockMode;
 
 /** Owns one reusable descriptor cursor and its independently selected access path. */
 final class SqlDescriptorPointScanAccess {
@@ -17,6 +19,7 @@ final class SqlDescriptorPointScanAccess {
   private final RelationalRowIdentityResult identity = new RelationalRowIdentityResult();
   private final RelationalLockedCandidateResult lockedCandidate =
       new RelationalLockedCandidateResult();
+  private LockMode serializableSourceMode = LockMode.SHARED;
 
   SqlDescriptorPointScanAccess(RelationalSession relationalSession) {
     session = relationalSession;
@@ -24,14 +27,25 @@ final class SqlDescriptorPointScanAccess {
 
   StatusCode prepare(
       SqlCommand command, TableDescriptor table, SqlDescriptorPredicate predicate) {
-    return index.prepare(command, table, predicate.bindings(), 0, null, null);
+    serializableSourceMode = LockMode.SHARED;
+    StatusCode status = index.prepare(command, table, predicate.bindings(), 0, null, null);
+    if (status.isOk()) {
+      serializableSourceMode = index.serializableSourceMode(lockingSource(command));
+    }
+    return status;
+  }
+
+  private static boolean lockingSource(SqlCommand command) {
+    return command.isSelectForUpdate() || command.type() == SqlCommandType.UPDATE
+        || command.type() == SqlCommandType.DELETE;
   }
 
   StatusCode open(SchemaPin pin) {
     StatusCode status = cursor.reset();
     if (!status.isOk()) return status;
     return index.active()
-        ? session.descriptorRows().beginIndexScan(pin, index.bounds(), cursor)
+        ? session.descriptorRows().beginIndexScan(
+            pin, index.bounds(), serializableSourceMode, cursor)
         : session.descriptorRows().beginScan(pin, cursor);
   }
 
@@ -66,6 +80,7 @@ final class SqlDescriptorPointScanAccess {
     StatusCode status = cursor.isActive()
         ? session.descriptorRows().closeScan(cursor) : StatusCode.OK;
     index.reset();
+    serializableSourceMode = LockMode.SHARED;
     return status;
   }
 }

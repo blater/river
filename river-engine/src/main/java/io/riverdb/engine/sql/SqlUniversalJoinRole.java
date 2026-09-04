@@ -38,6 +38,10 @@ final class SqlUniversalJoinRole {
   StatusCode open(SqlUniversalJoinRows rows) {
     return usesDescriptor ? descriptor.open(rows) : legacy.open();
   }
+  StatusCode open(
+      SqlUniversalJoinRows rows, SqlNestedRowProvider ancestors) {
+    return usesDescriptor ? descriptor.open(rows, ancestors) : legacy.open();
+  }
   StatusCode openFullScan() {
     return usesDescriptor ? descriptor.openFullScan() : legacy.open();
   }
@@ -58,7 +62,16 @@ final class SqlUniversalJoinRole {
   boolean indexed() { return usesDescriptor && descriptor.indexed(); }
   boolean exact() { return usesDescriptor && descriptor.exact(); }
   boolean unique() { return usesDescriptor && descriptor.unique(); }
+  int exactUniqueOuterColumns(
+      int sourceRole, TableDefinition source, int projectedInnerColumn, int[] target) {
+    return usesDescriptor
+        ? descriptor.exactUniqueOuterColumns(
+            sourceRole, source, projectedInnerColumn, target) : -1;
+  }
   int accessColumn() { return usesDescriptor ? descriptor.accessColumn() : -1; }
+  boolean hasResources() {
+    return descriptor.hasResources() || legacy.hasResources();
+  }
   long key() { return usesDescriptor ? descriptor.key() : legacy.key(); }
   long publicKey() { return usesDescriptor ? descriptor.publicKey() : legacy.key(); }
   SqlBlockRow row() { return usesDescriptor ? descriptor.row() : legacy.row(); }

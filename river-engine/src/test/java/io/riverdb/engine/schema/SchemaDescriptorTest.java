@@ -12,6 +12,7 @@ import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.format.btree.TupleKeyBuilder;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
@@ -227,7 +228,7 @@ final class SchemaDescriptorTest {
   }
 
   @Test
-  void computesPhysicalLayoutAndRejectsOversizedRows() {
+  void computesPhysicalLayoutAndAdmitsMaximumBigintColumns() {
     ColumnDescriptorSet.Result columnsResult = new ColumnDescriptorSet.Result();
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         new int[] {
@@ -247,7 +248,7 @@ final class SchemaDescriptorTest {
     assertEquals(4, table.fixedWidthAt(1));
     assertEquals(8, table.fixedWidthAt(2));
     assertTrue(table.fixedOffsetAt(1) > table.fixedOffsetAt(0));
-    assertTrue(table.encodedMaximumRowBytes() <= SqlShapeLimits.MAX_STORED_ROW_BYTES);
+    assertTrue(table.encodedMaximumRowBytes() <= HeapPage.MAXIMUM_ROW_BYTES);
     assertEquals(7, table.tableId());
     assertEquals(3, table.rowLayoutId());
     assertEquals(9, table.catalogGeneration());
@@ -262,44 +263,39 @@ final class SchemaDescriptorTest {
     ColumnDescriptorSet.Result wideColumns = new ColumnDescriptorSet.Result();
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         wideTypes, wideNames, wideNullability, wideColumns));
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, TableDescriptor.createForTest(
-        wideColumns.value(), null, null, null, new TableDescriptor.Result()));
+    TableDescriptor.Result wideTable = new TableDescriptor.Result();
+    assertEquals(StatusCode.OK, TableDescriptor.createForTest(
+        wideColumns.value(), null, null, null, wideTable));
+    assertEquals(8_352, wideTable.value().encodedMaximumRowBytes());
   }
 
   @Test
-  void checksCompleteWorstCaseRowAtEightKilobytes() {
-    int[] exactTypes = new int[10];
-    CharSequence[] exactNames = new CharSequence[10];
-    boolean[] exactNullable = new boolean[10];
-    exactTypes[0] = SqlTypeDescriptor.varchar(238);
-    exactNames[0] = "v0";
-    for (int index = 1; index < 8; index++) {
-      exactTypes[index] = SqlTypeDescriptor.varchar(255);
-      exactNames[index] = "v" + index;
-    }
-    exactTypes[8] = SqlTypeDescriptor.BOOLEAN;
-    exactTypes[9] = SqlTypeDescriptor.BOOLEAN;
-    exactNames[8] = "b8";
-    exactNames[9] = "b9";
+  void checksCompleteWorstCaseRowAtSingleHeapRowBoundary() {
+    int[] exactTypes = {
+      SqlTypeDescriptor.varchar(4_043),
+      SqlTypeDescriptor.BOOLEAN,
+      SqlTypeDescriptor.BOOLEAN,
+      SqlTypeDescriptor.BOOLEAN
+    };
+    CharSequence[] exactNames = {"v0", "b1", "b2", "b3"};
+    boolean[] exactNullable = new boolean[exactTypes.length];
     ColumnDescriptorSet.Result exact = new ColumnDescriptorSet.Result();
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         exactTypes, exactNames, exactNullable, exact));
     TableDescriptor.Result exactTable = new TableDescriptor.Result();
     assertEquals(StatusCode.OK, TableDescriptor.createForTest(
         exact.value(), null, null, null, exactTable));
-    assertEquals(8_192, exactTable.value().encodedMaximumRowBytes());
+    assertEquals(HeapPage.MAXIMUM_ROW_BYTES, exactTable.value().encodedMaximumRowBytes());
 
-    int[] overTypes = new int[11];
-    CharSequence[] overNames = new CharSequence[11];
-    boolean[] overNullable = new boolean[11];
-    for (int index = 0; index < 8; index++) {
-      overTypes[index] = SqlTypeDescriptor.varchar(index == 0 ? 238 : 255);
-      overNames[index] = "v" + index;
-    }
-    for (int index = 8; index < 11; index++) {
-      overTypes[index] = SqlTypeDescriptor.BOOLEAN;
-      overNames[index] = "b" + index;
-    }
+    int[] overTypes = {
+      SqlTypeDescriptor.varchar(4_043),
+      SqlTypeDescriptor.BOOLEAN,
+      SqlTypeDescriptor.BOOLEAN,
+      SqlTypeDescriptor.BOOLEAN,
+      SqlTypeDescriptor.BOOLEAN
+    };
+    CharSequence[] overNames = {"v0", "b1", "b2", "b3", "b4"};
+    boolean[] overNullable = new boolean[overTypes.length];
     ColumnDescriptorSet.Result over = new ColumnDescriptorSet.Result();
     assertEquals(StatusCode.OK, ColumnDescriptorSet.create(
         overTypes, overNames, overNullable, over));

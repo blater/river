@@ -4,6 +4,8 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
+import io.riverdb.engine.runtime.DatabaseProviderLease;
+import io.riverdb.engine.runtime.DatabaseStoreLease;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.wal.local.LocalWal;
@@ -20,10 +22,12 @@ final class IndexedTableStoreConstruction {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration generation,
-      IndexedTableStoreOpenResult result) {
+      IndexedTableStoreOpenResult result,
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease) {
     return construct(
         directory, pages, rows, versions, wal, database, generation, result,
-        IndexedPageCacheConfig.DEFAULT, IndexedTableStoreAllocator.SYSTEM);
+        providerLease, storeLease, IndexedTableStoreAllocator.SYSTEM);
   }
 
   static StatusCode construct(
@@ -35,27 +39,13 @@ final class IndexedTableStoreConstruction {
       DatabaseIncarnation database,
       WalGeneration generation,
       IndexedTableStoreOpenResult result,
-      IndexedPageCacheConfig pageCacheConfig) {
-    return construct(
-        directory, pages, rows, versions, wal, database, generation, result,
-        pageCacheConfig, IndexedTableStoreAllocator.SYSTEM);
-  }
-
-  static StatusCode construct(
-      DurableDirectory directory,
-      DirectoryOperationResult pages,
-      DirectoryOperationResult rows,
-      DirectoryOperationResult versions,
-      LocalWal wal,
-      DatabaseIncarnation database,
-      WalGeneration generation,
-      IndexedTableStoreOpenResult result,
-      IndexedPageCacheConfig pageCacheConfig,
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease,
       IndexedTableStoreAllocator allocator) {
     try {
       IndexedTableStore store = allocator.allocate(
           directory, pages.file(), rows.file(), versions.file(), wal, database, generation,
-          pageCacheConfig);
+          providerLease, storeLease);
       if (store == null) {
         StatusCode cleanup = IndexedOpenFiles.close(
             versions.file(), rows.file(), pages.file());
@@ -78,9 +68,12 @@ final class IndexedTableStoreConstruction {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration generation,
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease,
       IndexedTableStoreOpenResult result) {
     StatusCode status = construct(
-        directory, pages, rows, versions, wal, database, generation, result);
+        directory, pages, rows, versions, wal, database, generation, result,
+        providerLease, storeLease);
     IndexedTableStore store = result.store();
     try {
       if (status.isOk()) status = store.recoverFromWal();
@@ -100,9 +93,12 @@ final class IndexedTableStoreConstruction {
       DatabaseIncarnation database,
       WalGeneration generation,
       CheckpointState checkpoint,
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease,
       IndexedTableStoreOpenResult result) {
     StatusCode status = construct(
-        directory, pages, rows, versions, wal, database, generation, result);
+        directory, pages, rows, versions, wal, database, generation, result,
+        providerLease, storeLease);
     IndexedTableStore store = result.store();
     try {
       if (status.isOk()) status = store.loadCheckpoint(checkpoint);

@@ -36,7 +36,10 @@ final class RiverClientProgramExchange {
     StatusCode status;
     do {
       status = connection.codec.encodeProgramExecuteRequest(
-          connection.request, requestId, handle, isolationLevel, arguments);
+          connection.request, requestId, handle, isolationLevel, arguments,
+          connection.diagnosticTag,
+          connection.diagnosticStepTag,
+          connection.metricsEpoch);
     } while (status == StatusCode.RESOURCE_EXHAUSTED
         && connection.growRequestBytes().isOk());
     return status.isOk()

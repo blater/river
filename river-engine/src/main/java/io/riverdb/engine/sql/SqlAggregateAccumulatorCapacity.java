@@ -3,8 +3,8 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlAggregateKind;
 
 /** Exact-shape reusable storage admission for aggregate accumulator lanes. */
@@ -18,11 +18,11 @@ final class SqlAggregateAccumulatorCapacity {
         state.values.length, required, SqlShapeLimits.MAX_AGGREGATES, 8);
     if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
     int slots = textSlots(aggregates);
-    int textBytes = slots == 0 ? 0 : (slots + 1) * Utf8Text.MAXIMUM_BYTES;
+    int textBytes = slots == 0 ? 0 : (slots + 1) * TableSchema.MAXIMUM_ROW_BYTES;
     int currentText = state.text == null ? 0 : state.text.length;
     int grownText = textBytes == 0 ? currentText : BoundedArrayGrowth.capacity(
         currentText, textBytes,
-        SqlShapeLimits.MAX_ENCODED_RESULT_ROW_BYTES, Utf8Text.MAXIMUM_BYTES);
+        SqlShapeLimits.MAX_ENCODED_RESULT_ROW_BYTES, TableSchema.MAXIMUM_ROW_BYTES);
     if (grownText < 0) return StatusCode.RESOURCE_EXHAUSTED;
     state.eraseText();
     try {

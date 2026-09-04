@@ -53,10 +53,6 @@ final class SqlDataChangeParser {
 
   private StatusCode appendInsertRow(
       CharSequence sql, SqlCommand result, boolean subsequent) {
-    if (subsequent
-        && result.insertRowCount() >= SqlCommand.MAXIMUM_INSERT_ROWS) {
-      return StatusCode.RESOURCE_EXHAUSTED;
-    }
     StatusCode status = row(sql, result, rowResult);
     if (status.isOk()
         && subsequent

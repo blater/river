@@ -1,38 +1,36 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.relational.RelationalSession;
 import io.riverdb.engine.table.IndexedSavepoint;
 import io.riverdb.sql.SqlIdentifier;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
+import java.util.Arrays;
 
 /** Owns reusable SQL transaction, statement, and savepoint state for one session. */
 final class SqlTransactionState {
-  private static final int MAXIMUM_USER_SAVEPOINTS = 3;
-
   private final RelationalSession session;
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
-  private final IndexedSavepoint[] userSavepoints =
-      new IndexedSavepoint[MAXIMUM_USER_SAVEPOINTS];
-  private final char[][] userSavepointNames =
-      new char[MAXIMUM_USER_SAVEPOINTS][SqlIdentifier.MAXIMUM_LENGTH];
-  private final int[] userSavepointNameLengths =
-      new int[MAXIMUM_USER_SAVEPOINTS];
+  private IndexedSavepoint[] userSavepoints = new IndexedSavepoint[0];
+  private char[][] userSavepointNames = new char[0][];
+  private int[] userSavepointNameLengths = new int[0];
   private boolean explicit;
   private boolean statementActive;
   private int userSavepointCount;
 
   SqlTransactionState(RelationalSession relational) {
     session = relational;
-    for (int index = 0; index < userSavepoints.length; index++) {
-      userSavepoints[index] = new IndexedSavepoint();
-    }
   }
 
   boolean isExplicit() {
     return explicit;
+  }
+
+  boolean transactionHandleActive() {
+    return session.transactionHandleActive();
   }
 
   StatusCode beginExplicit(IsolationLevel isolation) {
@@ -53,6 +51,7 @@ final class SqlTransactionState {
     StatusCode status = session.commit(outcome);
     if (!session.transactionActive()) {
       explicit = false;
+      statementActive = false;
       clearUserSavepointsFrom(0);
     }
     return status;
@@ -65,6 +64,7 @@ final class SqlTransactionState {
     StatusCode status = session.abort(outcome);
     if (!session.transactionActive()) {
       explicit = false;
+      statementActive = false;
       clearUserSavepointsFrom(0);
     }
     return status;
@@ -122,13 +122,13 @@ final class SqlTransactionState {
   }
 
   StatusCode createUserSavepoint(CharSequence name) {
-    if (!explicit || userSavepointCount >= userSavepoints.length) {
-      return explicit ? StatusCode.RESOURCE_EXHAUSTED : StatusCode.CONFLICT;
-    }
+    if (!explicit) return StatusCode.CONFLICT;
     if (findUserSavepoint(name) >= 0) {
       return StatusCode.CONFLICT;
     }
-    StatusCode status = session.createSavepoint(userSavepoints[userSavepointCount]);
+    StatusCode status = reserveUserSavepoint();
+    if (!status.isOk()) return status;
+    status = session.createSavepoint(userSavepoints[userSavepointCount]);
     if (status.isOk()) {
       rememberUserSavepoint(name, userSavepointCount++);
     }
@@ -163,6 +163,29 @@ final class SqlTransactionState {
     userSavepointNameLengths[savepoint] = name.length();
     for (int index = 0; index < name.length(); index++) {
       userSavepointNames[savepoint][index] = name.charAt(index);
+    }
+  }
+
+  private StatusCode reserveUserSavepoint() {
+    if (userSavepointCount < userSavepoints.length) return StatusCode.OK;
+    if (userSavepointCount == Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
+    int capacity = BoundedArrayGrowth.capacity(
+        userSavepoints.length, userSavepointCount + 1, Integer.MAX_VALUE, 4);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    try {
+      IndexedSavepoint[] nextSavepoints = Arrays.copyOf(userSavepoints, capacity);
+      char[][] nextNames = Arrays.copyOf(userSavepointNames, capacity);
+      int[] nextNameLengths = Arrays.copyOf(userSavepointNameLengths, capacity);
+      for (int index = userSavepoints.length; index < capacity; index++) {
+        nextSavepoints[index] = new IndexedSavepoint();
+        nextNames[index] = new char[SqlIdentifier.MAXIMUM_LENGTH];
+      }
+      userSavepoints = nextSavepoints;
+      userSavepointNames = nextNames;
+      userSavepointNameLengths = nextNameLengths;
+      return StatusCode.OK;
+    } catch (OutOfMemoryError failure) {
+      return StatusCode.RESOURCE_EXHAUSTED;
     }
   }
 

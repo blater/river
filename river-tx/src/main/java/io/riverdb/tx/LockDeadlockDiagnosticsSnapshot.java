@@ -7,6 +7,9 @@ import io.riverdb.tx.api.lock.LockScope;
 /** Caller-owned bounded copy of generic deadlock diagnostics. */
 public final class LockDeadlockDiagnosticsSnapshot {
   private static final StatusCode[] STATUS_CODES = StatusCode.values();
+  private static final long[] NO_LONGS = new long[0];
+  private static final int[] NO_INTS = new int[0];
+  private static final byte[] NO_BYTES = new byte[0];
   final LockDeadlockDiagnosticsConfig config;
   final long[] epochs;
   final int[] epochSignatureCounts;
@@ -30,6 +33,7 @@ public final class LockDeadlockDiagnosticsSnapshot {
   final long[] eventTransactionGenerations;
   final long[] eventStartOrders;
   final long[] eventDiagnosticTags;
+  final long[] eventDiagnosticStepTags;
   final int[] eventSignatureIndexes;
   final int[] eventQueuedCancelled;
   final int[] eventHoldingsReleased;
@@ -42,10 +46,12 @@ public final class LockDeadlockDiagnosticsSnapshot {
   final long[] edgeWaiterGenerations;
   final long[] edgeWaiterStartOrders;
   final long[] edgeWaiterTags;
+  final long[] edgeWaiterStepTags;
   final long[] edgeBlockerIds;
   final long[] edgeBlockerGenerations;
   final long[] edgeBlockerStartOrders;
   final long[] edgeBlockerTags;
+  final long[] edgeBlockerStepTags;
   final long[] edgeResourceNamespaces;
   final long[] edgeResourceLowerKeys;
   final long[] edgeResourceUpperNamespaces;
@@ -59,6 +65,7 @@ public final class LockDeadlockDiagnosticsSnapshot {
   final byte[] edgeScopes;
   final byte[] edgeRequestedModes;
   final byte[] edgeHeldModes;
+  final byte[] edgeBlockerRequestedModes;
   final byte[] edgeWaiterQueueKinds;
   final byte[] edgeBlockerQueueKinds;
   final byte[] edgePredicateResults;
@@ -88,63 +95,74 @@ public final class LockDeadlockDiagnosticsSnapshot {
     int events = config.victimEventCapacity();
     int exemplars = config.exemplarCapacity();
     int edges = config.edgeCapacity();
-    epochs = new long[config.maximumEpochs()];
-    epochSignatureCounts = new int[config.maximumEpochs()];
-    epochVictimEventCounts = new int[config.maximumEpochs()];
-    signatureEpochs = new long[signatures];
-    fingerprints = new long[signatures];
-    collisionGuards = new long[signatures];
-    signatureVictims = new long[signatures];
-    signatureOutcomes = new long[signatures];
-    signatureQueuedCancelled = new long[signatures];
-    signatureHoldingsReleased = new long[signatures];
-    signatureFirstSequences = new long[signatures];
-    signatureLastSequences = new long[signatures];
-    signatureExemplars = new int[signatures];
-    eventEpochs = new long[events];
-    eventSequences = new long[events];
-    eventOutcomeSequences = new long[events];
-    eventVictimSequences = new long[events];
-    eventFingerprints = new long[events];
-    eventTransactionIds = new long[events];
-    eventTransactionGenerations = new long[events];
-    eventStartOrders = new long[events];
-    eventDiagnosticTags = new long[events];
-    eventSignatureIndexes = new int[events];
-    eventQueuedCancelled = new int[events];
-    eventHoldingsReleased = new int[events];
-    eventCleanupValid = new byte[events];
-    eventOutcomeStatuses = new byte[events];
-    exemplarSignatureIndexes = new int[exemplars];
-    exemplarEventIndexes = new int[exemplars];
-    exemplarEdgeCounts = new int[exemplars];
-    edgeWaiterIds = new long[edges];
-    edgeWaiterGenerations = new long[edges];
-    edgeWaiterStartOrders = new long[edges];
-    edgeWaiterTags = new long[edges];
-    edgeBlockerIds = new long[edges];
-    edgeBlockerGenerations = new long[edges];
-    edgeBlockerStartOrders = new long[edges];
-    edgeBlockerTags = new long[edges];
-    edgeResourceNamespaces = new long[edges];
-    edgeResourceLowerKeys = new long[edges];
-    edgeResourceUpperNamespaces = new long[edges];
-    edgeResourceUpperKeys = new long[edges];
-    edgeResourceDigests = new long[edges];
-    edgeBlockingResourceDigests = new long[edges];
-    edgeWaiterQueueOrders = new long[edges];
-    edgeBlockerQueueOrders = new long[edges];
-    edgeKinds = new byte[edges];
-    edgePreconditions = new byte[edges];
-    edgeScopes = new byte[edges];
-    edgeRequestedModes = new byte[edges];
-    edgeHeldModes = new byte[edges];
-    edgeWaiterQueueKinds = new byte[edges];
-    edgeBlockerQueueKinds = new byte[edges];
-    edgePredicateResults = new byte[edges];
+    epochs = longs(config.maximumEpochs());
+    epochSignatureCounts = ints(config.maximumEpochs());
+    epochVictimEventCounts = ints(config.maximumEpochs());
+    signatureEpochs = longs(signatures);
+    fingerprints = longs(signatures);
+    collisionGuards = longs(signatures);
+    signatureVictims = longs(signatures);
+    signatureOutcomes = longs(signatures);
+    signatureQueuedCancelled = longs(signatures);
+    signatureHoldingsReleased = longs(signatures);
+    signatureFirstSequences = longs(signatures);
+    signatureLastSequences = longs(signatures);
+    signatureExemplars = ints(signatures);
+    eventEpochs = longs(events);
+    eventSequences = longs(events);
+    eventOutcomeSequences = longs(events);
+    eventVictimSequences = longs(events);
+    eventFingerprints = longs(events);
+    eventTransactionIds = longs(events);
+    eventTransactionGenerations = longs(events);
+    eventStartOrders = longs(events);
+    eventDiagnosticTags = longs(events);
+    eventDiagnosticStepTags = longs(events);
+    eventSignatureIndexes = ints(events);
+    eventQueuedCancelled = ints(events);
+    eventHoldingsReleased = ints(events);
+    eventCleanupValid = bytes(events);
+    eventOutcomeStatuses = bytes(events);
+    exemplarSignatureIndexes = ints(exemplars);
+    exemplarEventIndexes = ints(exemplars);
+    exemplarEdgeCounts = ints(exemplars);
+    edgeWaiterIds = longs(edges);
+    edgeWaiterGenerations = longs(edges);
+    edgeWaiterStartOrders = longs(edges);
+    edgeWaiterTags = longs(edges);
+    edgeWaiterStepTags = longs(edges);
+    edgeBlockerIds = longs(edges);
+    edgeBlockerGenerations = longs(edges);
+    edgeBlockerStartOrders = longs(edges);
+    edgeBlockerTags = longs(edges);
+    edgeBlockerStepTags = longs(edges);
+    edgeResourceNamespaces = longs(edges);
+    edgeResourceLowerKeys = longs(edges);
+    edgeResourceUpperNamespaces = longs(edges);
+    edgeResourceUpperKeys = longs(edges);
+    edgeResourceDigests = longs(edges);
+    edgeBlockingResourceDigests = longs(edges);
+    edgeWaiterQueueOrders = longs(edges);
+    edgeBlockerQueueOrders = longs(edges);
+    edgeKinds = bytes(edges);
+    edgePreconditions = bytes(edges);
+    edgeScopes = bytes(edges);
+    edgeRequestedModes = bytes(edges);
+    edgeHeldModes = bytes(edges);
+    edgeBlockerRequestedModes = bytes(edges);
+    edgeWaiterQueueKinds = bytes(edges);
+    edgeBlockerQueueKinds = bytes(edges);
+    edgePredicateResults = bytes(edges);
   }
 
   public boolean enabled() { return config.enabled(); }
+  public long maximumRetainedBytes() { return config.maximumRetainedBytes(); }
+  public long retainedPayloadBytes() { return config.retainedPayloadBytes(); }
+  public int maximumEpochs() { return config.maximumEpochs(); }
+  public int signaturesPerEpoch() { return config.signaturesPerEpoch(); }
+  public int victimEventsPerEpoch() { return config.victimEventsPerEpoch(); }
+  public int exemplarsPerSignature() { return config.exemplarsPerSignature(); }
+  public int maximumCycleEdges() { return config.maximumCycleEdges(); }
   public int fingerprintVersion() { return LockDeadlockDiagnostics.FINGERPRINT_VERSION; }
   public long totalVictimSelections() { return totalVictimSelections; }
   public long victimTransactionOutcomes() { return victimTransactionOutcomes; }
@@ -227,6 +245,9 @@ public final class LockDeadlockDiagnosticsSnapshot {
     return eventStartOrders[event(index)];
   }
   public long eventDiagnosticTagAt(int index) { return eventDiagnosticTags[event(index)]; }
+  public long eventDiagnosticStepTagAt(int index) {
+    return eventDiagnosticStepTags[event(index)];
+  }
   public int eventSignatureIndexAt(int index) { return eventSignatureIndexes[event(index)]; }
   public int eventQueuedRequestsCancelledAt(int index) {
     return eventQueuedCancelled[event(index)];
@@ -260,12 +281,18 @@ public final class LockDeadlockDiagnosticsSnapshot {
   }
   public long edgeWaiterStartOrderAt(int index) { return edgeWaiterStartOrders[edge(index)]; }
   public long edgeWaiterDiagnosticTagAt(int index) { return edgeWaiterTags[edge(index)]; }
+  public long edgeWaiterDiagnosticStepTagAt(int index) {
+    return edgeWaiterStepTags[edge(index)];
+  }
   public long edgeBlockerTransactionIdAt(int index) { return edgeBlockerIds[edge(index)]; }
   public long edgeBlockerTransactionGenerationAt(int index) {
     return edgeBlockerGenerations[edge(index)];
   }
   public long edgeBlockerStartOrderAt(int index) { return edgeBlockerStartOrders[edge(index)]; }
   public long edgeBlockerDiagnosticTagAt(int index) { return edgeBlockerTags[edge(index)]; }
+  public long edgeBlockerDiagnosticStepTagAt(int index) {
+    return edgeBlockerStepTags[edge(index)];
+  }
   public LockScope edgeResourceScopeAt(int index) {
     return LockExactTable.LOCK_SCOPES[Byte.toUnsignedInt(edgeScopes[edge(index)])];
   }
@@ -284,6 +311,10 @@ public final class LockDeadlockDiagnosticsSnapshot {
   }
   public LockMode edgeHeldModeAt(int index) {
     int ordinal = Byte.toUnsignedInt(edgeHeldModes[edge(index)]) - 1;
+    return ordinal < 0 ? null : LockExactTable.LOCK_MODES[ordinal];
+  }
+  public LockMode edgeBlockerRequestedModeAt(int index) {
+    int ordinal = Byte.toUnsignedInt(edgeBlockerRequestedModes[edge(index)]) - 1;
     return ordinal < 0 ? null : LockExactTable.LOCK_MODES[ordinal];
   }
   public LockQueueKind edgeWaiterQueueKindAt(int index) {
@@ -355,6 +386,7 @@ public final class LockDeadlockDiagnosticsSnapshot {
     copy(source.eventTransactionGenerations, eventTransactionGenerations);
     copy(source.eventStartOrders, eventStartOrders);
     copy(source.eventDiagnosticTags, eventDiagnosticTags);
+    copy(source.eventDiagnosticStepTags, eventDiagnosticStepTags);
     copy(source.eventSignatureIndexes, eventSignatureIndexes);
     copy(source.eventQueuedCancelled, eventQueuedCancelled);
     copy(source.eventHoldingsReleased, eventHoldingsReleased);
@@ -367,10 +399,12 @@ public final class LockDeadlockDiagnosticsSnapshot {
     copy(source.edgeWaiterGenerations, edgeWaiterGenerations);
     copy(source.edgeWaiterStartOrders, edgeWaiterStartOrders);
     copy(source.edgeWaiterTags, edgeWaiterTags);
+    copy(source.edgeWaiterStepTags, edgeWaiterStepTags);
     copy(source.edgeBlockerIds, edgeBlockerIds);
     copy(source.edgeBlockerGenerations, edgeBlockerGenerations);
     copy(source.edgeBlockerStartOrders, edgeBlockerStartOrders);
     copy(source.edgeBlockerTags, edgeBlockerTags);
+    copy(source.edgeBlockerStepTags, edgeBlockerStepTags);
     copy(source.edgeResourceNamespaces, edgeResourceNamespaces);
     copy(source.edgeResourceLowerKeys, edgeResourceLowerKeys);
     copy(source.edgeResourceUpperNamespaces, edgeResourceUpperNamespaces);
@@ -384,6 +418,7 @@ public final class LockDeadlockDiagnosticsSnapshot {
     copy(source.edgeScopes, edgeScopes);
     copy(source.edgeRequestedModes, edgeRequestedModes);
     copy(source.edgeHeldModes, edgeHeldModes);
+    copy(source.edgeBlockerRequestedModes, edgeBlockerRequestedModes);
     copy(source.edgeWaiterQueueKinds, edgeWaiterQueueKinds);
     copy(source.edgeBlockerQueueKinds, edgeBlockerQueueKinds);
     copy(source.edgePredicateResults, edgePredicateResults);
@@ -391,6 +426,8 @@ public final class LockDeadlockDiagnosticsSnapshot {
 
   boolean compatible(LockDeadlockDiagnosticsConfig other) {
     return other != null
+        && other.maximumRetainedBytes() == config.maximumRetainedBytes()
+        && other.retainedPayloadBytes() == config.retainedPayloadBytes()
         && other.maximumEpochs() == config.maximumEpochs()
         && other.signaturesPerEpoch() == config.signaturesPerEpoch()
         && other.victimEventsPerEpoch() == config.victimEventsPerEpoch()
@@ -419,5 +456,14 @@ public final class LockDeadlockDiagnosticsSnapshot {
   }
   private static long add(long value, long delta) {
     return delta > Long.MAX_VALUE - value ? Long.MAX_VALUE : value + delta;
+  }
+  private static long[] longs(int capacity) {
+    return capacity == 0 ? NO_LONGS : new long[capacity];
+  }
+  private static int[] ints(int capacity) {
+    return capacity == 0 ? NO_INTS : new int[capacity];
+  }
+  private static byte[] bytes(int capacity) {
+    return capacity == 0 ? NO_BYTES : new byte[capacity];
   }
 }

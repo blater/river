@@ -72,8 +72,18 @@ final class IndexedCurrentRowAccess {
         || !OrderedKey.isFiniteSpace(space)) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = resetCurrentKey();
     keyCandidate.reset();
-    if (status.isOk()) status = session.fetchCandidateByKey(space, key, keyCandidate);
+    if (status.isOk()) status = session.fetchCandidateByKey(
+        space, key, LockMode.UPDATE, keyCandidate);
     if (status.isOk()) status = lockCurrent(keyCandidate, keyCurrent);
+    if (status.isOk()) result.copyFrom(keyCurrent.row());
+    return status;
+  }
+
+  StatusCode lockCurrentKeyCurrent(long space, long key, HeapRowResult result) {
+    if (result == null || session.transaction().state() != TransactionState.ACTIVE
+        || !OrderedKey.isFiniteSpace(space)) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = resetCurrentKey();
+    if (status.isOk()) status = lockCurrentKeyCurrent(space, key, keyCurrent);
     if (status.isOk()) result.copyFrom(keyCurrent.row());
     return status;
   }

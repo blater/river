@@ -12,6 +12,8 @@ final class LockDeadlockDiagnostics {
   private static final AtomicLong SERVER_EVENT_SEQUENCE = new AtomicLong();
   private static final long HASH_OFFSET = 0xcbf29ce484222325L;
   private static final long HASH_PRIME = 0x100000001b3L;
+  private static final long[] NO_LONGS = new long[0];
+  private static final byte[] NO_BYTES = new byte[0];
 
   private final LockExactTable table;
   private final LockExactCycleValidator validator;
@@ -27,16 +29,17 @@ final class LockDeadlockDiagnostics {
 
   LockDeadlockDiagnostics(LockExactTable owner, LockDeadlockDiagnosticsConfig configuration) {
     table = owner;
-    validator = new LockExactCycleValidator(owner);
+    validator = configuration.enabled() ? new LockExactCycleValidator(owner) : null;
     config = configuration;
     state = new LockDeadlockDiagnosticsSnapshot(configuration);
-    cycleRequests = new long[configuration.maximumCycleEdges()];
-    cycleBlockers = new long[configuration.maximumCycleEdges()];
-    cycleBlockingResources = new long[configuration.maximumCycleEdges()];
-    cycleShape = new long[configuration.maximumCycleEdges()];
-    cycleGuardShape = new long[configuration.maximumCycleEdges()];
-    cycleKinds = new byte[configuration.maximumCycleEdges()];
-    cyclePreconditions = new byte[configuration.maximumCycleEdges()];
+    int edges = configuration.maximumCycleEdges();
+    cycleRequests = edges == 0 ? NO_LONGS : new long[edges];
+    cycleBlockers = edges == 0 ? NO_LONGS : new long[edges];
+    cycleBlockingResources = edges == 0 ? NO_LONGS : new long[edges];
+    cycleShape = edges == 0 ? NO_LONGS : new long[edges];
+    cycleGuardShape = edges == 0 ? NO_LONGS : new long[edges];
+    cycleKinds = edges == 0 ? NO_BYTES : new byte[edges];
+    cyclePreconditions = edges == 0 ? NO_BYTES : new byte[edges];
   }
 
   boolean prepareSelection(
@@ -45,6 +48,11 @@ final class LockDeadlockDiagnostics {
       LockExactBlockerCursor backEdge,
       long victim,
       long victimSelectionSequence) {
+    if (!config.enabled()) {
+      state.totalVictimSelections = increment(state.totalVictimSelections);
+      bindSelection(victim, -1, -1);
+      return true;
+    }
     long epoch = metricsEpoch(victim);
     long eventSequence = nextEventSequence();
     if (eventSequence <= 0) state.eventSequenceOverflows = increment(state.eventSequenceOverflows);
@@ -55,7 +63,6 @@ final class LockDeadlockDiagnostics {
       state.lastValidationFailureEpoch = epoch;
       return false;
     }
-    if (!config.enabled()) return true;
     state.totalVictimSelections = increment(state.totalVictimSelections);
     if (edgeCount > config.maximumCycleEdges()) {
       state.cycleEdgeOverflows = increment(state.cycleEdgeOverflows);
@@ -77,7 +84,6 @@ final class LockDeadlockDiagnostics {
   }
 
   void completeCleanup(long victim, int queuedCancelled, int released, boolean cleanupValid) {
-    if (!config.enabled()) return;
     state.queuedRequestsCancelled = add(state.queuedRequestsCancelled, queuedCancelled);
     state.holdingsReleased = add(state.holdingsReleased, released);
     LockExactTransactionStore.Chunk transactions = table.state.transactions.record(victim);
@@ -98,12 +104,14 @@ final class LockDeadlockDiagnostics {
   }
 
   void transactionOutcome(long transaction, StatusCode status) {
-    if (!config.enabled() || !table.state.transactions.occupied(transaction)) return;
+    if (!table.state.transactions.occupied(transaction)) return;
     LockExactTransactionStore.Chunk transactions = table.state.transactions.record(transaction);
     int offset = LockTypedSlots.offset(transaction);
-    int signature = decodeIndex(transactions.selectedSignatureIndexes[offset]);
-    int event = decodeIndex(transactions.selectedEventIndexes[offset]);
-    if (signature < 0 && event < 0) return;
+    long encodedSignature = transactions.selectedSignatureIndexes[offset];
+    long encodedEvent = transactions.selectedEventIndexes[offset];
+    if (encodedSignature == 0 && encodedEvent == 0) return;
+    int signature = decodeIndex(encodedSignature);
+    int event = decodeIndex(encodedEvent);
     state.victimTransactionOutcomes = increment(state.victimTransactionOutcomes);
     if (signature >= 0) {
       state.signatureOutcomes[signature] = increment(state.signatureOutcomes[signature]);
@@ -121,7 +129,7 @@ final class LockDeadlockDiagnostics {
   boolean selfValidEdge(
       long waiter, long request, long blocker, long blockingResource,
       LockDeadlockEdgeKind kind, LockGrantPrecondition precondition) {
-    return validator.validEdge(waiter, request, blocker, blockingResource,
+    return validator != null && validator.validEdge(waiter, request, blocker, blockingResource,
         (byte) kind.ordinal(), (byte) precondition.ordinal());
   }
 
@@ -228,6 +236,9 @@ final class LockDeadlockDiagnostics {
     if (kind == LockDeadlockEdgeKind.ACTIVE_OWNER.ordinal()) {
       LockExactHoldingStore.Chunk holdings = table.state.holdings.record(blocker);
       hash = mix(hash, holdings.modes[LockTypedSlots.offset(blocker)]);
+    } else {
+      LockExactRequestStore.Chunk blockers = table.state.requests.record(blocker);
+      hash = mix(hash, blockers.modes[LockTypedSlots.offset(blocker)]);
     }
     return avalanche(hash);
   }
@@ -325,12 +336,14 @@ final class LockDeadlockDiagnostics {
     state.eventTransactionGenerations[event] = transactions.transactionGenerations[offset];
     state.eventStartOrders[event] = transactions.startOrders[offset];
     state.eventDiagnosticTags[event] = transactions.diagnosticTags[offset];
+    state.eventDiagnosticStepTags[event] = transactions.diagnosticStepTags[offset];
     state.eventSignatureIndexes[event] = signature;
     state.epochVictimEventCounts[epochIndex]++;
     return event;
   }
 
   private void admitExemplar(int signature, int event, int edgeCount, int rotation) {
+    if (config.exemplarsPerSignature() == 0) return;
     int count = state.signatureExemplars[signature];
     if (count == config.exemplarsPerSignature()) {
       state.exemplarOverflows = increment(state.exemplarOverflows);
@@ -372,9 +385,14 @@ final class LockDeadlockDiagnostics {
         blocking.hashes[LockTypedSlots.offset(blockingResource)];
     state.edgeRequestedModes[target] = requests.modes[requestOffset];
     state.edgeHeldModes[target] = 0;
+    state.edgeBlockerRequestedModes[target] = 0;
     if (kind == LockDeadlockEdgeKind.ACTIVE_OWNER.ordinal()) {
       LockExactHoldingStore.Chunk holdings = table.state.holdings.record(blocker);
       state.edgeHeldModes[target] = (byte) (holdings.modes[LockTypedSlots.offset(blocker)] + 1);
+    } else {
+      LockExactRequestStore.Chunk blockers = table.state.requests.record(blocker);
+      state.edgeBlockerRequestedModes[target] =
+          (byte) (blockers.modes[LockTypedSlots.offset(blocker)] + 1);
     }
     state.edgeWaiterQueueKinds[target] = (byte) waiterQueueKind(request).ordinal();
     state.edgeBlockerQueueKinds[target] = (byte) blockerQueueKind(kind, blocker).ordinal();
@@ -397,11 +415,13 @@ final class LockDeadlockDiagnostics {
       state.edgeWaiterGenerations[target] = transactions.transactionGenerations[offset];
       state.edgeWaiterStartOrders[target] = transactions.startOrders[offset];
       state.edgeWaiterTags[target] = transactions.diagnosticTags[offset];
+      state.edgeWaiterStepTags[target] = transactions.diagnosticStepTags[offset];
     } else {
       state.edgeBlockerIds[target] = transactions.transactionIds[offset];
       state.edgeBlockerGenerations[target] = transactions.transactionGenerations[offset];
       state.edgeBlockerStartOrders[target] = transactions.startOrders[offset];
       state.edgeBlockerTags[target] = transactions.diagnosticTags[offset];
+      state.edgeBlockerStepTags[target] = transactions.diagnosticStepTags[offset];
     }
   }
 
@@ -409,7 +429,8 @@ final class LockDeadlockDiagnostics {
     LockExactTransactionStore.Chunk transactions = table.state.transactions.record(victim);
     int offset = LockTypedSlots.offset(victim);
     transactions.selectedSignatureIndexes[offset] = encodeIndex(signature);
-    transactions.selectedEventIndexes[offset] = encodeIndex(event);
+    transactions.selectedEventIndexes[offset] = signature < 0 && event < 0
+        ? -1 : encodeIndex(event);
   }
 
   private long metricsEpoch(long transaction) {
@@ -483,7 +504,7 @@ final class LockDeadlockDiagnostics {
   }
 
   private static long encodeIndex(int index) { return index < 0 ? 0 : (long) index + 1; }
-  private static int decodeIndex(long encoded) { return encoded == 0 ? -1 : (int) (encoded - 1); }
+  private static int decodeIndex(long encoded) { return encoded <= 0 ? -1 : (int) (encoded - 1); }
   private static long increment(long value) {
     return value == Long.MAX_VALUE ? Long.MAX_VALUE : value + 1;
   }

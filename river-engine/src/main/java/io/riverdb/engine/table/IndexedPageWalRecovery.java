@@ -27,8 +27,7 @@ final class IndexedPageWalRecovery {
       ByteBuffer payload, long recordStart, long recordEnd,
       long commitSequence, WalGeneration generation) {
     StatusCode status = IndexedWalCodec.validatePageOperation(
-        payload, IndexedTableLimits.MAX_CHANGED_PAGES,
-        IndexedTableLimits.MAX_OPERATION_ROWS);
+        payload, IndexedTableLimits.MAX_CHANGED_PAGES);
     if (!status.isOk()) return status;
     int pagesInRecord = IndexedWalCodec.pageOperationPageCount(payload);
     int versions = IndexedWalCodec.pageOperationVersionCount(payload);

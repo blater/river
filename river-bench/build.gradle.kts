@@ -20,6 +20,15 @@ tasks.withType<JavaCompile>().configureEach {
   options.compilerArgs.add("-Xlint:-processing")
 }
 
+tasks.register("riverHarnessRuntimeClasspath") {
+  group = "verification"
+  description = "Builds and reports the complete runtime classpath used by river-harness."
+  dependsOn(configurations.runtimeClasspath)
+  doLast {
+    println("RIVER_HARNESS_CLASSPATH=" + sourceSets.main.get().runtimeClasspath.asPath)
+  }
+}
+
 tasks.register<JavaExec>("benchmarkSmoke") {
   group = "verification"
   description = "Writes one immutable local-only benchmark harness smoke."

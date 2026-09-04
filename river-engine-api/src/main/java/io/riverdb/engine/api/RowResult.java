@@ -2,6 +2,7 @@ package io.riverdb.engine.api;
 
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.error.StatusCode;
+import java.nio.ByteBuffer;
 
 /** Reusable bounded row result; unavailable with OK denotes end of stream. */
 public final class RowResult {
@@ -123,8 +124,7 @@ public final class RowResult {
         || index >= columnCount
         || source == null
         || offset < 0
-        || length < 0
-        || length > CommandResult.MAXIMUM_TEXT_CHARACTERS) {
+        || length < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     return values.setText(index, source, offset, length);
@@ -203,6 +203,16 @@ public final class RowResult {
 
   public int textLengthAt(int index) {
     return values.textLengthAt(index);
+  }
+
+  /** Canonical UTF-8 byte length retained by this row, or {@code -1} when unavailable. */
+  public int encodedTextLengthAt(int index) {
+    return values.encodedTextLengthAt(index);
+  }
+
+  /** Copies canonical UTF-8 directly into a caller-owned absolute range. */
+  public int copyEncodedTextAt(int index, ByteBuffer destination, int offset) {
+    return values.copyEncodedTextAt(index, destination, offset);
   }
 
   public int copyTextAt(int index, char[] destination, int offset) {

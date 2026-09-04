@@ -17,6 +17,8 @@ final class RelationalDescriptorTupleDeltaValidation {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     for (int index = 0; index < plan.keyCount(); index++) {
+      if (plan.kind() == RelationalDescriptorTupleDeltaPlan.UPDATE
+          && !plan.changedAt(index)) continue;
       KeyDescriptor key = plan.keyAt(index);
       if (!key.isUnique() || nullableUnique(plan, index, key)) continue;
       ByteBuffer user = plan.userKey(index, true);

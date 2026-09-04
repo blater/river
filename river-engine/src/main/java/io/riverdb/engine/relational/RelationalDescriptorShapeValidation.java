@@ -19,7 +19,7 @@ final class RelationalDescriptorShapeValidation {
     if (textBytes < 0) return StatusCode.CORRUPTION;
     return values.reserve(
         table.columnCount(), SqlShapeLimits.MAX_TABLE_COLUMNS,
-        textBytes, SqlShapeLimits.MAX_STORED_ROW_BYTES);
+        textBytes, TableSchema.MAXIMUM_ROW_BYTES);
   }
 
   private static int maximumTextBytes(TableDescriptor table) {
@@ -28,7 +28,7 @@ final class RelationalDescriptorShapeValidation {
       int descriptor = table.typeDescriptorAt(index);
       if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         bytes += SqlTypeDescriptor.parameterOne(descriptor) * 4L;
-        if (bytes > SqlShapeLimits.MAX_STORED_ROW_BYTES) return -1;
+        if (bytes > TableSchema.MAXIMUM_ROW_BYTES) return -1;
       }
     }
     return (int) bytes;
@@ -37,7 +37,7 @@ final class RelationalDescriptorShapeValidation {
   private static StatusCode validate(TableDescriptor table) {
     if (table == null || table.columnCount() <= 0
         || table.columnCount() > SqlShapeLimits.MAX_TABLE_COLUMNS
-        || table.encodedMaximumRowBytes() > SqlShapeLimits.MAX_STORED_ROW_BYTES) {
+        || table.encodedMaximumRowBytes() > TableSchema.MAXIMUM_ROW_BYTES) {
       return StatusCode.CORRUPTION;
     }
     KeyDescriptor primary = table.primaryKey();

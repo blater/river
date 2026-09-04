@@ -2,7 +2,6 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.collection.BoundedArrayGrowth;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.ExactDecimal128;
 import io.riverdb.base.type.SqlNumericTypeRules;
@@ -37,7 +36,7 @@ final class SqlDescriptorPrimaryValues {
   StatusCode begin(int columns, int textBytes, SqlCommand source) {
     int laneCapacity = capacity(values.capacity(), columns, columns, 8);
     int valueTextCapacity = capacity(values.textCapacity(), textBytes, textBytes, 8);
-    int commandTextCapacity = Math.min(textBytes, Utf8Text.MAXIMUM_BUFFER_BYTES);
+    int commandTextCapacity = textBytes;
     if (laneCapacity < 0 || valueTextCapacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
     long charged = (long) (laneCapacity - values.capacity()) * LANE_BYTES
         + (long) (words(laneCapacity) - words(values.capacity())) * Long.BYTES
@@ -88,7 +87,9 @@ final class SqlDescriptorPrimaryValues {
       }
       return values.setFixed(column, target, converted.value);
     }
-    return values.setFixed(column, target, value);
+    StatusCode status = values.setFixed(column, target, value);
+    return status == StatusCode.INVALID_EXTERNAL_INPUT
+        ? StatusCode.CONFLICT : status;
   }
 
   private StatusCode assignDecimal128(

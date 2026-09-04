@@ -29,7 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class RelationalDatabaseResourceAdmissionTest {
-  private static final long DATABASE_BYTES = 128_000_000L;
+  private static final long DATABASE_BYTES = 192_000_000L;
+  private static final long ROOT_BYTES = DATABASE_BYTES * 2;
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x5245534f55524345L, 0x4441544142415345L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
@@ -38,13 +39,15 @@ final class RelationalDatabaseResourceAdmissionTest {
   void ordinaryRelationalLifecycleUsesTheDerivedGovernor(@TempDir Path directory) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(directory, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(
+            resourceRequest(), directory, DATABASE, GENERATION, 8, opened));
     assertTrue(opened.database().resourceGoverned());
     assertTrue(opened.database().resourceWriteEntryCapacity() > 384);
     assertEquals(StatusCode.OK, opened.database().close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(directory, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(
+            resourceRequest(), directory, DATABASE, GENERATION, 8, opened));
     assertTrue(opened.database().resourceGoverned());
     assertTrue(opened.database().resourceWriteEntryCapacity() > 384);
     assertEquals(StatusCode.OK, opened.database().close());
@@ -52,7 +55,7 @@ final class RelationalDatabaseResourceAdmissionTest {
 
   @Test
   void governedCreateFailureCloseAndReopenConserveRootCapacity(@TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     DatabaseResourcePlan plan = plan();
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
@@ -78,7 +81,7 @@ final class RelationalDatabaseResourceAdmissionTest {
   @Test
   void rejectsOwnerPlanSmallerThanTransactionAdmissionBeforeOpeningFiles(
       @TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
         RelationalDatabase.create(
@@ -89,15 +92,17 @@ final class RelationalDatabaseResourceAdmissionTest {
   }
 
   @Test
-  void openRetainsTheConfiguredLockProviderByteEnvelope(@TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+  void openRetainsEveryConfiguredDatabaseProviderByteEnvelope(@TempDir Path directory) {
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     DatabaseResourcePlan plan = plan(1);
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         EmbeddedDatabase.create(
             root, plan,
             directory, DATABASE, GENERATION, 1, opened));
-    assertEquals(plan.lockProviderBytes(),
+    assertEquals(
+        plan.lockProviderBytes() + plan.indexedPageCache().maximumRetainedBytes()
+            + plan.versionWorkspace().maximumRetainedBytes(),
         opened.database().retainedDatabaseAccountedBytes());
     assertEquals(StatusCode.OK, opened.database().close());
     assertEquals(0, root.admittedAccountedBytes());
@@ -106,7 +111,7 @@ final class RelationalDatabaseResourceAdmissionTest {
   @Test
   void unpublishedFailureDestructorReleasesAdmissionAfterOrdinaryCloseConflicts(
       @TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         EmbeddedDatabase.create(
@@ -124,7 +129,7 @@ final class RelationalDatabaseResourceAdmissionTest {
   @Test
   void transactionPreflightUsesOneLeaseAndAbortReturnsIt(
       @TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         EmbeddedDatabase.create(
@@ -140,7 +145,8 @@ final class RelationalDatabaseResourceAdmissionTest {
     assertEquals(StatusCode.OK, first.session().preflightPendingMutation(8));
     assertEquals(StatusCode.RETRY, second.session().preflightPendingMutation(8));
     assertEquals(1, database.liveResourceWriteEntries());
-    assertEquals(StatusCode.OK, first.session().protectKey(1, 1));
+    assertEquals(StatusCode.OK,
+        first.session().protectKey(1, 1, io.riverdb.tx.api.lock.LockMode.SHARED));
     assertEquals(1, database.liveResourceWriteEntries());
 
     TransactionOutcome outcome = new TransactionOutcome();
@@ -153,7 +159,7 @@ final class RelationalDatabaseResourceAdmissionTest {
 
   @Test
   void writeWorkspaceAndLockProviderUseSeparateRetainedBudgets(@TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         EmbeddedDatabase.create(
@@ -169,7 +175,8 @@ final class RelationalDatabaseResourceAdmissionTest {
     assertEquals(StatusCode.OK, session.preflightPendingMutation(8));
     long retainedAfterWrite = database.retainedDatabaseAccountedBytes();
     assertTrue(retainedAfterWrite > providerBytes);
-    assertEquals(StatusCode.OK, session.protectKey(1, 1));
+    assertEquals(StatusCode.OK,
+        session.protectKey(1, 1, io.riverdb.tx.api.lock.LockMode.SHARED));
     assertEquals(0, database.liveResourceAccountedBytes());
     long retainedAfterLock = database.retainedDatabaseAccountedBytes();
     assertEquals(retainedAfterWrite, retainedAfterLock);
@@ -181,7 +188,8 @@ final class RelationalDatabaseResourceAdmissionTest {
     assertEquals(StatusCode.OK, database.createSession(8_192, secondOpened));
     var second = secondOpened.session();
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.READ_COMMITTED));
-    assertEquals(StatusCode.OK, second.protectKey(1, 1));
+    assertEquals(StatusCode.OK,
+        second.protectKey(1, 1, io.riverdb.tx.api.lock.LockMode.SHARED));
     assertEquals(retainedAfterLock, database.retainedDatabaseAccountedBytes());
     assertEquals(StatusCode.OK, second.preflightPendingMutation(8));
     assertEquals(0, database.liveResourceAccountedBytes());
@@ -195,7 +203,7 @@ final class RelationalDatabaseResourceAdmissionTest {
   @Test
   void sessionAdmissionIsBoundedAndCloseReturnsItsRetainedWorkspace(
       @TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         EmbeddedDatabase.create(
@@ -226,7 +234,7 @@ final class RelationalDatabaseResourceAdmissionTest {
   @Test
   void governedSessionCommitsMoreThanLegacy384Writes(
       @TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         EmbeddedDatabase.create(
@@ -249,7 +257,7 @@ final class RelationalDatabaseResourceAdmissionTest {
   @Test
   void lifecycleCompilationUsesAndReleasesTheGovernedSessionWorkspace(
       @TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
         EmbeddedDatabase.create(
@@ -289,7 +297,7 @@ final class RelationalDatabaseResourceAdmissionTest {
   @Test
   void governedSqlCommitsAndReopensMoreThan384IndexedTupleMutations(
       @TempDir Path directory) {
-    RuntimeResourceRoot root = root(256_000_000L);
+    RuntimeResourceRoot root = root(ROOT_BYTES);
     DatabaseResourcePlan plan = plan();
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
@@ -349,13 +357,26 @@ final class RelationalDatabaseResourceAdmissionTest {
   }
 
   private static DatabaseResourcePlan plan(int owners, long writeEntries) {
-    DatabaseResourcePlanRequest request = new DatabaseResourcePlanRequest()
-        .memory(DATABASE_BYTES, 20_000_000, 10_000_000, 2_000_000, 32_000_000)
-        .lockProviderBytes(8_000_000)
-        .capacity(owners, writeEntries, 1_000, 64_000_000)
-        .maximumDelivery(Math.min(1_000, writeEntries), 100, 8_000_000);
+    DatabaseResourcePlanRequest request = resourceRequest(owners, writeEntries);
     DatabaseResourcePlan.Result result = new DatabaseResourcePlan.Result();
     assertEquals(StatusCode.OK, DatabaseResourcePlan.compile(request, result));
     return result.plan();
+  }
+
+  private static DatabaseResourcePlanRequest resourceRequest() {
+    return resourceRequest(8, 10_000);
+  }
+
+  private static DatabaseResourcePlanRequest resourceRequest(
+      int owners, long writeEntries) {
+    return new DatabaseResourcePlanRequest()
+        .memory(DATABASE_BYTES, 20_000_000, 10_000_000, 2_000_000, 32_000_000)
+        .lockProviderBytes(8_000_000)
+        .versionWorkspaceBytes(1_000_000)
+        .indexedPageCache(32_000_000, 8_000_000)
+        .capacity(owners, writeEntries, 800, 64_000_000)
+        .maximumDelivery(
+            Math.min(1_000, writeEntries), 100,
+            8_000_000);
   }
 }

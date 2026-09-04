@@ -85,6 +85,12 @@ final class RiverClientProgramIsolationTest {
     private volatile IsolationLevel lastIsolationLevel;
 
     @Override
+    public StatusCode configureTransactionDiagnostics(
+        long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+      return StatusCode.OK;
+    }
+
+    @Override
     public StatusCode prepareProgram(
         TransactionProgram program, ProgramOpenResult result) {
       return result.complete(7, 0);

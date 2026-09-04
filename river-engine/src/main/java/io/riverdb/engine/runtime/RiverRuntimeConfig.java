@@ -7,7 +7,7 @@ import java.nio.file.Path;
 /** Immutable database-local runtime settings admitted before database files open. */
 public final class RiverRuntimeConfig {
   public static final String FILE_NAME = "river.properties";
-  public static final int DEFAULT_PAGE_BYTES = 64_000;
+  public static final int DEFAULT_MATERIALIZED_PAGE_BYTES = 64_000;
   public static final long MAXIMUM_AUTO_CACHE_BYTES = 256_000_000L;
   public static final long MINIMUM_SCHEMA_CACHE_BYTES = 8_000_000L;
   public static final long MAXIMUM_AUTO_SCHEMA_CACHE_BYTES = 32_000_000L;
@@ -18,8 +18,6 @@ public final class RiverRuntimeConfig {
   public static final long MINIMUM_SUPPORTED_HEAP_BYTES = 32_000_000L;
   public static final int MINIMUM_CACHE_PAGES = 4;
   public static final int MINIMUM_SORT_RUN_PAGES = 2;
-  public static final int MAXIMUM_HASH_BUILD_ROWS = 1_048_576;
-  public static final int MAXIMUM_HASH_BUCKETS = 1_048_576;
   public static final int MAXIMUM_CONFIG_BYTES = 16_384;
   public static final int MAXIMUM_LINE_BYTES = 4_096;
 

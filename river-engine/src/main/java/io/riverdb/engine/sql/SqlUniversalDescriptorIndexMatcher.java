@@ -9,7 +9,7 @@ final class SqlUniversalDescriptorIndexMatcher {
 
   static boolean find(
       SqlBoundBooleanPredicateProgram program, SqlBoundJoinContext context,
-      int role, int column, SqlComparison comparison,
+      int queryBlock, int role, int column, SqlComparison comparison,
       SqlBlockColumnLineage lineage,
       SqlUniversalDescriptorIndexBinding result) {
     if (program == null || !program.available()
@@ -18,7 +18,8 @@ final class SqlUniversalDescriptorIndexMatcher {
     }
     for (int leaf = 0; leaf < program.leafCount(); leaf++) {
       if (SqlUniversalDescriptorIndexLeaf.find(
-          program, context, leaf, role, column, comparison, lineage, result)) return true;
+          program, context, queryBlock, leaf, role, column,
+          comparison, lineage, result)) return true;
     }
     return false;
   }

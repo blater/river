@@ -346,8 +346,11 @@ public final class SessionEndpoint {
     StatusCode status = requireSqlInSession();
     try {
       if (status.isOk()) {
-        status = session.execute(
-            sqlRequest.sql(), sqlRequest.parameters(), command);
+        status = configureSqlDiagnostics();
+        if (status.isOk()) {
+          status = session.execute(
+              sqlRequest.sql(), sqlRequest.parameters(), command);
+        }
       }
     } finally {
       releaseSqlRequest();
@@ -371,8 +374,11 @@ public final class SessionEndpoint {
     StatusCode status = requirePreparedInSession();
     try {
       if (status.isOk()) {
-        status = session.executePrepared(
-            preparedRequest.handle(), preparedRequest.parameters(), command);
+        status = configurePreparedDiagnostics();
+        if (status.isOk()) {
+          status = session.executePrepared(
+              preparedRequest.handle(), preparedRequest.parameters(), command);
+        }
       }
     } finally {
       preparedRequest.reset();
@@ -384,9 +390,12 @@ public final class SessionEndpoint {
     StatusCode status = requirePreparedInSession();
     try {
       if (status.isOk()) {
-        openedQuery.reset();
-        status = session.beginPreparedQuery(
-            preparedRequest.handle(), preparedRequest.parameters(), openedQuery);
+        status = configurePreparedDiagnostics();
+        if (status.isOk()) {
+          openedQuery.reset();
+          status = session.beginPreparedQuery(
+              preparedRequest.handle(), preparedRequest.parameters(), openedQuery);
+        }
       }
     } finally {
       preparedRequest.reset();
@@ -427,9 +436,12 @@ public final class SessionEndpoint {
     StatusCode status = requireProgramInSession();
     try {
       if (status.isOk()) {
-        status = session.executeProgram(
-            programRequest.handle(), programRequest.isolationLevel(),
-            programRequest.arguments(), programResult);
+        status = configureProgramDiagnostics();
+        if (status.isOk()) {
+          status = session.executeProgram(
+              programRequest.handle(), programRequest.isolationLevel(),
+              programRequest.arguments(), programResult);
+        }
       }
     } finally {
       programRequest.reset();
@@ -452,9 +464,12 @@ public final class SessionEndpoint {
     StatusCode status = requireSqlInSession();
     try {
       if (status.isOk()) {
-        openedQuery.reset();
-        status = session.beginQuery(
-            sqlRequest.sql(), sqlRequest.parameters(), openedQuery);
+        status = configureSqlDiagnostics();
+        if (status.isOk()) {
+          openedQuery.reset();
+          status = session.beginQuery(
+              sqlRequest.sql(), sqlRequest.parameters(), openedQuery);
+        }
       }
     } finally {
       releaseSqlRequest();
@@ -594,6 +609,27 @@ public final class SessionEndpoint {
     if (sqlRequest != null) {
       sqlRequest.reset();
     }
+  }
+
+  private StatusCode configureSqlDiagnostics() {
+    return session.configureTransactionDiagnostics(
+        sqlRequest.diagnosticTag(),
+        sqlRequest.diagnosticStepTag(),
+        sqlRequest.metricsEpoch());
+  }
+
+  private StatusCode configurePreparedDiagnostics() {
+    return session.configureTransactionDiagnostics(
+        preparedRequest.diagnosticTag(),
+        preparedRequest.diagnosticStepTag(),
+        preparedRequest.metricsEpoch());
+  }
+
+  private StatusCode configureProgramDiagnostics() {
+    return session.configureTransactionDiagnostics(
+        programRequest.diagnosticTag(),
+        programRequest.diagnosticStepTag(),
+        programRequest.metricsEpoch());
   }
 
   private StatusCode encodeCommand(ByteBuffer response, ProtocolMessageType type,

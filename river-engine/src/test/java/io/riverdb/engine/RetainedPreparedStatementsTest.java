@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -121,6 +122,7 @@ final class RetainedPreparedStatementsTest {
   private static Fixture openFixture(Path root, long incarnation) {
     RelationalDatabaseOpenResult databaseResult = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(4),
         root, DatabaseIncarnation.of(
             0x5052455041524544L, 0x53544F5245544553L + incarnation),
         WalGeneration.of(1), 4, databaseResult));

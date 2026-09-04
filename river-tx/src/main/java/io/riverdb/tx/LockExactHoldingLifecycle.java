@@ -165,6 +165,11 @@ final class LockExactHoldingLifecycle {
   }
 
   int releaseAll(long transaction) {
+    return releaseAll(transaction, null);
+  }
+
+  int releaseAll(
+      long transaction, TransactionGroupCompletionTimings timings) {
     LockExactTransactionStore.Chunk tc = table.state.transactions.record(transaction);
     int to = LockTypedSlots.offset(transaction);
     long holding = LockTypedSlots.decode(tc.holdingHeads[to]);
@@ -174,6 +179,12 @@ final class LockExactHoldingLifecycle {
       int ho = LockTypedSlots.offset(holding);
       long next = LockTypedSlots.decode(hc.nextTransaction[ho]);
       long resource = hc.resources[ho];
+      if (timings != null) {
+        LockExactResourceStore.Chunk resourceChunk =
+            table.state.resources.record(resource);
+        timings.releasedLockHolding(
+            resourceChunk.scopes[LockTypedSlots.offset(resource)]);
+      }
       table.unlink.holding(resource, transaction, holding);
       table.state.directory.holdingIndex.remove(holding, LockExactDirectory.holdingHash(
           resource, table.lifecycle.transactionId(transaction),

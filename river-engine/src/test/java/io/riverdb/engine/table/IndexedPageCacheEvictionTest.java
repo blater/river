@@ -8,6 +8,9 @@ import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.engine.runtime.DatabasePageCachePlan;
+import io.riverdb.engine.runtime.DatabasePageCacheTestPlan;
+import io.riverdb.engine.runtime.DatabaseResourceGovernor;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.platform.file.DirectoryOperationResult;
@@ -28,6 +31,8 @@ final class IndexedPageCacheEvictionTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(461, 463);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
   private static final int PAGE_COUNT = 4_097;
+  private static final io.riverdb.engine.runtime.DatabasePageCachePlan LARGE_TEST_CACHE =
+      io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(4_096, 128, 127);
 
   @Test
   void publishedGenerationNeverMutatesPinnedBorrow(@TempDir Path root) {
@@ -41,7 +46,7 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
-        new IndexedPageCacheConfig(4, 2, 0));
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(4, 2, 2));
 
     ByteBuffer first = pages.stageNew(
         1, 2, PageCodec.PAYLOAD_KIND_TUPLE_BTREE, 41);
@@ -83,7 +88,7 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
-        new IndexedPageCacheConfig(4, 2, 0));
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(4, 2, 2));
     IndexedOperationPage writer = new IndexedOperationPage();
     IndexedOperationPage firstGeneration = new IndexedOperationPage();
 
@@ -122,7 +127,7 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
-        new IndexedPageCacheConfig(2, 1, 0));
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(2, 1, 1));
     IndexedOperationPage writer = new IndexedOperationPage();
 
     assertEquals(StatusCode.OK, pages.pinNewScalarOperationPage(1, writer));
@@ -154,10 +159,12 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
     assertEquals(StatusCode.OK, directory.createFile("rows", rowFile));
     assertEquals(StatusCode.OK, directory.createFile("versions", versionFile));
+    DatabasePageCachePlan cachePlan = DatabasePageCacheTestPlan.geometry(2, 1, 1);
     IndexedPageSet pages = new IndexedPageSet(
-        pageFile.file(), stagingFile.file(), DATABASE, GENERATION,
-        new IndexedPageCacheConfig(2, 1, 0));
-    IndexedTableKernel kernel = pages.createKernel(rowFile.file(), versionFile.file());
+        pageFile.file(), stagingFile.file(), DATABASE, GENERATION, cachePlan);
+    IndexedTableKernel kernel = pages.createKernel(
+        rowFile.file(), versionFile.file(),
+        DatabasePageCacheTestPlan.governor(cachePlan, 1).plan());
     IndexedLogicalRowIdRegistry logicalRows = new IndexedLogicalRowIdRegistry();
     IndexedPreparedCommitInstaller installer =
         new IndexedPreparedCommitInstaller(kernel, pages, logicalRows);
@@ -216,7 +223,7 @@ final class IndexedPageCacheEvictionTest {
     DurableFile pagesFile = pageOperation.file();
     DurableFile stagingFile = stagingOperation.file();
     IndexedPageSet pages = new IndexedPageSet(
-        pagesFile, stagingFile, DATABASE, GENERATION);
+        pagesFile, stagingFile, DATABASE, GENERATION, LARGE_TEST_CACHE);
     ByteBuffer encoded = ByteBuffer.allocateDirect(PageCodec.PAGE_BYTES);
     CRC32C checksum = new CRC32C();
     ByteBuffer pinned = null;
@@ -274,7 +281,7 @@ final class IndexedPageCacheEvictionTest {
     DurableFile pagesFile = pageOperation.file();
     DurableFile stagingFile = stagingOperation.file();
     IndexedPageSet pages = new IndexedPageSet(
-        pagesFile, stagingFile, DATABASE, GENERATION);
+        pagesFile, stagingFile, DATABASE, GENERATION, LARGE_TEST_CACHE);
 
     assertNotNull(pages.stageNew(
         1,
@@ -309,8 +316,11 @@ final class IndexedPageCacheEvictionTest {
     DirectoryOperationResult stagingOperation = new DirectoryOperationResult();
     assertEquals(StatusCode.OK, directory.createFile("pages", pageOperation));
     assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
+    io.riverdb.engine.runtime.DatabasePageCachePlan scaleConfig =
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(128, 2, 256);
     IndexedPageSet pages = new IndexedPageSet(
-        pageOperation.file(), stagingOperation.file(), DATABASE, GENERATION);
+        pageOperation.file(), stagingOperation.file(), DATABASE, GENERATION,
+        scaleConfig);
     IndexedOperationPage page = new IndexedOperationPage();
 
     pages.beginPageImageOperation();
@@ -323,13 +333,15 @@ final class IndexedPageCacheEvictionTest {
             IndexedTableLimits.MAX_CHANGED_PAGES + 1, 1, page));
     pages.clearStagedFlags();
     pages.resetChanges();
-    for (int pageId = 1; pageId <= IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES; pageId++) {
+    int logicalCapacity = pages.changedPageCapacity();
+    assertEquals(256, logicalCapacity);
+    for (int pageId = 1; pageId <= logicalCapacity; pageId++) {
       assertEquals(StatusCode.OK, pages.pinNewScalarOperationPage(pageId, page));
       assertEquals(StatusCode.OK, pages.releaseOperationPage(page));
     }
     assertEquals(StatusCode.RESOURCE_EXHAUSTED,
         pages.pinNewScalarOperationPage(
-            IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES + 1, page));
+            logicalCapacity + 1, page));
     pages.clearStagedFlags();
     pages.resetChanges();
     assertEquals(
@@ -355,7 +367,8 @@ final class IndexedPageCacheEvictionTest {
     DirectoryOperationResult stagingFile = new DirectoryOperationResult();
     assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
     assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
-    IndexedPageCacheConfig config = new IndexedPageCacheConfig(2, 2, 0);
+    io.riverdb.engine.runtime.DatabasePageCachePlan config =
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(2, 2, 2);
     IndexedPageSet pages = new IndexedPageSet(
         pageFile.file(), stagingFile.file(), DATABASE, GENERATION, config);
     IndexedOperationPage page = new IndexedOperationPage();
@@ -407,7 +420,7 @@ final class IndexedPageCacheEvictionTest {
     IoResult io = new IoResult();
     assertEquals(StatusCode.OK, pageFile.file().write(0, encoded, io));
     IndexedPageSet pages = new IndexedPageSet(
-        pageFile.file(), stagingFile.file(), DATABASE, GENERATION);
+        pageFile.file(), stagingFile.file(), DATABASE, GENERATION, LARGE_TEST_CACHE);
 
     assertEquals(StatusCode.OK, pages.readCurrent(pageFile.file(), 1, 0, io));
     assertEquals(false, pages.isPresent(1));
@@ -439,7 +452,7 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, pageOperation.file().write(0, encoded, io));
     OneShotReadFailureFile pagesFile = new OneShotReadFailureFile(pageOperation.file());
     IndexedPageSet pages = new IndexedPageSet(
-        pagesFile, stagingOperation.file(), DATABASE, GENERATION);
+        pagesFile, stagingOperation.file(), DATABASE, GENERATION, LARGE_TEST_CACHE);
     pages.installPresent(1);
 
     assertNull(pages.stageExisting(1, IndexedTableLimits.MAX_CHANGED_PAGES));
@@ -470,18 +483,23 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, directory.createFile("versions", versionOperation));
 
     OneShotReadFailureFile failingPages = new OneShotReadFailureFile(pageOperation.file());
+    DatabaseResourceGovernor governor =
+        DatabasePageCacheTestPlan.governor(LARGE_TEST_CACHE, 1);
     IndexedPageSet ioPages = new IndexedPageSet(
-        failingPages, stagingOperation.file(), DATABASE, GENERATION);
+        failingPages, stagingOperation.file(), DATABASE, GENERATION, LARGE_TEST_CACHE);
     ioPages.installPresent(IndexedTableKernel.ROOT_META_PAGE_ID);
     IndexedRelationalScalarLookup ioLookup = new IndexedRelationalScalarLookup(
-        ioPages.createKernel(rowOperation.file(), versionOperation.file()), ioPages);
+        ioPages.createKernel(rowOperation.file(), versionOperation.file(), governor.plan()),
+        ioPages);
     assertEquals(StatusCode.IO_FAILURE, ioLookup.find(CatalogKeyspace.INDEX_ROOT_SPACE, 1));
 
     IndexedPageSet exhaustedPages = new IndexedPageSet(
-        null, stagingOperation.file(), DATABASE, GENERATION);
+        null, stagingOperation.file(), DATABASE, GENERATION, LARGE_TEST_CACHE);
     exhaustedPages.installPresent(IndexedTableKernel.ROOT_META_PAGE_ID);
     IndexedRelationalScalarLookup exhaustedLookup = new IndexedRelationalScalarLookup(
-        exhaustedPages.createKernel(rowOperation.file(), versionOperation.file()), exhaustedPages);
+        exhaustedPages.createKernel(
+            rowOperation.file(), versionOperation.file(), governor.plan()),
+        exhaustedPages);
     assertEquals(
         StatusCode.RESOURCE_EXHAUSTED,
         exhaustedLookup.find(CatalogKeyspace.INDEX_ROOT_SPACE, 1));
@@ -505,7 +523,8 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, directory.createFile("staging", stagingOperation));
     OneShotReadFailureFile stagingFile =
         new OneShotReadFailureFile(stagingOperation.file(), false);
-    IndexedPageCacheConfig config = new IndexedPageCacheConfig(2, 1, 0, 2);
+    io.riverdb.engine.runtime.DatabasePageCachePlan config =
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(2, 1, 2);
     IndexedPageSet pages = new IndexedPageSet(
         pageOperation.file(), stagingFile, DATABASE, GENERATION, config);
     for (int pageId = 1; pageId <= 2; pageId++) {

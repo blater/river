@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -31,7 +32,7 @@ final class EmbeddedRiverGeneralizedHavingTest {
   void evaluatesScalarAndGroupedAggregateSetsWithThreeValuedLogic(
       @TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -121,7 +122,7 @@ final class EmbeddedRiverGeneralizedHavingTest {
   @Test
   void ownsTextAcrossOrderedMaterializedAndSpilledGroups(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -206,8 +207,8 @@ final class EmbeddedRiverGeneralizedHavingTest {
             "CREATE TABLE text_spill "
                 + "(id BIGINT PRIMARY KEY, bucket VARCHAR(8), label VARCHAR(16))",
             result));
-    for (int first = 1; first <= 1_025; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
-      int last = Math.min(1_025, first + SqlCommand.MAXIMUM_INSERT_ROWS - 1);
+    for (int first = 1; first <= 1_025; first += SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS) {
+      int last = Math.min(1_025, first + SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS - 1);
       StringBuilder sql = new StringBuilder("INSERT INTO text_spill VALUES ");
       for (int id = first; id <= last; id++) {
         if (id > first) sql.append(',');

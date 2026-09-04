@@ -20,6 +20,13 @@ final class TupleBTreePageBytes {
         && header.type() == expectedType && index >= 0 && index < header.entryCount();
   }
 
+  static boolean validValidatedRead(
+      ByteBuffer source, int start, TupleBTreePageHeader header,
+      int index, int expectedType) {
+    return validRead(source, start, header, index, expectedType)
+        && header.validates(source, start, expectedType);
+  }
+
   static boolean validLinks(int type, int left, int pointer, int highLength) {
     return type == TupleBTreePageCodec.TYPE_INTERNAL ? left == 0 && pointer > 0
         : left >= 0 && pointer >= 0 && ((pointer == 0) == (highLength == 0));

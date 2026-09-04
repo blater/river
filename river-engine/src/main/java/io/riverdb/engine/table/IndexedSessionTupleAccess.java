@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.tx.api.TransactionState;
+import io.riverdb.tx.api.lock.LockMode;
 import java.nio.ByteBuffer;
 
 /** Coordinates tuple-index admission, visibility, and lifecycle staging for one session. */
@@ -27,6 +28,7 @@ final class IndexedSessionTupleAccess {
     if (!session.sharedMutationCapacity(mutations)) return StatusCode.RESOURCE_EXHAUSTED;
     long retained = IndexedWriteWorkspaceAccounting.tuples(
         session.pendingMutations(), session.tupleIntents(), session.tupleLifecycle(),
+        session.logicalRowFloors(),
         mutations, descriptors, payloadBytes);
     StatusCode status = session.ensureWriteEntries(mutations, retained);
     return status.isOk() ? session.tupleIntents().reserve(
@@ -41,6 +43,7 @@ final class IndexedSessionTupleAccess {
     if (!session.sharedMutationCapacity(additional)) return StatusCode.RESOURCE_EXHAUSTED;
     long retained = IndexedWriteWorkspaceAccounting.combined(
         session.pendingMutations(), session.tupleIntents(), session.tupleLifecycle(),
+        session.logicalRowFloors(),
         lengths, start, scalarRows, tupleMutations, descriptors, tuplePayloadBytes);
     StatusCode status = session.ensureWriteEntries(additional, retained);
     if (status.isOk()) status = session.pendingMutations().reserve(lengths, start, scalarRows);
@@ -72,7 +75,8 @@ final class IndexedSessionTupleAccess {
     if (!session.activeTransaction()) return StatusCode.CONFLICT;
     if (!session.sharedMutationCapacity(additional)) return StatusCode.RESOURCE_EXHAUSTED;
     long retained = IndexedWriteWorkspaceAccounting.lifecycle(
-        session.pendingMutations(), session.tupleIntents(), session.tupleLifecycle(), additional);
+        session.pendingMutations(), session.tupleIntents(), session.tupleLifecycle(),
+        session.logicalRowFloors(), additional);
     StatusCode status = session.ensureWriteEntries(additional, retained);
     return status.isOk() ? session.tupleLifecycle().reserve(additional) : status;
   }
@@ -87,7 +91,8 @@ final class IndexedSessionTupleAccess {
     }
     if (!session.sharedMutationCapacity(1)) return StatusCode.RESOURCE_EXHAUSTED;
     long retained = IndexedWriteWorkspaceAccounting.lifecycle(
-        session.pendingMutations(), session.tupleIntents(), session.tupleLifecycle(), 1);
+        session.pendingMutations(), session.tupleIntents(), session.tupleLifecycle(),
+        session.logicalRowFloors(), 1);
     StatusCode status = session.ensureWriteEntries(1, retained);
     if (status.isOk()) status = session.acquireExclusiveKey(
         CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
@@ -97,7 +102,8 @@ final class IndexedSessionTupleAccess {
 
   StatusCode readState(long keyId, IndexedTupleIndexState result) {
     if (!session.activeTransaction()) return StatusCode.CONFLICT;
-    StatusCode status = session.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+    StatusCode status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     return status.isOk() ? stateReader.read(session, keyId, result) : status;
   }
 
@@ -107,7 +113,8 @@ final class IndexedSessionTupleAccess {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!session.activeTransaction()) return StatusCode.CONFLICT;
-    StatusCode status = session.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+    StatusCode status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     return status.isOk() ? published.snapshot(
         ownerId, keyId, schemaId, shape, key, offset, length, result) : status;
   }
@@ -118,7 +125,8 @@ final class IndexedSessionTupleAccess {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!session.activeTransaction()) return StatusCode.CONFLICT;
-    StatusCode status = session.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+    StatusCode status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     if (!status.isOk()) return status;
     status = session.tupleIntents().resolveUniquePrefix(
         keyId, shape, key, offset, length, false, 0, result);
@@ -140,7 +148,8 @@ final class IndexedSessionTupleAccess {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!session.activeTransaction()) return StatusCode.CONFLICT;
-    StatusCode status = session.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+    StatusCode status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     if (!status.isOk()) return status;
     long pending = session.tupleIntents().anyInsertPrefixRowId(
         keyId, shape, key, offset, length, excludedRowId);

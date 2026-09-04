@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,7 +12,6 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.checkpoint.CheckpointResult;
-import io.riverdb.engine.runtime.DatabaseResourceDefaults;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
 import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class RelationalDescriptorRowPathTest {
+  private static final int FORMER_DEFAULT_WRITE_ENTRIES = 384;
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x57494445524f5750L, 0x4154485445535431L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
@@ -41,9 +42,11 @@ final class RelationalDescriptorRowPathTest {
     RelationalDatabaseOpenResult firstOpen = new RelationalDatabaseOpenResult();
     RelationalDatabaseOpenResult secondOpen = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8),
         Files.createDirectory(root.resolve("first")),
         DATABASE, GENERATION, 8, firstOpen));
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8),
         Files.createDirectory(root.resolve("second")),
         DatabaseIncarnation.of(0x57494445524f5750L, 0x4154485445535432L),
         GENERATION, 8, secondOpen));
@@ -85,7 +88,7 @@ final class RelationalDescriptorRowPathTest {
   void wideRowNullsIdentityAndPrimaryMutationSurviveAbortAndReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
     StatusDetail detail = new StatusDetail(128);
@@ -127,7 +130,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     table = new SchemaPin();
     assertEquals(StatusCode.OK,
@@ -188,7 +191,7 @@ final class RelationalDescriptorRowPathTest {
   void tuplePrimaryCorruptionBlocksPointAccessAndFailsReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
     StatusDetail detail = new StatusDetail(128);
@@ -244,11 +247,12 @@ final class RelationalDescriptorRowPathTest {
   void scanAdmissionGrowsCallerBufferBeforeConsumingTheFirstRow(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
+    StatusDetail detail = new StatusDetail(128);
     assertEquals(StatusCode.OK, database.services().descriptors().create(
-        wideDescriptor(), table, new StatusDetail(128)));
+        wideDescriptor(), table, detail), detail.toString());
     RelationalSession session = session(database);
     TransactionOutcome outcome = new TransactionOutcome();
     RelationalRowIdentityResult inserted = new RelationalRowIdentityResult();
@@ -282,7 +286,7 @@ final class RelationalDescriptorRowPathTest {
   void groupedMutationsGrowBeyondDefaultWriteCounts(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().create(
@@ -293,7 +297,7 @@ final class RelationalDescriptorRowPathTest {
     ByteBuffer oneByte = ByteBuffer.wrap(new byte[] {1});
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     for (int index = 0;
-        index < DatabaseResourceDefaults.TRANSACTION_WRITE_ENTRIES - 1;
+        index < FORMER_DEFAULT_WRITE_ENTRIES - 1;
         index++) {
       oneByte.position(0);
       assertEquals(StatusCode.OK, session.indexedSession().insert(10, index, oneByte));
@@ -303,7 +307,7 @@ final class RelationalDescriptorRowPathTest {
         session.descriptorRows().insert(table, values(51, NULL_ORDINALS), accepted));
     assertEquals(1, accepted.logicalRowId());
     assertEquals(
-        DatabaseResourceDefaults.TRANSACTION_WRITE_ENTRIES,
+        FORMER_DEFAULT_WRITE_ENTRIES,
         session.indexedSession().pendingMutationCount());
     assertEquals(StatusCode.OK, session.commit(outcome));
 
@@ -321,7 +325,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     table = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().open(
@@ -340,7 +344,7 @@ final class RelationalDescriptorRowPathTest {
   void updateStagesOnlyKeysWhoseCanonicalBytesChange(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().create(
@@ -379,7 +383,7 @@ final class RelationalDescriptorRowPathTest {
   void explicitTransactionRollsBackPartialBatchThenCommitsAndReopens(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
     StatusDetail detail = new StatusDetail(128);
@@ -424,7 +428,7 @@ final class RelationalDescriptorRowPathTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     table = new SchemaPin();
     assertEquals(StatusCode.OK,
@@ -443,7 +447,7 @@ final class RelationalDescriptorRowPathTest {
   void preparedReservationsSurviveDmlRollbackWithoutReusingIdentity(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     RelationalSession session = session(database);
     TransactionOutcome outcome = new TransactionOutcome();
@@ -487,7 +491,7 @@ final class RelationalDescriptorRowPathTest {
   void rolledBackPreparedPinCannotEscapeAndCleanupRetriesAfterRelease(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     RelationalSession session = session(database);
     TransactionOutcome outcome = new TransactionOutcome();
@@ -519,7 +523,7 @@ final class RelationalDescriptorRowPathTest {
   void insertBatchGrowsBeyondDefaultWriteCountAndReservesAsOneRange(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().create(
@@ -532,7 +536,7 @@ final class RelationalDescriptorRowPathTest {
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     for (int index = 0;
-        index < DatabaseResourceDefaults.TRANSACTION_WRITE_ENTRIES - 1;
+        index < FORMER_DEFAULT_WRITE_ENTRIES - 1;
         index++) {
       oneByte.position(0);
       assertEquals(StatusCode.OK, session.indexedSession().insert(20, index, oneByte));
@@ -573,7 +577,7 @@ final class RelationalDescriptorRowPathTest {
       @TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin table = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().create(

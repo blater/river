@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
@@ -10,6 +11,13 @@ import io.riverdb.engine.api.RowResult;
 import org.junit.jupiter.api.Test;
 
 final class ProtocolMemoryBudgetTest {
+  @Test
+  void connectionAccountingHasNoBenchmarkSizedCountLimit() {
+    assertTrue(ProtocolMemoryBudget.supportsServerConnections(1_025));
+    assertTrue(ProtocolMemoryBudget.supportsServerConnections(Integer.MAX_VALUE));
+    assertFalse(ProtocolMemoryBudget.supportsServerConnections(0));
+  }
+
   @Test
   void includesProgramFloorsAndExecutePhasePeak() {
     int connections = 2;

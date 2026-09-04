@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RowResult;
 
@@ -12,7 +13,7 @@ public final class SqlPublicResultPublisher {
   private long[] values = new long[0];
   private int[] descriptors = new int[0];
   private long[] nullWords = new long[0];
-  private final char[] text = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  private char[] text = new char[0];
 
   public StatusCode reserve(int columns) {
     if (columns < 0 || columns > SqlShapeLimits.MAX_RESULT_COLUMNS) {
@@ -64,16 +65,19 @@ public final class SqlPublicResultPublisher {
   private StatusCode prepare(
       SqlExecutionResult source, int columns, CommandResult result) {
     StatusCode status = reserve(columns);
-    int textBytes = 0;
+    long textBytes = 0;
     for (int index = 0; status.isOk() && index < columns; index++) {
       values[index] = source.valueAt(index);
       decimalHighs[index] = source.highValueAt(index);
       descriptors[index] = source.typeDescriptorAt(index);
-      int length = source.textLengthAt(index);
-      if (length > 0) textBytes += length * 4;
+      int length = source.encodedTextLengthAt(index);
+      if (length > 0) textBytes += length;
+      if (textBytes > SqlShapeLimits.MAX_ENCODED_RESULT_ROW_BYTES) {
+        status = StatusCode.RESOURCE_EXHAUSTED;
+      }
     }
     if (status.isOk()) copyNulls(source, source.nullWordCount());
-    return status.isOk() ? result.reserve(columns, textBytes) : status;
+    return status.isOk() ? result.reserve(columns, (int) textBytes) : status;
   }
 
   private StatusCode prepare(
@@ -103,6 +107,8 @@ public final class SqlPublicResultPublisher {
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < columns; index++) {
       if (!source.isVarchar(index) || source.isNull(index)) continue;
+      status = reserveText(source.textLengthAt(index));
+      if (!status.isOk()) continue;
       int length = source.copyTextAt(index, text, 0);
       status = length < 0
           ? StatusCode.INVARIANT_BROKEN : result.setTextAt(index, text, 0, length);
@@ -114,10 +120,27 @@ public final class SqlPublicResultPublisher {
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < columns; index++) {
       if (!source.isVarchar(index) || source.isNull(index)) continue;
+      status = reserveText(source.textLengthAt(index));
+      if (!status.isOk()) continue;
       int length = source.copyTextAt(index, text, 0);
       status = length < 0
           ? StatusCode.INVARIANT_BROKEN : result.setTextAt(index, text, 0, length);
     }
     return status;
+  }
+
+  private StatusCode reserveText(int required) {
+    if (required < 0 || required > Utf8Text.MAXIMUM_UTF16_CODE_UNITS) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
+    if (required <= text.length) return StatusCode.OK;
+    int capacity = BoundedArrayGrowth.capacity(
+        text.length, required, Utf8Text.MAXIMUM_UTF16_CODE_UNITS, 8);
+    try {
+      text = java.util.Arrays.copyOf(text, capacity);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 }

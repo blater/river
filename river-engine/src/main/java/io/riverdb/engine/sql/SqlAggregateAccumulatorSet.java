@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlNumericTypeRules;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.sql.SqlAggregateKind;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -190,7 +191,7 @@ final class SqlAggregateAccumulatorSet {
 
   private StatusCode accumulateBlockText(
       SqlBlockRow row, int invocation, int kind, int lane) {
-    int candidate = textSlotCount * Utf8Text.MAXIMUM_BYTES;
+    int candidate = textSlotCount * TableSchema.MAXIMUM_ROW_BYTES;
     for (int index = 0; index < candidateLength; index++) text[candidate + index] = 0;
     int length = Utf8Text.encode(
         row.text(lane), 0, row.textLength(lane),
@@ -260,7 +261,7 @@ final class SqlAggregateAccumulatorSet {
       int invocation,
       int kind,
       int lane) {
-    int candidateOffset = textSlotCount * Utf8Text.MAXIMUM_BYTES;
+    int candidateOffset = textSlotCount * TableSchema.MAXIMUM_ROW_BYTES;
     for (int index = 0; index < candidateLength; index++) {
       text[candidateOffset + index] = 0;
     }
@@ -296,7 +297,7 @@ final class SqlAggregateAccumulatorSet {
       HeapRowResult source,
       TableDefinition definition,
       int lane) {
-    int target = textSlotCount * Utf8Text.MAXIMUM_BYTES;
+    int target = textSlotCount * TableSchema.MAXIMUM_ROW_BYTES;
     int generated = row.textLength(lane);
     int column = programs.rawColumn(lane);
     if (column < 0) {
@@ -309,7 +310,7 @@ final class SqlAggregateAccumulatorSet {
     int length = (int) handle;
     if (offset < 0
         || length < 0
-        || length > Utf8Text.MAXIMUM_BYTES
+        || length > TableSchema.MAXIMUM_ROW_BYTES
         || definition == null
         || offset < definition.fixedRowBytes()
         || offset > source.length() - length) return -1;
@@ -338,7 +339,9 @@ final class SqlAggregateAccumulatorSet {
   boolean nullValue(int invocation) { return nulls[invocation]; }
   int textLength(int invocation) { return Short.toUnsignedInt(textLengths[invocation]); }
   byte[] text() { return text; }
-  int textOffset(int invocation) { return textSlots[invocation] * Utf8Text.MAXIMUM_BYTES; }
+  int textOffset(int invocation) {
+    return textSlots[invocation] * TableSchema.MAXIMUM_ROW_BYTES;
+  }
 
   private StatusCode increment(int invocation) {
     if (values[invocation] == Long.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
@@ -355,7 +358,7 @@ final class SqlAggregateAccumulatorSet {
       int length = Short.toUnsignedInt(textLengths[invocation]);
       for (int index = 0; index < length; index++) text[offset + index] = 0;
     }
-    int candidate = textSlotCount * Utf8Text.MAXIMUM_BYTES;
+    int candidate = textSlotCount * TableSchema.MAXIMUM_ROW_BYTES;
     for (int index = 0; index < candidateLength; index++) text[candidate + index] = 0;
     candidateLength = 0;
   }

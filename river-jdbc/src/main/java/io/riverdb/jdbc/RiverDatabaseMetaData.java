@@ -10,8 +10,6 @@ import java.sql.SQLException;
 final class RiverDatabaseMetaData extends RiverShapeDatabaseMetaData {
   private static final String PRODUCT_VERSION = "0.1-pre-v1";
   private static final int MAXIMUM_IDENTIFIER_LENGTH = 64;
-  private static final int MAXIMUM_TABLE_PATTERN_LENGTH = 128;
-  private static final int MAXIMUM_TABLE_TYPES = 16;
 
   private final RiverJdbcConnection connection;
   private final String url;
@@ -233,13 +231,6 @@ final class RiverDatabaseMetaData extends RiverShapeDatabaseMetaData {
       String tableNamePattern,
       String[] types) throws SQLException {
     connection.requireOpen();
-    if (tableNamePattern != null
-        && tableNamePattern.length() > MAXIMUM_TABLE_PATTERN_LENGTH) {
-      throw JdbcExceptions.invalid("table name pattern is too long");
-    }
-    if (types != null && types.length > MAXIMUM_TABLE_TYPES) {
-      throw JdbcExceptions.invalid("too many table type filters");
-    }
     boolean includeTables = types == null;
     boolean includeViews = types == null;
     if (types != null) {
@@ -269,14 +260,6 @@ final class RiverDatabaseMetaData extends RiverShapeDatabaseMetaData {
       String tableNamePattern,
       String columnNamePattern) throws SQLException {
     connection.requireOpen();
-    if (tableNamePattern != null
-        && tableNamePattern.length() > MAXIMUM_TABLE_PATTERN_LENGTH) {
-      throw JdbcExceptions.invalid("table name pattern is too long");
-    }
-    if (columnNamePattern != null
-        && columnNamePattern.length() > MAXIMUM_TABLE_PATTERN_LENGTH) {
-      throw JdbcExceptions.invalid("column name pattern is too long");
-    }
     boolean namespaceMatches = absentNamespace(catalog) && matchesAbsentSchema(schemaPattern);
     return connection.openColumns(
         tableNamePattern == null ? "%" : tableNamePattern,

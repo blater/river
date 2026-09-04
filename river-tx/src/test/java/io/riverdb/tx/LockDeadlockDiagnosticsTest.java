@@ -19,7 +19,72 @@ import org.junit.jupiter.api.Test;
 
 final class LockDeadlockDiagnosticsTest {
   private static final LockDeadlockDiagnosticsConfig DIAGNOSTICS =
-      LockDeadlockDiagnosticsConfig.bounded(2, 4, 8, 1, 8);
+      diagnostics(1L << 20, 2, 4, 8, 1, 8);
+
+  @Test
+  void configurationUsesOnlyCallerBudgetAndAddressabilityBoundaries() {
+    LockDeadlockDiagnosticsConfig.Result result = new LockDeadlockDiagnosticsConfig.Result();
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED,
+        LockDeadlockDiagnosticsConfig.createBounded(269, 1, 1, 1, 0, 2, result));
+    assertEquals(null, result.config());
+    assertEquals(StatusCode.OK,
+        LockDeadlockDiagnosticsConfig.createBounded(270, 1, 1, 1, 0, 2, result));
+    assertEquals(270, result.config().retainedPayloadBytes());
+    assertEquals(270, result.config().maximumRetainedBytes());
+    assertEquals(0, result.config().exemplarsPerSignature());
+
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED,
+        LockDeadlockDiagnosticsConfig.createBounded(
+            Long.MAX_VALUE, Integer.MAX_VALUE, 2, 1, 0, 2, result));
+    assertEquals(null, result.config());
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        LockDeadlockDiagnosticsConfig.createBounded(1_024, 1, 1, 1, -1, 2, result));
+  }
+
+  @Test
+  void disabledStorageStillAccountsEveryVictimCleanupAndOutcome() {
+    LockDeadlockDiagnosticsConfig disabled = LockDeadlockDiagnosticsConfig.disabled();
+    Fixture fixture = new Fixture(disabled);
+    runTwoOwnerCycle(fixture, 1, 2, 10, 20, 101, 202, 9);
+    fixture.table.lifecycle.releaseAll(2, 1, StatusCode.DEADLOCK);
+    fixture.table.lifecycle.releaseAll(1, 1, StatusCode.CANCELLED);
+
+    LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(disabled);
+    fixture.table.snapshotDeadlocks(snapshot);
+    assertFalse(snapshot.enabled());
+    assertEquals(0, snapshot.retainedPayloadBytes());
+    assertEquals(1, snapshot.totalVictimSelections());
+    assertEquals(1, snapshot.victimTransactionOutcomes());
+    assertEquals(1, snapshot.queuedRequestsCancelled());
+    assertEquals(1, snapshot.holdingsReleased());
+    assertEquals(0, snapshot.signatureCount());
+    assertEquals(0, snapshot.victimEventCount());
+    assertEquals(0, snapshot.exemplarCount());
+    assertFalse(snapshot.validForDiagnosticGate());
+  }
+
+  @Test
+  void zeroExemplarShapeKeepsCompleteAggregateAndSignatureAccounting() {
+    LockDeadlockDiagnosticsConfig config = diagnostics(4_096, 1, 2, 2, 0, 8);
+    Fixture fixture = new Fixture(config);
+    runTwoOwnerCycle(fixture, 1, 2, 10, 20, 101, 202, 9);
+    fixture.table.lifecycle.releaseAll(2, 1, StatusCode.DEADLOCK);
+    fixture.table.lifecycle.releaseAll(1, 1, StatusCode.CANCELLED);
+    runTwoOwnerCycle(fixture, 3, 4, 30, 40, 303, 404, 9);
+    fixture.table.lifecycle.releaseAll(4, 1, StatusCode.DEADLOCK);
+    fixture.table.lifecycle.releaseAll(3, 1, StatusCode.CANCELLED);
+
+    LockDeadlockDiagnosticsSnapshot snapshot = new LockDeadlockDiagnosticsSnapshot(config);
+    fixture.table.snapshotDeadlocks(snapshot);
+    assertEquals(2, snapshot.totalVictimSelections());
+    assertEquals(2, snapshot.victimTransactionOutcomes());
+    assertEquals(2, snapshot.signatureVictimSelectionsAt(0));
+    assertEquals(2, snapshot.signatureVictimOutcomesAt(0));
+    assertEquals(2, snapshot.victimEventCount());
+    assertEquals(0, snapshot.exemplarCount());
+    assertEquals(0, snapshot.exemplarOverflows());
+    assertTrue(snapshot.validForDiagnosticGate());
+  }
 
   @Test
   void transactionTagEpochVictimOutcomeAndReuseReconcileEndToEnd() {
@@ -28,10 +93,12 @@ final class LockDeadlockDiagnosticsTest {
         TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS, DIAGNOSTICS);
     Transaction first = new Transaction(2);
     Transaction second = new Transaction(2);
-    assertEquals(StatusCode.OK, first.configureDiagnostics(101, 7));
-    assertEquals(StatusCode.OK, second.configureDiagnostics(202, 7));
+    assertEquals(StatusCode.OK, first.configureDiagnostics(101, 0, 7));
+    assertEquals(StatusCode.OK, second.configureDiagnostics(202, 0, 7));
     assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, first));
     assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, second));
+    assertEquals(StatusCode.OK, first.updateDiagnosticStep(11));
+    assertEquals(StatusCode.OK, second.updateDiagnosticStep(17));
 
     LockService locks = manager.lockService();
     StatusDetail detail = new StatusDetail(64);
@@ -62,6 +129,7 @@ final class LockDeadlockDiagnosticsTest {
     assertEquals(1, snapshot.victimEventCount());
     assertEquals(7, snapshot.eventEpochAt(0));
     assertEquals(202, snapshot.eventDiagnosticTagAt(0));
+    assertEquals(17, snapshot.eventDiagnosticStepTagAt(0));
     assertEquals(StatusCode.DEADLOCK, snapshot.eventOutcomeStatusAt(0));
     assertTrue(snapshot.eventOutcomeSequenceAt(0) > snapshot.eventSequenceAt(0));
     assertTrue(snapshot.eventCleanupValidAt(0));
@@ -77,9 +145,10 @@ final class LockDeadlockDiagnosticsTest {
         first.context(), first.transactionGeneration(), firstHeld, detail));
     assertEquals(StatusCode.NOT_OWNER, locks.acknowledge(secondHeld, detail));
     assertEquals(StatusCode.OK, manager.abort(first, new TransactionOutcome()));
+    assertEquals(StatusCode.CONFLICT, first.updateDiagnosticStep(19));
 
     assertEquals(StatusCode.OK, second.reset());
-    assertEquals(StatusCode.OK, second.configureDiagnostics(303, 8));
+    assertEquals(StatusCode.OK, second.configureDiagnostics(303, 0, 8));
     assertEquals(StatusCode.OK, manager.begin(IsolationLevel.SERIALIZABLE, 1, second));
     assertEquals(StatusCode.OK, manager.abort(second, new TransactionOutcome()));
   }
@@ -140,6 +209,9 @@ final class LockDeadlockDiagnosticsTest {
         fairness = true;
         assertEquals(LockQueueKind.ORDINARY, snapshot.edgeWaiterQueueKindAt(edge));
         assertEquals(LockQueueKind.ORDINARY, snapshot.edgeBlockerQueueKindAt(edge));
+        assertEquals(LockMode.SHARED, snapshot.edgeRequestedModeAt(edge));
+        assertEquals(LockMode.EXCLUSIVE, snapshot.edgeBlockerRequestedModeAt(edge));
+        assertEquals(null, snapshot.edgeHeldModeAt(edge));
         assertEquals(LockGrantPrecondition.NO_EARLIER_INCOMPATIBLE_WAITER,
             snapshot.edgePreconditionAt(edge));
         assertFalse(snapshot.edgeGrantPredicateResultAt(edge));
@@ -170,7 +242,7 @@ final class LockDeadlockDiagnosticsTest {
   @Test
   void signatureTableDetectsCollisionCapacityAndEpochOverflow() {
     LockDeadlockDiagnosticsConfig config =
-        LockDeadlockDiagnosticsConfig.bounded(1, 1, 1, 1, 2);
+        diagnostics(4_096, 1, 1, 1, 1, 2);
     Fixture fixture = new Fixture(config);
     assertEquals(0, fixture.table.deadlocks.admitSignatureForTest(1, 17, 23));
     assertEquals(-1, fixture.table.deadlocks.admitSignatureForTest(1, 17, 29));
@@ -189,22 +261,26 @@ final class LockDeadlockDiagnosticsTest {
   @Test
   void eventAndCycleEdgeOverflowAreExplicitAndDoNotHideVictimSelection() {
     LockDeadlockDiagnosticsConfig eventConfig =
-        LockDeadlockDiagnosticsConfig.bounded(1, 2, 1, 1, 8);
+        diagnostics(8_192, 1, 2, 1, 1, 8);
     Fixture events = new Fixture(eventConfig);
     runTwoOwnerCycle(events, 1, 2, 10, 20, 1, 2, 3);
     events.table.lifecycle.releaseAll(2, 1, StatusCode.DEADLOCK);
     events.table.lifecycle.releaseAll(1, 1, StatusCode.CANCELLED);
     runTwoOwnerCycle(events, 3, 4, 30, 40, 3, 4, 3);
+    events.table.lifecycle.releaseAll(4, 1, StatusCode.DEADLOCK);
+    events.table.lifecycle.releaseAll(3, 1, StatusCode.CANCELLED);
     LockDeadlockDiagnosticsSnapshot eventSnapshot =
         new LockDeadlockDiagnosticsSnapshot(eventConfig);
     events.table.snapshotDeadlocks(eventSnapshot);
     assertEquals(2, eventSnapshot.totalVictimSelections());
+    assertEquals(2, eventSnapshot.victimTransactionOutcomes());
+    assertEquals(2, events.table.deadlockVictimSelections());
     assertEquals(1, eventSnapshot.victimEventCount());
     assertEquals(1, eventSnapshot.victimEventOverflows());
     assertFalse(eventSnapshot.validForDiagnosticGate());
 
     LockDeadlockDiagnosticsConfig edgeConfig =
-        LockDeadlockDiagnosticsConfig.bounded(1, 2, 2, 1, 2);
+        diagnostics(8_192, 1, 2, 2, 1, 2);
     Fixture edges = new Fixture(edgeConfig);
     acquire(edges, 1, 10, LockMode.EXCLUSIVE);
     acquire(edges, 2, 20, LockMode.EXCLUSIVE);
@@ -261,6 +337,15 @@ final class LockDeadlockDiagnosticsTest {
 
   private static LockRequest key(long space, long key, LockMode mode) {
     return new LockRequest().setKey(space, key, mode, 0);
+  }
+
+  private static LockDeadlockDiagnosticsConfig diagnostics(
+      long bytes, int epochs, int signatures, int events, int exemplars, int edges) {
+    LockDeadlockDiagnosticsConfig.Result result = new LockDeadlockDiagnosticsConfig.Result();
+    StatusCode status = LockDeadlockDiagnosticsConfig.createBounded(
+        bytes, epochs, signatures, events, exemplars, edges, result);
+    if (!status.isOk()) throw new AssertionError("diagnostic fixture admission failed: " + status);
+    return result.config();
   }
 
   private static final class Wait {

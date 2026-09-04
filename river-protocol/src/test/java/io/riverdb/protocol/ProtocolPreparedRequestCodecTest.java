@@ -20,11 +20,15 @@ final class ProtocolPreparedRequestCodecTest {
     assertEquals(StatusCode.OK, source.appendInteger(17));
     assertEquals(StatusCode.OK, source.appendNull(0));
     assertEquals(StatusCode.OK, codec.encodePreparedRequest(
-        bytes, ProtocolMessageType.EXECUTE_PREPARED, 31, 0x100000002L, source));
+        bytes, ProtocolMessageType.EXECUTE_PREPARED, 31, 0x100000002L, source,
+        101, 7, 2));
     assertEquals(StatusCode.OK, codec.decode(bytes, frame));
     ProtocolPreparedRequestDecoder decoder = new ProtocolPreparedRequestDecoder();
     assertEquals(StatusCode.OK, decoder.decode(frame));
     assertEquals(0x100000002L, decoder.handle());
+    assertEquals(101, decoder.diagnosticTag());
+    assertEquals(7, decoder.diagnosticStepTag());
+    assertEquals(2, decoder.metricsEpoch());
     assertEquals(2, decoder.parameters().count());
     assertEquals(17, decoder.parameters().integerAt(0));
     assertTrue(decoder.parameters().isNull(1));
@@ -47,7 +51,7 @@ final class ProtocolPreparedRequestCodecTest {
   void rejectsTruncatedMaximumCountBeforeRetainedMemoryAdmission() {
     ParameterSet empty = new ParameterSet(0, 0);
     assertEquals(StatusCode.OK, codec.encodePreparedRequest(
-        bytes, ProtocolMessageType.EXECUTE_PREPARED, 51, 7, empty));
+        bytes, ProtocolMessageType.EXECUTE_PREPARED, 51, 7, empty, 0, 0, 0));
     bytes.putShort(ProtocolFrameCodec.HEADER_BYTES + Long.BYTES, (short) 0xffff);
     assertEquals(StatusCode.OK, codec.decode(bytes, frame));
     ProtocolMemoryBudget budget = new ProtocolMemoryBudget(

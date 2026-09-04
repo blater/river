@@ -25,8 +25,10 @@ final class RelationalDescriptorTupleDeltaProtection {
     if (plan.kind() == RelationalDescriptorTupleDeltaPlan.INSERT) {
       return protect(session, plan, index, true);
     }
-    if (plan.kind() == RelationalDescriptorTupleDeltaPlan.DELETE
-        || !plan.changedAt(index)) return protect(session, plan, index, false);
+    if (plan.kind() == RelationalDescriptorTupleDeltaPlan.DELETE) {
+      return protect(session, plan, index, false);
+    }
+    if (!plan.changedAt(index)) return StatusCode.OK;
     int compared = TupleKeyCodec.compareUserTuple(
         plan.bytes(), plan.beforeOffsetAt(index), plan.beforeLengthAt(index),
         plan.bytes(), plan.afterOffsetAt(index), plan.afterLengthAt(index));

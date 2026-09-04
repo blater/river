@@ -14,7 +14,7 @@ final class TupleBTreeInternalPrefixSearch {
       ByteBuffer page, int start, long schemaId, TupleShape shape,
       ByteBuffer prefix, int offset, int length, int parts,
       TupleBTreeWorkspace workspace) {
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         page, start, schemaId, shape, TupleBTreePageCodec.TYPE_INTERNAL, workspace);
     if (!status.isOk()) return 0;
     return childValidated(page, start, prefix, offset, length, parts, workspace);
@@ -43,7 +43,7 @@ final class TupleBTreeInternalPrefixSearch {
       ByteBuffer page, int start, long schemaId, TupleShape shape,
       ByteBuffer prefix, int offset, int length, int parts,
       TupleBTreeWorkspace workspace) {
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         page, start, schemaId, shape, TupleBTreePageCodec.TYPE_INTERNAL, workspace);
     if (!status.isOk()) return 0;
     return upperChildValidated(page, start, prefix, offset, length, parts, workspace);

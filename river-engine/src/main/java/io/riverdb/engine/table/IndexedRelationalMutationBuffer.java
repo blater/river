@@ -1,15 +1,16 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.engine.runtime.DatabaseResourceDefaults;
 import io.riverdb.format.btree.TupleKeyCodec;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
 /** Caller-owned exact-count grouped relational mutation state. */
 final class IndexedRelationalMutationBuffer {
-  static final int DEFAULT_MUTATIONS = DatabaseResourceDefaults.TRANSACTION_WRITE_ENTRIES;
+  static final int DEFAULT_MUTATIONS =
+      DatabaseResourceDefaults.ADDRESSABLE_TRANSACTION_WRITE_ENTRIES;
   static final int MAX_MUTATIONS = Integer.MAX_VALUE;
   static final int MAX_INDEX_DESCRIPTORS = Integer.MAX_VALUE;
   static final int BASE_INSERT = 1;
@@ -39,7 +40,7 @@ final class IndexedRelationalMutationBuffer {
             > (long) descriptorCapacity * TupleKeyCodec.MAX_INDEX_KEY_PARTS) {
       throw new IllegalArgumentException("invalid relational mutation capacity");
     }
-    long payloadBudget = (long) mutationCapacity * SqlShapeLimits.MAX_STORED_ROW_BYTES;
+    long payloadBudget = (long) mutationCapacity * HeapPage.MAXIMUM_ROW_BYTES;
     maximumPayloadBytes = payloadBudget > Integer.MAX_VALUE
         ? Integer.MAX_VALUE : (int) payloadBudget;
     entries = new IndexedRelationalMutationEntries(mutationCapacity, maximumPayloadBytes);
@@ -54,13 +55,24 @@ final class IndexedRelationalMutationBuffer {
   StatusCode reserve(
       int additionalMutations, int additionalDescriptors,
       int additionalDescriptorParts, int additionalPayloadBytes) {
+    return reserve(
+        additionalMutations, additionalDescriptors,
+        additionalDescriptorParts, additionalPayloadBytes, 0);
+  }
+
+  StatusCode reserve(
+      int additionalMutations, int additionalDescriptors,
+      int additionalDescriptorParts, int additionalPayloadBytes,
+      int additionalLogicalRowFloors) {
     if (sealed || additionalMutations < 0 || additionalDescriptors < 0
-        || additionalDescriptorParts < 0 || additionalPayloadBytes < 0) {
+        || additionalDescriptorParts < 0 || additionalPayloadBytes < 0
+        || additionalLogicalRowFloors < 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     if (additionalMutations > entries.capacity() - entries.count()
         || additionalPayloadBytes > maximumPayloadBytes - entries.payloadBytes()
-        || !descriptors.canReserve(additionalDescriptors, additionalDescriptorParts)) {
+        || !descriptors.canReserve(additionalDescriptors, additionalDescriptorParts)
+        || additionalLogicalRowFloors > mutationCapacity() - logicalRowFloors.count()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     long suboperationAdditional = (long) additionalMutations + additionalDescriptors;
@@ -71,6 +83,9 @@ final class IndexedRelationalMutationBuffer {
     StatusCode status = descriptors.reserve(additionalDescriptors, additionalDescriptorParts);
     if (status.isOk()) status = entries.reserve(additionalMutations, additionalPayloadBytes);
     if (status.isOk()) status = suboperations.reserve((int) suboperationAdditional);
+    if (status.isOk()) {
+      status = logicalRowFloors.reserve(logicalRowFloors.count() + additionalLogicalRowFloors);
+    }
     return status;
   }
 
@@ -253,17 +268,21 @@ final class IndexedRelationalMutationBuffer {
         + suboperations.accountedBytes() + logicalRowFloors.accountedBytes();
   }
   long accountedBytesForReservation(
-      int mutations, int descriptorCount, int descriptorParts, int payloadBytes) {
+      int mutations, int descriptorCount, int descriptorParts, int payloadBytes,
+      int logicalRowFloorCount) {
     if ((long) mutations + descriptorCount > Integer.MAX_VALUE) return -1;
     long entryBytes = entries.accountedBytesForReservation(mutations, payloadBytes);
     long descriptorBytes = descriptors.accountedBytesForReservation(
         descriptorCount, descriptorParts);
     long suboperationBytes = suboperations.accountedBytesForReservation(
         mutations + descriptorCount);
-    if (entryBytes < 0 || descriptorBytes < 0 || suboperationBytes < 0
+    long floorBytes = logicalRowFloors.accountedBytesForEntries(logicalRowFloorCount);
+    if (entryBytes < 0 || descriptorBytes < 0 || suboperationBytes < 0 || floorBytes < 0
         || entryBytes > Long.MAX_VALUE - descriptorBytes
-        || entryBytes + descriptorBytes > Long.MAX_VALUE - suboperationBytes) return -1;
-    return entryBytes + descriptorBytes + suboperationBytes;
+        || entryBytes + descriptorBytes > Long.MAX_VALUE - suboperationBytes
+        || entryBytes + descriptorBytes + suboperationBytes
+            > Long.MAX_VALUE - floorBytes) return -1;
+    return entryBytes + descriptorBytes + suboperationBytes + floorBytes;
   }
   void release() {
     entries.release();
@@ -360,7 +379,7 @@ final class IndexedRelationalMutationBuffer {
 
   private static boolean validPayload(ByteBuffer source, int offset, int length) {
     return source != null && offset >= 0 && length > 0
-        && length <= SqlShapeLimits.MAX_STORED_ROW_BYTES
+        && length <= HeapPage.MAXIMUM_ROW_BYTES
         && offset <= source.limit() - length;
   }
 

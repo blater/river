@@ -215,7 +215,9 @@ final class RelationalRowMutation {
           TableDefinition.INDEX_NONE);
       StatusCode status = resolveKey(referenceTable, referencedKey);
       if (status.isOk()) {
-        status = session.protectKey(physicalKey.space(), physicalKey.key());
+        status = session.protectKey(
+            physicalKey.space(), physicalKey.key(),
+            io.riverdb.tx.api.lock.LockMode.SHARED);
       }
       if (status.isOk()) {
         status = session.fetchByKey(

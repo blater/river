@@ -22,6 +22,7 @@ import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.engine.relational.RelationalDatabase;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.sql.SqlExecutionResult;
 import io.riverdb.engine.sql.SqlPreparedPlan;
 import io.riverdb.engine.sql.SqlPublicResultPublisher;
@@ -41,53 +42,118 @@ public final class EmbeddedRiver {
     return SqlSession.timeZoneDatabaseVersion();
   }
 
+  /** Appends bounded embedded lock diagnostics for the managed-server boundary. */
+  public static StatusCode appendDeadlockDiagnostics(
+      RiverDatabase database, StringBuilder target) {
+    if (!(database instanceof EngineDatabase engine) || target == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return engine.database.appendDeadlockDiagnostics(target);
+  }
+
+  /** Appends internal commit/WAL diagnostics without exposing table types through engine-api. */
+  public static StatusCode appendCommitDiagnostics(
+      RiverDatabase database, StringBuilder target) {
+    if (!(database instanceof EngineDatabase engine) || target == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return engine.database.appendCommitDiagnostics(target);
+  }
+
+  /** Starts one aggregate-only capture after the caller establishes quiescence. */
+  public static StatusCode beginPerformanceCapture(RiverDatabase database) {
+    if (!(database instanceof EngineDatabase engine)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return engine.database.beginPerformanceCapture();
+  }
+
+  /** Ends and formats the active capture after all admitted work drains. */
+  public static StatusCode endPerformanceCapture(
+      RiverDatabase database, StringBuilder target) {
+    if (!(database instanceof EngineDatabase engine) || target == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return engine.database.endPerformanceCapture(target);
+  }
+
+  public static StatusCode cancelPerformanceCapture(RiverDatabase database) {
+    if (!(database instanceof EngineDatabase engine)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return engine.database.cancelPerformanceCapture();
+  }
+
   public static StatusCode create(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
       DatabaseOpenResult result) {
+    return create(
+        resourceRequest, directory, database, generation, maximumActiveTransactions,
+        EmbeddedLockDiagnosticsConfig.disabled(), result);
+  }
+
+  public static StatusCode create(
+      DatabaseResourcePlanRequest resourceRequest,
+      Path directory,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      int maximumActiveTransactions,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
+      DatabaseOpenResult result) {
     return open(
+        resourceRequest,
         directory,
         database,
         generation,
         maximumActiveTransactions,
         true,
+        lockDiagnostics,
         result);
   }
 
   public static StatusCode openExisting(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
       DatabaseOpenResult result) {
     return open(
+        resourceRequest,
         directory,
         database,
         generation,
         maximumActiveTransactions,
         false,
+        EmbeddedLockDiagnosticsConfig.disabled(),
         result);
   }
 
   private static StatusCode open(
+      DatabaseResourcePlanRequest resourceRequest,
       Path directory,
       DatabaseIncarnation database,
       WalGeneration generation,
       int maximumActiveTransactions,
       boolean create,
+      EmbeddedLockDiagnosticsConfig lockDiagnostics,
       DatabaseOpenResult result) {
-    if (result == null) {
+    if (resourceRequest == null || lockDiagnostics == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     StatusCode status = create
         ? RelationalDatabase.create(
-            directory, database, generation, maximumActiveTransactions, opened)
+            resourceRequest, directory, database, generation, maximumActiveTransactions,
+            lockDiagnostics, opened)
         : RelationalDatabase.openExisting(
-            directory, database, generation, maximumActiveTransactions, opened);
+            resourceRequest, directory, database, generation,
+            maximumActiveTransactions, opened);
     if (!status.isOk()) {
       result.detail().copyFrom(opened.detail());
       if (result.detail().code().isOk()) result.detail().set(status);
@@ -122,7 +188,22 @@ public final class EmbeddedRiver {
     }
 
     @Override
+    public int activeTransactionCount() { return database.activeTransactionCount(); }
+
+    @Override
+    public long activeLockCount() { return database.activeLockCount(); }
+
+    @Override
+    public long waitingLockCount() { return database.waitingLockCount(); }
+
+    @Override
     public long lockWaitsEntered() { return database.lockWaitsEntered(); }
+
+    @Override
+    public long lockWaitsActuallyBlocked() { return database.lockWaitsActuallyBlocked(); }
+
+    @Override
+    public long lockWaitBlockedNanos() { return database.lockWaitBlockedNanos(); }
 
     @Override
     public long lockWaitsGranted() { return database.lockWaitsGranted(); }
@@ -249,7 +330,16 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode prepare(String sql, PreparedOpenResult result) {
+    public synchronized StatusCode configureTransactionDiagnostics(
+        long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+      if (closed) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      return session.configureTransactionDiagnostics(
+          diagnosticTag, diagnosticStepTag, metricsEpoch);
+    }
+
+    @Override
+    public synchronized StatusCode prepare(String sql, PreparedOpenResult result) {
       if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
       result.reset();
       if (closed) return StatusCode.CLOSED;
@@ -261,7 +351,7 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode executePrepared(
+    public synchronized StatusCode executePrepared(
         long handle, ParameterSet parameters, CommandResult result) {
       if (parameters == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
       result.reset();
@@ -274,7 +364,7 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode beginPreparedQuery(
+    public synchronized StatusCode beginPreparedQuery(
         long handle, ParameterSet parameters, QueryOpenResult result) {
       if (parameters == null || result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
       result.reset();
@@ -287,13 +377,14 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode closePrepared(long handle) {
+    public synchronized StatusCode closePrepared(long handle) {
       if (closed) return StatusCode.CLOSED;
       return query.active ? StatusCode.CONFLICT : prepared.close(handle);
     }
 
     @Override
-    public StatusCode prepareProgram(TransactionProgram program, ProgramOpenResult result) {
+    public synchronized StatusCode prepareProgram(
+        TransactionProgram program, ProgramOpenResult result) {
       if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
       result.reset();
       if (closed) return StatusCode.CLOSED;
@@ -302,7 +393,7 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode executeProgram(
+    public synchronized StatusCode executeProgram(
         long programHandle,
         IsolationLevel isolationLevel,
         TransactionProgramArguments arguments,
@@ -320,18 +411,18 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode closeProgram(long programHandle) {
+    public synchronized StatusCode closeProgram(long programHandle) {
       if (closed) return StatusCode.CLOSED;
       return query.active ? StatusCode.CONFLICT : transactionPrograms.close(programHandle);
     }
 
     @Override
-    public StatusCode execute(String sql, CommandResult result) {
+    public synchronized StatusCode execute(String sql, CommandResult result) {
       return execute(sql, null, result, false);
     }
 
     @Override
-    public StatusCode execute(
+    public synchronized StatusCode execute(
         String sql, ParameterSet parameters, CommandResult result) {
       return execute(sql, parameters, result, true);
     }
@@ -358,12 +449,12 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode beginQuery(String sql, QueryOpenResult result) {
+    public synchronized StatusCode beginQuery(String sql, QueryOpenResult result) {
       return beginQuery(sql, null, result, false);
     }
 
     @Override
-    public StatusCode beginQuery(
+    public synchronized StatusCode beginQuery(
         String sql, ParameterSet parameters, QueryOpenResult result) {
       return beginQuery(sql, parameters, result, true);
     }
@@ -426,29 +517,29 @@ public final class EmbeddedRiver {
     }
 
     @Override
-    public StatusCode close() {
+    public synchronized StatusCode close() {
       return terminalTransferred ? StatusCode.NOT_OWNER : closeOwned();
     }
 
     @Override
-    public boolean transferToTerminalCleanup(Object databaseOwner) {
+    public synchronized boolean transferToTerminalCleanup(Object databaseOwner) {
       if (databaseOwner != owner || closed || terminalTransferred) return false;
       terminalTransferred = true;
       return true;
     }
 
     @Override
-    public StatusCode retryTerminalClose() {
+    public synchronized StatusCode retryTerminalClose() {
       return !terminalTransferred ? StatusCode.NOT_OWNER : closeOwned();
     }
 
     @Override
-    public TerminalSessionCleanupTarget terminalCleanupNext() {
+    public synchronized TerminalSessionCleanupTarget terminalCleanupNext() {
       return terminalNext;
     }
 
     @Override
-    public void terminalCleanupNext(TerminalSessionCleanupTarget next) {
+    public synchronized void terminalCleanupNext(TerminalSessionCleanupTarget next) {
       terminalNext = next;
     }
 
@@ -492,6 +583,12 @@ public final class EmbeddedRiver {
 
       @Override
       public StatusCode next(RowResult result) {
+        synchronized (EngineSession.this) {
+          return nextSerialized(result);
+        }
+      }
+
+      private StatusCode nextSerialized(RowResult result) {
         if (result == null) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
@@ -516,6 +613,12 @@ public final class EmbeddedRiver {
 
       @Override
       public StatusCode close(CommandResult result) {
+        synchronized (EngineSession.this) {
+          return closeSerialized(result);
+        }
+      }
+
+      private StatusCode closeSerialized(CommandResult result) {
         if (result == null) {
           return StatusCode.INVALID_EXTERNAL_INPUT;
         }
@@ -537,7 +640,9 @@ public final class EmbeddedRiver {
 
       @Override
       public boolean isActive() {
-        return active;
+        synchronized (EngineSession.this) {
+          return active;
+        }
       }
 
       @Override

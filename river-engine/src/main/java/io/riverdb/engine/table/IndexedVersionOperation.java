@@ -1,19 +1,31 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.engine.runtime.DatabaseResourceDefaults;
+import io.riverdb.engine.runtime.DatabaseResourcePlan;
+import io.riverdb.engine.runtime.DatabaseVersionWorkspacePlan;
 
 /** Bounded staged version metadata for one logical table operation. */
 final class IndexedVersionOperation {
-  private final IndexedLongChunks previousRows = new IndexedLongChunks(
-      DatabaseResourceDefaults.MAXIMUM_TRANSACTION_WRITE_ENTRIES);
-  private final IndexedIntChunks deleted = new IndexedIntChunks(
-      DatabaseResourceDefaults.MAXIMUM_TRANSACTION_WRITE_ENTRIES);
-  private final IndexedIntChunks pageIds = new IndexedIntChunks(
-      DatabaseResourceDefaults.MAXIMUM_TRANSACTION_WRITE_ENTRIES);
-  private final IndexedIntChunks slots = new IndexedIntChunks(
-      DatabaseResourceDefaults.MAXIMUM_TRANSACTION_WRITE_ENTRIES);
+  private final long maximumRetainedBytes;
+  private final IndexedLongChunks previousRows;
+  private final IndexedIntChunks deleted;
+  private final IndexedIntChunks pageIds;
+  private final IndexedIntChunks slots;
   private int count;
+  private long retainedBytes;
+
+  IndexedVersionOperation(DatabaseResourcePlan resourcePlan) {
+    this(resourcePlan.versionWorkspace());
+  }
+
+  IndexedVersionOperation(DatabaseVersionWorkspacePlan workspacePlan) {
+    int maximum = workspacePlan.maximumOperations();
+    maximumRetainedBytes = workspacePlan.maximumRetainedBytes();
+    previousRows = new IndexedLongChunks(maximum);
+    deleted = new IndexedIntChunks(maximum);
+    pageIds = new IndexedIntChunks(maximum);
+    slots = new IndexedIntChunks(maximum);
+  }
 
   int count() { return count; }
   long previousRow(int index) { return previousRows.get(index); }
@@ -25,6 +37,11 @@ final class IndexedVersionOperation {
   StatusCode reserve(int required) {
     if (required < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (required == 0) return StatusCode.OK;
+    long targetBytes = accountedBytesForCapacity(required);
+    if (targetBytes < 0 || targetBytes > maximumRetainedBytes) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+    if (targetBytes > retainedBytes) retainedBytes = targetBytes;
     StatusCode status = previousRows.reserve(required);
     if (status.isOk()) status = deleted.reserve(required);
     if (status.isOk()) status = pageIds.reserve(required);
@@ -33,8 +50,7 @@ final class IndexedVersionOperation {
 
   static int required(int scalarVersions, int registryVersions) {
     if (scalarVersions < 0 || registryVersions < 0
-        || scalarVersions > DatabaseResourceDefaults.MAXIMUM_TRANSACTION_WRITE_ENTRIES
-            - registryVersions) return -1;
+        || scalarVersions > Integer.MAX_VALUE - registryVersions) return -1;
     return scalarVersions + registryVersions;
   }
 
@@ -109,11 +125,24 @@ final class IndexedVersionOperation {
         + pageIds.allocatedBytes() + slots.allocatedBytes();
   }
 
-  void release() {
+  StatusCode release() {
     previousRows.release();
     deleted.release();
     pageIds.release();
     slots.release();
     count = 0;
+    retainedBytes = 0;
+    return StatusCode.OK;
+  }
+
+  long retainedBytes() { return retainedBytes; }
+
+  private long accountedBytesForCapacity(int required) {
+    long longBytes = previousRows.accountedBytesForCapacity(required);
+    long intBytes = deleted.accountedBytesForCapacity(required);
+    if (longBytes < 0 || intBytes < 0 || intBytes > (Long.MAX_VALUE - longBytes) / 3) {
+      return -1;
+    }
+    return longBytes + intBytes * 3;
   }
 }
