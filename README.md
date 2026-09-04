@@ -4,7 +4,7 @@ implementation squads. The goal is to learn more about managing concurrent agent
 workflows in a large and complex project and building the toolsets and process
 to support large agentic builds.
 
-River is (initially) a fully featured relational database written (initially) in Java. 
+River is a fully featured relational database written in Java. 
 It provides an embedded Java API, JDBC access, and a command-line client. 
 Its storage engine uses MVCC, heap pages, B+trees, a write-ahead log, and checkpoints.
 
