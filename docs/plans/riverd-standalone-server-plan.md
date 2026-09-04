@@ -154,8 +154,10 @@ sequenceDiagram
 
 Arguments and path-tree collisions are fully validated before the first
 filesystem mutation. Shutdown always proceeds listener first, database second.
-The stop command reads one data-directory-owned record, never searches for a
-process, and never terminates or otherwise signals a PID.
+The stop command performs the ADR's bounded SDS scan of the fixed request,
+nonce-stage, and accepted-receipt control names, then validates the bounded
+runtime/lock identity before a new publication. It never searches arbitrary
+processes and never terminates or otherwise signals a PID.
 
 ## 4. Command contract
 
@@ -220,8 +222,10 @@ Help behaviour:
 Exit zero is `OK`; invalid syntax is exit 2 with
 `INVALID_EXTERNAL_INPUT`; every operational failure is exit 1 with the exact
 native `StatusCode` and stable number required by ADR 0014. Failure records go
-to standard error, never accompany `riverd_status=ready`, and do not replace
-native status propagation with diagnostic text.
+to standard error and do not replace native status propagation with diagnostic
+text. A pre-readiness-commit failure emits no `riverd_status=ready`; a prior
+irrevocable readiness observation may be followed by the specified terminal
+`IO_FAILURE`, ordered cleanup, and exit 1.
 
 ### 4.2 Start options and defaults
 
@@ -256,9 +260,10 @@ DATADIR/
   instance.lock            exclusive live-process lock
   stop.request             nonce-bound cooperative stop; normally absent
   bootstrap.properties     first-create recovery record; normally absent
+  .instance-<nonce>.stage  same-parent first-create authority stage; normally absent
   runtime.properties       bounded process, endpoint, and client-config identity
   database/                River-owned embedded database directory
-  security/                owner-only generation bundles and manifest
+  security/                owner-only bundles/manifest; .security-<nonce>.stage is transient
   audit/                   active forced audit and immutable archives
 ```
 
@@ -303,12 +308,25 @@ mask semantics. The ADR enumerates the only path calls, parent file-key
 revalidation, target/source force order, destination-parent staging,
 source/destination alias recovery, and both-parent forcing for a cross-parent
 directory move. The adapter uses hard-link publication only for forced
-immutable files and probes atomic replacement/fixed-directory moves plus file
-and directory force on the same filesystem. The runtime probe is not durability
-evidence: `tic-95e8` and `tic-9640` must accept an ADR-0003 qualification
-artifact for the exact distribution/JDK/provider/kernel/filesystem/mount/
-storage tuple before support is promoted. macOS/APFS and unrecognized/remote/
-access-unprovable stores are unsupported. Unsupported proof is
+immutable files staged beside their targets; cross-parent regular-file
+link/unlink is forbidden. Bootstrap binds `.instance-<nonce>.stage` in
+`DATADIR`, and renewal binds `.security-<nonce>.stage` in `security/`.
+Every SDS `newByteChannel` result used for regular files or locking must be a
+public `FileChannel`, otherwise `FEATURE_NOT_SUPPORTED`; the probe exercises
+`force(true)` and `tryLock` through those returned channels.
+
+The exact executable profile is
+`<distribution-home>/lib/riverd-filesystem-qualification-v1.properties`,
+checksummed and one-way bound by the launcher-JAR manifest to its contract,
+version, source revision, and record checksum. Its `runtime-*` JDK/provider/
+OS/FileStore fields are matched through public APIs on every instance,
+registry, and ready-parent store; its `evidence-*` mkfs/device/mount/barrier/
+ACL-mask/fault-harness fields are evidence-only and are not falsely inferred
+from `FileStore`. The runtime probe is not durability evidence: `tic-95e8` must
+bind API/process-crash evidence and `tic-9640` ADR-0003 power-loss evidence to
+the identical qualification-record and launcher-JAR checksums before support
+is promoted. A rebuilt pair requires new evidence. macOS/APFS and
+unrecognized/remote/access-unprovable stores are unsupported. Unsupported proof is
 `FEATURE_NOT_SUPPORTED`; wrong type/owner/mode/ACL/symlink proof is
 `ACCESS_DENIED`. Before mutation, equality, unintended ancestor/descendant,
 symlink, file-key, and hard-link alias collisions among the data tree, its
@@ -775,6 +793,9 @@ not exempt the new module from existing build policy.
   nonce-derived bootstrap namespace resumes only a checksum/file-key-bound
   next step; missing/invalid bootstrap, source/destination duplication, or any
   extra entry is preserved;
+- instance authority publishes only from the bootstrap-bound
+  `.instance-<nonce>.stage` beside its target, and recovery removes only that
+  validated same-parent alias/residue;
 - under-lock zero/torn/stale pre-bootstrap lock recovery is allowed only for an
   otherwise empty authority-free tree; bootstrap/instance identity and absent-
   process proofs govern every later stale lock;
@@ -831,7 +852,10 @@ not exempt the new module from existing build policy.
   ACL override, every enumerated path operation, parent file-key and
   directory-create races, source/destination aliases and parent forces,
   incorrect atomic exclusive/replacement semantics, owner/mode/type failures,
-  and every format framing bound have focused tests; the runtime probe is not
+  SDS-returned non-`FileChannel`, force/tryLock, and every format framing bound
+  have focused tests; qualification-record checksum/JAR-manifest binding and
+  runtime-observable matching are negative-tested while evidence-only fields
+  remain promotion checks, not runtime claims; the runtime probe is not
   accepted as durability evidence;
 - a source and compiled-code check proves that production contains no plain
   listener/client fallback.
@@ -939,8 +963,9 @@ The launcher slice is complete when:
   or mismatched state;
 - `riverd` and `riverd ps` list all verified instances registered by the
   current user, and the empty listing suggests `riverd start`;
-- failed startup or shutdown exits nonzero and never prints successful
-  readiness;
+- a failure known before readiness commit exits nonzero without successful
+  readiness; a prior irrevocable readiness observation may be followed only by
+  the specified terminal `IO_FAILURE`, ordered cleanup, and exit 1;
 - the instance lock prevents concurrent ownership without inspecting or
   terminating another PID;
 - help/version are useful and side-effect free;

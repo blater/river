@@ -124,9 +124,12 @@ The process has three public exit classes:
 
 An exit-1/2 command writes a concise diagnostic followed by exactly
 `riverd_status_code=<StatusCode.stableCode()>` and final
-`riverd_status=<StatusCode-name>` records to standard error. It never prints
-successful readiness. Human text is diagnostic only and is not a second status
-contract.
+`riverd_status=<StatusCode-name>` records to standard error. A failure known
+before the selected readiness commit emits no successful readiness. A command
+whose readiness observation is already irrevocable may later emit these
+failure records and exit 1 under the post-commit rules below; it does not emit
+a second or retracting readiness record. Human text is diagnostic only and is
+not a second status contract.
 
 The owning boundary uses these exact outcomes:
 
@@ -164,6 +167,7 @@ DATADIR/
   .stop-accepted-<nonce>
   bootstrap.properties     # present only during first-create recovery
   .bootstrap-<nonce>.stage
+  .instance-<nonce>.stage
   .riverd-bootstrap-<nonce>/
   runtime.properties
   database/
@@ -172,6 +176,7 @@ DATADIR/
     client.properties
     renewal.intent
     .renewal-intent-<nonce>.stage
+    .security-<nonce>.stage
     generations/<credential-generation>/
       token.bin
       server-private-key.pkcs8
@@ -219,12 +224,14 @@ path-based public-NIO calls and no others:
 | --- | --- |
 | `toRealPath(NOFOLLOW_LINKS)`, `Files.readAttributes(...,NOFOLLOW_LINKS)`, `Files.getFileStore`, and `Files.newDirectoryStream(realTrustRoot)` | Initial read-only selection of the nearest existing trust root, qualification tuple, and sole path-based opening of that real root. The returned stream must be an SDS; the adapter compares type/owner/mode/access views/file key and walks every existing descendant SDS-relative. |
 | `Files.createDirectory(parent.resolve(fixedComponent),0700)` | The only directory creation call. Immediately before and after it, re-read the path parent without following links and require its file key to equal the already open SDS parent. Then validate the child no-follow, acquire it through the SDS, and compare its file key. Failure removes only the exact new child through the SDS and forces that parent. |
-| `Files.createLink(target,forcedStage)` | Exclusive publication of one already forced, closed, immutable, canonical regular file staged in the destination parent. Source and target parent file keys are checked against open SDS handles immediately before and after; cross-parent regular-file links are forbidden. |
+| `Files.createLink(target,forcedStage)` | Exclusive publication of one already forced, closed, immutable, canonical regular file staged in the target's same parent. That one parent file key is checked against its open SDS immediately before and after; cross-parent regular-file links are forbidden. |
 | `Files.move(source,target,ATOMIC_MOVE,REPLACE_EXISTING)` | Replacement of an already forced immutable regular file staged in the destination parent. The one parent file key is checked before and after; replacement is never cross-parent. |
 | `Files.move(source,target,ATOMIC_MOVE)` | Rename of a request/receipt in one parent, or publication of a fully forced fixed directory between two already open parents on the same qualified store. Absence is checked SDS-relative while the instance lock excludes River competitors; source and destination parent file keys are checked before and after. |
 | `FileChannel.open(directoryPath,READ).force(true)` | Directory force only. Immediately before opening and after force, the path's file key must equal the already open SDS directory. Regular files are opened/created/forced through SDS-relative byte channels. |
+| `FileChannel.open(realDistributionArtifact,READ,NOFOLLOW_LINKS)` | Read-only access to the already-real launcher JAR and its one fixed sibling qualification record. Type, real containment, and file key are checked before and after; the channel computes bytes/checksums and reads the launcher manifest, and never accesses writable instance state. |
 
-All existing-entry opens, reads, and deletes use SDS-relative operations;
+All existing-entry opens, reads, and deletes in the writable instance,
+registry, and ready-parent trees use SDS-relative operations;
 `Files.delete`, path-based regular-file open/create, arbitrary path moves, and
 recursive path operations are forbidden. A prospective data-directory leaf
 uses the fixed-component create proof; caller-selected missing intermediate
@@ -233,6 +240,17 @@ components are unsupported. A ready-file leaf requires an existing verified
 fixed component at a time only when `$HOME` or the prior component is already
 verified `0700`; every new parent immediately passes the same proof.
 
+Every regular-file create/open, including `instance.lock`, uses
+`SecureDirectoryStream.newByteChannel`. The returned public
+`SeekableByteChannel` must also be a public `FileChannel`; the adapter closes a
+non-`FileChannel` result and returns `FEATURE_NOT_SUPPORTED`. Only after that
+check may it call `FileChannel.force(true)` or, for `instance.lock`,
+`tryLock()`. The scratch capability probe performs both a forced file write and
+an exclusive `tryLock` through SDS-returned `FileChannel` objects before any
+production-state mutation. Provider qualification records and tests cover this
+exact capability; a provider-specific channel cast or reflective force/lock
+substitute is forbidden.
+
 Exclusive file publication is exactly: create, force, and close the immutable stage in
 the destination directory; verify target absence; `createLink`; revalidate the
 parent and source/target identical file keys and checksums; open and force the
@@ -240,11 +258,10 @@ target link; force the destination parent; delete the source name through SDS;
 and force that parent again. The target-link publication is the visibility
 commit. After a crash with both names, recovery accepts only identical file
 keys, canonical bytes, and expected checksum: it re-forces the target and
-destination parent, removes the source name, and forces the source parent. A
+same parent, removes the source name, and forces that parent. A
 different file key or byte identity is preserved as `CONFLICT`/`CORRUPTION`.
-Because the stage is always in the destination parent, the two named parents
-are normally the same; if qualification ever permits a cross-parent link or
-unlink, both parents must be forced after each namespace change.
+The stage and target are always in one parent; cross-parent regular-file link
+and unlink publication is forbidden.
 
 Atomic replacement similarly stages in the destination parent and forces the
 target and parent after the move. A matching source/target hard-link alias left
@@ -259,23 +276,93 @@ containing parent, which is forced before deletion is durable. No namespace
 change is durable until every affected source and destination parent force
 completes.
 
-The runtime scratch probe exercises these APIs, existing-target refusal,
-competing creators, alias recovery, replacement visibility, file-key checks,
-and file/directory forces on the selected store. That probe proves only current
-API behavior, not crash or power-loss durability. A distribution may claim
-ext4/xfs support only when its shipped qualification manifest names an accepted
-artifact for the exact distribution SHA, JDK vendor/version/build, NIO provider
-class/module, OS/kernel, filesystem/mkfs features, device, mount options, and
-storage force/barrier policy. `tic-95e8` owns API, concurrency, injected-crash,
-and process-crash qualification; `tic-9640`, under ADR 0003, owns unclean-
-shutdown/power-loss recovery evidence and final support promotion. Before those
-artifacts are accepted the distribution is a qualification candidate, not a
-supported ext4/xfs release. At runtime the instance, registry, and ready parent
-`FileStore` tuples each independently must match the qualified profile and pass
-the probe; no link/move crosses those three trees. A runtime tuple/probe
-mismatch is `FEATURE_NOT_SUPPORTED`; an absent or mismatched evidence artifact
-blocks promotion/support claims. There is no best-effort permission,
-unqualified durability claim, or non-POSIX fallback.
+The runtime scratch probe exercises these APIs, SDS-returned `FileChannel`
+force/lock, existing-target refusal, competing creators, alias recovery,
+replacement visibility, file-key checks, and file/directory forces on the
+selected store. That probe proves only current API behavior, not crash or
+power-loss durability.
+
+The executable filesystem profile is one immutable canonical record at
+`<distribution-home>/lib/riverd-filesystem-qualification-v1.properties`.
+`distribution-home` is the real parent of the `lib` directory containing the
+real regular launcher JAR identified by `RiverDaemonMain`'s protection-domain
+`file:` code-source URL; any other layout, URL scheme, symlinked record, missing
+record, duplicate record, or changed record is `FEATURE_NOT_SUPPORTED`. The
+record is generated before the launcher JAR, never rewritten in place, and has
+this exact ordered schema:
+
+```text
+format=riverd-filesystem-qualification-v1
+launcher-contract=riverd-v1
+river-version=<distribution-version>
+launcher-jar-name=<single-filename>
+launcher-source-revision=<40-lowercase-hex>
+api-evidence-ticket=tic-95e8
+api-evidence-path=docs/delivery/evidence/tic-95e8-riverd-filesystem-api.json
+power-loss-evidence-ticket=tic-9640
+power-loss-evidence-path=docs/delivery/evidence/tic-9640-riverd-filesystem-power-loss.json
+runtime-jdk-vendor=<canonical-nonempty-java.vendor>
+runtime-jdk-version=<canonical-nonempty-java.version>
+runtime-jdk-runtime-version=<canonical-nonempty-java.runtime.version>
+runtime-nio-provider-class=<canonical-binary-class-name>
+runtime-nio-provider-module=<canonical-module-name>
+runtime-os-name=Linux
+runtime-os-version=<canonical-nonempty-os.version>
+runtime-os-arch=<canonical-nonempty-os.arch>
+runtime-file-store-type=<ext4|xfs>
+runtime-posix-view=true
+runtime-acl-view-supported=<true|false>
+evidence-filesystem-mkfs=<canonical-nonempty-description>
+evidence-device-identity=<canonical-nonempty-description>
+evidence-mount-options=<canonical-nonempty-description>
+evidence-storage-force-barrier-policy=<canonical-nonempty-description>
+evidence-posix-acl-mask-semantics=<canonical-nonempty-description>
+evidence-fault-harness=<canonical-nonempty-name-and-version>
+record-sha256=<64-lowercase-hex>
+```
+
+Each `canonical-nonempty-*` value is NFC UTF-8 of 1..256 bytes with no NUL,
+CR, LF, `=`, Unicode control, or leading/trailing whitespace; runtime property
+values are otherwise the exact returned strings and receive no case folding.
+`single-filename` is 1..128 ASCII letters, digits, dot, underscore, or hyphen,
+contains no slash or backslash, and is neither `.` nor `..`. Boolean and choice
+fields accept only their displayed lowercase literals.
+
+The universal checksum/framing rules below apply and the record is at most
+8192 bytes. The build embeds the record's exact final SHA-256 in the named
+launcher JAR manifest attribute
+`Riverd-Filesystem-Qualification-SHA256`, plus the record's version, contract,
+and source revision in `Implementation-Version`, `Riverd-Launcher-Contract`,
+and `Riverd-Source-Revision`; this one-way record-then-JAR construction has no
+self-referential digest. `tic-95e8` creates the record and JAR and its API
+evidence names the exact record checksum and complete launcher-JAR checksum.
+`tic-9640` runs ADR-0003 unclean-shutdown and power-loss recovery against that
+unchanged pair; its evidence names the same two checksums. Promotion accepts
+the profile only when both tickets are
+closed, both fixed-path evidence artifacts are immutable and accepted, their
+content binds those checksums and every field above, and both acceptance
+commits are ancestors of the promoted source revision. A rebuild with a
+different launcher-JAR byte, record byte, or tuple is a different profile and
+requires new evidence. Before that two-ticket acceptance, executions are
+qualification candidates and no ext4/xfs support is claimed.
+
+At runtime the launcher bounded-reads and checksum-validates the record through
+the enumerated read-only distribution channel, opens its own real code-source
+JAR through the same operation, requires the four manifest attributes above to
+match the record and its checksum, and compares every `runtime-*` field using
+the named Java system property, `Path.getFileSystem().provider()` class/module,
+and public `FileStore` type/view queries. It independently applies that
+observable matcher and the scratch probe
+to the instance, registry, and ready-parent stores; no link/move crosses those
+trees. The `evidence-*` device, mkfs, mount, barrier, ACL-mask semantics, and
+fault-harness fields are evidence-only because public NIO cannot discover them
+and the runtime does not pretend to compare them. Deployment support remains
+conditional on their external exact match to the accepted evidence. A record,
+launcher-manifest binding,
+runtime-observable tuple, or probe mismatch is `FEATURE_NOT_SUPPORTED`; an
+evidence-only deployment mismatch is unsupported even if runtime observation
+passes. There is no best-effort permission, unqualified durability claim, or
+non-POSIX fallback.
 
 `--ready-file` uses the same secure-parent/no-follow rules, is created `0600`,
 and is never overwritten. The fixed per-user registry is
@@ -357,14 +444,17 @@ database-name=database
 security-name=security
 audit-name=audit
 staging-name=.riverd-bootstrap-<attempt-nonce>
+instance-stage-name=.instance-<attempt-nonce>.stage
 record-sha256=<64-lowercase-hex>
 ```
 
 The nonzero attempt nonce is 16 random bytes encoded as 32 lowercase hex
 characters. Its only staging namespace is
 `.riverd-bootstrap-<attempt-nonce>`; inside it the only names are `database`,
-`security`, `audit`, and `instance.properties.stage`. While holding the forced
-lock record, first creation performs these exact durable steps:
+`security`, and `audit`. The instance-authority stage is the bootstrap-bound
+`.instance-<attempt-nonce>.stage` directly in `DATADIR`, the same parent as its
+target. While holding the forced lock record, first creation performs these
+exact durable steps:
 
 1. It validates an empty/new `DATADIR`, fixes the incarnation and nonce, writes
    and forces `.bootstrap-<nonce>.stage`, atomically publishes it without
@@ -378,11 +468,13 @@ lock record, first creation performs these exact durable steps:
    without overwrite to their final fixed names, forcing `DATADIR` after each
    rename. A staged child's bootstrap/incarnation header and file key are
    checked immediately before its rename.
-5. It writes and forces `instance.properties.stage`, atomically publishes it
-   without overwrite as `instance.properties`, and forces `DATADIR`. This
-   directory force is the sole instance-authority commit.
+5. It writes and forces the bound `.instance-<attempt-nonce>.stage` directly in
+   `DATADIR`, uses same-parent exclusive-file publication without overwrite as
+   `instance.properties`, and forces `DATADIR`. This directory force is the
+   sole instance-authority commit.
 6. It removes only the matching bootstrap record and now-empty matching nonce
-   namespace, then forces `DATADIR`.
+   namespace plus any already-validated instance-stage alias residue, then
+   forces `DATADIR`.
 
 A crash before the bootstrap rename leaves only a checked stage that a retry
 may delete by matching file key and nonce. After bootstrap publication and
@@ -407,8 +499,8 @@ is permitted during recovery.
 | Bootstrap authoritative, namespace absent or empty | Recreate the one recorded namespace and resume step 3 with the recorded incarnation/nonce. |
 | A staged child is partial, no corresponding final child | Validate its bootstrap identity; remove/recreate only that child, force its parent, and resume. |
 | Exactly the ordered prefix of `database`, `security`, and `audit` is final | Validate the prefix and remaining staged identities, then perform only the next rename and force. |
-| Instance stage is complete, instance target absent | Revalidate all three final children, then publish/force the recorded instance authority. |
-| Instance target is complete but its matching stage alias or last directory force remains | Apply alias recovery if needed, revalidate all final bytes and identities, and repeat the idempotent `DATADIR` force before treating authority as committed. |
+| Bound `.instance-<nonce>.stage` is complete in `DATADIR`, instance target absent | Revalidate all three final children, then same-parent publish/force the recorded instance authority. |
+| Instance target is complete but its matching `.instance-<nonce>.stage` alias or last directory force remains | Apply same-parent alias recovery if needed, revalidate all final bytes and identities, and repeat the idempotent `DATADIR` force before treating authority as committed. |
 | Instance authority is committed and bootstrap/namespace remains | Validate authority and remove only matching bootstrap/stage residue, then force `DATADIR`. |
 
 Any state outside exactly one row, including a gap in the published-child
@@ -930,8 +1022,10 @@ validity is not required; corrupt, missing, or mismatched accepted material is
 The 16-byte random operation nonce is lowercase 32-hex. The only transaction
 namespace is
 `security/.renew-<old-generation>-to-<new-generation>-<operation-nonce>` and
-contains only `new-generation` and `security.properties.stage`. Durable intent
-is outside and precedes that namespace: the launcher derives the public archive
+contains only `new-generation`. The authority stage is
+`security/.security-<operation-nonce>.stage`, directly beside its
+`security.properties` target and bound by the intent below. Durable intent is
+outside and precedes the namespace: the launcher derives the public archive
 digest without mutation, writes and forces
 `security/.renewal-intent-<operation-nonce>.stage`, then exclusively publishes
 and forces `security/renewal.intent` before creating the namespace. Its exact
@@ -948,7 +1042,7 @@ old-security-record-sha256=<64-lowercase-hex>
 archive-name=credential-<old-generation>-sha256-<public-manifest-digest>
 namespace-name=.renew-<old-generation>-to-<new-generation>-<operation-nonce>
 new-generation-name=new-generation
-security-stage-name=security.properties.stage
+security-stage-name=.security-<operation-nonce>.stage
 record-sha256=<64-lowercase-hex>
 ```
 
@@ -991,17 +1085,18 @@ the archive. Renewal performs these exact durable steps:
    each secret/public file and that directory, atomically moves it without
    overwrite to `security/generations/<new-generation>`, then forces
    `security/generations/` and `security/`.
-5. It writes and forces `security.properties.stage`, atomically replaces
-   `security/security.properties`, and forces `security/`. That force is the
-   sole authority switch: before it the old generation authenticates; after it
-   only the new generation does.
+5. It writes and forces `security/.security-<operation-nonce>.stage`, performs
+   same-parent atomic replacement of `security/security.properties`, and
+   forces `security/`. That force is the sole authority switch: before it the
+   old generation authenticates; after it only the new generation does.
 6. After the new authority revalidates, it unlinks the old token, private key,
    certificate, and old generation directory using checked file keys; forces
    the affected old directory before its removal and then
    `security/generations/` and `security/`; removes and forces the exact
-   transaction namespace; then deletes `renewal.intent` by checksum/file key as
-   the final record and forces `security/`. This is durable logical deletion
-   without a physical-media erasure claim.
+   transaction namespace; removes any validated same-parent security-stage
+   residue; then deletes `renewal.intent` by checksum/file key as the final
+   record and forces `security/`. This is durable logical deletion without a
+   physical-media erasure claim.
 
 A crash before the authority switch leaves the old authority. A retry under the
 lock finds at most one valid `renewal.intent` bound to its checksum,
@@ -1026,9 +1121,9 @@ its selected endpoint.
 | Final public archive exists | Old authority; validate its name, manifest digest, certificate, and both directory forces, then resume new-generation construction. |
 | `new-generation` is incomplete in the transaction namespace | Old authority; remove/recreate only that matching staged generation and resume step 4. |
 | Final `generations/<new>` exists, old security authority remains | Old authority; validate the new generation and archive, then resume manifest staging; never authenticate with new yet. |
-| New security stage is complete, old authority remains | Old authority; revalidate all inputs and perform only the replacement and directory force. |
+| Bound `.security-<nonce>.stage` is complete beside the old authority | Old authority; revalidate all inputs and perform only the same-parent replacement and directory force. |
 | New security target is visible but its directory force may have crashed | New authority after complete validation; repeat the idempotent `security/` force, then perform only old-secret deletion. |
-| New authority is durable, any old secret, namespace, or intent remains | New authority; before listener bind, unlink only matching old files, force every affected directory, remove/force the exact namespace, then remove/force the intent last. |
+| New authority is durable, any old secret, bound security stage, namespace, or intent remains | New authority; before listener bind, unlink only matching old files, force every affected directory, remove/force the exact namespace and bound stage, then remove/force the intent last. |
 
 An archive/new generation with the right numeric generation but the wrong
 nonce, checksum, certificate, or file key is never adopted.
@@ -1109,7 +1204,11 @@ included in those deferrals.
   but was independently rejected for incomplete path-operation/durability
   qualification, unimplementable generic-JSSE erasure claims, and remaining
   lock, ready, stop-receipt, and renewal-intent recovery ambiguity.
-- The current candidate preserves both rejection records. No independent
+- Candidate `56b8911a144d9e5accae1d4e3569820891d1fd54` closed those findings
+  but was independently rejected for cross-parent authority stages, an
+  unspecified SDS channel capability, a non-executable qualification artifact,
+  overbroad failure/readiness wording, and an inaccurate stop-scan summary.
+- The current candidate preserves all three rejection records. No independent
   acceptance or implementation authorization is claimed until `tic-11a5`
   review passes and its status/index are updated in the accepted merge.
 

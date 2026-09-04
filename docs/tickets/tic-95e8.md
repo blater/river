@@ -38,7 +38,12 @@ failure terminate as `IO_FAILURE`; ready-file stdout-mirror failure remains
 nonterminal. No failure leaks a resource or secret; diagnosable data is
 preserved and the instance is restartable where the contract permits. No plain
 path remains in source or compiled output. Record the exact
-distribution/JDK/provider/kernel/ext4-or-xfs/
-mount/storage tuple and API, race, injected-crash, process-crash, alias, force,
-ACL, and path-operation evidence; explicitly defer power-loss promotion to
-`tic-9640`. Evidence and source tag are recorded.
+runtime-observable distribution/JDK/provider/OS/ext4-or-xfs tuple separately
+from the evidence-only mkfs/device/mount/barrier/ACL-mask/fault-harness tuple.
+Create the immutable installed
+`lib/riverd-filesystem-qualification-v1.properties` record and bind
+`docs/delivery/evidence/tic-95e8-riverd-filesystem-api.json` to its checksum and
+the complete launcher-JAR checksum. Cover SDS-returned public `FileChannel`
+force/tryLock, API, race, injected-crash, process-crash, same-parent stage/alias,
+ACL, and every enumerated path operation; explicitly defer power-loss promotion
+to `tic-9640`. Evidence and source tag are recorded.
