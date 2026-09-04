@@ -22,7 +22,7 @@ final class TupleBTreeInsertPreflightParents {
       if (!status.isOk()) return failure(result, status);
       if (result.splitLevelCount() <= workspace.pathDepth - parent) return StatusCode.OK;
     }
-    if (!BTreeStructuralLimits.canDescendFrom(workspace.pathDepth)) {
+    if (!TupleBTreeStructure.canDescendFrom(workspace.pathDepth)) {
       return failure(result, StatusCode.RESOURCE_EXHAUSTED);
     }
     result.set(false, true, result.newPageCount() + 1,

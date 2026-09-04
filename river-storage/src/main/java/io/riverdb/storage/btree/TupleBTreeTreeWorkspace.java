@@ -42,11 +42,11 @@ public final class TupleBTreeTreeWorkspace {
         && keyScratch != null && !keyScratch.isReadOnly()
         && keyScratch.limit() >= TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
         && pageScratch != keyScratch
-        && pathPageIds != null && pathPageIds.length >= BTreeStructuralLimits.MAXIMUM_LEVELS
+        && pathPageIds != null && pathPageIds.length >= TupleBTreeStructure.MAXIMUM_LEVELS
         && pathChildOrdinals != null
-        && pathChildOrdinals.length >= BTreeStructuralLimits.MAXIMUM_LEVELS
+        && pathChildOrdinals.length >= TupleBTreeStructure.MAXIMUM_LEVELS
         && pathNextChildOrdinals != null
-        && pathNextChildOrdinals.length >= BTreeStructuralLimits.MAXIMUM_LEVELS
+        && pathNextChildOrdinals.length >= TupleBTreeStructure.MAXIMUM_LEVELS
         && !current.isAttached() && !other.isAttached();
   }
 

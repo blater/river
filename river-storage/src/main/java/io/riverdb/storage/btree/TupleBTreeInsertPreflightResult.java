@@ -2,7 +2,7 @@ package io.riverdb.storage.btree;
 
 /** Caller-owned exact admission result for one read-only insert preflight. */
 public final class TupleBTreeInsertPreflightResult {
-  public static final int MAXIMUM_NEW_PAGES = BTreeStructuralLimits.MAXIMUM_LEVELS;
+  public static final int MAXIMUM_NEW_PAGES = TupleBTreeStructure.MAXIMUM_LEVELS;
   public static final int MAXIMUM_CHANGED_PAGES = MAXIMUM_NEW_PAGES * 2;
 
   private boolean keyExists;

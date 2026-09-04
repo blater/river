@@ -40,8 +40,8 @@ final class TupleBTreeTraversal {
     if (!tree.isValid(workspace)) return StatusCode.INVALID_EXTERNAL_INPUT;
     workspace.resetPath();
     int pageId = tree.provider().rootPageId();
-    if (!BTreeStructuralLimits.validPageId(pageId)) return StatusCode.CORRUPTION;
-    for (int level = 0; BTreeStructuralLimits.canVisitLevel(level); level++) {
+    if (!TupleBTreeStructure.validPageId(pageId)) return StatusCode.CORRUPTION;
+    for (int level = 0; TupleBTreeStructure.canVisitLevel(level); level++) {
       StatusCode status = tree.provider().pin(pageId, false, workspace.current);
       if (!status.isOk()) return status;
       status = TupleBTreePageAdmission.validate(
@@ -59,7 +59,7 @@ final class TupleBTreeTraversal {
       if (recordPath) workspace.pathPageIds[workspace.pathDepth++] = pageId;
       int child = child(tree, workspace, key, offset, length, prefixParts);
       status = release(tree, workspace,
-          BTreeStructuralLimits.validPageId(child) ? StatusCode.OK : StatusCode.CORRUPTION);
+          TupleBTreeStructure.validPageId(child) ? StatusCode.OK : StatusCode.CORRUPTION);
       if (!status.isOk()) return status;
       pageId = child;
     }

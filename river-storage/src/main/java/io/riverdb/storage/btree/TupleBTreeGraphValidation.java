@@ -14,7 +14,7 @@ final class TupleBTreeGraphValidation {
     if (tree == null || !tree.isValid(workspace)) return StatusCode.INVALID_EXTERNAL_INPUT;
     workspace.resetPath();
     int root = tree.provider().rootPageId();
-    if (!BTreeStructuralLimits.validPageId(root)) return StatusCode.CORRUPTION;
+    if (!TupleBTreeStructure.validPageId(root)) return StatusCode.CORRUPTION;
     workspace.pathPageIds[0] = root;
     workspace.pathChildOrdinals[0] = -1;
     workspace.pathNextChildOrdinals[0] = -1;
@@ -53,9 +53,9 @@ final class TupleBTreeGraphValidation {
       int child = TupleBTreeGraphPages.child(workspace, ordinal);
       workspace.pathNextChildOrdinals[depth] = ordinal + 1;
       status = release(tree, workspace,
-          BTreeStructuralLimits.validPageId(child) ? StatusCode.OK : StatusCode.CORRUPTION);
+          TupleBTreeStructure.validPageId(child) ? StatusCode.OK : StatusCode.CORRUPTION);
       if (!status.isOk()) return status;
-      if (!BTreeStructuralLimits.canDescendFrom(depth)
+      if (!TupleBTreeStructure.canDescendFrom(depth)
           || TupleBTreeGraphPages.onPath(workspace, depth, child)) {
         return StatusCode.CORRUPTION;
       }
