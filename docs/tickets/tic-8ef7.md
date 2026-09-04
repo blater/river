@@ -1,10 +1,12 @@
 ---
 id: tic-8ef7
-status: open
+status: in_progress
 type: bug
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: 588da3f19b9b892e4ace2226a6e639a751286594
+branch: ticket/tic-8ef7-clean-test-contracts
 tags:
     - p0
     - build
