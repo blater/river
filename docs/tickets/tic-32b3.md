@@ -1,12 +1,13 @@
 ---
 id: tic-32b3
-status: in_progress
+status: closed
 type: story
 assignee: blater
 parent: tic-30c3
 delivery: documentation
 base-commit: 5b120a179055a9ec1c640152b4e2bf057d23f5ac
 branch: ticket/tic-32b3-reconcile-performance-workflow
+delivered-commit: 0e6fcd90e92b5e7a1235baf519a191c43068b8df
 tags:
     - performance
     - workflow
