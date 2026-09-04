@@ -240,7 +240,8 @@ components are unsupported. A ready-file leaf requires an existing verified
 fixed component at a time only when `$HOME` or the prior component is already
 verified `0700`; every new parent immediately passes the same proof.
 
-Every regular-file create/open, including `instance.lock`, uses
+Every regular-file create/open in the writable instance, registry, and
+ready-parent trees, including `instance.lock`, uses
 `SecureDirectoryStream.newByteChannel`. The returned public
 `SeekableByteChannel` must also be a public `FileChannel`; the adapter closes a
 non-`FileChannel` result and returns `FEATURE_NOT_SUPPORTED`. Only after that
@@ -249,7 +250,9 @@ check may it call `FileChannel.force(true)` or, for `instance.lock`,
 an exclusive `tryLock` through SDS-returned `FileChannel` objects before any
 production-state mutation. Provider qualification records and tests cover this
 exact capability; a provider-specific channel cast or reflective force/lock
-substitute is forbidden.
+substitute is forbidden. The launcher JAR and qualification record are read-only
+distribution artifacts and use only the enumerated path-based
+`FileChannel.open` exception above.
 
 Exclusive file publication is exactly: create, force, and close the immutable stage in
 the destination directory; verify target absence; `createLink`; revalidate the
@@ -326,7 +329,11 @@ CR, LF, `=`, Unicode control, or leading/trailing whitespace; runtime property
 values are otherwise the exact returned strings and receive no case folding.
 `single-filename` is 1..128 ASCII letters, digits, dot, underscore, or hyphen,
 contains no slash or backslash, and is neither `.` nor `..`. Boolean and choice
-fields accept only their displayed lowercase literals.
+fields accept only their displayed lowercase literals. A
+`canonical-binary-class-name` is ASCII `[A-Za-z_$][A-Za-z0-9_$]*` segments
+separated by single dots. `canonical-module-name` is ASCII
+`[A-Za-z][A-Za-z0-9]*` segments separated by single dots. Empty segments and
+every other character are invalid.
 
 The universal checksum/framing rules below apply and the record is at most
 8192 bytes. The build embeds the record's exact final SHA-256 in the named
@@ -338,8 +345,8 @@ self-referential digest. `tic-95e8` creates the record and JAR and its API
 evidence names the exact record checksum and complete launcher-JAR checksum.
 `tic-9640` runs ADR-0003 unclean-shutdown and power-loss recovery against that
 unchanged pair; its evidence names the same two checksums. Promotion accepts
-the profile only when both tickets are
-closed, both fixed-path evidence artifacts are immutable and accepted, their
+the profile only when both tickets are closed, both fixed-path evidence
+artifacts are immutable and accepted, their
 content binds those checksums and every field above, and both acceptance
 commits are ancestors of the promoted source revision. A rebuild with a
 different launcher-JAR byte, record byte, or tuple is a different profile and
@@ -348,21 +355,30 @@ qualification candidates and no ext4/xfs support is claimed.
 
 At runtime the launcher bounded-reads and checksum-validates the record through
 the enumerated read-only distribution channel, opens its own real code-source
-JAR through the same operation, requires the four manifest attributes above to
-match the record and its checksum, and compares every `runtime-*` field using
-the named Java system property, `Path.getFileSystem().provider()` class/module,
-and public `FileStore` type/view queries. It independently applies that
-observable matcher and the scratch probe
+JAR through the same operation, requires `launcher-jar-name` to equal that
+code-source path's actual filename, and requires the four manifest attributes
+above to match the record and its checksum. It compares every `runtime-*` field
+using the named Java system property, `Path.getFileSystem().provider()`
+class/module, and public `FileStore` type/view queries. It independently applies
+that observable matcher and the scratch probe
 to the instance, registry, and ready-parent stores; no link/move crosses those
 trees. The `evidence-*` device, mkfs, mount, barrier, ACL-mask semantics, and
 fault-harness fields are evidence-only because public NIO cannot discover them
 and the runtime does not pretend to compare them. Deployment support remains
 conditional on their external exact match to the accepted evidence. A record,
-launcher-manifest binding,
-runtime-observable tuple, or probe mismatch is `FEATURE_NOT_SUPPORTED`; an
+launcher-manifest binding, runtime-observable tuple, or probe mismatch is
+`FEATURE_NOT_SUPPORTED`; an
 evidence-only deployment mismatch is unsupported even if runtime observation
 passes. There is no best-effort permission, unqualified durability claim, or
 non-POSIX fallback.
+
+The runtime checks only the canonical record checksum, actual JAR filename,
+record-to-JAR manifest equality, runtime-observable tuple, and probe. It does
+not treat a self-computed full-JAR digest or a Git lookup as an expected-source
+oracle. The complete launcher-JAR SHA-256, expected source revision, evidence
+content checksums, ticket closure, and acceptance-commit ancestry are build and
+promotion evidence-only checks performed from the trusted repository artifacts
+named above; they are not fields a deployed JVM can independently authenticate.
 
 `--ready-file` uses the same secure-parent/no-follow rules, is created `0600`,
 and is never overwritten. The fixed per-user registry is
@@ -499,6 +515,7 @@ is permitted during recovery.
 | Bootstrap authoritative, namespace absent or empty | Recreate the one recorded namespace and resume step 3 with the recorded incarnation/nonce. |
 | A staged child is partial, no corresponding final child | Validate its bootstrap identity; remove/recreate only that child, force its parent, and resume. |
 | Exactly the ordered prefix of `database`, `security`, and `audit` is final | Validate the prefix and remaining staged identities, then perform only the next rename and force. |
+| Bound `.instance-<nonce>.stage` exists in `DATADIR` but is partial/noncanonical, instance target absent | Only when the canonical bootstrap binds that exact direct-child name and nonce and all three final children validate: require one owner/mode-correct regular file, no other direct child in that verified parent with its file key, and one unchanged non-null file key across no-follow lookup, SDS open/read, parent scan, and immediate pre-remove lookup. Remove only that exact name through the `DATADIR` SDS, force `DATADIR`, and recreate step 5. An unbound name, alias, symlink/special/wrong-type object, or missing/changed/null file key is preserved as `CONFLICT`/`CORRUPTION`. |
 | Bound `.instance-<nonce>.stage` is complete in `DATADIR`, instance target absent | Revalidate all three final children, then same-parent publish/force the recorded instance authority. |
 | Instance target is complete but its matching `.instance-<nonce>.stage` alias or last directory force remains | Apply same-parent alias recovery if needed, revalidate all final bytes and identities, and repeat the idempotent `DATADIR` force before treating authority as committed. |
 | Instance authority is committed and bootstrap/namespace remains | Validate authority and remove only matching bootstrap/stage residue, then force `DATADIR`. |
@@ -1093,10 +1110,9 @@ the archive. Renewal performs these exact durable steps:
    certificate, and old generation directory using checked file keys; forces
    the affected old directory before its removal and then
    `security/generations/` and `security/`; removes and forces the exact
-   transaction namespace; removes any validated same-parent security-stage
-   residue; then deletes `renewal.intent` by checksum/file key as the final
-   record and forces `security/`. This is durable logical deletion without a
-   physical-media erasure claim.
+   transaction namespace; then deletes `renewal.intent` by checksum/file key as
+   the final record and forces `security/`. This is durable logical deletion
+   without a physical-media erasure claim.
 
 A crash before the authority switch leaves the old authority. A retry under the
 lock finds at most one valid `renewal.intent` bound to its checksum,
@@ -1121,9 +1137,10 @@ its selected endpoint.
 | Final public archive exists | Old authority; validate its name, manifest digest, certificate, and both directory forces, then resume new-generation construction. |
 | `new-generation` is incomplete in the transaction namespace | Old authority; remove/recreate only that matching staged generation and resume step 4. |
 | Final `generations/<new>` exists, old security authority remains | Old authority; validate the new generation and archive, then resume manifest staging; never authenticate with new yet. |
+| Intent-bound `.security-<nonce>.stage` exists beside the old authority but is partial/noncanonical | Only when the canonical intent binds that exact direct-child name/nonce, the old target still matches `old-security-record-sha256`, and the archive/new-generation prefix validates: require one owner/mode-correct regular file, no other direct child in that verified parent with its file key, and one unchanged non-null file key across no-follow lookup, SDS open/read, `security/` scan, and immediate pre-remove lookup. Remove only that exact name through the `security/` SDS, force `security/`, and recreate step 5. An unbound name, alias, symlink/special/wrong-type object, or missing/changed/null file key is preserved as `CONFLICT`/`CORRUPTION`. |
 | Bound `.security-<nonce>.stage` is complete beside the old authority | Old authority; revalidate all inputs and perform only the same-parent replacement and directory force. |
 | New security target is visible but its directory force may have crashed | New authority after complete validation; repeat the idempotent `security/` force, then perform only old-secret deletion. |
-| New authority is durable, any old secret, bound security stage, namespace, or intent remains | New authority; before listener bind, unlink only matching old files, force every affected directory, remove/force the exact namespace and bound stage, then remove/force the intent last. |
+| New authority is durable, any old secret, namespace, or intent remains and no security stage exists | New authority; before listener bind, unlink only matching old files, force every affected directory, remove/force the exact namespace, then remove/force the intent last. Any security-stage name after authority replacement is impossible state and is preserved. |
 
 An archive/new generation with the right numeric generation but the wrong
 nonce, checksum, certificate, or file key is never adopted.
@@ -1208,7 +1225,11 @@ included in those deferrals.
   but was independently rejected for cross-parent authority stages, an
   unspecified SDS channel capability, a non-executable qualification artifact,
   overbroad failure/readiness wording, and an inaccurate stop-scan summary.
-- The current candidate preserves all three rejection records. No independent
+- Candidate `a86c5c5c4e66c6f1a846abb7275a78463e35802e` closed those findings
+  but was independently rejected for missing partial-authority-stage recovery,
+  one stale bootstrap-plan sentence, an overbroad SDS-channel statement, and
+  incomplete qualification-name/runtime-versus-evidence exactness.
+- The current candidate preserves all four rejection records. No independent
   acceptance or implementation authorization is claimed until `tic-11a5`
   review passes and its status/index are updated in the accepted merge.
 

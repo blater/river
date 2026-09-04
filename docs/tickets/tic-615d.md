@@ -47,7 +47,10 @@ pre-bootstrap lock recovery is limited to the otherwise empty authority-free
 tree; bootstrap/instance cases require their identity and absent process. Exact
 nonce-staged bootstrap and every properties checksum pass forced-write/rename/
 directory-force fault tests, including the bound `.instance-<nonce>.stage` in
-`DATADIR`. POSIX/no-follow/provider tests cover overriding ACLs, the sole
+`DATADIR`. A partial bound instance stage is removed/recreated only after exact
+path/type/owner/mode, stable file-key, and non-alias proof; unbound, aliased,
+wrong-type, or changed/wrong-file-key objects are preserved.
+POSIX/no-follow/provider tests cover overriding ACLs, the sole
 fixed-component path-based directory create and revalidation race, file-key
 swaps, immutable hard-link target/source force and alias recovery, cross-parent
 directory force, SDS-returned `FileChannel` force/tryLock, and probed atomic

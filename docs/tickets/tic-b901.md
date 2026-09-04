@@ -41,7 +41,10 @@ full-at-start, runtime exhaustion, and both audit control directory forces are
 proved. Renewal tests cover generation overflow, every force/crash boundary
 before and after authority switch, archive/stage identity collision, durable
 secret deletion, same-parent security-stage recovery and safe
-retry/cleanup, running validity failure with
+retry/cleanup. A partial intent-bound security stage is removed/recreated only
+after exact path/type/owner/mode, stable file-key, non-alias, old-authority, and
+ordered-prefix proof; unbound, aliased, wrong-type, or changed/wrong-file-key
+objects are preserved. Tests cover running validity failure with
 new/active/resumed TLS sessions and admission races, exit/recovery, loaded-old
 `ACCESS_DENIED`, and
 reload-missing-secret `IO_FAILURE`, with no silent truncation, repair, or secret

@@ -621,16 +621,17 @@ On the first start:
 5. Exclusively publish and force the bootstrap record with the selected
    non-zero 128-bit incarnation and `SecureRandom` attempt nonce, then force
    `DATADIR`.
-6. Build the database, initial credential generation, audit authority, and
-   staged instance record under that exact namespace; force every file and
-   directory required to reopen them.
+6. Build only the three staged directories `database`, `security`, and `audit`
+   under that exact namespace; force every file and directory required to
+   reopen them. The instance stage is not inside the namespace.
 7. Atomically publish `database`, `security`, then `audit` without overwrite,
-   forcing `DATADIR` after each. Publish `instance.properties` last and force
-   `DATADIR`; that force is the single instance-authority transition. Remove
-   only checksum/file-key-matching bootstrap residue after authoritative
-   validation succeeds. Retry resumes the first incomplete ordered rename;
-   source/destination duplication, extra state, or identity mismatch is
-   preserved as `CONFLICT`/`CORRUPTION`.
+   forcing `DATADIR` after each. Write the bootstrap-bound
+   `.instance-<nonce>.stage` directly in `DATADIR`, publish
+   `instance.properties` last, and force `DATADIR`; that force is the single
+   instance-authority transition. Remove only checksum/file-key-matching
+   bootstrap residue after authoritative validation succeeds. Retry resumes the
+   first incomplete ordered rename; source/destination duplication, extra
+   state, or identity mismatch is preserved as `CONFLICT`/`CORRUPTION`.
 
 On later starts, validate the identity file strictly and call
 `EmbeddedRiver.openExisting` with its recorded values. Do not infer identity
