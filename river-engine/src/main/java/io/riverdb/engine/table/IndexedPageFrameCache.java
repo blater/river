@@ -26,6 +26,7 @@ final class IndexedPageFrameCache {
   private long accessClock;
   private long pageGenerationClock;
   private int currentProbeCursor;
+  private final IndexedReclaimedPageFrames reclaimed = new IndexedReclaimedPageFrames();
   private StatusCode lastStatus = StatusCode.OK;
   private final IoResult cacheIo = new IoResult();
 
@@ -79,6 +80,7 @@ final class IndexedPageFrameCache {
     currentMap.detach();
     stagingMap.detach();
     currentFrames = stagingFrames = DETACHED_FRAMES;
+    reclaimed.clear();
   }
 
   ByteBuffer currentPayloadUnchecked(int pageId) {
@@ -568,6 +570,7 @@ final class IndexedPageFrameCache {
           || frame.validUntilCommitSequence > oldestVisibleCommitSequence) continue;
       StatusCode status = prepareCurrentSlotForReuse(slot);
       if (!status.isOk()) return setStatus(status);
+      reclaimed.offer(currentFrames, slot);
     }
     return setStatus(StatusCode.OK);
   }
@@ -809,6 +812,8 @@ final class IndexedPageFrameCache {
   }
 
   int reusableCurrentSlot(boolean allowEviction, long oldestVisibleCommitSequence) {
+    int reclaimedSlot = reclaimed.poll(currentFrames);
+    if (reclaimedSlot >= 0) return reclaimedSlot;
     for (int probe = 0; probe < currentFrames.length; probe++) {
       int index = currentProbeCursor;
       currentProbeCursor = (currentProbeCursor + 1) % currentFrames.length;

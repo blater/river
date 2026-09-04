@@ -65,12 +65,74 @@ final class IndexedPageCacheEvictionTest {
     pages.resetChanges();
 
     assertEquals(11, old.payload().getInt(0));
+    assertEquals(StatusCode.OK, pages.reclaimHistorical(2));
+    ByteBuffer third = pages.stageExisting(1, 2);
+    assertNotNull(third);
+    third.putInt(0, 33);
+    publishPrepared(pages, 2, 3, 4, 3);
+    pages.resetChanges();
+
+    assertEquals(11, old.payload().getInt(0));
     IndexedPageGenerationPin current = new IndexedPageGenerationPin();
-    assertEquals(StatusCode.OK, pages.pinPageAt(1, 2, current));
-    assertEquals(22, current.payload().getInt(0));
+    assertEquals(StatusCode.OK, pages.pinPageAt(1, 3, current));
+    assertEquals(33, current.payload().getInt(0));
     assertEquals(StatusCode.OK, pages.unpinPage(current));
     assertEquals(StatusCode.OK, pages.unpinPage(old));
+    assertEquals(StatusCode.OK, pages.reclaimHistorical(3));
+    assertEquals(StatusCode.CORRUPTION,
+        pages.pinPageAt(1, 1, new IndexedPageGenerationPin()));
     assertEquals(StatusCode.OK, pageFile.file().close());
+    assertEquals(StatusCode.OK, stagingFile.file().close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void reusesReclaimedFrameBeforeAllocatingUnusedCapacity(@TempDir Path root) {
+    NioDirectoryOpenResult directoryResult = new NioDirectoryOpenResult();
+    assertEquals(StatusCode.OK, NioDurableDirectory.openExisting(
+        root, new FatalStateFence(), new NioIoCounters(), 8, directoryResult));
+    NioDurableDirectory directory = directoryResult.directory();
+    DirectoryOperationResult pageFile = new DirectoryOperationResult();
+    DirectoryOperationResult stagingFile = new DirectoryOperationResult();
+    assertEquals(StatusCode.OK, directory.createFile("pages", pageFile));
+    assertEquals(StatusCode.OK, directory.createFile("staging", stagingFile));
+    DatabasePageCachePlan plan = DatabasePageCacheTestPlan.geometry(4, 2, 2);
+    IndexedPageState state = new IndexedPageState(plan);
+    WriteCountingFile countedPages = new WriteCountingFile(pageFile.file());
+    IndexedPageFrameCache cache = new IndexedPageFrameCache(
+        countedPages, stagingFile.file(), DATABASE, GENERATION, state, plan);
+
+    ByteBuffer first = cache.stageNew(1, 2);
+    assertNotNull(first);
+    first.putInt(0, 11);
+    publishPrepared(cache, 1, 1, 2);
+    state.resetChanges();
+
+    assertEquals(StatusCode.OK, cache.reclaimHistorical(1));
+    ByteBuffer second = cache.stageExisting(1, 2);
+    assertNotNull(second);
+    second.putInt(0, 22);
+    publishPrepared(cache, 2, 2, 3);
+    state.resetChanges();
+    assertEquals(2, allocatedCurrentFrames(cache));
+
+    assertEquals(StatusCode.OK, cache.reclaimHistorical(1));
+    IndexedPageGenerationPin stillVisible = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, cache.pinPageAt(1, 1, stillVisible));
+    assertEquals(11, stillVisible.payload().getInt(0));
+    assertEquals(StatusCode.OK, cache.unpinPage(stillVisible));
+    int writesBeforeReclaim = countedPages.writes;
+    assertEquals(StatusCode.OK, cache.reclaimHistorical(2));
+    assertEquals(writesBeforeReclaim, countedPages.writes);
+    ByteBuffer third = cache.stageExisting(1, 2);
+    assertNotNull(third);
+    third.putInt(0, 33);
+    publishPrepared(cache, 3, 3, 4);
+    state.resetChanges();
+
+    assertEquals(2, allocatedCurrentFrames(cache));
+    assertEquals(33, cache.currentPayload(1).getInt(0));
+    assertEquals(StatusCode.OK, countedPages.close());
     assertEquals(StatusCode.OK, stagingFile.file().close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -562,6 +624,27 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, pages.releasePreparedBatch());
   }
 
+  private static void publishPrepared(
+      IndexedPageFrameCache cache,
+      long commitSequence,
+      long recordStart,
+      long recordEnd) {
+    assertEquals(StatusCode.OK, cache.beginPreparedBatch());
+    assertEquals(StatusCode.OK, cache.freezeChangedPages(0, commitSequence));
+    assertEquals(StatusCode.OK,
+        cache.installPreparedPages(
+            new long[] {commitSequence}, 1, recordStart, recordEnd));
+    assertEquals(StatusCode.OK, cache.releasePreparedBatch());
+  }
+
+  private static int allocatedCurrentFrames(IndexedPageFrameCache cache) {
+    int count = 0;
+    for (IndexedPageFrame frame : cache.currentFrames) {
+      if (frame != null) count++;
+    }
+    return count;
+  }
+
   private static final class OneShotReadFailureFile implements DurableFile {
     private final DurableFile delegate;
     private boolean failRead;
@@ -589,6 +672,38 @@ final class IndexedPageCacheEvictionTest {
 
     @Override
     public StatusCode write(long position, ByteBuffer source, IoResult result) {
+      return delegate.write(position, source, result);
+    }
+
+    @Override
+    public StatusCode force(ForceMode mode) { return delegate.force(mode); }
+
+    @Override
+    public StatusCode truncate(long sizeBytes) { return delegate.truncate(sizeBytes); }
+
+    @Override
+    public StatusCode size(FileSizeResult result) { return delegate.size(result); }
+
+    @Override
+    public StatusCode close() { return delegate.close(); }
+  }
+
+  private static final class WriteCountingFile implements DurableFile {
+    private final DurableFile delegate;
+    private int writes;
+
+    private WriteCountingFile(DurableFile file) {
+      delegate = file;
+    }
+
+    @Override
+    public StatusCode read(long position, ByteBuffer target, IoResult result) {
+      return delegate.read(position, target, result);
+    }
+
+    @Override
+    public StatusCode write(long position, ByteBuffer source, IoResult result) {
+      writes++;
       return delegate.write(position, source, result);
     }
 
