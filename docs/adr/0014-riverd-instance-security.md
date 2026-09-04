@@ -1,14 +1,14 @@
 # ADR 0014: `riverd` instance security and client discovery
 
-Status: Accepted
+Status: Proposed; pending independent acceptance of `tic-11a5`
 
 ## Authority and scope
 
-This ADR is the public lifecycle and security contract for the first installed
-`riverd`. It ratifies
+This ADR is the single candidate public lifecycle and security contract for the
+first installed `riverd`. Acceptance will ratify
 [`docs/plans/riverd-standalone-server-plan.md`](../plans/riverd-standalone-server-plan.md)
-and replaces every alternative or deferred description of the same behavior.
-It closes the ownership and deletion gaps inventoried by `tic-de1d`, merged at
+and replace every alternative or deferred description of the same behavior.
+The candidate closes the ownership and deletion gaps inventoried by `tic-de1d`, merged at
 `4827f84e349c0aed7b4c585aede13d505efb1eb9` and recorded closed at
 `5b120a179055a9ec1c640152b4e2bf057d23f5ac`.
 It is pinned to the accepted audit design merged at
@@ -142,10 +142,12 @@ The owning boundary uses these exact outcomes:
 | Pending audit bytes unavailable before a sequence exists | `RETRY` |
 | Cancelled/deadline/stop wait | `CANCELLED`, `TIMEOUT`, or `TIMEOUT` respectively |
 | Java/NIO, control-publication, or lifecycle I/O failure | `IO_FAILURE` |
+| Ready visibility committed, then target/parent/source force fails, or stdout-only final transfer/flush is ambiguous | Irrevocable ready observation followed by terminal `IO_FAILURE`, ordered shutdown, and eventual exit 1 |
 | Impossible River-owned state | `INVARIANT_BROKEN` and the owning fatal fence |
 
 A well-formed but expired/not-yet-valid credential is `ACCESS_DENIED` on
-`start`; `credentials renew` may validate and replace an expired generation.
+`start`; `credentials renew` may validate and replace either out-of-interval
+generation.
 An audit I/O ambiguity returns `IO_FAILURE`, fences the audit owner, and makes
 later admissions return `FENCED`, exactly as accepted by `tic-a221`.
 
@@ -168,6 +170,8 @@ DATADIR/
   security/
     security.properties
     client.properties
+    renewal.intent
+    .renewal-intent-<nonce>.stage
     generations/<credential-generation>/
       token.bin
       server-private-key.pkcs8
@@ -197,49 +201,81 @@ those POSIX restrictions. An unenumerable access mechanism is
 `FEATURE_NOT_SUPPORTED`; any additional allow/grant is `ACCESS_DENIED`. No
 launcher-owned component may be a symbolic link or special file.
 
-The first implementation has one public-NIO adapter and supports only the
-default Linux NIO provider on a local `ext4` or `xfs` `FileStore`. It requires
-POSIX access semantics in which the group permission bits are the POSIX ACL
-mask; exact `0700`/`0600` therefore proves that no named-user/group ACL grant is
-effective. If an `AclFileAttributeView` or provider-specific access view is
-also exposed, every entry is enumerated and no non-owner allow entry may be
-effective. macOS/APFS, NFS, SMB, FUSE, overlay, an unrecognized provider/store,
-or any access view whose effect cannot be enumerated or masked is
-`FEATURE_NOT_SUPPORTED`. Privileged host administrators remain outside the
-filesystem threat boundary. The provider must also supply
-`SecureDirectoryStream`, exclusive file locking, same-filesystem atomic moves,
-hard links, and synchronous file and directory force. `SecureDirectoryStream` owns every
-relative lookup, open, move, and removal of an existing child; it is not used to
-create a directory because public NIO exposes no such operation. The only
-path-based operation below a verified tree is
-`Files.createDirectory(verifiedParent.resolve(singleFixedComponent), 0700)`.
-Immediately afterward the adapter no-follow reads the child's type, owner,
-mode, ACL, and file key; reopens and compares the parent's file key; acquires
-the child through the parent's secure stream; and compares the child's file
-key again. On any mismatch it removes only that exact newly created file key
-and fails. A prospective data-directory leaf follows this rule; missing parent
-chains and caller-selected intermediate components are unsupported. The
-prospective data-directory leaf and a ready-file leaf require an already
-existing verified `0700` parent. The fixed `$HOME/.river/run/instances` chain
-may be created one fixed component at a time, but only when `$HOME` or the prior
-component is already verified `0700` and every new parent immediately passes
-the same proof; otherwise startup is `ACCESS_DENIED` without mutation.
+The first implementation has one `RiverDaemonFileSystem` adapter and supports
+only a qualified default Linux NIO provider on a local `ext4` or `xfs`
+`FileStore`. It requires POSIX access semantics in which group permission bits
+are the POSIX ACL mask; exact `0700`/`0600` therefore proves that no named-user
+or group ACL grant is effective. If an `AclFileAttributeView` or another
+provider access view is exposed, every entry is enumerated and no non-owner
+allow entry may be effective. macOS/APFS, NFS, SMB, FUSE, overlay, an
+unrecognized provider/store, or an access view whose effect cannot be
+enumerated or masked is `FEATURE_NOT_SUPPORTED`. Privileged host administrators
+remain outside the filesystem threat boundary.
 
-At startup the adapter runs an owner-only scratch capability probe on the same
-filesystem. Exclusive regular-file publication uses
-`Files.createLink(target, forcedStage)`, whose existing-target failure is
-atomic, followed by parent force and exact stage unlink. Replacement uses
-`Files.move(stage,target,ATOMIC_MOVE,REPLACE_EXISTING)`. Staged fixed
-directories use `Files.move(stage,target,ATOMIC_MOVE)` only after an
-SDS-relative absence check while the instance lock excludes River competitors;
-same-account non-River actors are already trusted. The probe verifies
-existing-target refusal, competing creators, replacement visibility, expected
-bytes and file keys, then forces source and destination directories with
-readable directory `FileChannel.force(true)`. A provider whose semantics differ
-is `FEATURE_NOT_SUPPORTED`. Production publication uses only these qualified
-adapter operations; deterministic concurrency/fault tests prove exclusive,
-replacement, and force behavior. There is no best-effort permission or
-non-POSIX fallback.
+Below the first verified real ancestor, the adapter permits exactly these
+path-based public-NIO calls and no others:
+
+| Path call | Sole purpose and required checks |
+| --- | --- |
+| `toRealPath(NOFOLLOW_LINKS)`, `Files.readAttributes(...,NOFOLLOW_LINKS)`, `Files.getFileStore`, and `Files.newDirectoryStream(realTrustRoot)` | Initial read-only selection of the nearest existing trust root, qualification tuple, and sole path-based opening of that real root. The returned stream must be an SDS; the adapter compares type/owner/mode/access views/file key and walks every existing descendant SDS-relative. |
+| `Files.createDirectory(parent.resolve(fixedComponent),0700)` | The only directory creation call. Immediately before and after it, re-read the path parent without following links and require its file key to equal the already open SDS parent. Then validate the child no-follow, acquire it through the SDS, and compare its file key. Failure removes only the exact new child through the SDS and forces that parent. |
+| `Files.createLink(target,forcedStage)` | Exclusive publication of one already forced, closed, immutable, canonical regular file staged in the destination parent. Source and target parent file keys are checked against open SDS handles immediately before and after; cross-parent regular-file links are forbidden. |
+| `Files.move(source,target,ATOMIC_MOVE,REPLACE_EXISTING)` | Replacement of an already forced immutable regular file staged in the destination parent. The one parent file key is checked before and after; replacement is never cross-parent. |
+| `Files.move(source,target,ATOMIC_MOVE)` | Rename of a request/receipt in one parent, or publication of a fully forced fixed directory between two already open parents on the same qualified store. Absence is checked SDS-relative while the instance lock excludes River competitors; source and destination parent file keys are checked before and after. |
+| `FileChannel.open(directoryPath,READ).force(true)` | Directory force only. Immediately before opening and after force, the path's file key must equal the already open SDS directory. Regular files are opened/created/forced through SDS-relative byte channels. |
+
+All existing-entry opens, reads, and deletes use SDS-relative operations;
+`Files.delete`, path-based regular-file open/create, arbitrary path moves, and
+recursive path operations are forbidden. A prospective data-directory leaf
+uses the fixed-component create proof; caller-selected missing intermediate
+components are unsupported. A ready-file leaf requires an existing verified
+`0700` parent. The fixed `$HOME/.river/run/instances` chain may be created one
+fixed component at a time only when `$HOME` or the prior component is already
+verified `0700`; every new parent immediately passes the same proof.
+
+Exclusive file publication is exactly: create, force, and close the immutable stage in
+the destination directory; verify target absence; `createLink`; revalidate the
+parent and source/target identical file keys and checksums; open and force the
+target link; force the destination parent; delete the source name through SDS;
+and force that parent again. The target-link publication is the visibility
+commit. After a crash with both names, recovery accepts only identical file
+keys, canonical bytes, and expected checksum: it re-forces the target and
+destination parent, removes the source name, and forces the source parent. A
+different file key or byte identity is preserved as `CONFLICT`/`CORRUPTION`.
+Because the stage is always in the destination parent, the two named parents
+are normally the same; if qualification ever permits a cross-parent link or
+unlink, both parents must be forced after each namespace change.
+
+Atomic replacement similarly stages in the destination parent and forces the
+target and parent after the move. A matching source/target hard-link alias left
+by an interrupted prior exclusive publication follows the alias recovery above;
+any other simultaneous source and destination is preserved. A cross-parent
+fixed-directory move first forces the complete source tree and source parent,
+then performs the atomic move, revalidates both parent file keys and the moved
+directory file key, and forces the moved directory, source parent, and
+destination parent. Same-parent request/receipt rename forces its one parent.
+There is no cross-parent unlink operation: each SDS deletion changes one
+containing parent, which is forced before deletion is durable. No namespace
+change is durable until every affected source and destination parent force
+completes.
+
+The runtime scratch probe exercises these APIs, existing-target refusal,
+competing creators, alias recovery, replacement visibility, file-key checks,
+and file/directory forces on the selected store. That probe proves only current
+API behavior, not crash or power-loss durability. A distribution may claim
+ext4/xfs support only when its shipped qualification manifest names an accepted
+artifact for the exact distribution SHA, JDK vendor/version/build, NIO provider
+class/module, OS/kernel, filesystem/mkfs features, device, mount options, and
+storage force/barrier policy. `tic-95e8` owns API, concurrency, injected-crash,
+and process-crash qualification; `tic-9640`, under ADR 0003, owns unclean-
+shutdown/power-loss recovery evidence and final support promotion. Before those
+artifacts are accepted the distribution is a qualification candidate, not a
+supported ext4/xfs release. At runtime the instance, registry, and ready parent
+`FileStore` tuples each independently must match the qualified profile and pass
+the probe; no link/move crosses those three trees. A runtime tuple/probe
+mismatch is `FEATURE_NOT_SUPPORTED`; an absent or mismatched evidence artifact
+blocks promotion/support claims. There is no best-effort permission,
+unqualified durability claim, or non-POSIX fallback.
 
 `--ready-file` uses the same secure-parent/no-follow rules, is created `0600`,
 and is never overwritten. The fixed per-user registry is
@@ -259,7 +295,8 @@ validation before using any field, opening any referenced path, checking a
 process, or taking a lifecycle action. The checksum detects corruption; it is
 not authentication. `instance.properties` and `bootstrap.properties` are at
 most 4096 bytes; security, client, runtime, lock, stop-request, registry,
-ready-file, and credential-public records are each at most 8192 bytes. Audit
+ready-file, renewal-intent, and credential-public records are each at most
+8192 bytes. Audit
 event/control checksums and bounds remain the binary contract accepted by
 `tic-a221`; they are not launcher properties. Stdout is not a persistent-
 properties record and has no checksum. These are format framing
@@ -282,6 +319,29 @@ record-sha256=<64-lowercase-hex>
 The combined 128-bit incarnation is generated with the platform
 `SecureRandom` and must be nonzero. WAL generation one is the only initial
 value. River does not infer either value from database bytes.
+
+`instance.lock` is acquired before its record is trusted. While holding the
+exclusive OS lock on the same verified file key, the launcher handles
+pre-bootstrap lock bytes as follows. A newly created zero-length file is filled
+with the new incarnation/owner record and forced before any bootstrap stage. A
+pre-existing canonical record may be replaced only when its PID/start/command
+is proved absent. A torn, checksum-invalid, or otherwise unparsable record may
+be replaced only when `instance.properties`, `bootstrap.properties`, every
+bootstrap/stop stage, and every fixed child are absent and `DATADIR` contains
+only that exact locked file key. This is safe because no instance or bootstrap
+authority exists; the old bytes are retained in the failure diagnostic, the
+new canonical record is written through the locked channel, then the file and
+`DATADIR` are forced. If a canonical record names a live process despite the
+free lock, or any other entry exists, state is preserved as `CORRUPTION`.
+
+When a valid bootstrap authority exists, a torn/stale lock record is replaced
+only after the bootstrap PID/start/command is proved absent and every staged or
+final entry validates against its incarnation and nonce. With an accepted
+instance authority, replacement instead requires that incarnation plus absent
+old-process proof; the acquired launcher retains the prior lock bytes until any
+matching stale ready/runtime/registry cleanup completes, then publishes its new
+lock record. No lock-record recovery changes bootstrap, instance,
+database, credential, or audit authority.
 
 The temporary first-create record has this exact ordered schema:
 
@@ -343,11 +403,12 @@ is permitted during recovery.
 | Observed crash boundary under the recovered lock | Only permitted action |
 | --- | --- |
 | Bootstrap stage exists, final bootstrap absent | Match nonce/file key, remove the stage, force `DATADIR`, and restart step 1 with a new nonce. |
+| Bootstrap target and stage are matching hard-link aliases | Apply exclusive-file alias recovery, retain the target as intent, and resume namespace creation with the recorded identity. |
 | Bootstrap authoritative, namespace absent or empty | Recreate the one recorded namespace and resume step 3 with the recorded incarnation/nonce. |
 | A staged child is partial, no corresponding final child | Validate its bootstrap identity; remove/recreate only that child, force its parent, and resume. |
 | Exactly the ordered prefix of `database`, `security`, and `audit` is final | Validate the prefix and remaining staged identities, then perform only the next rename and force. |
 | Instance stage is complete, instance target absent | Revalidate all three final children, then publish/force the recorded instance authority. |
-| Instance target is complete but the last directory force may have crashed | Revalidate all final bytes and identities and repeat the idempotent `DATADIR` force before treating authority as committed. |
+| Instance target is complete but its matching stage alias or last directory force remains | Apply alias recovery if needed, revalidate all final bytes and identities, and repeat the idempotent `DATADIR` force before treating authority as committed. |
 | Instance authority is committed and bootstrap/namespace remains | Validate authority and remove only matching bootstrap/stage residue, then force `DATADIR`. |
 
 Any state outside exactly one row, including a gap in the published-child
@@ -437,14 +498,32 @@ zeros every caller scratch buffer in `finally` on success and every failure.
 Ownership of the verifier buffer transfers exactly once to `TokenAuthenticator`;
 that object owns and zeros the stored HMAC key, offered-proof scratch, and
 expected-proof scratch. Its destruction is idempotent and occurs only after the
-listener rejects admission, all connection workers have stopped, and the JSSE
-listener, engines, managers, context, and session caches have been released.
-Private-key DER buffers are zeroed after key-manager construction and a
-provider key implementing `Destroyable` is destroyed when JSSE releases it.
-TLS session resumption and session tickets are disabled; inability to prove
-that state is `FEATURE_NOT_SUPPORTED`. JSSE-owned opaque private/session
-material remains owned until that ordered shutdown, after which all River
-references are cleared. Durable unlink never claims physical media erasure.
+listener rejects admission, all connection workers have stopped, and River has
+completed the public JSSE cleanup below. Private-key DER buffers are zeroed
+after key-manager construction.
+
+This contract does not claim that generic JSSE erases provider-owned session,
+ticket, key-manager, or `SSLContext` internals. After listener close and worker
+join, River takes the server `SSLSessionContext`, enumerates its public
+`getIds()` snapshot, calls `invalidate()` on every session returned by
+`getSession(id)` and on every connection session still referenced by River,
+then retains one cleanup-local Bouncy Castle key reference while clearing every
+other River listener, engine, session, manager, context, and key reference.
+Enumeration/invalidation failure is `IO_FAILURE`; cleanup continues. The local
+key is then `destroy()`ed and checked with `isDestroyed()` before its last
+reference is cleared. Any destroy throw, including `DestroyFailedException`, or
+`isDestroyed()==false` is `IO_FAILURE`; River still clears its reference and
+completes shutdown. Only River-owned arrays and the
+successfully destroyed provider key have a zeroization guarantee. Finally
+`TokenAuthenticator.destroy()` zeros its River-owned buffers. Any failure is
+combined with the lifecycle's existing first-failure rule.
+
+TLS resumption may exist inside the selected JSSE provider, but it conveys only
+transport state. Every new or resumed connection still passes current token
+authentication and the application validity/admission fence; every statement
+on an existing connection passes that same fence. Security therefore does not
+depend on generic ticket/cache erasure. Durable unlink likewise claims logical
+deletion after directory force, never physical-media or provider-memory erasure.
 
 ## Client configuration and authenticated-only migration
 
@@ -546,18 +625,20 @@ two readiness modes have one commit point each and never require both sinks:
 
 - With `--ready-file`, the launcher writes and forces this canonical bounded
   record to a `.<target-name>.riverd-ready-<owner-nonce>.stage` file in the
-  verified target parent, then atomically publishes it without overwrite to the
-  target and synchronously forces that parent. Publication of the fully forced
-  stage is the sole, irrevocable readiness commit. A crash
-  before the move leaves no ready target; a matching stage may be removed by
-  file key on restart. A crash after the move may leave the complete ready
-  record and never a partial one. A directory-force failure after a successful
-  move cannot safely retract an externally visible commitment: the service
-  remains ready, reports the force failure diagnostically, and orderly shutdown
-  removes only the matching ready target. Standard output is written and
-  flushed afterward as a best-effort mirror. Broken/closed stdout, partial
-  mirror output, or mirror flush failure neither retracts the ready file nor
-  stops the ready service.
+  verified target parent, then uses the exclusive immutable-file sequence to
+  link it without overwrite to the target. Target-link visibility is the sole,
+  irrevocable readiness commit. It then forces the target, forces the parent,
+  unlinks the matching stage, and forces the parent again. A crash before the
+  link leaves no ready target; a matching stage follows alias recovery. A crash
+  after the link leaves a complete target and never a partial record. Any
+  target/parent/source-unlink force failure after visibility cannot retract the
+  commitment: it sets terminal `IO_FAILURE`, invokes ordered lifecycle cleanup,
+  emits the final failure records on stderr where possible, and exits 1. It
+  never continues indefinitely after that durability failure. Only after the
+  publication sequence succeeds does start write/flush standard output as a
+  best-effort mirror. Broken/closed stdout, partial mirror output, or mirror
+  flush failure is a nonterminal warning and neither retracts the ready file nor
+  stops the service.
 - Without `--ready-file`, the launcher writes and flushes all lines before
   `riverd_status=ready`, then writes that complete final LF-terminated line as
   one bounded final record and flushes it. The external readiness commit is the
@@ -568,8 +649,10 @@ two readiness modes have one commit point each and never require both sinks:
   lifecycle order; removes only matching runtime/registry/client records and
   stages; emits no later readiness; and exits `IO_FAILURE`. If the final write
   or flush fails after a complete record may have become observable, the
-  launcher cannot retract it and keeps the service ready while reporting the
-  output failure diagnostically. No later stdout failure stops a ready service.
+  launcher cannot retract it: it sets terminal `IO_FAILURE`, performs ordered
+  cleanup, emits final failure records on stderr where possible, and eventually
+  exits 1. The complete ready observation remains a historical commit even
+  though its service then terminates; the launcher never reports a clean exit.
 
 The ready file contains no secret and has this exact schema; its status field is
 immediately before the universal final checksum:
@@ -663,6 +746,21 @@ whose filename/content identifies that same datadir and whose exact process is
 proved absent. Malformed or mismatched collisions are preserved and return
 `CORRUPTION`/`CONFLICT`; `ps` itself never performs this recovery.
 
+An existing ready target is normally `CONFLICT` and is never overwritten. The
+only stale-ready recovery occurs after `start` holds the instance lock: a
+canonical old runtime record and the pre-replacement lock record must bind the
+same incarnation, normalized datadir, owner nonce, PID/start/command, and
+canonical checksums to a process proved absent; the ready file must
+be a canonical `riverd-ready-v1` record with the same incarnation, owner nonce,
+PID, runtime path, and client path; and any registry record must match that same
+owner. After revalidating the external ready parent and target file key, start
+deletes that exact ready file through its SDS and forces its parent, then removes
+and forces only the matching registry/runtime records. It may then publish a
+new runtime/ready generation. A missing binding, live/unverifiable process,
+checksum mismatch, different file key, different target contents, or unrelated
+existing ready file is preserved as `NOT_OWNER`, `CORRUPTION`, or `CONFLICT`
+and receives no cleanup.
+
 ## Foreground lifecycle and exact stop fencing
 
 Start owns resources in this order: secure directory handle, instance lock,
@@ -679,11 +777,21 @@ records, and never deletes database/identity/security/audit data.
 
 `riverd stop` never signals a PID, calls `ProcessHandle.destroy`, acquires or
 steals the live lock, or selects a process by an identifier that can be reused.
-It securely validates the bounded runtime and lock records and requires their
-datadir, incarnation, PID, start instant, command, and owner nonce to match and
-an exclusive nonblocking lock attempt to remain contended. PID/start/command
-are evidence and output only. It publishes a cooperative request into the
-verified instance root with this exact schema:
+Before creating a stage it SDS-scans the direct instance-root control names:
+the fixed `stop.request`, every `.stop-request-<nonce>.stage`, and every
+`.stop-accepted-<nonce>`. One canonical accepted receipt bound to the instance
+and currently contended lock owner is joined immediately even if shutdown has
+already removed runtime state. One canonical pending request is joined after
+its runtime checksum and lock owner validate. Multiple accepted receipts,
+unknown control names, bad name/content nonce, or malformed control bytes are
+`CORRUPTION` and are preserved; a well-formed different owner is `NOT_OWNER`.
+
+Only when there is no pending or accepted request does the CLI securely
+validate the bounded runtime and lock records, requiring datadir, incarnation,
+PID, start instant, command, and owner nonce to match and an exclusive
+nonblocking lock attempt to remain contended. PID/start/command are evidence
+and output only. It then publishes a cooperative request into the verified
+instance root with this exact schema:
 
 ```text
 format=riverd-stop-request-v1
@@ -697,8 +805,16 @@ record-sha256=<64-lowercase-hex>
 ```
 
 The CLI writes and forces `.stop-request-<request-nonce>.stage`, revalidates the
-unchanged lock/runtime file keys and checksums, atomically publishes without
-overwrite to `stop.request`, and forces `DATADIR`. The lock-owning server's sole
+unchanged lock/runtime file keys and checksums, uses exclusive immutable-file
+publication for `stop.request`, and forces `DATADIR`. It then performs the late-
+publication check: re-read lock/runtime and scan pending/accepted controls. A
+still-matching pending request is joined; a matching accepted receipt is joined
+even if runtime disappeared during shutdown. If ownership changed or became
+free while the exact request remains pending, the CLI deletes only that request
+and its stage by checksum/file key, forces `DATADIR`, and returns `NOT_OWNER`.
+It never deletes a request after a matching accepted receipt is visible.
+
+The lock-owning server's sole
 lifecycle-control thread checks this fixed file before readiness and at least
 every 100 milliseconds while serving. It validates checksum, incarnation,
 owner nonce, and runtime checksum, then atomically renames it without overwrite
@@ -709,8 +825,10 @@ Concurrent and repeated operations are deterministic. An exact retry joins its
 recorded nonce. If another CLI has already published a valid request for the
 same owner/runtime, every contender removes only its own unpublished stage and
 joins the published request regardless of its newly generated nonce. A request
-for a different owner/runtime is `NOT_OWNER`; malformed control state or an
-accepted-receipt collision is `CORRUPTION` and is preserved. Before acceptance,
+for a different owner/runtime is `NOT_OWNER`; malformed control state or a
+multiple/mismatched accepted-receipt collision is `CORRUPTION` and is
+preserved. A single matching accepted receipt is always an idempotent join.
+Before acceptance,
 a CLI timeout races one atomic removal against
 the server's atomic rename: removal of its unchanged checksum/file key succeeds
 and is directory-forced, or acceptance wins and the request cannot be
@@ -725,18 +843,22 @@ old owner nonce. The next start, only after acquiring the lock and proving the
 old process absent, removes and directory-forces that exact stale request and
 never replays it. A crash after acceptance leaves the named accepted receipt;
 the next start validates old-owner absence and instance recovery, removes only
-that matching receipt, and forces `DATADIR` before readiness. Orderly shutdown
-does the same after runtime/registry removal. Stop reports `OK` only after the
-lock is free and matching runtime, registry, ready target, request, and accepted
-receipt are absent; otherwise it waits until timeout. A completed retry sees no
-live owner and returns `NOT_OWNER`.
+that matching receipt, and forces `DATADIR` before readiness. During orderly
+shutdown the receipt is retained while the lifecycle closes listener, workers,
+public JSSE state, authenticator, and database; removes and forces the matching
+external ready target, registry record, and runtime record; then deletes and
+forces the accepted receipt as the final filesystem control record immediately
+before releasing the lock. Stop reports `OK` only after the lock is free and
+matching runtime, registry, ready target, request, and accepted receipt are
+absent; otherwise it waits until timeout. A completed retry sees no live owner
+and returns `NOT_OWNER`.
 
 | Stop crash/publication boundary | Only permitted recovery |
 | --- | --- |
 | One or more CLI stages exist, `stop.request` absent | A later stop validates every stage for the still-live owner, publishes the lexicographically smallest request nonce, then removes and directory-forces the other matching stages; invalid stages are preserved as `CORRUPTION`. A new owner removes only stages bound to the proved-absent old owner. |
-| Request link is visible and its directory force fails or the CLI crashes | The request remains authoritative for the live owner; the CLI/later retry joins and never retracts the ambiguous publication. |
+| Request link is visible and its directory force fails or the CLI crashes | The request remains authoritative for the live owner; the CLI/later retry applies matching stage/target alias recovery, joins, and never retracts the publication. |
 | Request is forced, server has not accepted | The server accepts it or timeout removes exactly that file; the atomic rename/remove winner decides. |
-| Accepted receipt is forced, server is shutting down | No CLI cancels it; all contenders wait for cleanup or return `TIMEOUT`. |
+| Accepted receipt is forced, server is shutting down | Every matching prepublication or retry scan idempotently joins it; no CLI cancels it; contenders wait for cleanup or return `TIMEOUT`. |
 | Server crashes before acceptance | The next lock owner proves old-owner absence, removes the matching request/stage, and directory-forces before readiness. |
 | Server crashes after acceptance | The next lock owner validates recovery, removes only the matching receipt, and directory-forces before readiness; it never replays shutdown. |
 
@@ -765,36 +887,58 @@ preserve-and-reinitialize command. Terminal `EXHAUSTED` authority returns
 ## Certificate expiry and credential renewal
 
 While running, the launcher and session authorizer share one monotonic
-credential-expiry fence. Every authentication and statement-admission attempt
-checks the fence and current wall-clock epoch second before effect. At the first
-observation `now >= notAfter`, the observer atomically closes the fence and
-invokes the lifecycle owner; an independent timer observes the boundary no
-later than one second after it. The listener stops accepting, TLS resumption is
-already disabled, every later request on an existing session is rejected with
-`ACCESS_DENIED`, and no new statement effect is admitted. Work already admitted
-before the fence completes normally or follows ordinary shutdown
-cancel/rollback. The launcher then closes workers and JSSE, destroys the token
-authenticator, closes the database, removes matching discovery/control records,
-releases the lock, and exits 1 with `ACCESS_DENIED` and renewal guidance. A
-restart remains `ACCESS_DENIED` until offline renewal; no cached or resumed TLS
-session bypasses this rule.
+credential-validity fence and checked millisecond `notBefore`/exclusive
+`notAfter` bounds. Every new, resumed, or existing-session authentication and
+every statement-admission attempt performs one `System.currentTimeMillis()`
+read and one fence read before effect. If `now < notBefore` or
+`now >= notAfter`, the observer atomically closes the fence permanently and
+invokes the lifecycle owner. A primitive-state watcher calls the same check at
+least once per second so an idle server also exits; admission correctness does
+not depend on watcher timing. The listener stops accepting, any later request
+on an existing or resumed transport is denied with `ACCESS_DENIED`, its actual
+authorizer decision is audited before a returned denial, and no new statement
+effect is admitted. Work already admitted before the fence completes normally
+or follows ordinary shutdown cancel/rollback.
+
+The launcher then closes listener/workers, performs the honest public-JSSE and
+River-buffer cleanup above, closes the database, removes matching
+discovery/control records, releases the lock, and exits 1 with `ACCESS_DENIED`
+and renewal guidance. The fence never reopens if the clock returns to the valid
+interval. Restart remains `ACCESS_DENIED` until current time is within the
+generation bounds or offline renewal publishes a valid generation; a cached or
+resumed transport cannot bypass application authentication/admission.
+
+`tic-b901` owns the validity-fence cost evidence. It proves by counters that
+each authentication/statement admission performs exactly one wall-clock read
+and one fence read, and by warmed JFR that those checks allocate zero
+River-owned bytes. It also records five 30-second fixed authenticated-query
+samples for the parent and candidate at 1, 4, and 16 clients, interleaved
+`C,A,A,C,C,A,A,C,C,A`, with identical SQL, seed, resource plan, durability,
+JDK, and host. Report successful operations/second, p99.9 latency, CPU per
+admission, clock/fence reads, allocation, errors, and retries for every sample. Zero
+allocation and correctness are absolute; a repeated throughput/latency/CPU
+shift outside adjacent-sample variation is investigated with longer
+interleaving and cannot be silently waived. This evidence is separate from and
+does not weaken the accepted `tic-a221` audit performance gates.
 
 `riverd credentials renew -D PATH` requires the stopped instance lock. It
-validates the complete current credential generation except that expiry is
-allowed; corrupt, missing, or mismatched accepted material is `CORRUPTION`, not
-repair. It checked-adds one to the positive `long` generation before mutation;
+validates the complete current credential generation except that current-time
+validity is not required; corrupt, missing, or mismatched accepted material is
+`CORRUPTION`, not repair. It checked-adds one to the positive `long` generation before mutation;
 `Long.MAX_VALUE` returns `RESOURCE_EXHAUSTED` and is never wrapped.
 
 The 16-byte random operation nonce is lowercase 32-hex. The only transaction
 namespace is
 `security/.renew-<old-generation>-to-<new-generation>-<operation-nonce>` and
-contains `renewal.properties`, `new-generation`, and
-`security.properties.stage`. `renewal.properties` binds the incarnation,
-old/new generations, nonce, old security-record checksum, final archive name,
-and all three fixed child names with this exact schema:
+contains only `new-generation` and `security.properties.stage`. Durable intent
+is outside and precedes that namespace: the launcher derives the public archive
+digest without mutation, writes and forces
+`security/.renewal-intent-<operation-nonce>.stage`, then exclusively publishes
+and forces `security/renewal.intent` before creating the namespace. Its exact
+schema is:
 
 ```text
-format=riverd-renewal-v1
+format=riverd-renewal-intent-v1
 database-incarnation-high=<signed-decimal-long>
 database-incarnation-low=<signed-decimal-long>
 old-credential-generation=<positive-decimal-long>
@@ -802,6 +946,7 @@ new-credential-generation=<positive-decimal-long>
 operation-nonce=<32-lowercase-hex>
 old-security-record-sha256=<64-lowercase-hex>
 archive-name=credential-<old-generation>-sha256-<public-manifest-digest>
+namespace-name=.renew-<old-generation>-to-<new-generation>-<operation-nonce>
 new-generation-name=new-generation
 security-stage-name=security.properties.stage
 record-sha256=<64-lowercase-hex>
@@ -833,29 +978,33 @@ both names and success output. The credential-equivalent old
 `security.properties`, token verifier, token, and private-key data never enter
 the archive. Renewal performs these exact durable steps:
 
-1. It creates the transaction namespace, writes and forces the renewal record,
-   and forces `security/`.
-2. It creates the archive staging directory, copies and validates the public
+1. It forces the intent stage, exclusively links it as `renewal.intent`, forces
+   the target and `security/`, unlinks the stage, and forces `security/` again.
+   This is the intent commit; no transaction namespace exists before it.
+2. It creates the exact namespace named by the intent, revalidates it through
+   SDS, and forces `security/`.
+3. It creates the archive staging directory, copies and validates the public
    certificate, derives the public manifest, forces both files and the staging
    directory, atomically renames it without overwrite to the final archive,
    then forces `security/archive/` and `security/`.
-3. It creates and validates the new generation under `new-generation`, forces
+4. It creates and validates the new generation under `new-generation`, forces
    each secret/public file and that directory, atomically moves it without
    overwrite to `security/generations/<new-generation>`, then forces
    `security/generations/` and `security/`.
-4. It writes and forces `security.properties.stage`, atomically replaces
+5. It writes and forces `security.properties.stage`, atomically replaces
    `security/security.properties`, and forces `security/`. That force is the
    sole authority switch: before it the old generation authenticates; after it
    only the new generation does.
-5. After the new authority revalidates, it unlinks the old token, private key,
+6. After the new authority revalidates, it unlinks the old token, private key,
    certificate, and old generation directory using checked file keys; forces
    the affected old directory before its removal and then
-   `security/generations/` and `security/`; removes the exact transaction
-   namespace; and forces `security/`. This is durable logical deletion without
-   a physical-media erasure claim.
+   `security/generations/` and `security/`; removes and forces the exact
+   transaction namespace; then deletes `renewal.intent` by checksum/file key as
+   the final record and forces `security/`. This is durable logical deletion
+   without a physical-media erasure claim.
 
 A crash before the authority switch leaves the old authority. A retry under the
-lock finds at most one exactly named valid transaction bound to its checksum,
+lock finds at most one valid `renewal.intent` bound to its checksum,
 validates or completes the public archive and new generation in order, and
 resumes; incompatible, duplicate, extra, or partially mismatched state is
 preserved as `CONFLICT`/`CORRUPTION`. A crash after the authority switch leaves
@@ -868,14 +1017,18 @@ its selected endpoint.
 
 | Renewal crash boundary | Authority and only permitted recovery |
 | --- | --- |
-| Renewal record/stage creation incomplete | Old authority; remove only the checksum/file-key-matching incomplete nonce namespace, force `security/`, and begin a new operation. |
-| Public archive staging incomplete | Old authority; validate the renewal record, remove/recreate only that matching archive stage, and resume step 2. |
+| Intent stage exists; final intent and namespace are absent | Old authority; validate its current-authority checksum/file key, remove it, force `security/`, and begin a new operation. An unvalidated stage is preserved. |
+| Intent target and stage are matching hard-link aliases | Old authority; complete exclusive-file alias recovery, retain the forced target as intent, and create only its named namespace. |
+| Namespace exists without forced `renewal.intent` | No recoverable intent; preserve as `CORRUPTION`. Never infer identity from the namespace name or remove it. |
+| Forced/visible intent exists; namespace is absent | Old authority; validate and repeat target/`security/` forces, create only its named namespace, force `security/`, then resume step 3. |
+| Intent and its empty namespace exist | Old authority; validate both, repeat the namespace and `security/` forces, then resume step 3. |
+| Public archive staging incomplete | Old authority; validate the intent, remove/recreate only that matching archive stage, and resume step 3. |
 | Final public archive exists | Old authority; validate its name, manifest digest, certificate, and both directory forces, then resume new-generation construction. |
-| `new-generation` is incomplete in the transaction namespace | Old authority; remove/recreate only that matching staged generation and resume step 3. |
+| `new-generation` is incomplete in the transaction namespace | Old authority; remove/recreate only that matching staged generation and resume step 4. |
 | Final `generations/<new>` exists, old security authority remains | Old authority; validate the new generation and archive, then resume manifest staging; never authenticate with new yet. |
 | New security stage is complete, old authority remains | Old authority; revalidate all inputs and perform only the replacement and directory force. |
 | New security target is visible but its directory force may have crashed | New authority after complete validation; repeat the idempotent `security/` force, then perform only old-secret deletion. |
-| New authority is durable, any old secret or transaction stage remains | New authority; before listener bind, unlink only matching old files, force every affected directory, and remove the exact stage namespace. |
+| New authority is durable, any old secret, namespace, or intent remains | New authority; before listener bind, unlink only matching old files, force every affected directory, remove/force the exact namespace, then remove/force the intent last. |
 
 An archive/new generation with the right numeric generation but the wrong
 nonce, checksum, certificate, or file key is never adopted.
@@ -897,8 +1050,8 @@ removed returns `IO_FAILURE`. These are distinct outcomes: loaded-old material
 reaches authentication and is denied, while missing reload material never
 constructs a connection. Neither can authenticate. The operator uses the
 new `security/client.properties` published by the next successful start. Start
-returns `ACCESS_DENIED` for a well-formed expired generation and names this
-stopped-instance command.
+returns `ACCESS_DENIED` for a well-formed generation outside its validity
+interval and names this stopped-instance command.
 
 ## Module owners and deletion gates
 
@@ -915,7 +1068,8 @@ stopped-instance command.
 dependency allowance while adding only used app edges. `tic-95e8` proves the
 installed lifecycle and source/compiled absence of plain paths. `tic-0803`,
 `tic-d2e9`, and `tic-b901` add stop, listing, and expiry/recovery commands
-against the already accepted formats. `tic-9640` proves their composed recovery matrix;
+against these formats after ADR acceptance. `tic-9640` proves their composed
+recovery matrix;
 `tic-4cb6` publishes the stable external consumer subset only after that gate.
 
 ## Audit performance and acceptance contract
@@ -945,6 +1099,19 @@ inside riverd, and a broad tuning CLI are deferred. TLS 1.3, the token,
 single-principal authorization, audit-before-admission, credentials, exact
 lifecycle, and authenticated-only River callers are mandatory and are not
 included in those deferrals.
+
+## Review history
+
+- Candidate `d77793206a4edf43c5ffca207535a33b2526cdf0` was independently
+  rejected for readiness, process-stop, filesystem, provider, secret,
+  checksum, renewal, help, and path-collision ambiguity.
+- Candidate `238d6198ae186824e037b1005483882e2e2be296` closed those findings
+  but was independently rejected for incomplete path-operation/durability
+  qualification, unimplementable generic-JSSE erasure claims, and remaining
+  lock, ready, stop-receipt, and renewal-intent recovery ambiguity.
+- The current candidate preserves both rejection records. No independent
+  acceptance or implementation authorization is claimed until `tic-11a5`
+  review passes and its status/index are updated in the accepted merge.
 
 ## Consequences
 

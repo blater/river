@@ -27,10 +27,11 @@ Implement the accepted five-step audit control transition without overwrite,
 preserve corrupt audit, and refuse archive for terminal `EXHAUSTED` authority.
 Renew in the ADR's exact nonce-derived stage/archive names without overlap,
 preserving and forcing only the prior public certificate and redacted public
-manifest before publishing the new security authority. Durably unlink old
+manifest. Publish and force the external `renewal.intent` before creating its
+namespace, then publish the new security authority. Durably unlink old
 secrets after the authority switch. Fence a running generation at `notAfter`
-across listener, active sessions, TLS resumption, statement admission, and
-ordered shutdown.
+or before `notBefore` across listener, active/resumed sessions, application
+authentication, statement admission, and ordered shutdown.
 
 ## Acceptance Criteria
 
@@ -38,7 +39,10 @@ Live-owner rejection, audit/archive collision, corruption preservation,
 full-at-start, runtime exhaustion, and both audit control directory forces are
 proved. Renewal tests cover generation overflow, every force/crash boundary
 before and after authority switch, archive/stage identity collision, durable
-secret deletion, safe retry/cleanup, running expiry with new/active/resumed TLS
-sessions and admission races, exit/recovery, loaded-old `ACCESS_DENIED`, and
+secret deletion, safe retry/cleanup, running validity failure with
+new/active/resumed TLS sessions and admission races, exit/recovery, loaded-old
+`ACCESS_DENIED`, and
 reload-missing-secret `IO_FAILURE`, with no silent truncation, repair, or secret
-exposure.
+exposure. Prove exactly one wall-clock/fence read per authentication/statement,
+zero warmed River allocation, and the ADR's interleaved 1/4/16-client cost
+evidence; investigate every repeated shift outside adjacent-sample variation.

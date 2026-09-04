@@ -40,7 +40,12 @@ without Gradle or classpath knowledge. With a ready file, forced atomic
 publication is the sole commit and broken stdout is an irrelevant mirror;
 without one, prefix/partial failures clean up but an observed complete final
 ready record remains irrevocable across later flush failure. Publication races
-are deterministic. Normal, failed, and signal shutdown release the listener,
+are deterministic. A post-visibility target/parent/source force failure or
+ambiguous stdout-only final failure sets terminal `IO_FAILURE`, cleans up, and
+eventually exits 1; ready-file mirror failure stays nonterminal. Under-lock
+stale-ready cleanup removes only an exact incarnation/owner/process/file-key
+binding. Normal, failed, and signal shutdown release the listener,
 workers, and JSSE before idempotent authenticator destruction; caller scratch
-is zeroed on every path. Source and compiled-code checks find no plain
+is zeroed on every path, public session/key cleanup failure is `IO_FAILURE`,
+and no provider-owned opaque erasure is claimed. Source and compiled-code checks find no plain
 listener/client fallback or optional authentication branch.
