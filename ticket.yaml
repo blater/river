@@ -1,0 +1,6 @@
+tickets-directory: docs/tickets
+delivery:
+  require-commit-links: true
+  commit-trailer: Ticket
+  require-ticket-branch: true
+  branch-prefix: ticket/

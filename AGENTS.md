@@ -1,6 +1,9 @@
 # River Agent Working Agreement
 
 This file is the short operational contract for coding agents and contributors.
+The principles behind how changes are shaped, measured, reviewed, and promoted
+are defined in [`manifesto.md`](manifesto.md). This agreement supplies the
+executable rules; the manifesto supplies the shared engineering intent.
 The detailed rationale lives in
 [`docs/plans/river-engineering-personas-and-performance-charter.md`](docs/plans/river-engineering-personas-and-performance-charter.md).
 
