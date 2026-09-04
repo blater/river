@@ -102,6 +102,8 @@ public final class TpccServerMain {
         .append("server_maximum_active_transactions=").append(admittedConnections).append('\n')
         .append("server_active_transactions_at_capture=")
         .append(database.activeTransactionCount()).append('\n')
+        .append("server_retained_snapshots_at_capture=")
+        .append(database.retainedSnapshotCount()).append('\n')
         .append("server_active_locks_at_capture=")
         .append(database.activeLockCount()).append('\n')
         .append("server_waiting_locks_at_capture=")

@@ -28,6 +28,7 @@ final class LockExactTable {
   final LockExactLifecycle lifecycle;
   final LockExactDeadlockDetector deadlocks;
   final LockWaitCounters waitCounters = new LockWaitCounters();
+  final LockBlockCausality blockCausality = new LockBlockCausality();
   long nextCapability = 1;
   long nextReference = 1;
   long nextRequest = 1;
@@ -176,6 +177,11 @@ final class LockExactTable {
   long lockWaitsTimedOut() { return waitCounters.timedOutCount(); }
   long lockWaitsDeadlocked() { return waitCounters.deadlockCount(); }
   long lockWaitsCancelled() { return waitCounters.cancelledCount(); }
+  StatusCode beginBlockCausalityCapture() { return blockCausality.begin(); }
+  StatusCode endBlockCausalityCapture(LockBlockCausalitySnapshot target) {
+    return blockCausality.end(target);
+  }
+  StatusCode cancelBlockCausalityCapture() { return blockCausality.cancel(); }
   StatusCode activateTransaction(
       long id, long generation, long startOrder,
       long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {

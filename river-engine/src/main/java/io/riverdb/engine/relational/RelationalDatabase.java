@@ -160,6 +160,8 @@ public final class RelationalDatabase {
 
   public int activeTransactionCount() { return embedded.activeTransactionCount(); }
 
+  public int retainedSnapshotCount() { return embedded.retainedSnapshotCount(); }
+
   public long activeLockCount() { return embedded.activeLockCount(); }
 
   public long waitingLockCount() { return embedded.waitingLockCount(); }

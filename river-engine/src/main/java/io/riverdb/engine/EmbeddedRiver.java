@@ -191,6 +191,9 @@ public final class EmbeddedRiver {
     public int activeTransactionCount() { return database.activeTransactionCount(); }
 
     @Override
+    public int retainedSnapshotCount() { return database.retainedSnapshotCount(); }
+
+    @Override
     public long activeLockCount() { return database.activeLockCount(); }
 
     @Override

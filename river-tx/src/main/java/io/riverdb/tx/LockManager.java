@@ -61,6 +61,16 @@ public final class LockManager implements LockService {
   public synchronized long lockWaitsCancelled() { return exact.lockWaitsCancelled(); }
   public boolean lockEscalationSupported() { return LockWaitCounters.escalationSupported(); }
   public long lockEscalationCount() { return LockWaitCounters.escalationCount(); }
+  synchronized StatusCode beginBlockCausalityCapture() {
+    return exact.beginBlockCausalityCapture();
+  }
+  synchronized StatusCode endBlockCausalityCapture(
+      LockBlockCausalitySnapshot target) {
+    return exact.endBlockCausalityCapture(target);
+  }
+  synchronized StatusCode cancelBlockCausalityCapture() {
+    return exact.cancelBlockCausalityCapture();
+  }
   synchronized long accountedBytes() { return arena.accountedBytes(); }
   synchronized long targetedWakes() { return exact.targetedWakes(); }
   public LockDeadlockDiagnosticsSnapshot newDeadlockDiagnosticsSnapshot() {

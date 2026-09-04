@@ -49,6 +49,7 @@ final class LockExactDeadlockDetector {
         cycleAncestor, cycleCurrent, blockers, victim, selectionSequence)) return;
     table.lifecycle.deadlock(victim);
     if (victimSelections != Long.MAX_VALUE) victimSelections++;
+    table.blockCausality.victimSelected();
     int cancelled = table.requestLifecycle.cancelAll(victim, StatusCode.DEADLOCK);
     int released = table.holdingLifecycle.releaseAll(victim);
     diagnostics.completeCleanup(victim, cancelled, released, cleanupValid(victim));

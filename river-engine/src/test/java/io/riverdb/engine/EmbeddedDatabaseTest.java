@@ -83,6 +83,9 @@ final class EmbeddedDatabaseTest {
     assertEquals(StatusCode.OK, database.endPerformanceCapture(metrics));
     String captured = metrics.toString();
     assertEquals(true, captured.contains("server_performance_capture_valid=true\n"));
+    assertEquals(true, captured.contains("server_capture_retained_snapshots=0\n"));
+    assertEquals(true, captured.contains("server_capture_lock_block_valid=true\n"));
+    assertEquals(true, captured.contains("server_capture_lock_block_bucket_total=0\n"));
     assertEquals(true, captured.contains("server_capture_commit_submissions=1\n"));
     assertEquals(true, captured.contains("server_capture_wal_force_count=1\n"));
     assertEquals(StatusCode.OK, database.close());

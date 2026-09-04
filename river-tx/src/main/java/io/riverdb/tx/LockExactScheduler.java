@@ -9,6 +9,7 @@ import io.riverdb.tx.api.lock.LockWaitState;
 final class LockExactScheduler {
   private final LockExactTable table;
   private final LockIntervalCursor affected = new LockIntervalCursor();
+  private final LockExactGrantDecision grants;
   private long workHead = -1;
   private long workTail = -1;
   private long deadlockHead = -1;
@@ -17,7 +18,10 @@ final class LockExactScheduler {
   private long overlapSearches;
   private boolean draining;
 
-  LockExactScheduler(LockExactTable owner) { table = owner; }
+  LockExactScheduler(LockExactTable owner) {
+    table = owner;
+    grants = new LockExactGrantDecision(owner);
+  }
 
   void schedule(long resource) {
     if (table.waitingCount == 0) return;
@@ -104,28 +108,10 @@ final class LockExactScheduler {
   }
 
   private boolean canGrant(long resource, long request) {
-    LockExactResourceStore.Chunk rc = table.state.resources.record(resource);
-    LockExactRequestStore.Chunk qc = table.state.requests.record(request);
-    int ro = LockTypedSlots.offset(resource);
-    int qo = LockTypedSlots.offset(request);
-    if (table.lifecycle.frozen(qc.transactions[qo])) return false;
-    long holding = qc.holdings[qo];
-    LockExactHoldingStore.Chunk hc = table.state.holdings.record(holding);
-    int ho = LockTypedSlots.offset(holding);
-    if (interval(rc.scopes[ro])) {
-      return (table.state.requests.conversion(request)
-              || !table.conflicts.earlierBlocked(resource, request))
-          && (table.state.requests.conversion(request)
-              || !table.conflicts.conversionBlocked(resource, qc.transactions[qo]))
-          && !table.conflicts.activeBlocked(resource, qc.transactions[qo], qc.modes[qo]);
-    }
-    if (hc.active[ho] == 0) return LockExactCompatibility.grantable(
-        qc.modes[qo], rc.ownerCounts[ro], rc.sharedCounts[ro], rc.updateCounts[ro]);
-    int held = hc.modes[ho];
-    if (held >= qc.modes[qo]) return true;
-    return LockExactCompatibility.upgradeable(
-        qc.modes[qo], rc.ownerCounts[ro], rc.sharedCounts[ro], rc.updateCounts[ro]);
+    return grants.grantable(resource, request);
   }
+
+  void recordActualBlock(long request) { grants.recordActualBlock(request); }
 
   private long waitHead(long resource) {
     return LockTypedSlots.decode(table.state.resources.record(resource)
@@ -146,6 +132,7 @@ final class LockExactScheduler {
     table.holdingLifecycle.grant(resource, qc.holdings[qo], qc.modes[qo]);
     qc.states[qo] = (byte) LockWaitState.GRANTED.ordinal();
     table.waitCounters.granted();
+    table.blockCausality.handoff();
     if (qc.actuallyBlocked[qo] != 0) {
       table.waitCounters.completeBlocked(qc.blockedAtNanos[qo], System.nanoTime());
     }

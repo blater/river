@@ -477,6 +477,8 @@ public final class EmbeddedDatabase {
     return transactions.activeTransactionCount();
   }
 
+  public int retainedSnapshotCount() { return transactions.retainedSnapshotCount(); }
+
   public long currentCommitSequence() {
     return table.currentCommitSequence();
   }

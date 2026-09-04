@@ -120,6 +120,9 @@ public final class TransactionManager {
     return snapshots.count();
   }
 
+  /** Explicit count of snapshot-registry entries retained at the observation boundary. */
+  public synchronized int retainedSnapshotCount() { return snapshots.count(); }
+
   /** Oldest commit sequence still visible to an active transaction. */
   public synchronized long oldestVisibleCommitSequence() {
     return snapshots.oldestVisibleCommitSequence();
@@ -154,6 +157,25 @@ public final class TransactionManager {
   public boolean lockEscalationSupported() { return locks.lockEscalationSupported(); }
 
   public long lockEscalationCount() { return locks.lockEscalationCount(); }
+
+  public LockBlockCausalitySnapshot newLockBlockCausalitySnapshot() {
+    return new LockBlockCausalitySnapshot();
+  }
+
+  /** Starts aggregate classification; the caller must already own a quiescent boundary. */
+  public synchronized StatusCode beginLockBlockCausalityCapture() {
+    return locks.beginBlockCausalityCapture();
+  }
+
+  /** Ends aggregate classification; the caller must still own the same quiescent boundary. */
+  public synchronized StatusCode endLockBlockCausalityCapture(
+      LockBlockCausalitySnapshot target) {
+    return locks.endBlockCausalityCapture(target);
+  }
+
+  public synchronized StatusCode cancelLockBlockCausalityCapture() {
+    return locks.cancelBlockCausalityCapture();
+  }
 
   /** Runs one cold boundary action while transaction admission remains quiescent. */
   public synchronized StatusCode atQuiescentBoundary(

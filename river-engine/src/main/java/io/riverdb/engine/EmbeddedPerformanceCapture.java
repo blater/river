@@ -5,6 +5,7 @@ import io.riverdb.engine.table.IndexedGroupCommitTelemetry;
 import io.riverdb.engine.table.IndexedCommitPath;
 import io.riverdb.engine.table.IndexedCommitStage;
 import io.riverdb.engine.table.IndexedTable;
+import io.riverdb.tx.LockBlockCausalitySnapshot;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.wal.local.LocalWalForceCause;
 import io.riverdb.wal.local.LocalWalMetrics;
@@ -15,6 +16,7 @@ final class EmbeddedPerformanceCapture {
   private final TransactionManager transactions;
   private final IndexedGroupCommitTelemetry commits = new IndexedGroupCommitTelemetry();
   private final LocalWalMetrics forces = new LocalWalMetrics();
+  private final LockBlockCausalitySnapshot lockBlocks;
   private long waitsEntered;
   private long waitsBlocked;
   private long blockedNanos;
@@ -29,11 +31,13 @@ final class EmbeddedPerformanceCapture {
   private long capturedWaitsTimedOut;
   private long capturedWaitsDeadlocked;
   private long capturedWaitsCancelled;
+  private int capturedRetainedSnapshots;
   private boolean active;
 
   EmbeddedPerformanceCapture(IndexedTable indexedTable, TransactionManager transactionManager) {
     table = indexedTable;
     transactions = transactionManager;
+    lockBlocks = transactionManager.newLockBlockCausalitySnapshot();
   }
 
   synchronized StatusCode begin() {
@@ -49,7 +53,10 @@ final class EmbeddedPerformanceCapture {
     waitsTimedOut = transactions.lockWaitsTimedOut();
     waitsDeadlocked = transactions.lockWaitsDeadlocked();
     waitsCancelled = transactions.lockWaitsCancelled();
-    StatusCode status = table.beginPerformanceCapture();
+    StatusCode status = transactions.beginLockBlockCausalityCapture();
+    if (!status.isOk()) return status;
+    status = table.beginPerformanceCapture();
+    if (!status.isOk()) transactions.cancelLockBlockCausalityCapture();
     if (status.isOk()) active = true;
     return status;
   }
@@ -58,7 +65,9 @@ final class EmbeddedPerformanceCapture {
     if (!active || target == null) return StatusCode.CONFLICT;
     StatusCode status = transactions.atQuiescentBoundary(this::endAtBoundary);
     if (!status.isOk()) return status;
-    boolean valid = commits.reconciles()
+    boolean valid = lockBlocks.reconciles()
+        && lockCountersReconcile()
+        && commits.reconciles()
         && forces.reconciles()
         && commitForcesReconcile();
     target.append("server_performance_capture_scope=quiescent_window\n")
@@ -75,6 +84,7 @@ final class EmbeddedPerformanceCapture {
         .append(capturedWaitsDeadlocked).append('\n')
         .append("server_capture_lock_waits_cancelled=")
         .append(capturedWaitsCancelled).append('\n');
+    EmbeddedLockBlockDiagnostics.append(target, lockBlocks, capturedRetainedSnapshots);
     EmbeddedCommitDiagnostics.append(target, commits, forces, "capture_");
     return StatusCode.OK;
   }
@@ -82,7 +92,10 @@ final class EmbeddedPerformanceCapture {
   private StatusCode endAtBoundary() {
     StatusCode status = table.endPerformanceCapture(commits, forces);
     active = false;
-    if (!status.isOk()) return status;
+    if (!status.isOk()) {
+      transactions.cancelLockBlockCausalityCapture();
+      return status;
+    }
     capturedWaitsEntered = delta(waitsEntered, transactions.lockWaitsEntered());
     capturedWaitsBlocked = delta(waitsBlocked, transactions.lockWaitsActuallyBlocked());
     capturedBlockedNanos = delta(blockedNanos, transactions.lockWaitBlockedNanos());
@@ -90,19 +103,32 @@ final class EmbeddedPerformanceCapture {
     capturedWaitsTimedOut = delta(waitsTimedOut, transactions.lockWaitsTimedOut());
     capturedWaitsDeadlocked = delta(waitsDeadlocked, transactions.lockWaitsDeadlocked());
     capturedWaitsCancelled = delta(waitsCancelled, transactions.lockWaitsCancelled());
+    capturedRetainedSnapshots = transactions.retainedSnapshotCount();
+    StatusCode lockStatus = transactions.endLockBlockCausalityCapture(lockBlocks);
     if (capturedWaitsEntered < 0 || capturedWaitsBlocked < 0 || capturedBlockedNanos < 0
         || capturedWaitsGranted < 0 || capturedWaitsTimedOut < 0
         || capturedWaitsDeadlocked < 0 || capturedWaitsCancelled < 0) {
       return StatusCode.INVARIANT_BROKEN;
     }
-    return StatusCode.OK;
+    return lockStatus;
   }
 
   synchronized StatusCode cancelIfActive() {
     if (!active) return StatusCode.OK;
     StatusCode status = table.cancelPerformanceCapture();
+    StatusCode lockStatus = transactions.cancelLockBlockCausalityCapture();
     active = false;
-    return status;
+    return status.isOk() ? lockStatus : status;
+  }
+
+  private boolean lockCountersReconcile() {
+    return capturedWaitsEntered == lockBlocks.entered()
+        && capturedWaitsBlocked == lockBlocks.actualBlocks()
+        && capturedWaitsGranted == lockBlocks.handoffs()
+        && capturedWaitsTimedOut == lockBlocks.timedOut()
+        && capturedWaitsDeadlocked == lockBlocks.deadlocked()
+        && capturedWaitsCancelled == lockBlocks.cancelled()
+        && capturedRetainedSnapshots == 0;
   }
 
   private boolean commitForcesReconcile() {

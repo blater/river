@@ -55,6 +55,7 @@ final class LockExactRequestLifecycle {
     long transaction = chunk.transactions[offset];
     table.unlink.request(chunk.resources[offset], transaction, request, false);
     removeIndex(request, chunk, offset);
+    table.blockCausality.consumed(chunk.actuallyBlocked[offset] != 0);
     completeGranted(lane, handle, request, chunk, offset);
     table.state.requests.free(request);
     table.lifecycle.recycleTransaction(transaction);
@@ -185,6 +186,8 @@ final class LockExactRequestLifecycle {
         : status == StatusCode.CANCELLED ? LockWaitState.CANCELLED
         : status == StatusCode.DEADLOCK ? LockWaitState.DEADLOCK : LockWaitState.FAILED;
     table.waitCounters.terminal(status);
+    table.blockCausality.terminal(
+        status, chunk.actuallyBlocked[offset] != 0, current == LockWaitState.GRANTED);
     if (chunk.actuallyBlocked[offset] != 0) {
       table.waitCounters.completeBlocked(chunk.blockedAtNanos[offset], System.nanoTime());
     }
