@@ -345,3 +345,22 @@ intervals are not called passes, and the standard 10:2 interval is correctly
 classified as a detected regression. The run overlap and build/classpath
 provenance gaps prevent these data from becoming an accepted checkpoint even
 apart from that regression.
+
+## Independent review
+
+An independent transaction-correctness, performance/statistics, and provenance
+adversary accepted exact pushed candidate
+`eb8b363ed6986f611da40d4f35199ffa0c742bdf` as a blocked progress/evidence
+checkpoint only. The reviewer independently recalculated all 40 manifest rows,
+six per-run hashes and identifiers, aggregate correctness counts, raw summary
+statistics, and every baseline and adjacent log-ratio interval from the retained
+artifacts. The recalculation matched this document, including the standard
+10:2 regression and conservative `b5-d4` contamination classification.
+
+The review also verified the clean pushed branch and exact SHA, two-file scope,
+Ticket trailers and graph validation, conflict-free merge against then-current
+master `7cf93b47e74ba62a9915a8aea3f98e46b1f2d641`, and the separation of the two
+prerequisite contracts. It authorizes a no-fast-forward merge only to preserve
+durable blocked evidence while `tic-1dda` remains `in_progress`. It does not
+authorize ticket closure, P0 certification, a clean-gate claim, a performance
+ledger entry, or any source/performance checkpoint tag.
