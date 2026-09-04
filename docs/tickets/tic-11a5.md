@@ -1,10 +1,12 @@
 ---
 id: tic-11a5
-status: open
+status: in_progress
 type: story
 assignee: blater
 parent: tic-e2b7
 delivery: documentation
+base-commit: 8df484694039e9b53cd7ff6c5cccb44973b86c0e
+branch: ticket/tic-11a5-ratify-riverd-security
 tags:
     - riverd
     - security
