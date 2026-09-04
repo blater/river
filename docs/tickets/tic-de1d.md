@@ -25,3 +25,7 @@ Identify reusable accepted owners, missing TLS/credential/instance behavior, ins
 ## Acceptance Criteria
 
 The inventory names every plan requirement's current owner and status, identifies deletions and migration boundaries, and records source revisions without changing production behavior.
+
+## Evidence
+
+- [`2026-09-04-tic-de1d-riverd-boundary-inventory.md`](../delivery/evidence/2026-09-04-tic-de1d-riverd-boundary-inventory.md)
