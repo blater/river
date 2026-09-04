@@ -177,7 +177,8 @@ Only `riverd audit archive` under the stopped instance lock may transition it:
 
 1. prove no live owner/pending slot; validate and force the active generation;
 2. derive its digest and last sequence; create and force a new generation whose
-   first sequence is old last plus one and whose header links the old digest;
+   first sequence is old last plus one and whose header links the old digest,
+   then force the parent directory so the new name is durable;
 3. publish/force an `ARCHIVING` control generation naming both files and the
    collision-checked content archive, then force the directory;
 4. atomically rename the old generation to the archive name without overwrite
@@ -246,9 +247,11 @@ force count/time and cohort histogram, queue occupancy/pressure, CPU/profile
 and monitor contention, allocation bytes/objects, River-owned copy bytes/count,
 and GC count/pause/allocation rate.
 
-Correctness is absolute: identical semantic decision sequence and admitted
-effects for the seed, zero unexplained outcomes, valid audit/restart, and zero
-resource residue. Warmed audit allocation is 0 bytes/objects per event and the
+Correctness is absolute: identical request-correlated decision multiset,
+per-client request order, and admitted effects for the seed; each independently
+scheduled audit stream must have gap-free global sequences. There must also be
+zero unexplained outcomes, valid audit/restart, and zero resource residue.
+Warmed audit allocation is 0 bytes/objects per event and the
 audit record is encoded directly once into reserved provider storage with zero
 River-owned byte-array copies. The deterministic overlap test requires one
 force to release the whole forced cohort. At 4 and 16 clients, the upper 95%
