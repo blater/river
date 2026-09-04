@@ -128,6 +128,8 @@ Tickets track epics, stories, investigations, dependencies, ownership, and
 delivery evidence. They link to plans and ADRs rather than replacing those
 architectural and semantic authorities. The working and promotion rules remain
 defined by [`manifesto.md`](manifesto.md) and [`AGENTS.md`](AGENTS.md).
+Cross-repository dependencies link the owning repository's ticket and immutable
+delivery instead of placing foreign implementation work in River tickets.
 
 ## License
 

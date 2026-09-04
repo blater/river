@@ -1,29 +1,35 @@
 ---
 id: tic-e6c5
 status: open
-type: story
+type: investigation
 priority: 1
 assignee: blater
 parent: tic-9c58
-delivery: code
+delivery: evidence
 tags:
     - performance
     - tpcc
-    - mariadb
-    - parity
     - harness
 deps:
     - tic-46ec
 created: 2026-09-04T15:10:08.429494Z
 ---
-# Make the River and MariaDB TPC-C pair comparison-eligible
+# Route stress-workload compatibility defects to their owners
 
-Close the evidenced compatibility gap so the shared harness can execute the same logical workload and comparison key on River and MariaDB.
+Route each evidenced compatibility gap to one repository without adding
+target-specific semantics to River or coupling comparison code to
+river-harness.
 
 ## Design
 
-Implement the missing behavior in its semantic owner, or correct the harness contract in its repository, without target-specific workload semantics or weakened River validation.
+If River lacks required SQL or protocol semantics, create a concrete River code
+story under the relevant subsystem epic. If river-harness is wrong, link its
+own repository ticket and commit. If artifact comparison is missing, link the
+external sidecar ticket. This coordination ticket owns no cross-repository code.
 
 ## Acceptance Criteria
 
-Matched smoke and targeted family runs pass setup, workload, invariants, and outcome reconciliation on both targets; result.json reports eligibility=eligible and identical comparison keys.
+Every defect has one owner, ticket, and immutable delivery or evidence
+reference. River-harness then produces valid per-engine stress artifacts
+through supported lifecycle contracts; comparison eligibility is decided only
+by the external sidecar.

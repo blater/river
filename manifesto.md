@@ -52,9 +52,10 @@ contains the detailed rationale.
 - A dependency means work genuinely cannot complete before another ticket.
   Non-blocking relationships use links. A blocked ticket names the unmet
   condition and its owner; priority labels do not override dependency truth.
-- Ticket flow is `proposed` to `open` to `in_progress` to `review` to `closed`.
-  Readiness and blocking are derived from unresolved dependencies rather than
-  duplicated as manually maintained states.
+- Ticket flow is `open` to `in_progress` to `closed`. Readiness and blocking
+  are derived from unresolved dependencies rather than duplicated as manually
+  maintained states. Review is a required delivery gate recorded in ticket
+  evidence, notes, and commits, not a second mutable workflow status.
 - Work starts only from a ready ticket and is claimed atomically across Git
   worktrees. The claim records the owner, stable base revision, feature branch,
   and worktree. Claims are released or recovered explicitly and are never
@@ -111,9 +112,13 @@ contains the detailed rationale.
 - Removing one bottleneck may expose the next. A gate passes only when its
   target mechanism and failure modes are explained; an improved TPS number
   alone does not prove that the mechanism is healthy.
-- River-specific TPS evidence and shared River/MariaDB harness evidence answer
-  different questions and are never compared as though they were the same
-  workload.
+- `river-harness` owns engine-independent stress execution through supported
+  database process contracts; River benchmarking waits for `riverd` rather than
+  teaching the harness River build or classpath internals.
+- Cross-database comparison is a separate sidecar responsibility over versioned
+  immutable artifacts. It lives outside River, does not import River or harness
+  implementation packages, and never turns River-specific TPS evidence into a
+  cross-engine denominator.
 
 ## 5. Fast loops, deliberate checkpoints
 

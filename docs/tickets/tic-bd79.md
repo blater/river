@@ -1,10 +1,10 @@
 ---
 id: tic-bd79
 status: open
-type: story
+type: investigation
 assignee: blater
 parent: tic-c7bb
-delivery: code
+delivery: evidence
 tags:
     - performance
     - tpcc
@@ -14,14 +14,22 @@ deps:
     - tic-8561
 created: 2026-09-04T15:10:08.162434Z
 ---
-# Automate the 500 TPS evidence gate
+# Verify river-harness automation of the 500 TPS gate
 
-Make the accepted interim contract mechanically runnable and machine-verifiable without hiding phase failures or emitting misleading zero-TPS results.
+Verify that river-harness implements the accepted interim contract as a
+mechanically runnable, machine-verifiable stress gate without hiding phase
+failures or emitting misleading zero-TPS results.
 
 ## Design
 
-Reuse benchmark semantic validation and evidence ownership. Persist source/configuration fingerprints, sample identities, raw outcomes, confidence calculation, invariants, and artifact paths.
+Implementation belongs to the river-harness repository and carries its own
+ticket and commit. It must preserve semantic validation and persist
+source/configuration fingerprints, riverd identity, sample identities, raw
+outcomes, confidence calculation, invariants, and artifact paths. No gate code
+is added to River core.
 
 ## Acceptance Criteria
 
-Focused invalid-run and statistics tests pass; the runner rejects mismatched or incomplete samples; a documented command reproduces the gate without changing database behavior.
+A linked external commit has focused invalid-run and statistics tests; the
+runner rejects mismatched or incomplete samples; a documented command
+reproduces the gate through riverd without changing database behavior.

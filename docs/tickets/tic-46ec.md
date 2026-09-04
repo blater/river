@@ -12,16 +12,24 @@ tags:
     - mariadb
     - parity
     - harness
+deps:
+    - tic-45a7
 created: 2026-09-04T15:10:08.338824Z
 ---
-# Reproduce and classify River harness incompatibility
+# Reproduce and classify River stress-workload incompatibility
 
-Reproduce the River INVALID_EXTERNAL_INPUT setup failure that currently prevents an eligible MariaDB comparison.
+Reproduce the River INVALID_EXTERNAL_INPUT setup failure that currently
+prevents river-harness from producing an eligible River stress artifact.
 
 ## Design
 
-Trace parameterized insert and SELECT FOR UPDATE admission through the shared logical workload and River boundary; distinguish harness contract defects from missing or incorrect River SQL behavior.
+Run river-harness through riverd and trace parameterized insert and SELECT FOR
+UPDATE admission through the shared logical workload and River boundary.
+Distinguish harness defects from missing or incorrect River SQL behavior
+without involving comparison tooling.
 
 ## Acceptance Criteria
 
-The exact incompatible operations, expected semantics, owning repository, status mapping, and minimum correction are evidenced; no River zero-TPS or parity ratio is reported for an ineligible run.
+The exact incompatible operations, expected semantics, owning repository,
+status mapping, and minimum correction are evidenced; no River zero-TPS or
+parity ratio is reported for an ineligible run.
