@@ -26,3 +26,10 @@ tickets record that immutable commit before closure. Evidence investigations
 record a commit or evidence reference, and performance deliveries also record
 their accepted checkpoint tag. The repository-root `ticket.yaml` contains the
 enforced branch and delivery policy.
+
+Work implemented in another repository is not disguised as a River code
+delivery. Its owning repository carries its own ticket, branch, and commit;
+the River dependency ticket uses an external reference and evidence link to
+that immutable delivery. In particular, `river-harness` owns stress execution,
+while cross-database comparison belongs to a separate artifact-consuming
+sidecar rather than River core or harness implementation packages.

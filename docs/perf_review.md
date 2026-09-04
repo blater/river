@@ -463,8 +463,9 @@ outcomes. The harness does not currently retain River cycle fingerprints or
 reconcile client retries to server outcomes, and these runs span other dirty
 workspace changes. They therefore show a failure-mode warning, not causation by
 the source-order slice. Native phase-correlated diagnostics remain normative
-for P0; the harness remains a throughput-regression guard until its compare and
-failure-correlation support is available.
+for P0; the harness remains a throughput-regression guard only after its
+`riverd` lifecycle and failure-correlation support are available. Cross-engine
+comparison eligibility belongs to the independent artifact sidecar.
 
 One retained harness failure produced two New Order `INVARIANT_BROKEN` commit
 outcomes followed by widespread `FENCED` results. It does not prove that a
@@ -1553,8 +1554,9 @@ eligible pair. Its guarded one-worker sample New Order MariaDB run completed at
 rejected before workload admission because the harness's parameterized insert
 and `SELECT ... FOR UPDATE` preflight received `INVALID_EXTERNAL_INPUT`. No
 River zero-TPS value and no cross-engine ratio is reported. Re-run the pair only
-after the independently developed harness comparison path declares this River
-contract compatible.
+after the `riverd`-backed harness produces a valid River artifact and the
+independently developed comparison sidecar declares it compatible with the
+matched MariaDB artifact.
 
 The cache reduces a proved CPU tax but does not solve P1's force-per-write
 ceiling. The same JFR attributes 11.82% of pre-change samples to physical group

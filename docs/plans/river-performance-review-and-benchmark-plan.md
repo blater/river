@@ -49,7 +49,10 @@ whole relevant cost vector.
 9. **Standalone end-to-end workloads use `river-harness`.** The Java
    `river-bench` module owns JMH, mechanism prototypes, and internal allocation
    evidence. The separate Go harness repository owns full-database workloads,
-   DBMS adapters, cross-DBMS comparison, and external reporting projections.
+   DBMS adapters, immutable result artifacts, and external telemetry
+   projections. An independently versioned sidecar consumes those artifacts
+   for cross-DBMS eligibility, statistics, and comparison; it imports neither
+   River nor harness implementation packages.
 
 ## 3. Metric contract
 
@@ -155,9 +158,9 @@ a River durable-WAL benchmark.
   bindings, and DBMS adapters remain distinct. Its first adapter targets the
   installed Homebrew MariaDB through an explicit start/stop lifecycle; a
   PostgreSQL adapter then proves that generators, scheduling, verification,
-  metrics, artifacts, and comparison are not DBMS-specific. River enters later
-  when its public SQL/query execution path supports the required vertical
-  slice.
+  metrics, and artifacts are not DBMS-specific. River enters only through the
+  installed `riverd` process contract. Cross-DBMS comparison belongs to a
+  separate artifact-consuming sidecar.
 - Add a River dialect/driver to
   [BenchBase](https://github.com/cmu-db/benchbase) when JDBC ships. Start with
   SmallBank, then TPC-C-like and CH-benCHmark coverage. Call results BenchBase
@@ -448,8 +451,9 @@ The reviewer links:
   internal allocation evidence; benchmark dependencies never enter the engine.
 - Create the separate `river-harness` Git repository according to the
   [standalone workload harness plan](river-standalone-workload-harness-plan.md)
-  for full-database suites, DBMS adapters, cross-DBMS comparison, and external
-  report compatibility.
+  for full-database suites, DBMS adapters, immutable artifacts, and external
+  report compatibility. Keep cross-DBMS comparison in an independent sidecar
+  over the versioned artifact contract.
 - Define machine/run/dataset/result JSON schemas.
 - Add HDR histograms, open/closed-loop scheduling, fixed seeds, status/error
   accounting, and complete result consumption.

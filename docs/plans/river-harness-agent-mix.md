@@ -25,6 +25,11 @@ This document is a bridge in the River planning workspace. When the separate
 tracked `docs/agent-mix.md` in that repository and is reviewed against the
 models then available.
 
+This team owns stress execution and immutable target artifacts, not a
+cross-database comparison engine. Comparison is implemented and reviewed in a
+separate sidecar repository against the versioned artifact contract; its agents
+do not share harness implementation ownership or import harness internals.
+
 ## 2. Operating decisions
 
 1. Use one lead integrator and at most three concurrent builders by default.
@@ -50,7 +55,7 @@ The preferred active build cell has four agents:
 | Role | Model | Effort | Primary ownership |
 | --- | --- | --- | --- |
 | Lead integrator and contract owner | `gpt-5.6-sol` | `high` | Repository structure, DBMS session contract, suite/binding boundary, milestone integration, disputed decisions |
-| Runtime and performance builder | `gpt-5.6-terra` | `high` | Phase runner, actors, bounded queues, open/closed loop, metrics, artifacts, comparison mechanics |
+| Runtime and performance builder | `gpt-5.6-terra` | `high` | Phase runner, actors, bounded queues, open/closed loop, metrics, and immutable artifacts |
 | MariaDB adapter and lifecycle builder | `gpt-5.6-sol` | `high` | Driver boundary, SQLSTATE/native outcomes, sessions, process ownership, readiness, graceful shutdown, non-destructive cleanup |
 | Workload semantics and binding builder | `gpt-5.6-terra` | `high` | TPC-C generation, logical transactions, invariants, verification, MariaDB/PostgreSQL bindings |
 
@@ -76,10 +81,10 @@ subproblem under section 6.
 
 ### 3.2 Runtime and performance builder
 
-Use Terra/high for well-bounded scheduler, metrics, artifact, and comparison
-implementation after the lead freezes the contracts. Switch a task to Sol/high
+Use Terra/high for well-bounded scheduler, metrics, and artifact implementation
+after the lead freezes the contracts. Switch a task to Sol/high
 when it requires material new reasoning about concurrency, coordinated
-omission, bounded admission, cancellation, or comparison validity. This is a
+omission, bounded admission, cancellation, or artifact validity. This is a
 model reassignment, not an automatic effort escalation.
 
 ### 3.3 MariaDB adapter and lifecycle builder
@@ -186,7 +191,7 @@ task at xhigh before max becomes a recurring choice.
 | --- | --- | --- |
 | RH0 | Lead, runtime architect, MariaDB boundary/lifecycle builder | Architecture plus boundary and non-destructive-operations review at high |
 | RH1 | Lead, runtime builder, MariaDB adapter/lifecycle builder, smoke/artifact builder | Fresh correctness/operations reviewer replaces completed smoke role |
-| RH2 | Lead, PostgreSQL adapter builder, comparison builder | Fresh comparison and boundary reviewer |
+| RH2 | Lead, PostgreSQL adapter builder, artifact-contract builder | Fresh artifact-boundary and compatibility reviewer |
 | RH3 | Lead, generator builder, MariaDB binding builder, PostgreSQL binding builder | Fresh relational-semantics reviewer |
 | RH4-RH5 | Lead plus transaction/binding builders with disjoint transaction ownership | Correctness adversary after every transaction slice; full semantics review before mixed workload |
 | RH6 | Lead, telemetry builder, artifact/Bencher builder | Performance/allocation reviewer measures enabled/disabled overhead |
@@ -206,8 +211,9 @@ profiling on the same host. One controlled operator owns a canonical run.
 - Keep Go build/test caches separate when measuring client allocation or timing.
 - Only one lifecycle owner may use the Homebrew MariaDB data directory, and no
   canonical run overlaps builds, tests, profiling, or another DBMS process.
-- After the River gate opens, only one River Gradle build runs at a time; use a
-  separate River worktree and caches for cross-repository integration.
+- After the River gate opens, integration uses a pinned installed `riverd`
+  distribution; harness agents do not invoke River Gradle builds or use a River
+  source checkout as a lifecycle API.
 - Review agents inspect the exact candidate commit in a clean worktree.
 - Only the lead performs final merges and release tagging.
 

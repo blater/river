@@ -90,11 +90,19 @@ documentation.
 ## TPC-C performance loop
 
 Use the standalone local harness at
-`~/src/ingres/river-harness/benchmark` for TPC-C-derived workload checks and
-River/MariaDB comparisons. Run it from the River repository root. The wrapper
-builds only the required River classes, starts a fresh ephemeral River server
-on an unused port, and stops it on success, failure, or interruption. It does
-not run `clean`.
+`~/src/ingres/river-harness/benchmark` as the core TPC-C-derived stress and
+workload runner. It may execute one selected database target and publish a
+versioned result artifact; it does not own cross-database comparison policy.
+
+River harness runs require the accepted installed `riverd` executable and its
+published process/readiness/client-configuration contract. The harness must not
+build River, invoke Gradle, construct a Java classpath, name a River main class,
+inspect process classes, or import River implementation packages. Until the
+`riverd` benchmark-lifecycle prerequisite recorded in `docs/tickets/` closes,
+use `tools/tps-test.sh` for focused River diagnostics and do not make harness-
+based River promotion or comparison claims. Once it closes, use the exact
+launcher option and command recorded by the linked river-harness delivery;
+do not preserve the superseded `--river-home` source-launch path.
 
 The harness provides two data profiles:
 
@@ -110,89 +118,54 @@ not audited TPC-C runs, and must not be reported as `tpmC`.
 Choose the smallest level that can answer the current question:
 
 1. **Focused smoke:** one affected category, sample data, one worker, and a
-   short window. Use `--no-report` when immutable comparison evidence is not
-   needed.
-
-   ```sh
-   ~/src/ingres/river-harness/benchmark run river tpcc sample new-order \
-     --river-home="$PWD" --warmup=1s --duration=3s --workers=1 \
-     --warehouses=1 --seed=42 --max-retries=3 --no-report
-   ```
+   short window. Use `--no-report` only when immutable workload evidence is not
+   needed. A River run still uses `riverd`; source-tree lifecycle shortcuts are
+   not permitted for convenience.
 
 2. **Targeted contention or transaction interaction:** use only the implicated
    category or pair, a fixed seed, and enough workers to reproduce the boundary.
    Start with sample data and 10 seconds; lengthen the run before widening the
    workload.
 
-   ```sh
-   ~/src/ingres/river-harness/benchmark run river tpcc sample \
-     new-order payment \
-     --river-home="$PWD" --warmup=2s --duration=10s --workers=4 \
-     --warehouses=1 --seed=42 --max-retries=3
-   ```
-
-3. **Paired mature-system comparison:** run exactly the same profile,
-   categories, seed, warehouse count, worker count, retry limit, warmup, and
-   measured duration against MariaDB and River. Change only the target and
-   River lifecycle option.
-
-   ```sh
-   ~/src/ingres/river-harness/benchmark run mariadb tpcc sample new-order \
-     --warmup=5s --duration=30s --workers=4 --warehouses=1 \
-     --seed=42 --max-retries=3
-
-   ~/src/ingres/river-harness/benchmark run river tpcc sample new-order \
-     --river-home="$PWD" --warmup=5s --duration=30s --workers=4 \
-     --warehouses=1 --seed=42 --max-retries=3
-   ```
-
-   The harness owns report locations below `river-harness/runs`; its friendly
-   command does not accept an output-directory override. Both runs must report
-   `status: passed`, zero failed/unknown outcomes, and successful invariants.
-   Open the printed report paths and require
-   `.comparison.eligibility == "eligible"` and identical `.comparison.key`
-   values in `result.json` before comparing `.workload.committed_tps`, latency,
-   or retries. A quick pair is diagnostic only. Any performance claim requires
-   multiple longer interleaved samples, normally MariaDB/River/River/MariaDB,
-   because short local runs exhibit substantial host variability.
-
-4. **Occasional wider sanity:** after focused runs pass, exercise all five
+3. **Occasional wider sanity:** after focused runs pass, exercise all five
    families. Use `sample all` for routine integration checkpoints; use
    `full all` only when data cardinality, access paths, cache behavior, page
    splits, or capacity are in scope.
 
-   ```sh
-   ~/src/ingres/river-harness/benchmark run river tpcc sample all \
-     --river-home="$PWD" --warmup=5s --duration=30s --workers=8 \
-     --warehouses=1 --seed=42 --max-retries=3
+Cross-database work has three explicit owners:
 
-   ~/src/ingres/river-harness/benchmark run river tpcc full all \
-     --river-home="$PWD" --warmup=5s --duration=1m --workers=8 \
-     --warehouses=1 --seed=42 --max-retries=3
-   ```
+- `river-harness` executes the same declared stress workload separately against
+  River, MariaDB, PostgreSQL, or another target and emits immutable versioned
+  artifacts;
+- a separate sidecar comparison utility consumes those artifacts through a
+  process/file contract, validates semantic and configuration eligibility, and
+  computes pairings, confidence, ratios, and reports;
+- each database repository owns only its database behavior and public process,
+  protocol, or SQL contract.
 
-Run the equivalent MariaDB command only when a mature-system control is useful;
-do not make a full cross-target matrix part of every edit loop. Warehouse and
-worker sweeps belong to an explicit scaling investigation or promotion gate,
-not routine correctness work.
+The comparator must not live in River, import River types, import
+`river-harness` implementation packages, start databases, or execute workloads.
+The harness must not embed comparison thresholds or become a linked library of
+the comparator. Both evolve against a versioned artifact schema with explicit
+compatibility tests. Produce target artifacts with identical workload manifests
+and interleaved scheduling, then pass their paths to the independently versioned
+sidecar. A quick pair is diagnostic only; performance claims require multiple
+longer interleaved samples because short local runs exhibit substantial host
+variability.
 
-The harness comparison and `tools/tps-test.sh` serve different purposes:
+Use `tools/tps-test.sh` only for River-specific isolation, retry/deadlock,
+protocol, lock-wait, WAL, JFR, and workspace-fingerprint evidence. Never compare
+one of its TPS figures directly with a river-harness target artifact because the
+workload implementation, profile, and isolation contract differ.
 
-- use the harness for a shared logical workload and cross-engine behavioral or
-  performance comparison;
-- use `tools/tps-test.sh` for River-specific isolation, retry/deadlock,
-  protocol, lock-wait, WAL, JFR, and workspace-fingerprint evidence;
-- never compare a harness MariaDB TPS figure directly with a
-  `tools/tps-test.sh` River figure because the workload implementations,
-  profiles, and isolation contracts differ.
-
-A River harness invocation is also a Gradle build and must obey the one-build-
-at-a-time rule. Do not overlap any harness run with compilation, tests,
-profiling, another harness run, or another database workload on the same host.
-For MariaDB, use the wrapper rather than the low-level Go command so its guarded
-Homebrew lifecycle and owned-database cleanup apply. If MariaDB is already
-service-managed or active, do not stop the user's server; let the harness fail
-safely and ask before changing external state. Set
+A River harness invocation must not be a Gradle build. It still consumes the
+same host CPU, memory, storage, and server resources, so do not overlap any
+harness run with compilation, tests, profiling, another harness run, or another
+database workload on the same host.
+For MariaDB, use the harness target lifecycle rather than a low-level Go command
+so its guarded Homebrew lifecycle and owned-database cleanup apply. If MariaDB
+is already service-managed or active, do not stop the user's server; let the
+harness fail safely and ask before changing external state. Set
 `RIVER_HARNESS_MARIADB_PASSWORD` only when the selected local account requires
 it; never print or persist the value.
 

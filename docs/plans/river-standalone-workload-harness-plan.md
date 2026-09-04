@@ -25,12 +25,12 @@ also be capable of adding TPC-H, TPC-E, TPCx-IoT, YCSB, and River-owned suites
 without moving their generators, scheduling, verification, metrics, or report
 formats into DBMS-specific connection code.
 
-The harness must run the same declared workload against MariaDB, River when it
-is ready, and other DBMS targets on the same physical host. A comparison is
-emitted only after the
-harness has checked workload, schema, isolation, durability, environment, and
-run-method compatibility. A shared machine alone does not make two results
-comparable.
+The harness must run the same declared workload against MariaDB, River through
+the accepted `riverd` process contract, and other DBMS targets on the same
+physical host. It emits one immutable versioned artifact per run. A separate
+sidecar checks workload, schema, isolation, durability, environment, and
+run-method compatibility before emitting a comparison. A shared machine alone
+does not make two results comparable.
 
 The implementation lives in a separate `river-harness` Git repository with its
 own history, releases, issue tracking, `go.mod`, CI, commands, tests, and
@@ -49,7 +49,7 @@ River repository. River production and test modules do not depend on it.
 3. **MariaDB is the bootstrap DBMS.** Its adapter and binding establish the
    first working vertical slice while River's SQL query execution path is in
    progress. MariaDB driver types, SQLSTATE/native codes, connection settings,
-   and process details do not enter core, suite, reporter, or comparison code.
+   and process details do not enter core, suite, reporter, or artifact code.
 4. **A second real adapter proves the boundary.** PostgreSQL is the initial
    reference adapter because it has a maintained Go driver and supports the
    relational behavior needed by the smoke and TPC-C-derived slices. River,
@@ -83,11 +83,13 @@ River repository. River production and test modules do not depend on it.
 10. **Derived results are named honestly.** A run with schema, transaction,
     timing, topology, or metric deviations is not reported as an official TPC
     result and does not use a protected primary metric.
-11. **`river-bench` and `river-harness` have different jobs.** The Java
+11. **`river-bench`, `river-harness`, and comparison have different jobs.** The Java
     `river-bench` module retains JMH, mechanism prototypes, allocation evidence,
     and existing developer artifacts. The separate harness repository owns
-    full database loading, workload execution, cross-DBMS comparison, and
-    external reporting integrations.
+    full database loading, workload execution, immutable run artifacts, and
+    external telemetry integrations. Cross-DBMS comparison lives in another
+    repository and consumes artifacts through a process/file contract without
+    importing harness implementation packages.
 
 ## 3. Scope
 
@@ -95,7 +97,7 @@ The initial repository provides:
 
 - one self-contained Go executable;
 - deterministic, bounded data and operation generation;
-- load, run, verify, inspect, report, and compare commands;
+- load, run, verify, inspect, and report commands;
 - closed-loop execution followed by open-loop scheduling;
 - MariaDB and PostgreSQL DBMS adapters, with River deferred behind its
   capability gate;
@@ -107,7 +109,7 @@ The initial repository provides:
 - Bencher Metric Format output for historical regression tracking;
 - optional Prometheus/OpenMetrics and OTLP live metrics;
 - semantic, load, post-run, and recovery verification; and
-- a comparison reader that refuses an unlabeled invalid comparison.
+- a versioned artifact validator suitable for independent consumers.
 
 The initial repository does not provide:
 
@@ -134,19 +136,23 @@ Homebrew MariaDB                    river-harness repository
 ----------------                    ------------------------
 server and data directory <-------- MariaDB lifecycle + DBMS adapter
                                     suite/DBMS bindings
-                                    core, reports, comparison
+                                    core, reports, artifacts
 
 river repository                    later River integration
 ----------------                    -----------------------
 engine/server/protocol <----------> River DBMS adapter
 wire-contract fixtures              River suite bindings
 release/commit identity             pinned integration CI
+
+comparison sidecar                  artifact integration
+------------------                  --------------------
+eligibility/statistics <----------  versioned immutable run artifacts
 ```
 
-Neither repository vendors or nests the other. Local integration accepts an
-explicit River checkout or server executable only after the River gate opens.
-CI then checks out both repositories into sibling directories and records both
-exact commits. A harness release
+Neither repository vendors or nests the other. Local integration accepts only
+an explicit installed `riverd` executable after the River gate opens. It never
+accepts a River checkout as a lifecycle API. CI provisions a pinned River
+distribution artifact and records its release and content digest. A harness release
 states the River protocol versions it implements; a River release may state the
 minimum independently tested harness release without adding a code dependency.
 
@@ -170,7 +176,6 @@ river-harness/
     config/
     artifact/
     metrics/
-    compare/
     dbms/
       contract/
       mariadb/
@@ -351,10 +356,13 @@ licensing, process topology, schema binding, isolation, and durability mapping
 must be reviewed before implementation. No JDBC bridge, ODBC dependency, or
 shell wrapper is assumed by this plan.
 
-### 5.8 Comparison engine
+### 5.8 External comparison artifact boundary
 
-`compare` reads completed, checksum-verified artifacts; it does not rerun a
-workload. Before calculating a delta it requires compatible values for:
+The harness does not implement a compare command or calculate cross-DBMS
+eligibility and ratios. An independently versioned sidecar reads completed,
+checksum-verified artifacts; it does not start databases, execute workloads, or
+import harness implementation packages. Before calculating a delta it requires
+compatible values for:
 
 - suite, suite version, profile, seed, scale, and logical schema;
 - operation generator version, mix, actor count, pacing, warmup, and measured
@@ -372,10 +380,11 @@ in a required compatibility field produces `NOT_COMPARABLE` with exact reasons
 and no default percentage claim. An explicit override may render a diagnostic
 view, but the view retains the `NOT_COMPARABLE` label.
 
-Canonical comparison runs are sequential and interleaved across systems, for
-example `A B B A`, using a freshly restored or regenerated database for every
-independent write sample. Running both DBMS systems simultaneously is a
-separate interference workload.
+The harness produces canonical target runs sequentially and interleaved across
+systems, for example `A B B A`, using a freshly restored or regenerated
+database for every independent write sample. The sidecar groups only compatible
+artifacts. Running both DBMS systems simultaneously is a separate interference
+workload.
 
 ## 6. Configuration and trust boundaries
 
@@ -566,7 +575,6 @@ run-id/artifacts/
   histograms/
   time-series.ndjson
   environment.json
-  comparison.json          # compare command only
   bencher.json             # optional projection
 ```
 
@@ -764,8 +772,8 @@ Exit evidence:
 ### RH2: cross-DBMS adapter proof
 
 Outcome: the same smoke suite runs through a PostgreSQL binding and adapter,
-then `compare` reads both artifacts and either produces a valid diagnostic
-comparison or exact incompatibility reasons.
+and both runs publish artifacts accepted by the external sidecar's versioned
+contract.
 
 Exit evidence:
 
@@ -775,8 +783,8 @@ Exit evidence:
   MariaDB bindings;
 - connection configuration and credentials occur only under their adapter and
   are absent from published artifacts/logs; and
-- comparison rejection tests cover isolation, durability, schema, seed, host,
-  cache, and incomplete-artifact mismatches.
+- artifact fixtures cover isolation, durability, schema, seed, host, cache, and
+  incomplete-run fields required for external eligibility rejection tests.
 
 ### RH3: deterministic TPC-C load
 
@@ -834,7 +842,7 @@ Exit evidence:
 - dashboard queries use bounded label sets; and
 - enabled/disabled exporter overhead is measured.
 
-### RH7: recovery, repeated samples, and comparison protocol
+### RH7: recovery, repeated samples, and artifact protocol
 
 Outcome: the lifecycle boundary proven in RH1 runs repeated same-host
 baseline/candidate and cross-DBMS samples with an explicitly harness-owned
@@ -852,8 +860,7 @@ Exit evidence:
 ### RH8: second workload proof
 
 Outcome: a pinned YCSB core profile uses the existing DBMS adapter, runtime,
-metrics, artifact, and comparison contracts without adding TPC-C conditionals
-to core.
+metrics, and artifact contracts without adding TPC-C conditionals to core.
 
 Exit evidence:
 
@@ -876,9 +883,9 @@ go test -race ./...
 The race run may be a separate CI job because it changes timing. Focused Go
 package tests run during editing. The local MariaDB integration job starts and
 stops the server explicitly and serializes all tests that share the Homebrew
-data directory. Later River integration uses the narrowest Gradle task needed
-to assemble/start the real server and never overlaps another Gradle build in a
-shared River checkout.
+data directory. Later River integration executes a pinned installed `riverd`
+distribution. The harness build and test process never invokes Gradle or
+assembles River from a source checkout.
 
 Required test families are:
 
@@ -893,7 +900,8 @@ Required test families are:
 - transaction success, rollback, conflict, cancellation, and unknown-outcome
   tests;
 - artifact atomicity, no-clobber, checksum, and incomplete-run tests;
-- comparison compatibility/rejection tests;
+- artifact fields and fixtures required by the external sidecar's compatibility
+  and rejection tests;
 - open-loop coordinated-omission and saturation tests;
 - allocation, CPU, and client-bottleneck profiles; and
 - crash/restart verification at RH7.
@@ -927,7 +935,7 @@ Required lenses are:
 | TPC-C semantics/bindings | Relational execution | Relational semantics and transaction correctness |
 | Artifact publication | Boundary/operations | Correctness adversary and operations |
 | Recovery controller | Storage/recovery plus boundary | Correctness adversary and operations |
-| Cross-DBMS comparison | Lead integrator/performance | Architecture and performance methodology |
+| Cross-DBMS artifact production | Lead integrator/performance | Architecture and artifact-boundary compatibility |
 
 Durable, recovery, concurrency, security, and comparison claims do not pass on
 author self-review alone.

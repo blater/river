@@ -20,11 +20,16 @@ created: 2026-09-04T15:10:08.617995Z
 ---
 # Run the normative MariaDB parity and Alpha3 campaign
 
-Execute the final scaling and comparison matrix only after the 500 TPS checkpoint and all mechanism tickets admitted by the parity baseline are complete.
+Execute the final river-harness scaling matrix through riverd and compare its
+versioned artifacts with the external sidecar only after the 500 TPS checkpoint
+and all mechanism tickets admitted by the parity baseline are complete.
 
 ## Design
 
-Use the exact Alpha3 workload, durability, isolation, scale, ten-sample, transaction-count, provenance, absolute throughput, relative median, family latency, invariant, and failure criteria in docs/perf_review.md.
+Use the exact Alpha3 workload, durability, isolation, scale, ten-sample,
+transaction-count, provenance, absolute throughput, relative median, family
+latency, invariant, and failure criteria in docs/perf_review.md. Record exact
+River, riverd, river-harness, and sidecar versions.
 
 ## Acceptance Criteria
 

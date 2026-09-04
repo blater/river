@@ -16,11 +16,14 @@ created: 2026-09-04T15:10:08.245373Z
 ---
 # Run the interleaved 500 TPS promotion campaign
 
-Execute the accepted 500 TPS gate against a clean merged candidate and interleaved stable control.
+Execute the accepted river-harness 500 TPS gate through riverd against a clean
+merged candidate and interleaved stable control.
 
 ## Design
 
-Serialize host workloads, preserve all artifacts, investigate repeatable regressions at the nearest feature checkpoint, and report observed confidence rather than extrapolation.
+Serialize host workloads, preserve River, riverd, and river-harness identities
+with all artifacts, investigate repeatable regressions at the nearest feature
+checkpoint, and report observed confidence rather than extrapolation.
 
 ## Acceptance Criteria
 
