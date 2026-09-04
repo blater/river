@@ -35,7 +35,7 @@ deterministic budget exhaustion returns `RESOURCE_EXHAUSTED` without corrupting
 transaction state; release, rollback, commit, abort, and close reclaim retained
 state; the exact formerly failing `SqlSessionTest` method and affected engine
 module suite pass. Record clean-master failure XML SHA-256
-`92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab` and
+`92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab4` and
 accepted candidate evidence.
 
 ## Notes
@@ -48,6 +48,6 @@ Clean-baseline discriminator: the exact focused test failed at
 retained at
 `/private/tmp/river-tic-af29-evidence-20260904/allocation/baseline-9f756561-focused-SqlSessionTest-namedSavepoint.xml`
 with SHA-256
-`92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab`.
+`92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab4`.
 This was discovered during `tic-af29` affected-module verification;
 `tic-af29` source was excluded by exact baseline reproduction.
