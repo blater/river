@@ -1,14 +1,14 @@
 # ADR 0014: `riverd` instance security and client discovery
 
-Status: Proposed; pending independent acceptance of `tic-11a5`
+Status: Accepted
 
 ## Authority and scope
 
-This ADR is the single candidate public lifecycle and security contract for the
-first installed `riverd`. Acceptance will ratify
+This ADR is the public lifecycle and security contract for the first installed
+`riverd`. It ratifies
 [`docs/plans/riverd-standalone-server-plan.md`](../plans/riverd-standalone-server-plan.md)
-and replace every alternative or deferred description of the same behavior.
-The candidate closes the ownership and deletion gaps inventoried by `tic-de1d`, merged at
+and replaces every alternative or deferred description of the same behavior.
+The decision closes the ownership and deletion gaps inventoried by `tic-de1d`, merged at
 `4827f84e349c0aed7b4c585aede13d505efb1eb9` and recorded closed at
 `5b120a179055a9ec1c640152b4e2bf057d23f5ac`.
 It is pinned to the accepted audit design merged at
@@ -1229,9 +1229,17 @@ included in those deferrals.
   but was independently rejected for missing partial-authority-stage recovery,
   one stale bootstrap-plan sentence, an overbroad SDS-channel statement, and
   incomplete qualification-name/runtime-versus-evidence exactness.
-- The current candidate preserves all four rejection records. No independent
-  acceptance or implementation authorization is claimed until `tic-11a5`
-  review passes and its status/index are updated in the accepted merge.
+- Exact pushed candidate `a7ca80184fb91141c2d4266e9a28dd3d53cc1c2e`
+  closed every prior finding and was independently accepted with no blocker or
+  required finding. Architecture, boundary/security, durable-filesystem and
+  lifecycle, and operations/compatibility adversary lenses all passed. The
+  reviewer verified the exact clean worktree and remote SHA, valid Ticket
+  metadata, and docs/static scope with `tk validate`; no build or runtime test
+  was claimed or required for this contract-only ratification.
+- This acceptance fixes the public contract and unblocks its named downstream
+  implementation tickets. It does not claim that `riverd`, its distribution,
+  filesystem qualification, recovery, security, or operational promotion has
+  been implemented or validated; those gates remain with their named owners.
 
 ## Consequences
 

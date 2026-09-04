@@ -13,7 +13,7 @@ mechanism should be pursued next.
 
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
 | --- | --- | --- | --- |
-| Standalone `riverd` | [`tic-11a5`](tickets/tic-11a5.md): ratify the lifecycle/security ADR; the [`tic-de1d`](tickets/tic-de1d.md) and [`tic-a221`](tickets/tic-a221.md) investigations are closed | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-615d`](tickets/tic-615d.md) in parallel | Installable lifecycle, safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
+| Standalone `riverd` | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-615d`](tickets/tic-615d.md) in parallel; [`tic-11a5`](tickets/tic-11a5.md) ratified accepted ADR 0014 | [`tic-ec50`](tickets/tic-ec50.md): deliver the installable authenticated lifecycle | Safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
 | Transaction performance | [`tic-5cc0`](tickets/tic-5cc0.md): restore resource-accounted SQL savepoint admission; [`tic-af29`](tickets/tic-af29.md): classify successful lock blocking after that baseline blocker; [`tic-0636`](tickets/tic-0636.md): retain exact build/run provenance | Resume [`tic-1dda`](tickets/tic-1dda.md): rerun the serializable P0 matrix, including the mixed-isolation reproducer | P1 logical-commit preparation, visibility design, and lock-scope audit; then P1 promotion, Payment protocol A/B, measured P3 work, and the 500 TPS gate |
 | Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Verify `river-harness` uses the published `riverd` process contract; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
 | Workflow safety | [`tic-701f`](tickets/tic-701f.md) and [`tic-dd80`](tickets/tic-dd80.md) may proceed when they do not displace P0 product work | Atomic cross-worktree claims and promotion enforcement | Close [`tic-ef07`](tickets/tic-ef07.md) when both enforcement gaps are proved |
@@ -28,10 +28,11 @@ is non-blocking support work and must not become a substitute for delivery.
 
 1. The [`tic-a221`](tickets/tic-a221.md) audit design and parallel
    [`tic-de1d`](tickets/tic-de1d.md) boundary inventory are closed.
-2. Ratify one contract in [`tic-11a5`](tickets/tic-11a5.md) (**Now**).
+2. [`tic-11a5`](tickets/tic-11a5.md) is closed after independent acceptance of
+   the one ADR 0014 lifecycle/security contract.
 3. Implement resource-accounted audit durability in
    [`tic-72ea`](tickets/tic-72ea.md) and instance identity/credentials in
-   [`tic-615d`](tickets/tic-615d.md). These may proceed in parallel after the ADR;
+   [`tic-615d`](tickets/tic-615d.md) (**Now**). These may proceed in parallel after the ADR;
    `tic-615d` creates the non-empty app boundary with its real security consumer.
 4. Complete authenticated start/restart in [`tic-ec50`](tickets/tic-ec50.md),
    migrate every River caller including diagnostics, and delete all plain APIs;

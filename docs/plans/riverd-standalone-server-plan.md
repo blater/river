@@ -1,15 +1,17 @@
 # River standalone server (`riverd`) plan
 
-Status: Proposed; candidate for ratification by
+Status: Accepted contract; ratified by
 [`ADR 0014`](../adr/0014-riverd-instance-security.md) after independent
-`tic-11a5` acceptance
+acceptance of exact `tic-11a5` candidate
+`a7ca80184fb91141c2d4266e9a28dd3d53cc1c2e`
 
-The ADR 0014 candidate is the single normative source during `tic-11a5` review;
-implementation may rely on it only after acceptance. It prevails when this plan
+ADR 0014 is the single normative source. It prevails when this accepted plan
 summarizes a public command, status, format, security, or recovery rule. The
 complete scalable audit contract is the independently accepted `tic-a221` evidence merged at
 `e592addff67ac6016ae6e9e37e3bf374a6511f0d`; this plan does not define a second
-audit state machine.
+audit state machine. Acceptance ratifies documentation only: production code,
+build, filesystem qualification, recovery, security, and operational evidence
+remain required at the named downstream tickets.
 
 ## 1. Objective
 
