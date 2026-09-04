@@ -1,10 +1,14 @@
 ---
 id: tic-a221
-status: open
+status: in_progress
 type: investigation
 assignee: blater
 parent: tic-e2b7
 delivery: evidence
+base-commit: 0f7916153eeca3d3062f10c6588c7c4d6fb66bf8
+branch: ticket/tic-a221-audit-durability
+evidence:
+    - docs/delivery/evidence/2026-09-04-tic-a221-audit-durability-design.md
 tags:
     - riverd
     - security
