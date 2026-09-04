@@ -1,6 +1,6 @@
 # `tic-de1d` riverd authentication and launcher inventory
 
-Status: candidate evidence for independent boundary, security, architecture,
+Status: accepted inventory after independent boundary, security, architecture,
 and operations review
 
 Evidence class: source inventory only; no production behavior or contract is
@@ -159,3 +159,14 @@ contradiction, mandatory audit design, instance credentials, and exact command
 outcomes must be resolved before implementation. This evidence changes no
 production behavior and is ready for independent review; it does not accept
 ADR 0014, close `tic-11a5`, or authorize harness promotion.
+
+## Independent review
+
+The first candidate at `891d81c` was rejected with two blockers and four
+required findings: incomplete plan coverage, an impossible no-plain-path ticket
+sequence, unnamed client-config ownership, JDBC documentation drift, inaccurate
+database-shutdown ownership, and an overbroad dormant dependency allowance.
+Candidate `80f74e5` corrected all findings. An independent architecture,
+boundary/security, and operations/compatibility reviewer verified the exact
+range and source/claim revisions, passed `git diff --check` and `tk validate`,
+accepted every lens, and authorized merge with no remaining findings.
