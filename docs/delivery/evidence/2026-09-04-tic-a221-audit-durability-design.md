@@ -1,7 +1,7 @@
 # `tic-a221` scalable security-audit durability and admission
 
-Status: proposed; pending independent concurrency, security, recovery, and
-performance acceptance
+Status: accepted by independent concurrency, security, recovery, and
+performance review; public-contract ratification remains owned by `tic-11a5`
 
 Evidence class: design and executable evidence plan; no production behavior is
 changed or accepted here
@@ -351,11 +351,34 @@ force, and before/after directory force. The suite also proves the non-applicabl
 embedded path's zero file/queue/thread/force cost.
 Warmed admission must allocate zero per event after provider construction.
 
-## Proposed conclusion
+## Independent review
+
+An independent correctness, security, recovery, and performance adversary
+rejected four pushed candidates before accepting the design:
+
+- `fe1be5a0be55a5db21d2e61b266b10b111c2bd39` left an archive crash window,
+  ambiguous program-event accounting, incomplete cancellation ownership, and
+  no exact byte or executable performance contract.
+- `0fe5043ccd39f00aa7ce37d5ddece14b59c3d3ed` did not force the new generation's
+  directory entry and incorrectly compared request counts from timed runs.
+- `cba1323a9a13885ea9e90b355582295e0d3c5d3e` left signed-long exhaustion and
+  numeric CPU/GC promotion decisions undefined.
+- `f116ee61bcd4c51f09b40e15a5703f20badde440` allowed terminal control authority
+  to overtake an unresolved last-legal audit record.
+
+The reviewer accepted exact pushed candidate
+`7d09c5f2069839c136cd0e65bbeaecc71cf024fb` with no blocker or required finding.
+Concurrency, security, recovery, performance, boundedness, allocation/copy,
+archive, disabled-path cost, and executable-evidence lenses all passed. The
+review verified a clean worktree, exact remote SHA, conflict-free merge against
+`10acfa58664f715c0023b31280d75eabdcbfa5cd`, valid Ticket metadata and trailers,
+and a candidate delta limited to this evidence and `tic-a221` metadata.
+
+## Accepted conclusion
 
 This state machine preserves audit-before-admission while allowing one ordered
 force to cover a concurrent cohort. It accounts every declared event and every
 retained byte, fails closed without an unaudited fallback, and gives archive
-and cancellation exact ownership. It is not accepted until independent
-concurrency, security, recovery, and performance reviewers record acceptance
-and `tic-11a5` ratifies the public contract.
+and cancellation exact ownership. It is accepted as the implementation and
+measurement input to `tic-11a5`; it does not itself ratify the public lifecycle
+contract or change production behavior.
