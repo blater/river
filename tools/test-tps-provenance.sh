@@ -407,6 +407,7 @@ printf 'fake-gradle-runtime\n' >"$fixture/fake-gradle-home/lib/gradle.jar"
 cat >"$fixture/fake-bin/ps" <<'EOF'
 #!/usr/bin/env bash
 if [[ ${1:-} == -p ]]; then
+  [[ ${FAKE_PS_SELF_FAIL:-false} != true ]] || exit 1
   printf 'Fri Sep  4 12:00:00 2026\n'
 else
   printf '1 0 Fri Sep  4 00:00:00 2026 launchd\n'
@@ -555,6 +556,35 @@ set -e
 assert_equal "$missing_attestation_status" 2
 assert_contains "$test_root/missing-attestation.stderr" \
   'RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true is required'
+pass
+
+lease_identity_output="$test_root/lease-identity-output"
+lease_identity_tmp="$test_root/lease-identity-tmp"
+mkdir "$lease_identity_tmp"
+set +e
+PATH="$fixture/fake-bin:$PATH" TMPDIR="$lease_identity_tmp" \
+  FAKE_RIVER_ROOT="$fixture" FAKE_PS_SELF_FAIL=true \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/lease-identity-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$lease_identity_output" \
+  >"$test_root/lease-identity.stdout" 2>"$test_root/lease-identity.stderr"
+lease_identity_status=$?
+set -e
+assert_equal "$lease_identity_status" 1
+assert_contains "$lease_identity_output/run-metadata.properties" \
+  'run.result=evidence_invalid'
+assert_contains "$lease_identity_output/run-metadata.properties" \
+  'run.status=HOST_LEASE_ACQUISITION_FAILED'
+assert_contains "$lease_identity_output/run-metadata.properties" \
+  'provenance.host_exclusion_valid=false'
+assert_contains "$lease_identity_output/host-violations.tsv" \
+  'reason=owner_identity_unavailable'
+assert_contains "$lease_identity_output/evidence-invalid.status" \
+  'status=HOST_LEASE_ACQUISITION_FAILED'
+[[ -z $(find "$lease_identity_tmp" -mindepth 1 -print -quit) && \
+  ! -e $test_root/lease-identity-lease ]] ||
+  fail "lease identity failure did not clean persisted temp state"
 pass
 
 printf 'stale-class-bytes\n' >"$fixture/build/classes/Main.class"
@@ -780,7 +810,7 @@ ledger_failure_status=$?
 set -e
 assert_equal "$ledger_failure_status" 1
 assert_contains "$ledger_failure_output/run-metadata.properties" \
-  'run.status=EVIDENCE_PUBLICATION_FAILED'
+  'run.result=evidence_invalid'
 assert_contains "$ledger_failure_output/run-metadata.properties" \
   'provenance.publication_valid=false'
 pass

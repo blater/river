@@ -269,25 +269,40 @@ provenance_acquire_lease() {
   local owner_file="$lease_dir/owner"
   local owner_staged="$lease_dir/owner.staged"
   local stale_dir pid expected recorded_token actual token token_hash owner_pid owner_record
+  PROVENANCE_LEASE_ACQUIRE_STATUS=owner_identity_unavailable
   owner_pid=${BASHPID:-$$}
   expected=$(provenance_process_start "$owner_pid")
   [[ -n $expected ]] || return 1
   token="$owner_pid:$expected"
-  token_hash=$(provenance_sha256_text "$token") || return 1
+  token_hash=$(provenance_sha256_text "$token") || {
+    PROVENANCE_LEASE_ACQUIRE_STATUS=owner_token_failed
+    return 1
+  }
   if ! mkdir "$lease_dir" 2>/dev/null; then
-    owner_record=$(provenance_read_lease_owner "$owner_file") || return 1
+    owner_record=$(provenance_read_lease_owner "$owner_file") || {
+      PROVENANCE_LEASE_ACQUIRE_STATUS=existing_owner_invalid
+      return 1
+    }
     IFS=$'\t' read -r pid expected recorded_token <<<"$owner_record"
     actual=
     actual=$(provenance_process_start "$pid" || true)
     if [[ -n $actual && $actual == "$expected" ]]; then
+      PROVENANCE_LEASE_ACQUIRE_STATUS=lease_held
       return 1
     fi
     if [[ -z $actual ]] && kill -0 "$pid" 2>/dev/null; then
+      PROVENANCE_LEASE_ACQUIRE_STATUS=existing_owner_identity_unavailable
       return 1
     fi
     stale_dir="$lease_dir.stale.$owner_pid.${SECONDS}"
-    mv -- "$lease_dir" "$stale_dir" 2>/dev/null || return 1
-    mkdir "$lease_dir" 2>/dev/null || return 1
+    mv -- "$lease_dir" "$stale_dir" 2>/dev/null || {
+      PROVENANCE_LEASE_ACQUIRE_STATUS=stale_reclaim_failed
+      return 1
+    }
+    mkdir "$lease_dir" 2>/dev/null || {
+      PROVENANCE_LEASE_ACQUIRE_STATUS=stale_reclaim_raced
+      return 1
+    }
     rm -rf -- "$stale_dir"
   fi
   if ! {
@@ -296,10 +311,15 @@ provenance_acquire_lease() {
     printf 'start=%s\n' "${token#*:}"
     printf 'token_sha256=%s\n' "$token_hash"
   } >"$owner_staged"; then
+    PROVENANCE_LEASE_ACQUIRE_STATUS=owner_write_failed
     return 1
   fi
-  mv -- "$owner_staged" "$owner_file" 2>/dev/null || return 1
+  mv -- "$owner_staged" "$owner_file" 2>/dev/null || {
+    PROVENANCE_LEASE_ACQUIRE_STATUS=owner_publish_failed
+    return 1
+  }
   PROVENANCE_LEASE_TOKEN_SHA256=$token_hash
+  PROVENANCE_LEASE_ACQUIRE_STATUS=acquired
   export PROVENANCE_LEASE_TOKEN_SHA256
 }
 

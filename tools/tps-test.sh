@@ -731,10 +731,12 @@ cleanup() {
   verify_provenance_checkpoint metadata || true
   if [[ $source_stable != true || $classpath_stable != true ||
       $host_exclusion_valid != true || $publication_valid != true ]]; then
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=PROVENANCE_CHANGED_OR_HOST_BUSY
-    run_exit_status=1
+    if [[ $run_result != evidence_invalid ]]; then
+      run_result=evidence_invalid
+      run_phase=provenance
+      run_status=PROVENANCE_CHANGED_OR_HOST_BUSY
+      run_exit_status=1
+    fi
   fi
   if [[ -f $artifact ]]; then
     if ! mkdir -p "$(dirname -- "$artifact_destination")"; then
@@ -768,21 +770,25 @@ cleanup() {
     persist_checkpoint_files "$output_dir/checkpoints"
   fi
   if [[ $publication_valid != true ]]; then
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=EVIDENCE_PUBLICATION_FAILED
-    run_exit_status=1
+    if [[ $run_result != evidence_invalid ]]; then
+      run_result=evidence_invalid
+      run_phase=provenance
+      run_status=EVIDENCE_PUBLICATION_FAILED
+      run_exit_status=1
+    fi
   fi
   write_metadata
   if [[ $publication_valid != true ]]; then
-    run_result=evidence_invalid
-    run_phase=provenance
-    run_status=EVIDENCE_PUBLICATION_FAILED
-    run_exit_status=1
+    if [[ $run_result != evidence_invalid ]]; then
+      run_result=evidence_invalid
+      run_phase=provenance
+      run_status=EVIDENCE_PUBLICATION_FAILED
+      run_exit_status=1
+    fi
     {
       printf 'schema=river-tps-evidence-status-v1\n'
       printf 'result=evidence_invalid\n'
-      printf 'status=EVIDENCE_PUBLICATION_FAILED\n'
+      printf 'status=%s\n' "$run_status"
     } >"$temp_dir/evidence-invalid.status"
     if [[ -n ${output_dir:-} ]]; then
       persist_if_present "$temp_dir/evidence-invalid.status" \
@@ -845,8 +851,17 @@ git -C "$river_root" rev-parse HEAD >"$git_commit_start" ||
   die "unable to capture Git commit"
 workspace_start_sha256=$(hash_file "$source_manifest_start")
 
-provenance_acquire_lease "$host_lease_dir" ||
-  die "another TPS diagnostic owns the shared-host exclusion lease"
+if ! provenance_acquire_lease "$host_lease_dir"; then
+  host_exclusion_valid=false
+  run_result=evidence_invalid
+  run_phase=provenance
+  run_status=HOST_LEASE_ACQUISITION_FAILED
+  run_exit_status=1
+  printf 'violation\thost_lease_acquisition_failed\t%s\treason=%s\n' \
+    "$(date +%s)" "${PROVENANCE_LEASE_ACQUIRE_STATUS:-unknown}" \
+    >"$host_evidence_dir/host-violations.tsv"
+  die "host exclusion lease acquisition failed: ${PROVENANCE_LEASE_ACQUIRE_STATUS:-unknown}"
+fi
 lease_acquired=true
 : >"$host_evidence_dir/host-observations.tsv"
 : >"$host_evidence_dir/host-processes.tsv"
