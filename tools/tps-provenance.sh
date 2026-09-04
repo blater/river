@@ -505,9 +505,12 @@ provenance_monitor_host() {
   local maximum_bytes=${8:-16777216}
   local inspection_timeout_seconds=${9:-2}
   local provisional_daemons=${10:-$evidence_dir/host-provisional-daemons.tsv}
+  local ready_file=${11:-}
+  local maximum_observations=${12:-0}
   local retained_maximum=$((maximum_bytes - 256))
   local sequence=0 raw_snapshot snapshot raw_classification classification now label pid state daemon_home
   local snapshot_start live_start_before live_start_after phase observation observation_finished provisional_addition
+  local observations_completed=0 monitor_stop_requested=false
   local retained_files=( "$evidence_dir/host-observations.tsv"
     "$evidence_dir/host-processes.tsv" "$evidence_dir/host-classifications.tsv"
     "$evidence_dir/host-violations.tsv" "$provisional_daemons" )
@@ -516,7 +519,11 @@ provenance_monitor_host() {
     sequence=$(tail -1 "$evidence_dir/host-observations.tsv" | cut -f1)
     [[ $sequence =~ ^[0-9]+$ ]] || return 1
   fi
-  while [[ ! -e $stop_file ]]; do
+  if [[ -n $ready_file ]]; then
+    trap 'monitor_stop_requested=true' HUP INT TERM
+    printf 'ready\n' >"$ready_file" || return 1
+  fi
+  while [[ $monitor_stop_requested != true && ! -e $stop_file ]]; do
     sequence=$((sequence + 1))
     now=$(date +%s)
     phase=unknown
@@ -638,6 +645,10 @@ provenance_monitor_host() {
     fi
     rm -f -- "$snapshot" "$classification" "$observation" "$provisional_addition" \
       "$classification.violations"
+    observations_completed=$((observations_completed + 1))
+    if ((maximum_observations > 0 && observations_completed >= maximum_observations)); then
+      break
+    fi
     sleep "$interval"
   done
 }

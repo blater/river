@@ -410,6 +410,13 @@ if [[ ${1:-} == -p ]]; then
   [[ ${FAKE_PS_SELF_FAIL:-false} != true ]] || exit 1
   printf 'Fri Sep  4 12:00:00 2026\n'
 else
+  if [[ -n ${FAKE_PS_SCAN_GATE:-} && ! -e $FAKE_PS_SCAN_GATE/release ]]; then
+    if mkdir "$FAKE_PS_SCAN_GATE/claimed" 2>/dev/null; then
+      : >"$FAKE_PS_SCAN_GATE/started"
+      while [[ ! -e $FAKE_PS_SCAN_GATE/release ]]; do /bin/sleep 0.01; done
+    fi
+  fi
+  [[ ${FAKE_PS_SCAN_FAIL:-false} != true ]] || exit 1
   printf '1 0 Fri Sep  4 00:00:00 2026 launchd\n'
 fi
 EOF
@@ -585,6 +592,69 @@ assert_contains "$lease_identity_output/evidence-invalid.status" \
 [[ -z $(find "$lease_identity_tmp" -mindepth 1 -print -quit) && \
   ! -e $test_root/lease-identity-lease ]] ||
   fail "lease identity failure did not clean persisted temp state"
+pass
+
+slow_monitor_output="$test_root/slow-monitor-output"
+slow_monitor_gate="$test_root/slow-monitor-gate"
+mkdir "$slow_monitor_gate"
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_PS_SCAN_GATE="$slow_monitor_gate" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/slow-monitor-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$slow_monitor_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/slow-monitor.stdout" 2>"$test_root/slow-monitor.stderr" &
+slow_monitor_pid=$!
+for _ in {1..200}; do
+  [[ -e $slow_monitor_gate/started ]] && break
+  /bin/sleep 0.01
+done
+[[ -e $slow_monitor_gate/started ]] || fail "slow initial host observation did not start"
+/bin/sleep 5.5
+kill -0 "$slow_monitor_pid" 2>/dev/null ||
+  fail "slow initial host observation hit the former five-second readiness race"
+: >"$slow_monitor_gate/release"
+wait "$slow_monitor_pid" || fail "slow initial host observation was rejected"
+assert_contains "$slow_monitor_output/run-metadata.properties" 'run.result=completed'
+assert_contains "$slow_monitor_output/run-metadata.properties" \
+  'provenance.host_exclusion_valid=true'
+pass
+
+monitor_start_output="$test_root/monitor-start-output"
+monitor_start_tmp="$test_root/monitor-start-tmp"
+mkdir "$monitor_start_tmp"
+set +e
+PATH="$fixture/fake-bin:$PATH" TMPDIR="$monitor_start_tmp" \
+  FAKE_RIVER_ROOT="$fixture" \
+  FAKE_PS_SCAN_FAIL=true \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/monitor-start-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$monitor_start_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/monitor-start.stdout" 2>"$test_root/monitor-start.stderr"
+monitor_start_status=$?
+set -e
+assert_equal "$monitor_start_status" 1
+assert_contains "$monitor_start_output/run-metadata.properties" \
+  'run.result=evidence_invalid'
+assert_contains "$monitor_start_output/run-metadata.properties" \
+  'run.status=HOST_MONITOR_START_FAILED'
+assert_contains "$monitor_start_output/run-metadata.properties" \
+  'provenance.host_exclusion_valid=false'
+assert_contains "$monitor_start_output/host-violations.tsv" \
+  $'violation\thost_monitor_start_failed'
+assert_contains "$monitor_start_output/host-violations.tsv" \
+  'reason=initial_observation_failed'
+assert_contains "$monitor_start_output/evidence-invalid.status" \
+  'status=HOST_MONITOR_START_FAILED'
+[[ ! -e $monitor_start_output/tpcc-acceptance.properties ]] ||
+  fail "monitor startup failure published an acceptance artifact"
+[[ -z $(find "$monitor_start_tmp" -mindepth 1 -maxdepth 1 \
+    -type d -name 'river-tps-test.*' -print -quit) && \
+  ! -e $test_root/monitor-start-lease ]] ||
+  fail "monitor startup failure did not clean the owned temp tree and lease"
 pass
 
 printf 'stale-class-bytes\n' >"$fixture/build/classes/Main.class"

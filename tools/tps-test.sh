@@ -386,6 +386,7 @@ classpath_manifest_check="$temp_dir/classpath-manifest.check.tsv"
 host_evidence_dir="$temp_dir/host-exclusion"
 host_monitor_stop="$temp_dir/host-monitor.stop"
 host_monitor_phase="$temp_dir/host-monitor.phase"
+host_monitor_ready="$temp_dir/host-monitor.ready"
 owned_build_marker="$temp_dir/owned-gradle-build.active"
 provisional_daemons="$host_evidence_dir/host-provisional-daemons.tsv"
 provenance_checkpoints="$temp_dir/provenance-checkpoints.tsv"
@@ -424,21 +425,42 @@ persist_if_present() {
 }
 
 start_host_monitor() {
-  local baseline current attempt
-  baseline=$(wc -l <"$host_evidence_dir/host-observations.tsv") || return 1
-  rm -f -- "$host_monitor_stop" || return 1
+  local attempt
+  HOST_MONITOR_START_STATUS=initial_observation_failed
+  rm -f -- "$host_monitor_stop" "$host_monitor_ready" || return 1
+  if ! provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
+      "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
+      "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
+      "$provisional_daemons" '' 1; then
+    return 1
+  fi
+  HOST_MONITOR_START_STATUS=readiness_failed
   provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
     "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
     "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
-    "$provisional_daemons" &
+    "$provisional_daemons" "$host_monitor_ready" &
   monitor_pid=$!
   for ((attempt = 0; attempt < 50; attempt++)); do
-    current=$(wc -l <"$host_evidence_dir/host-observations.tsv") || return 1
-    ((current > baseline)) && return 0
     kill -0 "$monitor_pid" 2>/dev/null || return 1
+    if [[ -f $host_monitor_ready ]]; then
+      kill -0 "$monitor_pid" 2>/dev/null || return 1
+      HOST_MONITOR_START_STATUS=ready
+      return 0
+    fi
     sleep 0.1
   done
   return 1
+}
+
+fail_host_monitor_start() {
+  local reason=${HOST_MONITOR_START_STATUS:-unknown}
+  host_exclusion_valid=false
+  run_result=evidence_invalid
+  run_phase=provenance
+  run_status=HOST_MONITOR_START_FAILED
+  run_exit_status=1
+  printf 'violation\thost_monitor_start_failed\t%s\treason=%s\n' \
+    "$(date +%s)" "$reason" >>"$host_evidence_dir/host-violations.tsv"
 }
 
 stop_host_monitor() {
@@ -738,6 +760,16 @@ cleanup() {
       run_exit_status=1
     fi
   fi
+  if [[ $run_result == evidence_invalid ]]; then
+    {
+      printf 'schema=river-tps-evidence-status-v1\n'
+      printf 'result=evidence_invalid\n'
+      printf 'status=%s\n' "$run_status"
+    } >"$temp_dir/evidence-invalid.status" || {
+      publication_valid=false
+      persistence_valid=false
+    }
+  fi
   if [[ -f $artifact ]]; then
     if ! mkdir -p "$(dirname -- "$artifact_destination")"; then
       publication_valid=false
@@ -766,6 +798,8 @@ cleanup() {
     persist_if_present "$host_evidence_dir/host-classifications.tsv" "$output_dir/host-classifications.tsv"
     persist_if_present "$host_evidence_dir/host-violations.tsv" "$output_dir/host-violations.tsv"
     persist_if_present "$provisional_daemons" "$output_dir/host-provisional-daemons.tsv"
+    persist_if_present "$temp_dir/evidence-invalid.status" \
+      "$output_dir/evidence-invalid.status"
     persist_file "$provenance_checkpoints" "$output_dir/provenance-checkpoints.tsv"
     persist_checkpoint_files "$output_dir/checkpoints"
   fi
@@ -790,7 +824,7 @@ cleanup() {
       printf 'result=evidence_invalid\n'
       printf 'status=%s\n' "$run_status"
     } >"$temp_dir/evidence-invalid.status"
-    if [[ -n ${output_dir:-} ]]; then
+    if [[ -n ${output_dir:-} && ! -e $output_dir/evidence-invalid.status ]]; then
       persist_if_present "$temp_dir/evidence-invalid.status" \
         "$output_dir/evidence-invalid.status"
     fi
@@ -873,7 +907,10 @@ root_cache_key=$(hash_text "$river_root")
 gradle_user_home=${RIVER_TPS_GRADLE_USER_HOME:-${GRADLE_USER_HOME:-${TMPDIR:-/tmp}/river-tps-gradle-user-$root_cache_key}}
 project_cache_dir=${RIVER_TPS_PROJECT_CACHE_DIR:-${TMPDIR:-/tmp}/river-tps-project-cache-$root_cache_key}
 mkdir -p "$gradle_user_home" "$project_cache_dir"
-start_host_monitor || die "host exclusion monitor did not start"
+if ! start_host_monitor; then
+  fail_host_monitor_start
+  die "host exclusion monitor did not start: ${HOST_MONITOR_START_STATUS:-unknown}"
+fi
 [[ ! -s $host_evidence_dir/host-violations.tsv ]] ||
   die "shared host has an overlapping build or workload"
 
@@ -913,7 +950,10 @@ provenance_validate_gradle_daemons "$runtime_descriptor" "$provisional_daemons" 
 [[ ! -s $host_evidence_dir/host-violations.tsv ]] ||
   die "shared host had an overlapping build or workload"
 printf 'workload\n' >"$host_monitor_phase" || die "unable to enter workload monitor phase"
-start_host_monitor || die "host exclusion monitor did not restart"
+if ! start_host_monitor; then
+  fail_host_monitor_start
+  die "host exclusion monitor did not restart: ${HOST_MONITOR_START_STATUS:-unknown}"
+fi
 verify_provenance_checkpoint build || die "source changed during the build"
 gradle_runtime_home=$(property gradle.home "$runtime_descriptor")
 [[ -n $gradle_runtime_home && $gradle_runtime_home != unavailable ]] ||
