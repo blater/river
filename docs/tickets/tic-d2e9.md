@@ -14,14 +14,23 @@ deps:
     - tic-0803
 created: 2026-09-04T15:23:11.538879Z
 ---
-# Implement bounded registry, ps, and multiple instances
+# Complete bounded registry validation, ps, and multiple instances
 
-Publish and validate per-user ready-instance records and support independent instances without scanning the process table.
+Consume the final records published by `tic-ec50`, complete their validation
+and stale-replacement behavior, add `ps`, and support independent instances
+without scanning the process table.
 
 ## Design
 
-Use a digest of normalized data-directory path as the filename; publish atomically after readiness; validate bounded regular files; list only verified live records in deterministic order; warn but do not delete stale records.
+Use the normalized-datadir digest filename and canonical
+`riverd-registry-v1` record. Start may replace only a same-instance stale record
+under its instance lock after proving the process absent. List only verified
+live records in deterministic order; `ps` warns but never deletes stale or
+invalid records.
 
 ## Acceptance Criteria
 
-No-argument and ps behavior match; empty guidance, two-instance start/list/stop, port collision, same-directory lock contention, stale registry, and matching-record removal tests pass without signalling unrelated processes.
+No-argument and ps behavior match; empty guidance, two-instance start/list/stop,
+port collision, same-directory lock contention, stale-registry replacement,
+warning-without-delete, and matching-record removal by shutdown/stop tests pass
+without signalling unrelated processes.
