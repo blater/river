@@ -1,8 +1,12 @@
 # River
+This is an experiment is writing a huge system by feeding specifications to agentic 
+implementation squads. The goal is to learn more about managing concurrent agentic 
+workflows in a large and complex project and building the toolsets and process
+to support large agentic builds.
 
-River is a single-node relational database written in Java. It provides an
-embedded Java API, JDBC access, and a command-line client. Its storage engine
-uses MVCC, heap pages, B+trees, a write-ahead log, and checkpoints.
+River is (initially) a fully featured relational database written (initially) in Java. 
+It provides an embedded Java API, JDBC access, and a command-line client. 
+Its storage engine uses MVCC, heap pages, B+trees, a write-ahead log, and checkpoints.
 
 > River 0.1.0-alpha.2 is an evaluation release. It is incomplete and may break.
 > Read the [release limits](docs/delivery/alpha-2-known-limitations.md) before
@@ -117,7 +121,15 @@ Run the clean, reproducible release check at an integration checkpoint:
 and dependency policies, and uses an isolated repository-local Gradle home by
 default.
 
-## Development backlog
+## Strategic Development Direction 
+
+Once functional as a capable traditional relational DB we will look at multi-modal
+capabilities focussed on agent efficiency - likely around context databases.
+
+NQL integration is also likely, where the backend datastore is abstracted to allow 
+retrieval & update across DB/files - duckdb style.
+
+## Tactical Development Backlog
 
 River keeps its execution backlog as source-controlled Markdown tickets under
 [`docs/tickets/`](docs/tickets/). The visible project configuration in
