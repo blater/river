@@ -1,10 +1,12 @@
 ---
 id: tic-5cc0
-status: open
+status: in_progress
 type: bug
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: cb9572b53af9dee5e21184808268632928144b63
+branch: ticket/tic-5cc0-savepoint-resources
 tags:
     - p0
     - sql
@@ -51,3 +53,4 @@ with SHA-256
 `92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab4`.
 This was discovered during `tic-af29` affected-module verification;
 `tic-af29` source was excluded by exact baseline reproduction.
+
