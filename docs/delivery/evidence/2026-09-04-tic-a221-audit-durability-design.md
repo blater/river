@@ -90,15 +90,37 @@ limits are positive `long` values. `Long.MAX_VALUE` is reserved as the terminal
 control generation and is never an event sequence, audit generation, or
 ordinary control generation. Before reservation, control publication, or
 archive mutation, the owner preflights all next values with checked arithmetic.
-If any operational next value would reach the reserved value, it writes an
+If any operational next value would reach the reserved value, then, under the
+same audit owner that reserves slots, it transitions `ACTIVE -> EXHAUSTING` and
+returns `RETRY` without a sequence to every later reservation until the
+transition resolves. The coordinator resolves every already sealed or appended
+sequence through the captured `lastAssignedSequence` and forces that complete
+prefix; a drain failure uses the normal `IO_FAILURE`/`FENCED`
+path and does not publish terminal authority. After a successful drain, the
+owner computes the active file's exact durable length and digest and writes an
 `EXHAUSTED` record at terminal control generation `Long.MAX_VALUE` into the
-inactive control slot and forces that file and its directory. Only a successful
-terminal force returns `RESOURCE_EXHAUSTED`; a write/force failure follows the
-normal `IO_FAILURE`/`FENCED` path and admits nothing. Recovery selects the
-terminal record over every ordinary generation and remains exhausted. No
-sequence or generation is reset or reused. Recovery requires a separately
-reviewed wider durable format or a new instance incarnation; ordinary startup
-and archive cannot clear it. The format has no benchmark-derived event cap.
+inactive control slot. That record binds the active generation, durable length,
+digest, and `durableSequence`; the owner forces the control file and directory.
+Only that successful terminal force returns `RESOURCE_EXHAUSTED` to the
+triggering request and makes all later requests return the same status. Recovery
+selects the terminal record over every ordinary generation, verifies its exact
+active-file binding, and remains exhausted; a missing, torn, longer, or
+mismatched active file is `CORRUPTION`. No sequence or
+generation is reset or reused. Recovery requires a separately reviewed wider
+durable format or a new instance incarnation; ordinary startup and archive
+cannot clear it. The format has no benchmark-derived event cap.
+
+Cancellation or deadline expiry detaches the unreserved triggering caller with
+`CANCELLED` or `TIMEOUT`, but the provider-owned exhaustion transition continues.
+A later caller already cancelled/expired gets that status; otherwise it gets
+`RETRY` while `EXHAUSTING`. An already sealed last-legal slot follows the normal
+provider-owned cancellation rule and is still part of the forced prefix. If
+close wins before exhaustion starts, close semantics apply and no terminal
+transition begins. If close begins after `EXHAUSTING`, it prevents admission of
+all unresolved allowed slots, joins the drain, persists terminal authority,
+then closes the files; affected allowed-decision waiters return `CLOSED`, while
+the exhaustion trigger returns its already determined terminal/cancellation
+status.
 
 The launcher supplies two explicit byte budgets:
 
@@ -171,7 +193,7 @@ executor. It never changes allowed/denied or calls the engine.
 | Crash after force and before notification/admission | The complete record validates on restart. It is retained; the interrupted work was not acknowledged or admitted by the dead process. Duplicate insertion is avoided through global sequence/record validation, not by promising that the work occurred. |
 | Header, instance, generation, sequence, length, checksum, reserved field, or tail invalid | Startup returns `CORRUPTION`, publishes no readiness, and performs no truncation, repair, rollover, or implicit reinitialization. |
 | Active capacity full at startup/runtime | Startup fails before readiness if minimum admission cannot fit. Runtime returns `RESOURCE_EXHAUSTED` before effects and names the stopped-instance archive operation. |
-| Global sequence, audit generation, or ordinary control generation reaches its reserved terminal boundary | Before reservation or archive mutation, publish and force the terminal `EXHAUSTED` control record. On success return `RESOURCE_EXHAUSTED`; on persistence failure return `IO_FAILURE` and fence. Admit no work and never wrap, reset, or reuse an identity under the instance incarnation. Restart remains unavailable until an explicitly reviewed format/incarnation migration. |
+| Global sequence, audit generation, or ordinary control generation reaches its reserved terminal boundary | Under the reservation owner, stop new work, capture the last assigned sequence, drain and force every earlier slot, then bind that exact durable frontier/length/digest in the forced terminal `EXHAUSTED` control record. On drain or persistence failure return `IO_FAILURE` and fence without terminal authority. Never wrap, reset, or reuse an identity. |
 
 Java/NIO exceptions are translated at the platform adapter. Expected pressure,
 cancellation, corruption, and I/O outcomes remain `StatusCode` values.
@@ -181,10 +203,21 @@ cancellation, corruption, and I/O outcomes remain `StatusCode` values.
 Audit generations use immutable `audit-<generation>.log` files and a redundant,
 independently checksummed two-generation control store following ADR 0003. A
 control record contains instance identity, control generation, state
-`ACTIVE|ARCHIVING|EXHAUSTED`, old/new audit generation and names, content-archive name and
-digest, first/next global sequence, and predecessor digest. Recovery selects
-the highest valid control generation; disagreement, missing authoritative data,
-or invalid identity/checksum is `CORRUPTION`.
+`ACTIVE|ARCHIVING|EXHAUSTED`, old/new audit generation and names,
+content-archive name and digest, first/next/durable global sequence, exact
+durable byte length, active-file digest, and predecessor control generation and
+digest. Recovery selects the highest valid control generation; disagreement, missing
+authoritative data, or invalid identity/checksum is `CORRUPTION`.
+
+For terminal recovery, the named active generation's header and lineage, every
+record through `durableSequence`, exact byte boundary, and whole-file digest
+must match the `EXHAUSTED` record, with no suffix. A crash after the active
+prefix force but before a valid terminal record leaves the prior control
+authoritative; startup validates the complete prefix and retries exhaustion.
+A crash after the terminal-file force but before its directory force may expose
+either the prior valid control or the complete terminal record; recovery accepts
+only one of those fully validated states. After the directory force, terminal
+authority must be present. A partial or mismatched candidate is never selected.
 
 Only `riverd audit archive` under the stopped instance lock may transition it:
 
@@ -311,8 +344,11 @@ partial write; short/zero progress; force failure; coordinator failure; crash
 before/after force and notification; restart validation; corrupt/torn tails;
 archive collision/interruption; full-at-start; long-offset arithmetic; secret
 scans; near-`Long.MAX_VALUE` sequence and generation preflight with persistent
-exhaustion across restart; and the non-applicable embedded path's zero
-file/queue/thread/force cost.
+exhaustion across restart; a concurrent final legal slot racing terminal
+detection; cancellation and close during `EXHAUSTING`; and crashes before/after
+the active-prefix force, during terminal-record write, before/after terminal-file
+force, and before/after directory force. The suite also proves the non-applicable
+embedded path's zero file/queue/thread/force cost.
 Warmed admission must allocate zero per event after provider construction.
 
 ## Proposed conclusion
