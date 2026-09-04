@@ -130,6 +130,8 @@ architectural and semantic authorities. The working and promotion rules remain
 defined by [`manifesto.md`](manifesto.md) and [`AGENTS.md`](AGENTS.md).
 Cross-repository dependencies link the owning repository's ticket and immutable
 delivery instead of placing foreign implementation work in River tickets.
+The current ordered delivery frontier is published in
+[`docs/backlog-kanban.md`](docs/backlog-kanban.md).
 
 ## License
 

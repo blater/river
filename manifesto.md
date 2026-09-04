@@ -72,9 +72,11 @@ contains the detailed rationale.
   sensitive work also records its checkpoint tag. Completed tickets remain in
   source history so decisions, dependencies, and rollback evidence stay
   reproducible.
-- Ticket status is the execution view; we do not maintain a second handwritten
-  backlog board. Generated or queried summaries may present the same ticket
-  data without becoming another authority.
+- Ticket status is the execution view. The checked-in
+  [`delivery Kanban`](docs/backlog-kanban.md) records the priority decision among
+  simultaneously ready tickets, but ticket files remain authoritative for
+  status and dependencies. The Kanban is refreshed with the graph rather than
+  becoming a second independent backlog.
 
 ## 3. Isolation enables concurrency
 

@@ -5,6 +5,11 @@ repository-root [`ticket.yaml`](../../ticket.yaml) configures `tk` to read and
 write ticket Markdown files here, including when it is invoked from a nested
 repository directory.
 
+[`docs/backlog-kanban.md`](../backlog-kanban.md) is the human-readable priority
+queue over that ticket graph. Ticket files remain authoritative for status and
+dependencies; the Kanban records sequencing among work that is simultaneously
+ready.
+
 Tickets record epics, stories, investigations, dependencies, ownership,
 delivery state, and links to evidence. They do not replace architectural or
 semantic authorities:
