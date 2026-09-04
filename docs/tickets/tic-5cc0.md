@@ -10,6 +10,8 @@ tags:
     - sql
     - transactions
     - resources
+deps:
+    - tic-50e8
 created: 2026-09-04T22:00:53.349124Z
 ---
 # Restore resource-accounted SQL savepoint admission
