@@ -1,12 +1,14 @@
 ---
 id: tic-a88b
-status: in_progress
+status: closed
 type: story
 priority: 1
 assignee: blater
 delivery: documentation
 base-commit: adccf7172e74450cf4518a561b3712c4e8927c0d
 branch: ticket/tic-a88b-delivery-workflow
+delivered-commit: 81f07baeb52b7dc569ad101d98333a277068309a
+checkpoint-tag: workflow-ticket-v1
 tags:
     - workflow
     - bootstrap
