@@ -12,6 +12,9 @@ tags:
     - tpcc
     - p0
     - evidence
+deps:
+    - tic-638b
+    - tic-6afb
 created: 2026-09-04T15:10:06.990273Z
 ---
 # Revalidate the P0 promotion matrix on stable master
