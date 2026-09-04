@@ -11,6 +11,8 @@ tags:
     - p0
     - locks
     - observability
+deps:
+    - tic-5cc0
 created: 2026-09-04T20:32:35.538355Z
 ---
 # Classify successful lock blocking for P0
