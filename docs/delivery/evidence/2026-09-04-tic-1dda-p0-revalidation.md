@@ -265,15 +265,14 @@ retry layer and remains unexplained by the current successful-block aggregates.
 
 ## Required P0 prerequisites
 
-No current ticket owns the missing successful-block causality contract.
+No prior ticket owned the missing successful-block causality contract.
 `tic-4d14` is a downstream P1 holdings audit that depends on `tic-1dda`; using
-it here would create a dependency cycle and mix a different concern. Root must
-create these two disjoint P0 children of `tic-5db4`, then add both as
-dependencies of `tic-1dda`. The Transaction Performance Kanban should put the
-two prerequisites in Now and the full `tic-1dda` revalidation immediately
-Next. The coordination commits belong to the new tickets, not this branch.
+it here would create a dependency cycle and mix a different concern. The
+integrator created two disjoint P0 children of `tic-5db4`, added both as
+dependencies of `tic-1dda`, and moved them to the Transaction Performance
+Kanban's Now column. The full `tic-1dda` revalidation remains immediately Next.
 
-### Proposed prerequisite A: classify successful lock blocking for P0
+### P0 prerequisite A: `tic-af29` classifies successful lock blocking
 
 - Type: `story`
 - Parent: `tic-5db4`
@@ -299,7 +298,7 @@ Next. The coordination commits belong to the new tickets, not this branch.
   successful-block cause; no lock optimization is admitted by aggregate TPS
   alone.
 
-### Proposed prerequisite B: retain promotion-grade diagnostic provenance
+### P0 prerequisite B: `tic-0636` retains promotion-grade diagnostic provenance
 
 - Type: `story`
 - Parent: `tic-5db4`

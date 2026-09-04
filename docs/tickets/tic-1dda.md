@@ -14,6 +14,9 @@ tags:
     - tpcc
     - p0
     - evidence
+deps:
+    - tic-af29
+    - tic-0636
 created: 2026-09-04T15:10:06.990273Z
 ---
 # Revalidate the P0 promotion matrix on stable master
@@ -32,13 +35,8 @@ Every run has matching effective isolation, zero unexplained outcomes and cleanu
 
 ### 2026-09-04 P0 revalidation blocked
 
-The clean-source 40-run serializable matrix and blocked gate decision are
-recorded in
-`docs/delivery/evidence/2026-09-04-tic-1dda-p0-revalidation.md`. All runs were
-internally correct with zero retries, but the standard-mix 10:2-terminal ratio
-has an individual 95% interval wholly below 1.0. Current diagnostics also lack
-the required successful-block causal classification, retained-snapshot gauge,
-mixed-isolation artifact, and promotion-grade build/classpath/host-exclusion
-provenance. Keep this ticket `in_progress`; no clean gate or performance tag is
-accepted. The evidence proposes two disjoint P0 prerequisites for the
-integrator to create and link before the full rerun.
+The independently reviewed 40-run evidence records internally correct
+serializable runs but a detected standard-mix 10:2 scaling regression. The
+disjoint P0 prerequisites `tic-af29` and `tic-0636` must close before the full
+rerun. Keep this ticket `in_progress`; no clean gate, P0 certification, or
+performance checkpoint tag is accepted.
