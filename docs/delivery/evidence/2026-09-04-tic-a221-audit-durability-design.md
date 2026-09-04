@@ -360,9 +360,10 @@ rejected four pushed candidates before accepting the design:
   ambiguous program-event accounting, incomplete cancellation ownership, and
   no exact byte or executable performance contract.
 - `0fe5043ccd39f00aa7ce37d5ddece14b59c3d3ed` did not force the new generation's
-  directory entry and incorrectly compared request counts from timed runs.
+  directory entry and required nondeterministic cross-run global audit order.
 - `cba1323a9a13885ea9e90b355582295e0d3c5d3e` left signed-long exhaustion and
-  numeric CPU/GC promotion decisions undefined.
+  numeric CPU/GC promotion decisions undefined and used an incompatible
+  fixed-duration, identical-request-multiset oracle.
 - `f116ee61bcd4c51f09b40e15a5703f20badde440` allowed terminal control authority
   to overtake an unresolved last-legal audit record.
 
