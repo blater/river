@@ -22,6 +22,9 @@ The detailed rationale lives in
 
 ## Delivery priority
 
+- Use [`docs/backlog-kanban.md`](docs/backlog-kanban.md) for the current ordered
+  delivery frontier. Ticket dependencies remain authoritative when they differ
+  from a priority label or stale summary.
 - Deliver the smallest end-to-end database capability that advances the
   current functional milestone.
 - Prefer working kernel, transaction, recovery, and relational behavior over
