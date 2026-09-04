@@ -6,7 +6,6 @@ import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Retained generated-text lanes for one in-memory sort run. */
 final class SqlSortGeneratedText {
-  private static final int RETAINED_LANES = 1_024 * 8;
   private final SqlRetainedArrayAllocator allocator;
   private byte[] lengths;
   private char[] text;
@@ -150,8 +149,18 @@ final class SqlSortGeneratedText {
         : (long) capacity * (1 + Character.BYTES * SqlProjectedRow.MAXIMUM_GENERATED_TEXT);
   }
 
-  void shedOversized() {
-    if (lengths == null || lengths.length <= RETAINED_LANES) return;
+  static long cleanRequiredBytes(int rows, int projections, boolean requiredText) {
+    if (!requiredText) return 0;
+    long requiredLong = (long) rows * projections;
+    if (requiredLong > Integer.MAX_VALUE) return Long.MAX_VALUE;
+    int capacity = BoundedArrayGrowth.capacity(
+        0, (int) requiredLong, Integer.MAX_VALUE, rows);
+    long characters = (long) capacity * SqlProjectedRow.MAXIMUM_GENERATED_TEXT;
+    return capacity < 0 || characters > Integer.MAX_VALUE ? Long.MAX_VALUE
+        : (long) capacity * (1 + Character.BYTES * SqlProjectedRow.MAXIMUM_GENERATED_TEXT);
+  }
+
+  void release() {
     lengths = null;
     text = null;
   }

@@ -6,6 +6,8 @@ import java.nio.ByteBuffer;
 public final class Utf8Text {
   /** Maximum declared VARCHAR length accepted by the UTF-8 primitives. */
   public static final int MAXIMUM_SCALARS = 65_535;
+  /** Maximum UTF-16 code units needed to represent one declared VARCHAR value. */
+  public static final int MAXIMUM_UTF16_CODE_UNITS = MAXIMUM_SCALARS * 2;
   /** Maximum byte capacity used by bounded row/value scratch buffers. */
   public static final int MAXIMUM_BYTES = 8 * 1_024;
   /** Bound for fixed parser/result scratch, independent of a column declaration. */

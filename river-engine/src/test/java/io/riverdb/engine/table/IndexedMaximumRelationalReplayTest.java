@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,7 +44,8 @@ final class IndexedMaximumRelationalReplayTest {
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
-        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+        IndexedTableStore.create(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult opened = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(created.store(), opened));
     IndexedTransactionSession session = session(opened.table());
@@ -59,7 +61,8 @@ final class IndexedMaximumRelationalReplayTest {
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult recovered = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
-        IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, recovered));
+        IndexedTableStore.openExisting(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(4), recovered));
     assertBaseValue(recovered.store(), 1, 2);
     assertBaseValue(recovered.store(), ROWS, ROWS * 2L);
     assertIndexedValue(recovered.store(), PRIMARY_KEY, ROWS, ROWS, shape);
@@ -157,8 +160,15 @@ final class IndexedMaximumRelationalReplayTest {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4,
         new LockMemoryEnvelope(32L << 20));
-    return new IndexedTransactionSession(
-        manager, table, 128, null, null, 384, 4_096, null);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext.Result contextResult = new IndexedSessionContext.Result();
+    assertEquals(
+        StatusCode.OK,
+        IndexedSessionContext.bind(manager, table, null, vacuum, contextResult));
+    IndexedTransactionSessionOpenResult sessionResult =
+        new IndexedTransactionSessionOpenResult();
+    assertEquals(StatusCode.OK, contextResult.context().openSession(128, sessionResult));
+    return sessionResult.session();
   }
 
   private static TupleShape shape() {

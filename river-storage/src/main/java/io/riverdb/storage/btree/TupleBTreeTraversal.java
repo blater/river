@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.btree.TupleBTreePageCodec;
 import java.nio.ByteBuffer;
 
-/** Root-to-leaf traversal with a caller-owned bounded parent path. */
+/** Root-to-leaf traversal with a caller-owned structurally bounded parent path. */
 final class TupleBTreeTraversal {
   private TupleBTreeTraversal() { }
 
@@ -40,11 +40,11 @@ final class TupleBTreeTraversal {
     if (!tree.isValid(workspace)) return StatusCode.INVALID_EXTERNAL_INPUT;
     workspace.resetPath();
     int pageId = tree.provider().rootPageId();
-    if (pageId <= 0) return StatusCode.CORRUPTION;
-    for (int level = 0; level < TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT; level++) {
+    if (!BTreeStructuralLimits.validPageId(pageId)) return StatusCode.CORRUPTION;
+    for (int level = 0; BTreeStructuralLimits.canVisitLevel(level); level++) {
       StatusCode status = tree.provider().pin(pageId, false, workspace.current);
       if (!status.isOk()) return status;
-      status = TupleBTreePageSupport.validate(
+      status = TupleBTreePageAdmission.validate(
           workspace.current.page(), workspace.current.start(),
           tree.schemaId(), tree.shape(), 0, workspace.page,
           tree.provider(), workspace.current);
@@ -58,7 +58,8 @@ final class TupleBTreeTraversal {
       }
       if (recordPath) workspace.pathPageIds[workspace.pathDepth++] = pageId;
       int child = child(tree, workspace, key, offset, length, prefixParts);
-      status = release(tree, workspace, child > 0 ? StatusCode.OK : StatusCode.CORRUPTION);
+      status = release(tree, workspace,
+          BTreeStructuralLimits.validPageId(child) ? StatusCode.OK : StatusCode.CORRUPTION);
       if (!status.isOk()) return status;
       pageId = child;
     }

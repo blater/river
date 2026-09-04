@@ -177,6 +177,11 @@ final class SqlStreamingStatementLifecycle {
     if (pendingBodyStatus.isOk()) {
       if (phase != STATEMENT_COMPLETED) return StatusCode.CONFLICT;
     } else {
+      if (!transactions.transactionHandleActive()) {
+        StatusCode resultStatus = returnBodyStatus ? pendingBodyStatus : StatusCode.OK;
+        clear();
+        return resultStatus;
+      }
       if (phase == SAVEPOINT_ACTIVE || phase == STATEMENT_COMPLETED) {
         status = session.cancelLockWait();
         if (!status.isOk()) return status;

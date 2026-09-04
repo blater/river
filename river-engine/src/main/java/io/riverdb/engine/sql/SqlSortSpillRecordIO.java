@@ -8,20 +8,42 @@ import java.util.zip.CRC32C;
 
 /** Reusable variable-record buffer, checksum, and paged-stream transfer state. */
 final class SqlSortSpillRecordIO {
+  private final SqlSessionShapeBudget budget;
   private final SqlMaterializedPagedByteStream.AppendResult append =
       new SqlMaterializedPagedByteStream.AppendResult();
   private final StatusDetail detail = new StatusDetail(160);
   private final CRC32C checksum = new CRC32C();
   private ByteBuffer record;
+  private long retainedBytes;
+
+  SqlSortSpillRecordIO(SqlSessionShapeBudget shapeBudget) { budget = shapeBudget; }
 
   StatusCode reserve(int bytes, SqlRetainedArrayAllocator allocator) {
+    if (bytes <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (record != null && record.capacity() >= bytes) return StatusCode.OK;
+    long delta = bytes - retainedBytes;
+    StatusCode status = budget == null ? StatusCode.OK : budget.reserve(delta);
+    if (!status.isOk()) return status;
     try {
-      record = allocator.direct(bytes);
+      ByteBuffer next = allocator.direct(bytes);
+      record = next;
+      retainedBytes = bytes;
       return StatusCode.OK;
     } catch (OutOfMemoryError failure) {
+      if (budget != null) budget.rollback(delta);
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+  }
+
+  long retainedBytes() { return retainedBytes; }
+
+  long requiredBytes(int bytes) {
+    return bytes <= 0 ? Long.MAX_VALUE : Math.max(retainedBytes, bytes);
+  }
+
+  void releaseRetainedStorage() {
+    record = null;
+    retainedBytes = 0;
   }
 
   ByteBuffer buffer() { return record; }

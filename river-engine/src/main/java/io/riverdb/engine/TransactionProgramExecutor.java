@@ -41,6 +41,7 @@ final class TransactionProgramExecutor {
     if (!status.isOk()) return rejected(status, result);
     int step = 0;
     while (status.isOk() && step < program.stepCount()) {
+      session.updateTransactionDiagnosticStep(step + 1L);
       int target = values.guardTarget(program, arguments, step);
       if (target == Integer.MIN_VALUE) status = values.status();
       else if (target >= 0) step = target;

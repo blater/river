@@ -1,13 +1,13 @@
 package io.riverdb.engine.row;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.base.type.SqlValueDomain;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.format.FormatBytes;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
 /** Prevalidates then atomically writes one canonical stored row. */
@@ -29,7 +29,7 @@ final class StoredTableRowEncoder {
     }
     int length = checkedLength(table, values);
     if (length < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (length > SqlShapeLimits.MAX_STORED_ROW_BYTES) return StatusCode.RESOURCE_EXHAUSTED;
+    if (length > HeapPage.MAXIMUM_ROW_BYTES) return StatusCode.RESOURCE_EXHAUSTED;
     if (start > target.limit() - length) return StatusCode.RESOURCE_EXHAUSTED;
 
     StoredTableRowHeaderCodec.encode(target, start, table.rowLayoutId(), logicalRowId);
@@ -57,7 +57,7 @@ final class StoredTableRowEncoder {
       if (values.isNull(index)) continue;
       if (isText(descriptor)) {
         int bytes = values.textByteLengthAt(index);
-        if (bytes < 0 || bytes > SqlShapeLimits.MAX_STORED_ROW_BYTES - length) return -1;
+        if (bytes < 0 || bytes > HeapPage.MAXIMUM_ROW_BYTES - length) return -1;
         length += bytes;
       } else if (SqlTypeDescriptor.isWideDecimal(descriptor)) {
         if (!SqlValueDomain.validDecimal128(

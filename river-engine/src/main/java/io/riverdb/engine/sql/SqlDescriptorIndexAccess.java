@@ -5,6 +5,7 @@ import io.riverdb.engine.schema.KeyDescriptor;
 import io.riverdb.engine.schema.TableDescriptor;
 import io.riverdb.sql.SqlBooleanPredicateProgram;
 import io.riverdb.sql.SqlCommand;
+import io.riverdb.tx.api.lock.LockMode;
 
 /** Retains one descriptor tuple-index access decision and its typed bound values. */
 final class SqlDescriptorIndexAccess {
@@ -31,6 +32,14 @@ final class SqlDescriptorIndexAccess {
   }
 
   boolean active() { return active; }
+  /** Physical source classification; semantic singleton proof is intentionally separate. */
+  boolean physicalExactUnique() {
+    return active && choice.key.isUnique() && choice.equalityParts == choice.key.partCount();
+  }
+  LockMode serializableSourceMode(boolean lockingSource) {
+    if (!lockingSource) return LockMode.SHARED;
+    return physicalExactUnique() ? LockMode.EXCLUSIVE : LockMode.UPDATE;
+  }
   boolean exactUnique() { return active && exactUnique; }
   boolean orderCovered() { return active && choice.orderCovered; }
   io.riverdb.engine.relational.RelationalDescriptorIndexBounds bounds() {

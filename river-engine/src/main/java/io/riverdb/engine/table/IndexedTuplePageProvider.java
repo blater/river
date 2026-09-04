@@ -4,14 +4,14 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.storage.btree.BTreeRootPage;
 import io.riverdb.storage.btree.TupleBTreePageProvider;
 import io.riverdb.storage.btree.TupleBTreePageReference;
+import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import java.nio.ByteBuffer;
 
 /** Operation-scoped native PageSet provider for one tuple index. */
 final class IndexedTuplePageProvider implements TupleBTreePageProvider {
-  private static final int MAXIMUM_NEW_PAGES =
-      IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES - 2;
   private final IndexedPageSet pages;
   private final IndexedTupleRootState root;
+  private final int maximumNewPages;
   private final IndexedOperationPage metadata = new IndexedOperationPage();
   private final IndexedOperationPage firstPage = new IndexedOperationPage();
   private final IndexedOperationPage secondPage = new IndexedOperationPage();
@@ -24,11 +24,12 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   IndexedTuplePageProvider(IndexedPageSet pageSet, IndexedTupleRootState rootState) {
     pages = pageSet;
     root = rootState;
+    maximumNewPages = pages == null ? 0 : Math.max(0, pages.changedPageCapacity() - 2);
   }
 
   StatusCode begin(int newPages) {
     if (active || pages == null || root == null
-        || newPages < 0 || newPages > MAXIMUM_NEW_PAGES) {
+        || newPages < 0 || newPages > maximumNewPages) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = root.begin();
@@ -116,21 +117,51 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
   }
 
   @Override
-  public boolean pageValidationMatches(
+  public StatusCode restorePageValidation(
       TupleBTreePageReference reference, long schemaId,
-      long descriptorHash, int expectedType) {
-    return pages.pageValidationMatches(
-        reference.pageId(), reference.pageGeneration(),
-        schemaId, descriptorHash, expectedType);
+      long descriptorHash, int expectedType,
+      TupleBTreePageValidationProof target) {
+    IndexedOperationPage page = ownedPage(reference);
+    return page == null ? StatusCode.INVALID_EXTERNAL_INPUT
+        : pages.restorePageValidation(
+            page.pageId(), page.pageGeneration(),
+            schemaId, descriptorHash, expectedType, target);
   }
 
   @Override
-  public void rememberPageValidation(
+  public StatusCode rememberPageValidation(
       TupleBTreePageReference reference, long schemaId,
-      long descriptorHash, int pageType) {
-    pages.rememberPageValidation(
-        reference.pageId(), reference.pageGeneration(),
-        schemaId, descriptorHash, pageType);
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    IndexedOperationPage page = ownedPage(reference);
+    return page == null ? StatusCode.INVALID_EXTERNAL_INPUT
+        : pages.rememberPageValidation(
+            page.pageId(), page.pageGeneration(),
+            schemaId, descriptorHash, pageType, source);
+  }
+
+  @Override
+  public StatusCode consumeCanonicalMutationValidation(
+      TupleBTreePageReference reference, long schemaId,
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof target) {
+    IndexedOperationPage page = ownedWritablePage(reference);
+    return page == null ? StatusCode.INVALID_EXTERNAL_INPUT
+        : pages.consumeTupleMutationInputValidation(
+            page.pageId(), page.pageGeneration(), root.keyId(),
+            schemaId, descriptorHash, pageType, target);
+  }
+
+  @Override
+  public StatusCode sealCanonicalMutation(
+      TupleBTreePageReference reference, long schemaId,
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    IndexedOperationPage page = ownedWritablePage(reference);
+    if (page == null) return StatusCode.INVARIANT_BROKEN;
+    return pages.sealTupleMutationValidation(
+        page.pageId(), page.pageGeneration(), root.keyId(),
+        schemaId, descriptorHash, pageType, source);
   }
 
   @Override
@@ -192,6 +223,31 @@ final class IndexedTuplePageProvider implements TupleBTreePageProvider {
     if (page == firstPage) firstReference = reference;
     else secondReference = reference;
     return StatusCode.OK;
+  }
+
+  private IndexedOperationPage ownedWritablePage(TupleBTreePageReference reference) {
+    IndexedOperationPage page = reference == firstReference ? firstPage
+        : reference == secondReference ? secondPage : null;
+    return active && reference != null && reference.isAttached()
+        && reference.isWritable() && page != null && page.attached()
+        && page.writable() && page.arena() == IndexedOperationPage.STAGING_ARENA
+        && reference.pageId() == page.pageId()
+        && reference.page() == page.payload()
+        && reference.start() == 0
+        && reference.pageGeneration() == page.pageGeneration()
+        ? page : null;
+  }
+
+  private IndexedOperationPage ownedPage(TupleBTreePageReference reference) {
+    IndexedOperationPage page = reference == firstReference ? firstPage
+        : reference == secondReference ? secondPage : null;
+    return active && reference != null && reference.isAttached()
+        && page != null && page.attached()
+        && reference.pageId() == page.pageId()
+        && reference.page() == page.payload()
+        && reference.start() == 0
+        && reference.pageGeneration() == page.pageGeneration()
+        ? page : null;
   }
 
   private StatusCode releaseMetadata() {

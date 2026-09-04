@@ -46,4 +46,7 @@ final class SqlBlockLegacyJoinRows implements SqlBlockJoinRows {
 
   @Override
   public StatusCode close() { return StatusCode.OK; }
+
+  @Override
+  public boolean hasResources() { return source.hasResources(); }
 }

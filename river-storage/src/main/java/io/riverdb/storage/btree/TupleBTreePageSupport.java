@@ -3,7 +3,6 @@ package io.riverdb.storage.btree;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.btree.TupleBTreePageCodec;
-import io.riverdb.format.btree.TupleBTreePageHeader;
 import io.riverdb.format.btree.TupleKeyCodec;
 import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
@@ -12,52 +11,6 @@ import java.nio.ByteBuffer;
 final class TupleBTreePageSupport {
   private TupleBTreePageSupport() { }
 
-  static StatusCode validate(
-      ByteBuffer page, int start, long schemaId, TupleShape shape,
-      int expectedType, TupleBTreeWorkspace workspace) {
-    StatusCode status = TupleBTreePageCodec.validate(
-        page, start, schemaId, shape, workspace.header);
-    return status.isOk() && workspace.header.type() != expectedType
-        ? StatusCode.INVALID_EXTERNAL_INPUT : status;
-  }
-
-  /**
-   * Validates a provider-borrowed page, reusing its immutable generation
-   * stamp when the schema and descriptor identity are unchanged.
-   */
-  static StatusCode validate(
-      ByteBuffer page, int start, long schemaId, TupleShape shape,
-      int expectedType, TupleBTreeWorkspace workspace,
-      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
-    return validate(
-        page, start, schemaId, shape, expectedType, workspace.header, provider, reference);
-  }
-
-  static StatusCode validate(
-      ByteBuffer page, int start, long schemaId, TupleShape shape,
-      int expectedType, TupleBTreePageHeader header,
-      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
-    if (provider != null && reference != null
-        && provider.pageValidationMatches(
-            reference, schemaId, shape == null ? 0 : shape.descriptorHash(), expectedType)) {
-      StatusCode status = TupleBTreePageCodec.readValidatedHeader(
-          page, start, header);
-      if (!status.isOk()) return status;
-      return expectedType <= 0 || header.type() == expectedType
-          ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    StatusCode status = TupleBTreePageCodec.validate(
-        page, start, schemaId, shape, header);
-    if (status.isOk() && expectedType > 0 && header.type() != expectedType) {
-      status = StatusCode.INVALID_EXTERNAL_INPUT;
-    }
-    if (status.isOk() && provider != null && reference != null) {
-      provider.rememberPageValidation(
-          reference, schemaId, shape.descriptorHash(), header.type());
-    }
-    return status;
-  }
-
   static int lowerBoundLeaf(
       ByteBuffer page, int start, ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace) {
@@ -65,7 +18,7 @@ final class TupleBTreePageSupport {
     int high = workspace.header.entryCount();
     while (low < high) {
       int middle = (low + high) >>> 1;
-      readLeaf(page, start, middle, workspace);
+      if (!readLeaf(page, start, middle, workspace)) return -1;
       int comparison = TupleKeyCodec.compare(
           page, start + workspace.leaf.keyOffset(), workspace.leaf.keyLength(),
           key, keyOffset, keyLength);
@@ -110,7 +63,9 @@ final class TupleBTreePageSupport {
   static StatusCode appendLeafSource(
       ByteBuffer source, int sourceStart, ByteBuffer target, int targetStart,
       TupleShape shape, int sourceIndex, TupleBTreeWorkspace workspace) {
-    readLeaf(source, sourceStart, sourceIndex, workspace);
+    if (!readLeaf(source, sourceStart, sourceIndex, workspace)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     return TupleBTreePageCodec.appendLeaf(
         target, targetStart, shape, source,
         sourceStart + workspace.leaf.keyOffset(), workspace.leaf.keyLength());
@@ -126,9 +81,10 @@ final class TupleBTreePageSupport {
         workspace.internal.rightChildPageId());
   }
 
-  static void readLeaf(
+  static boolean readLeaf(
       ByteBuffer page, int start, int index, TupleBTreeWorkspace workspace) {
-    TupleBTreePageCodec.readLeaf(page, start, workspace.header, index, workspace.leaf);
+    return TupleBTreePageCodec.readValidatedLeaf(
+        page, start, workspace.header, index, workspace.leaf).isOk();
   }
 
   static void readInternal(

@@ -18,6 +18,7 @@ final class LocalWalOpener {
       WalGeneration walGeneration,
       boolean createWhenMissing,
       boolean requireCreate,
+      LocalWalForceCause createForceCause,
       LocalWalOpenResult result) {
     if (directory == null
         || fileName == null
@@ -26,6 +27,7 @@ final class LocalWalOpener {
         || !databaseIncarnation.isValid()
         || walGeneration == null
         || !walGeneration.isValid()
+        || createForceCause == null
         || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
@@ -44,7 +46,9 @@ final class LocalWalOpener {
       return status;
     }
     LocalWal wal = new LocalWal(operation.file(), databaseIncarnation, walGeneration, fileName);
-    status = created ? wal.initializeFileForOpen(directory) : wal.recoverValidTailForOpen();
+    status = created
+        ? wal.initializeFileForOpen(directory, createForceCause)
+        : wal.recoverValidTailForOpen();
     if (!status.isOk()) {
       wal.closeFileAfterOpen();
       return status;

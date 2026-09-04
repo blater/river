@@ -11,6 +11,7 @@ final class LockExactTransactionStore extends LockTypedSlots {
     final long[] requestHeads = new long[256];
     final long[] startOrders = new long[256];
     final long[] diagnosticTags = new long[256];
+    final long[] diagnosticStepTags = new long[256];
     final long[] metricsEpochs = new long[256];
     final long[] visitEpochs = new long[256];
     final long[] finishEpochs = new long[256];
@@ -38,7 +39,7 @@ final class LockExactTransactionStore extends LockTypedSlots {
   }
 
   // Includes all retained DFS workspace; detection never grows storage after admission.
-  LockExactTransactionStore(LockSegmentArena arena) { super(arena, 49_696); }
+  LockExactTransactionStore(LockSegmentArena arena) { super(arena, 51_744); }
   Chunk record(long slot) { return (Chunk) chunk(slot); }
   @Override Object newChunk(long index) { return new Chunk(); }
   @Override long generation(long slot) { return record(slot).generations[offset(slot)]; }
@@ -61,7 +62,8 @@ final class LockExactTransactionStore extends LockTypedSlots {
     int offset = offset(slot);
     chunk.transactionIds[offset] = chunk.transactionGenerations[offset] = 0;
     chunk.holdingHeads[offset] = chunk.requestHeads[offset] = chunk.free[offset] = 0;
-    chunk.startOrders[offset] = chunk.diagnosticTags[offset] = chunk.metricsEpochs[offset] = 0;
+    chunk.startOrders[offset] = chunk.diagnosticTags[offset] = 0;
+    chunk.diagnosticStepTags[offset] = chunk.metricsEpochs[offset] = 0;
     chunk.visitEpochs[offset] = chunk.finishEpochs[offset] = 0;
     chunk.parents[offset] = chunk.parentRequests[offset] = 0;
     chunk.parentBlockerRecords[offset] = chunk.parentBlockingResources[offset] = 0;

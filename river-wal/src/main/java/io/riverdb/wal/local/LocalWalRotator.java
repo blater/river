@@ -29,7 +29,7 @@ final class LocalWalRotator {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     LocalWalOpenResult opened = new LocalWalOpenResult();
-    StatusCode status = LocalWal.createNamed(
+    StatusCode status = LocalWal.createCheckpointGeneration(
         directory, nextFileName, wal.databaseIncarnation(), nextGeneration, opened);
     if (!status.isOk()) {
       return status;

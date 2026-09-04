@@ -8,9 +8,9 @@ final class SqlMaterializedSortLease {
       new SqlMaterializedSortReservation();
   private SqlMaterializedStatement owner;
 
-  StatusCode acquire(SqlMaterializedStatement statement) {
+  StatusCode acquire(SqlMaterializedStatement statement, int runPages) {
     if (statement == null || owner != null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode status = statement.reserveSortPages(reservation);
+    StatusCode status = statement.reserveSortPages(reservation, runPages);
     if (status.isOk()) owner = statement;
     return status;
   }

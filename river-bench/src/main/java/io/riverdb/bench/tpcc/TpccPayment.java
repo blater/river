@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import io.riverdb.jdbc.RiverTransactionDiagnostics;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -17,9 +18,12 @@ final class TpccPayment implements AutoCloseable {
   private final PreparedStatement updateCustomer;
   private final PreparedStatement updateBadCredit;
   private final PreparedStatement history;
+  private final RiverTransactionDiagnostics diagnostics;
 
-  TpccPayment(Connection owner) throws SQLException {
+  TpccPayment(Connection owner, RiverTransactionDiagnostics transactionDiagnostics)
+      throws SQLException {
     connection = owner;
+    diagnostics = transactionDiagnostics;
     names = new TpccCustomerLookup(owner);
     warehouse = owner.prepareStatement("SELECT w_name FROM warehouse WHERE w_id=?");
     district = owner.prepareStatement("SELECT d_name FROM district WHERE d_w_id=? AND d_id=?");
@@ -38,7 +42,7 @@ final class TpccPayment implements AutoCloseable {
       updateDistrictTotal(input);
       String districtName = districtName(input.warehouse, input.district);
       int customerId = input.customer == 0
-          ? names.find(input.customerWarehouse, input.customerDistrict, input.last)
+          ? findCustomer(input)
           : input.customer;
       updateCustomer(input, customerId);
       insertHistory(input, customerId, warehouseName + "    " + districtName);
@@ -51,6 +55,7 @@ final class TpccPayment implements AutoCloseable {
   }
 
   private String warehouseName(int warehouseId) throws SQLException {
+    diagnostics.diagnosticStep(2);
     warehouse.setInt(1, warehouseId);
     try (ResultSet rows = warehouse.executeQuery()) {
       if (!rows.next()) throw new SQLException("warehouse lookup returned no row");
@@ -59,6 +64,7 @@ final class TpccPayment implements AutoCloseable {
   }
 
   private String districtName(int warehouseId, int districtId) throws SQLException {
+    diagnostics.diagnosticStep(4);
     TpccSql.bindDistrict(district, warehouseId, districtId);
     try (ResultSet rows = district.executeQuery()) {
       if (!rows.next()) throw new SQLException("district lookup returned no row");
@@ -67,12 +73,14 @@ final class TpccPayment implements AutoCloseable {
   }
 
   private void updateWarehouseTotal(TpccInputs.Payment input) throws SQLException {
+    diagnostics.diagnosticStep(1);
     updateWarehouse.setBigDecimal(1, input.amount);
     updateWarehouse.setInt(2, input.warehouse);
     TpccSql.changedOne(updateWarehouse, "payment.update-warehouse");
   }
 
   private void updateDistrictTotal(TpccInputs.Payment input) throws SQLException {
+    diagnostics.diagnosticStep(3);
     updateDistrict.setBigDecimal(1, input.amount);
     updateDistrict.setInt(2, input.warehouse);
     updateDistrict.setInt(3, input.district);
@@ -80,6 +88,7 @@ final class TpccPayment implements AutoCloseable {
   }
 
   private void updateCustomer(TpccInputs.Payment input, int customerId) throws SQLException {
+    diagnostics.diagnosticStep(6);
     customer.setInt(1, input.customerWarehouse);
     customer.setInt(2, input.customerDistrict);
     customer.setInt(3, customerId);
@@ -99,12 +108,14 @@ final class TpccPayment implements AutoCloseable {
       updateBadCredit.setInt(4, input.customerWarehouse);
       updateBadCredit.setInt(5, input.customerDistrict);
       updateBadCredit.setInt(6, customerId);
+      diagnostics.diagnosticStep(7);
       TpccSql.changedOne(updateBadCredit, "payment.update-bad-credit-customer");
     } else {
       bindCustomerUpdate(updateCustomer, input);
       updateCustomer.setInt(3, input.customerWarehouse);
       updateCustomer.setInt(4, input.customerDistrict);
       updateCustomer.setInt(5, customerId);
+      diagnostics.diagnosticStep(7);
       TpccSql.changedOne(updateCustomer, "payment.update-customer");
     }
   }
@@ -117,6 +128,7 @@ final class TpccPayment implements AutoCloseable {
 
   private void insertHistory(TpccInputs.Payment input, int customerId, String data)
       throws SQLException {
+    diagnostics.diagnosticStep(8);
     history.setInt(1, customerId);
     history.setInt(2, input.customerDistrict);
     history.setInt(3, input.customerWarehouse);
@@ -126,6 +138,11 @@ final class TpccPayment implements AutoCloseable {
     history.setBigDecimal(7, input.amount);
     history.setString(8, data.substring(0, Math.min(24, data.length())));
     TpccSql.changedOne(history, "payment.insert-history");
+  }
+
+  private int findCustomer(TpccInputs.Payment input) throws SQLException {
+    diagnostics.diagnosticStep(5);
+    return names.find(input.customerWarehouse, input.customerDistrict, input.last);
   }
 
   @Override

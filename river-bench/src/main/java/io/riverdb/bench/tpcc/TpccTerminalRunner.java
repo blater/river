@@ -17,18 +17,33 @@ final class TpccTerminalRunner {
 
   static TpccMetrics run(TpccConfig config) throws Exception {
     List<TpccTerminal> terminals = new ArrayList<>(config.terminals());
+    Exception primary = null;
     try {
       for (int index = 0; index < config.terminals(); index++) {
         terminals.add(new TpccTerminal(config, index));
       }
       return execute(config, terminals);
+    } catch (Exception failure) {
+      primary = failure;
+      throw failure;
     } finally {
-      SQLException failure = null;
+      SQLException closeFailure = null;
       for (TpccTerminal terminal : terminals) {
-        try { terminal.close(); } catch (SQLException exception) { failure = exception; }
+        try {
+          terminal.close();
+        } catch (SQLException failure) {
+          if (closeFailure == null) closeFailure = failure;
+          else closeFailure.addSuppressed(failure);
+        }
       }
-      if (failure != null) throw failure;
+      Exception combined = combineFailure(primary, closeFailure);
+      if (primary == null && combined != null) throw combined;
     }
+  }
+
+  static Exception combineFailure(Exception primary, SQLException closeFailure) {
+    if (primary != null && closeFailure != null) primary.addSuppressed(closeFailure);
+    return primary != null ? primary : closeFailure;
   }
 
   private static TpccMetrics execute(TpccConfig config, List<TpccTerminal> terminals)
@@ -68,8 +83,13 @@ final class TpccTerminalRunner {
       }));
     }
     ready.await();
-    TpccJfrProfile profile = TpccJfrProfile.open(config);
+    TpccJfrProfile profile = null;
+    Exception primary = null;
+    boolean captureStarted = false;
     try {
+      TpccPerformanceCapture.begin(config);
+      captureStarted = true;
+      profile = TpccJfrProfile.open(config);
       long measuredDeadline = System.nanoTime() + config.measured().toNanos();
       deadline.set(measuredDeadline);
       start.countDown();
@@ -83,9 +103,20 @@ final class TpccTerminalRunner {
       for (Future<TpccMetrics> future : futures) combined.add(result(future));
       combined.inFlightAtCutoff(inFlightAtCutoff);
       return combined;
+    } catch (Exception failure) {
+      primary = failure;
+      throw failure;
     } finally {
       start.countDown();
-      profile.close();
+      if (profile != null) profile.close();
+      if (captureStarted) {
+        try {
+          TpccPerformanceCapture.end(config);
+        } catch (Exception failure) {
+          if (primary != null) primary.addSuppressed(failure);
+          else throw failure;
+        }
+      }
     }
   }
 

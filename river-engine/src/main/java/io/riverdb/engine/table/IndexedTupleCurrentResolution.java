@@ -3,6 +3,7 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.tx.api.lock.LockMode;
 import java.nio.ByteBuffer;
 
 /** Current-committed tuple probes used only after integrity protection is retained. */
@@ -57,7 +58,8 @@ final class IndexedTupleCurrentResolution {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode status = session.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+    StatusCode status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     if (!status.isOk()) return status;
     long pending = session.tupleIntents().anyInsertPrefixRowId(
         keyId, shape, key, offset, length, excludedRowId);

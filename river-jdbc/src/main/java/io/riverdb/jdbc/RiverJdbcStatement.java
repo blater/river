@@ -12,13 +12,11 @@ import java.sql.SQLException;
 
 /** One forward-only statement on the connection's ordered River session. */
 class RiverJdbcStatement extends AbstractStatement {
-  static final int MAXIMUM_BATCH_STATEMENTS = 64;
-
   private final RiverJdbcConnection connection;
   private final RiverSession session;
   private final CommandResult command = new CommandResult();
   private final QueryOpenResult openedQuery = new QueryOpenResult();
-  final String[] batch = new String[MAXIMUM_BATCH_STATEMENTS];
+  String[] batch = new String[0];
   ParameterSet[] batchParameters;
   private RiverJdbcResultSet resultSet;
   private RiverGeneratedKeysResultSet generatedKeysResultSet;
@@ -424,11 +422,11 @@ class RiverJdbcStatement extends AbstractStatement {
   }
 
   void addSqlBatch(String sql, ParameterSet parameters) throws SQLException {
-    requireBatchCapacity();
+    ensureBatchCapacity();
     batch[batchCount] = sql;
     if (parameters != null) {
       if (batchParameters == null) {
-        batchParameters = new ParameterSet[MAXIMUM_BATCH_STATEMENTS];
+        batchParameters = new ParameterSet[batch.length];
       }
       batchParameters[batchCount] = parameters;
     }
@@ -436,18 +434,32 @@ class RiverJdbcStatement extends AbstractStatement {
   }
 
   void addPreparedBatch(ParameterSet parameters) throws SQLException {
-    requireBatchCapacity();
+    ensureBatchCapacity();
     if (batchParameters == null) {
-      batchParameters = new ParameterSet[MAXIMUM_BATCH_STATEMENTS];
+      batchParameters = new ParameterSet[batch.length];
     }
     batchParameters[batchCount++] = parameters;
   }
 
-  final void requireBatchCapacity() throws SQLException {
-    if (batchCount >= batch.length) {
+  final void ensureBatchCapacity() throws SQLException {
+    if (batchCount < batch.length) return;
+    if (batchCount == Integer.MAX_VALUE) {
       throw JdbcExceptions.failure(
           StatusCode.RESOURCE_EXHAUSTED,
           "add batch entry");
+    }
+    int required = batchCount + 1;
+    int grown = batch.length == 0 ? 16
+        : batch.length >= Integer.MAX_VALUE / 2 ? Integer.MAX_VALUE : batch.length << 1;
+    int capacity = Math.max(required, grown);
+    try {
+      String[] grownBatch = java.util.Arrays.copyOf(batch, capacity);
+      ParameterSet[] grownParameters = batchParameters == null ? null
+          : java.util.Arrays.copyOf(batchParameters, capacity);
+      batch = grownBatch;
+      batchParameters = grownParameters;
+    } catch (OutOfMemoryError exhausted) {
+      throw JdbcExceptions.failure(StatusCode.RESOURCE_EXHAUSTED, "add batch entry");
     }
   }
 

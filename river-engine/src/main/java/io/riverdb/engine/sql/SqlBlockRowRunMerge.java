@@ -111,7 +111,7 @@ final class SqlBlockRowRunMerge implements SqlPagedExternalOrder.MergePass {
 
   private void sift(int root, int size) {
     int run = cursors.heap()[root];
-    while (root <= (size - 2) / 2) {
+    while (root < size / 2) {
       int child = root * 2 + 1;
       if (child + 1 < size && compareHeap(child + 1, child) < 0) child++;
       if (compareRun(run, cursors.heap()[child]) <= 0) break;

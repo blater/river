@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.tuple.TupleShape;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.TupleBTree;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
 import io.riverdb.storage.btree.TupleBTreeTreeWorkspace;
 import io.riverdb.storage.btree.TupleBTreeValidationResult;
 import java.nio.ByteBuffer;
@@ -24,7 +25,7 @@ final class IndexedTupleGraphValidation {
     pages = pageSet;
     provider = new IndexedTupleValidationProvider(pages, visited);
     tree = new TupleBTree(provider, 1, null);
-    int height = TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT;
+    int height = BTreeStructuralLimits.MAXIMUM_LEVELS;
     workspace = new TupleBTreeTreeWorkspace(
         ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES),
         ByteBuffer.allocate(io.riverdb.format.btree.TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES),

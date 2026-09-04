@@ -68,6 +68,7 @@ final class SqlUniversalJoinMerge {
   }
 
   boolean handles(int current) { return stage == current; }
+  boolean hasResources() { return store.hasResources() || identities.hasResources(); }
 
   StatusCode close() {
     StatusCode status = store.close();

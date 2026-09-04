@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import static io.riverdb.bench.tpcc.TpccTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -11,9 +12,14 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
+import io.riverdb.engine.api.TransactionProgram;
+import io.riverdb.engine.api.TransactionProgramArguments;
+import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.jdbc.RiverConnectionMetrics;
+import io.riverdb.jdbc.RiverTransactionPrograms;
 import io.riverdb.server.LoopbackRiverServer;
 import io.riverdb.server.LoopbackServerOpenResult;
+import java.lang.reflect.Proxy;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -22,12 +28,85 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class TpccRiverNewOrderTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(8_301, 8_303);
   private static final int ITEMS = 15;
+
+  @Test
+  void acquiresNewOrderSourceBeforeReadingCustomer() throws Exception {
+    ProgramRecorder programs = new ProgramRecorder();
+    Connection connection = (Connection) Proxy.newProxyInstance(
+        Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+        (ignored, method, arguments) -> method.getName().equals("unwrap") ? programs : null);
+
+    try (TpccRiverNewOrder transaction = new TpccRiverNewOrder(connection, 1, ITEMS)) {
+      assertEquals(List.of(
+          "warehouse", "district", "advance-district",
+          "reserve-new-order", "insert-order", "insert-new-order", "customer"),
+          programs.firstHeader);
+      assertEquals(0, transaction.failureCount(0));
+    }
+  }
+
+  @Test
+  void canonicalStockOrderPreservesOriginalLineMetadata() throws Exception {
+    TpccInputs.NewOrder input = input(1, 5, 1);
+    input.item[0] = 5;
+    input.item[1] = 2;
+    input.item[2] = 4;
+    input.item[3] = 1;
+    input.item[4] = 3;
+    input.supplyWarehouse[0] = 1;
+    input.supplyWarehouse[1] = 2;
+    input.supplyWarehouse[2] = 1;
+    input.supplyWarehouse[3] = 1;
+    input.supplyWarehouse[4] = 2;
+    input.quantity[0] = 50;
+    input.quantity[1] = 20;
+    input.quantity[2] = 40;
+    input.quantity[3] = 10;
+    input.quantity[4] = 30;
+    TpccRiverNewOrderArguments binder = new TpccRiverNewOrderArguments(ITEMS);
+    TransactionProgramArguments arguments = binder.bind(input);
+
+    assertLine(arguments, 0, 1, 1, 10, 4);
+    assertLine(arguments, 1, 1, 4, 40, 3);
+    assertLine(arguments, 2, 1, 5, 50, 1);
+    assertLine(arguments, 3, 2, 2, 20, 2);
+    assertLine(arguments, 4, 2, 3, 30, 5);
+    binder.release();
+  }
+
+  @Test
+  void invalidSentinelRemainsLastAfterCanonicalOrdering() throws Exception {
+    TpccInputs.NewOrder input = input(1, 5, 1);
+    input.item[0] = 5;
+    input.item[1] = 2;
+    input.item[2] = 4;
+    input.item[3] = 1;
+    input.item[4] = ITEMS + 1;
+    input.supplyWarehouse[0] = 2;
+    input.supplyWarehouse[1] = 2;
+    input.supplyWarehouse[2] = 2;
+    input.supplyWarehouse[3] = 2;
+    input.supplyWarehouse[4] = 1;
+    TpccRiverNewOrderArguments binder = new TpccRiverNewOrderArguments(ITEMS);
+    TransactionProgramArguments arguments = binder.bind(input);
+
+    assertLine(arguments, 0, 2, 1, 5, 4);
+    assertLine(arguments, 1, 2, 2, 5, 2);
+    assertLine(arguments, 2, 2, 4, 5, 3);
+    assertLine(arguments, 3, 2, 5, 5, 1);
+    assertLine(arguments, 4, 1, ITEMS + 1, 5, 5);
+    binder.release();
+  }
 
   @Test
   void executesEveryTpccLineCountThroughOneRequest(@TempDir Path root) throws Exception {
@@ -148,6 +227,23 @@ final class TpccRiverNewOrderTest {
     return input;
   }
 
+  private static void assertLine(
+      TransactionProgramArguments arguments,
+      int executionLine,
+      int warehouse,
+      int item,
+      int quantity,
+      int originalLineNumber) {
+    assertEquals(item, arguments.valueAt(TpccRiverNewOrderLayout.item(executionLine)));
+    assertEquals(quantity, arguments.valueAt(TpccRiverNewOrderLayout.quantity(executionLine)));
+    assertEquals(
+        warehouse,
+        arguments.valueAt(TpccRiverNewOrderLayout.supplyWarehouse(executionLine)));
+    assertEquals(
+        originalLineNumber,
+        arguments.valueAt(TpccRiverNewOrderLayout.lineNumber(executionLine)));
+  }
+
   private static int stockValue(Connection connection, int warehouse, int item, String column)
       throws Exception {
     return scalar(connection, "SELECT " + column + " FROM stock WHERE s_w_id="
@@ -191,7 +287,8 @@ final class TpccRiverNewOrderTest {
     static Fixture open(Path root) throws java.sql.SQLException {
       DatabaseOpenResult opened = new DatabaseOpenResult();
       assertEquals(StatusCode.OK,
-          EmbeddedRiver.create(root, DATABASE, WalGeneration.of(1), 16, opened));
+          EmbeddedRiver.create(
+              databaseRequest(16), root, DATABASE, WalGeneration.of(1), 16, opened));
       LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
       assertEquals(StatusCode.OK,
           LoopbackRiverServer.start(opened.database(), 0, serverResult));
@@ -207,6 +304,54 @@ final class TpccRiverNewOrderTest {
       connection.close();
       assertEquals(StatusCode.OK, server.close());
       assertEquals(StatusCode.OK, database.close());
+    }
+  }
+
+  private static final class ProgramRecorder implements RiverTransactionPrograms {
+    private long nextStatement = 1;
+    private long nextProgram = 1;
+    private final Map<Long, String> statementNames = new HashMap<>();
+    private List<String> firstHeader;
+
+    @Override
+    public long prepareStatement(String sql) {
+      long handle = nextStatement++;
+      statementNames.put(handle, statementName(sql));
+      return handle;
+    }
+
+    @Override
+    public void closeStatement(long handle) { }
+
+    @Override
+    public long prepareProgram(TransactionProgram program) {
+      if (firstHeader == null) {
+        firstHeader = new ArrayList<>(TpccRiverNewOrderLayout.HEADER_STEPS);
+        for (int step = 0; step < TpccRiverNewOrderLayout.HEADER_STEPS; step++) {
+          firstHeader.add(statementNames.get(program.preparedHandle(step)));
+        }
+      }
+      return nextProgram++;
+    }
+
+    @Override
+    public void executeProgram(
+        long handle,
+        TransactionProgramArguments arguments,
+        TransactionProgramResult result) { }
+
+    @Override
+    public void closeProgram(long handle) { }
+
+    private static String statementName(String sql) {
+      if (sql.startsWith("SELECT w_tax")) return "warehouse";
+      if (sql.startsWith("SELECT d_tax")) return "district";
+      if (sql.startsWith("UPDATE district")) return "advance-district";
+      if (sql.startsWith("SELECT c_discount")) return "customer";
+      if (sql.startsWith("SELECT no_o_id")) return "reserve-new-order";
+      if (sql.startsWith("INSERT INTO orders")) return "insert-order";
+      if (sql.startsWith("INSERT INTO new_order")) return "insert-new-order";
+      return "line-operation";
     }
   }
 

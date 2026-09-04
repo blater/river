@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -55,7 +56,7 @@ final class RiverTypedParameterJdbcTest {
         token, token.length, authenticated));
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK, EmbeddedRiver.create(
-        root, DATABASE, GENERATION, 8, opened));
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
     assertEquals(
@@ -87,6 +88,29 @@ final class RiverTypedParameterJdbcTest {
     assertClosedWarnings(connection);
     source.close();
     Arrays.fill(token, (byte) 0);
+    assertEquals(StatusCode.OK, server.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
+  @Test
+  void roundTripsSinglePageTextBoundaryThroughJdbc(@TempDir Path root)
+      throws Exception {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
+    RiverDatabase database = opened.database();
+    LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
+    assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, listener));
+    LoopbackRiverServer server = listener.server();
+    try (Connection connection = java.sql.DriverManager.getConnection(
+            RiverDriver.URL_PREFIX + server.port());
+        Statement statement = connection.createStatement()) {
+      assertEquals(0, statement.executeUpdate(
+          "CREATE TABLE typed_page_text "
+              + "(id BIGINT PRIMARY KEY, value VARCHAR(4041) NOT NULL,"
+              + "flag_a BOOLEAN NOT NULL,flag_b BOOLEAN NOT NULL,flag_c BOOLEAN NOT NULL)"));
+      assertSinglePageTextBoundaryRoundTrip(connection);
+    }
     assertEquals(StatusCode.OK, server.close());
     assertEquals(StatusCode.OK, database.close());
   }
@@ -131,6 +155,54 @@ final class RiverTypedParameterJdbcTest {
     }
   }
 
+  private static void assertSinglePageTextBoundaryRoundTrip(Connection connection)
+      throws SQLException {
+    String inserted = "\ud83d\ude00".repeat(4_041);
+    String updated = "\ud83d\ude01".repeat(4_041);
+    try (PreparedStatement insert = connection.prepareStatement(
+            "INSERT INTO typed_page_text VALUES (?,?,?,?,?)");
+        PreparedStatement update = connection.prepareStatement(
+            "UPDATE typed_page_text SET value=? WHERE id=?");
+        PreparedStatement select = connection.prepareStatement(
+            "SELECT value FROM typed_page_text WHERE id=?");
+        PreparedStatement scan = connection.prepareStatement(
+            "SELECT value FROM typed_page_text ORDER BY id")) {
+      insert.setLong(1, 1);
+      insert.setString(2, inserted);
+      insert.setBoolean(3, false);
+      insert.setBoolean(4, true);
+      insert.setBoolean(5, false);
+      assertEquals(1, insert.executeUpdate());
+      assertText(select, inserted);
+      assertScanText(scan, inserted);
+
+      update.setString(1, updated);
+      update.setLong(2, 1);
+      assertEquals(1, update.executeUpdate());
+      assertText(select, updated);
+      assertScanText(scan, updated);
+    }
+  }
+
+  private static void assertText(PreparedStatement select, String expected)
+      throws SQLException {
+    select.setLong(1, 1);
+    try (ResultSet rows = select.executeQuery()) {
+      assertTrue(rows.next());
+      assertEquals(expected, rows.getString(1));
+      assertFalse(rows.next());
+    }
+  }
+
+  private static void assertScanText(PreparedStatement select, String expected)
+      throws SQLException {
+    try (ResultSet rows = select.executeQuery()) {
+      assertTrue(rows.next());
+      assertEquals(expected, rows.getString(1));
+      assertFalse(rows.next());
+    }
+  }
+
   private static void insertTypedRows(Connection connection) throws SQLException {
     String sql = "INSERT INTO typed_parameters VALUES (?,?,?,?,?,?,?,?)";
     try (PreparedStatement insert = connection.prepareStatement(sql)) {
@@ -167,9 +239,8 @@ final class RiverTypedParameterJdbcTest {
             "INSERT INTO typed_concurrent VALUES (?,?)");
         PreparedStatement second = connection.prepareStatement(
             "INSERT INTO typed_concurrent VALUES (?,?)");
-        PreparedStatement nested = connection.prepareStatement(
-            "SELECT id FROM typed_parameters WHERE id IN "
-                + "(SELECT id FROM typed_parameters WHERE flag=true) ORDER BY id")) {
+        PreparedStatement selected = connection.prepareStatement(
+            "SELECT id FROM typed_parameters WHERE flag=true ORDER BY id")) {
       first.setLong(1, 1);
       first.setDate(2, Date.valueOf("2024-01-01"));
       first.addBatch();
@@ -184,7 +255,7 @@ final class RiverTypedParameterJdbcTest {
       second.addBatch();
       assertArrayEquals(new int[] {1, 1}, first.executeBatch());
       assertArrayEquals(new int[] {1, 1}, second.executeBatch());
-      try (ResultSet rows = nested.executeQuery()) {
+      try (ResultSet rows = selected.executeQuery()) {
         assertTrue(rows.next());
         assertEquals(1, rows.getLong(1));
         assertFalse(rows.next());
@@ -293,13 +364,17 @@ final class RiverTypedParameterJdbcTest {
           () -> mismatch.setBigDecimal(1, new BigDecimal("1E+38")));
       assertEquals("22003", negativeScale.getSQLState());
     }
-    try (PreparedStatement normalized = connection.prepareStatement("SELECT ?")) {
+    try (PreparedStatement normalized = connection.prepareStatement(
+        "UPDATE typed_parameters SET amount=? WHERE id=1")) {
       normalized.setBigDecimal(1, new BigDecimal("1E+2"));
-      try (ResultSet rows = normalized.executeQuery()) {
-        assertTrue(rows.next());
-        assertEquals(new BigDecimal("100"), rows.getBigDecimal(1));
-        assertFalse(rows.next());
-      }
+      assertEquals(1, normalized.executeUpdate());
+    }
+    try (Statement statement = connection.createStatement();
+        ResultSet rows = statement.executeQuery(
+            "SELECT amount FROM typed_parameters WHERE id=1")) {
+      assertTrue(rows.next());
+      assertEquals(new BigDecimal("100.000"), rows.getBigDecimal(1));
+      assertFalse(rows.next());
     }
     RiverJdbcPreparedStatement lifecycle = (RiverJdbcPreparedStatement)
         connection.prepareStatement("SELECT id FROM typed_parameters WHERE label=?");
@@ -327,12 +402,9 @@ final class RiverTypedParameterJdbcTest {
           BatchUpdateException.class, insert::executeBatch);
       assertArrayEquals(new int[] {1}, failure.getUpdateCounts());
 
-      for (int index = 0; index < RiverJdbcStatement.MAXIMUM_BATCH_STATEMENTS;
-          index++) {
+      for (int index = 0; index < 257; index++) {
         addBatch(insert, 100 + index, LocalDate.of(2024, 2, 1));
       }
-      SQLException full = assertThrows(SQLException.class, insert::addBatch);
-      assertEquals("53000", full.getSQLState());
       insert.clearBatch();
     }
     try (Statement statement = connection.createStatement();

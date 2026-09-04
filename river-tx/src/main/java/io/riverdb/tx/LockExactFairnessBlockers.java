@@ -57,7 +57,8 @@ final class LockExactFairnessBlockers {
       LockExactRequestStore.Chunk candidates = table.state.requests.record(candidate);
       int offset = LockTypedSlots.offset(candidate);
       long next = LockTypedSlots.decode(candidates.nextMode[offset]);
-      if (candidate != request && candidates.transactions[offset] != transaction) {
+      if (candidate != request && table.conflicts.fairnessPredecessorBlocks(
+          candidate, transaction)) {
         if (next >= 0 && requestOrder(next) < requestOrder(request)) {
           frame.frameFairnessCandidates[frameOffset] = LockTypedSlots.encode(next);
         } else {

@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -24,7 +25,7 @@ final class SqlJoinPlannerTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = openSession(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -60,7 +61,7 @@ final class SqlJoinPlannerTest {
     opened.reset();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     session = openSession(database);
     assertEstimatedPlan(session, result, small, 4, 1, 1, "join");

@@ -1,15 +1,15 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
 /** Applies one BASE suboperation to scalar logical-row mappings. */
 final class IndexedRelationalBaseApply {
   private final IndexedTableKernel kernel;
   private final IndexedRelationalScalarWriter writer;
-  private final ByteBuffer row = ByteBuffer.allocate(SqlShapeLimits.MAX_STORED_ROW_BYTES);
+  private final ByteBuffer row = ByteBuffer.allocate(HeapPage.MAXIMUM_ROW_BYTES);
 
   IndexedRelationalBaseApply(IndexedTableKernel table, IndexedPageSet pages) {
     kernel = table;

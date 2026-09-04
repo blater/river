@@ -110,6 +110,11 @@ final class SqlAtomicStatementLifecycle {
         return StatusCode.CONFLICT;
       }
     } else {
+      if (!transactions.transactionHandleActive()) {
+        StatusCode result = pendingBodyStatus;
+        clear();
+        return result;
+      }
       if (phase == SAVEPOINT_ACTIVE || phase == STATEMENT_COMPLETED) {
         status = session.cancelLockWait();
         if (!status.isOk()) {

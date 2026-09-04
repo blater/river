@@ -139,6 +139,29 @@ final class SqlPreparedTemplateTest {
   }
 
   @Test
+  void materializesMinimumBigintWithoutConfusingItForATextHandle() {
+    SqlParser parser = new SqlParser();
+    SqlQuery query = new SqlQuery();
+    SqlCommand parsed = new SqlCommand();
+    assertEquals(StatusCode.OK, parser.parseTemplate(
+        "INSERT INTO values_table VALUES (?)", query, parsed));
+    SqlStatementTemplate.Result captured = new SqlStatementTemplate.Result();
+    assertEquals(StatusCode.OK, SqlStatementTemplate.capture(
+        parsed, query, parser.templateParameterCount(), captured));
+
+    SqlCommand invocation = new SqlCommand();
+    SqlQuery invocationQuery = new SqlQuery();
+    assertEquals(StatusCode.OK, captured.value().restore(invocationQuery, invocation));
+    SqlRuntimeParameterBindings parameters = new SqlRuntimeParameterBindings();
+    assertEquals(StatusCode.OK, parameters.begin(1, 0));
+    assertEquals(StatusCode.OK,
+        parameters.set(0, SqlTypeDescriptor.BIGINT, 0, Long.MIN_VALUE, false, 0));
+
+    assertEquals(StatusCode.OK, parameters.materialize(invocationQuery, invocation));
+    assertEquals(Long.MIN_VALUE, invocation.insertValue(0, 0));
+  }
+
+  @Test
   void preservesStockLevelJoinAndGlobalParameterOrdinals() {
     String sql = "SELECT COUNT(DISTINCT s.s_i_id) FROM order_line ol "
         + "INNER JOIN stock s ON s.s_w_id=ol.ol_supply_w_id AND s.s_i_id=ol.ol_i_id "

@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -27,7 +28,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RelationalDatabase database = opened.database();
     RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -67,7 +68,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.create(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
     RelationalDatabase database = opened.database();
     RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -90,7 +91,7 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();
@@ -151,6 +152,7 @@ final class RelationalDatabaseTest {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.createWithDurableWalQuorum(
+            databaseRequest(8),
             primary, followers, 2, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     assertEquals(2, database.requiredDurableNodeCount());
@@ -174,6 +176,7 @@ final class RelationalDatabaseTest {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.openWithDurableWalQuorum(
+            databaseRequest(8),
             primary, followers, 2, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -194,7 +197,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.create(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
     RelationalDatabase database = opened.database();
     TableDefinition accounts = new TableDefinition();
     assertEquals(StatusCode.OK, database.createTable("accounts", accounts));
@@ -223,7 +226,7 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.dropTable("accounts"));
     assertEquals(StatusCode.CONFLICT, database.dropTable("accounts"));
@@ -241,7 +244,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.create(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
     RelationalDatabase database = opened.database();
     TableDefinition accounts = new TableDefinition();
     TableDefinition papers = new TableDefinition();
@@ -274,7 +277,7 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 6, opened));
+        RelationalDatabase.openExisting(databaseRequest(6), root, DATABASE, GENERATION, 6, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     session = sessionResult.session();
@@ -300,7 +303,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(firstRoot, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), firstRoot, DATABASE, GENERATION, 4, opened));
     RelationalDatabase first = opened.database();
     TableDefinition table = new TableDefinition();
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, first.createTable("bad-name", table));
@@ -309,6 +312,7 @@ final class RelationalDatabaseTest {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.create(
+            databaseRequest(4),
             secondRoot,
             DatabaseIncarnation.of(743, 751),
             GENERATION,
@@ -334,7 +338,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RelationalDatabase database = opened.database();
     RelationalSessionOpenResult firstResult = new RelationalSessionOpenResult();
     RelationalSessionOpenResult secondResult = new RelationalSessionOpenResult();
@@ -365,7 +369,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RelationalDatabase database = opened.database();
     RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -408,7 +412,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RelationalDatabase database = opened.database();
     TableDefinition stale = new TableDefinition();
     assertEquals(StatusCode.OK, database.createTable("accounts", stale));
@@ -442,7 +446,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     TableDefinition events = new TableDefinition();
     assertEquals(StatusCode.OK, database.createTable("events", events));
@@ -474,7 +478,7 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, database.createSession(sessions));
     session = sessions.session();
@@ -509,7 +513,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     TableDefinition events = new TableDefinition();
     assertEquals(StatusCode.OK, database.createTable("drop_events", events));
@@ -543,7 +547,7 @@ final class RelationalDatabaseTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(
         StatusCode.OK,
@@ -559,7 +563,7 @@ final class RelationalDatabaseTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 9, opened));
+        RelationalDatabase.create(databaseRequest(9), root, DATABASE, GENERATION, 9, opened));
     RelationalDatabase database = opened.database();
     TableDefinition events = new TableDefinition();
     assertEquals(StatusCode.OK, database.createTable("events", events));
@@ -581,7 +585,7 @@ final class RelationalDatabaseTest {
     assertEquals(StatusCode.OK, database.close());
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 9, opened));
+        RelationalDatabase.openExisting(databaseRequest(9), root, DATABASE, GENERATION, 9, opened));
     database = opened.database();
     assertEquals(
         StatusCode.OK,

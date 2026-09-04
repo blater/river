@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -20,7 +21,7 @@ final class RelationalInternalSessionOwnerTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, WalGeneration.of(1), 2, opened));
+        RelationalDatabase.create(databaseRequest(2), root, DATABASE, WalGeneration.of(1), 2, opened));
     RelationalDatabase database = opened.database();
     RelationalSessionOpenResult sessionResult = new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));

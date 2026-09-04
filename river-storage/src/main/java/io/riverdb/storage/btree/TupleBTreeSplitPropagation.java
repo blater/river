@@ -79,7 +79,7 @@ final class TupleBTreeSplitPropagation {
   private static StatusCode newRoot(
       TupleBTree tree, int leftPageId, int rightPageId,
       int originalRoot, TupleBTreeTreeWorkspace workspace) {
-    if (workspace.pathDepth + 1 >= TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT) {
+    if (!BTreeStructuralLimits.canDescendFrom(workspace.pathDepth)) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     StatusCode status = tree.provider().allocate(workspace.current);

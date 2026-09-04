@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -23,7 +24,7 @@ final class SqlMaximumRowTransactionTest {
   void commitsMaximumRowsPlusIndexRegistryVersionsAndReplays(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = openSession(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -44,7 +45,7 @@ final class SqlMaximumRowTransactionTest {
 
     opened.reset();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     session = openSession(database);
     assertCount(session, result, ROWS);

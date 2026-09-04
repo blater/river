@@ -2,6 +2,7 @@ package io.riverdb.wal.local;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
@@ -49,6 +50,70 @@ final class LocalWalTest {
     assertEquals(41, read.header().transactionId());
     assertEquals(43, read.header().commitSequence());
     assertEquals(appended.endOffset(), read.nextOffset());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void attributesForcesByCauseAndReconcilesTotals(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalMetrics before = new LocalWalMetrics();
+    LocalWalMetrics after = new LocalWalMetrics();
+    assertEquals(StatusCode.OK, wal.copyMetrics(before));
+
+    LocalWalForceCause[] causes = {
+      LocalWalForceCause.SHARED_GROUP,
+      LocalWalForceCause.DIRECT_COMMIT,
+      LocalWalForceCause.CHECKPOINT
+    };
+    for (int index = 0; index < causes.length; index++) {
+      LocalWalReservation reservation = reserve(wal, new byte[] {(byte) index});
+      LocalWalAppendResult appended = new LocalWalAppendResult();
+      assertEquals(StatusCode.OK, wal.appendUnforced(
+          reservation, index + 2, index + 1, 1, 1, 1, appended));
+      LocalWalForceResult forced = new LocalWalForceResult();
+      assertEquals(StatusCode.OK, wal.forcePending(forced, causes[index]));
+      assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    }
+
+    assertEquals(StatusCode.OK, wal.copyMetrics(after));
+    assertTrue(after.reconciles());
+    assertEquals(causes.length, after.totalForceCount() - before.totalForceCount());
+    assertEquals(
+        after.totalForceCount() - before.totalForceCount(),
+        causeDelta(after, before, LocalWalForceCause.SHARED_GROUP)
+            + causeDelta(after, before, LocalWalForceCause.DIRECT_COMMIT)
+            + causeDelta(after, before, LocalWalForceCause.CHECKPOINT));
+    for (LocalWalForceCause cause : causes) {
+      assertEquals(1, causeDelta(after, before, cause));
+      assertEquals(1, statusDelta(after, before, cause, StatusCode.OK));
+      assertTrue(after.forceBytes(cause) >= before.forceBytes(cause));
+      assertTrue(after.forceNanos(cause) >= before.forceNanos(cause));
+    }
+    assertTrue(after.totalForceBytes() >= before.totalForceBytes());
+    assertTrue(after.totalForceNanos() >= before.totalForceNanos());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void attributesGenerationHeaderForceToCheckpoint(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalMetrics before = new LocalWalMetrics();
+    LocalWalMetrics after = new LocalWalMetrics();
+    assertEquals(StatusCode.OK, wal.copyMetrics(before));
+
+    WalGeneration next = WalGeneration.of(GENERATION.value() + 1);
+    assertEquals(StatusCode.OK, wal.rotate(
+        directory, LocalWal.generationFileName(next), next, 1));
+
+    assertEquals(StatusCode.OK, wal.copyMetrics(after));
+    assertTrue(after.reconciles());
+    assertEquals(1, after.totalForceCount() - before.totalForceCount());
+    assertEquals(1, causeDelta(after, before, LocalWalForceCause.CHECKPOINT));
+    assertEquals(0, causeDelta(after, before, LocalWalForceCause.OTHER));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -154,10 +219,13 @@ final class LocalWalTest {
     assertEquals(initialForces + 1, counters.forceCalls());
 
     LocalWalReadResult forcedRead = new LocalWalReadResult();
+    LocalWalForcedCursor cursor = new LocalWalForcedCursor();
+    assertEquals(StatusCode.OK, wal.openForcedCursor(cursor));
     for (int index = 0; index < 3; index++) {
-      assertEquals(StatusCode.OK, wal.readForcedRecord(index, forcedRead));
+      assertEquals(StatusCode.OK, cursor.next(forcedRead));
       assertEquals(index + 10L, forcedRead.payload().getLong(0));
     }
+    assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(StatusCode.OK, wal.releaseForcedBatch());
 
     long offset = firstStart;
@@ -173,31 +241,22 @@ final class LocalWalTest {
   }
 
   @Test
-  void rejectsWholeGroupWhenPendingSlotsAreInsufficient(@TempDir Path root) {
+  void growsPendingBatchPastTheFormerFixedSlotBoundary(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     LocalWalReservation single = new LocalWalReservation();
     LocalWalAppendResult appended = new LocalWalAppendResult();
-    for (int index = 0; index < LocalWal.MAX_PENDING_RECORDS - 1; index++) {
+    int records = 33;
+    for (int index = 0; index < records; index++) {
       assertEquals(StatusCode.OK, wal.reserve(1, single));
       single.writablePayload().put((byte) index);
       assertEquals(
           StatusCode.OK,
           wal.appendUnforced(single, 91, 0, 0, 3, 1, appended));
     }
-    long tail = wal.tailEnd();
-    long sequence = wal.nextJournalSequence();
-    LocalWalGroupReservation group = new LocalWalGroupReservation();
-    assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
-        wal.reserveGroup(new int[] {1, 1}, 2, group));
-    assertEquals(tail, wal.tailEnd());
-    assertEquals(sequence, wal.nextJournalSequence());
-    assertEquals(false, group.isActive());
-
     LocalWalForceResult forced = new LocalWalForceResult();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
-    assertEquals(LocalWal.MAX_PENDING_RECORDS - 1, forced.recordCount());
+    assertEquals(records, forced.recordCount());
     assertEquals(StatusCode.OK, wal.releaseForcedBatch());
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
@@ -207,18 +266,11 @@ final class LocalWalTest {
   void appendsLogicalGroupContiguouslyWithOneFinalDecision(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
-    LocalWalGroupReservation group = new LocalWalGroupReservation();
-    assertEquals(StatusCode.OK, wal.reserveGroup(new int[] {4, 8, 1}, 3, group));
-    group.writablePayload(0).putInt(101);
-    group.writablePayload(1).putLong(103);
+    LocalWalRecordBatch group = new BytesBatch(
+        ByteBuffer.allocate(4).putInt(101).array(),
+        ByteBuffer.allocate(8).putLong(103).array(),
+        new byte[] {107});
     LocalWalGroupAppendResult appended = new LocalWalGroupAppendResult();
-    long reservedTail = wal.tailEnd();
-    assertEquals(
-        StatusCode.INVALID_EXTERNAL_INPUT,
-        wal.appendGroupUnforced(group, 97, 11, 7, 2, appended));
-    assertEquals(reservedTail, wal.tailEnd());
-    assertEquals(true, group.isActive());
-    group.writablePayload(2).put((byte) 107);
     assertEquals(StatusCode.OK, wal.appendGroupUnforced(group, 97, 11, 7, 2, appended));
     assertEquals(3, appended.recordCount());
     assertEquals(1, appended.firstJournalSequence());
@@ -251,34 +303,77 @@ final class LocalWalTest {
     NioIoCounters counters = new NioIoCounters();
     NioDurableDirectory directory = openDirectory(root, counters);
     LocalWal wal = openWal(directory);
-    int[] bytes = {1, 1, 1, 1, 1, 1};
-    LocalWalGroupReservation reservation = new LocalWalGroupReservation();
-    assertEquals(StatusCode.OK, wal.reserveGroup(bytes, bytes.length, reservation));
-    for (int record = 0; record < bytes.length; record++) {
-      reservation.writablePayload(record).put((byte) (record + 1));
-    }
+    byte[][] payloads = {
+      {1}, {2}, {3}, {4}, {5}, {6}
+    };
     long[] transactions = {101, 102, 103};
     long[] sequences = {1, 2, 3};
     int[] groupEnds = {2, 3, 6};
+    LocalWalDecisionBatch batch = new TestDecisionBatch(
+        payloads, transactions, sequences, groupEnds);
     LocalWalGroupAppendResult appended = new LocalWalGroupAppendResult();
     assertEquals(StatusCode.OK, wal.appendDecisionBatchUnforced(
-        reservation, transactions, sequences, groupEnds, 3, 7, 2, appended));
+        batch, 7, 2, appended));
     long forces = counters.forceCalls();
     LocalWalForceResult forced = new LocalWalForceResult();
     assertEquals(StatusCode.OK, wal.forcePending(forced));
     assertEquals(forces + 1, counters.forceCalls());
     assertEquals(6, forced.recordCount());
     LocalWalReadResult read = new LocalWalReadResult();
+    LocalWalForcedCursor cursor = new LocalWalForcedCursor();
+    assertEquals(StatusCode.OK, wal.openForcedCursor(cursor));
     int group = 0;
-    for (int record = 0; record < bytes.length; record++) {
-      assertEquals(StatusCode.OK, wal.readForcedRecord(record, read));
+    for (int record = 0; record < payloads.length; record++) {
+      assertEquals(StatusCode.OK, cursor.next(read));
       assertEquals(transactions[group], read.header().transactionId());
       boolean decision = record + 1 == groupEnds[group];
       assertEquals(decision ? 1 : 0, read.header().decisionCode());
       assertEquals(decision ? sequences[group] : 0, read.header().commitSequence());
       if (decision) group++;
     }
+    assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(StatusCode.OK, wal.releaseForcedBatch());
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void decisionBatchReportsPhysicalProgressWhenLaterEncodingFails(
+      @TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalDecisionBatch batch = new FailingDecisionBatch(
+        new byte[][] {{1}, {2}},
+        new long[] {101, 102},
+        new long[] {1, 2},
+        new int[] {1, 2},
+        1);
+    LocalWalGroupAppendResult appended = new LocalWalGroupAppendResult();
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        wal.appendDecisionBatchUnforced(batch, 7, 2, appended));
+    assertEquals(
+        LocalWalAppendDisposition.STORAGE_MAY_HAVE_CHANGED,
+        appended.disposition());
+    assertEquals(StatusCode.FENCED,
+        wal.reserve(1, new LocalWalReservation()));
+    assertEquals(StatusCode.OK, wal.close());
+    assertEquals(StatusCode.OK, directory.close());
+  }
+
+  @Test
+  void fencesForcedDecisionBatchWhenPublicationCannotComplete(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    LocalWalReservation reservation = reserve(wal, new byte[] {7});
+    LocalWalAppendResult appended = new LocalWalAppendResult();
+    assertEquals(StatusCode.OK, wal.appendUnforced(
+        reservation, 101, 1, 1, 7, 1, appended));
+    LocalWalForceResult forced = new LocalWalForceResult();
+    assertEquals(StatusCode.OK, wal.forcePending(forced));
+
+    assertEquals(StatusCode.OK, wal.fencePendingBatch());
+    assertEquals(StatusCode.FENCED, wal.reserve(1, new LocalWalReservation()));
     assertEquals(StatusCode.OK, wal.close());
     assertEquals(StatusCode.OK, directory.close());
   }
@@ -287,10 +382,9 @@ final class LocalWalTest {
   void forcesContinuationThenFinalGroupAndRecoversDecisionBoundary(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
-    LocalWalGroupReservation continuation = new LocalWalGroupReservation();
-    assertEquals(StatusCode.OK, wal.reserveGroup(new int[] {4, 4}, continuation));
-    continuation.writablePayload(0).putInt(201);
-    continuation.writablePayload(1).putInt(203);
+    LocalWalRecordBatch continuation = new BytesBatch(
+        ByteBuffer.allocate(4).putInt(201).array(),
+        ByteBuffer.allocate(4).putInt(203).array());
     LocalWalGroupAppendResult continued = new LocalWalGroupAppendResult();
     assertEquals(StatusCode.OK,
         wal.appendContinuationGroupUnforced(continuation, 197, 9, 3, continued));
@@ -302,10 +396,8 @@ final class LocalWalTest {
     assertEquals(0, forced.commitSequence());
     assertEquals(StatusCode.OK, wal.releaseForcedBatch());
 
-    LocalWalGroupReservation decision = new LocalWalGroupReservation();
-    assertEquals(StatusCode.OK, wal.reserveGroup(new int[] {8, 1}, decision));
-    decision.writablePayload(0).putLong(205);
-    decision.writablePayload(1).put((byte) 207);
+    LocalWalRecordBatch decision = new BytesBatch(
+        ByteBuffer.allocate(8).putLong(205).array(), new byte[] {(byte) 207});
     LocalWalGroupAppendResult decided = new LocalWalGroupAppendResult();
     assertEquals(StatusCode.OK, wal.appendGroupUnforced(decision, 197, 7, 9, 3, decided));
     assertEquals(3, decided.firstJournalSequence());
@@ -339,11 +431,10 @@ final class LocalWalTest {
   void reopensContinuationOnlyCrashImageWithoutInventingDecision(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
-    LocalWalGroupReservation continuation = new LocalWalGroupReservation();
-    assertEquals(StatusCode.OK, wal.reserveGroup(new int[] {2, 3, 1}, continuation));
-    continuation.writablePayload(0).putShort((short) 211);
-    continuation.writablePayload(1).put(new byte[] {1, 2, 3});
-    continuation.writablePayload(2).put((byte) 5);
+    LocalWalRecordBatch continuation = new BytesBatch(
+        ByteBuffer.allocate(2).putShort((short) 211).array(),
+        new byte[] {1, 2, 3},
+        new byte[] {5});
     LocalWalGroupAppendResult appended = new LocalWalGroupAppendResult();
     assertEquals(StatusCode.OK,
         wal.appendContinuationGroupUnforced(continuation, 211, 5, 4, appended));
@@ -374,24 +465,6 @@ final class LocalWalTest {
   }
 
   @Test
-  void cancelsGroupReservationWithoutConsumingSlots(@TempDir Path root) {
-    NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
-    LocalWalGroupReservation group = new LocalWalGroupReservation();
-    assertEquals(StatusCode.OK, wal.reserveGroup(new int[] {2, 3}, 2, group));
-    long tail = wal.tailEnd();
-    assertEquals(StatusCode.OK, wal.cancelGroup(group));
-    assertEquals(false, group.isActive());
-    assertEquals(tail, wal.tailEnd());
-
-    LocalWalReservation single = reserve(wal, new byte[] {5});
-    LocalWalAppendResult appended = new LocalWalAppendResult();
-    assertEquals(StatusCode.OK, wal.publish(single, 1, 1, 1, 1, 1, appended));
-    assertEquals(StatusCode.OK, wal.close());
-    assertEquals(StatusCode.OK, directory.close());
-  }
-
-  @Test
   void rejectsNullStaleAndForeignLogicalStreamCapabilities(@TempDir Path root)
       throws Exception {
     NioDurableDirectory firstDirectory = openDirectory(
@@ -410,16 +483,12 @@ final class LocalWalTest {
     LocalWalLogicalStream foreign = new LocalWalLogicalStream();
     assertEquals(StatusCode.OK, first.beginLogicalStream(301, 7, 1, owned));
     assertEquals(StatusCode.OK, second.beginLogicalStream(303, 7, 1, foreign));
-    LocalWalGroupReservation reservation = new LocalWalGroupReservation();
-    assertEquals(StatusCode.OK,
-        first.reserveLogicalStreamBatch(owned, new int[] {1}, 1, reservation));
-    reservation.writablePayload(0).put((byte) 1);
+    LocalWalRecordBatch batch = new BytesBatch(new byte[] {1});
     assertEquals(StatusCode.CONFLICT,
-        first.appendLogicalStreamContinuation(foreign, reservation, append));
-    assertEquals(StatusCode.OK, first.cancelLogicalStreamBatch(owned, reservation));
+        first.appendLogicalStreamContinuation(foreign, batch, append));
     assertEquals(StatusCode.OK, first.cancelLogicalStream(owned));
     assertEquals(StatusCode.CONFLICT,
-        first.appendLogicalStreamContinuation(owned, reservation, append));
+        first.appendLogicalStreamContinuation(owned, batch, append));
     assertEquals(StatusCode.OK, second.cancelLogicalStream(foreign));
     assertEquals(StatusCode.OK, first.close());
     assertEquals(StatusCode.OK, second.close());
@@ -493,5 +562,100 @@ final class LocalWalTest {
     assertEquals(StatusCode.OK, wal.reserve(payload.length, reservation));
     reservation.writablePayload().put(payload);
     return reservation;
+  }
+
+  private static long causeDelta(
+      LocalWalMetrics after, LocalWalMetrics before, LocalWalForceCause cause) {
+    return after.forceCount(cause) - before.forceCount(cause);
+  }
+
+  private static long statusDelta(
+      LocalWalMetrics after,
+      LocalWalMetrics before,
+      LocalWalForceCause cause,
+      StatusCode status) {
+    return after.forceStatusCount(cause, status) - before.forceStatusCount(cause, status);
+  }
+
+  private static class BytesBatch implements LocalWalRecordBatch {
+    private final byte[][] payloads;
+
+    BytesBatch(byte[]... recordPayloads) {
+      payloads = recordPayloads;
+    }
+
+    @Override
+    public int recordCount() {
+      return payloads.length;
+    }
+
+    @Override
+    public int payloadBytes(int record) {
+      return payloads[record].length;
+    }
+
+    @Override
+    public StatusCode encodePayload(int record, ByteBuffer target) {
+      target.put(payloads[record]);
+      return StatusCode.OK;
+    }
+  }
+
+  private static class TestDecisionBatch extends BytesBatch
+      implements LocalWalDecisionBatch {
+    private final long[] transactionIds;
+    private final long[] commitSequences;
+    private final int[] transactionEnds;
+
+    TestDecisionBatch(
+        byte[][] payloads,
+        long[] transactions,
+        long[] sequences,
+        int[] ends) {
+      super(payloads);
+      transactionIds = transactions;
+      commitSequences = sequences;
+      transactionEnds = ends;
+    }
+
+    @Override
+    public int transactionCount() {
+      return transactionIds.length;
+    }
+
+    @Override
+    public int transactionEndRecord(int transaction) {
+      return transactionEnds[transaction];
+    }
+
+    @Override
+    public long transactionId(int transaction) {
+      return transactionIds[transaction];
+    }
+
+    @Override
+    public long commitSequence(int transaction) {
+      return commitSequences[transaction];
+    }
+  }
+
+  private static final class FailingDecisionBatch extends TestDecisionBatch {
+    private final int failingRecord;
+
+    FailingDecisionBatch(
+        byte[][] payloads,
+        long[] transactions,
+        long[] sequences,
+        int[] ends,
+        int failureRecord) {
+      super(payloads, transactions, sequences, ends);
+      failingRecord = failureRecord;
+    }
+
+    @Override
+    public StatusCode encodePayload(int record, ByteBuffer target) {
+      return record == failingRecord
+          ? StatusCode.INVALID_EXTERNAL_INPUT : super.encodePayload(record, target);
+    }
   }
 }

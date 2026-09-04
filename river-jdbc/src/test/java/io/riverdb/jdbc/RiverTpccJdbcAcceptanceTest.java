@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -47,7 +48,8 @@ final class RiverTpccJdbcAcceptanceTest {
   @Test
   void loadsWarehouseRowsThroughPreparedJdbcBatch(@TempDir Path root) throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server));
@@ -79,7 +81,8 @@ final class RiverTpccJdbcAcceptanceTest {
   void executesFiveTransactionFamiliesOverCompositeAndKeylessSchema(@TempDir Path root)
       throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 16, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server))) {
@@ -101,7 +104,8 @@ final class RiverTpccJdbcAcceptanceTest {
     opened.reset();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 16, opened));
+        EmbeddedRiver.openExisting(
+            databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
     database = opened.database();
     server = start(database);
     try (Connection connection = DriverManager.getConnection(url(server))) {
@@ -120,7 +124,8 @@ final class RiverTpccJdbcAcceptanceTest {
         "river.tx.lock-wait-timeout=20ms\n",
         StandardCharsets.UTF_8);
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 16, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection first = DriverManager.getConnection(url(server));
@@ -151,13 +156,20 @@ final class RiverTpccJdbcAcceptanceTest {
   void opposingCompositeKeyLocksReportOneDeadlockAndGrantTheSurvivor(@TempDir Path root)
       throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 16, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(
+        databaseRequest(16), root, DATABASE, GENERATION, 16, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (Connection first = DriverManager.getConnection(url(server));
         Connection second = DriverManager.getConnection(url(server))) {
       createSchema(first);
       seed(first);
+      RiverTransactionDiagnostics firstDiagnostics =
+          first.unwrap(RiverTransactionDiagnostics.class);
+      RiverTransactionDiagnostics secondDiagnostics =
+          second.unwrap(RiverTransactionDiagnostics.class);
+      firstDiagnostics.beginDiagnosticAttempt(101, 1);
+      secondDiagnostics.beginDiagnosticAttempt(202, 1);
       try (Statement statement = first.createStatement()) {
         assertEquals(1, statement.executeUpdate(
             "INSERT INTO district VALUES "

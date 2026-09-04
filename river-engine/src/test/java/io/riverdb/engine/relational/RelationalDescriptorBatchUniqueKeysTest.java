@@ -1,12 +1,15 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.schema.ColumnDescriptorSet;
@@ -24,7 +27,7 @@ final class RelationalDescriptorBatchUniqueKeysTest {
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x4241544348554e49L, 0x5155454b45595331L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
-  private static final long RECEIPT_BYTES = 64L * (Integer.BYTES + Long.BYTES);
+  private static final long RECEIPT_BYTES = 8L * (Integer.BYTES + Long.BYTES);
   private static final long INITIAL_UNIQUE_BYTES =
       8L * (Long.BYTES + 3L * Integer.BYTES) + 256L + 16L * Integer.BYTES;
 
@@ -63,6 +66,73 @@ final class RelationalDescriptorBatchUniqueKeysTest {
         batch.admitUnique(1, ByteBuffer.wrap(new byte[] {2}), 1));
     assertEquals(RECEIPT_BYTES + INITIAL_UNIQUE_BYTES, budget.retained);
     assertEquals(budget.retained, batch.retainedBytes());
+  }
+
+  @Test
+  void receiptGrowsBeyondLegacyInsertBatchSize() {
+    TrackingBudget budget = new TrackingBudget(Long.MAX_VALUE);
+    RelationalDescriptorInsertBatch batch = new RelationalDescriptorInsertBatch(budget);
+    TableDescriptor table = table();
+    int rows = 257;
+
+    assertEquals(StatusCode.OK, batch.begin(table, rows));
+    for (int row = 0; row < rows; row++) {
+      assertEquals(StatusCode.OK, batch.admit(table, 1, 0, 0, row));
+    }
+
+    assertEquals(rows, batch.rowCount());
+    assertTrue(batch.admittedFor(table));
+    assertEquals(512L * (Integer.BYTES + Long.BYTES), batch.retainedBytes());
+    assertEquals(batch.retainedBytes(), budget.retained);
+  }
+
+  @Test
+  void uniqueKeyWorkspaceGrowsBeyondLegacyRowTimesIndexLimit() {
+    RelationalDescriptorBatchUniqueKeys keys = new RelationalDescriptorBatchUniqueKeys();
+    ByteBuffer key = ByteBuffer.allocate(Long.BYTES);
+    int entries = 64 * SqlShapeLimits.MAX_TABLE_INDEXES + 1;
+
+    for (int entry = 0; entry < entries; entry++) {
+      key.putLong(0, entry);
+      assertEquals(StatusCode.OK, keys.add(1, key, Long.BYTES));
+    }
+
+    key.putLong(0, entries - 1L);
+    assertEquals(StatusCode.UNIQUE_VIOLATION, keys.add(1, key, Long.BYTES));
+  }
+
+  @Test
+  void retainedBudgetRejectsReceiptGrowthWithoutDiscardingPriorCapacity() {
+    long replacement = 128L * (Integer.BYTES + Long.BYTES);
+    TrackingBudget budget = new TrackingBudget(RECEIPT_BYTES + replacement - 1);
+    RelationalDescriptorInsertBatch batch = new RelationalDescriptorInsertBatch(budget);
+    TableDescriptor table = table();
+
+    assertEquals(StatusCode.OK, batch.begin(table, 1));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, batch.begin(table, 65));
+
+    assertEquals(RECEIPT_BYTES, batch.retainedBytes());
+    assertEquals(RECEIPT_BYTES, budget.retained);
+    assertFalse(batch.admittedFor(table));
+  }
+
+  @Test
+  void retainedBudgetRejectsUniqueKeyGrowthWithoutPublishingPartialArrays() {
+    TrackingBudget budget = new TrackingBudget(RECEIPT_BYTES + INITIAL_UNIQUE_BYTES);
+    RelationalDescriptorInsertBatch batch = new RelationalDescriptorInsertBatch(budget);
+    ByteBuffer key = ByteBuffer.allocate(Long.BYTES);
+
+    assertEquals(StatusCode.OK, batch.begin(table(), 1));
+    for (int entry = 0; entry < 8; entry++) {
+      key.putLong(0, entry);
+      assertEquals(StatusCode.OK, batch.admitUnique(1, key, Long.BYTES));
+    }
+    key.putLong(0, 8);
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED,
+        batch.admitUnique(1, key, Long.BYTES));
+
+    assertEquals(RECEIPT_BYTES + INITIAL_UNIQUE_BYTES, batch.retainedBytes());
+    assertEquals(batch.retainedBytes(), budget.retained);
   }
 
   @Test
@@ -121,7 +191,7 @@ final class RelationalDescriptorBatchUniqueKeysTest {
   void tinyBudgetFailureDoesNotReserveALogicalRowId(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SchemaPin pin = new SchemaPin();
     assertEquals(StatusCode.OK, database.services().descriptors().create(

@@ -71,10 +71,19 @@ public final class IndexedVacuum implements TransactionCommitParticipant {
     return automaticRowsReclaimed;
   }
 
+  boolean matches(TransactionManager transactionManager, IndexedTable indexedTable) {
+    return manager == transactionManager && table == indexedTable;
+  }
+
   private StatusCode runMaintenance(TransactionOutcome outcome) {
     committedSequence = 0;
     result.reset();
-    return manager.commitMaintenance(this, outcome);
+    StatusCode status = manager.commitMaintenance(this, outcome);
+    if (!status.isOk()) return status;
+    StatusCode completed = table.completeVersionMaintenance();
+    if (completed.isOk()) return StatusCode.OK;
+    table.fenceCommitWriter();
+    return StatusCode.FENCED;
   }
 
   private void recordAutomaticDeferral(boolean rejectAdmission) {

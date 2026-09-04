@@ -16,7 +16,7 @@ measured, drain, and checkpoint failures distinctly.
 Options:
   --backend=river|mariadb       Backend (current Java path: river only)
   --profile=tiny|standard       Workload scale (default: tiny)
-  --mix=standard|new-order|payment|new-order-payment-50-50
+  --mix=standard|new-order|payment|new-order-payment-50-50|new-order-delivery-50-50|new-order-stock-level-50-50
                                 Transaction-family mix (default: standard)
   --scheduling=standard|no-wait-stress
                                 Scheduling profile (default: no-wait-stress)
@@ -34,6 +34,29 @@ Options:
                                 Server readiness timeout (default: 30)
   --server-stop-timeout-seconds=N
                                 Graceful server-stop timeout (default: 20)
+  --resource-maximum-bytes=N    Managed database root budget (default: 1073741824)
+  --resource-delivery-bytes=N   Aggregate transaction/WAL budget (default: 268435456)
+  --resource-lock-provider-bytes=N
+                                Lock-provider budget (default: 67108864)
+  --resource-version-workspace-bytes=N
+                                Version-operation workspace budget (default: 67108864)
+  --resource-page-cache-bytes=N Page-cache budget (default: 268435456)
+  --resource-staging-frame-bytes=N
+                                Page-cache staging budget (default: 67108864)
+  --resource-staged-page-capacity=N
+                                Aggregate staged-page admission (default: 4096)
+  --deadlock-diagnostics-bytes=N
+                                Retained diagnostic payload budget; 0 disables (default: 0)
+  --deadlock-diagnostics-epochs=N
+                                Retained metrics epochs; required when enabled
+  --deadlock-diagnostics-signatures-per-epoch=N
+                                Cycle fingerprints per epoch; required when enabled
+  --deadlock-diagnostics-events-per-epoch=N
+                                Correlated victim events per epoch; required when enabled
+  --deadlock-diagnostics-exemplars-per-signature=N
+                                Full cycle exemplars per fingerprint; required when enabled
+  --deadlock-diagnostics-maximum-cycle-edges=N
+                                Edges retained in one exemplar; required when enabled
   --retry-base-micros=N         Retry base delay
   --retry-maximum-millis=N      Retry maximum delay
   --seed=N                      Workload random seed
@@ -50,7 +73,7 @@ Options:
                                 Declared JDBC/program isolation (default: serializable)
   -h, --help                    Show this help
 
-The current Java path supports jdbc:river, all four declared diagnostic mixes,
+The current Java path supports jdbc:river, all listed diagnostic mixes,
 and explicit serializable, repeatable-read, or mixed-diagnostic isolation.
 MariaDB remains unavailable because the Java acceptance path validates
 jdbc:river. Java-emitted metrics are printed verbatim when present; unavailable
@@ -95,6 +118,32 @@ hash_text() {
   printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
 }
 
+workspace_fingerprint() {
+  local root=$1
+  local commit status_hash tracked_hash untracked_hash fingerprint
+  if ! git -C "$root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '%s\n' unavailable
+    return
+  fi
+  commit=$(git -C "$root" rev-parse HEAD 2>/dev/null) || commit=unavailable
+  status_hash=$(git -C "$root" status --porcelain=v1 --untracked-files=all \
+      | shasum -a 256 | awk '{print $1}') || status_hash=unavailable
+  tracked_hash=$(git -C "$root" diff --no-ext-diff --binary HEAD -- \
+      | shasum -a 256 | awk '{print $1}') || tracked_hash=unavailable
+  untracked_hash=$(git -C "$root" ls-files --others --exclude-standard \
+      | git -C "$root" hash-object --stdin-paths --no-filters 2>/dev/null \
+      | shasum -a 256 | awk '{print $1}') || untracked_hash=unavailable
+  if [[ $commit == unavailable || $status_hash == unavailable \
+      || $tracked_hash == unavailable || $untracked_hash == unavailable ]]; then
+    printf '%s\n' unavailable
+    return
+  fi
+  fingerprint=$(printf '%s\n%s\n%s\n%s\n' \
+      "$commit" "$status_hash" "$tracked_hash" "$untracked_hash" \
+      | shasum -a 256 | awk '{print $1}') || fingerprint=unavailable
+  printf '%s\n' "$fingerprint"
+}
+
 property() {
   local key=$1
   local file=$2
@@ -121,6 +170,19 @@ measured_seconds=10
 runner_timeout_seconds=
 server_start_timeout_seconds=30
 server_stop_timeout_seconds=20
+resource_maximum_bytes=1073741824
+resource_delivery_bytes=268435456
+resource_lock_provider_bytes=67108864
+resource_version_workspace_bytes=67108864
+resource_page_cache_bytes=268435456
+resource_staging_frame_bytes=67108864
+resource_staged_page_capacity=4096
+deadlock_diagnostics_bytes=0
+deadlock_diagnostics_epochs=0
+deadlock_diagnostics_signatures_per_epoch=0
+deadlock_diagnostics_events_per_epoch=0
+deadlock_diagnostics_exemplars_per_signature=0
+deadlock_diagnostics_maximum_cycle_edges=0
 retry_base_micros=
 retry_maximum_millis=
 seed=
@@ -154,6 +216,19 @@ while (($# > 0)); do
     --runner-timeout-seconds=*) runner_timeout_seconds=${1#*=} ;;
     --server-start-timeout-seconds=*) server_start_timeout_seconds=${1#*=} ;;
     --server-stop-timeout-seconds=*) server_stop_timeout_seconds=${1#*=} ;;
+    --resource-maximum-bytes=*) resource_maximum_bytes=${1#*=} ;;
+    --resource-delivery-bytes=*) resource_delivery_bytes=${1#*=} ;;
+    --resource-lock-provider-bytes=*) resource_lock_provider_bytes=${1#*=} ;;
+    --resource-version-workspace-bytes=*) resource_version_workspace_bytes=${1#*=} ;;
+    --resource-page-cache-bytes=*) resource_page_cache_bytes=${1#*=} ;;
+    --resource-staging-frame-bytes=*) resource_staging_frame_bytes=${1#*=} ;;
+    --resource-staged-page-capacity=*) resource_staged_page_capacity=${1#*=} ;;
+    --deadlock-diagnostics-bytes=*) deadlock_diagnostics_bytes=${1#*=} ;;
+    --deadlock-diagnostics-epochs=*) deadlock_diagnostics_epochs=${1#*=} ;;
+    --deadlock-diagnostics-signatures-per-epoch=*) deadlock_diagnostics_signatures_per_epoch=${1#*=} ;;
+    --deadlock-diagnostics-events-per-epoch=*) deadlock_diagnostics_events_per_epoch=${1#*=} ;;
+    --deadlock-diagnostics-exemplars-per-signature=*) deadlock_diagnostics_exemplars_per_signature=${1#*=} ;;
+    --deadlock-diagnostics-maximum-cycle-edges=*) deadlock_diagnostics_maximum_cycle_edges=${1#*=} ;;
     --retry-base-micros=*) retry_base_micros=${1#*=} ;;
     --retry-maximum-millis=*) retry_maximum_millis=${1#*=} ;;
     --seed=*) seed=${1#*=} ;;
@@ -175,7 +250,10 @@ done
 
 case $backend in river) ;; *) die "backend=$backend is unsupported; only backend=river is available" ;; esac
 case $profile in tiny|standard) ;; *) die "profile must be tiny or standard" ;; esac
-case $mix in standard|new-order|payment|new-order-payment-50-50) ;; *) die "unknown workload mix: $mix" ;; esac
+case $mix in
+  standard|new-order|payment|new-order-payment-50-50|new-order-delivery-50-50|new-order-stock-level-50-50) ;;
+  *) die "unknown workload mix: $mix" ;;
+esac
 case $scheduling in standard|no-wait-stress) ;; *) die "unknown scheduling profile: $scheduling" ;; esac
 case $evidence in diagnostic|alpha3) ;; *) die "unknown evidence mode: $evidence" ;; esac
 case $fresh_load in true|false) ;; *) die "fresh-load must be true or false" ;; esac
@@ -191,6 +269,19 @@ require_positive warmup_seconds "$warmup_seconds"
 require_positive measured_seconds "$measured_seconds"
 require_positive server_start_timeout_seconds "$server_start_timeout_seconds"
 require_positive server_stop_timeout_seconds "$server_stop_timeout_seconds"
+require_positive resource_maximum_bytes "$resource_maximum_bytes"
+require_positive resource_delivery_bytes "$resource_delivery_bytes"
+require_positive resource_lock_provider_bytes "$resource_lock_provider_bytes"
+require_positive resource_version_workspace_bytes "$resource_version_workspace_bytes"
+require_positive resource_page_cache_bytes "$resource_page_cache_bytes"
+require_positive resource_staging_frame_bytes "$resource_staging_frame_bytes"
+require_positive resource_staged_page_capacity "$resource_staged_page_capacity"
+require_uint deadlock_diagnostics_bytes "$deadlock_diagnostics_bytes"
+require_uint deadlock_diagnostics_epochs "$deadlock_diagnostics_epochs"
+require_uint deadlock_diagnostics_signatures_per_epoch "$deadlock_diagnostics_signatures_per_epoch"
+require_uint deadlock_diagnostics_events_per_epoch "$deadlock_diagnostics_events_per_epoch"
+require_uint deadlock_diagnostics_exemplars_per_signature "$deadlock_diagnostics_exemplars_per_signature"
+require_uint deadlock_diagnostics_maximum_cycle_edges "$deadlock_diagnostics_maximum_cycle_edges"
 if [[ -n $runner_timeout_seconds ]]; then require_positive runner_timeout_seconds "$runner_timeout_seconds";
 else runner_timeout_seconds=$((warmup_seconds + measured_seconds + 300)); fi
 if [[ -n $retry_base_micros ]]; then require_positive retry_base_micros "$retry_base_micros"; fi
@@ -218,23 +309,42 @@ required_classes=(
   "$river_root/river-server/build/classes/java/main/io/riverdb/server/LoopbackRiverServer.class"
   "$river_root/river-jdbc/build/classes/java/main/io/riverdb/jdbc/RiverDriver.class"
 )
+build_marker="$river_root/river-bench/build/tps-test-classes.stamp"
 build_required=false
 for required_class in "${required_classes[@]}"; do
   if [[ ! -f $required_class ]]; then build_required=true; break; fi
 done
+if [[ $build_required == false && ! -f $build_marker ]]; then build_required=true; fi
 if [[ $build_required == false ]]; then
-  build_marker=${required_classes[0]}
   for source_root in "$river_root"/river-*/src/main; do
     [[ -d $source_root ]] || continue
     newer_source=$(find "$source_root" -type f -newer "$build_marker" -print -quit)
     if [[ -n $newer_source ]]; then build_required=true; break; fi
   done
 fi
+if [[ $build_required == false && -d $river_root/buildSrc/src/main ]]; then
+  newer_source=$(find "$river_root/buildSrc/src/main" -type f \
+    -newer "$build_marker" -print -quit)
+  [[ -n $newer_source ]] && build_required=true
+fi
+if [[ $build_required == false ]]; then
+  newer_build_file=$(find "$river_root" -maxdepth 2 -type f \
+    \( -name 'build.gradle.kts' -o -name 'settings.gradle.kts' \
+    -o -name 'gradle.properties' \) -newer "$build_marker" -print -quit)
+  [[ -n $newer_build_file ]] && build_required=true
+fi
 if [[ $build_required == true ]]; then
   [[ ${RIVER_TPS_SKIP_BUILD:-false} == true ]] && die "compiled classes are missing or stale and RIVER_TPS_SKIP_BUILD=true"
   [[ -x $gradle_bin ]] || die "Gradle launcher is not executable: $gradle_bin"
   echo "build=required task=:river-bench:classes clean=false"
-  "$gradle_bin" :river-bench:classes
+  build_start_marker="$build_marker.$$"
+  mkdir -p "$(dirname -- "$build_marker")"
+  touch "$build_start_marker"
+  if ! "$gradle_bin" :river-bench:classes; then
+    rm -f "$build_start_marker"
+    exit 1
+  fi
+  mv "$build_start_marker" "$build_marker"
 else
   echo "build=skipped reason=compiled_classes_current"
 fi
@@ -278,6 +388,7 @@ run_phase=startup
 run_status=NOT_STARTED
 run_exit_status=1
 started_epoch=$(date +%s)
+workspace_start_sha256=$(workspace_fingerprint "$river_root")
 if [[ -z $artifact ]]; then
   if [[ -n $output_dir ]]; then artifact="$output_dir/tpcc-acceptance.properties";
   else artifact="$temp_dir/tpcc-acceptance.properties"; fi
@@ -294,6 +405,10 @@ stderr_log="$temp_dir/tpcc.stderr.log"
 combined_log="$temp_dir/tpcc-output.log"
 server_log="$temp_dir/server.log"
 server_metrics="$temp_dir/server-metrics.log"
+metrics_start="$temp_dir/performance-capture-start"
+metrics_started="$temp_dir/performance-capture-started"
+metrics_stop="$temp_dir/performance-capture-stop"
+metrics_stopped="$temp_dir/performance-capture-stopped"
 server_ready="$temp_dir/server.ready"
 server_stop="$temp_dir/server.stop"
 
@@ -311,10 +426,19 @@ write_metadata() {
   mkdir -p "$parent" 2>/dev/null || { echo "warning: cannot create metadata parent $parent" >&2; return; }
   local staged="$destination.staged.$$"
   local git_commit=unavailable git_status=unavailable git_dirty=unknown
+  local workspace_finish_sha256 workspace_stable
   local java_version=unavailable run_id=unavailable database_digest=unavailable
   if git_commit=$(git -C "$river_root" rev-parse HEAD 2>/dev/null); then
     git_status=$(git -C "$river_root" status --porcelain=v1 --untracked-files=all 2>/dev/null || true)
     [[ -n $git_status ]] && git_dirty=dirty || git_dirty=clean
+  fi
+  workspace_finish_sha256=$(workspace_fingerprint "$river_root")
+  if [[ $workspace_start_sha256 == unavailable || $workspace_finish_sha256 == unavailable ]]; then
+    workspace_stable=unknown
+  elif [[ $workspace_start_sha256 == "$workspace_finish_sha256" ]]; then
+    workspace_stable=true
+  else
+    workspace_stable=false
   fi
   java_version=$("$java_bin" -version 2>&1 | head -1 || true)
   if [[ -f $artifact ]]; then
@@ -336,6 +460,9 @@ write_metadata() {
     printf 'git.commit_sha=%s\n' "$git_commit"
     printf 'git.dirty_state=%s\n' "$git_dirty"
     printf 'git.status_sha256=%s\n' "$(hash_text "$git_status")"
+    printf 'git.workspace_start_sha256=%s\n' "$workspace_start_sha256"
+    printf 'git.workspace_finish_sha256=%s\n' "$workspace_finish_sha256"
+    printf 'git.workspace_stable_during_run=%s\n' "$workspace_stable"
     printf 'environment.java_launcher=%s\n' "$java_bin"
     printf 'environment.java_version=%s\n' "$java_version"
     printf 'environment.os=%s\n' "$(uname -srm 2>/dev/null || printf unavailable)"
@@ -358,6 +485,19 @@ write_metadata() {
     printf 'configuration.runner_timeout_seconds=%s\n' "$runner_timeout_seconds"
     printf 'configuration.server_start_timeout_seconds=%s\n' "$server_start_timeout_seconds"
     printf 'configuration.server_stop_timeout_seconds=%s\n' "$server_stop_timeout_seconds"
+    printf 'configuration.resource_maximum_bytes=%s\n' "$resource_maximum_bytes"
+    printf 'configuration.resource_delivery_bytes=%s\n' "$resource_delivery_bytes"
+    printf 'configuration.resource_lock_provider_bytes=%s\n' "$resource_lock_provider_bytes"
+    printf 'configuration.resource_version_workspace_bytes=%s\n' "$resource_version_workspace_bytes"
+    printf 'configuration.resource_page_cache_bytes=%s\n' "$resource_page_cache_bytes"
+    printf 'configuration.resource_staging_frame_bytes=%s\n' "$resource_staging_frame_bytes"
+    printf 'configuration.resource_staged_page_capacity=%s\n' "$resource_staged_page_capacity"
+    printf 'configuration.deadlock_diagnostics_bytes=%s\n' "$deadlock_diagnostics_bytes"
+    printf 'configuration.deadlock_diagnostics_epochs=%s\n' "$deadlock_diagnostics_epochs"
+    printf 'configuration.deadlock_diagnostics_signatures_per_epoch=%s\n' "$deadlock_diagnostics_signatures_per_epoch"
+    printf 'configuration.deadlock_diagnostics_events_per_epoch=%s\n' "$deadlock_diagnostics_events_per_epoch"
+    printf 'configuration.deadlock_diagnostics_exemplars_per_signature=%s\n' "$deadlock_diagnostics_exemplars_per_signature"
+    printf 'configuration.deadlock_diagnostics_maximum_cycle_edges=%s\n' "$deadlock_diagnostics_maximum_cycle_edges"
     printf 'configuration.seed=%s\n' "${seed:-java_default}"
     printf 'configuration.retry_base_micros=%s\n' "${retry_base_micros:-java_default}"
     printf 'configuration.retry_maximum_millis=%s\n' "${retry_maximum_millis:-java_default}"
@@ -365,7 +505,7 @@ write_metadata() {
     printf 'configuration.server_jfr=%s\n' "${server_jfr:-disabled}"
     printf 'configuration.client_java_options=%s\n' "$(IFS=,; echo "${client_java_options[*]:-}")"
     printf 'configuration.server_java_options=%s\n' "$(IFS=,; echo "${server_java_options[*]:-}")"
-    printf 'configuration.fingerprint=%s\n' "$(hash_text "$backend|$profile|$mix|$isolation|$scheduling|$evidence|$fresh_load|$warehouses|$terminals|$batch_rows|$maximum_attempts|$warmup_seconds|$measured_seconds|${seed:-java_default}|${retry_base_micros:-java_default}|${retry_maximum_millis:-java_default}")"
+    printf 'configuration.fingerprint=%s\n' "$(hash_text "$backend|$profile|$mix|$isolation|$scheduling|$evidence|$fresh_load|$warehouses|$terminals|$batch_rows|$maximum_attempts|$warmup_seconds|$measured_seconds|${seed:-java_default}|${retry_base_micros:-java_default}|${retry_maximum_millis:-java_default}|$resource_maximum_bytes|$resource_delivery_bytes|$resource_lock_provider_bytes|$resource_version_workspace_bytes|$resource_page_cache_bytes|$resource_staging_frame_bytes|$resource_staged_page_capacity|$deadlock_diagnostics_bytes|$deadlock_diagnostics_epochs|$deadlock_diagnostics_signatures_per_epoch|$deadlock_diagnostics_events_per_epoch|$deadlock_diagnostics_exemplars_per_signature|$deadlock_diagnostics_maximum_cycle_edges")"
     printf 'artifact.path=%s\n' "$artifact"
     printf 'artifact.run_id=%s\n' "$run_id"
     printf 'artifact.database_digest_sha256=%s\n' "$database_digest"
@@ -412,12 +552,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
+((terminals <= 2147483643)) || die "terminals leave no addressable server control slots"
 server_connections=$((terminals + 4))
-((server_connections < 16)) && server_connections=16
-((server_connections > 1024)) && server_connections=1024
 server_args=( "--directory=$temp_dir/database" "--port=$port"
   "--maximum-connections=$server_connections" "--ready-file=$server_ready"
-  "--stop-file=$server_stop" "--metrics-file=$server_metrics" )
+  "--resource-maximum-bytes=$resource_maximum_bytes"
+  "--resource-delivery-bytes=$resource_delivery_bytes"
+  "--resource-lock-provider-bytes=$resource_lock_provider_bytes"
+  "--resource-version-workspace-bytes=$resource_version_workspace_bytes"
+  "--resource-page-cache-bytes=$resource_page_cache_bytes"
+  "--resource-staging-frame-bytes=$resource_staging_frame_bytes"
+  "--resource-staged-page-capacity=$resource_staged_page_capacity"
+  "--stop-file=$server_stop" "--metrics-file=$server_metrics"
+  "--metrics-start-file=$metrics_start" "--metrics-started-file=$metrics_started"
+  "--metrics-stop-file=$metrics_stop" "--metrics-stopped-file=$metrics_stopped"
+  "--deadlock-diagnostics-bytes=$deadlock_diagnostics_bytes"
+  "--deadlock-diagnostics-epochs=$deadlock_diagnostics_epochs"
+  "--deadlock-diagnostics-signatures-per-epoch=$deadlock_diagnostics_signatures_per_epoch"
+  "--deadlock-diagnostics-events-per-epoch=$deadlock_diagnostics_events_per_epoch"
+  "--deadlock-diagnostics-exemplars-per-signature=$deadlock_diagnostics_exemplars_per_signature"
+  "--deadlock-diagnostics-maximum-cycle-edges=$deadlock_diagnostics_maximum_cycle_edges" )
 if [[ -n $server_jfr ]]; then
   server_jfr=$(absolute_path "$server_jfr")
   [[ ! -e $server_jfr ]] || die "refusing to overwrite server JFR: $server_jfr"
@@ -453,13 +607,21 @@ require_uint managed_port "$managed_port"
 ((managed_port > 0 && managed_port <= 65535)) || die "managed server returned invalid port: $managed_port"
 url="jdbc:river://localhost:$managed_port"
 echo "managed_server=started port=$managed_port"
+echo "managed_server_resources=explicit maximum_bytes=$resource_maximum_bytes delivery_bytes=$resource_delivery_bytes lock_provider_bytes=$resource_lock_provider_bytes version_workspace_bytes=$resource_version_workspace_bytes page_cache_bytes=$resource_page_cache_bytes staging_frame_bytes=$resource_staging_frame_bytes staged_page_capacity=$resource_staged_page_capacity"
 [[ -n $server_jfr ]] && echo "managed_server_jfr=$server_jfr"
+if [[ $deadlock_diagnostics_bytes =~ ^0+$ ]]; then
+  echo "managed_server_deadlock_diagnostics=disabled budget_bytes=0"
+else
+  echo "managed_server_deadlock_diagnostics=enabled budget_bytes=$deadlock_diagnostics_bytes epochs=$deadlock_diagnostics_epochs signatures_per_epoch=$deadlock_diagnostics_signatures_per_epoch events_per_epoch=$deadlock_diagnostics_events_per_epoch exemplars_per_signature=$deadlock_diagnostics_exemplars_per_signature maximum_cycle_edges=$deadlock_diagnostics_maximum_cycle_edges"
+fi
 
 runner_args=( "--url=$url" "--fresh-load=$fresh_load" "--warmup-seconds=$warmup_seconds"
   "--measured-seconds=$measured_seconds" "--scheduling=$scheduling" "--mix=$mix"
   "--isolation=$isolation" "--warehouses=$warehouses"
   "--terminals=$terminals" "--batch-rows=$batch_rows" "--maximum-attempts=$maximum_attempts"
-  "--artifact=$artifact" "--evidence=$evidence" )
+  "--artifact=$artifact" "--evidence=$evidence"
+  "--metrics-start-file=$metrics_start" "--metrics-started-file=$metrics_started"
+  "--metrics-stop-file=$metrics_stop" "--metrics-stopped-file=$metrics_stopped" )
 [[ $profile == tiny ]] && runner_args+=( "--tiny" )
 [[ -n $seed ]] && runner_args+=( "--seed=$seed" )
 [[ -n $retry_base_micros ]] && runner_args+=( "--retry-base-micros=$retry_base_micros" )
@@ -487,8 +649,93 @@ echo "=== TPS runner output ==="; cat "$stdout_log"
 if [[ -s $stderr_log ]]; then echo "=== runner stderr ===" >&2; cat "$stderr_log" >&2; fi
 
 stop_server
+diagnostic_status=SERVER_METRICS_MISSING
+performance_capture_status=SERVER_METRICS_MISSING
+server_measured_deadlocks=0
+server_capture_deadlocks=-1
+client_deadlock_outcomes=0
+server_active_transactions=-1
+server_active_locks=-1
+server_waiting_locks=-1
 if [[ -f $server_metrics ]]; then
   echo; echo "=== managed server metrics (Java-emitted) ==="; sed -n '1,240p' "$server_metrics"
+  diagnostic_enabled=$(awk -F= '/^server_deadlock_diagnostics_enabled=/{print $2}' "$server_metrics")
+  diagnostic_budget=$(awk -F= '/^server_deadlock_diagnostics_budget_bytes=/{print $2}' "$server_metrics")
+  diagnostic_valid=$(awk -F= '/^server_deadlock_diagnostics_valid=/{print $2}' "$server_metrics")
+  diagnostic_engine_status=$(awk -F= '/^server_deadlock_diagnostics_status=/{print $2}' "$server_metrics")
+  performance_capture_enabled=$(awk -F= '/^server_performance_capture_enabled=/{print $2}' "$server_metrics")
+  performance_capture_engine_status=$(awk -F= '/^server_performance_capture_status=/{print $2}' "$server_metrics")
+  performance_capture_valid=$(awk -F= '/^server_performance_capture_valid=/{print $2}' "$server_metrics")
+  server_active_transactions=$(awk -F= '/^server_active_transactions_at_capture=/{print $2}' "$server_metrics")
+  server_active_locks=$(awk -F= '/^server_active_locks_at_capture=/{print $2}' "$server_metrics")
+  server_waiting_locks=$(awk -F= '/^server_waiting_locks_at_capture=/{print $2}' "$server_metrics")
+  server_capture_deadlocks=$(awk -F= '/^server_capture_lock_waits_deadlocked=/{print $2}' "$server_metrics")
+  server_measured_deadlocks=$(awk '
+    /^deadlock_event / {
+      epoch=""; outcome=""; cleanup=""
+      for (i=1; i<=NF; i++) {
+        split($i, f, "=")
+        if (f[1]=="epoch") epoch=f[2]
+        if (f[1]=="outcome") outcome=f[2]
+        if (f[1]=="cleanup_valid") cleanup=f[2]
+      }
+      if (epoch==2 && outcome=="DEADLOCK" && cleanup=="true") count++
+      else if (epoch==2) invalid++
+    }
+    END { if (invalid) print -invalid; else print count+0 }
+  ' "$server_metrics")
+  client_deadlock_outcomes=$(awk '
+    /^retry_correlation / {
+      status=""
+      for (i=1; i<=NF; i++) {
+        split($i, f, "=")
+        if (f[1]=="status") status=f[2]
+      }
+      if (status=="DEADLOCK") count++
+    }
+    END { print count+0 }
+  ' "$combined_log")
+  if [[ ! $server_active_transactions =~ ^[0-9]+$
+      || ! $server_active_locks =~ ^[0-9]+$
+      || ! $server_waiting_locks =~ ^[0-9]+$
+      || ! $server_capture_deadlocks =~ ^[0-9]+$ ]]; then
+    diagnostic_status=INVALID_TERMINAL_CLEANUP_METRICS
+  elif ((server_active_transactions != 0
+      || server_active_locks != 0
+      || server_waiting_locks != 0)); then
+    diagnostic_status=INCOMPLETE_TERMINAL_CLEANUP
+  elif [[ $diagnostic_engine_status != OK ]]; then
+    diagnostic_status=INVALID_SERVER_DIAGNOSTICS
+  elif ((server_capture_deadlocks != client_deadlock_outcomes)); then
+    diagnostic_status=DEADLOCK_RECONCILIATION_MISMATCH
+  elif [[ $deadlock_diagnostics_bytes =~ ^0+$ ]]; then
+    if [[ $diagnostic_enabled != false || $diagnostic_budget != 0 ]]; then
+      diagnostic_status=DIAGNOSTIC_CONFIGURATION_MISMATCH
+    else
+      diagnostic_status=OK
+    fi
+  elif [[ $diagnostic_enabled != true || $diagnostic_valid != true
+      || $diagnostic_budget != "$deadlock_diagnostics_bytes" ]]; then
+    diagnostic_status=INVALID_SERVER_DIAGNOSTICS
+  elif ((server_measured_deadlocks < 0)); then
+    diagnostic_status=INVALID_MEASURED_DEADLOCK_EVENT
+  elif ((server_measured_deadlocks != server_capture_deadlocks)); then
+    diagnostic_status=DEADLOCK_RECONCILIATION_MISMATCH
+  else
+    diagnostic_status=OK
+  fi
+  if [[ $performance_capture_enabled != true ]]; then
+    performance_capture_status=PERFORMANCE_CAPTURE_DISABLED
+  elif [[ $performance_capture_engine_status != OK ]]; then
+    performance_capture_status=$performance_capture_engine_status
+  elif [[ $performance_capture_valid != true ]]; then
+    performance_capture_status=INVALID_PERFORMANCE_CAPTURE
+  else
+    performance_capture_status=OK
+  fi
+  echo "deadlock_reconciliation=$diagnostic_status server_capture_deadlocks=$server_capture_deadlocks server_epoch_2_events=$server_measured_deadlocks client_deadlock_outcomes=$client_deadlock_outcomes"
+  echo "performance_capture=$performance_capture_status"
+  echo "terminal_cleanup active_transactions=$server_active_transactions active_locks=$server_active_locks waiting_locks=$server_waiting_locks"
 else echo "server_metrics=unavailable"; fi
 
 if [[ -n $client_jfr && -f $client_jfr ]]; then
@@ -518,7 +765,7 @@ read -r retries errors commits completed attempts in_flight tps <<<"$summary"
 phase_state=$(awk '
   /^phase_start=/ { split($0, f, "="); active=f[2] }
   /^phase_complete=/ { split($0, f, "="); if (active==f[2]) active="" }
-  END { print active=="" ? "none" : active }
+  END { print (active == "" ? "none" : active) }
 ' "$combined_log")
 if [[ $runner_timed_out == true ]]; then
   run_result="${phase_state}_failed"; [[ $phase_state == none ]] && run_result=startup_failed
@@ -527,6 +774,12 @@ elif ((runner_status != 0)); then
   run_phase=${phase_state/none/startup}; run_result="${run_phase}_failed"
   run_status=$(sed -nE 's/.*: (RESOURCE_EXHAUSTED|IO_FAILURE|DEADLOCK|LOCK_TIMEOUT|TIMEOUT|CANCELLED|INVALID_ARGUMENT|NOT_OWNER|[A-Z][A-Z0-9_]{2,})$/\1/p' "$combined_log" | tail -1)
   [[ -n $run_status ]] || run_status=EXCEPTION; run_exit_status=$runner_status
+elif [[ $diagnostic_status != OK ]]; then
+  run_phase=diagnostics; run_result=diagnostics_failed
+  run_status=$diagnostic_status; run_exit_status=1
+elif [[ $performance_capture_status != OK ]]; then
+  run_phase=diagnostics; run_result=diagnostics_failed
+  run_status=$performance_capture_status; run_exit_status=1
 elif [[ $phase_state != none && $phase_state != checkpoint ]]; then
   run_phase=$phase_state; run_result="${phase_state}_failed"; run_status=INCOMPLETE_PHASE; run_exit_status=1
 elif ((commits <= 0)); then
@@ -542,6 +795,8 @@ echo "result=$run_result"; echo "phase=$run_phase"; echo "status=$run_status"
 echo "duration_seconds=$measured_seconds"; echo "retries=$retries"; echo "errors=$errors"
 echo "commits=$commits"; echo "completed=$completed"; echo "attempts=$attempts"
 echo "in_flight_at_cutoff=$in_flight"
+echo "deadlock_reconciliation=$diagnostic_status"
+echo "performance_capture=$performance_capture_status"
 if [[ $run_result == completed || $commits -gt 0 ]]; then echo "tps=$tps"; else echo "tps=unavailable"; fi
 if [[ -f $artifact ]]; then
   echo "artifact=$artifact"; echo "artifact_sha256=$(hash_file "$artifact")"

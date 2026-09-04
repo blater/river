@@ -30,6 +30,7 @@ final class SqlSessionExecutionCoordinator {
   private final SqlViewExpander viewExpander = new SqlViewExpander(binder);
   private final SqlViewDefinitionValidator viewValidator =
       new SqlViewDefinitionValidator(binder);
+  private final SqlBindingTableResolver bindingTables = new SqlBindingTableResolver();
   private final SqlTransactionState transactions;
   private final SqlCommandDispatcher dispatcher;
   private final SqlDmlExecutor dml;
@@ -89,7 +90,8 @@ final class SqlSessionExecutionCoordinator {
         session,
         temporal,
         rowExpressions,
-        queries.predicateEvaluator());
+        queries.predicateEvaluator(),
+        shapeBudget);
     pointCommands = new SqlPointCommandExecutor(
         session,
         bound,
@@ -118,6 +120,22 @@ final class SqlSessionExecutionCoordinator {
 
   boolean matchesCatalogGeneration(long expected) {
     return expected > 0 && session.matchesCatalogGeneration(expected);
+  }
+
+  StatusCode configureTransactionDiagnostics(
+      long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+    if (closes.unavailable() || queries.hasActiveScan()) {
+      return closes.unavailable() ? StatusCode.CLOSED : StatusCode.CONFLICT;
+    }
+    return session.configureTransactionDiagnostics(
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
+  }
+
+  StatusCode updateTransactionDiagnosticStep(long diagnosticStepTag) {
+    if (closes.unavailable() || queries.hasActiveScan()) {
+      return closes.unavailable() ? StatusCode.CLOSED : StatusCode.CONFLICT;
+    }
+    return session.updateTransactionDiagnosticStep(diagnosticStepTag);
   }
 
   void claimDatabaseLease(io.riverdb.engine.runtime.SqlRuntimeLease lease) {
@@ -184,14 +202,14 @@ final class SqlSessionExecutionCoordinator {
       status = atomic.begin(IsolationLevel.READ_COMMITTED);
       began = status.isOk();
     }
-    if (status.isOk()) {
-      status = session.resolveBindingTable(bound.command.tableName(), bound.table);
+    if (status.isOk() && bound.command.tableName().length() > 0) {
+      status = bindingTables.resolve(session, bound.command.tableName(), bound.table);
     }
     long catalogGeneration = status.isOk() ? session.catalogGeneration() : 0;
     if (began) status = atomic.finish(status);
     long retainedBytes = status.isOk()
         ? SqlPreparedPlan.estimateByteCharge(bound.command, bound.query) : 0;
-    if (status.isOk() && retainedBytes <= 0) status = StatusCode.INVARIANT_BROKEN;
+    if (status.isOk() && retainedBytes <= 0) status = StatusCode.FEATURE_NOT_SUPPORTED;
     boolean reserved = false;
     if (status.isOk()) {
       status = budget.reserveRetainedBytes(retainedBytes);

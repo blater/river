@@ -1,13 +1,11 @@
 package io.riverdb.engine.relational;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 
 /** Retained primitive row measurements captured before descriptor INSERT reservation. */
 final class RelationalDescriptorInsertReceipt {
-  private static final int MAXIMUM_ROWS =
-      io.riverdb.base.sql.SqlShapeLimits.MAX_INSERT_ROWS_PER_STATEMENT;
-  private static final long RETAINED_BYTES =
-      (long) MAXIMUM_ROWS * (Integer.BYTES + Long.BYTES);
+  private static final int INITIAL_ROWS = 8;
   private final RelationalRetainedBudget budget;
   private final RelationalDescriptorBatchAllocator allocator;
   private int[] mutationLengths = new int[0];
@@ -20,18 +18,26 @@ final class RelationalDescriptorInsertReceipt {
     allocator = batchAllocator;
   }
 
-  StatusCode prepare() {
-    if (mutationLengths.length == MAXIMUM_ROWS) return StatusCode.OK;
-    StatusCode status = budget == null ? StatusCode.OK : budget.reserve(RETAINED_BYTES);
+  StatusCode prepare(int requiredRows) {
+    if (requiredRows <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (requiredRows <= mutationLengths.length) return StatusCode.OK;
+    int capacity = BoundedArrayGrowth.capacity(
+        mutationLengths.length, requiredRows, Integer.MAX_VALUE, INITIAL_ROWS);
+    if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    long replacementBytes = retainedBytes(capacity);
+    StatusCode status = budget == null ? StatusCode.OK : budget.reserve(replacementBytes);
     if (!status.isOk()) return status;
     try {
-      int[] nextLengths = allocator.integers(MAXIMUM_ROWS);
-      long[] nextFingerprints = allocator.longs(MAXIMUM_ROWS);
+      // begin() has reset the prior statement, so growth replaces rather than copies its receipt.
+      int[] nextLengths = allocator.integers(capacity);
+      long[] nextFingerprints = allocator.longs(capacity);
+      long retiredBytes = retainedBytes();
       mutationLengths = nextLengths;
       contentFingerprints = nextFingerprints;
+      if (budget != null && retiredBytes > 0) budget.rollback(retiredBytes);
       return StatusCode.OK;
     } catch (OutOfMemoryError failure) {
-      if (budget != null) budget.rollback(RETAINED_BYTES);
+      if (budget != null) budget.rollback(replacementBytes);
       return StatusCode.RESOURCE_EXHAUSTED;
     }
   }
@@ -56,7 +62,10 @@ final class RelationalDescriptorInsertReceipt {
   int[] mutationLengths() { return mutationLengths; }
 
   long retainedBytes() {
-    return mutationLengths.length * (long) Integer.BYTES
-        + contentFingerprints.length * (long) Long.BYTES;
+    return retainedBytes(mutationLengths.length);
+  }
+
+  private static long retainedBytes(int rows) {
+    return (long) rows * (Integer.BYTES + Long.BYTES);
   }
 }

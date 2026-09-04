@@ -60,12 +60,13 @@ final class SqlSubqueryOrderedConsumerTest {
             + " ORDER BY label",
         new long[] {2, 5, 1, 6},
         new String[] {null, "alpha", "東京", "🌊-résumé"});
-    assertBegin(
+    assertTextRows(
         fixture,
         "SELECT id,CAST(day_value AS VARCHAR(10)) AS rendered "
             + "FROM order_rows o WHERE " + SMALL_ORDINARY
             + " ORDER BY rendered DESC LIMIT 3",
-        StatusCode.FEATURE_NOT_SUPPORTED);
+        new long[] {6, 5, 1},
+        new String[] {"2024-01-06", "2024-01-05", "2024-01-03"});
     assertTextRows(
         fixture,
         "SELECT id,CAST(day_value AS VARCHAR(10)) AS rendered "
@@ -215,7 +216,10 @@ final class SqlSubqueryOrderedConsumerTest {
             + SMALL_GRAPH + " ORDER BY rank");
     assertEquals(6, counters[0], "all physical parent candidates reached the graph");
     assertEquals(6, counters[1], "the correlated child executed for every candidate");
-    assertEquals(30, counters[2], "six full child scans reached every candidate");
+    assertEquals(
+        22,
+        counters[2],
+        "membership scans stop at a match and exhaust only unmatched candidates");
     assertEquals(5, counters[3], "five child rows passed their residual filter");
     assertEquals(6, counters[4], "all predicate results completed");
     assertEquals(4, counters[5], "four accepted rows reached the direct consumer");
@@ -259,8 +263,8 @@ final class SqlSubqueryOrderedConsumerTest {
     fixture.execute(
         "CREATE TABLE spill_error "
             + "(id BIGINT PRIMARY KEY,owner BIGINT,value BIGINT)");
-    for (int first = 1; first <= 1_100; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
-      int end = Math.min(first + SqlCommand.MAXIMUM_INSERT_ROWS, 1_101);
+    for (int first = 1; first <= 1_100; first += SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS) {
+      int end = Math.min(first + SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS, 1_101);
       StringBuilder rows = new StringBuilder("INSERT INTO spill_rows VALUES ");
       for (int id = first; id < end; id++) {
         if (id > first) rows.append(',');
@@ -271,8 +275,8 @@ final class SqlSubqueryOrderedConsumerTest {
       }
       fixture.execute(rows.toString());
     }
-    for (int first = 1; first <= 1_100; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
-      int end = Math.min(first + SqlCommand.MAXIMUM_INSERT_ROWS, 1_101);
+    for (int first = 1; first <= 1_100; first += SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS) {
+      int end = Math.min(first + SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS, 1_101);
       StringBuilder accepted = new StringBuilder("INSERT INTO spill_accept VALUES ");
       for (int id = first; id < end; id++) {
         if (id > first) accepted.append(',');

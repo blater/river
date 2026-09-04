@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,6 +44,7 @@ final class EmbeddedRiverApiAllocationTest {
     assertEquals(
         StatusCode.OK,
         EmbeddedRiver.create(
+            databaseRequest(4),
             root,
             DatabaseIncarnation.of(0x415049414c4c4f43L, 0x4154494f4e303031L),
             WalGeneration.of(1),

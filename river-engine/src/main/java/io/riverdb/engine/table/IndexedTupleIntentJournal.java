@@ -15,10 +15,11 @@ final class IndexedTupleIntentJournal {
   private final IndexedTupleIntentDescriptors descriptors;
   private final IndexedTupleIntentEntries entries;
   private final IndexedRelationalCompilationBuffer compilation;
+  private long generation = 1;
 
   IndexedTupleIntentJournal() {
     this(MAX_MUTATIONS, MAX_DESCRIPTORS,
-        MAX_MUTATIONS * TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES);
+        maximumPayloadBytes(MAX_MUTATIONS));
   }
 
   IndexedTupleIntentJournal(int maximumMutations, int maximumDescriptors,
@@ -43,7 +44,8 @@ final class IndexedTupleIntentJournal {
 
   long accountedBytesForReservation(
       int scalarMutations, int scalarPayloadBytes,
-      int mutations, int descriptorCount, int payloadBytes) {
+      int mutations, int descriptorCount, int payloadBytes,
+      int logicalRowFloors) {
     long entryBytes = entries.accountedBytesForReservation(mutations, payloadBytes);
     long descriptorBytes = descriptors.accountedBytesForReservation(descriptorCount);
     long totalMutations = (long) scalarMutations + entries.count() + mutations;
@@ -55,7 +57,8 @@ final class IndexedTupleIntentJournal {
         || totalDescriptors > Integer.MAX_VALUE || totalPayload > Integer.MAX_VALUE
         || totalParts > Integer.MAX_VALUE) return -1;
     long compilationBytes = compilation.accountedBytesForReservation(
-        (int) totalMutations, (int) totalDescriptors, (int) totalParts, (int) totalPayload);
+        (int) totalMutations, (int) totalDescriptors, (int) totalParts,
+        (int) totalPayload, logicalRowFloors);
     if (compilationBytes < 0 || entryBytes > Long.MAX_VALUE - descriptorBytes
         || entryBytes + descriptorBytes > Long.MAX_VALUE - compilationBytes) return -1;
     return entryBytes + descriptorBytes + compilationBytes;
@@ -64,7 +67,7 @@ final class IndexedTupleIntentJournal {
   long accountedBytesForLifecycleReservation(
       int scalarMutations, int scalarPayloadBytes,
       int mutations, int descriptorAdds, int payloadBytes,
-      int lifecycleDescriptors, int lifecycleParts) {
+      int lifecycleDescriptors, int lifecycleParts, int logicalRowFloors) {
     long entryBytes = entries.accountedBytesForReservation(mutations, payloadBytes);
     long descriptorBytes = descriptors.accountedBytesForReservation(descriptorAdds);
     long totalMutations = (long) scalarMutations + entries.count() + mutations;
@@ -77,7 +80,8 @@ final class IndexedTupleIntentJournal {
         || totalMutations > Integer.MAX_VALUE || totalPayload > Integer.MAX_VALUE
         || totalDescriptors > Integer.MAX_VALUE || totalParts > Integer.MAX_VALUE) return -1;
     long compilationBytes = compilation.accountedBytesForReservation(
-        (int) totalMutations, (int) totalDescriptors, (int) totalParts, (int) totalPayload);
+        (int) totalMutations, (int) totalDescriptors, (int) totalParts,
+        (int) totalPayload, logicalRowFloors);
     if (compilationBytes < 0 || entryBytes > Long.MAX_VALUE - descriptorBytes
         || entryBytes + descriptorBytes > Long.MAX_VALUE - compilationBytes) return -1;
     return entryBytes + descriptorBytes + compilationBytes;
@@ -94,9 +98,11 @@ final class IndexedTupleIntentJournal {
   }
 
   void release() {
+    boolean changed = entries.count() != 0 || descriptors.count() != 0;
     entries.release();
     descriptors.release();
     compilation.release();
+    if (changed) changeGeneration();
   }
 
   StatusCode append(
@@ -109,12 +115,15 @@ final class IndexedTupleIntentJournal {
     int descriptor = descriptors.register(owner, keyId, schemaId, shape);
     if (descriptor < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     entries.append(operation, descriptor, logicalRowId, key, offset, length);
+    changeGeneration();
     return StatusCode.OK;
   }
 
   void truncate(int mutations, int descriptorCount, int payloadBytes) {
+    boolean changed = mutations != entries.count() || descriptorCount != descriptors.count();
     entries.truncate(mutations, payloadBytes);
     descriptors.truncate(descriptorCount);
+    if (changed) changeGeneration();
   }
 
   void reset() {
@@ -122,6 +131,8 @@ final class IndexedTupleIntentJournal {
     compilation.reset();
   }
   int mutationCount() { return entries.count(); }
+  long generation() { return generation; }
+  int activeMutationCount() { return entries.activeCount(); }
   int mutationCapacity() { return maximumMutations; }
   int descriptorCount() { return descriptors.count(); }
   int payloadBytes() { return entries.payloadBytes(); }
@@ -256,6 +267,12 @@ final class IndexedTupleIntentJournal {
         mutations, descriptorCount, descriptorParts, payloadBytes, logicalRowFloors, result);
   }
 
+  StatusCode reserveCompilation(IndexedHybridLogicalSizing sizing) {
+    return sizing == null ? StatusCode.INVALID_EXTERNAL_INPUT : compilation.reserve(
+        sizing.mutations(), sizing.descriptors(), sizing.descriptorParts(),
+        sizing.payloadBytes(), sizing.logicalRowFloors());
+  }
+
   private int descriptorParts() {
     int parts = 0;
     for (int descriptor = 0; descriptor < descriptorCount(); descriptor++) {
@@ -273,6 +290,11 @@ final class IndexedTupleIntentJournal {
     return (int) Math.min(Integer.MAX_VALUE, maximum);
   }
 
+  private static int maximumPayloadBytes(int mutations) {
+    long maximum = (long) mutations * TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES;
+    return (int) Math.min(Integer.MAX_VALUE, maximum);
+  }
+
   private static boolean valid(
       int operation, long owner, long keyId, long schemaId, TupleShape shape,
       long logicalRowId, ByteBuffer key, int offset, int length) {
@@ -287,5 +309,9 @@ final class IndexedTupleIntentJournal {
         && offset <= key.limit() - length
         && TupleKeyCodec.matchesPhysicalIndexKey(key, offset, length, shape)
         && TupleKeyCodec.logicalRowId(key, offset, length) == logicalRowId;
+  }
+
+  private void changeGeneration() {
+    generation = generation == Long.MAX_VALUE ? 0 : generation + 1;
   }
 }

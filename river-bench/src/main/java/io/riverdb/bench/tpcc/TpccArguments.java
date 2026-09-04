@@ -10,8 +10,14 @@ final class TpccArguments {
   private boolean load = true;
   private TpccPhase phase = TpccPhase.LOAD_RUN_CHECKPOINT;
   private TpccScheduling scheduling = TpccScheduling.STANDARD;
+  private TpccWorkloadMix mix = TpccWorkloadMix.STANDARD;
+  private TpccIsolationContract isolation = TpccIsolationContract.SERIALIZABLE;
   private Path artifact = Path.of("river-tpcc-acceptance.properties");
   private Path jfr;
+  private Path metricsStartFile;
+  private Path metricsStartedFile;
+  private Path metricsStopFile;
+  private Path metricsStoppedFile;
   private long warmup = 300;
   private long measured = 1_800;
   private long seed = 0x5450_4343_0001L;
@@ -41,8 +47,14 @@ final class TpccArguments {
       case "--url" -> url = value;
       case "--phase" -> phase = TpccPhase.parse(value);
       case "--scheduling" -> scheduling = TpccScheduling.parse(value);
+      case "--mix" -> mix = TpccWorkloadMix.parse(value);
+      case "--isolation" -> isolation = TpccIsolationContract.parse(value);
       case "--artifact" -> artifact = Path.of(value);
       case "--jfr" -> jfr = Path.of(value);
+      case "--metrics-start-file" -> metricsStartFile = Path.of(value);
+      case "--metrics-started-file" -> metricsStartedFile = Path.of(value);
+      case "--metrics-stop-file" -> metricsStopFile = Path.of(value);
+      case "--metrics-stopped-file" -> metricsStoppedFile = Path.of(value);
       case "--evidence" -> evidence = TpccEvidenceMode.parse(value);
       case "--tiny" -> tiny = Boolean.parseBoolean(value);
       case "--fresh-load" -> load = Boolean.parseBoolean(value);
@@ -77,7 +89,10 @@ final class TpccArguments {
         tiny ? 22 : 2_101, configuredTerminals,
         Duration.ofSeconds(warmup), Duration.ofSeconds(measured), batch, configuredAttempts,
         seed, load,
-        phase, scheduling, Duration.ofNanos(Math.multiplyExact(retryBaseMicros, 1_000L)),
-        Duration.ofMillis(retryMaximumMillis), artifact, jfr, evidence);
+        phase, scheduling, mix, isolation,
+        Duration.ofNanos(Math.multiplyExact(retryBaseMicros, 1_000L)),
+        Duration.ofMillis(retryMaximumMillis), artifact, jfr,
+        metricsStartFile, metricsStartedFile, metricsStopFile, metricsStoppedFile,
+        evidence);
   }
 }

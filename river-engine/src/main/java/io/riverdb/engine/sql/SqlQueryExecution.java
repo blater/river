@@ -419,17 +419,17 @@ final class SqlQueryExecution {
 
   private StatusCode nextActiveScan(
       SqlScanCursor cursor, SqlScanRowResult result) {
-    SqlQuerySpecialScan.next(
-        unions, universalJoins, descriptorScans, plan, catalogs, activeScan,
-        projectedValues, explainTypeDescriptors, bound.projectedTypeDescriptors,
-        cursor, result, specialScan);
-    if (specialScan.matched()) return specialScan.status();
     if (bound.hasBlockPlans()
         && blockPipeline != null && blockPipeline.active()) {
       StatusCode status = blockPipeline.next(result);
       if (status.isOk()) cursor.rowReturned();
       return status;
     }
+    SqlQuerySpecialScan.next(
+        unions, universalJoins, descriptorScans, plan, catalogs, activeScan,
+        projectedValues, explainTypeDescriptors, bound.projectedTypeDescriptors,
+        cursor, result, specialScan);
+    if (specialScan.matched()) return specialScan.status();
     if (!plan.aggregate() && cursor.limitReached()) {
       return StatusCode.CONFLICT;
     }

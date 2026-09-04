@@ -17,16 +17,19 @@ final class SqlUniversalJoinSource {
   private final SqlUniversalJoinMetrics metrics = new SqlUniversalJoinMetrics();
   private final SqlUniversalJoinHash hash;
   private final SqlUniversalJoinMerge merge;
+  private final SqlUniversalJoinOrderedRoot orderedRoot;
   private SqlUniversalJoinRows rows;
   private SqlUniversalJoinPredicates predicates;
   private SqlBoundJoinContext context;
   private SqlBoundBooleanPredicateProgram where;
   private SqlCommand command;
+  private int orderedInnerColumn = -1;
   private int stage = -1;
 
   SqlUniversalJoinSource(RelationalSession session, SqlSessionShapeBudget budget) {
     hash = new SqlUniversalJoinHash(session, budget);
     merge = new SqlUniversalJoinMerge(budget);
+    orderedRoot = new SqlUniversalJoinOrderedRoot(budget);
   }
 
   void configure(
@@ -34,13 +37,15 @@ final class SqlUniversalJoinSource {
       SqlBoundJoinContext joinContext,
       SqlBoundBooleanPredicateProgram whereProgram,
       SqlUniversalJoinRows joinRows,
-      SqlUniversalJoinPredicates predicateEvaluator) {
+      SqlUniversalJoinPredicates predicateEvaluator,
+      int canonicalInnerColumn) {
     command = source;
     context = joinContext;
     access.configure(joinContext);
     where = whereProgram;
     rows = joinRows;
     predicates = predicateEvaluator;
+    orderedInnerColumn = canonicalInnerColumn;
     resetProgress();
     resetFallback();
   }
@@ -52,16 +57,21 @@ final class SqlUniversalJoinSource {
     if (command.rowLimit() == 0) return StatusCode.OK;
     StatusCode status = hash.begin(command, context, rows);
     if (status.isOk()) status = merge.begin(command, context, rows);
+    if (status.isOk() && hash.stage() < 0) {
+      status = orderedRoot.begin(
+          command, context, where, rows, orderedInnerColumn);
+    }
     if (status.isOk() && hash.stage() >= 0) {
       runtimeFallback[hash.stage()] = hash.fallback(hash.stage());
     }
-    return status.isOk() ? rows.open(0) : status;
+    return !status.isOk() || orderedRoot.active() ? status : rows.open(0);
   }
 
   StatusCode next() {
     while (true) {
       if (stage < 0) {
-        StatusCode status = rows.next(0);
+        StatusCode status = orderedRoot.active()
+            ? orderedRoot.next(rows) : rows.next(0);
         if (!status.isOk()) return status;
         metrics.root();
         resetStages();
@@ -152,11 +162,18 @@ final class SqlUniversalJoinSource {
         ? planned : SqlJoinStrategy.NESTED_LOOP;
   }
   boolean stageFallback(int current) { return runtimeFallback[current]; }
+  boolean hasResources() {
+    return stage >= 0 || hash.hasResources() || merge.hasResources()
+        || orderedRoot.hasResources() || rows != null && rows.hasResources();
+  }
 
   StatusCode close() {
     resetProgress();
     StatusCode status = hash.close();
-    return status.isOk() ? merge.close() : status;
+    StatusCode mergeStatus = merge.close();
+    StatusCode orderedStatus = orderedRoot.close();
+    if (status.isOk()) status = mergeStatus;
+    return status.isOk() ? orderedStatus : status;
   }
 
   private void resetStages() {

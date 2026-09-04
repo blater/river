@@ -177,8 +177,14 @@ final class LockExactTable {
   long lockWaitsDeadlocked() { return waitCounters.deadlockCount(); }
   long lockWaitsCancelled() { return waitCounters.cancelledCount(); }
   StatusCode activateTransaction(
-      long id, long generation, long startOrder, long diagnosticTag, long metricsEpoch) {
-    return transactionAdmission.activate(id, generation, startOrder, diagnosticTag, metricsEpoch);
+      long id, long generation, long startOrder,
+      long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+    return transactionAdmission.activate(
+        id, generation, startOrder, diagnosticTag, diagnosticStepTag, metricsEpoch);
+  }
+
+  StatusCode updateDiagnosticStep(long id, long generation, long diagnosticStepTag) {
+    return transactionAdmission.updateDiagnosticStep(id, generation, diagnosticStepTag);
   }
   void snapshotDeadlocks(LockDeadlockDiagnosticsSnapshot target) {
     deadlocks.snapshot(target);

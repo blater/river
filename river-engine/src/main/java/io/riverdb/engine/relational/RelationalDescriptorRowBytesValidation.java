@@ -1,7 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.format.row.StoredTableRowHeaderCodec;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
@@ -13,7 +12,7 @@ final class RelationalDescriptorRowBytesValidation {
   StatusCode copy(HeapRowResult row) {
     int length = row.length();
     if (length < StoredTableRowHeaderCodec.HEADER_BYTES
-        || length > SqlShapeLimits.MAX_STORED_ROW_BYTES) {
+        || length > TableSchema.MAXIMUM_ROW_BYTES) {
       return StatusCode.CORRUPTION;
     }
     StatusCode status = reserve(length);
@@ -33,7 +32,7 @@ final class RelationalDescriptorRowBytesValidation {
     if (bytes != null && requested <= bytes.capacity()) return StatusCode.OK;
     int capacity = bytes == null ? 256 : bytes.capacity();
     while (capacity < requested) capacity = Math.min(
-        SqlShapeLimits.MAX_STORED_ROW_BYTES, capacity << 1);
+        TableSchema.MAXIMUM_ROW_BYTES, capacity << 1);
     try {
       bytes = ByteBuffer.allocateDirect(capacity);
       return StatusCode.OK;

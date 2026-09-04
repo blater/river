@@ -1,5 +1,10 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databasePlan;
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
+import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
+import static io.riverdb.tx.TransactionManager.DEFAULT_LOCK_WAIT_TIMEOUT_NANOS;
+
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.concurrent.FatalStateFence;
 import io.riverdb.base.error.StatusCode;
@@ -14,6 +19,7 @@ import io.riverdb.format.btree.TupleIndexRootRecord;
 import io.riverdb.format.btree.TupleIndexRootRecordCodec;
 import io.riverdb.format.btree.TupleBTreePageCodec;
 import io.riverdb.format.btree.TupleKeyBuilder;
+import io.riverdb.format.btree.TupleKeyCodec;
 import io.riverdb.format.catalog.CatalogKeyspace;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.format.wal.WalRecordCodec;
@@ -23,7 +29,11 @@ import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.storage.btree.BTreeFreePage;
 import io.riverdb.storage.btree.BTreeRootPage;
+import io.riverdb.storage.btree.TupleBTree;
+import io.riverdb.storage.btree.TupleBTreeInsertPreflightResult;
 import io.riverdb.storage.btree.TupleBTreePageReference;
+import io.riverdb.storage.btree.BTreeStructuralLimits;
+import io.riverdb.storage.btree.TupleBTreeTreeWorkspace;
 import io.riverdb.tx.TransactionManager;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
@@ -32,10 +42,10 @@ import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalAppendResult;
 import io.riverdb.wal.local.LocalWalForceResult;
 import io.riverdb.wal.local.LocalWalGroupAppendResult;
-import io.riverdb.wal.local.LocalWalGroupReservation;
 import io.riverdb.wal.local.LocalWalLogicalStream;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import io.riverdb.wal.local.LocalWalReadResult;
+import io.riverdb.wal.local.LocalWalRecordBatch;
 import io.riverdb.wal.local.LocalWalReservation;
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
@@ -224,14 +234,16 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(2), created));
     IndexedTableOpenResult opened = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), opened));
     ByteBuffer malformed = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES + 1);
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), opened.table().nextTransactionId(), 2);
-    IndexedTransactionSession session = new IndexedTransactionSession(
-        manager, opened.table(), malformed.remaining());
+    IndexedVacuum vacuum = new IndexedVacuum(manager, opened.table());
+    IndexedSessionContext context = context(manager, opened.table(), null, vacuum);
+    IndexedTransactionSession session = session(context, malformed.remaining());
     TransactionOutcome outcome = new TransactionOutcome();
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
     requireOk(session.insert(CatalogKeyspace.INDEX_ROOT_SPACE, 1_000, malformed));
@@ -251,7 +263,7 @@ final class IndexedRelationalWalHarnessTest {
   }
 
   @Test
-  void worstMutationCountChunksWithinWalLimit() {
+  void worstMutationCountChunksWithinPhysicalRecordLimit() {
     IndexedRelationalMutationBuffer source =
         new IndexedRelationalMutationBuffer(384, 0, 0);
     int rowBytes = 8_192;
@@ -268,7 +280,6 @@ final class IndexedRelationalWalHarnessTest {
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
     requireOk(plan.plan(TRANSACTION_ID, OPERATION_ID + 1, source));
     check(plan.chunkCount() > 1, "worst mutation group did not exercise chunking");
-    check(plan.chunkCount() <= LocalWal.MAX_PENDING_RECORDS, "too many WAL chunks");
     for (int chunk = 0; chunk < plan.chunkCount(); chunk++) {
       check(plan.payloadBytesAt(chunk) <= WalRecordCodec.MAX_PAYLOAD_BYTES,
           "chunk exceeds LocalWal payload");
@@ -494,12 +505,13 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(source.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
     requireOk(plan.plan(TRANSACTION_ID, OPERATION_ID + 7, source));
-    check(plan.chunkCount() > LocalWal.MAX_PENDING_RECORDS,
-        "fixture did not cross the provider batch boundary");
+    check(plan.chunkCount() > 16,
+        "fixture did not cross the removed fixed-slot boundary");
 
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
-    IndexedRelationalWalCommitter committer = new IndexedRelationalWalCommitter(wal);
+    IndexedRelationalWalCommitter committer =
+        new IndexedRelationalWalCommitter(wal, new IndexedGroupCommitMetrics());
     requireOk(committer.appendAndForce(plan, 91));
     check(committer.recordStart() > 0 && committer.recordEnd() > committer.recordStart(),
         "streamed logical extent was not retained");
@@ -544,7 +556,8 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(source.seal());
     IndexedRelationalWalPlan interrupted = new IndexedRelationalWalPlan();
     requireOk(interrupted.plan(TRANSACTION_ID, OPERATION_ID + 8, source));
-    check(interrupted.hasMoreBatches(), "fixture did not require a continuation batch");
+    check(interrupted.chunkCount() > 16,
+        "fixture did not cross the removed fixed-slot boundary");
 
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
@@ -552,19 +565,9 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(wal.beginLogicalStream(
         interrupted.transactionId(), IndexedRelationalWalCodec.WAL_FORMAT_ID,
         IndexedRelationalWalCodec.WAL_FORMAT_VERSION, stream));
-    int chunks = interrupted.batchChunkCount();
-    int[] payloadBytes = new int[LocalWal.MAX_PENDING_RECORDS];
-    for (int chunk = 0; chunk < chunks; chunk++) {
-      payloadBytes[chunk] = interrupted.payloadBytesAt(chunk);
-    }
-    LocalWalGroupReservation reservation = new LocalWalGroupReservation();
-    requireOk(wal.reserveLogicalStreamBatch(stream, payloadBytes, chunks, reservation));
-    for (int chunk = 0; chunk < chunks; chunk++) {
-      requireOk(IndexedRelationalWalCodec.encode(
-          interrupted, chunk, reservation.writablePayload(chunk)));
-    }
     LocalWalGroupAppendResult appended = new LocalWalGroupAppendResult();
-    requireOk(wal.appendLogicalStreamContinuation(stream, reservation, appended));
+    requireOk(wal.appendLogicalStreamContinuation(
+        stream, new PrefixBatch(interrupted, interrupted.recordCount() - 1), appended));
     long interruptedStart = appended.startOffset();
     requireOk(wal.forceLogicalStreamBatch(stream, new LocalWalForceResult()));
     requireOk(wal.releaseLogicalStreamBatch(stream));
@@ -584,7 +587,8 @@ final class IndexedRelationalWalHarnessTest {
 
     IndexedRelationalWalPlan committed = oneBasePlan(
         TRANSACTION_ID + 1, OPERATION_ID + 9, 29);
-    IndexedRelationalWalCommitter committer = new IndexedRelationalWalCommitter(wal);
+    IndexedRelationalWalCommitter committer =
+        new IndexedRelationalWalCommitter(wal, new IndexedGroupCommitMetrics());
     requireOk(committer.appendAndForce(committed, 91));
     requireOk(committer.releaseForced());
     requireOk(wal.close());
@@ -611,7 +615,9 @@ final class IndexedRelationalWalHarnessTest {
     Path[] followerPaths = {followerOnePath, followerTwoPath};
     EmbeddedDatabaseOpenResult opened = new EmbeddedDatabaseOpenResult();
     requireOk(EmbeddedDatabase.createWithDurableWalQuorum(
-        primaryPath, followerPaths, 2, DATABASE, GENERATION, 8, opened));
+        runtimeRoot(), databasePlan(8),
+        primaryPath, followerPaths, 2, DATABASE, GENERATION, 8, DEFAULT_LOCK_WAIT_TIMEOUT_NANOS,
+        opened));
     requireOk(opened.database().close());
 
     NioDurableDirectory primaryDirectory = openDirectory(primaryPath);
@@ -641,20 +647,9 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(primary.beginLogicalStream(
         interrupted.transactionId(), IndexedRelationalWalCodec.WAL_FORMAT_ID,
         IndexedRelationalWalCodec.WAL_FORMAT_VERSION, stream));
-    int chunks = interrupted.batchChunkCount();
-    int[] payloadBytes = new int[LocalWal.MAX_PENDING_RECORDS];
-    for (int chunk = 0; chunk < chunks; chunk++) {
-      payloadBytes[chunk] = interrupted.payloadBytesAt(chunk);
-    }
-    LocalWalGroupReservation reservation = new LocalWalGroupReservation();
-    requireOk(primary.reserveLogicalStreamBatch(
-        stream, payloadBytes, chunks, reservation));
-    for (int chunk = 0; chunk < chunks; chunk++) {
-      requireOk(IndexedRelationalWalCodec.encode(
-          interrupted, chunk, reservation.writablePayload(chunk)));
-    }
     requireOk(primary.appendLogicalStreamContinuation(
-        stream, reservation, new LocalWalGroupAppendResult()));
+        stream, new PrefixBatch(interrupted, interrupted.recordCount() - 1),
+        new LocalWalGroupAppendResult()));
     requireOk(primary.forceLogicalStreamBatch(stream, new LocalWalForceResult()));
     requireOk(primary.releaseLogicalStreamBatch(stream));
     crashWal(primary);
@@ -665,7 +660,9 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(followerTwoDirectory.close());
 
     requireOk(EmbeddedDatabase.openWithDurableWalQuorum(
-        primaryPath, followerPaths, 2, DATABASE, GENERATION, 8, opened));
+        runtimeRoot(), databasePlan(8),
+        primaryPath, followerPaths, 2, DATABASE, GENERATION, 8, DEFAULT_LOCK_WAIT_TIMEOUT_NANOS,
+        opened));
     EmbeddedDatabase database = opened.database();
     check(database.availableDurableNodeCount() == 3,
         "repaired replicas were not admitted to quorum");
@@ -679,7 +676,9 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(database.close());
 
     requireOk(EmbeddedDatabase.openWithDurableWalQuorum(
-        primaryPath, followerPaths, 2, DATABASE, GENERATION, 8, opened));
+        runtimeRoot(), databasePlan(8),
+        primaryPath, followerPaths, 2, DATABASE, GENERATION, 8, DEFAULT_LOCK_WAIT_TIMEOUT_NANOS,
+        opened));
     database = opened.database();
     requireOk(database.createSession(128, sessionResult));
     session = sessionResult.session();
@@ -738,7 +737,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult table = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), table));
     requireOk(created.store().close());
@@ -772,7 +771,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistry(reopened.store());
     assertRecoveredRegistry(reopened.store(), 1_001, 5, SECOND_OWNER_OBJECT_ID);
     HeapRowResult base = new HeapRowResult();
@@ -800,7 +799,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened.reset();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistry(reopened.store());
     assertRecoveredRegistry(reopened.store(), 1_001, 5, SECOND_OWNER_OBJECT_ID);
     requireOk(reopened.store().close());
@@ -814,7 +813,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult opened = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), opened));
     int[] descriptor = {
@@ -864,7 +863,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 0, 4, 2,
         recoveredCursor);
@@ -914,7 +913,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_ABSENT, 0, generation, 0, 0);
     assertRecoveredFreeChain(pageSet(reopened.store()), nextPage - firstCursor);
@@ -928,7 +927,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult table = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), table));
     IndexedCommitResult commit = new IndexedCommitResult();
@@ -958,7 +957,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     requireOk(reopened.store().fetchByKey(space, 1, row));
     check(row.getLong(0) == 811 && reopened.store().rowCount() == 1,
         "live grouped recovery diverged from publication");
@@ -972,7 +971,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult table = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), table));
     IndexedCommitResult commit = new IndexedCommitResult();
@@ -1036,7 +1035,7 @@ final class IndexedRelationalWalHarnessTest {
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult resumed = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
-        directory, wal, DATABASE, GENERATION, resumed));
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(4), resumed));
     created = resumed;
     assertRecoveredRegistry(
         created.store(), 1_000, 4, OWNER_OBJECT_ID, 3, KEY_SCHEMA_ID);
@@ -1100,7 +1099,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistry(reopened.store(), 1_001, 4, SECOND_OWNER_OBJECT_ID, 2);
     check(reopened.store().rowCount() == 10, "atomic grouped recovery frontier mismatch");
     IndexedPageSet reopenedPages = pageSet(reopened.store());
@@ -1117,7 +1116,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), tableResult));
     IndexedCommitResult commit = new IndexedCommitResult();
@@ -1139,7 +1138,9 @@ final class IndexedRelationalWalHarnessTest {
     IndexedTable table = tableResult.table();
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, 128);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context, 128);
     requireOk(session.begin(IsolationLevel.REPEATABLE_READ));
     long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
     ByteBuffer row = ByteBuffer.allocate(Long.BYTES);
@@ -1206,7 +1207,7 @@ final class IndexedRelationalWalHarnessTest {
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
-        directory, wal, DATABASE, GENERATION, reopened));
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
     check(fetched.getLong(0) == 991, "reopen lost hybrid base row");
     check(reopened.store().fetchByKey(baseSpace, 2, fetched) == StatusCode.CONFLICT,
@@ -1225,7 +1226,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root, counters);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), tableResult));
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
@@ -1247,23 +1248,44 @@ final class IndexedRelationalWalHarnessTest {
     IndexedTable table = tableResult.table();
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     IndexedGroupCommitCoordinator coordinator =
         new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
-    IndexedTransactionSession first =
-        new IndexedTransactionSession(manager, table, 128, coordinator);
-    IndexedTransactionSession second =
-        new IndexedTransactionSession(manager, table, 128, coordinator);
+    IndexedSessionContext context = context(manager, table, coordinator, vacuum);
+    IndexedTransactionSession first = session(context, 128);
+    IndexedTransactionSession second = session(context, 128);
     long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
     prepareHybrid(first, descriptor, baseSpace, 1, 991);
     prepareHybrid(second, descriptor, baseSpace, 2, 992);
     check(first.eligibleForCommitGroup(), "first hybrid transaction was not group eligible");
     check(second.eligibleForCommitGroup(), "second hybrid transaction was not group eligible");
     check(first.hasTupleIntents() && second.hasTupleIntents(), "hybrid intents were not retained");
-    IndexedTransactionSession[] cohort = {first, second};
+    requireOk(first.prepareLogicalCommit());
+    requireOk(second.prepareLogicalCommit());
+    TransactionOutcome[] probeOutcomes = {new TransactionOutcome(), new TransactionOutcome()};
+    io.riverdb.tx.Transaction[] probeTransactions = {
+        first.groupTransaction(), second.groupTransaction()
+    };
+    requireOk(manager.prepareCommit(probeTransactions[0], probeOutcomes[0]));
+    requireOk(manager.prepareCommit(probeTransactions[1], probeOutcomes[1]));
+    IndexedPreparedLogicalCommit[] cohort = {
+        first.preparedCommit(), second.preparedCommit()
+    };
+    requireOk(table.reserveHybridCommitGroupCapacity(cohort.length));
     StatusCode preflight = table.preflightHybridCommitGroup(
         cohort, cohort.length, Long.MAX_VALUE);
     check(preflight.isOk(), "hybrid cohort preflight failed: " + preflight);
     requireOk(table.cancelCommitGroup());
+    check(manager.abortPreparedCommitGroup(
+        probeTransactions, probeOutcomes, probeTransactions.length,
+        StatusCode.CANCELLED) == StatusCode.OK,
+        "prepared probe cohort was not aborted");
+    check(first.completeCoordinatedCommit(StatusCode.CANCELLED) == StatusCode.CANCELLED,
+        "first probe cleanup failed");
+    check(second.completeCoordinatedCommit(StatusCode.CANCELLED) == StatusCode.CANCELLED,
+        "second probe cleanup failed");
+    prepareHybrid(first, descriptor, baseSpace, 1, 991);
+    prepareHybrid(second, descriptor, baseSpace, 2, 992);
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch start = new CountDownLatch(1);
     ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -1297,8 +1319,13 @@ final class IndexedRelationalWalHarnessTest {
     assertTuple(created.store(), descriptor, 991, 1);
     assertTuple(created.store(), descriptor, 992, 2);
     assertRecoveredRegistry(created.store(), 1_000, 4, OWNER_OBJECT_ID, 4, KEY_SCHEMA_ID);
-    check(coordinator.forceCount() == 1, "coordinator did not record the shared force");
-    check(coordinator.maximumCohortSize() == 2, "coordinator did not retain both requests");
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    requireOk(coordinator.copyTelemetry(telemetry));
+    check(telemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_FORCE) == 1,
+        "coordinator did not record the shared force");
+    check(telemetry.successfulCohortSizeBucket(1) == 1,
+        "coordinator did not retain both requests");
     requireOk(coordinator.close());
 
     crashWal(wal);
@@ -1307,7 +1334,7 @@ final class IndexedRelationalWalHarnessTest {
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     requireOk(IndexedTableStore.openExisting(
-        directory, wal, DATABASE, GENERATION, reopened));
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
     requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
@@ -1321,7 +1348,7 @@ final class IndexedRelationalWalHarnessTest {
     wal = openWal(directory, true);
     reopened.reset();
     requireOk(IndexedTableStore.openExisting(
-        directory, wal, DATABASE, GENERATION, reopened));
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     requireOk(reopened.store().fetchByKey(baseSpace, 1, fetched));
     requireOk(reopened.store().fetchByKey(baseSpace, 2, fetched));
     assertTuple(reopened.store(), descriptor, 991, 1);
@@ -1332,11 +1359,316 @@ final class IndexedRelationalWalHarnessTest {
   }
 
   @Test
+  void tupleLeafSplitPublishesInsideTwoMemberHybridGroupAndLeavesStoreReusable(
+      @TempDir Path root) throws Exception {
+    NioIoCounters counters = new NioIoCounters();
+    NioDurableDirectory directory = openDirectory(root, counters);
+    LocalWal wal = openWal(directory, false);
+    IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    requireOk(IndexedTable.create(created.store(), tableResult));
+    int[] descriptor = {SqlTypeDescriptor.BIGINT};
+    long hash = descriptorHash(descriptor);
+    IndexedCommitResult rootCommit = new IndexedCommitResult();
+    requireOk(commitRelationalQuiescent(created.store(),
+        TRANSACTION_ID, liveRootMutation(
+            descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
+            0, 4, 0, 1, 0, 1,
+            IndexedRelationalMutation.REGISTRY_ABSENT,
+            IndexedRelationalMutation.REGISTRY_BUILDING, 0, TRANSACTION_ID, 4, 5),
+        rootCommit));
+    requireOk(commitRelationalQuiescent(created.store(),
+        TRANSACTION_ID + 1, liveRootMutation(
+            descriptor, hash, OWNER_OBJECT_ID, 1_000, KEY_SCHEMA_ID,
+            4, 4, 1, 2, 1, 2,
+            IndexedRelationalMutation.REGISTRY_BUILDING,
+            IndexedRelationalMutation.REGISTRY_READY, TRANSACTION_ID, 0, 5, 5),
+        rootCommit));
+
+    IndexedTable table = tableResult.table();
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
+    IndexedTransactionSession filler = session(context, 128);
+    TransactionOutcome fillerOutcome = new TransactionOutcome();
+    int splitKey = 1;
+    long splitValue;
+    int splitNewPages;
+    while (true) {
+      splitValue = splitKey;
+      ByteBuffer candidate = physicalFixedTuple(splitKey, splitValue);
+      splitNewPages = tupleInsertNewPageCount(created.store(), descriptor, candidate);
+      if (splitNewPages > 0) break;
+      prepareHybrid(filler, descriptor, baseSpace, splitKey, splitValue);
+      requireOk(filler.commit(fillerOutcome));
+      check(fillerOutcome.state() == TransactionState.COMMITTED,
+          "tuple leaf filler did not commit");
+      splitKey++;
+    }
+    check(splitKey > 1, "empty tuple leaf unexpectedly required a split");
+    requireOk(filler.close());
+
+    TupleIndexRootRecord beforeGroup = registryRecord(created.store(), 1_000);
+    check(beforeGroup.rootPageId() == 4,
+        "tuple root changed before allocating preflight boundary");
+    int tuplePagesBefore = tuplePageCount(created.store(), 1_000);
+    int firstKey = splitKey;
+    long firstValue = splitValue;
+    int secondKey = splitKey + 1;
+    long secondValue = splitValue + 1;
+    IndexedTransactionSession first = session(context, 128);
+    IndexedTransactionSession second = session(context, 128);
+    prepareHybrid(first, descriptor, baseSpace, firstKey, firstValue);
+    prepareHybrid(second, descriptor, baseSpace, secondKey, secondValue);
+    int firstMask = first.commitGroupEligibilityMask();
+    int secondMask = second.commitGroupEligibilityMask();
+    check(firstMask == 0 && secondMask == 0,
+        "split cohort was not group eligible");
+
+    IndexedGroupCommitMetrics metrics = table.commitMetrics();
+    IndexedGroupCommitTelemetry beforeTelemetry = new IndexedGroupCommitTelemetry();
+    requireOk(table.copyCommitTelemetry(beforeTelemetry));
+    TransactionOutcome firstOutcome = new TransactionOutcome();
+    TransactionOutcome secondOutcome = new TransactionOutcome();
+    IndexedGroupCommitRequest firstRequest = new IndexedGroupCommitRequest(first);
+    IndexedGroupCommitRequest secondRequest = new IndexedGroupCommitRequest(second);
+    requireOk(first.prepareLogicalCommit());
+    requireOk(second.prepareLogicalCommit());
+    long firstTicket = firstRequest.prepare(firstOutcome, firstMask, metrics);
+    long secondTicket = secondRequest.prepare(secondOutcome, secondMask, metrics);
+    check(firstTicket > 0 && secondTicket > 0,
+        "split cohort requests were not prepared");
+    requireOk(manager.prepareCommit(first.groupTransaction(), firstRequest.outcome));
+    requireOk(manager.prepareCommit(second.groupTransaction(), secondRequest.outcome));
+    // Mirror process() admission while retaining force/publication as explicit test phases.
+    metrics.recordWriteSubmission(firstMask, true);
+    metrics.recordWriteSubmission(secondMask, true);
+    metrics.recordQueueEnqueue(1);
+    metrics.recordQueueEnqueue(2);
+    metrics.recordWriterSelection(2, 2, 2, true, false);
+    metrics.recordAttemptedGroup(2);
+    IndexedGroupCommitBatch batch = new IndexedGroupCommitBatch(manager, table, metrics);
+    requireOk(table.reserveHybridCommitGroupCapacity(batch.capacity()));
+    batch.add(0, firstRequest);
+    batch.add(1, secondRequest);
+
+    long forceCalls = counters.forceCalls();
+    check(batch.forceSharedGroup(2),
+        "split cohort failed before forced publication");
+    check(counters.forceCalls() == forceCalls + 1,
+        "split cohort did not use exactly one shared force");
+    check(table.commitGroupDecisionAppended(),
+        "forced split cohort did not retain its WAL decision");
+    IndexedGroupCommitTelemetry forcedTelemetry = new IndexedGroupCommitTelemetry();
+    requireOk(table.copyCommitTelemetry(forcedTelemetry));
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_PREFLIGHT) == 1,
+        "split cohort preflight phase was not recorded");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_RECLAIM) == 1,
+        "split cohort reclaim phase was not recorded");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_VERSION_RESERVATION) == 1,
+        "split cohort version-reservation phase was not recorded");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_COMPILE) == 2,
+        "split cohort did not compile both members");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_WAL_PLAN) == 2,
+        "split cohort did not plan both WAL members");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_LOGICAL_ROW_ADMISSION) == 2,
+        "split cohort did not admit both logical-row updates");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_WAL_ADMISSION) == 2,
+        "split cohort did not admit both WAL members");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_PAGE_FREEZE) == 2,
+        "split cohort did not freeze both member generations");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.PREFLIGHT_OPERATION_ADMISSION) == 1,
+        "split cohort publication was not admitted");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_ADMISSION) == 1,
+        "split cohort transaction admission was not recorded");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_APPEND) == 1,
+        "split cohort append phase was not recorded");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_FORCE) == 1,
+        "split cohort force phase was not recorded");
+    check(forcedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_PUBLICATION) == 0,
+        "split cohort published before the explicit publication phase");
+
+    batch.publishForced(2);
+    check(firstRequest.outcome.state() == TransactionState.COMMITTED
+            && secondRequest.outcome.state() == TransactionState.COMMITTED,
+        "split cohort publication did not commit both members");
+    check(!table.commitGroupDecisionAppended(),
+        "split cohort retained group state after publication");
+    batch.complete(2);
+    StatusCode firstStatus = firstRequest.await(firstTicket, firstOutcome);
+    StatusCode secondStatus = secondRequest.await(secondTicket, secondOutcome);
+    requireOk(firstStatus);
+    requireOk(secondStatus);
+    requireOk(first.completeCoordinatedCommit(firstStatus));
+    requireOk(second.completeCoordinatedCommit(secondStatus));
+    check(firstOutcome.state() == TransactionState.COMMITTED
+            && secondOutcome.state() == TransactionState.COMMITTED
+            && secondOutcome.commitSequence() == firstOutcome.commitSequence() + 1,
+        "split cohort did not retain two consecutive commit decisions");
+
+    IndexedGroupCommitTelemetry publishedTelemetry = new IndexedGroupCommitTelemetry();
+    requireOk(table.copyCommitTelemetry(publishedTelemetry));
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_PUBLICATION) == 1,
+        "split cohort publication phase was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_PUBLICATION_PREPARE) == 1,
+        "split cohort publication preparation was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_PUBLICATION_INSTALL) == 1,
+        "split cohort page/frontier installation was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_TRANSACTION_COMPLETION) == 1,
+        "split cohort transaction completion was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_LOCK_RELEASE) == 1,
+        "split cohort lock release was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_LOCK_OUTCOME) == 1,
+        "split cohort lock outcome was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_LOCK_REQUEST_CANCELLATION) == 1,
+        "split cohort lock-request cancellation was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_LOCK_HOLDING_RELEASE) == 1,
+        "split cohort holding release was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_LOCK_RECORD_RECYCLE) == 1,
+        "split cohort lock-record recycle was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_ACTIVE_REMOVAL) == 1,
+        "split cohort active-set removal was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP,
+        IndexedCommitStage.GROUP_OUTCOME_PUBLICATION) == 1,
+        "split cohort outcome publication was not recorded");
+    check(publishedTelemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.NOTIFICATION) == 2,
+        "split cohort did not notify both members");
+    check(publishedTelemetry.successfulCohortSizeBucket(1) == 1
+            && publishedTelemetry.maximumSuccessfulCohort() == 2,
+        "split cohort was not reported as one successful size-two group");
+    check(publishedTelemetry.directCommitTransactions()
+            == beforeTelemetry.directCommitTransactions(),
+        "split cohort used a direct fallback");
+    for (IndexedGroupFailureStage stage : IndexedGroupFailureStage.values()) {
+      check(publishedTelemetry.groupFailureCohortCount(stage) == 0,
+          "split cohort recorded group failure at " + stage);
+    }
+    for (IndexedCommitStage stage : IndexedCommitStage.values()) {
+      check(publishedTelemetry.stageFailureCount(
+          IndexedCommitPath.SHARED_GROUP, stage, StatusCode.INVARIANT_BROKEN) == 0,
+          "split cohort recorded invariant failure at " + stage);
+    }
+    check(publishedTelemetry.reconciles(),
+        "split cohort telemetry did not reconcile");
+
+    TupleIndexRootRecord afterGroup = registryRecord(created.store(), 1_000);
+    check(afterGroup.rootPageId() != beforeGroup.rootPageId()
+            && afterGroup.generation() == beforeGroup.generation() + 2,
+        "allocating tuple insert did not replace the leaf root");
+    int tuplePagesAfterGroup = tuplePageCount(created.store(), 1_000);
+    check(tuplePagesAfterGroup == tuplePagesBefore + splitNewPages,
+        "split cohort allocated a different tuple-page count than preflight");
+    assertBaseRow(created.store(), baseSpace, firstKey, firstValue);
+    assertBaseRow(created.store(), baseSpace, secondKey, secondValue);
+    assertTuple(created.store(), descriptor, firstValue, firstKey);
+    assertTuple(created.store(), descriptor, secondValue, secondKey);
+    requireOk(first.close());
+    requireOk(second.close());
+    check(manager.activeTransactionCount() == 0
+            && manager.activeLockCount() == 0
+            && manager.waitingLockCount() == 0,
+        "split cohort did not clean up transaction or lock state");
+    requireOk(created.store().admission());
+
+    int thirdKey = splitKey + 2;
+    long thirdValue = splitValue + 2;
+    check(tupleInsertNewPageCount(
+        created.store(), descriptor, physicalFixedTuple(thirdKey, thirdValue)) == 0,
+        "freshly split tuple leaf did not admit the independent commit");
+    IndexedTransactionSession third = session(context, 128);
+    TransactionOutcome thirdOutcome = new TransactionOutcome();
+    prepareHybrid(third, descriptor, baseSpace, thirdKey, thirdValue);
+    requireOk(third.commit(thirdOutcome));
+    check(thirdOutcome.state() == TransactionState.COMMITTED
+            && thirdOutcome.commitSequence() == secondOutcome.commitSequence() + 1,
+        "independent commit failed after split-cohort cleanup");
+    requireOk(third.close());
+    check(manager.activeTransactionCount() == 0
+            && manager.activeLockCount() == 0
+            && manager.waitingLockCount() == 0,
+        "independent commit did not clean up transaction or lock state");
+    requireOk(created.store().admission());
+    check(tuplePageCount(created.store(), 1_000) == tuplePagesAfterGroup,
+        "independent commit unexpectedly allocated another tuple page");
+    assertBaseRow(created.store(), baseSpace, thirdKey, thirdValue);
+    assertTuple(created.store(), descriptor, thirdValue, thirdKey);
+    int lastFillerKey = splitKey - 1;
+    long lastFillerValue = lastFillerKey;
+    assertBaseRow(created.store(), baseSpace, lastFillerKey, lastFillerValue);
+    assertTuple(created.store(), descriptor, lastFillerValue, lastFillerKey);
+    TupleIndexRootRecord finalRegistry = registryRecord(created.store(), 1_000);
+    check(finalRegistry.generation() == afterGroup.generation() + 1,
+        "independent commit did not advance tuple generation exactly once");
+
+    crashWal(wal);
+    requireOk(directory.close());
+    directory = openDirectory(root);
+    wal = openWal(directory, true);
+    IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
+    requireOk(IndexedTableStore.openExisting(
+        directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
+    assertBaseRow(reopened.store(), baseSpace, lastFillerKey, lastFillerValue);
+    assertBaseRow(reopened.store(), baseSpace, firstKey, firstValue);
+    assertBaseRow(reopened.store(), baseSpace, secondKey, secondValue);
+    assertBaseRow(reopened.store(), baseSpace, thirdKey, thirdValue);
+    assertTuple(reopened.store(), descriptor, lastFillerValue, lastFillerKey);
+    assertTuple(reopened.store(), descriptor, firstValue, firstKey);
+    assertTuple(reopened.store(), descriptor, secondValue, secondKey);
+    assertTuple(reopened.store(), descriptor, thirdValue, thirdKey);
+    assertRecoveredRegistry(
+        reopened.store(), 1_000, finalRegistry.rootPageId(), OWNER_OBJECT_ID,
+        finalRegistry.generation(), KEY_SCHEMA_ID);
+    check(tuplePageCount(reopened.store(), 1_000) == tuplePagesAfterGroup,
+        "reopen recovered a different tuple-page graph");
+    requireOk(reopened.store().flush());
+    requireOk(reopened.store().close());
+    requireOk(wal.close());
+    requireOk(directory.close());
+  }
+
+  @Test
   void tupleDeleteAfterSavepointRollbackRetainsEarlierInsert(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), tableResult));
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
@@ -1358,7 +1690,9 @@ final class IndexedRelationalWalHarnessTest {
     IndexedTable table = tableResult.table();
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, 128);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context, 128);
     long baseSpace = CatalogKeyspace.relationalBaseRowSpace(OWNER_OBJECT_ID);
     ByteBuffer row = scalarRow(993);
     ByteBuffer tuple = physicalFixedTuple(3, 993);
@@ -1396,7 +1730,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     probe.reset();
     requireOk(reopened.store().probeTuplePrefixAt(
         reopened.store().currentCommitSequence(), OWNER_OBJECT_ID, 1_000,
@@ -1413,13 +1747,15 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), tableResult));
     IndexedTable table = tableResult.table();
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, 128);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context, 128);
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     TransactionOutcome outcome = new TransactionOutcome();
 
@@ -1479,7 +1815,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertReadyRegistry(
         reopened.store(), 1_000, OWNER_OBJECT_ID, firstBuilding.rootPageId(), 3);
     assertReadyRegistry(
@@ -1491,7 +1827,9 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(IndexedTable.open(reopened.store(), reopenedTable));
     manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), reopenedTable.table().nextTransactionId(), 4);
-    session = new IndexedTransactionSession(manager, reopenedTable.table(), 128);
+    vacuum = new IndexedVacuum(manager, reopenedTable.table());
+    context = context(manager, reopenedTable.table(), null, vacuum);
+    session = session(context, 128);
     requireOk(session.begin(IsolationLevel.SERIALIZABLE));
     int cleanupHorizon = session.tupleIndexCleanupHorizon();
     requireOk(session.preflightTupleIndexLifecycles(2));
@@ -1534,7 +1872,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult cleaned = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, cleaned));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), cleaned));
     assertAbsentRegistry(cleaned.store(), 1_000, OWNER_OBJECT_ID, 6);
     assertAbsentRegistry(cleaned.store(), 1_001, SECOND_OWNER_OBJECT_ID, 5);
     requireOk(cleaned.store().close());
@@ -1547,13 +1885,15 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult opened = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), opened));
     IndexedTable table = opened.table();
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, 128);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context, 128);
     int[] descriptor = {SqlTypeDescriptor.BIGINT};
     TupleShape shape = shape(descriptor);
     TransactionOutcome outcome = new TransactionOutcome();
@@ -1593,7 +1933,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult table = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), table));
     requireOk(created.store().close());
@@ -1612,7 +1952,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     IndexedTableStore store = reopened.store();
     IndexedPageSet pages = pageSet(store);
     checkValidationAllocationFailures(store, pages);
@@ -1656,7 +1996,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult table = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), table));
     requireOk(created.store().close());
@@ -1674,7 +2014,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     int tuples = 80;
     long prediction = predictTupleInsert(
         reopened.store(), descriptor, 4, 1, tuples, 'x');
@@ -1713,7 +2053,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_BUILDING, tupleRoot, 2, 2);
     requireOk(commitRelationalQuiescent(reopened.store(), 
@@ -1730,7 +2070,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 0, 3, 2);
     long transaction = TRANSACTION_ID + 102;
@@ -1772,7 +2112,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_ABSENT, 0, generation, 0);
     requireOk(reopened.store().close());
@@ -1785,7 +2125,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult table = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), table));
     requireOk(created.store().close());
@@ -1799,7 +2139,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_BUILDING, 0, 1, 2);
     requireOk(reopened.store().flush());
@@ -1810,7 +2150,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     requireOk(commitRelationalQuiescent(reopened.store(), 
         TRANSACTION_ID + 102, liveRootMutation(
             descriptor, descriptorHash(descriptor), 0, 0, 1, 2, 1, 2,
@@ -1830,7 +2170,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult table = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), table));
     requireOk(created.store().close());
@@ -1851,7 +2191,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 4, 3, 4);
     requireOk(reopened.store().flush());
@@ -1862,7 +2202,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     assertRecoveredRegistryState(
         reopened.store(), TupleIndexRootRecordCodec.STATE_DROPPING, 4, 3, 4);
     requireOk(reopened.store().close());
@@ -1876,7 +2216,7 @@ final class IndexedRelationalWalHarnessTest {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory, false);
     IndexedTableStoreOpenResult created = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, created));
+    requireOk(IndexedTableStore.create(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), created));
     IndexedTableOpenResult opened = new IndexedTableOpenResult();
     requireOk(IndexedTable.create(created.store(), opened));
     int[] descriptor = {
@@ -1940,7 +2280,7 @@ final class IndexedRelationalWalHarnessTest {
       wal = openWal(directory, true);
       reopened = new IndexedTableStoreOpenResult();
       requireOk(IndexedTableStore.openExisting(
-          directory, wal, DATABASE, GENERATION, reopened));
+          directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
       int before = freePages;
       int resultingCursor = Math.min(
           nextPage, cleanupCursor + IndexedTupleGraphReclaimer.MAX_INSPECTED_PAGES);
@@ -1969,7 +2309,7 @@ final class IndexedRelationalWalHarnessTest {
     directory = openDirectory(root);
     wal = openWal(directory, true);
     reopened = new IndexedTableStoreOpenResult();
-    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+    requireOk(IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, databaseProviderLease(4), reopened));
     requireOk(commitRelationalQuiescent(reopened.store(), 
         transaction++, liveRootMutation(
             descriptor, hash, OWNER_OBJECT_ID, 1_000, 1_000,
@@ -2076,6 +2416,45 @@ final class IndexedRelationalWalHarnessTest {
       pages.clearStagedFlags();
       pages.resetChanges();
     }
+  }
+
+  private static int tupleInsertNewPageCount(
+      IndexedTableStore store, int[] descriptor, ByteBuffer tuple) throws Exception {
+    TupleIndexRootRecord record = registryRecord(store, 1_000);
+    check(record.state() == TupleIndexRootRecordCodec.STATE_READY
+            && record.rootPageId() > 0,
+        "tuple split probe requires a READY rooted index");
+    IndexedTupleRootState root = new IndexedTupleRootState(
+        record.keyId(), record.schemaId(), record.rootPageId());
+    IndexedTuplePageProvider provider = new IndexedTuplePageProvider(pageSet(store), root);
+    TupleBTree tree = new TupleBTree(provider, record.schemaId(), shape(descriptor));
+    int height = BTreeStructuralLimits.MAXIMUM_LEVELS;
+    TupleBTreeTreeWorkspace workspace = new TupleBTreeTreeWorkspace(
+        ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES),
+        ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES),
+        new int[height], new int[height], new int[height]);
+    TupleBTreeInsertPreflightResult result = new TupleBTreeInsertPreflightResult();
+    requireOk(provider.begin(0));
+    StatusCode status = tree.preflightInsert(
+        tuple, tuple.position(), tuple.remaining(), workspace, result);
+    StatusCode finished = provider.finish(status);
+    provider.cancelRoot();
+    requireOk(finished);
+    check(!result.keyExists(), "tuple split probe reused an existing key");
+    return result.newPageCount();
+  }
+
+  private static int tuplePageCount(IndexedTableStore store, long keyId) throws Exception {
+    IndexedPageSet pages = pageSet(store);
+    int count = 0;
+    for (int pageId = 1; pageId <= pages.highestPageId(); pageId++) {
+      if (pages.isPresent(pageId)
+          && pages.payloadKind(pageId) == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+          && pages.ownerKeyId(pageId) == keyId) {
+        count++;
+      }
+    }
+    return count;
   }
 
   private static IndexedRelationalMutation liveRootMutation(
@@ -2364,7 +2743,8 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(mutations.seal());
     IndexedRelationalWalPlan plan = new IndexedRelationalWalPlan();
     requireOk(plan.plan(sequence, OPERATION_ID + sequence, mutations));
-    IndexedRelationalWalCommitter committer = new IndexedRelationalWalCommitter(wal);
+    IndexedRelationalWalCommitter committer =
+        new IndexedRelationalWalCommitter(wal, new IndexedGroupCommitMetrics());
     requireOk(committer.appendAndForce(plan, sequence));
     requireOk(committer.releaseForced());
   }
@@ -2567,6 +2947,13 @@ final class IndexedRelationalWalHarnessTest {
         "grouped hybrid tuple missing for row " + logicalRowId);
   }
 
+  private static void assertBaseRow(
+      IndexedTableStore store, long space, long key, long expectedValue) {
+    HeapRowResult row = new HeapRowResult();
+    requireOk(store.fetchByKey(space, key, row));
+    check(row.getLong(0) == expectedValue, "hybrid base row value mismatch for " + key);
+  }
+
   private static LocalWal openWal(NioDurableDirectory directory, boolean existing) {
     LocalWalOpenResult result = new LocalWalOpenResult();
     requireOk(LocalWal.open(directory, DATABASE, GENERATION, result));
@@ -2611,6 +2998,7 @@ final class IndexedRelationalWalHarnessTest {
     requireOk(provider.visit(4));
     requireOk(provider.pin(4, false, reference));
     requireOk(provider.release(reference));
+    reference.reset();
     requireOk(provider.configure(4, 1_000, nextPageId));
     check(provider.visit(4) == StatusCode.CORRUPTION,
         "tuple page reached twice across graphs");
@@ -2686,12 +3074,55 @@ final class IndexedRelationalWalHarnessTest {
     return new String(characters);
   }
 
+  private static IndexedSessionContext context(
+      TransactionManager manager,
+      IndexedTable table,
+      IndexedGroupCommitCoordinator coordinator,
+      IndexedVacuum vacuum) {
+    IndexedSessionContext.Result result = new IndexedSessionContext.Result();
+    requireOk(IndexedSessionContext.bind(manager, table, coordinator, vacuum, result));
+    return result.context();
+  }
+
+  private static IndexedTransactionSession session(
+      IndexedSessionContext context, int maximumRowBytes) {
+    IndexedTransactionSessionOpenResult result =
+        new IndexedTransactionSessionOpenResult();
+    requireOk(context.openSession(maximumRowBytes, result));
+    return result.session();
+  }
+
   private static void requireOk(StatusCode status) {
     if (!status.isOk()) throw new AssertionError("expected OK, got " + status);
   }
 
   private static void check(boolean condition, String message) {
     if (!condition) throw new AssertionError(message);
+  }
+
+  private static final class PrefixBatch implements LocalWalRecordBatch {
+    private final LocalWalRecordBatch source;
+    private final int records;
+
+    PrefixBatch(LocalWalRecordBatch recordSource, int recordCount) {
+      source = recordSource;
+      records = recordCount;
+    }
+
+    @Override
+    public int recordCount() {
+      return records;
+    }
+
+    @Override
+    public int payloadBytes(int record) {
+      return source.payloadBytes(record);
+    }
+
+    @Override
+    public StatusCode encodePayload(int record, ByteBuffer target) {
+      return source.encodePayload(record, target);
+    }
   }
 
   private static final class RecordingReplay implements IndexedRelationalWalReplay {

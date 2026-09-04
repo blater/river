@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -116,7 +117,7 @@ final class SqlDescriptorScalarAggregateTest {
   private static Fixture open(Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 7, opened));
+        RelationalDatabase.create(databaseRequest(7), root, DATABASE, GENERATION, 7, opened));
     SqlSessionOpenResult sessions = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(opened.database(), sessions));
     return new Fixture(opened.database(), sessions.session());

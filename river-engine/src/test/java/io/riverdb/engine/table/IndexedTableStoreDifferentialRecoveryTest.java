@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.concurrent.FatalStateFence;
@@ -175,7 +176,8 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.create(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(4), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     return new Fixture(root, directory, wal, storeResult.store(), tableResult.table());
@@ -189,7 +191,8 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(4), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     return new Fixture(fixture.root, directory, wal, storeResult.store(), tableResult.table());
@@ -236,7 +239,17 @@ final class IndexedTableStoreDifferentialRecoveryTest {
     private TransactionWriter(IndexedTable table, int maximumRowBytes) {
       TransactionManager manager = new TransactionManager(
           DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-      session = new IndexedTransactionSession(manager, table, maximumRowBytes);
+      IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+      IndexedSessionContext.Result contextResult = new IndexedSessionContext.Result();
+      assertEquals(
+          StatusCode.OK,
+          IndexedSessionContext.bind(manager, table, null, vacuum, contextResult));
+      IndexedTransactionSessionOpenResult sessionResult =
+          new IndexedTransactionSessionOpenResult();
+      assertEquals(
+          StatusCode.OK,
+          contextResult.context().openSession(maximumRowBytes, sessionResult));
+      session = sessionResult.session();
     }
 
     private void insert(long space, long key, ByteBuffer value) {

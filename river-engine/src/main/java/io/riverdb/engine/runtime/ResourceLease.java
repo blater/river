@@ -16,6 +16,7 @@ public final class ResourceLease {
   private long accountedBytes;
   private long writeEntries;
   private long stagedPages;
+  private long versionOperations;
   private long walBytes;
   private volatile int state;
 
@@ -27,6 +28,7 @@ public final class ResourceLease {
   public synchronized long accountedBytes() { return accountedBytes; }
   public synchronized long writeEntries() { return writeEntries; }
   public synchronized long stagedPages() { return stagedPages; }
+  public synchronized long versionOperations() { return versionOperations; }
   public synchronized long walBytes() { return walBytes; }
 
   public synchronized StatusCode reset() {
@@ -81,13 +83,17 @@ public final class ResourceLease {
   synchronized boolean matchesTarget(ResourceDemand demand) {
     return demand != null && accountedBytes == demand.accountedBytes()
         && writeEntries == demand.writeEntries()
-        && stagedPages == demand.stagedPages() && walBytes == demand.walBytes();
+        && stagedPages == demand.stagedPages()
+        && versionOperations == demand.versionOperations()
+        && walBytes == demand.walBytes();
   }
 
   synchronized boolean monotonic(ResourceDemand demand) {
     return demand != null && demand.accountedBytes() >= accountedBytes
         && demand.writeEntries() >= writeEntries
-        && demand.stagedPages() >= stagedPages && demand.walBytes() >= walBytes;
+        && demand.stagedPages() >= stagedPages
+        && demand.versionOperations() >= versionOperations
+        && demand.walBytes() >= walBytes;
   }
 
   synchronized void complete() { clear(); }
@@ -96,6 +102,7 @@ public final class ResourceLease {
     accountedBytes = demand.accountedBytes();
     writeEntries = demand.writeEntries();
     stagedPages = demand.stagedPages();
+    versionOperations = demand.versionOperations();
     walBytes = demand.walBytes();
   }
 
@@ -103,6 +110,6 @@ public final class ResourceLease {
     state = EMPTY;
     governor = null;
     databaseToken = leaseToken = ownerId = ownerGeneration = 0;
-    accountedBytes = writeEntries = stagedPages = walBytes = 0;
+    accountedBytes = writeEntries = stagedPages = versionOperations = walBytes = 0;
   }
 }

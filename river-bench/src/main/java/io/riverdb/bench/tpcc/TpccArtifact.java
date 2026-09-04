@@ -1,8 +1,9 @@
 package io.riverdb.bench.tpcc;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
+import io.riverdb.base.error.StatusCode;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -10,10 +11,8 @@ import java.time.Instant;
 import java.util.Properties;
 import java.util.UUID;
 
-/** Bounded atomic properties artifact shared by run and recovery phases. */
+/** Atomic streaming properties artifact shared by run and recovery phases. */
 final class TpccArtifact {
-  private static final long MAXIMUM_BYTES = 64 * 1024;
-
   record Recovery(String runId, String databaseDigest, long seed, int warehouses, boolean standard) {}
 
   private TpccArtifact() {}
@@ -84,20 +83,25 @@ final class TpccArtifact {
     values.setProperty("config.terminals", Integer.toString(config.terminals()));
     values.setProperty("config.terminal_homes", terminalHomes(config));
     values.setProperty("config.scheduling", config.scheduling().name());
+    values.setProperty("config.mix", config.mix().name());
+    values.setProperty("config.isolation_contract", config.isolation().name());
+    values.setProperty("config.jdbc_isolation", config.isolation().jdbcLabel());
+    values.setProperty("config.program_isolation", config.isolation().programLabel());
     values.setProperty("config.evidence", config.evidence().name());
     values.setProperty("config.warmup_seconds", Long.toString(config.warmup().toSeconds()));
     values.setProperty("config.measured_seconds", Long.toString(config.measured().toSeconds()));
     values.setProperty("config.batch_rows", Integer.toString(config.batchRows()));
     values.setProperty("config.maximum_attempts", Integer.toString(config.maximumAttempts()));
-    values.setProperty("config.retry_base_nanos", Long.toString(config.retryBase().toNanos()));
-    values.setProperty("config.retry_maximum_nanos", Long.toString(config.retryMaximum().toNanos()));
+    values.setProperty("config.retry_base_nanos",
+        Long.toString(TpccRetry.saturatedNanos(config.retryBase())));
+    values.setProperty("config.retry_maximum_nanos",
+        Long.toString(TpccRetry.saturatedNanos(config.retryMaximum())));
     values.setProperty("instrumentation.jfr", config.jfr() == null
         ? "disabled" : config.jfr().toAbsolutePath().toString());
     values.setProperty("config.nurand_load_last", Integer.toString(TpccNurandConstants.STANDARD.loadLast()));
     values.setProperty("config.nurand_run_last", Integer.toString(TpccNurandConstants.STANDARD.runLast()));
     values.setProperty("config.nurand_customer_id", Integer.toString(TpccNurandConstants.STANDARD.customerId()));
     values.setProperty("config.nurand_item_id", Integer.toString(TpccNurandConstants.STANDARD.itemId()));
-    values.setProperty("bound.jdbc_batch_statements", "64");
     values.setProperty("bound.configured_load_batch_rows", Integer.toString(config.batchRows()));
     values.setProperty("bound.latency_buckets_per_family", "64");
     values.setProperty("bound.engine_high_water", "unavailable_via_jdbc");
@@ -137,6 +141,22 @@ final class TpccArtifact {
         Long.toString(metrics.total()));
     values.setProperty("measurement.in_flight_at_cutoff",
         Long.toString(metrics.inFlightAtCutoff()));
+    values.setProperty("measurement.transaction_attempts",
+        Long.toString(metrics.transactionAttempts()));
+    values.setProperty("measurement.drain_transaction_attempts",
+        Long.toString(metrics.drainTransactionAttempts()));
+    values.setProperty("measurement.attempt_id_first", Long.toString(metrics.firstAttemptId()));
+    values.setProperty("measurement.attempt_id_last", Long.toString(metrics.lastAttemptId()));
+    values.setProperty("measurement.unclassified_retry_failures",
+        Long.toString(metrics.unclassifiedRetryFailures()));
+    values.setProperty("measurement.drain_unclassified_retry_failures",
+        Long.toString(metrics.drainUnclassifiedRetryFailures()));
+    values.setProperty("measurement.retry_correlation_overflows",
+        Long.toString(metrics.retryCorrelationOverflows()));
+    values.setProperty("measurement.metrics_overflowed",
+        Boolean.toString(metrics.overflowed()));
+    values.setProperty("measurement.drain_completed_transactions",
+        Long.toString(metrics.drainTotal()));
     values.setProperty("measurement.maximum_latency_us",
         Long.toString(metrics.maximumLatencyMicros()));
     values.setProperty(
@@ -149,8 +169,27 @@ final class TpccArtifact {
         "measurement.protocol_bytes_sent", Long.toString(metrics.protocolBytesSent()));
     values.setProperty(
         "measurement.protocol_bytes_received", Long.toString(metrics.protocolBytesReceived()));
+    values.setProperty("measurement.drain_protocol_requests",
+        Long.toString(metrics.drainProtocolRequests()));
+    values.setProperty("measurement.drain_protocol_bytes_sent",
+        Long.toString(metrics.drainProtocolBytesSent()));
+    values.setProperty("measurement.drain_protocol_bytes_received",
+        Long.toString(metrics.drainProtocolBytesReceived()));
     values.setProperty("measurement.rollback_probes", Integer.toString(rollbackProbes));
     values.setProperty("measurement.retry_probes", Integer.toString(retryProbes));
+    for (StatusCode status : StatusCode.values()) {
+      if (!status.isRetryable()) continue;
+      String prefix = "measurement.retry_status."
+          + status.name().toLowerCase(java.util.Locale.ROOT) + ".";
+      values.setProperty(prefix + "server_outcomes",
+          Long.toString(metrics.retryableOutcomes(status)));
+      values.setProperty(prefix + "client_retries",
+          Long.toString(metrics.clientRetries(status)));
+      values.setProperty(prefix + "drain_server_outcomes",
+          Long.toString(metrics.drainRetryableOutcomes(status)));
+      values.setProperty(prefix + "drain_client_retries",
+          Long.toString(metrics.drainClientRetries(status)));
+    }
     for (TpccTransactionType type : TpccTransactionType.values()) {
       String prefix = "measurement." + type.name().toLowerCase(java.util.Locale.ROOT) + ".";
       values.setProperty(prefix + "committed", Long.toString(metrics.committed(type)));
@@ -159,14 +198,41 @@ final class TpccArtifact {
       values.setProperty(
           prefix + "retry_exhausted", Long.toString(metrics.retryExhausted(type)));
       values.setProperty(prefix + "failed", Long.toString(metrics.failed(type)));
+      values.setProperty(prefix + "drain_committed", Long.toString(metrics.drainCommitted(type)));
+      values.setProperty(prefix + "drain_expected_rollbacks",
+          Long.toString(metrics.drainExpectedRollbacks(type)));
+      values.setProperty(prefix + "drain_retry_exhausted",
+          Long.toString(metrics.drainRetryExhausted(type)));
+      values.setProperty(prefix + "drain_failed", Long.toString(metrics.drainFailed(type)));
       values.setProperty(
           prefix + "protocol_requests", Long.toString(metrics.protocolRequests(type)));
+      values.setProperty(prefix + "drain_protocol_requests",
+          Long.toString(metrics.drainProtocolRequests(type)));
+      values.setProperty(prefix + "drain_protocol_bytes_sent",
+          Long.toString(metrics.drainProtocolBytesSent(type)));
+      values.setProperty(prefix + "drain_protocol_bytes_received",
+          Long.toString(metrics.drainProtocolBytesReceived(type)));
       values.setProperty(prefix + "protocol_bytes_sent",
           Long.toString(metrics.protocolBytesSent(type)));
       values.setProperty(prefix + "protocol_bytes_received",
           Long.toString(metrics.protocolBytesReceived(type)));
       values.setProperty(prefix + "protocol_requests_per_attempt", String.format(
           java.util.Locale.ROOT, "%.1f", metrics.protocolRequestsPerAttempt(type)));
+      values.setProperty(prefix + "transaction_attempts",
+          Long.toString(metrics.transactionAttempts(type)));
+      for (StatusCode status : StatusCode.values()) {
+        if (!status.isRetryable()) continue;
+        String statusPrefix = prefix + "retry_status."
+            + status.name().toLowerCase(java.util.Locale.ROOT) + ".";
+        values.setProperty(statusPrefix + "server_outcomes",
+            Long.toString(metrics.retryableOutcomes(type, status)));
+        values.setProperty(statusPrefix + "client_retries",
+            Long.toString(metrics.clientRetries(type, status)));
+        values.setProperty(statusPrefix + "drain_server_outcomes",
+            Long.toString(metrics.drainRetryableOutcomes(type, status)));
+        values.setProperty(statusPrefix + "drain_client_retries",
+            Long.toString(metrics.drainClientRetries(type, status)));
+      }
       values.setProperty(prefix + "p50_us_upper", Long.toString(metrics.percentileMicros(type, 50)));
       values.setProperty(prefix + "p95_us_upper", Long.toString(metrics.percentileMicros(type, 95)));
       values.setProperty(prefix + "p99_us_upper", Long.toString(metrics.percentileMicros(type, 99)));
@@ -189,24 +255,22 @@ final class TpccArtifact {
   }
 
   private static Properties readProperties(Path path) throws IOException {
-    long size = Files.size(path);
-    if (size <= 0 || size > MAXIMUM_BYTES) throw new IOException("TPC-C artifact outside bound");
-    byte[] bytes = Files.readAllBytes(path);
     Properties values = new Properties();
-    values.load(new ByteArrayInputStream(bytes));
+    try (InputStream input = Files.newInputStream(path)) {
+      values.load(input);
+    }
     return values;
   }
 
   private static void writeProperties(Path path, Properties values) throws IOException {
-    ByteArrayOutputStream bytes = new ByteArrayOutputStream(8 * 1024);
-    values.store(bytes, "River TPC-C engineering acceptance");
-    if (bytes.size() > MAXIMUM_BYTES) throw new IOException("TPC-C artifact exceeds bound");
     Path absolute = path.toAbsolutePath();
     Path parent = absolute.getParent();
     if (parent != null) Files.createDirectories(parent);
     Path staged = absolute.resolveSibling(absolute.getFileName() + ".staged");
-    Files.write(staged, bytes.toByteArray());
     try {
+      try (OutputStream output = Files.newOutputStream(staged)) {
+        values.store(output, "River TPC-C engineering acceptance");
+      }
       Files.move(staged, absolute, StandardCopyOption.ATOMIC_MOVE,
           StandardCopyOption.REPLACE_EXISTING);
     } finally {

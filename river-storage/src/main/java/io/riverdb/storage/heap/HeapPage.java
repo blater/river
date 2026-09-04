@@ -1,12 +1,16 @@
 package io.riverdb.storage.heap;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
 /** Bounded slotted heap layout inside one validated page payload. */
 public final class HeapPage {
   public static final int HEADER_BYTES = 32;
   public static final int SLOT_BYTES = 8;
+  /** Largest row representable by one slot in the fixed page payload. */
+  public static final int MAXIMUM_ROW_BYTES =
+      PageCodec.MAX_PAYLOAD_BYTES - HEADER_BYTES - SLOT_BYTES;
   public static final int VERSION = 1;
 
   private static final long MAGIC = 0x5249564552484550L; // RIVERHEP

@@ -20,7 +20,6 @@ final class TupleBTreeLeafPageModelTest {
   void randomizedMutationsMatchFiniteReferenceModel() {
     TupleShape shape = shape();
     ByteBuffer page = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
-    ByteBuffer scratch = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
     assertEquals(StatusCode.OK, TupleBTreePageCodec.initialize(
         page, 0, TupleBTreePageCodec.TYPE_LEAF, 0,
         shape, 73, null, 0, 0));
@@ -38,11 +37,15 @@ final class TupleBTreeLeafPageModelTest {
           ? StatusCode.CONFLICT : StatusCode.OK;
       StatusCode actual = insert
           ? TupleBTreeLeafPage.insert(
-              page, 0, scratch, 0, 73, shape, key, 0, length, workspace)
+              page, 0, 73, shape, key, 0, length, workspace)
           : TupleBTreeLeafPage.delete(
-              page, 0, scratch, 0, 73, shape, key, 0, length, workspace);
+              page, 0, 73, shape, key, 0, length, workspace);
       assertEquals(expected, actual);
-      if (actual.isOk()) present[value][row] = insert;
+      if (actual.isOk()) {
+        present[value][row] = insert;
+        assertEquals(StatusCode.OK, TupleBTreePageAdmission.validate(
+            page, 0, 73, shape, TupleBTreePageCodec.TYPE_LEAF, workspace));
+      }
       if (operation % 25 == 0) {
         assertModel(page, key, present, shape, workspace, lookup);
       }
@@ -53,8 +56,8 @@ final class TupleBTreeLeafPageModelTest {
   private static void assertModel(
       ByteBuffer page, ByteBuffer key, boolean[][] present, TupleShape shape,
       TupleBTreeWorkspace workspace, TupleBTreeLookupResult lookup) {
-    assertEquals(StatusCode.OK, TupleBTreePageCodec.validate(
-        page, 0, 73, shape, workspace.header));
+    assertEquals(StatusCode.OK, TupleBTreePageAdmission.validate(
+        page, 0, 73, shape, TupleBTreePageCodec.TYPE_LEAF, workspace));
     int expectedCount = 0;
     for (boolean[] rows : present) {
       for (boolean value : rows) if (value) expectedCount++;
@@ -71,7 +74,7 @@ final class TupleBTreeLeafPageModelTest {
     TupleBTreeLeafEntry previous = new TupleBTreeLeafEntry();
     TupleBTreeLeafEntry current = new TupleBTreeLeafEntry();
     for (int index = 0; index < expectedCount; index++) {
-      assertEquals(StatusCode.OK, TupleBTreePageCodec.readLeaf(
+      assertEquals(StatusCode.OK, TupleBTreePageCodec.readValidatedLeaf(
           page, 0, workspace.header, index, current));
       if (index > 0) {
         assertTrue(TupleKeyCodec.compare(

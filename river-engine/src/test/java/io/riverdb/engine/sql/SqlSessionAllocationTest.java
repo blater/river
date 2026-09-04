@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,6 +57,7 @@ final class SqlSessionAllocationTest {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.create(
+            databaseRequest(4),
             root,
             DatabaseIncarnation.of(769, 773),
             WalGeneration.of(1),
@@ -657,8 +659,8 @@ final class SqlSessionAllocationTest {
     fixture.execute(
         "CREATE TABLE allocation_sort_accept "
             + "(id BIGINT PRIMARY KEY,mode BIGINT)");
-    for (int first = 1; first <= 1_100; first += SqlCommand.MAXIMUM_INSERT_ROWS) {
-      int end = Math.min(first + SqlCommand.MAXIMUM_INSERT_ROWS, 1_101);
+    for (int first = 1; first <= 1_100; first += SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS) {
+      int end = Math.min(first + SqlCommand.RECOMMENDED_INSERT_BATCH_ROWS, 1_101);
       StringBuilder rows = new StringBuilder("INSERT INTO allocation_sort_rows VALUES ");
       StringBuilder accepted =
           new StringBuilder("INSERT INTO allocation_sort_accept VALUES ");

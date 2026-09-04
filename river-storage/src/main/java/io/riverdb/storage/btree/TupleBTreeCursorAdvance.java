@@ -18,7 +18,7 @@ final class TupleBTreeCursorAdvance {
       while (available(cursor)) {
         int entryIndex = cursor.index;
         cursor.index += cursor.direction;
-        StatusCode status = TupleBTreePageCodec.readLeaf(
+        StatusCode status = TupleBTreePageCodec.readValidatedLeaf(
             cursor.page, cursor.pageStart, cursor.header, entryIndex, result);
         if (!status.isOk()) return finish(cursor, result, status);
         int location = location(cursor, result);
@@ -83,7 +83,7 @@ final class TupleBTreeCursorAdvance {
 
   private static StatusCode validateAdjacent(TupleBTreeCursor cursor, int current) {
     io.riverdb.format.btree.TupleBTreePageHeader header = nextHeader(cursor);
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         cursor.transitionReference.page(), cursor.transitionReference.start(),
         cursor.tree.schemaId(), cursor.tree.shape(), TupleBTreePageCodec.TYPE_LEAF,
         header, cursor.tree.provider(), cursor.transitionReference);

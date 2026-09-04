@@ -146,7 +146,8 @@ final class SessionEndpointAuthenticationTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeSqlRequest(
-            request, ProtocolMessageType.EXECUTE, 1, "SELECT secret", null));
+            request, ProtocolMessageType.EXECUTE, 1, "SELECT secret", null,
+            0, 0, 0));
     int originalLimit = request.limit();
     request.limit(originalLimit + 1);
     request.put(originalLimit, (byte) 0x7f);
@@ -194,7 +195,8 @@ final class SessionEndpointAuthenticationTest {
     assertEquals(
         StatusCode.OK,
         codec.encodeSqlRequest(
-            request, ProtocolMessageType.EXECUTE, requestId, "SELECT 1", null));
+            request, ProtocolMessageType.EXECUTE, requestId, "SELECT 1", null,
+            0, 0, 0));
     int limit = request.limit();
     assertEquals(StatusCode.OK, endpoint.process(request, response));
     assertEquals(StatusCode.OK, codec.decodeResponse(response, frame, decoded));

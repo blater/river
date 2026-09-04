@@ -6,10 +6,11 @@ import java.nio.ByteBuffer;
 
 /** Reusable bounded row-major null words shared by in-memory and spilled sort state. */
 final class SqlSortNullWords implements SqlNullWords {
+  private static final long[] EMPTY_LONGS = new long[0];
   private int maximumRows;
   private final SqlRetainedArrayAllocator allocator;
-  private long[] words = new long[0];
-  private long[] selectedWords = new long[0];
+  private long[] words = EMPTY_LONGS;
+  private long[] selectedWords = EMPTY_LONGS;
   private int wordCount;
 
   SqlSortNullWords(int rows) { this(rows, SqlRetainedArrayAllocator.STANDARD); }
@@ -19,35 +20,51 @@ final class SqlSortNullWords implements SqlNullWords {
     allocator = retainedAllocator;
   }
 
-  void maximumRows(int rows) { maximumRows = rows; }
-
   long retainedBytes() {
     return (long) (words.length + selectedWords.length) * Long.BYTES;
   }
 
   long requiredBytes(int columns, int maximumColumns) {
+    return requiredBytes(columns, maximumColumns, maximumRows);
+  }
+
+  long requiredBytes(int columns, int maximumColumns, int rows) {
+    return requiredBytes(columns, maximumColumns, rows, words.length, selectedWords.length);
+  }
+
+  static long cleanRequiredBytes(int columns, int maximumColumns, int rows) {
+    return requiredBytes(columns, maximumColumns, rows, 0, 0);
+  }
+
+  private static long requiredBytes(
+      int columns, int maximumColumns, int rows,
+      int retainedWords, int retainedSelectedWords) {
     int requiredWords = (columns + Long.SIZE - 1) >>> 6;
     int maximumWordCount = (maximumColumns + Long.SIZE - 1) >>> 6;
-    long requiredLong = (long) maximumRows * requiredWords;
+    long requiredLong = (long) rows * requiredWords;
     if (requiredLong > Integer.MAX_VALUE) return Long.MAX_VALUE;
     int capacity = BoundedArrayGrowth.capacity(
-        words.length, (int) requiredLong, Integer.MAX_VALUE, maximumRows);
+        retainedWords, (int) requiredLong, Integer.MAX_VALUE, rows);
     int selected = BoundedArrayGrowth.capacity(
-        selectedWords.length, requiredWords, maximumWordCount, 1);
+        retainedSelectedWords, requiredWords, maximumWordCount, 1);
     return capacity < 0 || selected < 0 ? Long.MAX_VALUE
         : (long) (capacity + selected) * Long.BYTES;
   }
 
   StatusCode reserve(int columns, int maximumColumns) {
-    if (columns <= 0 || columns > maximumColumns || maximumRows <= 0) {
+    return reserve(columns, maximumColumns, maximumRows);
+  }
+
+  StatusCode reserve(int columns, int maximumColumns, int rows) {
+    if (columns <= 0 || columns > maximumColumns || rows <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     int requiredWords = (columns + Long.SIZE - 1) >>> 6;
     int maximumWordCount = (maximumColumns + Long.SIZE - 1) >>> 6;
-    long requiredLong = (long) maximumRows * requiredWords;
+    long requiredLong = (long) rows * requiredWords;
     if (requiredLong > Integer.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     int capacity = BoundedArrayGrowth.capacity(
-        words.length, (int) requiredLong, Integer.MAX_VALUE, maximumRows);
+        words.length, (int) requiredLong, Integer.MAX_VALUE, rows);
     if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
     int selectedCapacity = BoundedArrayGrowth.capacity(
         selectedWords.length, requiredWords, maximumWordCount, 1);
@@ -59,11 +76,18 @@ final class SqlSortNullWords implements SqlNullWords {
           ? selectedWords : allocator.longs(selectedCapacity);
       words = nextWords;
       selectedWords = nextSelected;
+      maximumRows = rows;
       wordCount = requiredWords;
       return StatusCode.OK;
     } catch (OutOfMemoryError error) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+  }
+
+  void release() {
+    words = EMPTY_LONGS;
+    selectedWords = EMPTY_LONGS;
+    wordCount = 0;
   }
 
   StatusCode copyFrom(int row, SqlNullWords source) {

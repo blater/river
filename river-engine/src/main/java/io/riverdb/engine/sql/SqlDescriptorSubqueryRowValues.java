@@ -2,9 +2,9 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
 
 /** Budgeted retained row buffer for one descriptor-subquery child. */
@@ -49,7 +49,7 @@ final class SqlDescriptorSubqueryRowValues {
       int descriptor = table.typeDescriptorAt(column);
       if (SqlTypeDescriptor.typeId(descriptor) == SqlTypeDescriptor.TYPE_ID_VARCHAR) {
         bytes += SqlTypeDescriptor.parameterOne(descriptor) * 4L;
-        if (bytes > SqlShapeLimits.MAX_STORED_ROW_BYTES) return -1;
+        if (bytes > TableSchema.MAXIMUM_ROW_BYTES) return -1;
       }
     }
     return (int) bytes;

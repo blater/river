@@ -3,10 +3,25 @@ package io.riverdb.storage.heap;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Test;
 
 final class HeapPageTest {
+  @Test
+  void maximumRowDerivesFromOnePageSlot() {
+    ByteBuffer page = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
+    assertEquals(StatusCode.OK, HeapPage.initialize(page));
+    assertEquals(StatusCode.OK, HeapPage.insert(
+        page, ByteBuffer.allocate(HeapPage.MAXIMUM_ROW_BYTES), new HeapInsertResult()));
+
+    page.clear();
+    assertEquals(StatusCode.OK, HeapPage.initialize(page));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, HeapPage.insert(
+        page, ByteBuffer.allocate(HeapPage.MAXIMUM_ROW_BYTES + 1),
+        new HeapInsertResult()));
+  }
+
   @Test
   void insertsFetchesScansAndStopsAtCapacity() {
     ByteBuffer page = ByteBuffer.allocate(128);

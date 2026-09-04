@@ -36,7 +36,7 @@ class IndexedKernelVersions {
     return versions.load(checkpoint);
   }
 
-  void closeCheckpointVersions() { versions.close(); }
+  StatusCode closeCheckpointVersions() { return versions.close(); }
 
   StatusCode applyRecoveredVersions(
       ByteBuffer payload, int offset, long previousRows, int count, long commitSequence) {

@@ -16,9 +16,10 @@ abstract class IndexedRelationalStoreAccess {
       IndexedPageSet pages,
       IndexedStorePhase phase,
       IndexedWalRecovery recovery,
-      IndexedLogicalRowIdRegistry logicalRowIds) {
+      IndexedLogicalRowIdRegistry logicalRowIds,
+      IndexedGroupCommitMetrics commitMetrics) {
     services = new IndexedRelationalStoreServices(
-        store, kernel, wal, pages, phase, recovery, logicalRowIds);
+        store, kernel, wal, pages, phase, recovery, logicalRowIds, commitMetrics);
   }
 
   /** Forces and atomically publishes one preflighted base-and-index mutation group. */
@@ -32,16 +33,11 @@ abstract class IndexedRelationalStoreAccess {
   }
 
   StatusCode commitHybrid(
-      long transactionId,
-      PendingMutationBuffer pending,
-      IndexedTupleIntentJournal intents,
-      IndexedTupleIndexLifecycleBatch lifecycle,
-      IndexedLogicalRowIdFloors logicalRowFloors,
+      IndexedPreparedLogicalCommit preparedCommit,
       long oldestVisibleCommitSequence,
       IndexedCommitResult result) {
     return relationalServices().commitHybrid(
-        transactionId, pending, intents, lifecycle, logicalRowFloors,
-        oldestVisibleCommitSequence, result);
+        preparedCommit, oldestVisibleCommitSequence, result);
   }
 
   StatusCode probeTuplePrefixAt(

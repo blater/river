@@ -146,6 +146,7 @@ public final class SqlExecutionResult {
   public boolean isVarchar(int index) { return lanes.isText(index); }
   public int typeDescriptorAt(int index) { return lanes.descriptor(index); }
   public int textLengthAt(int index) { return lanes.textLength(index); }
+  public int encodedTextLengthAt(int index) { return lanes.encodedTextLength(index); }
   public int copyTextAt(int index, char[] target, int offset) {
     return lanes.copyText(index, target, offset);
   }

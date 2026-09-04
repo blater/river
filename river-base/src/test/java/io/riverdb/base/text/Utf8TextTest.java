@@ -9,7 +9,7 @@ final class Utf8TextTest {
   @Test
   void roundTripsCanonicalUtf8WithoutAllocatingStorage() {
     String value = "River £ 河 🌊";
-    ByteBuffer encoded = ByteBuffer.allocateDirect(Utf8Text.MAXIMUM_BYTES);
+    ByteBuffer encoded = ByteBuffer.allocateDirect(Utf8Text.encodedLength(value));
     int bytes = Utf8Text.encode(value, 11, encoded);
     assertEquals(17, bytes);
     assertEquals(11, Utf8Text.validate(encoded, 0, bytes, 11));

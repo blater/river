@@ -20,8 +20,10 @@ import io.riverdb.engine.api.TransactionProgramAction;
 import io.riverdb.engine.api.TransactionProgramArguments;
 import io.riverdb.engine.api.TransactionProgramResult;
 import io.riverdb.protocol.ProtocolMemoryBudget;
+import io.riverdb.protocol.ProtocolFrame;
 import io.riverdb.protocol.ProtocolFrameCodec;
 import io.riverdb.protocol.ProtocolMessageType;
+import io.riverdb.protocol.ProtocolResponse;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -61,7 +63,7 @@ final class ServerResponseBudgetTest {
     assertEquals(StatusCode.OK, responses.process(endpoint, request));
     assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
         request, 4, 44, IsolationLevel.REPEATABLE_READ,
-        new TransactionProgramArguments()));
+        new TransactionProgramArguments(), 0, 0, 0));
     assertEquals(StatusCode.OK, responses.process(endpoint, request));
     TransactionProgramResult published = database.session.programResult;
     assertEquals(IsolationLevel.REPEATABLE_READ, database.session.programIsolation);
@@ -95,6 +97,18 @@ final class ServerResponseBudgetTest {
     assertEquals(StatusCode.OK, growOnce(second));
     assertEquals(base + ProtocolFrameCodec.MAXIMUM_FRAME_BYTES,
         budget.retainedBytes());
+  }
+
+  @Test
+  void distinguishesMalformedProgramResultsFromOversizedResults() {
+    ProtocolMemoryBudget budget = ProtocolMemoryBudget.forServer(1);
+    ServerResponseBuffer responses = new ServerResponseBuffer(budget.lease());
+    TransactionProgramResult malformed = new TransactionProgramResult();
+    assertEquals(StatusCode.OK,
+        malformed.beginStepResult(0, TransactionProgramAction.EXACT_ONE, 1));
+    assertEquals(StatusCode.OK, malformed.beginRow(1));
+
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT, responses.admit(malformed));
   }
 
   @Test
@@ -132,6 +146,63 @@ final class ServerResponseBudgetTest {
     second.releasePublishedHighWater();
     assertEquals(StatusCode.OK, secondBuffer.releaseHighWater());
     assertEquals(base, budget.retainedBytes());
+  }
+
+  @Test
+  void diagnosticConflictPreventsExecutionForEveryRequestForm() {
+    ProtocolMemoryBudget budget = ProtocolMemoryBudget.forServer(1);
+    ServerResponseBuffer responses = new ServerResponseBuffer(budget.lease());
+    WideDatabase database = new WideDatabase();
+    database.session.diagnosticStatus = StatusCode.CONFLICT;
+    SessionEndpoint endpoint = openedEndpoint(database, responses);
+    ProtocolFrameCodec codec = new ProtocolFrameCodec();
+    ProtocolFrame frame = new ProtocolFrame();
+    ProtocolResponse decoded = new ProtocolResponse();
+    ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ParameterSet noParameters = new ParameterSet(0, 0);
+    assertEquals(StatusCode.OK, codec.encodeSqlRequest(
+        request, ProtocolMessageType.EXECUTE, 3, "SELECT wide", null,
+        101, 7, 11));
+    assertDiagnosticConflict(endpoint, responses, request, codec, frame, decoded);
+
+    assertEquals(StatusCode.OK, codec.encodeSqlRequest(
+        request, ProtocolMessageType.BEGIN_QUERY, 4, "SELECT wide", null,
+        101, 7, 11));
+    assertDiagnosticConflict(endpoint, responses, request, codec, frame, decoded);
+
+    assertEquals(StatusCode.OK, codec.encodePreparedRequest(
+        request, ProtocolMessageType.EXECUTE_PREPARED, 5, 41, noParameters,
+        101, 7, 11));
+    assertDiagnosticConflict(endpoint, responses, request, codec, frame, decoded);
+
+    assertEquals(StatusCode.OK, codec.encodePreparedRequest(
+        request, ProtocolMessageType.BEGIN_PREPARED_QUERY, 6, 41, noParameters,
+        101, 7, 11));
+    assertDiagnosticConflict(endpoint, responses, request, codec, frame, decoded);
+
+    assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
+        request, 7, 43, IsolationLevel.SERIALIZABLE,
+        new TransactionProgramArguments(), 101, 7, 11));
+    assertEquals(StatusCode.OK, responses.process(endpoint, request));
+    assertEquals(
+        StatusCode.OK,
+        codec.decodeProgramResultResponse(
+            responses.buffer(), frame, new TransactionProgramResult()));
+    assertEquals(StatusCode.CONFLICT, codec.decodedProgramResultStatus());
+
+    assertEquals(0, database.session.executions);
+  }
+
+  private static void assertDiagnosticConflict(
+      SessionEndpoint endpoint,
+      ServerResponseBuffer responses,
+      ByteBuffer request,
+      ProtocolFrameCodec codec,
+      ProtocolFrame frame,
+      ProtocolResponse decoded) {
+    assertEquals(StatusCode.OK, responses.process(endpoint, request));
+    assertEquals(StatusCode.OK, codec.decodeResponse(responses.buffer(), frame, decoded));
+    assertEquals(StatusCode.CONFLICT, decoded.status());
   }
 
   private static void growToMaximum(ServerResponseBuffer buffer) {
@@ -175,7 +246,8 @@ final class ServerResponseBudgetTest {
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(StatusCode.OK, codec.encodeSqlRequest(
-        request, ProtocolMessageType.EXECUTE, requestId, "SELECT wide", null));
+        request, ProtocolMessageType.EXECUTE, requestId, "SELECT wide", null,
+        0, 0, 0));
     return request;
   }
 
@@ -197,6 +269,13 @@ final class ServerResponseBudgetTest {
     private int executions;
     private TransactionProgramResult programResult;
     private IsolationLevel programIsolation;
+    private StatusCode diagnosticStatus = StatusCode.OK;
+
+    @Override
+    public StatusCode configureTransactionDiagnostics(
+        long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+      return diagnosticStatus;
+    }
 
     private WideSession() {
       for (int index = 0; index < descriptors.length; index++) {
@@ -218,11 +297,13 @@ final class ServerResponseBudgetTest {
     public StatusCode prepare(String sql, PreparedOpenResult result) { return StatusCode.CLOSED; }
     @Override
     public StatusCode executePrepared(long handle, ParameterSet parameters, CommandResult result) {
+      executions++;
       return StatusCode.CLOSED;
     }
     @Override
     public StatusCode beginPreparedQuery(
         long handle, ParameterSet parameters, QueryOpenResult result) {
+      executions++;
       return StatusCode.CLOSED;
     }
     @Override
@@ -235,6 +316,7 @@ final class ServerResponseBudgetTest {
     public StatusCode executeProgram(long handle, IsolationLevel isolationLevel,
         TransactionProgramArguments arguments,
         TransactionProgramResult result) {
+      executions++;
       programIsolation = isolationLevel;
       programResult = result;
       assertEquals(StatusCode.OK,
@@ -253,6 +335,7 @@ final class ServerResponseBudgetTest {
     public StatusCode beginQuery(String sql, QueryOpenResult result) { return StatusCode.CLOSED; }
     @Override
     public StatusCode beginQuery(String sql, ParameterSet parameters, QueryOpenResult result) {
+      executions++;
       return StatusCode.CLOSED;
     }
   }

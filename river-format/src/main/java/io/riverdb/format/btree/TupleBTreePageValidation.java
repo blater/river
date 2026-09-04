@@ -25,6 +25,7 @@ final class TupleBTreePageValidation {
         FormatBytes.getInt(source, start + 44),
         FormatBytes.getLong(source, start + 48),
         FormatBytes.getLong(source, start + 56),
+        FormatBytes.getInt(source, start + 32),
         FormatBytes.getInt(source, start + 36),
         FormatBytes.getInt(source, start + 40));
     return StatusCode.OK;
@@ -32,7 +33,9 @@ final class TupleBTreePageValidation {
 
   static StatusCode validate(
       ByteBuffer source, int start, long expectedSchemaId,
-      TupleShape expectedShape, TupleBTreePageHeader result) {
+      TupleShape expectedShape, TupleBTreePageHeader result,
+      TupleBTreePageValidationProof proof) {
+    if (proof != null) proof.reset();
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
     if (!TupleBTreePageBytes.validPayload(source, start, false) || expectedShape == null) {
@@ -81,7 +84,15 @@ final class TupleBTreePageValidation {
         source, start + freeStart, start + freeEnd)) return StatusCode.CORRUPTION;
     result.set(
         type, count, pointer, leftSibling, arity, descriptorHash,
-        schemaId, highOffset, highLength);
+        schemaId, freeEnd, highOffset, highLength);
+    if (proof != null) {
+      StatusCode proofStatus = proof.bind(source, start, schemaId, descriptorHash, type);
+      if (!proofStatus.isOk()) {
+        result.reset();
+        return proofStatus;
+      }
+      result.bindValidation(proof);
+    }
     return StatusCode.OK;
   }
 }

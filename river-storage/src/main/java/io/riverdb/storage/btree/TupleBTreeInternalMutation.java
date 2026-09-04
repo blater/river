@@ -55,7 +55,7 @@ final class TupleBTreeInternalMutation {
         || !TupleKeyCodec.matchesPhysicalIndexKey(key, keyOffset, keyLength, shape)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    return TupleBTreePageSupport.validate(
+    return TupleBTreePageAdmission.validate(
         page, start, schemaId, shape, TupleBTreePageCodec.TYPE_INTERNAL, workspace);
   }
 

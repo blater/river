@@ -19,6 +19,66 @@ import org.junit.jupiter.api.Test;
 
 final class LockTupleIntervalTableTest {
   @Test
+  void emptyWaiterReleaseSkipsOverlapSearchWithoutLosingALaterWake() {
+    Fixture fixture = new Fixture();
+    LockRequest request = prefix(6, bytes(4), LockMode.EXCLUSIVE);
+    LockToken firstOwner = acquire(fixture, 1, request);
+    long searches = fixture.table.overlapSearches();
+
+    assertEquals(StatusCode.OK, fixture.table.release(firstOwner));
+    assertEquals(searches, fixture.table.overlapSearches());
+
+    LockToken secondOwner = acquire(fixture, 2, request);
+    Wait waiter = enqueue(fixture, 3, 1, request, StatusCode.RETRY);
+    assertEquals(LockWaitState.QUEUED, waiter.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(secondOwner));
+    assertEquals(LockWaitState.GRANTED, waiter.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(consume(fixture, waiter)));
+    assertEquals(0, fixture.table.waitingCount());
+    assertEquals(0, fixture.table.holdingCount());
+  }
+
+  @Test
+  void cancellingTheLastWaiterSkipsOverlapSearchAndStillRecyclesTheResource() {
+    Fixture fixture = new Fixture();
+    LockRequest request = prefix(6, bytes(7), LockMode.EXCLUSIVE);
+    LockToken owner = acquire(fixture, 1, request);
+    Wait waiter = enqueue(fixture, 2, 1, request, StatusCode.RETRY);
+    long searches = fixture.table.overlapSearches();
+
+    assertEquals(StatusCode.CANCELLED,
+        fixture.table.cancel(waiter.lane, waiter.handle, StatusCode.CANCELLED));
+    assertEquals(searches, fixture.table.overlapSearches());
+    assertEquals(0, fixture.table.waitingCount());
+    assertEquals(StatusCode.OK, fixture.table.release(owner));
+    assertEquals(searches, fixture.table.overlapSearches());
+    assertEquals(0, fixture.table.holdingCount());
+    assertEquals(-1, fixture.table.state.directory.resource(request));
+  }
+
+  @Test
+  void cancellingAQueuedWriterSearchesAndGrantsItsCompatibleSuccessor() {
+    Fixture fixture = new Fixture();
+    LockRequest shared = prefix(6, bytes(9), LockMode.SHARED);
+    LockToken owner = acquire(fixture, 1, shared);
+    Wait writer = enqueue(
+        fixture, 2, 1, prefix(6, bytes(9), LockMode.EXCLUSIVE), StatusCode.RETRY);
+    Wait reader = enqueue(fixture, 3, 1, shared, StatusCode.RETRY);
+    assertEquals(LockWaitState.QUEUED, writer.handle.state());
+    assertEquals(LockWaitState.QUEUED, reader.handle.state());
+    long searches = fixture.table.overlapSearches();
+
+    assertEquals(StatusCode.CANCELLED,
+        fixture.table.cancel(writer.lane, writer.handle, StatusCode.CANCELLED));
+    assertTrue(fixture.table.overlapSearches() > searches);
+    assertEquals(LockWaitState.GRANTED, reader.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(consume(fixture, reader)));
+    assertEquals(StatusCode.OK, fixture.table.release(owner));
+    assertEquals(0, fixture.table.waitingCount());
+    assertEquals(0, fixture.table.holdingCount());
+  }
+
+  @Test
   void exactAndRangeConflictInBothOrdersWithHalfOpenBoundaries() {
     Fixture fixture = new Fixture();
     LockToken range = acquire(fixture, 1, range(7, bytes(10), true, bytes(20), false,
@@ -50,6 +110,89 @@ final class LockTupleIntervalTableTest {
     LockToken samePrefix = acquire(fixture, 6, key(8, bytes(3, 9)));
     assertEquals(StatusCode.OK, fixture.table.release(samePrefix));
     assertEquals(StatusCode.OK, fixture.table.release(descendantsExcluded));
+  }
+
+  @Test
+  void overlappingUpdatePrefixesSerializeWhileCompatibleAndDisjointRequestsProceed() {
+    Fixture fixture = new Fixture();
+    LockToken updateOwner = acquire(
+        fixture, 1, prefix(17, bytes(3), LockMode.UPDATE));
+    LockToken sharedOwner = acquire(
+        fixture, 2, prefix(17, bytes(3), LockMode.SHARED));
+    LockToken disjointUpdate = acquire(
+        fixture, 3, prefix(17, bytes(4), LockMode.UPDATE));
+    Wait overlappingUpdate = enqueue(
+        fixture, 4, 1, prefix(17, bytes(3), LockMode.UPDATE), StatusCode.RETRY);
+    Wait descendantWriter = enqueue(
+        fixture, 5, 1, key(17, bytes(3, 7), LockMode.EXCLUSIVE), StatusCode.RETRY);
+
+    assertEquals(LockWaitState.QUEUED, overlappingUpdate.handle.state());
+    assertEquals(LockWaitState.QUEUED, descendantWriter.handle.state());
+    assertEquals(0, fixture.table.deadlockVictimSelections());
+
+    assertEquals(StatusCode.OK, fixture.table.release(updateOwner));
+    assertEquals(LockWaitState.GRANTED, overlappingUpdate.handle.state());
+    assertEquals(LockWaitState.QUEUED, descendantWriter.handle.state());
+    LockToken grantedUpdate = consume(fixture, overlappingUpdate);
+    assertEquals(StatusCode.OK, fixture.table.release(grantedUpdate));
+    assertEquals(LockWaitState.QUEUED, descendantWriter.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(sharedOwner));
+    assertEquals(LockWaitState.GRANTED, descendantWriter.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(consume(fixture, descendantWriter)));
+    assertEquals(StatusCode.OK, fixture.table.release(disjointUpdate));
+    assertEquals(0, fixture.table.deadlockVictimSelections());
+  }
+
+  @Test
+  void updatePrefixOwnerBypassesPredecessorsItBlocksThenPreservesSchedulerOrder() {
+    Fixture fixture = new Fixture();
+    LockToken prefixOwner = acquire(
+        fixture, 1, prefix(18, bytes(6), LockMode.UPDATE));
+    Wait descendantWriter = enqueue(
+        fixture, 3, 1, key(18, bytes(6, 2), LockMode.EXCLUSIVE), StatusCode.RETRY);
+    Wait overlappingUpdate = enqueue(
+        fixture, 2, 1, prefix(18, bytes(6), LockMode.UPDATE), StatusCode.RETRY);
+
+    LockToken ownerWriter = acquire(
+        fixture, 1, key(18, bytes(6, 2), LockMode.EXCLUSIVE));
+    assertEquals(LockWaitState.QUEUED, descendantWriter.handle.state());
+    assertEquals(LockWaitState.QUEUED, overlappingUpdate.handle.state());
+    assertEquals(0, fixture.table.deadlockVictimSelections());
+
+    assertEquals(StatusCode.OK, fixture.table.release(ownerWriter));
+    assertEquals(LockWaitState.QUEUED, descendantWriter.handle.state());
+    assertEquals(LockWaitState.QUEUED, overlappingUpdate.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(prefixOwner));
+    assertEquals(LockWaitState.GRANTED, descendantWriter.handle.state());
+    assertEquals(LockWaitState.QUEUED, overlappingUpdate.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(consume(fixture, descendantWriter)));
+    assertEquals(LockWaitState.GRANTED, overlappingUpdate.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(consume(fixture, overlappingUpdate)));
+    assertEquals(0, fixture.table.deadlockVictimSelections());
+  }
+
+  @Test
+  void lateSharedPrefixDoesNotBargeQueuedDescendantWriter() {
+    Fixture fixture = new Fixture();
+    LockToken prefixOwner = acquire(
+        fixture, 1, prefix(19, bytes(8), LockMode.UPDATE));
+    Wait descendantWriter = enqueue(
+        fixture, 2, 1, key(19, bytes(8, 4), LockMode.EXCLUSIVE), StatusCode.RETRY);
+
+    assertEquals(StatusCode.RETRY, tryAcquire(
+        fixture, 3, prefix(19, bytes(8), LockMode.SHARED)));
+    Wait lateReader = enqueue(
+        fixture, 3, 1, prefix(19, bytes(8), LockMode.SHARED), StatusCode.RETRY);
+    assertEquals(LockWaitState.QUEUED, descendantWriter.handle.state());
+    assertEquals(LockWaitState.QUEUED, lateReader.handle.state());
+
+    assertEquals(StatusCode.OK, fixture.table.release(prefixOwner));
+    assertEquals(LockWaitState.GRANTED, descendantWriter.handle.state());
+    assertEquals(LockWaitState.QUEUED, lateReader.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(consume(fixture, descendantWriter)));
+    assertEquals(LockWaitState.GRANTED, lateReader.handle.state());
+    assertEquals(StatusCode.OK, fixture.table.release(consume(fixture, lateReader)));
+    assertEquals(0, fixture.table.deadlockVictimSelections());
   }
 
   @Test
@@ -295,9 +438,23 @@ final class LockTupleIntervalTableTest {
     return wait;
   }
 
+  private static LockToken consume(Fixture fixture, Wait wait) {
+    LockToken token = new LockToken();
+    assertEquals(StatusCode.OK, fixture.table.consume(wait.lane, wait.handle, token));
+    return token;
+  }
+
   private static LockRequest key(long namespace, ByteBuffer key) {
+    return key(namespace, key, LockMode.EXCLUSIVE);
+  }
+
+  private static LockRequest key(long namespace, ByteBuffer key, LockMode mode) {
     return new LockRequest().setTupleKey(
-        namespace, key, 0, key.remaining(), LockMode.EXCLUSIVE, 0);
+        namespace, key, 0, key.remaining(), mode, 0);
+  }
+
+  private static LockRequest prefix(long namespace, ByteBuffer key, LockMode mode) {
+    return range(namespace, key, true, key, true, mode);
   }
 
   private static LockRequest range(

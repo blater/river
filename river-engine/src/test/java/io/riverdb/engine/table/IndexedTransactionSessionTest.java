@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -20,9 +21,11 @@ import io.riverdb.platform.file.nio.NioIoCounters;
 import io.riverdb.storage.btree.BTreePage;
 import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.tx.TransactionManager;
+import io.riverdb.tx.TransactionGroupCompletionTimings;
 import io.riverdb.tx.api.IsolationLevel;
 import io.riverdb.tx.api.TransactionOutcome;
 import io.riverdb.tx.api.TransactionState;
+import io.riverdb.tx.api.lock.LockMode;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalOpenResult;
 import java.nio.ByteBuffer;
@@ -41,6 +44,67 @@ final class IndexedTransactionSessionTest {
   private static final WalGeneration GENERATION = WalGeneration.of(1);
 
   @Test
+  void preparedLogicalCommitRejectsSameCardinalityContentChange(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
+    TransactionOutcome outcome = new TransactionOutcome();
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, session.logicalRowFloors().record(1, 2));
+    assertEquals(StatusCode.OK, session.prepareLogicalCommit());
+    assertEquals(StatusCode.OK, manager.prepareCommit(session.groupTransaction(), outcome));
+    assertTrue(session.preparedCommit().valid());
+
+    assertEquals(StatusCode.OK, session.logicalRowFloors().record(1, 3));
+    assertFalse(session.preparedCommit().valid());
+
+    io.riverdb.tx.Transaction[] transactions = {session.groupTransaction()};
+    TransactionOutcome[] outcomes = {outcome};
+    assertEquals(StatusCode.OK, manager.abortPreparedCommitGroup(
+        transactions, outcomes, 1, StatusCode.CANCELLED));
+    assertEquals(StatusCode.CANCELLED,
+        session.completeCoordinatedCommit(StatusCode.CANCELLED));
+    assertFalse(session.transactionLifecycleActive());
+    assertEquals(StatusCode.OK, session.close());
+    close(table, wal, directory);
+  }
+
+  @Test
+  void abortCleansADeadlockTerminatedStatementAndAllowsImmediateReuse(
+      @TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
+    TransactionOutcome outcome = new TransactionOutcome();
+
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.beginStatement());
+    assertEquals(StatusCode.OK, session.insert(0, 80, row(8001)));
+    assertEquals(StatusCode.OK, manager.abort(session.transaction(), outcome));
+    assertTrue(session.transactionLifecycleActive());
+
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertFalse(session.transactionLifecycleActive());
+    assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, session.abort(outcome));
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void readCommittedLocksAndUpdatesTheCurrentSuccessorAfterAWait(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
@@ -48,9 +112,12 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession seed = session(manager, table);
-    IndexedTransactionSession claimant = session(manager, table);
-    IndexedTransactionSession blocker = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
+    IndexedTransactionSession claimant = session(context);
+    IndexedTransactionSession blocker = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, seed.insert(0, 81, row(8101)));
@@ -60,7 +127,8 @@ final class IndexedTransactionSessionTest {
     IndexedLockedRow current = new IndexedLockedRow();
     assertEquals(StatusCode.OK, claimant.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, claimant.beginStatement());
-    assertEquals(StatusCode.OK, claimant.fetchCandidateByKey(0, 81, candidate));
+    assertEquals(StatusCode.OK,
+        claimant.fetchCandidateByKey(0, 81, LockMode.SHARED, candidate));
     assertEquals(8101, value(candidate.row()));
     assertEquals(StatusCode.OK, blocker.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, blocker.update(0, 81, row(8102)));
@@ -88,22 +156,85 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void serializableUpdateCandidatesSerializeBeforeExclusiveConversion(@TempDir Path root)
+      throws Exception {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
+    IndexedTransactionSession first = session(context);
+    IndexedTransactionSession second = session(context);
+    TransactionOutcome outcome = new TransactionOutcome();
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.READ_COMMITTED));
+    assertEquals(StatusCode.OK, seed.insert(0, 87, row(8701)));
+    assertEquals(StatusCode.OK, seed.commit(outcome));
+
+    assertEquals(StatusCode.OK, first.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, first.beginStatement());
+    assertEquals(StatusCode.OK, second.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, second.beginStatement());
+    IndexedRowCandidate firstCandidate = new IndexedRowCandidate();
+    IndexedRowCandidate secondCandidate = new IndexedRowCandidate();
+    assertEquals(StatusCode.OK,
+        first.fetchCandidateByKey(0, 87, LockMode.UPDATE, firstCandidate));
+
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<StatusCode> waiting = executor.submit(() ->
+          second.fetchCandidateByKey(0, 87, LockMode.UPDATE, secondCandidate));
+      awaitOneLockWait(manager);
+
+      IndexedLockedRow firstCurrent = new IndexedLockedRow();
+      assertEquals(StatusCode.OK, first.lockCurrent(firstCandidate, firstCurrent));
+      assertEquals(StatusCode.OK, first.updateLocked(firstCurrent, row(8702)));
+      assertEquals(StatusCode.OK, first.completeStatement());
+      assertEquals(StatusCode.OK, first.commit(outcome));
+      assertEquals(StatusCode.OK, waiting.get());
+    } finally {
+      executor.shutdownNow();
+    }
+
+    assertEquals(8702, value(secondCandidate.row()));
+    IndexedLockedRow secondCurrent = new IndexedLockedRow();
+    assertEquals(StatusCode.OK, second.lockCurrent(secondCandidate, secondCurrent));
+    assertEquals(StatusCode.OK, second.updateLocked(secondCurrent, row(8703)));
+    assertEquals(StatusCode.OK, second.completeStatement());
+    assertEquals(StatusCode.OK, second.commit(outcome));
+    assertEquals(0, manager.deadlockVictimSelections());
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 87, fetched));
+    assertEquals(8703, value(fetched));
+    assertEquals(0, manager.waitingLockCount());
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void repeatableReadLockCurrentReturnsANewerCurrentSuccessor(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession seed = session(manager, table);
-    IndexedTransactionSession claimant = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
+    IndexedTransactionSession claimant = session(context);
+    IndexedTransactionSession writer = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, seed.insert(0, 82, row(8201)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
     assertEquals(StatusCode.OK, claimant.begin(IsolationLevel.REPEATABLE_READ));
     IndexedRowCandidate candidate = new IndexedRowCandidate();
-    assertEquals(StatusCode.OK, claimant.fetchCandidateByKey(0, 82, candidate));
+    assertEquals(StatusCode.OK,
+        claimant.fetchCandidateByKey(0, 82, LockMode.SHARED, candidate));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, writer.update(0, 82, row(8202)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
@@ -123,9 +254,12 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession seed = session(manager, table);
-    IndexedTransactionSession claimant = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
+    IndexedTransactionSession claimant = session(context);
+    IndexedTransactionSession writer = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, seed.insert(0, 83, row(8301)));
@@ -133,7 +267,8 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, claimant.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, claimant.beginStatement());
     IndexedRowCandidate candidate = new IndexedRowCandidate();
-    assertEquals(StatusCode.OK, claimant.fetchCandidateByKey(0, 83, candidate));
+    assertEquals(StatusCode.OK,
+        claimant.fetchCandidateByKey(0, 83, LockMode.SHARED, candidate));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, writer.delete(0, 83));
     assertEquals(StatusCode.OK, writer.commit(outcome));
@@ -155,13 +290,17 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 2);
-    IndexedTransactionSession session = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, session.insert(0, 84, row(8401)));
     IndexedRowCandidate candidate = new IndexedRowCandidate();
     IndexedLockedRow current = new IndexedLockedRow();
-    assertEquals(StatusCode.OK, session.fetchCandidateByKey(0, 84, candidate));
+    assertEquals(StatusCode.OK,
+        session.fetchCandidateByKey(0, 84, LockMode.SHARED, candidate));
     assertEquals(StatusCode.OK, session.lockCurrent(candidate, current));
     assertEquals(StatusCode.OK, session.updateLocked(current, row(8402)));
     assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
@@ -180,8 +319,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 3);
-    IndexedTransactionSession seed = session(manager, table);
-    IndexedTransactionSession reader = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
+    IndexedTransactionSession reader = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, seed.insert(0, 85, row(8501)));
@@ -226,7 +368,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
     TupleShape.Result shape = new TupleShape.Result();
     assertEquals(StatusCode.OK,
         TupleShape.create(new int[] {SqlTypeDescriptor.BIGINT}, shape));
@@ -248,142 +393,18 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
-  void callerOwnedRelationalGroupCommitsThroughSession(@TempDir Path root) {
-    NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
-    IndexedTable table = createTable(createStore(directory, wal));
-    TransactionManager manager = new TransactionManager(
-        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
-    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.reserveLogicalRowIds(
-        19, 1, new IndexedLogicalRowIdReservation()));
-    IndexedRelationalMutation mutation = relationalBaseMutation(1911);
-    TransactionOutcome outcome = new TransactionOutcome();
-    assertEquals(StatusCode.OK, session.commitRelational(mutation, outcome));
-    assertEquals(TransactionState.COMMITTED, outcome.state());
-    HeapRowResult fetched = new HeapRowResult();
-    long space = CatalogKeyspace.relationalBaseRowSpace(19);
-    assertEquals(StatusCode.OK, table.fetchByKey(space, 1, fetched));
-    assertEquals(1911, value(fetched));
-    close(table, wal, directory);
-  }
-
-  @Test
-  void relationalCommitRetainsActiveRepeatableReadPageGenerations(@TempDir Path root) {
-    NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
-    IndexedTable table = createTable(createStore(
-        directory, wal, new IndexedPageCacheConfig(8, 4, 0)));
-    TransactionManager manager = new TransactionManager(
-        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 16);
-    TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
-    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert(77, 23, row(2301)));
-    assertEquals(StatusCode.OK, seed.commit(outcome));
-
-    IndexedTransactionSession reader = session(manager, table);
-    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
-    HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, reader.fetchByKey(77, 23, fetched));
-    assertEquals(2301, value(fetched));
-    IndexedScanCursor cursor = new IndexedScanCursor();
-    IndexedScanResult scanned = new IndexedScanResult();
-    assertEquals(StatusCode.OK, reader.beginScan(77, 23, 77, 24, cursor));
-
-    StatusCode pressure = StatusCode.OK;
-    long latest = 2301;
-    long rowsBeforeFailure = 0;
-    long sequenceBeforeFailure = 0;
-    IndexedTransactionSession failedWriter = null;
-    for (int attempt = 0; attempt < 16 && pressure.isOk(); attempt++) {
-      latest++;
-      IndexedTransactionSession writer = session(manager, table);
-      assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-      rowsBeforeFailure = table.rowCount();
-      sequenceBeforeFailure = table.currentCommitSequence();
-      pressure = writer.commitRelational(
-          relationalScalarUpdate(table, 77, 23, latest), outcome);
-      if (!pressure.isOk()) failedWriter = writer;
-    }
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, pressure, "value=" + latest);
-    assertTrue(failedWriter != null);
-    assertEquals(TransactionState.ABORTED, outcome.state());
-    assertEquals(false, failedWriter.transactionLifecycleActive());
-    assertEquals(rowsBeforeFailure, table.rowCount());
-    assertEquals(sequenceBeforeFailure, table.currentCommitSequence());
-    assertEquals(1, manager.activeTransactionCount());
-    assertEquals(StatusCode.OK, reader.nextScan(cursor, scanned));
-    assertEquals(2301, value(scanned.row()));
-    assertEquals(StatusCode.OK, reader.closeScan(cursor));
-    assertEquals(StatusCode.OK, reader.abort(outcome));
-    assertEquals(0, manager.activeTransactionCount());
-
-    IndexedTransactionSession resumed = session(manager, table);
-    assertEquals(StatusCode.OK, resumed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, resumed.commitRelational(
-        relationalScalarUpdate(table, 77, 23, latest + 1), outcome));
-    assertEquals(StatusCode.OK, table.fetchByKey(77, 23, fetched));
-    assertEquals(latest + 1, value(fetched));
-    close(table, wal, directory);
-  }
-
-  @Test
-  void relationalGroupAtomicallyCommitsGenericScalarAndBaseRows(@TempDir Path root) {
-    NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
-    IndexedTable table = createTable(createStore(directory, wal));
-    TransactionManager manager = new TransactionManager(
-        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
-    assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, session.reserveLogicalRowIds(
-        19, 1, new IndexedLogicalRowIdReservation()));
-    IndexedRelationalMutation mutation = new IndexedRelationalMutation(2, 0, 0);
-    assertEquals(StatusCode.OK, mutation.reserve(2, 0, 0, 2 * Long.BYTES));
-    assertEquals(StatusCode.OK, mutation.appendLogicalRowFloor(19, 2));
-    assertEquals(StatusCode.OK, mutation.appendSuboperation(
-        0, IndexedRelationalMutation.SCALAR_SUBOPERATION, 0, 1,
-        0, 0, 3, 3, 4, 4, 0, 0, 0, 1,
-        IndexedRelationalMutation.REGISTRY_ABSENT,
-        IndexedRelationalMutation.REGISTRY_ABSENT, 0, 0));
-    assertEquals(StatusCode.OK, mutation.appendSuboperation(
-        19, -1, 1, 1, 0, 0, 3, 3, 4, 4, 0, 0, 1, 2,
-        IndexedRelationalMutation.REGISTRY_ABSENT,
-        IndexedRelationalMutation.REGISTRY_ABSENT, 0, 0));
-    ByteBuffer scalar = row(3117);
-    assertEquals(StatusCode.OK, mutation.appendScalar(
-        0, IndexedRelationalMutation.SCALAR_INSERT, 77, 23, 0,
-        scalar, 0, scalar.remaining()));
-    ByteBuffer base = row(1917);
-    assertEquals(StatusCode.OK, mutation.appendBase(
-        1, 19, IndexedRelationalMutation.BASE_INSERT, 1, 0,
-        base, 0, base.remaining()));
-    assertEquals(StatusCode.OK, mutation.seal());
-    TransactionOutcome outcome = new TransactionOutcome();
-    assertEquals(StatusCode.OK, session.commitRelational(mutation, outcome));
-    assertEquals(TransactionState.COMMITTED, outcome.state());
-
-    HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, table.fetchByKey(77, 23, fetched));
-    assertEquals(3117, value(fetched));
-    long baseSpace = CatalogKeyspace.relationalBaseRowSpace(19);
-    assertEquals(StatusCode.OK, table.fetchByKey(baseSpace, 1, fetched));
-    assertEquals(1917, value(fetched));
-    close(table, wal, directory);
-  }
-
-  @Test
   void repeatableReadHidesLaterCommitAndReadCommittedRefreshes(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
-    IndexedTransactionSession repeatable = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
-    IndexedTransactionSession readCommitted = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession repeatable = session(context);
+    IndexedTransactionSession writer = session(context);
+    IndexedTransactionSession readCommitted = session(context);
     assertEquals(StatusCode.OK, repeatable.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, readCommitted.begin(IsolationLevel.READ_COMMITTED));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
@@ -411,8 +432,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
-    IndexedTransactionSession reader = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession reader = session(context);
+    IndexedTransactionSession writer = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     HeapRowResult fetched = new HeapRowResult();
 
@@ -442,8 +466,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession first = session(manager, table);
-    IndexedTransactionSession second = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession first = session(context);
+    IndexedTransactionSession second = session(context);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, first.insert( 0,9, row(91)));
@@ -474,8 +501,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession first = session(manager, table);
-    IndexedTransactionSession second = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession first = session(context);
+    IndexedTransactionSession second = session(context);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
     long keyId = 19;
@@ -485,8 +515,10 @@ final class IndexedTransactionSessionTest {
     int firstLength = IndexedTupleLockKey.userLength(firstKey, 0, firstKey.remaining());
     int secondOffset = IndexedTupleLockKey.userOffset(secondKey, 0, secondKey.remaining());
     int secondLength = IndexedTupleLockKey.userLength(secondKey, 0, secondKey.remaining());
-    assertEquals(StatusCode.OK, first.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId));
-    assertEquals(StatusCode.OK, second.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId));
+    assertEquals(StatusCode.OK, first.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED));
+    assertEquals(StatusCode.OK, second.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED));
     assertEquals(StatusCode.OK, first.tryAcquireTupleKey(
         keyId, firstKey, firstOffset, firstLength,
         io.riverdb.tx.api.lock.LockMode.EXCLUSIVE));
@@ -499,7 +531,8 @@ final class IndexedTransactionSessionTest {
         io.riverdb.tx.api.lock.LockMode.EXCLUSIVE));
     long nonuniqueKeyId = 23;
     assertEquals(StatusCode.OK,
-        first.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, nonuniqueKeyId));
+        first.protectKey(
+            CatalogKeyspace.INDEX_ROOT_SPACE, nonuniqueKeyId, LockMode.SHARED));
     assertEquals(StatusCode.RETRY,
         second.tryAcquireExclusiveKey(CatalogKeyspace.INDEX_ROOT_SPACE, nonuniqueKeyId));
     assertEquals(StatusCode.OK, second.cancelLockWait());
@@ -518,8 +551,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession first = session(manager, table);
-    IndexedTransactionSession second = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession first = session(context);
+    IndexedTransactionSession second = session(context);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, first.insert( 0,1, row(101)));
@@ -560,8 +596,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession reader = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession reader = session(context);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     HeapRowResult fetched = new HeapRowResult();
@@ -583,14 +622,44 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void serializablePointReadCapturesCurrentFrontierAfterKeyProtection(@TempDir Path root) {
+    NioDurableDirectory directory = openDirectory(root);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession reader = session(context);
+    IndexedTransactionSession writer = session(context);
+    TransactionOutcome outcome = new TransactionOutcome();
+
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, writer.insert(0, 89, row(890)));
+    assertEquals(StatusCode.OK, writer.commit(outcome));
+
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, reader.fetchByKey(0, 89, fetched));
+    assertEquals(890, value(fetched));
+    assertEquals(table.currentCommitSequence(), reader.visibleCommitSequence());
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    close(table, wal, directory);
+  }
+
+  @Test
   void serializableReaderCanUpgradeMissingKeyToInsert(@TempDir Path root) {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.SERIALIZABLE));
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.CONFLICT, session.fetchByKey( 0,99, fetched));
@@ -611,8 +680,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession reader = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession reader = session(context);
+    IndexedTransactionSession writer = session(context);
     IndexedScanCursor cursor = new IndexedScanCursor();
     IndexedScanResult scanned = new IndexedScanResult();
     TransactionOutcome outcome = new TransactionOutcome();
@@ -652,6 +724,100 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
+  void serializableScanWritersShareForceAndRetainPhantomProtection(
+      @TempDir Path root) throws Exception {
+    NioIoCounters counters = new NioIoCounters();
+    NioDurableDirectory directory = openDirectory(root, counters);
+    LocalWal wal = openWal(directory);
+    IndexedTable table = createTable(createStore(directory, wal));
+    TransactionManager manager = new TransactionManager(
+        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    TransactionOutcome seedOutcome = new TransactionOutcome();
+    IndexedTransactionSession seed = session(context);
+    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, seed.insert(0, 1_000, row(10_000)));
+    assertEquals(StatusCode.OK, seed.insert(0, 2_000, row(20_000)));
+    assertEquals(StatusCode.OK, seed.commit(seedOutcome));
+
+    IndexedGroupCommitCoordinator coordinator =
+        new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
+    IndexedSessionContext groupContext = context(manager, table, coordinator, vacuum);
+    IndexedGroupCommitTelemetry telemetryBefore = new IndexedGroupCommitTelemetry();
+    assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetryBefore));
+    IndexedTransactionSession first = session(groupContext);
+    IndexedTransactionSession second = session(groupContext);
+    IndexedScanCursor firstScan = new IndexedScanCursor();
+    IndexedScanCursor secondScan = new IndexedScanCursor();
+    IndexedScanResult scanned = new IndexedScanResult();
+    assertEquals(StatusCode.OK, first.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, first.beginScan(0, 0, 0, 100, firstScan));
+    assertEquals(StatusCode.CONFLICT, first.nextScan(firstScan, scanned));
+    assertEquals(StatusCode.OK, first.closeScan(firstScan));
+    assertEquals(StatusCode.OK, first.update(0, 1_000, row(10_001)));
+    assertEquals(StatusCode.OK, second.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(StatusCode.OK, second.beginScan(0, 200, 0, 300, secondScan));
+    assertEquals(StatusCode.CONFLICT, second.nextScan(secondScan, scanned));
+    assertEquals(StatusCode.OK, second.closeScan(secondScan));
+    assertEquals(StatusCode.OK, second.update(0, 2_000, row(20_001)));
+
+    IndexedTransactionSession phantom = session(context);
+    assertEquals(StatusCode.OK, phantom.begin(IsolationLevel.REPEATABLE_READ));
+    TransactionOutcome firstOutcome = new TransactionOutcome();
+    TransactionOutcome secondOutcome = new TransactionOutcome();
+    ExecutorService executor = Executors.newFixedThreadPool(3);
+    long forcesBefore = counters.forceCalls();
+    try {
+      Future<StatusCode> insert = executor.submit(
+          () -> phantom.insert(0, 50, row(500)));
+      awaitOneLockWait(manager);
+      Future<StatusCode> firstCommit = executor.submit(() -> first.commit(firstOutcome));
+      Future<StatusCode> secondCommit = executor.submit(() -> second.commit(secondOutcome));
+      assertEquals(StatusCode.OK, firstCommit.get());
+      assertEquals(StatusCode.OK, secondCommit.get());
+      assertEquals(1, counters.forceCalls() - forcesBefore);
+      assertEquals(StatusCode.OK, insert.get());
+    } finally {
+      executor.shutdownNow();
+    }
+
+    assertTrue(firstOutcome.commitSequence() > seedOutcome.commitSequence());
+    assertTrue(secondOutcome.commitSequence() > seedOutcome.commitSequence());
+    assertNotEquals(firstOutcome.commitSequence(), secondOutcome.commitSequence());
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+    assertTrue(telemetry.reconciles());
+    assertEquals(
+        2,
+        telemetry.successfulGroupTransactions()
+            - telemetryBefore.successfulGroupTransactions());
+    assertEquals(
+        1,
+        telemetry.successfulGroupCohorts()
+            - telemetryBefore.successfulGroupCohorts());
+    assertEquals(2, telemetry.maximumSuccessfulCohort());
+    assertEquals(
+        0,
+        telemetry.directCommitTransactions()
+            - telemetryBefore.directCommitTransactions());
+    assertEquals(StatusCode.OK, phantom.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, coordinator.close());
+
+    HeapRowResult fetched = new HeapRowResult();
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 1_000, fetched));
+    assertEquals(10_001, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 2_000, fetched));
+    assertEquals(20_001, value(fetched));
+    assertEquals(StatusCode.OK, table.fetchByKey(0, 50, fetched));
+    assertEquals(500, value(fetched));
+    assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.activeLockCount());
+    close(table, wal, directory);
+  }
+
+  @Test
   void serializableScanCapturesCurrentFrontierAfterQueuedRangeGrant(@TempDir Path root)
       throws Exception {
     NioDurableDirectory directory = openDirectory(root);
@@ -659,9 +825,12 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession writer = session(manager, table);
-    IndexedTransactionSession reader = session(manager, table);
-    IndexedTransactionSession outside = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession writer = session(context);
+    IndexedTransactionSession reader = session(context);
+    IndexedTransactionSession outside = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     IndexedScanCursor cursor = new IndexedScanCursor();
     IndexedScanResult scanned = new IndexedScanResult();
@@ -701,8 +870,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
+    IndexedTransactionSession writer = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.insert( 0,10, row(100)));
@@ -739,8 +911,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession first = session(manager, table);
-    IndexedTransactionSession second = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession first = session(context);
+    IndexedTransactionSession second = session(context);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, first.insert( 0,17, row(171)));
@@ -769,7 +944,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.insert( 0,20, row(200)));
@@ -826,8 +1004,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
-    IndexedTransactionSession contender = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
+    IndexedTransactionSession contender = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.insert( 0,10, row(100)));
@@ -865,8 +1046,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession child = session(manager, table);
-    IndexedTransactionSession parent = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession child = session(context);
+    IndexedTransactionSession parent = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer parentKey = genericFixedTuple(9753);
     long keyId = 31;
@@ -903,7 +1087,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession session = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.insert( 0,10, row(100)));
@@ -932,8 +1119,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession writer = session(manager, table);
-    IndexedTransactionSession reader = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession writer = session(context);
+    IndexedTransactionSession reader = session(context);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert( 0,31, row(311)));
@@ -965,7 +1155,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession writer = new IndexedTransactionSession(manager, table, 256);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession writer = session(context, 256);
     ByteBuffer row = ByteBuffer.allocateDirect(256);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     for (int key = 0; key < 64; key++) {
@@ -990,7 +1183,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1009,13 +1203,16 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert( 0,40, row(400)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert( 0,41, row(410)));
     assertEquals(StatusCode.CONFLICT, writer.insert( 0,40, row(401)));
@@ -1036,7 +1233,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     for (int key = 0; key < 255; key++) {
@@ -1044,7 +1244,7 @@ final class IndexedTransactionSessionTest {
     }
     assertEquals(StatusCode.OK, seed.commit(outcome));
     int oldRoot = table.rootPageId();
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert( 0,1000, row(10000)));
     assertEquals(StatusCode.OK, writer.insert( 0,1001, row(10010)));
@@ -1066,15 +1266,18 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 6);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert( 0,60, row(600)));
     assertEquals(StatusCode.OK, seed.insert( 0,61, row(610)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
-    IndexedTransactionSession oldReader = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession oldReader = session(context);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, oldReader.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.update( 0,60, row(601)));
@@ -1106,7 +1309,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1129,7 +1333,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     for (int index = 0; index < BTreePage.MAX_ENTRIES; index++) {
@@ -1137,8 +1344,8 @@ final class IndexedTransactionSessionTest {
     }
     assertEquals(StatusCode.OK, seed.commit(outcome));
     int leafRoot = table.rootPageId();
-    IndexedTransactionSession oldReader = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession oldReader = session(context);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, oldReader.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.update( 0,0, row(9_000)));
@@ -1168,7 +1375,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1192,13 +1400,16 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert( 0,75, row(750)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
-    IndexedTransactionSession stale = session(manager, table);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession stale = session(context);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, stale.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.update( 0,75, row(751)));
@@ -1219,24 +1430,27 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 7);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert( 0,85, row(850)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
     long insertedAt = outcome.commitSequence();
 
-    IndexedTransactionSession beforeDelete = session(manager, table);
+    IndexedTransactionSession beforeDelete = session(context);
     assertEquals(StatusCode.OK, beforeDelete.begin(IsolationLevel.REPEATABLE_READ));
-    IndexedTransactionSession deleter = session(manager, table);
+    IndexedTransactionSession deleter = session(context);
     assertEquals(StatusCode.OK, deleter.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, deleter.delete( 0,85));
     assertEquals(StatusCode.OK, deleter.commit(outcome));
     long deletedAt = outcome.commitSequence();
 
-    IndexedTransactionSession afterDelete = session(manager, table);
+    IndexedTransactionSession afterDelete = session(context);
     assertEquals(StatusCode.OK, afterDelete.begin(IsolationLevel.REPEATABLE_READ));
-    IndexedTransactionSession reinserter = session(manager, table);
+    IndexedTransactionSession reinserter = session(context);
     assertEquals(StatusCode.OK, reinserter.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, reinserter.insert( 0,85, row(851)));
     assertEquals(StatusCode.OK, reinserter.commit(outcome));
@@ -1266,27 +1480,30 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert(0, 85, row(850)));
     assertEquals(StatusCode.OK, seed.insert(0, 86, row(860)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
     long insertedAt = outcome.commitSequence();
 
-    IndexedTransactionSession sameTransaction = session(manager, table);
+    IndexedTransactionSession sameTransaction = session(context);
     assertEquals(StatusCode.OK, sameTransaction.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, sameTransaction.delete(0, 85));
     assertEquals(StatusCode.OK, sameTransaction.insert(0, 85, row(851)));
     assertEquals(StatusCode.OK, sameTransaction.commit(outcome));
     long replacedAt = outcome.commitSequence();
 
-    IndexedTransactionSession deleter = session(manager, table);
+    IndexedTransactionSession deleter = session(context);
     assertEquals(StatusCode.OK, deleter.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, deleter.delete(0, 86));
     assertEquals(StatusCode.OK, deleter.commit(outcome));
     long deletedAt = outcome.commitSequence();
-    IndexedTransactionSession reinserter = session(manager, table);
+    IndexedTransactionSession reinserter = session(context);
     assertEquals(StatusCode.OK, reinserter.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, reinserter.insert(0, 86, row(861)));
     assertEquals(StatusCode.OK, reinserter.commit(outcome));
@@ -1298,7 +1515,8 @@ final class IndexedTransactionSessionTest {
     wal = openWal(directory);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     table = openTable(storeResult.store());
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKeyAt(insertedAt, 0, 85, fetched));
@@ -1322,29 +1540,31 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert(0, 87, row(870)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
-    IndexedTransactionSession deleter = session(manager, table);
+    IndexedTransactionSession deleter = session(context);
     assertEquals(StatusCode.OK, deleter.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, deleter.delete(0, 87));
     assertEquals(StatusCode.OK, deleter.commit(outcome));
 
-    IndexedTable committingTable = table;
     IndexedGroupCommitCoordinator coordinator =
         new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
+    IndexedSessionContext groupContext = context(manager, table, coordinator, vacuum);
     CountDownLatch ready = new CountDownLatch(2);
     CountDownLatch start = new CountDownLatch(1);
     ExecutorService executor = Executors.newFixedThreadPool(2);
     long forcesBefore = counters.forceCalls();
     try {
       Future<StatusCode> resurrection = executor.submit(
-          () -> commitInsertValue(
-              manager, committingTable, coordinator, 87, 8_700, ready, start));
+          () -> commitInsertValue(groupContext, 87, 8_700, ready, start));
       Future<StatusCode> companion = executor.submit(
-          () -> commitDistinct(manager, committingTable, coordinator, 88, ready, start));
+          () -> commitDistinct(groupContext, 88, ready, start));
       ready.await();
       start.countDown();
       assertEquals(StatusCode.OK, resurrection.get());
@@ -1352,13 +1572,16 @@ final class IndexedTransactionSessionTest {
     } finally {
       executor.shutdownNow();
     }
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+    assertTrue(telemetry.reconciles());
     assertEquals(
         1, counters.forceCalls() - forcesBefore,
-        "cohorts=" + coordinator.cohortCount()
-            + " shared=" + coordinator.sharedForceTransactions()
-            + " direct=" + coordinator.directFallbackTransactions()
-            + " max=" + coordinator.maximumCohortSize());
-    assertEquals(2, coordinator.sharedForceTransactions());
+        "groupCohorts=" + telemetry.successfulGroupCohorts()
+            + " sharedTransactions=" + telemetry.successfulGroupTransactions()
+            + " direct=" + telemetry.directCommitTransactions()
+            + " max=" + telemetry.maximumSuccessfulCohort());
+    assertEquals(2, telemetry.successfulGroupTransactions());
     assertEquals(StatusCode.OK, coordinator.close());
 
     assertEquals(StatusCode.OK, directory.advanceGeneration());
@@ -1367,7 +1590,8 @@ final class IndexedTransactionSessionTest {
     wal = openWal(directory);
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     table = openTable(storeResult.store());
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey(0, 87, fetched));
@@ -1384,30 +1608,32 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert( 0,201, row(2010)));
     assertEquals(StatusCode.OK, seed.insert( 0,202, row(2020)));
     assertEquals(StatusCode.OK, seed.insert( 0,203, row(2030)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.update( 0,201, row(2011)));
     assertEquals(StatusCode.OK, writer.delete( 0,202));
     assertEquals(StatusCode.OK, writer.delete( 0,203));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    IndexedTransactionSession reinserter = session(manager, table);
+    IndexedTransactionSession reinserter = session(context);
     assertEquals(StatusCode.OK, reinserter.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, reinserter.insert( 0,202, row(2021)));
     assertEquals(StatusCode.OK, reinserter.commit(outcome));
     assertEquals(7, table.rowCount());
     assertEquals(4, table.obsoleteVersionCount());
 
-    IndexedTransactionSession snapshot = session(manager, table);
+    IndexedTransactionSession snapshot = session(context);
     assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
-    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     assertEquals(StatusCode.RETRY, vacuum.run(outcome));
     assertEquals(7, table.rowCount());
     assertEquals(StatusCode.OK, snapshot.abort(outcome));
@@ -1442,7 +1668,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1463,8 +1690,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession session = session(manager, table);
+    IndexedTransactionSession session = session(context);
 
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, session.insert(0, 41, row(410)));
@@ -1475,7 +1705,6 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, session.delete(0, 43));
     assertEquals(StatusCode.OK, session.commit(outcome));
 
-    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     assertEquals(StatusCode.OK, session.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, table.vacuumPreflight());
     assertEquals(StatusCode.RETRY, vacuum.run(outcome));
@@ -1494,7 +1723,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
-    IndexedTransactionSession writer = new IndexedTransactionSession(manager, table, 4096);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession writer = session(context, 4096);
     TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer largeRow = ByteBuffer.allocateDirect(4096);
     for (int batch = 0; batch < 6; batch++) {
@@ -1526,7 +1758,6 @@ final class IndexedTransactionSessionTest {
         IndexedTableStore.VACUUM_COMMIT_PAYLOAD_BYTES
             + 300L * (4096 + 24) > WalRecordCodec.MAX_PAYLOAD_BYTES);
 
-    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     assertEquals(StatusCode.OK, vacuum.run(outcome));
     assertEquals(600, vacuum.result().rowsBefore());
     assertEquals(300, vacuum.result().rowsAfter());
@@ -1540,7 +1771,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1560,7 +1792,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession writer = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert( 0,501, row(5010)));
@@ -1568,7 +1803,6 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.update( 0,501, row(5011)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
-    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
     assertEquals(StatusCode.OK, vacuum.run(outcome));
     long incompleteEnd = wal.durableEnd()
         - WalRecordCodec.encodedBytes(IndexedTableStore.VACUUM_COMMIT_PAYLOAD_BYTES);
@@ -1585,7 +1819,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1596,7 +1831,9 @@ final class IndexedTransactionSessionTest {
     assertEquals(5011, value(fetched));
     manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
-    writer = session(manager, table);
+    vacuum = new IndexedVacuum(manager, table);
+    context = context(manager, table, null, vacuum);
+    writer = session(context);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert(0, 502, row(5020)));
     assertEquals(StatusCode.OK, writer.commit(outcome));
@@ -1606,7 +1843,8 @@ final class IndexedTransactionSessionTest {
     wal = openWal(directory);
     storeResult = new IndexedTableStoreOpenResult();
     assertEquals(StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1625,21 +1863,18 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, seed.insert( 0,301, row(3010)));
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
-    IndexedTransactionSession snapshot = session(manager, table);
+    IndexedTransactionSession snapshot = session(context);
     assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
-    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    IndexedTransactionSession writer = new IndexedTransactionSession(
-        manager,
-        table,
-        128,
-        null,
-        vacuum);
+    IndexedTransactionSession writer = session(context);
     for (long value = 3011; value <= 3013; value++) {
       assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
       assertEquals(StatusCode.OK, writer.update( 0,301, row(value)));
@@ -1677,7 +1912,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1689,72 +1925,27 @@ final class IndexedTransactionSessionTest {
   }
 
   @Test
-  void versionPressureCoalescesAdmissionRejectionUntilSnapshotDrains(@TempDir Path root) {
-    NioDurableDirectory directory = openDirectory(root);
-    LocalWal wal = openWal(directory);
-    IndexedTable table = createTable(createStore(directory, wal));
-    TransactionManager manager = new TransactionManager(
-        DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
-    TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
-    assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, seed.insert( 0,401, row(4010)));
-    assertEquals(StatusCode.OK, seed.commit(outcome));
-
-    IndexedTransactionSession snapshot = session(manager, table);
-    assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
-    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
-    IndexedTransactionSession writer = new IndexedTransactionSession(
-        manager,
-        table,
-        128,
-        null,
-        vacuum,
-        Integer.MAX_VALUE);
-    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(StatusCode.OK, writer.update( 0,401, row(4011)));
-    assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.RETRY, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(1, vacuum.automaticDeferrals());
-    assertEquals(1, vacuum.automaticPressureRejections());
-    assertEquals(StatusCode.RETRY, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(1, vacuum.automaticDeferrals());
-    assertEquals(1, vacuum.automaticPressureRejections());
-    assertEquals(2, table.rowCount());
-    HeapRowResult fetched = new HeapRowResult();
-    assertEquals(StatusCode.OK, snapshot.fetchByKey( 0,401, fetched));
-    assertEquals(4010, value(fetched));
-
-    assertEquals(StatusCode.OK, snapshot.abort(outcome));
-    assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
-    assertEquals(2, table.rowCount());
-    assertEquals(0, vacuum.automaticRuns());
-    assertEquals(StatusCode.OK, writer.update( 0,401, row(4012)));
-    assertEquals(StatusCode.OK, writer.commit(outcome));
-    assertEquals(StatusCode.OK, table.fetchByKey( 0,401, fetched));
-    assertEquals(4012, value(fetched));
-    close(table, wal, directory);
-  }
-
-  @Test
   void commitsDistinctTransactionsFromConcurrentSessions(@TempDir Path root) throws Exception {
     NioDurableDirectory directory = openDirectory(root);
     LocalWal wal = openWal(directory);
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     CountDownLatch ready = new CountDownLatch(4);
     CountDownLatch start = new CountDownLatch(1);
     ExecutorService executor = Executors.newFixedThreadPool(4);
     try {
       Future<StatusCode> first = executor.submit(
-          () -> commitDistinct(manager, table, 101, ready, start));
+          () -> commitDistinct(context, 101, ready, start));
       Future<StatusCode> second = executor.submit(
-          () -> commitDistinct(manager, table, 102, ready, start));
+          () -> commitDistinct(context, 102, ready, start));
       Future<StatusCode> third = executor.submit(
-          () -> commitDistinct(manager, table, 103, ready, start));
+          () -> commitDistinct(context, 103, ready, start));
       Future<StatusCode> fourth = executor.submit(
-          () -> commitDistinct(manager, table, 104, ready, start));
+          () -> commitDistinct(context, 104, ready, start));
       ready.await();
       start.countDown();
       assertEquals(StatusCode.OK, first.get());
@@ -1781,11 +1972,13 @@ final class IndexedTransactionSessionTest {
     LocalWal wal = openWal(directory);
     IndexedTableStore store = createStore(directory, wal);
     IndexedTable table = createTable(store);
-    IndexedTable committingTable = table;
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
     IndexedGroupCommitCoordinator coordinator =
         new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
+    IndexedSessionContext context = context(manager, table, coordinator, vacuum);
     CountDownLatch ready = new CountDownLatch(4);
     CountDownLatch start = new CountDownLatch(1);
     ExecutorService executor = Executors.newFixedThreadPool(4);
@@ -1794,13 +1987,13 @@ final class IndexedTransactionSessionTest {
     long compiledCopiesBefore = store.relationalCompilationCopyBytes();
     try {
       Future<StatusCode> first = executor.submit(
-          () -> commitDistinct(manager, committingTable, coordinator, 301, ready, start));
+          () -> commitDistinct(context, 301, ready, start));
       Future<StatusCode> second = executor.submit(
-          () -> commitDistinct(manager, committingTable, coordinator, 302, ready, start));
+          () -> commitDistinct(context, 302, ready, start));
       Future<StatusCode> third = executor.submit(
-          () -> commitDistinct(manager, committingTable, coordinator, 303, ready, start));
+          () -> commitDistinct(context, 303, ready, start));
       Future<StatusCode> fourth = executor.submit(
-          () -> commitDistinct(manager, committingTable, coordinator, 304, ready, start));
+          () -> commitDistinct(context, 304, ready, start));
       ready.await();
       start.countDown();
       assertEquals(StatusCode.OK, first.get());
@@ -1810,12 +2003,14 @@ final class IndexedTransactionSessionTest {
     } finally {
       executor.shutdownNow();
     }
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
     assertEquals(
         1, counters.forceCalls() - forcesBefore,
-        "cohorts=" + coordinator.cohortCount()
-            + " shared=" + coordinator.sharedForceTransactions()
-            + " direct=" + coordinator.directFallbackTransactions()
-            + " max=" + coordinator.maximumCohortSize());
+        "groupCohorts=" + telemetry.successfulGroupCohorts()
+            + " sharedTransactions=" + telemetry.successfulGroupTransactions()
+            + " direct=" + telemetry.directCommitTransactions()
+            + " max=" + telemetry.maximumSuccessfulCohort());
     assertEquals(4L * Long.BYTES, store.walCopyBytes() - walCopiesBefore);
     assertEquals(
         4L * Long.BYTES,
@@ -1823,8 +2018,16 @@ final class IndexedTransactionSessionTest {
     assertEquals(0, wal.copiedPayloadBytes());
     assertEquals(0, manager.activeTransactionCount());
     assertEquals(5, table.currentCommitSequence());
-    assertEquals(4, coordinator.sharedForceTransactions());
-    assertEquals(0, coordinator.directFallbackTransactions());
+    assertEquals(4, telemetry.successfulGroupTransactions());
+    assertEquals(0, telemetry.directCommitTransactions());
+    assertEquals(4, telemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.QUEUE_RESIDENCE));
+    assertEquals(4, telemetry.stageCount(
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.NOTIFICATION));
+    assertEquals(0, telemetry.stageCount(
+        IndexedCommitPath.DIRECT_COMMIT, IndexedCommitStage.QUEUE_RESIDENCE));
+    assertEquals(0, telemetry.stageCount(
+        IndexedCommitPath.DIRECT_COMMIT, IndexedCommitStage.NOTIFICATION));
     assertEquals(StatusCode.OK, coordinator.close());
 
     assertEquals(StatusCode.OK, directory.advanceGeneration());
@@ -1834,7 +2037,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1853,39 +2057,58 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession first = session(manager, table);
-    IndexedTransactionSession second = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession first = session(context);
+    IndexedTransactionSession second = session(context);
     assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, first.insert(0, 351, row(3_510)));
     assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, second.insert(0, 352, row(3_520)));
 
     IndexedTransactionSession[] sessions = {first, second};
+    assertEquals(StatusCode.OK, first.prepareLogicalCommit());
+    assertEquals(StatusCode.OK, second.prepareLogicalCommit());
+    IndexedPreparedLogicalCommit[] prepared = {
+        first.preparedCommit(), second.preparedCommit()
+    };
+    assertEquals(StatusCode.OK, table.reserveHybridCommitGroupCapacity(prepared.length));
     io.riverdb.tx.Transaction[] transactions = {
         first.groupTransaction(), second.groupTransaction()
     };
     TransactionOutcome[] outcomes = {new TransactionOutcome(), new TransactionOutcome()};
     long[] sequences = new long[2];
+    long[] committedRows = new long[2];
     long previousFrontier = table.currentCommitSequence();
+    assertEquals(StatusCode.OK,
+        manager.prepareCommit(transactions[0], outcomes[0]));
+    assertEquals(StatusCode.OK,
+        manager.prepareCommit(transactions[1], outcomes[1]));
     assertEquals(
         StatusCode.OK,
         table.preflightHybridCommitGroup(
-            sessions, sessions.length, manager.oldestVisibleCommitSequence()));
+            prepared, prepared.length, manager.oldestVisibleCommitSequence()));
     assertEquals(StatusCode.OK, manager.beginCommitGroup(transactions, transactions.length));
     assertEquals(
-        StatusCode.OK, table.appendHybridCommitGroup(sessions, sequences, sessions.length));
+        StatusCode.OK,
+        table.appendHybridCommitGroup(
+            prepared, sequences, committedRows, prepared.length));
+    assertEquals(0, first.committedSequence());
+    assertEquals(0, second.committedSequence());
     assertEquals(StatusCode.OK, table.forceHybridCommitGroup());
     assertEquals(StatusCode.OK, table.prepareForcedGroupPublication());
     assertEquals(previousFrontier, table.currentCommitSequence());
 
-    IndexedTransactionSession oldSnapshot = session(manager, table);
+    IndexedTransactionSession oldSnapshot = session(context);
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, oldSnapshot.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.CONFLICT, oldSnapshot.fetchByKey(0, 351, new HeapRowResult()));
     assertEquals(
         StatusCode.OK,
         manager.publishCommitGroup(
-            transactions, outcomes, sequences, transactions.length, table));
+            transactions, outcomes, sequences, transactions.length, table,
+            new TransactionGroupCompletionTimings()));
     assertEquals(StatusCode.OK, first.completeCoordinatedCommit(StatusCode.OK));
     assertEquals(StatusCode.OK, second.completeCoordinatedCommit(StatusCode.OK));
     assertEquals(sequences[1], table.currentCommitSequence());
@@ -1897,7 +2120,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.CONFLICT, oldSnapshot.fetchByKey(0, 351, new HeapRowResult()));
     assertEquals(StatusCode.OK, oldSnapshot.abort(new TransactionOutcome()));
 
-    IndexedTransactionSession newSnapshot = session(manager, table);
+    IndexedTransactionSession newSnapshot = session(context);
     assertEquals(StatusCode.OK, newSnapshot.begin(IsolationLevel.REPEATABLE_READ));
     fetched.reset();
     assertEquals(StatusCode.OK, newSnapshot.fetchByKey(0, 351, fetched));
@@ -1918,7 +2141,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(store);
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 8);
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession seed = session(context);
     TransactionOutcome outcome = new TransactionOutcome();
     assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
     for (int key = 401; key <= 404; key++) {
@@ -1926,9 +2152,11 @@ final class IndexedTransactionSessionTest {
     }
     assertEquals(StatusCode.OK, seed.commit(outcome));
 
-    IndexedTable committingTable = table;
     IndexedGroupCommitCoordinator coordinator =
         new IndexedGroupCommitCoordinator(manager, table, 500_000_000);
+    IndexedSessionContext groupContext = context(manager, table, coordinator, vacuum);
+    IndexedGroupCommitTelemetry telemetryBefore = new IndexedGroupCommitTelemetry();
+    assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetryBefore));
     CountDownLatch ready = new CountDownLatch(4);
     CountDownLatch start = new CountDownLatch(1);
     ExecutorService executor = Executors.newFixedThreadPool(4);
@@ -1937,17 +2165,13 @@ final class IndexedTransactionSessionTest {
     long compiledCopiesBefore = store.relationalCompilationCopyBytes();
     try {
       Future<StatusCode> first = executor.submit(
-          () -> commitMutation(
-              manager, committingTable, coordinator, 401, false, ready, start));
+          () -> commitMutation(groupContext, 401, false, ready, start));
       Future<StatusCode> second = executor.submit(
-          () -> commitMutation(
-              manager, committingTable, coordinator, 402, false, ready, start));
+          () -> commitMutation(groupContext, 402, false, ready, start));
       Future<StatusCode> third = executor.submit(
-          () -> commitMutation(
-              manager, committingTable, coordinator, 403, true, ready, start));
+          () -> commitMutation(groupContext, 403, true, ready, start));
       Future<StatusCode> fourth = executor.submit(
-          () -> commitMutation(
-              manager, committingTable, coordinator, 404, true, ready, start));
+          () -> commitMutation(groupContext, 404, true, ready, start));
       ready.await();
       start.countDown();
       assertEquals(StatusCode.OK, first.get());
@@ -1965,8 +2189,17 @@ final class IndexedTransactionSessionTest {
     assertEquals(0, wal.copiedPayloadBytes());
     assertEquals(6, table.currentCommitSequence());
     assertMutationResults(table);
-    assertEquals(4, coordinator.sharedForceTransactions());
-    assertEquals(0, coordinator.directFallbackTransactions());
+    IndexedGroupCommitTelemetry telemetry = new IndexedGroupCommitTelemetry();
+    assertEquals(StatusCode.OK, coordinator.copyTelemetry(telemetry));
+    assertTrue(telemetry.reconciles());
+    assertEquals(
+        4,
+        telemetry.successfulGroupTransactions()
+            - telemetryBefore.successfulGroupTransactions());
+    assertEquals(
+        0,
+        telemetry.directCommitTransactions()
+            - telemetryBefore.directCommitTransactions());
     assertEquals(StatusCode.OK, coordinator.close());
 
     assertEquals(StatusCode.OK, directory.advanceGeneration());
@@ -1976,7 +2209,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -1991,7 +2225,10 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.insert( 0,501, row(5010)));
     assertEquals(StatusCode.OK, writer.insert( 0,502, row(5020)));
@@ -2007,7 +2244,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.open(directory, wal, DATABASE, GENERATION, storeResult));
+        IndexedTableStore.open(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
     table = tableResult.table();
@@ -2020,7 +2258,10 @@ final class IndexedTransactionSessionTest {
     assertEquals(5020, value(fetched));
     TransactionManager restartedManager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession restarted = session(restartedManager, table);
+    IndexedVacuum restartedVacuum = new IndexedVacuum(restartedManager, table);
+    IndexedSessionContext restartedContext =
+        context(restartedManager, table, null, restartedVacuum);
+    IndexedTransactionSession restarted = session(restartedContext);
     assertEquals(StatusCode.OK, restarted.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(committedTransactionId + 1, restarted.transaction().transactionId());
     assertEquals(StatusCode.OK, restarted.abort(outcome));
@@ -2034,8 +2275,11 @@ final class IndexedTransactionSessionTest {
     IndexedTable table = createTable(createStore(directory, wal));
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 6);
+    IndexedVacuum vacuum =
+        new IndexedVacuum(manager, table);
+    IndexedSessionContext context = context(manager, table, null, vacuum);
     TransactionOutcome outcome = new TransactionOutcome();
-    IndexedTransactionSession seed = session(manager, table);
+    IndexedTransactionSession seed = session(context);
     for (int batch = 0; batch < 5; batch++) {
       assertEquals(StatusCode.OK, seed.begin(IsolationLevel.REPEATABLE_READ));
       int first = batch * 52;
@@ -2044,9 +2288,9 @@ final class IndexedTransactionSessionTest {
       }
       assertEquals(StatusCode.OK, seed.commit(outcome));
     }
-    IndexedTransactionSession snapshot = session(manager, table);
+    IndexedTransactionSession snapshot = session(context);
     assertEquals(StatusCode.OK, snapshot.begin(IsolationLevel.REPEATABLE_READ));
-    IndexedTransactionSession writer = session(manager, table);
+    IndexedTransactionSession writer = session(context);
     assertEquals(StatusCode.OK, writer.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, writer.update( 0,10, row(101)));
     assertEquals(StatusCode.OK, writer.delete( 0,20));
@@ -2068,7 +2312,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, snapshot.closeScan(cursor));
     assertEquals(StatusCode.OK, snapshot.abort(outcome));
 
-    IndexedTransactionSession current = session(manager, table);
+    IndexedTransactionSession current = session(context);
     assertEquals(StatusCode.OK, current.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(StatusCode.OK, cursor.reset());
     assertEquals(StatusCode.OK, current.beginScan( 0,0, 0, Long.MAX_VALUE, cursor));
@@ -2092,12 +2336,11 @@ final class IndexedTransactionSessionTest {
   }
 
   private static StatusCode commitDistinct(
-      TransactionManager manager,
-      IndexedTable table,
+      IndexedSessionContext context,
       int key,
       CountDownLatch ready,
       CountDownLatch start) throws InterruptedException {
-    IndexedTransactionSession session = session(manager, table);
+    IndexedTransactionSession session = session(context);
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
       status = session.insert( 0,key, row(key * 10L));
@@ -2108,15 +2351,12 @@ final class IndexedTransactionSessionTest {
   }
 
   private static StatusCode commitMutation(
-      TransactionManager manager,
-      IndexedTable table,
-      IndexedGroupCommitCoordinator coordinator,
+      IndexedSessionContext context,
       int key,
       boolean delete,
       CountDownLatch ready,
       CountDownLatch start) throws InterruptedException {
-    IndexedTransactionSession session =
-        new IndexedTransactionSession(manager, table, 128, coordinator);
+    IndexedTransactionSession session = session(context);
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
       status = delete ? session.delete( 0,key) : session.update( 0,key, row(key * 100L));
@@ -2136,27 +2376,13 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,404, fetched));
   }
 
-  private static StatusCode commitDistinct(
-      TransactionManager manager,
-      IndexedTable table,
-      IndexedGroupCommitCoordinator coordinator,
-      int key,
-      CountDownLatch ready,
-      CountDownLatch start) throws InterruptedException {
-    return commitInsertValue(
-        manager, table, coordinator, key, key * 10L, ready, start);
-  }
-
   private static StatusCode commitInsertValue(
-      TransactionManager manager,
-      IndexedTable table,
-      IndexedGroupCommitCoordinator coordinator,
+      IndexedSessionContext context,
       int key,
       long value,
       CountDownLatch ready,
       CountDownLatch start) throws InterruptedException {
-    IndexedTransactionSession session =
-        new IndexedTransactionSession(manager, table, 128, coordinator);
+    IndexedTransactionSession session = session(context);
     StatusCode status = session.begin(IsolationLevel.REPEATABLE_READ);
     if (status.isOk()) {
       status = session.insert(0, key, row(value));
@@ -2185,52 +2411,34 @@ final class IndexedTransactionSessionTest {
     return tuple;
   }
 
-  private static IndexedRelationalMutation relationalBaseMutation(long value) {
-    IndexedRelationalMutation mutation = new IndexedRelationalMutation(1, 0, 0);
-    assertEquals(StatusCode.OK, mutation.reserve(1, 0, 0, Long.BYTES));
-    assertEquals(StatusCode.OK, mutation.appendLogicalRowFloor(19, 2));
-    assertEquals(StatusCode.OK, mutation.appendSuboperation(
-        19, -1, 0, 1, 0, 0, 3, 3, 4, 4,
-        0, 0, 0, 1,
-        IndexedRelationalSuboperations.REGISTRY_ABSENT,
-        IndexedRelationalSuboperations.REGISTRY_ABSENT, 0, 0));
-    ByteBuffer row = row(value);
-    assertEquals(StatusCode.OK, mutation.appendBase(
-        0, 19, IndexedRelationalMutation.BASE_INSERT, 1, 0,
-        row, 0, Long.BYTES));
-    assertEquals(StatusCode.OK, mutation.seal());
-    return mutation;
-  }
-
-  private static IndexedRelationalMutation relationalScalarUpdate(
-      IndexedTable table, long space, long key, long value) {
-    long expectedHeapVersion = table.rowCount();
-    IndexedRelationalMutation mutation = new IndexedRelationalMutation(1, 0, 0);
-    assertEquals(StatusCode.OK, mutation.reserve(1, 0, 0, Long.BYTES));
-    assertEquals(StatusCode.OK, mutation.appendSuboperation(
-        0, IndexedRelationalMutation.SCALAR_SUBOPERATION, 0, 1,
-        0, 0, 3, 3, 4, 4, 0, 0,
-        expectedHeapVersion, expectedHeapVersion + 1,
-        IndexedRelationalMutation.REGISTRY_ABSENT,
-        IndexedRelationalMutation.REGISTRY_ABSENT, 0, 0));
-    ByteBuffer row = row(value);
-    assertEquals(StatusCode.OK, mutation.appendScalar(
-        0, IndexedRelationalMutation.SCALAR_UPDATE, space, key, expectedHeapVersion,
-        row, 0, row.remaining()));
-    assertEquals(StatusCode.OK, mutation.seal());
-    return mutation;
-  }
-
   private static long value(HeapRowResult result) {
     ByteBuffer row = ByteBuffer.allocate(result.length());
     assertEquals(StatusCode.OK, result.copyTo(row));
     return row.getLong(0);
   }
 
-  private static IndexedTransactionSession session(
+  private static IndexedSessionContext context(
       TransactionManager manager,
-      IndexedTable table) {
-    return new IndexedTransactionSession(manager, table, 128);
+      IndexedTable table,
+      IndexedGroupCommitCoordinator coordinator,
+      IndexedVacuum vacuum) {
+    IndexedSessionContext.Result result = new IndexedSessionContext.Result();
+    assertEquals(
+        StatusCode.OK,
+        IndexedSessionContext.bind(manager, table, coordinator, vacuum, result));
+    return result.context();
+  }
+
+  private static IndexedTransactionSession session(IndexedSessionContext context) {
+    return session(context, 128);
+  }
+
+  private static IndexedTransactionSession session(
+      IndexedSessionContext context, int maximumRowBytes) {
+    IndexedTransactionSessionOpenResult result =
+        new IndexedTransactionSessionOpenResult();
+    assertEquals(StatusCode.OK, context.openSession(maximumRowBytes, result));
+    return result.session();
   }
 
   private static void awaitOneLockWait(TransactionManager manager) {
@@ -2272,19 +2480,8 @@ final class IndexedTransactionSessionTest {
     IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, result));
-    return result.store();
-  }
-
-  private static IndexedTableStore createStore(
-      NioDurableDirectory directory,
-      LocalWal wal,
-      IndexedPageCacheConfig pageCacheConfig) {
-    IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
-    assertEquals(
-        StatusCode.OK,
-        IndexedTableStoreFactory.create(
-            directory, wal, DATABASE, GENERATION, pageCacheConfig, result));
+        IndexedTableStore.create(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(8), result));
     return result.store();
   }
 

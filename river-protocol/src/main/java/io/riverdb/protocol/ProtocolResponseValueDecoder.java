@@ -49,11 +49,11 @@ final class ProtocolResponseValueDecoder {
 
   private static int text(ByteBuffer bytes, int offset, int end, int index,
       ProtocolResponse result) {
-    if (offset > end - Short.BYTES) return -1;
-    int length = Short.toUnsignedInt(bytes.getShort(offset));
-    offset += Short.BYTES;
+    if (offset > end - Integer.BYTES) return -1;
+    int length = bytes.getInt(offset);
+    offset += Integer.BYTES;
     int maximumScalars = SqlTypeDescriptor.parameterOne(result.typeDescriptorAt(index));
-    if (length > Utf8Text.MAXIMUM_BYTES || result.isNull(index) && length != 0
+    if (length < 0 || result.isNull(index) && length != 0
         || offset > end - length || Utf8Text.validate(bytes, offset, length, maximumScalars) < 0
         || !result.textAt(index, bytes, offset, length)) return -1;
     return offset + length;

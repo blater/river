@@ -78,6 +78,10 @@ public final class TupleKeyCodec {
         ? getBigEndianLong(source, offset + length - LOGICAL_ROW_ID_BYTES) : 0;
   }
 
+  static long validatedLogicalRowId(ByteBuffer source, int offset, int length) {
+    return getBigEndianLong(source, offset + length - LOGICAL_ROW_ID_BYTES);
+  }
+
   public static boolean containsNull(ByteBuffer source, int offset, int length) {
     if (!validate(source, offset, length)) return false;
     int cursor = offset + headerBytes(source, offset, length);

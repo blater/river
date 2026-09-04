@@ -142,6 +142,10 @@ final class SqlResultLanes {
         ? text.length(index) : -1;
   }
 
+  int encodedTextLength(int index) {
+    return isText(index) && !isNull(index) ? text.byteLength(index) : -1;
+  }
+
   int copyText(int index, char[] destination, int offset) {
     if (!isText(index) || isNull(index)) return -1;
     return text.copy(index, destination, offset);

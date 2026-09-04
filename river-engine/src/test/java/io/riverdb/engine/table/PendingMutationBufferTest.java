@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.management.ThreadMXBean;
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.storage.heap.HeapPage;
 import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import org.junit.jupiter.api.Assumptions;
@@ -271,6 +272,45 @@ final class PendingMutationBufferTest {
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, mutations.reserve(1, 1));
     PendingMutationBuffer enterprise = new PendingMutationBuffer(Integer.MAX_VALUE, 1);
     assertEquals(Integer.MAX_VALUE, enterprise.capacity());
+  }
+
+  @Test
+  void retainsChunkLocalRowAddressBeyondFlattenedIntRange() {
+    int chunkBytes = HeapPage.MAXIMUM_ROW_BYTES * 8;
+    int chunk = Integer.MAX_VALUE / chunkBytes + 1;
+    int offset = HeapPage.MAXIMUM_ROW_BYTES - 1;
+    assertTrue((long) chunk * chunkBytes + offset > Integer.MAX_VALUE);
+
+    long address = PendingRowArena.address(chunk, offset);
+    PendingMutationMetadata metadata = new PendingMutationMetadata(1);
+    assertEquals(StatusCode.OK, metadata.reserve(0, 1));
+    metadata.set(0, IndexedWalCodec.MUTATION_INSERT, 1, 2, 0, address, 3);
+
+    assertEquals(address, metadata.rowAddressAt(0));
+    assertEquals(chunk, PendingRowArena.addressChunk(address));
+    assertEquals(offset, PendingRowArena.addressOffset(address));
+  }
+
+  @Test
+  void checksExactCompiledPayloadBoundaryBeforeAllocatingChunks() {
+    int maximumRowBytes = HeapPage.MAXIMUM_ROW_BYTES;
+    int rows = (int) ((Integer.MAX_VALUE + (long) maximumRowBytes - 1)
+        / maximumRowBytes);
+    int[] rowLengths = new int[rows];
+    java.util.Arrays.fill(rowLengths, maximumRowBytes);
+    rowLengths[rows - 1] = (int) (Integer.MAX_VALUE
+        - (long) (rows - 1) * maximumRowBytes);
+    FailingChunkAllocator allocator = new FailingChunkAllocator(1);
+    PendingMutationBuffer mutations =
+        new PendingMutationBuffer(rows, maximumRowBytes, allocator);
+
+    assertTrue(mutations.accountedBytesForReservation(rowLengths, 0, rows) > 0,
+        "the exact int-indexed compiled-payload boundary must remain admissible");
+    rowLengths[rows - 1]++;
+    assertEquals(-1, mutations.accountedBytesForReservation(rowLengths, 0, rows));
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, mutations.reserve(rowLengths, 0, rows));
+    assertEquals(0, allocator.calls,
+        "unrepresentable aggregate payload must fail before row-chunk allocation");
   }
 
   @Test

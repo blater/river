@@ -26,7 +26,7 @@ final class SqlSubqueryFrames implements SqlNestedRowProvider {
   }
 
   void prepareAccess() { tables.prepareAccess(); }
-  SqlSubqueryAccess access() { return tables.access(); }
+  int accessColumn(int block) { return tables.accessColumn(block); }
   void prepareGraph() { joined.prepareGraph(); }
 
   StatusCode prepare(

@@ -4,9 +4,14 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
+import io.riverdb.engine.runtime.DatabaseProviderLease;
+import io.riverdb.engine.runtime.DatabaseResourceGovernor;
+import io.riverdb.engine.runtime.DatabaseStoreLease;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.wal.local.LocalWal;
+import io.riverdb.wal.local.LocalWalMetrics;
+import io.riverdb.tx.TransactionManager;
 import java.nio.ByteBuffer;
 
 /** Single-owner bounded page store whose WAL operations atomically cover heap and index state. */
@@ -22,20 +27,28 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
       IndexedWalCodec.VACUUM_COMMIT_PAYLOAD_BYTES;
 
   private static final long BOOTSTRAP_TRANSACTION_ID = 1;
-  static final int MAX_OPERATION_ROWS = IndexedTableLimits.MAX_OPERATION_ROWS;
-
   private final DurableFile file;
   private final LocalWal wal;
   private final DatabaseIncarnation database;
   private final IndexedTableKernel kernel;
   private final IndexedCheckpointCoordinator checkpoints;
+  private final IndexedGroupCommitMetrics commitMetrics = new IndexedGroupCommitMetrics();
   private final IndexedWalRecovery recovery;
   private final IndexedPageOperationCommitter pageCommitter;
   private final IndexedPageSet pages;
+  private final DatabaseProviderLease providerLease;
+  private final DatabaseStoreLease storeLease;
+  private final IndexedDurableVersionAdmission durableVersions =
+      new IndexedDurableVersionAdmission();
   private final IndexedLogicalRowIdRegistry logicalRowIds = new IndexedLogicalRowIdRegistry();
   final IndexedStorePhase phase = new IndexedStorePhase();
   boolean failed;
+  private boolean closing;
   private boolean closed;
+  private boolean checkpointVersionsClosed;
+  private boolean sidecarsClosed;
+  private boolean fileClosed;
+  private boolean providerReleased;
   private boolean baseLoaded;
   volatile long lastCommitSequence;
 
@@ -46,33 +59,25 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
       DurableFile versionDirectoryFile,
       LocalWal localWal,
       DatabaseIncarnation databaseIncarnation,
-      WalGeneration generation) {
-    this(
-        durableDirectory, durableFile, rowDirectoryFile, versionDirectoryFile,
-        localWal, databaseIncarnation, generation, IndexedPageCacheConfig.DEFAULT);
-  }
-
-  IndexedTableStore(
-      DurableDirectory durableDirectory,
-      DurableFile durableFile,
-      DurableFile rowDirectoryFile,
-      DurableFile versionDirectoryFile,
-      LocalWal localWal,
-      DatabaseIncarnation databaseIncarnation,
       WalGeneration generation,
-      IndexedPageCacheConfig pageCacheConfig) {
+      DatabaseProviderLease databaseProviders,
+      DatabaseStoreLease storeOwnership) {
     file = durableFile;
     wal = localWal;
     database = databaseIncarnation;
+    providerLease = databaseProviders;
+    storeLease = storeOwnership;
     pages = new IndexedPageSet(
-        file, versionDirectoryFile, database, generation, pageCacheConfig);
-    kernel = pages.createKernel(rowDirectoryFile, versionDirectoryFile);
+        file, versionDirectoryFile, database, generation,
+        databaseProviders.plan().indexedPageCache());
+    kernel = pages.createKernel(
+        rowDirectoryFile, versionDirectoryFile, databaseProviders.plan());
     checkpoints = new IndexedCheckpointCoordinator(
         durableDirectory, file, wal, kernel, pages,
         kernel.versionState(), database, phase, generation, logicalRowIds);
     recovery = new IndexedWalRecovery(wal, pages, kernel, database, phase, logicalRowIds);
     initializeRelationalServices(
-        this, kernel, wal, pages, phase, recovery, logicalRowIds);
+        this, kernel, wal, pages, phase, recovery, logicalRowIds, commitMetrics);
     pageCommitter = new IndexedPageOperationCommitter(wal, kernel, pages, phase, database);
   }
 
@@ -98,6 +103,20 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     return kernel.validate();
   }
 
+  StatusCode transactionAdmissionStatus() {
+    return durableVersions.transactionAdmissionStatus();
+  }
+
+  StatusCode admitDurableVersionOperations(int required) {
+    return durableVersions.admit(
+        kernel.rowCount(), kernel.obsoleteVersionCount(), required);
+  }
+
+  StatusCode completeVersionMaintenance() {
+    return durableVersions.maintenanceCompleted(
+        kernel.rowCount(), kernel.obsoleteVersionCount());
+  }
+
   StatusCode admitLogicalRowIds(long objectId, long publishedFloor) {
     return logicalRowIds.admit(objectId, publishedFloor);
   }
@@ -108,15 +127,23 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   }
 
   StatusCode preflightHybridGroup(
-      IndexedTransactionSession[] sessions, int count,
+      IndexedPreparedLogicalCommit[] prepared, int count,
       long oldestVisibleCommitSequence) {
     return relationalServices().preflightHybridGroup(
-        sessions, count, oldestVisibleCommitSequence);
+        prepared, count, oldestVisibleCommitSequence);
+  }
+
+  StatusCode reserveHybridGroupCapacity(int required) {
+    return relationalServices().reserveHybridGroupCapacity(required);
   }
 
   StatusCode appendHybridGroup(
-      IndexedTransactionSession[] sessions, long[] commitSequences, int count) {
-    return relationalServices().appendHybridGroup(sessions, commitSequences, count);
+      IndexedPreparedLogicalCommit[] prepared,
+      long[] commitSequences,
+      long[] committedRows,
+      int count) {
+    return relationalServices().appendHybridGroup(
+        prepared, commitSequences, committedRows, count);
   }
 
   StatusCode forceHybridGroup() {
@@ -129,6 +156,59 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
 
   boolean commitGroupDecisionAppended() {
     return relationalServices().hybridDecisionAppended();
+  }
+
+  boolean commitGroupDurabilityUncertain() {
+    return relationalServices().hybridDurabilityUncertain();
+  }
+
+  StatusCode fenceCommitWriter() {
+    StatusCode status = relationalServices().cancelHybridGroup();
+    failed = true;
+    return status;
+  }
+
+  IndexedGroupCommitMetrics commitMetrics() { return commitMetrics; }
+
+  DatabaseResourceGovernor resourceGovernor() { return providerLease.governor(); }
+
+  boolean matches(TransactionManager manager) {
+    return manager != null && manager.managesDatabase(database.high(), database.low());
+  }
+
+  StatusCode copyCommitMetrics(IndexedGroupCommitTelemetry result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    commitMetrics.copyTo(result);
+    return StatusCode.OK;
+  }
+
+  StatusCode copyWalMetrics(LocalWalMetrics result) {
+    return wal.copyMetrics(result);
+  }
+
+  StatusCode beginPerformanceCapture() {
+    StatusCode status = commitMetrics.beginCapture();
+    if (!status.isOk()) return status;
+    status = wal.beginMetricsCapture();
+    if (!status.isOk()) commitMetrics.cancelCapture();
+    return status;
+  }
+
+  StatusCode endPerformanceCapture(
+      IndexedGroupCommitTelemetry commitResult,
+      LocalWalMetrics walResult) {
+    if (commitResult == null || walResult == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    StatusCode commitStatus = commitMetrics.endCapture(commitResult);
+    StatusCode walStatus = wal.endMetricsCapture(walResult);
+    return commitStatus.isOk() ? walStatus : commitStatus;
+  }
+
+  StatusCode cancelPerformanceCapture() {
+    StatusCode commitStatus = commitMetrics.cancelCapture();
+    StatusCode walStatus = wal.cancelMetricsCapture();
+    return commitStatus.isOk() ? walStatus : commitStatus;
   }
 
   StatusCode prepareForcedGroupPublication() {
@@ -220,9 +300,10 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration walGeneration,
+      DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
     return IndexedTableStoreFactory.create(
-        directory, wal, database, walGeneration, result);
+        directory, wal, database, walGeneration, providerLease, result);
   }
 
   public static StatusCode open(
@@ -230,9 +311,10 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration walGeneration,
+      DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
     return IndexedTableStoreFactory.open(
-        directory, wal, database, walGeneration, true, result);
+        directory, wal, database, walGeneration, providerLease, true, result);
   }
 
   public static StatusCode openExisting(
@@ -240,9 +322,10 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration walGeneration,
+      DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
     return IndexedTableStoreFactory.open(
-        directory, wal, database, walGeneration, false, result);
+        directory, wal, database, walGeneration, providerLease, false, result);
   }
 
   public static StatusCode openCheckpoint(
@@ -250,9 +333,10 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
       LocalWal wal,
       DatabaseIncarnation database,
       CheckpointState checkpoint,
+      DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
     return IndexedTableStoreFactory.openCheckpoint(
-        directory, wal, database, checkpoint, result);
+        directory, wal, database, checkpoint, providerLease, result);
   }
 
   public static String checkpointFileName(WalGeneration generation) {
@@ -400,6 +484,10 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     return pages.highestPageId();
   }
 
+  public int activeStagedPageCapacity() {
+    return pages.changedPageCapacity();
+  }
+
   long nextCommitSequence() {
     return wal.nextCommitSequence();
   }
@@ -416,18 +504,41 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     return kernel.readVersion(rowId, result);
   }
 
-  public StatusCode close() {
+  public synchronized StatusCode close() {
     if (closed) {
       return StatusCode.CLOSED;
     }
-    if (phase.operationActive() || phase.commitGroupActive() || hasDirtyPages()) {
-      return StatusCode.CONFLICT;
+    if (!closing) {
+      if (phase.operationActive() || phase.commitGroupActive() || hasDirtyPages()) {
+        return StatusCode.CONFLICT;
+      }
+      StatusCode detach = pages.detach();
+      if (!detach.isOk()) return detach;
+      closing = true;
     }
-    closed = true;
-    kernel.closeCheckpointVersions();
-    StatusCode sidecarClose = kernel.closeSidecars();
-    StatusCode fileClose = file.close();
-    return sidecarClose.isOk() ? fileClose : sidecarClose;
+    StatusCode first = StatusCode.OK;
+    if (!checkpointVersionsClosed) {
+      StatusCode status = kernel.closeCheckpointVersions();
+      checkpointVersionsClosed = closeCompleted(status);
+      if (!checkpointVersionsClosed) first = status;
+    }
+    if (!sidecarsClosed) {
+      StatusCode status = kernel.closeSidecars();
+      sidecarsClosed = closeCompleted(status);
+      if (first.isOk() && !sidecarsClosed) first = status;
+    }
+    if (!fileClosed) {
+      StatusCode status = file.close();
+      fileClosed = closeCompleted(status);
+      if (first.isOk() && !fileClosed) first = status;
+    }
+    if (!providerReleased) {
+      StatusCode status = providerLease.releaseStore(storeLease);
+      providerReleased = status.isOk();
+      if (first.isOk() && !providerReleased) first = status;
+    }
+    closed = checkpointVersionsClosed && sidecarsClosed && fileClosed && providerReleased;
+    return first.isOk() && !closed ? StatusCode.INVARIANT_BROKEN : first;
   }
 
   StatusCode recoverFromWal() {
@@ -485,7 +596,7 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
         failed,
         pageCommitter.failed(),
         checkpoints.failed(),
-        closed);
+        closing || closed);
   }
 
   @Override
@@ -497,9 +608,16 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   }
 
   void closeOpenFile() {
+    kernel.closeCheckpointVersions();
     kernel.closeSidecars();
+    pages.abandon();
     pages.closeStagingFile();
     file.close();
+    if (providerLease.storeClaimed()) providerLease.releaseStore(storeLease);
+  }
+
+  private static boolean closeCompleted(StatusCode status) {
+    return status.isOk() || status == StatusCode.CLOSED;
   }
 
 }

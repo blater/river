@@ -4,6 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.storage.btree.TupleBTreePageProvider;
 import io.riverdb.storage.btree.TupleBTreePageReference;
+import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import java.nio.ByteBuffer;
 
 /** Read-only current-page provider for one short tuple probe. */
@@ -66,21 +67,44 @@ final class IndexedTupleProbePageProvider implements TupleBTreePageProvider {
   }
 
   @Override
-  public boolean pageValidationMatches(
+  public StatusCode restorePageValidation(
       TupleBTreePageReference reference, long schemaId,
-      long descriptorHash, int expectedType) {
-    return pages.pageValidationMatches(
-        reference.pageId(), reference.pageGeneration(),
-        schemaId, descriptorHash, expectedType);
+      long descriptorHash, int expectedType,
+      TupleBTreePageValidationProof target) {
+    IndexedPageGenerationPin pin = ownedPin(reference);
+    return pin == null ? StatusCode.INVALID_EXTERNAL_INPUT
+        : pages.restorePageValidation(
+            reference.pageId(), reference.pageGeneration(),
+            schemaId, descriptorHash, expectedType, target);
   }
 
   @Override
-  public void rememberPageValidation(
+  public StatusCode rememberPageValidation(
       TupleBTreePageReference reference, long schemaId,
-      long descriptorHash, int pageType) {
-    pages.rememberPageValidation(
-        reference.pageId(), reference.pageGeneration(),
-        schemaId, descriptorHash, pageType);
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    IndexedPageGenerationPin pin = ownedPin(reference);
+    return pin == null ? StatusCode.INVALID_EXTERNAL_INPUT
+        : pages.rememberPageValidation(
+            reference.pageId(), reference.pageGeneration(),
+            schemaId, descriptorHash, pageType, source);
+  }
+
+  @Override
+  public StatusCode consumeCanonicalMutationValidation(
+      TupleBTreePageReference reference, long schemaId,
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof target) {
+    if (target != null) target.reset();
+    return StatusCode.CONFLICT;
+  }
+
+  @Override
+  public StatusCode sealCanonicalMutation(
+      TupleBTreePageReference reference, long schemaId,
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    return StatusCode.FEATURE_NOT_SUPPORTED;
   }
 
   @Override public StatusCode allocate(TupleBTreePageReference result) {
@@ -101,10 +125,20 @@ final class IndexedTupleProbePageProvider implements TupleBTreePageProvider {
     if (pin == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = pages.unpinPage(pin);
     if (status.isOk()) {
-      reference.reset();
       if (reference == firstReference) firstReference = null;
       else secondReference = null;
     }
     return status;
+  }
+
+  private IndexedPageGenerationPin ownedPin(TupleBTreePageReference reference) {
+    IndexedPageGenerationPin pin = reference == firstReference ? firstPin
+        : reference == secondReference ? secondPin : null;
+    return reference != null && reference.isAttached() && pin != null && pin.active()
+        && reference.pageId() == pin.pageId()
+        && reference.page() == pin.payload()
+        && reference.start() == 0
+        && reference.pageGeneration() == pin.pageGeneration()
+        ? pin : null;
   }
 }

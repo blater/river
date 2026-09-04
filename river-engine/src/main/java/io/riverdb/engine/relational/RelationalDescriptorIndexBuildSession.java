@@ -1,7 +1,6 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.EmbeddedDatabase;
 import io.riverdb.engine.EmbeddedSessionOpenResult;
 import io.riverdb.engine.table.IndexedTransactionSession;
@@ -52,7 +51,7 @@ final class RelationalDescriptorIndexBuildSession {
   private StatusCode ensureSession() {
     if (session != null) return database.admitSession(session);
     StatusCode status = database.createSession(
-        SqlShapeLimits.MAX_STORED_ROW_BYTES, opened);
+        TableSchema.MAXIMUM_ROW_BYTES, opened);
     if (status.isOk()) session = opened.session();
     return status;
   }

@@ -12,8 +12,11 @@ public final class DatabaseResourcePlanRequest {
   long maximumDeliveryWalBytes;
   int maximumOwners;
   long writeEntryCapacity;
-  long lockProviderBytes;
   long stagedPageCapacity;
+  long versionWorkspaceBytes;
+  long lockProviderBytes;
+  long indexedPageCacheBytes;
+  long indexedStagingBytes;
   long walByteCapacity;
 
   public DatabaseResourcePlanRequest memory(
@@ -43,17 +46,37 @@ public final class DatabaseResourcePlanRequest {
     return this;
   }
 
+  /** Maximum retained indexed-cache bytes and the portion reserved for staging. */
+  public DatabaseResourcePlanRequest indexedPageCache(
+      long maximumBytes, long maximumStagingBytes) {
+    indexedPageCacheBytes = maximumBytes;
+    indexedStagingBytes = maximumStagingBytes;
+    return this;
+  }
+
   public DatabaseResourcePlanRequest lockProviderBytes(long bytes) {
     lockProviderBytes = bytes;
     return this;
   }
 
+  /** Database-lifetime retained byte budget for reusable version-operation storage. */
+  public DatabaseResourcePlanRequest versionWorkspaceBytes(long bytes) {
+    versionWorkspaceBytes = bytes;
+    return this;
+  }
+
+  public long maximumAccountedBytes() { return maximumAccountedBytes; }
+
   public void reset() {
     maximumAccountedBytes = fixedRuntimeBytes = progressReserveBytes = 0;
     minimumOwnerBytes = maximumDeliveryAccountedBytes = 0;
     maximumDeliveryWriteEntries = 0;
-    maximumDeliveryStagedPages = maximumDeliveryWalBytes = 0;
+    maximumDeliveryStagedPages = 0;
+    maximumDeliveryWalBytes = 0;
     maximumOwners = 0;
-    writeEntryCapacity = stagedPageCapacity = walByteCapacity = lockProviderBytes = 0;
+    writeEntryCapacity = stagedPageCapacity = 0;
+    walByteCapacity = lockProviderBytes = 0;
+    versionWorkspaceBytes = 0;
+    indexedPageCacheBytes = indexedStagingBytes = 0;
   }
 }

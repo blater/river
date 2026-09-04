@@ -49,4 +49,31 @@ final class IndexedLogicalRowIdFloorsTest {
     floors.release();
     assertEquals(0, floors.count());
   }
+
+  @Test
+  void reportsExactGrowthBeforeRecordingANewFloor() {
+    IndexedLogicalRowIdFloors floors = new IndexedLogicalRowIdFloors(4);
+
+    long firstReservation = floors.accountedBytesForRecord(17);
+    assertEquals(StatusCode.OK, floors.record(17, 8));
+    assertEquals(firstReservation, floors.accountedBytes());
+    assertEquals(firstReservation, floors.accountedBytesForRecord(17));
+
+    long secondReservation = floors.accountedBytesForRecord(23);
+    assertEquals(StatusCode.OK, floors.record(23, 4));
+    assertEquals(secondReservation, floors.accountedBytes());
+  }
+
+  @Test
+  void relationalCompilationReservesFloorStorageBeforeAppend() {
+    IndexedRelationalMutationBuffer mutation =
+        new IndexedRelationalMutationBuffer(2, 0, 0);
+    long reservation = mutation.accountedBytesForReservation(0, 0, 0, 0, 2);
+
+    assertEquals(StatusCode.OK, mutation.reserve(0, 0, 0, 0, 2));
+    assertEquals(reservation, mutation.accountedBytes());
+    assertEquals(StatusCode.OK, mutation.appendLogicalRowFloor(17, 8));
+    assertEquals(StatusCode.OK, mutation.appendLogicalRowFloor(23, 4));
+    assertEquals(StatusCode.OK, mutation.seal());
+  }
 }

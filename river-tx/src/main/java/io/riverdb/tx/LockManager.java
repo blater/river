@@ -63,8 +63,6 @@ public final class LockManager implements LockService {
   public long lockEscalationCount() { return LockWaitCounters.escalationCount(); }
   synchronized long accountedBytes() { return arena.accountedBytes(); }
   synchronized long targetedWakes() { return exact.targetedWakes(); }
-  boolean deadlockDiagnosticsEnabled() { return diagnosticsConfig.enabled(); }
-
   public LockDeadlockDiagnosticsSnapshot newDeadlockDiagnosticsSnapshot() {
     return new LockDeadlockDiagnosticsSnapshot(diagnosticsConfig);
   }

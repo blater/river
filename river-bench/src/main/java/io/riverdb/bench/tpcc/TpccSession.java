@@ -1,6 +1,7 @@
 package io.riverdb.bench.tpcc;
 
 import io.riverdb.jdbc.RiverConnectionMetrics;
+import io.riverdb.jdbc.RiverTransactionDiagnostics;
 import java.sql.Connection;
 import java.sql.SQLException;
 
@@ -11,10 +12,13 @@ final class TpccSession implements AutoCloseable {
   final TpccOrderStatus orderStatus;
   final TpccDelivery delivery;
   final TpccRiverStockLevel stockLevel;
+  private final TpccConfig configuration;
   private final Connection connection;
   private final RiverConnectionMetrics metrics;
+  private final RiverTransactionDiagnostics diagnostics;
 
   TpccSession(Connection owner, TpccConfig config, int homeDistrict) throws SQLException {
+    configuration = config;
     connection = owner;
     TpccRiverNewOrder openedNewOrder = null;
     TpccPayment openedPayment = null;
@@ -22,13 +26,15 @@ final class TpccSession implements AutoCloseable {
     TpccDelivery openedDelivery = null;
     TpccRiverStockLevel openedStockLevel = null;
     RiverConnectionMetrics openedMetrics;
+    RiverTransactionDiagnostics openedDiagnostics;
     try {
       openedMetrics = owner.unwrap(RiverConnectionMetrics.class);
+      openedDiagnostics = owner.unwrap(RiverTransactionDiagnostics.class);
       owner.setAutoCommit(false);
       openedNewOrder = new TpccRiverNewOrder(owner, homeDistrict, config.itemCount());
-      openedPayment = new TpccPayment(owner);
-      openedOrderStatus = new TpccOrderStatus(owner);
-      openedDelivery = new TpccDelivery(owner, config.districts());
+      openedPayment = new TpccPayment(owner, openedDiagnostics);
+      openedOrderStatus = new TpccOrderStatus(owner, openedDiagnostics);
+      openedDelivery = new TpccDelivery(owner, openedDiagnostics, config.districts());
       openedStockLevel = new TpccRiverStockLevel(owner);
     } catch (SQLException failure) {
       failure = rollback(failure);
@@ -41,6 +47,7 @@ final class TpccSession implements AutoCloseable {
       throw failure;
     }
     metrics = openedMetrics;
+    diagnostics = openedDiagnostics;
     newOrder = openedNewOrder;
     payment = openedPayment;
     orderStatus = openedOrderStatus;
@@ -53,6 +60,28 @@ final class TpccSession implements AutoCloseable {
   long bytesSent() { return metrics.bytesSent(); }
 
   long bytesReceived() { return metrics.bytesReceived(); }
+
+  void beginDiagnosticAttempt(long diagnosticTag, long metricsEpoch) throws SQLException {
+    diagnostics.beginDiagnosticAttempt(diagnosticTag, metricsEpoch);
+  }
+
+  void diagnosticStep(long diagnosticStepTag) throws SQLException {
+    diagnostics.diagnosticStep(diagnosticStepTag);
+  }
+
+  long diagnosticStepTag() throws SQLException { return diagnostics.diagnosticStepTag(); }
+
+  void prepareAttempt(TpccTransactionType type) throws SQLException {
+    int isolation = configIsolation(type);
+    connection.setTransactionIsolation(isolation);
+    if (connection.getTransactionIsolation() != isolation) {
+      throw new SQLException("effective JDBC isolation differs from benchmark contract");
+    }
+  }
+
+  private int configIsolation(TpccTransactionType type) {
+    return configuration.isolation().jdbcLevel(type);
+  }
 
   @Override
   public void close() throws SQLException {

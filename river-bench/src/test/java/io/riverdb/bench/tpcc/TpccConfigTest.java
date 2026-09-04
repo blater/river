@@ -17,8 +17,45 @@ final class TpccConfigTest {
     assertEquals(1_800, config.measured().toSeconds());
     assertEquals(32, config.batchRows());
     assertEquals(TpccScheduling.STANDARD, config.scheduling());
+    assertEquals(TpccWorkloadMix.STANDARD, config.mix());
+    assertEquals(TpccIsolationContract.SERIALIZABLE, config.isolation());
     assertEquals(TpccPhase.LOAD_RUN_CHECKPOINT, config.phase());
     assertEquals(null, config.jfr());
+  }
+
+  @Test
+  void parsesDiagnosticMixAndIsolationWithoutPromotingIt() {
+    TpccConfig config = TpccConfig.parse(new String[] {
+        "--url=jdbc:river://localhost:9999", "--tiny",
+        "--mix=new-order-payment-50-50", "--isolation=mixed-diagnostic"
+    });
+    assertEquals(TpccWorkloadMix.NEW_ORDER_PAYMENT_50_50, config.mix());
+    assertEquals(TpccIsolationContract.MIXED_DIAGNOSTIC, config.isolation());
+    assertFalse(config.isolation().common());
+
+    assertThrows(IllegalArgumentException.class, () -> TpccConfig.parse(new String[] {
+        "--url=jdbc:river://localhost:9999", "--tiny", "--evidence=alpha3",
+        "--isolation=mixed-diagnostic"
+    }));
+    assertThrows(IllegalArgumentException.class, () -> TpccConfig.parse(new String[] {
+        "--url=jdbc:river://localhost:9999", "--tiny", "--evidence=alpha3",
+        "--mix=payment"
+    }));
+  }
+
+  @Test
+  void parsesP0BlockerIsolationMixes() {
+    TpccConfig newOrderDelivery = TpccConfig.parse(new String[] {
+        "--url=jdbc:river://localhost:9999", "--tiny",
+        "--mix=new-order-delivery-50-50"
+    });
+    assertEquals(TpccWorkloadMix.NEW_ORDER_DELIVERY_50_50, newOrderDelivery.mix());
+
+    TpccConfig newOrderStockLevel = TpccConfig.parse(new String[] {
+        "--url=jdbc:river://localhost:9999", "--tiny",
+        "--mix=new-order-stock-level-50-50"
+    });
+    assertEquals(TpccWorkloadMix.NEW_ORDER_STOCK_LEVEL_50_50, newOrderStockLevel.mix());
   }
 
   @Test
@@ -65,17 +102,19 @@ final class TpccConfigTest {
   }
 
   @Test
-  void rejectsUnknownAndOutOfBoundOptions() {
-    assertThrows(IllegalArgumentException.class,
-        () -> TpccConfig.parse(new String[] {"--url=jdbc:river://localhost:9", "--batch-rows=64"}));
+  void rejectsUnknownAndSemanticallyInvalidOptions() {
+    TpccConfig scaled = TpccConfig.parse(new String[] {
+        "--url=jdbc:river://localhost:9", "--batch-rows=64",
+        "--warehouses=101", "--terminals=1010"
+    });
+    assertEquals(64, scaled.batchRows());
+    assertEquals(101, scaled.warehouses());
     assertThrows(IllegalArgumentException.class,
         () -> TpccConfig.parse(new String[] {"--url=jdbc:river://localhost:9", "--wat=true"}));
     assertThrows(IllegalArgumentException.class,
         () -> TpccConfig.parse(new String[] {"--url=jdbc:river://localhost:9", "--terminals=9"}));
     assertThrows(IllegalArgumentException.class,
         () -> TpccConfig.parse(new String[] {"--url=jdbc:river://localhost:9", "--warehouses=0"}));
-    assertThrows(IllegalArgumentException.class,
-        () -> TpccConfig.parse(new String[] {"--url=jdbc:river://localhost:9", "--warehouses=101"}));
     assertThrows(IllegalArgumentException.class,
         () -> TpccConfig.parse(new String[] {
             "--url=jdbc:river://localhost:9", "--warehouses=2", "--terminals=10"

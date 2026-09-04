@@ -8,7 +8,8 @@ import org.junit.jupiter.api.Test;
 final class IndexedPageMetadataBoundTest {
   @Test
   void sameWorkingSetRetainsSameCardinalityAcrossDifferentPageIdHistories() {
-    IndexedPageCacheConfig config = new IndexedPageCacheConfig(4, 2, 0);
+    io.riverdb.engine.runtime.DatabasePageCachePlan config =
+        io.riverdb.engine.runtime.DatabasePageCacheTestPlan.geometry(4, 2, 2);
     IndexedPageState shortHistory = new IndexedPageState(config);
     IndexedPageState longHistory = new IndexedPageState(config);
 

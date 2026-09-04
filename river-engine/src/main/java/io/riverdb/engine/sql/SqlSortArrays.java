@@ -1,15 +1,14 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 
 /** Primitive row and projection lanes retained by one in-memory sort run. */
 final class SqlSortArrays {
-  private static final int RETAINED_VALUE_LANES = 1_024 * 64;
   private final SqlRetainedArrayAllocator allocator;
   private long[] keys;
   private long[] keyHighs;
   private long[] primaryKeys;
+  private long[] ordinals;
   private final SqlSortProjectionArrays projections;
   private boolean[] keyNulls;
   private int[] rowSlots;
@@ -20,26 +19,27 @@ final class SqlSortArrays {
     projections = new SqlSortProjectionArrays(allocator);
   }
 
-  StatusCode reserve(int rows, int projections, SqlSortNullWords nulls) {
+  StatusCode reserve(int rows, int projections) {
     try {
       long[] nextKeys = keys == null || keys.length < rows ? allocator.longs(rows) : keys;
       long[] nextKeyHighs = keyHighs == null || keyHighs.length < rows
           ? allocator.longs(rows) : keyHighs;
       long[] nextPrimary = primaryKeys == null || primaryKeys.length < rows
           ? allocator.longs(rows) : primaryKeys;
+      long[] nextOrdinals = ordinals == null || ordinals.length < rows
+          ? allocator.longs(rows) : ordinals;
       boolean[] nextKeyNulls = keyNulls == null || keyNulls.length < rows
           ? allocator.booleans(rows) : keyNulls;
       int[] nextSlots = rowSlots == null || rowSlots.length < rows
           ? allocator.integers(rows) : rowSlots;
       int[] nextLengths = rowLengths == null || rowLengths.length < rows
           ? allocator.integers(rows) : rowLengths;
-      StatusCode status = nulls.reserve(projections, SqlShapeLimits.MAX_RESULT_COLUMNS);
-      if (!status.isOk()) return status;
-      status = this.projections.reserve(rows, projections);
+      StatusCode status = this.projections.reserve(rows, projections);
       if (!status.isOk()) return status;
       keys = nextKeys;
       keyHighs = nextKeyHighs;
       primaryKeys = nextPrimary;
+      ordinals = nextOrdinals;
       keyNulls = nextKeyNulls;
       rowSlots = nextSlots;
       rowLengths = nextLengths;
@@ -52,6 +52,7 @@ final class SqlSortArrays {
   void append(
       int row,
       int projections,
+      long ordinal,
       long keyHigh,
       long key,
       boolean keyNull,
@@ -62,6 +63,7 @@ final class SqlSortArrays {
     keys[row] = key;
     keyNulls[row] = keyNull;
     primaryKeys[row] = primaryKey;
+    ordinals[row] = ordinal;
     this.projections.append(row, projections, projectedHighs, projectedValues);
   }
 
@@ -69,6 +71,7 @@ final class SqlSortArrays {
     swap(keyHighs, left, right);
     swap(keys, left, right);
     swap(primaryKeys, left, right);
+    swap(ordinals, left, right);
     swap(keyNulls, left, right);
     swap(rowSlots, left, right);
     this.projections.swap(left, right, projections);
@@ -87,7 +90,7 @@ final class SqlSortArrays {
   }
 
   long retainedBytes() {
-    return bytes(keys) + bytes(keyHighs) + bytes(primaryKeys)
+    return bytes(keys) + bytes(keyHighs) + bytes(primaryKeys) + bytes(ordinals)
         + (keyNulls == null ? 0 : keyNulls.length)
         + bytes(rowSlots) + bytes(rowLengths) + projections.retainedBytes();
   }
@@ -97,7 +100,8 @@ final class SqlSortArrays {
     if (projectionBytes == Long.MAX_VALUE) return Long.MAX_VALUE;
     long rowLongs = (long) Math.max(rows, keys == null ? 0 : keys.length)
         + Math.max(rows, keyHighs == null ? 0 : keyHighs.length)
-        + Math.max(rows, primaryKeys == null ? 0 : primaryKeys.length);
+        + Math.max(rows, primaryKeys == null ? 0 : primaryKeys.length)
+        + Math.max(rows, ordinals == null ? 0 : ordinals.length);
     long rowInts = (long) Math.max(rows, rowSlots == null ? 0 : rowSlots.length)
         + Math.max(rows, rowLengths == null ? 0 : rowLengths.length);
     long nullBytes = Math.max(rows, keyNulls == null ? 0 : keyNulls.length);
@@ -105,13 +109,30 @@ final class SqlSortArrays {
         + projectionBytes;
   }
 
-  void shedOversizedProjections() {
-    projections.shed(RETAINED_VALUE_LANES);
+  static long cleanRequiredBytes(int rows, int projections) {
+    long projectionBytes = SqlSortProjectionArrays.cleanRequiredBytes(rows, projections);
+    if (projectionBytes == Long.MAX_VALUE) return Long.MAX_VALUE;
+    long rowLongs = 4L * rows;
+    long rowInts = 2L * rows;
+    return rowLongs * Long.BYTES + rowInts * Integer.BYTES + rows
+        + projectionBytes;
+  }
+
+  void release() {
+    keys = null;
+    keyHighs = null;
+    primaryKeys = null;
+    ordinals = null;
+    keyNulls = null;
+    rowSlots = null;
+    rowLengths = null;
+    projections.release();
   }
 
   long[] keys() { return keys; }
   long[] keyHighs() { return keyHighs; }
   long[] primaryKeys() { return primaryKeys; }
+  long[] ordinals() { return ordinals; }
   long[] highs() { return projections.highs(); }
   long[] values() { return projections.values(); }
   boolean[] keyNulls() { return keyNulls; }

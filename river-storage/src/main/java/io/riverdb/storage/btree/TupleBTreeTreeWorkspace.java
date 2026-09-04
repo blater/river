@@ -5,10 +5,8 @@ import io.riverdb.format.btree.TupleKeyCodec;
 import io.riverdb.format.page.PageCodec;
 import java.nio.ByteBuffer;
 
-/** Caller-owned fixed path and scratch storage reused by whole-tree operations. */
+/** Caller-owned structurally bounded path and scratch storage reused by whole-tree operations. */
 public final class TupleBTreeTreeWorkspace {
-  public static final int MAXIMUM_HEIGHT = 31;
-
   final TupleBTreeWorkspace page = new TupleBTreeWorkspace();
   final TupleBTreeWorkspace otherPage = new TupleBTreeWorkspace();
   final TupleBTreeLookupResult pageLookup = new TupleBTreeLookupResult();
@@ -44,10 +42,11 @@ public final class TupleBTreeTreeWorkspace {
         && keyScratch != null && !keyScratch.isReadOnly()
         && keyScratch.limit() >= TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES
         && pageScratch != keyScratch
-        && pathPageIds != null && pathPageIds.length >= MAXIMUM_HEIGHT
-        && pathChildOrdinals != null && pathChildOrdinals.length >= MAXIMUM_HEIGHT
+        && pathPageIds != null && pathPageIds.length >= BTreeStructuralLimits.MAXIMUM_LEVELS
+        && pathChildOrdinals != null
+        && pathChildOrdinals.length >= BTreeStructuralLimits.MAXIMUM_LEVELS
         && pathNextChildOrdinals != null
-        && pathNextChildOrdinals.length >= MAXIMUM_HEIGHT
+        && pathNextChildOrdinals.length >= BTreeStructuralLimits.MAXIMUM_LEVELS
         && !current.isAttached() && !other.isAttached();
   }
 

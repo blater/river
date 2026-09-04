@@ -23,7 +23,7 @@ final class TupleBTreeInternalSplitAdmission {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    return TupleBTreePageSupport.validate(
+    return TupleBTreePageAdmission.validate(
         source, sourceStart, schemaId, shape, TupleBTreePageCodec.TYPE_INTERNAL, workspace);
   }
 

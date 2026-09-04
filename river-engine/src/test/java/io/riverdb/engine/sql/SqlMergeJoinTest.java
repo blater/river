@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -23,7 +24,7 @@ final class SqlMergeJoinTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, WalGeneration.of(1), 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, WalGeneration.of(1), 8, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));

@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,7 +27,7 @@ final class SqlSegmentedStatisticsTest {
       @TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SqlSession session = session(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -41,7 +42,7 @@ final class SqlSegmentedStatisticsTest {
 
     opened.reset();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     session = session(database);
     assertPlanContainsStatistics(session);

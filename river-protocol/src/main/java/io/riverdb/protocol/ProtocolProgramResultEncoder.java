@@ -10,7 +10,7 @@ final class ProtocolProgramResultEncoder {
   static final int HEADER_BYTES = 64;
   static final int STEP_BYTES = 16;
   static final int ROW_BYTES = 8;
-  static final int VALUE_HEADER_BYTES = Integer.BYTES + Byte.BYTES * 2 + Short.BYTES;
+  static final int VALUE_HEADER_BYTES = ProtocolValueHeader.BYTES;
   static final int FLAG_FENCED = 1;
 
   static int requiredWireBytes(StatusCode outerStatus, TransactionProgramResult result) {

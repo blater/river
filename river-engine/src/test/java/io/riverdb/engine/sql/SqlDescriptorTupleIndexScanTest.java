@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -160,6 +161,46 @@ final class SqlDescriptorTupleIndexScanTest {
     assertEquals(StatusCode.OK, database.close());
   }
 
+  @Test
+  void payloadUpdateDoesNotWaitOnAnUnchangedSecondaryKey(@TempDir Path root)
+      throws Exception {
+    RelationalDatabase database = create(root);
+    SqlSession holder = session(database);
+    SqlSession reader = session(database);
+    SqlExecutionResult result = new SqlExecutionResult();
+    execute(holder, result,
+        "CREATE TABLE entries (id BIGINT PRIMARY KEY,bucket BIGINT,amount BIGINT)");
+    execute(holder, result, "CREATE INDEX entries_bucket ON entries(bucket)");
+    execute(holder, result, "INSERT INTO entries VALUES (1,15,100)");
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      execute(holder, result, "BEGIN SERIALIZABLE");
+      execute(holder, result,
+          "SELECT amount FROM entries WHERE id=1 FOR UPDATE");
+      execute(reader, result, "BEGIN SERIALIZABLE");
+      AtomicReference<Thread> worker = new AtomicReference<>();
+      SqlExecutionResult readerResult = new SqlExecutionResult();
+      Future<StatusCode> waiting = executor.submit(() -> {
+        worker.set(Thread.currentThread());
+        return reader.execute(
+            "SELECT id FROM entries WHERE bucket>=10 AND bucket<20", readerResult);
+      });
+      awaitParked(worker, waiting);
+      assertFalse(waiting.isDone());
+
+      execute(holder, result, "UPDATE entries SET amount=101 WHERE id=1");
+      execute(holder, result, "COMMIT");
+      assertEquals(StatusCode.OK, waiting.get());
+      assertEquals(1, readerResult.value());
+      execute(reader, result, "COMMIT");
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(StatusCode.OK, holder.close());
+    assertEquals(StatusCode.OK, reader.close());
+    assertEquals(StatusCode.OK, database.close());
+  }
+
   private static void openSerializableRange(
       SqlSession reader, SqlExecutionResult result) {
     assertEquals(StatusCode.OK, reader.execute("BEGIN SERIALIZABLE", result));
@@ -284,7 +325,7 @@ final class SqlDescriptorTupleIndexScanTest {
   private static RelationalDatabase create(Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     return opened.database();
   }
 

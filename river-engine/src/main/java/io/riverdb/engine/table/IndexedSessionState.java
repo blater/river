@@ -18,10 +18,10 @@ final class IndexedSessionState {
   final IndexedSessionSavepoints savepoints;
   final IndexedGroupCommitCoordinator groupCommit;
   final IndexedVacuum automaticVacuum;
-  final int automaticVacuumCapacityReserve;
   final IndexedCommitResult commitResult = new IndexedCommitResult();
   final IndexedGroupCommitRequest groupCommitRequest;
   final IndexedRelationalWalPlan groupWalPlan = new IndexedRelationalWalPlan();
+  final IndexedPreparedLogicalCommit preparedCommit;
   final TransactionOutcome maintenanceOutcome = new TransactionOutcome();
   final IndexedMutationTarget mutationTarget = new IndexedMutationTarget();
   final IndexedCurrentRowAccess currentRows;
@@ -40,8 +40,7 @@ final class IndexedSessionState {
       int tuplePayloadCapacity,
       DatabaseResourceGovernor governor,
       IndexedGroupCommitCoordinator groupCommitCoordinator,
-      IndexedVacuum versionVacuum,
-      int vacuumCapacityReserve) {
+      IndexedVacuum versionVacuum) {
     resourceAdmission = new IndexedTransactionResourceAdmission(governor);
     groupCommitRequest = new IndexedGroupCommitRequest(owner);
     pendingMutations = new PendingMutationBuffer(maximumMutations, maximumRowBytes);
@@ -49,12 +48,14 @@ final class IndexedSessionState {
         maximumMutations, maximumMutations, tuplePayloadCapacity);
     logicalRowFloors = new IndexedLogicalRowIdFloors(maximumMutations);
     tupleLifecycle = new IndexedTupleIndexLifecycleBatch(maximumMutations);
+    preparedCommit = new IndexedPreparedLogicalCommit(
+        transaction, resourceAdmission, pendingMutations, tupleIntents,
+        tupleLifecycle, logicalRowFloors, groupWalPlan);
     lockWait = new IndexedLockWait(manager);
     savepoints = new IndexedSessionSavepoints(
         owner, transaction, pendingMutations, tupleIntents, tupleLifecycle);
     groupCommit = groupCommitCoordinator;
     automaticVacuum = versionVacuum;
-    automaticVacuumCapacityReserve = vacuumCapacityReserve;
     scans = new IndexedTransactionScanCoordinator(owner);
     tupleScans = new IndexedTransactionTupleScans(owner);
     writeSet = new IndexedTransactionWriteSet(owner);

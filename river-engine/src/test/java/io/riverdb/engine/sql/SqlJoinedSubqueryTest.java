@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 
@@ -150,7 +151,7 @@ final class SqlJoinedSubqueryTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, WalGeneration.of(1), 32, opened));
+        RelationalDatabase.create(databaseRequest(32), root, DATABASE, WalGeneration.of(1), 32, opened));
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(opened.database(), sessionResult));
     Fixture fixture = new Fixture(opened.database(), sessionResult.session());

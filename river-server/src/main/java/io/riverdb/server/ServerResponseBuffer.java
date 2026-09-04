@@ -42,7 +42,8 @@ final class ServerResponseBuffer implements TransactionProgramResultAdmission {
   @Override
   public StatusCode admit(TransactionProgramResult result) {
     int required = ProtocolFrameCodec.programResultResponseBytes(StatusCode.OK, result);
-    return required <= 0 ? StatusCode.RESOURCE_EXHAUSTED : ensureCapacity(required);
+    return required < 0 ? StatusCode.RESOURCE_EXHAUSTED
+        : required == 0 ? StatusCode.INVALID_EXTERNAL_INPUT : ensureCapacity(required);
   }
 
   StatusCode releaseHighWater() {

@@ -1,12 +1,12 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.relational.RelationalDescriptorScanCursor;
 import io.riverdb.engine.relational.RelationalRowIdentityResult;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.schema.TableDescriptor;
 
 /** Reusable decoded row for one streaming descriptor join role. */
@@ -18,7 +18,7 @@ final class SqlUniversalDescriptorJoinRow {
   StatusCode prepare(TableDescriptor table) {
     StatusCode status = values.reserve(
         table.columnCount(), table.columnCount(),
-        SqlShapeLimits.MAX_STORED_ROW_BYTES, SqlShapeLimits.MAX_STORED_ROW_BYTES);
+        TableSchema.MAXIMUM_ROW_BYTES, TableSchema.MAXIMUM_ROW_BYTES);
     if (status.isOk()) status = row.reset(table.columnCount());
     return status;
   }

@@ -1,6 +1,7 @@
 package io.riverdb.protocol;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
@@ -36,11 +37,15 @@ final class ProtocolTransactionProgramCodecTest {
     assertEquals(StatusCode.OK, arguments.setDecimal128(
         0, SqlTypeDescriptor.decimal(38, 18), 0, 17));
     assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
-        request, 42, 77, IsolationLevel.REPEATABLE_READ, arguments));
+        request, 42, 77, IsolationLevel.REPEATABLE_READ, arguments,
+        401, 9, 2));
     assertEquals(StatusCode.OK, codec.decode(request, frame));
     assertEquals(StatusCode.OK, prepared.decode(frame));
     assertEquals(77, prepared.handle());
     assertEquals(IsolationLevel.REPEATABLE_READ, prepared.isolationLevel());
+    assertEquals(401, prepared.diagnosticTag());
+    assertEquals(9, prepared.diagnosticStepTag());
+    assertEquals(2, prepared.metricsEpoch());
     assertEquals(1, prepared.arguments().typeDescriptorAt(0) == 0 ? 0 : 1);
     assertEquals(17, prepared.arguments().valueAt(0));
   }
@@ -52,7 +57,8 @@ final class ProtocolTransactionProgramCodecTest {
     long requestId = 80;
     for (IsolationLevel isolationLevel : IsolationLevel.values()) {
       assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
-          request, requestId++, 77, isolationLevel, new TransactionProgramArguments()));
+          request, requestId++, 77, isolationLevel, new TransactionProgramArguments(),
+          0, 0, 0));
       assertEquals(StatusCode.OK, codec.decode(request, frame));
       assertEquals(StatusCode.OK, decoder.decode(frame));
       assertEquals(isolationLevel, decoder.isolationLevel());
@@ -64,7 +70,7 @@ final class ProtocolTransactionProgramCodecTest {
     ByteBuffer request = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
     assertEquals(StatusCode.OK, codec.encodeProgramExecuteRequest(
         request, 90, 77, IsolationLevel.SERIALIZABLE,
-        new TransactionProgramArguments()));
+        new TransactionProgramArguments(), 0, 0, 0));
     request.putInt(
         ProtocolFrameCodec.HEADER_BYTES + Long.BYTES + Integer.BYTES, 99);
     assertEquals(StatusCode.OK, codec.decode(request, frame));
@@ -123,6 +129,48 @@ final class ProtocolTransactionProgramCodecTest {
   }
 
   @Test
+  void roundTripsMaximumDescriptorProgramTextBeyondUnsignedShortLength() {
+    // Program results use the descriptor's scalar boundary and the logical-response byte budget;
+    // a cell's encoded length is not constrained by a physical frame or legacy u16 width.
+    String value = "\u0800".repeat(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    int utf8Bytes = Math.multiplyExact(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS, 3);
+    assertTrue(utf8Bytes > Short.toUnsignedInt((short) -1));
+    assertTrue(utf8Bytes < ProtocolFrameCodec.MAXIMUM_LOGICAL_RESPONSE_PAYLOAD_BYTES);
+
+    TransactionProgramResult source = new TransactionProgramResult();
+    assertEquals(StatusCode.OK, source.beginStepResult(
+        0, TransactionProgramAction.ROW_SET, 1));
+    assertEquals(StatusCode.OK, source.beginRow(1));
+    int descriptor = SqlTypeDescriptor.varchar(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS);
+    assertEquals(StatusCode.OK, source.appendText(descriptor, value));
+    source.complete(103);
+    assertEquals(1, source.rowCount());
+    assertEquals(1, source.columnCount(0));
+    assertEquals(descriptor, source.typeDescriptorAt(0, 0));
+    assertFalse(source.isNull(0, 0));
+    assertEquals(value.length(), source.textLengthAt(0, 0));
+
+    ByteBuffer encodedValue = ByteBuffer.allocate(ProtocolValueHeader.BYTES + utf8Bytes);
+    assertEquals(utf8Bytes, ProtocolProgramResultValueCodec.bytes(source, 0, 0));
+    assertEquals(encodedValue.capacity(),
+        ProtocolProgramResultValueCodec.write(encodedValue, 0, source, 0, 0));
+    assertEquals(utf8Bytes, encodedValue.getInt(ProtocolValueHeader.LENGTH_OFFSET));
+
+    int required = ProtocolProgramResultEncoder.requiredWireBytes(StatusCode.OK, source);
+    assertTrue(required > ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    ByteBuffer response = ByteBuffer.allocate(required);
+    assertEquals(StatusCode.OK, codec.encodeProgramResultResponse(
+        response, 55, StatusCode.OK, source));
+    TransactionProgramResult decoded = new TransactionProgramResult();
+    assertEquals(StatusCode.OK, codec.decodeProgramResultResponse(response, frame, decoded));
+    assertEquals(descriptor, decoded.typeDescriptorAt(0, 0));
+    assertEquals(value.length(), decoded.textLengthAt(0, 0));
+    assertEquals('\u0800', decoded.textCharacterAt(0, 0, 0));
+    assertEquals('\u0800', decoded.textCharacterAt(
+        0, 0, SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS - 1));
+  }
+
+  @Test
   void preservesStepAndRowGroupingAcrossProgramResults() {
     TransactionProgramResult source = new TransactionProgramResult();
     assertEquals(StatusCode.OK, source.beginStepResult(
@@ -178,6 +226,41 @@ final class ProtocolTransactionProgramCodecTest {
     for (int index = ProtocolFrameCodec.HEADER_BYTES; index < request.limit(); index++) {
       assertEquals(0, request.get(index));
     }
+  }
+
+  @Test
+  void rejectsNegativeAndEnvelopeOverrunU32ProgramResultLengths() {
+    // Typed result cells accept only nonnegative lengths wholly contained by the admitted result
+    // payload, before any row or cell is published to the caller-owned result.
+    TransactionProgramResult source = new TransactionProgramResult();
+    assertEquals(StatusCode.OK, source.beginStepResult(
+        0, TransactionProgramAction.ROW_SET, 1));
+    assertEquals(StatusCode.OK, source.beginRow(1));
+    assertEquals(StatusCode.OK, source.appendText(
+        SqlTypeDescriptor.varchar(SqlTypeDescriptor.MAXIMUM_VARCHAR_SCALARS), "ok"));
+    source.complete(104);
+
+    ByteBuffer response = ByteBuffer.allocate(ProtocolFrameCodec.MAXIMUM_FRAME_BYTES);
+    int value = ProtocolFrameCodec.HEADER_BYTES
+        + ProtocolProgramResultEncoder.HEADER_BYTES
+        + ProtocolProgramResultEncoder.STEP_BYTES
+        + ProtocolProgramResultEncoder.ROW_BYTES;
+    TransactionProgramResult decoded = new TransactionProgramResult();
+
+    assertEquals(StatusCode.OK, codec.encodeProgramResultResponse(
+        response, 56, StatusCode.OK, source));
+    response.putInt(value + ProtocolValueHeader.LENGTH_OFFSET, -1);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeProgramResultResponse(response, frame, decoded));
+    assertEquals(0, decoded.rowCount());
+
+    assertEquals(StatusCode.OK, codec.encodeProgramResultResponse(
+        response, 56, StatusCode.OK, source));
+    response.putInt(value + ProtocolValueHeader.LENGTH_OFFSET,
+        ProtocolProgramResultValueCodec.bytes(source, 0, 0) + 1);
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        codec.decodeProgramResultResponse(response, frame, decoded));
+    assertEquals(0, decoded.rowCount());
   }
 
   @Test

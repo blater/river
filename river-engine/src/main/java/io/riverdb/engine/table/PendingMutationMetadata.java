@@ -7,6 +7,7 @@ final class PendingMutationMetadata {
   private static final int CHUNK_SHIFT = 8;
   private static final int CHUNK_ENTRIES = 1 << CHUNK_SHIFT;
   private static final int CHUNK_MASK = CHUNK_ENTRIES - 1;
+  private static final long CHUNK_ACCOUNTED_BYTES = 13_312L;
   private PendingMutationMetadataChunk[] chunks = new PendingMutationMetadataChunk[0];
   private final int capacity;
   private final int maximumChunks;
@@ -45,7 +46,7 @@ final class PendingMutationMetadata {
 
   int operationAt(int index) { return chunk(index).operations[offset(index)]; }
   int rowLengthAt(int index) { return chunk(index).rowLengths[offset(index)]; }
-  int rowOffsetAt(int index) { return chunk(index).rowOffsets[offset(index)]; }
+  long rowAddressAt(int index) { return chunk(index).rowAddresses[offset(index)]; }
   long keyAt(int index) { return chunk(index).keys[offset(index)]; }
   long spaceAt(int index) { return chunk(index).spaces[offset(index)]; }
   long previousRowIdAt(int index) { return chunk(index).previousRowIds[offset(index)]; }
@@ -56,7 +57,7 @@ final class PendingMutationMetadata {
         : (int) (((long) entries + CHUNK_ENTRIES - 1) >>> CHUNK_SHIFT);
     int retained = Math.max(required, allocatedChunks);
     int references = retained == 0 ? chunks.length : referenceCapacity(retained);
-    return retained * 12_288L + references * Long.BYTES;
+    return retained * CHUNK_ACCOUNTED_BYTES + references * Long.BYTES;
   }
 
   void release() {
@@ -66,28 +67,29 @@ final class PendingMutationMetadata {
 
   void set(
       int index, int operation, long space, long key, long previousRowId,
-      int rowOffset, int rowLength) {
+      long rowAddress, int rowLength) {
     PendingMutationMetadataChunk chunk = chunk(index);
     int offset = offset(index);
     chunk.operations[offset] = operation;
     chunk.spaces[offset] = space;
     chunk.keys[offset] = key;
     chunk.previousRowIds[offset] = previousRowId;
-    chunk.rowOffsets[offset] = rowOffset;
+    chunk.rowAddresses[offset] = rowAddress;
     chunk.rowLengths[offset] = rowLength;
   }
 
   void retain(int index, boolean value) { chunk(index).retained[offset(index)] = value; }
 
-  void copy(int source, int target, int rowOffset) {
+  void copy(int source, int target, long rowAddress) {
     set(target, operationAt(source), spaceAt(source), keyAt(source),
-        previousRowIdAt(source), rowOffset, rowLengthAt(source));
+        previousRowIdAt(source), rowAddress, rowLengthAt(source));
   }
 
   void clear(int index) {
     PendingMutationMetadataChunk chunk = chunk(index);
     int offset = offset(index);
-    chunk.operations[offset] = chunk.rowLengths[offset] = chunk.rowOffsets[offset] = 0;
+    chunk.operations[offset] = chunk.rowLengths[offset] = 0;
+    chunk.rowAddresses[offset] = 0;
     chunk.keys[offset] = chunk.spaces[offset] = chunk.previousRowIds[offset] = 0;
     chunk.retained[offset] = false;
   }

@@ -42,7 +42,8 @@ final class SqlUniversalJoinExecution {
         bound.command, context, bound.whereBoolean);
     if (status.isOk()) {
       rows.configureAccess(bound.command, context, bound.whereBoolean);
-      source.configure(bound.command, context, bound.whereBoolean, rows, predicates);
+      source.configure(
+          bound.command, context, bound.whereBoolean, rows, predicates, -1);
       status = configureResult(bound, plan);
     }
     return status;

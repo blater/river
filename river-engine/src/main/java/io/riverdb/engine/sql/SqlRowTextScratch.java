@@ -2,6 +2,7 @@ package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.Utf8Text;
+import io.riverdb.base.type.LocalTemporalCast;
 import io.riverdb.base.type.SqlValueBuffer;
 import io.riverdb.engine.relational.TableDefinition;
 import io.riverdb.sql.SqlCommand;
@@ -10,7 +11,8 @@ import java.nio.ByteBuffer;
 
 /** Reusable owned text scratch for one scalar expression result. */
 final class SqlRowTextScratch implements CharSequence {
-  private final char[] characters = new char[Utf8Text.MAXIMUM_BUFFER_CHARACTERS];
+  private char[] characters =
+      new char[LocalTemporalCast.MAXIMUM_TEXT_CHARACTERS];
   private ByteBuffer literalBytes;
   private int length;
   private int highWater;
@@ -19,7 +21,8 @@ final class SqlRowTextScratch implements CharSequence {
   StatusCode loadBlock(SqlBlockRow source, int column) {
     clear();
     int sourceLength = source.textLength(column);
-    if (sourceLength > characters.length) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode capacity = reserveCharacters(sourceLength);
+    if (!capacity.isOk()) return capacity;
     for (int index = 0; index < sourceLength; index++) {
       characters[index] = source.textCharacter(column, index);
     }
@@ -29,6 +32,8 @@ final class SqlRowTextScratch implements CharSequence {
 
   StatusCode loadValueBuffer(SqlValueBuffer source, int column) {
     clear();
+    StatusCode capacity = reserveCharacters(source.textByteLengthAt(column));
+    if (!capacity.isOk()) return capacity;
     int copied = source.copyTextChars(column, characters, 0);
     if (copied < 0 || copied > characters.length) {
       clear();
@@ -41,10 +46,12 @@ final class SqlRowTextScratch implements CharSequence {
   StatusCode loadLiteral(SqlCommand command, long handle) {
     clear();
     int byteLength = command.textByteLength(handle);
-    if (literalBytes == null) literalBytes = ByteBuffer.allocate(Utf8Text.MAXIMUM_BUFFER_BYTES);
+    StatusCode capacity = reserveLiteralBytes(byteLength);
+    if (!capacity.isOk()) return capacity;
+    capacity = reserveCharacters(byteLength);
+    if (!capacity.isOk()) return capacity;
     literalBytes.clear();
-    if (byteLength < 0 || byteLength > literalBytes.remaining()
-        || command.copyText(handle, literalBytes) != byteLength) {
+    if (command.copyText(handle, literalBytes) != byteLength) {
       clear();
       return StatusCode.RESOURCE_EXHAUSTED;
     }
@@ -71,8 +78,10 @@ final class SqlRowTextScratch implements CharSequence {
     int offset = (int) (handle >>> 32);
     int byteLength = (int) handle;
     if (source == null || definition == null || offset < definition.fixedRowBytes()
-        || byteLength < 0 || byteLength > Utf8Text.MAXIMUM_BUFFER_BYTES
+        || byteLength < 0
         || offset > source.length() - byteLength) return StatusCode.CORRUPTION;
+    StatusCode capacity = reserveCharacters(byteLength);
+    if (!capacity.isOk()) return capacity;
     int decoded = Utf8RowText.decode(
         source, offset, byteLength, characters);
     if (decoded < 0) {
@@ -108,5 +117,27 @@ final class SqlRowTextScratch implements CharSequence {
   @Override public char charAt(int index) { return characters[index]; }
   @Override public CharSequence subSequence(int start, int end) {
     throw new UnsupportedOperationException();
+  }
+
+  private StatusCode reserveCharacters(int required) {
+    if (required < 0) return StatusCode.CORRUPTION;
+    if (required <= characters.length) return StatusCode.OK;
+    try {
+      characters = new char[required];
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+  }
+
+  private StatusCode reserveLiteralBytes(int required) {
+    if (required < 0) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (literalBytes != null && required <= literalBytes.capacity()) return StatusCode.OK;
+    try {
+      literalBytes = ByteBuffer.allocate(required);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 }

@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import io.riverdb.base.error.StatusCode;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -52,7 +53,8 @@ final class TpccAcceptanceProbes {
             update.setBigDecimal(1, BigDecimal.ONE);
             TpccSql.changedOne(update, "probe.concurrent-update");
             connection.rollback();
-            throw new SQLException("injected after staged mutation", "40001");
+            throw new SQLException(
+                "injected after staged mutation", "40001", StatusCode.RETRY.stableCode());
           }
           if (warehouseYtd(connection).compareTo(baseline) != 0) {
             throw new SQLException("retry observed leaked staged mutation");
@@ -64,7 +66,8 @@ final class TpccAcceptanceProbes {
         }
       };
       long deadline = System.nanoTime() + 5_000_000_000L;
-      TpccRetry.Result result = TpccRetry.execute(attempt, config, deadline);
+      TpccRetry.Result result = TpccRetry.execute(
+          attempt, config, deadline, TpccRetryObserver.NONE);
       if (result.retries() != 1 || warehouseYtd(connection).compareTo(baseline) != 0) {
         throw new SQLException("staged-mutation retry evidence incomplete");
       }

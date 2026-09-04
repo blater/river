@@ -163,4 +163,5 @@ final class LockExactDeadlockDetector {
     return chunk.requestHeads[offset] == 0 && chunk.holdingHeads[offset] == 0
         && chunk.lifecycleStates[offset] == LockExactLifecycle.DEADLOCK;
   }
+
 }

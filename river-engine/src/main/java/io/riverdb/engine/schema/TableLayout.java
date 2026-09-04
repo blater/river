@@ -2,8 +2,8 @@ package io.riverdb.engine.schema;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.error.StatusDetail;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.base.type.SqlTypeDescriptor;
+import io.riverdb.storage.heap.HeapPage;
 
 /** Recomputes physical slots and exact admitted maximum row bytes. */
 final class TableLayout {
@@ -56,10 +56,10 @@ final class TableLayout {
         maximum += SqlTypeDescriptor.parameterOne(descriptor) * 4L;
       }
     }
-    if (maximum > SqlShapeLimits.MAX_STORED_ROW_BYTES) {
+    if (maximum > HeapPage.MAXIMUM_ROW_BYTES) {
       return append(fail(detail, StatusCode.RESOURCE_EXHAUSTED,
           "row bytes exceed allowed bytes"), detail, maximum,
-          SqlShapeLimits.MAX_STORED_ROW_BYTES);
+          HeapPage.MAXIMUM_ROW_BYTES);
     }
     result.offsets = offsets;
     result.widths = widths;

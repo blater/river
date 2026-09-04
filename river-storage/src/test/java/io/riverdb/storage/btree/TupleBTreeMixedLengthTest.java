@@ -70,9 +70,9 @@ final class TupleBTreeMixedLengthTest {
     return new TupleBTreeTreeWorkspace(
         ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES),
         ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES),
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT],
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT],
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT]);
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS],
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS],
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS]);
   }
 
   private static TupleShape shape() {

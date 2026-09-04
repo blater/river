@@ -1,5 +1,6 @@
 package io.riverdb.jdbc;
 
+import static io.riverdb.jdbc.JdbcTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -113,7 +114,7 @@ final class M5TypeRecoveryBoundaryTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(source, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), source, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = startAuthenticated(database, audit, token);
     RiverDataSource dataSource = dataSource(server, token);
@@ -200,7 +201,8 @@ final class M5TypeRecoveryBoundaryTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(source, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(
+            databaseRequest(8), source, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
@@ -263,7 +265,8 @@ final class M5TypeRecoveryBoundaryTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(restored, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(
+            databaseRequest(8), restored, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = startAuthenticated(database, audit, token);
     RiverDataSource dataSource = dataSource(server, token);

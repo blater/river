@@ -6,6 +6,7 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.format.page.PageCodec;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalAppendResult;
+import io.riverdb.wal.local.LocalWalForceCause;
 import io.riverdb.wal.local.LocalWalReservation;
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
@@ -138,7 +139,8 @@ final class IndexedPageOperationCommitter {
         1,
         IndexedTableStore.WAL_FORMAT_ID,
         IndexedTableStore.WAL_FORMAT_VERSION,
-        appendResult);
+        appendResult,
+        LocalWalForceCause.RECOVERY_MAINTENANCE);
     if (!status.isOk()) {
       return status;
     }

@@ -31,9 +31,22 @@ final class IndexedRelationalCompilationBuffer {
     }
     result[0] = null;
     mutation.reset();
-    StatusCode status = mutation.reserve(mutations, descriptors, parts, payloadBytes);
+    StatusCode status = mutation.buffer().reserve(
+        mutations, descriptors, parts, payloadBytes, logicalRowFloors);
     if (status.isOk()) result[0] = mutation;
     return status;
+  }
+
+  StatusCode reserve(
+      int mutations, int descriptors, int parts, int payloadBytes, int logicalRowFloors) {
+    if (mutations < 0 || descriptors < 0 || parts < 0 || payloadBytes < 0
+        || logicalRowFloors < 0
+        || mutations == 0 && descriptors == 0 && logicalRowFloors == 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    mutation.reset();
+    return mutation.buffer().reserve(
+        mutations, descriptors, parts, payloadBytes, logicalRowFloors);
   }
 
   void reset() { mutation.reset(); }
@@ -41,10 +54,12 @@ final class IndexedRelationalCompilationBuffer {
   long accountedBytes() { return mutation.buffer().accountedBytes(); }
 
   long accountedBytesForReservation(
-      int mutations, int descriptors, int parts, int payloadBytes) {
-    if (mutations < 0 || descriptors < 0 || parts < 0 || payloadBytes < 0) return -1;
+      int mutations, int descriptors, int parts, int payloadBytes,
+      int logicalRowFloors) {
+    if (mutations < 0 || descriptors < 0 || parts < 0 || payloadBytes < 0
+        || logicalRowFloors < 0) return -1;
     return mutation.buffer().accountedBytesForReservation(
-        mutations, descriptors, parts, payloadBytes);
+        mutations, descriptors, parts, payloadBytes, logicalRowFloors);
   }
 
   private static int maximumDescriptorParts(int descriptors) {

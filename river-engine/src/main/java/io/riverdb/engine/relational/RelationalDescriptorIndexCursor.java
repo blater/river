@@ -40,7 +40,7 @@ final class RelationalDescriptorIndexCursor {
     StatusCode status = encode(lower, lowerShape, request.lower(), lowerParts);
     if (status.isOk()) status = encode(upper, upperShape, request.upper(), upperParts);
     if (status.isOk()) {
-      exactUnique = exactUnique();
+      exactUnique = computeExactUnique();
       empty = emptyRange();
       status = empty || lowerParts == 0 && upperParts == 0
           ? storage.setAll(request.direction())
@@ -97,6 +97,7 @@ final class RelationalDescriptorIndexCursor {
 
   TupleBTreeScanBounds storage() { return storage; }
   KeyDescriptor key() { return key; }
+  boolean exactUnique() { return exactUnique; }
   boolean matches() { return matches; }
   boolean empty() { return empty; }
 
@@ -121,7 +122,7 @@ final class RelationalDescriptorIndexCursor {
     return compared > 0 || compared == 0 && (!lowerInclusive || !upperInclusive);
   }
 
-  private boolean exactUnique() {
+  private boolean computeExactUnique() {
     if (!key.isUnique() || lowerParts != key.partCount() || upperParts != key.partCount()
         || lower.containsNull() || upper.containsNull()
         || !lowerInclusive || !upperInclusive || lower.length() != upper.length()) return false;

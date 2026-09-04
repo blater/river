@@ -24,16 +24,23 @@ final class TupleBTreeLeafSplit {
     if (!status.isOk()) return status;
     int insertion = TupleBTreePageSupport.lowerBoundLeaf(
         source, sourceStart, key, keyOffset, keyLength, workspace);
-    if (equalAt(source, sourceStart, key, keyOffset, keyLength, insertion, workspace)) {
+    if (insertion < 0) return StatusCode.INVARIANT_BROKEN;
+    int equality = equalAt(
+        source, sourceStart, key, keyOffset, keyLength, insertion, workspace);
+    if (equality < 0) return StatusCode.INVARIANT_BROKEN;
+    if (equality > 0) {
       return StatusCode.CONFLICT;
     }
     int total = workspace.header.entryCount() + 1;
     int splitAt = TupleBTreeLeafSplitPoint.choose(
         source, sourceStart, key, keyOffset, keyLength, insertion, workspace);
-    if (splitAt <= 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (splitAt < 0) return StatusCode.INVARIANT_BROKEN;
+    if (splitAt == 0) return StatusCode.RESOURCE_EXHAUSTED;
     if (splitAt != insertion) {
-      TupleBTreePageSupport.readLeaf(
-          source, sourceStart, splitAt < insertion ? splitAt : splitAt - 1, workspace);
+      if (!TupleBTreePageSupport.readLeaf(
+          source, sourceStart, splitAt < insertion ? splitAt : splitAt - 1, workspace)) {
+        return StatusCode.INVARIANT_BROKEN;
+      }
     }
     ByteBuffer separator = splitAt == insertion ? key : source;
     int separatorOffset = splitAt == insertion
@@ -52,7 +59,9 @@ final class TupleBTreeLeafSplit {
     }
     status = validateOutputs(left, leftStart, right, rightStart, schemaId, shape, workspace);
     if (!status.isOk()) return status;
-    TupleBTreePageSupport.readLeaf(right, rightStart, 0, workspace);
+    if (!TupleBTreePageSupport.readLeaf(right, rightStart, 0, workspace)) {
+      return StatusCode.INVARIANT_BROKEN;
+    }
     result.set(
         right, rightStart + workspace.leaf.keyOffset(), workspace.leaf.keyLength(),
         splitAt, total - splitAt);
@@ -73,21 +82,21 @@ final class TupleBTreeLeafSplit {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         source, sourceStart, schemaId, shape, TupleBTreePageCodec.TYPE_LEAF, workspace);
     if (!status.isOk()) return status;
     return TupleKeyCodec.matchesPhysicalIndexKey(key, keyOffset, keyLength, shape)
         ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;
   }
 
-  private static boolean equalAt(
+  private static int equalAt(
       ByteBuffer page, int start, ByteBuffer key, int keyOffset, int keyLength,
       int index, TupleBTreeWorkspace workspace) {
-    if (index >= workspace.header.entryCount()) return false;
-    TupleBTreePageSupport.readLeaf(page, start, index, workspace);
+    if (index >= workspace.header.entryCount()) return 0;
+    if (!TupleBTreePageSupport.readLeaf(page, start, index, workspace)) return -1;
     return TupleKeyCodec.compare(
         page, start + workspace.leaf.keyOffset(), workspace.leaf.keyLength(),
-        key, keyOffset, keyLength) == 0;
+        key, keyOffset, keyLength) == 0 ? 1 : 0;
   }
 
   private static StatusCode initializeOutputs(
@@ -124,9 +133,9 @@ final class TupleBTreeLeafSplit {
   private static StatusCode validateOutputs(
       ByteBuffer left, int leftStart, ByteBuffer right, int rightStart,
       long schemaId, TupleShape shape, TupleBTreeWorkspace workspace) {
-    StatusCode status = TupleBTreePageCodec.validate(
-        left, leftStart, schemaId, shape, workspace.header);
-    return status.isOk() ? TupleBTreePageCodec.validate(
-        right, rightStart, schemaId, shape, workspace.header) : status;
+    StatusCode status = TupleBTreePageAdmission.validate(
+        left, leftStart, schemaId, shape, TupleBTreePageCodec.TYPE_LEAF, workspace);
+    return status.isOk() ? TupleBTreePageAdmission.validate(
+        right, rightStart, schemaId, shape, TupleBTreePageCodec.TYPE_LEAF, workspace) : status;
   }
 }

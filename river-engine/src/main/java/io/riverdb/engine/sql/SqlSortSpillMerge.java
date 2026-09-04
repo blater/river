@@ -12,9 +12,9 @@ final class SqlSortSpillMerge implements SqlPagedExternalOrder.MergePass {
   private SqlMaterializedPagedByteStream source;
   private StatusCode status = StatusCode.OK;
 
-  SqlSortSpillMerge(SqlSortSpill spill, SqlSessionShapeBudget budget) {
+  SqlSortSpillMerge(SqlSortSpill spill, SqlSortSpillCursors retainedCursors) {
     owner = spill;
-    cursors = new SqlSortSpillCursors(budget);
+    cursors = retainedCursors;
   }
 
   @Override
@@ -25,7 +25,6 @@ final class SqlSortSpillMerge implements SqlPagedExternalOrder.MergePass {
       long width,
       int fanIn) {
     status = owner.prepareMergeHeads(fanIn);
-    if (status.isOk()) status = cursors.reserve(fanIn);
     if (!status.isOk()) return status;
     source = input;
     long inputOffset = 0;
@@ -41,8 +40,6 @@ final class SqlSortSpillMerge implements SqlPagedExternalOrder.MergePass {
         || outputOffset != input.logicalLength())) status = StatusCode.CORRUPTION;
     return status;
   }
-
-  void close() { cursors.close(); }
 
   private int prepare(long offset, long available, long width, int fanIn) {
     int runs = 0;
@@ -83,7 +80,7 @@ final class SqlSortSpillMerge implements SqlPagedExternalOrder.MergePass {
 
   private void sift(int root, int size) {
     int run = cursors.heap()[root];
-    while (status.isOk() && root <= (size - 2) / 2) {
+    while (status.isOk() && root < size / 2) {
       int child = root * 2 + 1;
       if (child + 1 < size && compareHeap(child + 1, child) < 0) child++;
       if (compare(run, cursors.heap()[child]) <= 0) break;

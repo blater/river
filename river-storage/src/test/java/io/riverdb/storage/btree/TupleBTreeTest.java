@@ -22,7 +22,7 @@ final class TupleBTreeTest {
   private static final String PREFIX = "p".repeat(255);
 
   @Test
-  void validatesAnUnchangedPageOnceAndInvalidatesOnGenerationOrSchemaChange() {
+  void copiesAKeyAliasedToTheSourcePageBeforeMutation() {
     TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
     TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(8);
     TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
@@ -32,35 +32,86 @@ final class TupleBTreeTest {
     int keyLength = bigintKey(key, 0, 7);
     assertEquals(StatusCode.OK, tree.insert(key, 0, keyLength, workspace));
 
+    ByteBuffer leaf = pages.page(pages.rootPageId());
+    assertEquals(StatusCode.OK, TupleBTreePageAdmission.validate(
+        leaf, 0, SCHEMA_ID, shape, TupleBTreePageCodec.TYPE_LEAF, workspace.page));
+    TupleBTreeLeafEntry entry = new TupleBTreeLeafEntry();
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.readValidatedLeaf(
+        leaf, 0, workspace.page.header, 0, entry));
+    ByteBuffer aliasedKey = leaf.duplicate();
+    assertEquals(StatusCode.OK, tree.delete(
+        aliasedKey, entry.keyOffset(), entry.keyLength(), workspace));
+
+    TupleBTreeLookupResult result = new TupleBTreeLookupResult();
+    assertEquals(StatusCode.CONFLICT, tree.lookupExact(
+        key, 0, keyLength, workspace, result));
+  }
+
+  @Test
+  void retainsSuccessfulMutationValidationUntilGenerationOrSchemaChanges() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(8);
+    TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
+    TupleBTreeTreeWorkspace workspace = workspace();
+    assertEquals(StatusCode.OK, tree.initialize(workspace));
+    ByteBuffer key = ByteBuffer.allocate(128);
+    int keyLength = bigintKey(key, 0, 7);
+    assertEquals(StatusCode.OK, tree.insert(key, 0, keyLength, workspace));
+    assertEquals(1, pages.canonicalSealCount());
+    assertEquals(1, pages.canonicalValidationReuseCount());
+
     TupleBTreeLookupResult result = new TupleBTreeLookupResult();
     int validationsBeforeLookup = pages.validationCount();
     int missesBeforeLookup = pages.validationMissCount();
     assertEquals(StatusCode.OK, tree.lookupExact(
         key, 0, keyLength, workspace, result));
-    assertEquals(validationsBeforeLookup + 1, pages.validationCount());
-    assertEquals(missesBeforeLookup + 1, pages.validationMissCount());
+    assertEquals(validationsBeforeLookup, pages.validationCount());
+    assertEquals(missesBeforeLookup, pages.validationMissCount());
     for (int attempt = 0; attempt < 4; attempt++) {
       assertEquals(StatusCode.OK, tree.lookupExact(
           key, 0, keyLength, workspace, result));
     }
-    assertEquals(validationsBeforeLookup + 1, pages.validationCount());
-    assertEquals(missesBeforeLookup + 1, pages.validationMissCount());
+    assertEquals(validationsBeforeLookup, pages.validationCount());
+    assertEquals(missesBeforeLookup, pages.validationMissCount());
 
-    pages.bumpPageGeneration(pages.rootPageId());
+    assertEquals(StatusCode.OK, pages.bumpPageGeneration(pages.rootPageId()));
     assertEquals(StatusCode.OK, tree.lookupExact(
         key, 0, keyLength, workspace, result));
-    assertEquals(validationsBeforeLookup + 2, pages.validationCount());
-    assertEquals(missesBeforeLookup + 2, pages.validationMissCount());
+    assertEquals(validationsBeforeLookup + 1, pages.validationCount());
+    assertEquals(missesBeforeLookup + 1, pages.validationMissCount());
 
     assertEquals(StatusCode.OK, tree.configure(pages, SCHEMA_ID + 1, shape));
     assertEquals(StatusCode.CORRUPTION, tree.lookupExact(
         key, 0, keyLength, workspace, result));
-    assertEquals(validationsBeforeLookup + 2, pages.validationCount());
-    assertEquals(missesBeforeLookup + 3, pages.validationMissCount());
+    assertEquals(validationsBeforeLookup + 1, pages.validationCount());
+    assertEquals(missesBeforeLookup + 2, pages.validationMissCount());
     assertEquals(StatusCode.OK, tree.configure(pages, SCHEMA_ID, shape));
     assertEquals(StatusCode.OK, tree.lookupExact(
         key, 0, keyLength, workspace, result));
-    assertEquals(validationsBeforeLookup + 2, pages.validationCount());
+    assertEquals(validationsBeforeLookup + 1, pages.validationCount());
+  }
+
+  @Test
+  void insertPreflightReusesAuthenticatedPageGeneration() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(8);
+    TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
+    TupleBTreeTreeWorkspace workspace = workspace();
+    assertEquals(StatusCode.OK, tree.initialize(workspace));
+    ByteBuffer keys = ByteBuffer.allocate(256);
+    int first = bigintKey(keys, 0, 7);
+    int second = bigintKey(keys, 128, 8);
+    assertEquals(StatusCode.OK, tree.insert(keys, 0, first, workspace));
+    int missesAfterFirst = pages.validationMissCount();
+
+    assertEquals(StatusCode.OK, tree.insert(keys, 128, second, workspace));
+
+    assertEquals(missesAfterFirst, pages.validationMissCount());
+    assertEquals(2, pages.canonicalSealCount());
+    assertEquals(2, pages.canonicalValidationReuseCount());
+    TupleBTreeValidationResult validation = new TupleBTreeValidationResult();
+    assertEquals(StatusCode.OK, tree.validate(workspace, validation));
+    assertEquals(2, validation.entryCount());
   }
 
   @Test
@@ -196,11 +247,39 @@ final class TupleBTreeTest {
   }
 
   @Test
+  void traversesMoreThanEightLevels() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    int internalLevels = 9;
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(internalLevels + 1);
+    TupleBTreePageReference reference = new TupleBTreePageReference();
+    for (int pageId = 1; pageId <= internalLevels; pageId++) {
+      assertEquals(StatusCode.OK, pages.allocate(reference));
+      assertEquals(StatusCode.OK, TupleBTreePageCodec.initialize(
+          reference.page(), reference.start(), TupleBTreePageCodec.TYPE_INTERNAL,
+          pageId + 1, shape, SCHEMA_ID, null, 0, 0));
+      assertEquals(StatusCode.OK, pages.release(reference));
+      reference.reset();
+    }
+    assertEquals(StatusCode.OK, pages.allocate(reference));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.initialize(
+        reference.page(), reference.start(), TupleBTreePageCodec.TYPE_LEAF,
+        0, shape, SCHEMA_ID, null, 0, 0));
+    assertEquals(StatusCode.OK, pages.release(reference));
+    reference.reset();
+    pages.setRootPageId(1);
+
+    ByteBuffer key = ByteBuffer.allocate(64);
+    int keyLength = bigintKey(key, 0, 1);
+    assertEquals(StatusCode.CONFLICT, new TupleBTree(pages, SCHEMA_ID, shape).lookupExact(
+        key, 0, keyLength, workspace(), new TupleBTreeLookupResult()));
+  }
+
+  @Test
   void rejectsAPathBeyondTheCheckedMaximumHeight() {
     TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
     TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(40);
     TupleBTreePageReference reference = new TupleBTreePageReference();
-    for (int pageId = 1; pageId <= TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT; pageId++) {
+    for (int pageId = 1; pageId <= BTreeStructuralLimits.MAXIMUM_LEVELS; pageId++) {
       assertEquals(StatusCode.OK, pages.allocate(reference));
       assertEquals(StatusCode.OK, TupleBTreePageCodec.initialize(
           reference.page(), reference.start(), TupleBTreePageCodec.TYPE_INTERNAL,
@@ -223,6 +302,35 @@ final class TupleBTreeTest {
     assertEquals(StatusCode.OK, builder.finishPhysical(1));
     assertEquals(StatusCode.CORRUPTION, tree.lookupExact(
         key, 0, builder.keyBytes(), workspace(), new TupleBTreeLookupResult()));
+  }
+
+  @Test
+  void rejectsAnInternalChildCycle() {
+    TupleShape shape = shape(new int[] {SqlTypeDescriptor.BIGINT});
+    TupleBTreeTestPageProvider pages = new TupleBTreeTestPageProvider(2);
+    TupleBTreePageReference reference = new TupleBTreePageReference();
+    assertEquals(StatusCode.OK, pages.allocate(reference));
+    ByteBuffer separator = ByteBuffer.allocate(64);
+    int separatorLength = bigintKey(separator, 0, 50);
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.initialize(
+        reference.page(), reference.start(), TupleBTreePageCodec.TYPE_INTERNAL,
+        1, shape, SCHEMA_ID, null, 0, 0));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.appendInternal(
+        reference.page(), reference.start(), shape,
+        separator, 0, separatorLength, 2));
+    assertEquals(StatusCode.OK, pages.release(reference));
+    reference.reset();
+    assertEquals(StatusCode.OK, pages.allocate(reference));
+    assertEquals(StatusCode.OK, TupleBTreePageCodec.initialize(
+        reference.page(), reference.start(), TupleBTreePageCodec.TYPE_LEAF,
+        0, shape, SCHEMA_ID, null, 0, 0));
+    assertEquals(StatusCode.OK, pages.release(reference));
+    reference.reset();
+    pages.setRootPageId(1);
+
+    TupleBTree tree = new TupleBTree(pages, SCHEMA_ID, shape);
+    assertEquals(StatusCode.CORRUPTION,
+        tree.validate(workspace(), new TupleBTreeValidationResult()));
   }
 
   @Test
@@ -361,11 +469,10 @@ final class TupleBTreeTest {
       TupleBTreeTestPageProvider pages, TupleShape shape, ByteBuffer key, int value) {
     ByteBuffer copy = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
     TupleBTreePageSupport.copyPayload(pages.page(pages.rootPageId()), 0, copy, 0);
-    ByteBuffer scratch = ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES);
     int length = key(key, 0, value, value + 1L);
     return TupleBTreeLeafPage.insert(
-        copy, 0, scratch, 0, SCHEMA_ID, shape,
-        key, 0, length, new TupleBTreeWorkspace()) == StatusCode.RESOURCE_EXHAUSTED;
+        copy, 0, SCHEMA_ID, shape, key, 0, length,
+        new TupleBTreeWorkspace()) == StatusCode.RESOURCE_EXHAUSTED;
   }
 
   private static int key(ByteBuffer target, int offset, long value, long rowId) {
@@ -436,9 +543,9 @@ final class TupleBTreeTest {
     return new TupleBTreeTreeWorkspace(
         ByteBuffer.allocate(PageCodec.MAX_PAYLOAD_BYTES),
         ByteBuffer.allocate(TupleKeyCodec.MAX_PHYSICAL_INDEX_KEY_BYTES),
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT],
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT],
-        new int[TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT]);
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS],
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS],
+        new int[BTreeStructuralLimits.MAXIMUM_LEVELS]);
   }
 
   private static TupleShape shape(int[] descriptors) {

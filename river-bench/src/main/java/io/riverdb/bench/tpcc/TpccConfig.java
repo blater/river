@@ -21,27 +21,46 @@ public record TpccConfig(
     boolean freshLoad,
     TpccPhase phase,
     TpccScheduling scheduling,
+    TpccWorkloadMix mix,
+    TpccIsolationContract isolation,
     Duration retryBase,
     Duration retryMaximum,
     Path artifact,
     Path jfr,
+    Path metricsStartFile,
+    Path metricsStartedFile,
+    Path metricsStopFile,
+    Path metricsStoppedFile,
     TpccEvidenceMode evidence) {
   public TpccConfig {
-    if (url == null || !url.startsWith("jdbc:river:") || warehouses < 1 || warehouses > 100
-        || districts < 1 || districts > 10
+    if (url == null || !url.startsWith("jdbc:river:") || warehouses < 1
+        || districts < 1
         || customersPerDistrict < 1 || itemCount < 1 || ordersPerDistrict < 1
-        || firstUndeliveredOrder < 1 || firstUndeliveredOrder > ordersPerDistrict + 1
-        || terminals < 1 || terminals > 1_024
-        || batchRows < 1 || batchRows > 32 || maximumAttempts < 1
+        || firstUndeliveredOrder < 1
+        || (long) firstUndeliveredOrder > (long) ordersPerDistrict + 1
+        || terminals < 1 || batchRows < 1 || maximumAttempts < 1
         || warmup.isNegative() || warmup.isZero() || measured.isNegative() || measured.isZero()
         || retryBase.isNegative() || retryBase.isZero() || retryMaximum.compareTo(retryBase) < 0
-        || retryMaximum.compareTo(Duration.ofSeconds(10)) > 0
-        || artifact == null || phase == null || scheduling == null || evidence == null) {
+        || artifact == null || phase == null || scheduling == null || mix == null
+        || isolation == null || evidence == null) {
       throw new IllegalArgumentException("invalid TPC-C acceptance configuration");
     }
-    if (itemCount == 100_000 && terminals != warehouses * districts) {
+    int metricsFiles = (metricsStartFile == null ? 0 : 1)
+        + (metricsStartedFile == null ? 0 : 1)
+        + (metricsStopFile == null ? 0 : 1)
+        + (metricsStoppedFile == null ? 0 : 1);
+    if (metricsFiles != 0 && metricsFiles != 4) {
+      throw new IllegalArgumentException(
+          "performance capture requires all four control files");
+    }
+    if (itemCount == 100_000 && terminals != (long) warehouses * districts) {
       throw new IllegalArgumentException(
           "standard acceptance requires one terminal per warehouse district");
+    }
+    if (evidence == TpccEvidenceMode.ALPHA3
+        && (mix != TpccWorkloadMix.STANDARD || !isolation.common())) {
+      throw new IllegalArgumentException(
+          "Alpha3 evidence requires the standard mix and one common isolation contract");
     }
   }
 

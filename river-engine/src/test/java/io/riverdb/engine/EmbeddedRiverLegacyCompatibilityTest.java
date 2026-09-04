@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -183,7 +184,7 @@ final class EmbeddedRiverLegacyCompatibilityTest {
           0x554f354649585430L + discriminator);
       assertEquals(
           StatusCode.OK,
-          EmbeddedRiver.create(root, incarnation, GENERATION, 4, databaseResult));
+          EmbeddedRiver.create(databaseRequest(4), root, incarnation, GENERATION, 4, databaseResult));
       RiverDatabase database = databaseResult.database();
       SessionOpenResult sessionResult = new SessionOpenResult();
       assertEquals(StatusCode.OK, database.createSession(sessionResult));

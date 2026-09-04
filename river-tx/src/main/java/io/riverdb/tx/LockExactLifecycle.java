@@ -82,17 +82,37 @@ final class LockExactLifecycle {
   }
 
   void releaseAll(long id, long generation, StatusCode outcome) {
+    releaseAll(id, generation, outcome, null);
+  }
+
+  void releaseAll(
+      long id,
+      long generation,
+      StatusCode outcome,
+      TransactionGroupCompletionTimings timings) {
     long transaction = table.state.directory.transaction(id, generation);
     if (transaction < 0) return;
+    long started = timings == null ? 0 : System.nanoTime();
     StatusCode diagnosticOutcome = table.state.transactions.record(transaction)
         .lifecycleStates[LockTypedSlots.offset(transaction)] == DEADLOCK
             ? StatusCode.DEADLOCK : outcome;
     table.deadlocks.transactionOutcome(transaction, diagnosticOutcome);
+    long outcomeCompleted = timings == null ? 0 : System.nanoTime();
     table.requestLifecycle.cancelAll(transaction, outcome);
+    long requestsCompleted = timings == null ? 0 : System.nanoTime();
     table.holdingLifecycle.releaseAll(transaction);
+    long holdingsCompleted = timings == null ? 0 : System.nanoTime();
     LockExactTransactionStore.Chunk chunk = table.state.transactions.record(transaction);
     chunk.transactionActive[LockTypedSlots.offset(transaction)] = 0;
     recycleTransaction(transaction);
+    if (timings != null) {
+      long recycled = System.nanoTime();
+      timings.addLockReleasePhases(
+          outcomeCompleted - started,
+          requestsCompleted - outcomeCompleted,
+          holdingsCompleted - requestsCompleted,
+          recycled - holdingsCompleted);
+    }
   }
 
   void recycle(long resource, long transaction) {

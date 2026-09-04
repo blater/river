@@ -3,6 +3,7 @@ package io.riverdb.engine.sql;
 import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.text.Utf8TextArena;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -56,6 +57,7 @@ final class SqlResultTextLanes {
   }
 
   void clearLane(int index) { offsets[index] = 0; lengths[index] = 0; }
+  int byteLength(int index) { return lengths[index]; }
   int length(int index) { return arena.copyChars(offsets[index], lengths[index], scratch, 0); }
   int copy(int index, char[] destination, int offset) {
     return arena.copyChars(offsets[index], lengths[index], destination, offset);
@@ -89,7 +91,7 @@ final class SqlResultTextLanes {
 
   private StatusCode reserveScratch(int characters) {
     if (characters <= scratch.length) return StatusCode.OK;
-    int maximum = SqlShapeLimits.MAX_ENCODED_RESULT_ROW_BYTES / 2;
+    int maximum = Utf8Text.MAXIMUM_UTF16_CODE_UNITS;
     int capacity = BoundedArrayGrowth.capacity(scratch.length, characters, maximum, 8);
     try {
       scratch = new char[capacity];

@@ -155,27 +155,27 @@ final class RuntimeConfigAdmission {
       StatusDetail detail) {
     long rows = RuntimeConfigNumbers.parseUnsignedDecimal(
         RuntimeConfigProperties.HASH_BUILD_ROWS, properties.hashBuildRows(), detail);
-    if (rows < 1 || rows > RiverRuntimeConfig.MAXIMUM_HASH_BUILD_ROWS) {
+    if (rows < 1 || rows > Integer.MAX_VALUE) {
       if (rows >= 0) {
         RuntimeConfigNumbers.invalid(
             detail,
             RuntimeConfigProperties.HASH_BUILD_ROWS,
             properties.hashBuildRows(),
-            "expected 1..1048576");
+            "expected 1..2147483647");
       }
       return detail.code();
     }
     long buckets = RuntimeConfigNumbers.parseUnsignedDecimal(
         RuntimeConfigProperties.HASH_BUCKETS, properties.hashBuckets(), detail);
     if (buckets < 2
-        || buckets > RiverRuntimeConfig.MAXIMUM_HASH_BUCKETS
+        || buckets > 1L << 30
         || (buckets & (buckets - 1)) != 0) {
       if (buckets >= 0) {
         RuntimeConfigNumbers.invalid(
             detail,
             RuntimeConfigProperties.HASH_BUCKETS,
             properties.hashBuckets(),
-            "expected power of two, 2..1048576");
+            "expected power of two, 2..1073741824");
       }
       return detail.code();
     }

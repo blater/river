@@ -98,7 +98,10 @@ final class SqlBlockStageRunner {
 
   private StatusCode prepareActive(int block) {
     if (bound.command.type() == SqlCommandType.JOIN_SCAN) {
-      StatusCode status = joinStage.prepare(block);
+      int orderedInnerColumn = SqlKeyOrderedLookupAdmission.projectedInnerColumn(
+          bound, bound.blockPlans(), block,
+          fusedScalarJoin && block == fusedJoinBlock);
+      StatusCode status = joinStage.prepare(block, orderedInnerColumn);
       if (!status.isOk()) return status;
       return fusedScalarJoin && block == fusedJoinBlock
           ? having.prepare(bound.command)
@@ -209,7 +212,7 @@ final class SqlBlockStageRunner {
   }
 
   SqlBlockRowStore finalStore() { return finalStore; }
-  boolean hasResources() { return source.hasResources(); }
+  boolean hasResources() { return source.hasResources() || joinStage.hasResources(); }
 
   StatusCode close() {
     StatusCode status = joinStage.close();

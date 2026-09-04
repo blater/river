@@ -22,7 +22,7 @@ final class TupleBTreeInsertPreflightParents {
       if (!status.isOk()) return failure(result, status);
       if (result.splitLevelCount() <= workspace.pathDepth - parent) return StatusCode.OK;
     }
-    if (workspace.pathDepth + 1 >= TupleBTreeTreeWorkspace.MAXIMUM_HEIGHT) {
+    if (!BTreeStructuralLimits.canDescendFrom(workspace.pathDepth)) {
       return failure(result, StatusCode.RESOURCE_EXHAUSTED);
     }
     result.set(false, true, result.newPageCount() + 1,
@@ -33,17 +33,16 @@ final class TupleBTreeInsertPreflightParents {
   private static StatusCode parent(
       TupleBTree tree, TupleBTreeTreeWorkspace workspace,
       TupleBTreeInsertPreflightResult result, int separatorLength) {
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         workspace.current.page(), workspace.current.start(), tree.schemaId(), tree.shape(),
-        TupleBTreePageCodec.TYPE_INTERNAL, workspace.page);
+        TupleBTreePageCodec.TYPE_INTERNAL, workspace.page,
+        tree.provider(), workspace.current);
     if (!status.isOk()) return status;
     int insertion = TupleBTreePageSupport.lowerBoundInternal(
         workspace.current.page(), workspace.current.start(), workspace.keyScratch, 0,
         separatorLength, workspace.page);
     if (equalAt(workspace, insertion, separatorLength)) return StatusCode.CORRUPTION;
-    if (TupleBTreePageOccupancy.acceptsInternal(
-        workspace.current.page(), workspace.current.start(),
-        separatorLength, workspace.page)) {
+    if (TupleBTreePageOccupancy.accepts(separatorLength, workspace.page)) {
       result.set(false, false, result.newPageCount(), result.changedPageCount() + 1,
           result.splitLevelCount(), workspace.pathDepth + 1);
       return StatusCode.OK;

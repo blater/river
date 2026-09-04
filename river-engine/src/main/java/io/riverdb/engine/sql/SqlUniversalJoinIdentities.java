@@ -48,4 +48,6 @@ final class SqlUniversalJoinIdentities {
     schema.reset();
     return status;
   }
+
+  boolean hasResources() { return store.hasResources(); }
 }

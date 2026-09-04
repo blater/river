@@ -1,5 +1,7 @@
 package io.riverdb.engine.schema.catalog;
 
+import static io.riverdb.engine.TestDatabaseResources.databasePlan;
+import static io.riverdb.engine.TestDatabaseResources.runtimeRoot;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
@@ -58,7 +60,7 @@ final class CatalogLifecycleRemediationTest {
 
     EmbeddedDatabaseOpenResult database = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 6, database));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, database));
     SchemaCache.Result cache = new SchemaCache.Result();
     assertEquals(StatusCode.OK,
         SchemaCache.createBudgeted(8_000_000, cache, new StatusDetail(64)));
@@ -382,7 +384,7 @@ final class CatalogLifecycleRemediationTest {
 
     EmbeddedDatabaseOpenResult result = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 6, result));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, result));
     SchemaCache.Result cache = new SchemaCache.Result();
     assertEquals(StatusCode.OK,
         SchemaCache.createBudgeted(8_000_000, cache, new StatusDetail(64)));
@@ -448,7 +450,7 @@ final class CatalogLifecycleRemediationTest {
 
     EmbeddedDatabaseOpenResult reopenedDatabase = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 6, reopenedDatabase));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, reopenedDatabase));
     SchemaCache.Result cache = new SchemaCache.Result();
     assertEquals(StatusCode.OK,
         SchemaCache.createBudgeted(8_000_000, cache, new StatusDetail(64)));
@@ -561,7 +563,7 @@ final class CatalogLifecycleRemediationTest {
 
     EmbeddedDatabaseOpenResult result = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedDatabase.openExisting(root, DATABASE, GENERATION, 6, result));
+        EmbeddedDatabase.openExisting(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, result));
     SchemaCache.Result cache = new SchemaCache.Result();
     assertEquals(StatusCode.OK,
         SchemaCache.createBudgeted(8_000_000, cache, new StatusDetail(64)));
@@ -797,7 +799,7 @@ final class CatalogLifecycleRemediationTest {
   private static Opened create(Path root) {
     EmbeddedDatabaseOpenResult result = new EmbeddedDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedDatabase.create(root, DATABASE, GENERATION, 6, result));
+        EmbeddedDatabase.create(runtimeRoot(), databasePlan(6), root, DATABASE, GENERATION, 6, result));
     SchemaCache.Result cache = new SchemaCache.Result();
     assertEquals(StatusCode.OK,
         SchemaCache.createBudgeted(8_000_000, cache, new StatusDetail(64)));

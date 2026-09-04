@@ -1,12 +1,12 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.ExactDecimal;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalScanCursor;
 import io.riverdb.engine.relational.RelationalScanResult;
 import io.riverdb.engine.relational.RelationalSession;
+import io.riverdb.engine.relational.TableSchema;
 import io.riverdb.engine.relational.ValueIndexLookupResult;
 import io.riverdb.sql.SqlCommandType;
 import io.riverdb.storage.heap.HeapRowResult;
@@ -344,7 +344,7 @@ final class SqlPointAggregateExecution {
         || SqlTypeDescriptor.typeId(bound.aggregates.resultDescriptor(0))
             != SqlTypeDescriptor.TYPE_ID_VARCHAR) return StatusCode.OK;
     try {
-      ByteBuffer next = allocator.direct(Utf8Text.MAXIMUM_BYTES);
+      ByteBuffer next = allocator.direct(TableSchema.MAXIMUM_ROW_BYTES);
       text = next;
       return StatusCode.OK;
     } catch (OutOfMemoryError error) {

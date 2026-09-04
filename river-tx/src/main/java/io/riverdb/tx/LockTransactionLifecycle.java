@@ -10,18 +10,25 @@ final class LockTransactionLifecycle {
 
   StatusCode activate(Transaction transaction, long databaseHigh, long databaseLow) {
     synchronized (manager) {
-      if (!manager.deadlockDiagnosticsEnabled()) {
-        return transaction.activateContext(manager.authority, databaseHigh, databaseLow);
-      }
       StatusCode status = manager.exact.activateTransaction(
           transaction.transactionId(), transaction.transactionGeneration(),
           transaction.transactionStartOrder(), transaction.diagnosticTag(),
-          transaction.metricsEpoch());
+          transaction.diagnosticStepTag(), transaction.metricsEpoch());
       if (!status.isOk()) return status;
       status = transaction.activateContext(manager.authority, databaseHigh, databaseLow);
       if (!status.isOk()) manager.exact.lifecycle.releaseAll(
           transaction.transactionId(), transaction.transactionGeneration(), StatusCode.CANCELLED);
       return status;
+    }
+  }
+
+  StatusCode updateDiagnosticStep(Transaction transaction, long opaqueStepTag) {
+    synchronized (manager) {
+      if (!transaction.contextMatches(manager.authority)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      return manager.exact.updateDiagnosticStep(
+          transaction.transactionId(), transaction.transactionGeneration(), opaqueStepTag);
     }
   }
 
@@ -75,9 +82,25 @@ final class LockTransactionLifecycle {
     }
   }
 
-  void complete(long id, long generation, StatusCode outcome) {
+  boolean deadlocked(Transaction transaction) {
     synchronized (manager) {
-      manager.exact.lifecycle.releaseAll(id, generation, outcome);
+      return transaction.contextMatches(manager.authority)
+          && manager.exact.deadlocked(
+              transaction.transactionId(), transaction.transactionGeneration());
+    }
+  }
+
+  void complete(long id, long generation, StatusCode outcome) {
+    complete(id, generation, outcome, null);
+  }
+
+  void complete(
+      long id,
+      long generation,
+      StatusCode outcome,
+      TransactionGroupCompletionTimings timings) {
+    synchronized (manager) {
+      manager.exact.lifecycle.releaseAll(id, generation, outcome, timings);
     }
   }
 

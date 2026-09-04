@@ -126,45 +126,45 @@ final class PendingRowArena {
     allocatedChunks = currentChunk = currentOffset = compactChunk = compactOffset = 0;
   }
 
-  int append(ByteBuffer source, int sourceStart, int length) {
+  long append(ByteBuffer source, int sourceStart, int length) {
     advanceFor(length);
-    int encodedOffset = encodeOffset(currentChunk, currentOffset);
+    long address = address(currentChunk, currentOffset);
     byte[] chunk = chunks[currentChunk];
     for (int index = 0; index < length; index++) {
       chunk[currentOffset + index] = source.get(sourceStart + index);
     }
     currentOffset += length;
-    return encodedOffset;
+    return address;
   }
 
-  int appendDeletion() {
+  long appendDeletion() {
     advanceFor(1);
-    int encodedOffset = encodeOffset(currentChunk, currentOffset);
+    long address = address(currentChunk, currentOffset);
     chunks[currentChunk][currentOffset++] = 0;
-    return encodedOffset;
+    return address;
   }
 
-  void copyTo(int encodedOffset, int length, ByteBuffer target, int targetOffset) {
-    int chunk = chunkIndex(encodedOffset);
-    int offset = chunkOffset(encodedOffset);
+  void copyTo(long address, int length, ByteBuffer target, int targetOffset) {
+    int chunk = addressChunk(address);
+    int offset = addressOffset(address);
     for (int index = 0; index < length; index++) {
       target.put(targetOffset + index, chunks[chunk][offset + index]);
     }
   }
 
   StatusCode insertInto(
-      int encodedOffset,
+      long address,
       int length,
       ByteBuffer heap,
       HeapInsertResult result) {
-    int chunk = chunkIndex(encodedOffset);
+    int chunk = addressChunk(address);
     return HeapPage.insertFrom(
-        heap, views[chunk], chunkOffset(encodedOffset), length, result);
+        heap, views[chunk], addressOffset(address), length, result);
   }
 
-  void setResult(int encodedOffset, int length, HeapRowResult result) {
-    int chunk = chunkIndex(encodedOffset);
-    result.set(views[chunk], 0, chunkOffset(encodedOffset), length);
+  void setResult(long address, int length, HeapRowResult result) {
+    int chunk = addressChunk(address);
+    result.set(views[chunk], 0, addressOffset(address), length);
   }
 
   void beginCompaction() {
@@ -172,21 +172,21 @@ final class PendingRowArena {
     compactOffset = 0;
   }
 
-  int compactRow(int sourceEncodedOffset, int length) {
+  long compactRow(long sourceAddress, int length) {
     if (compactOffset > chunkBytes - length) {
       compactChunk++;
       compactOffset = 0;
     }
-    int targetEncodedOffset = encodeOffset(compactChunk, compactOffset);
-    int sourceChunk = chunkIndex(sourceEncodedOffset);
-    int sourceOffset = chunkOffset(sourceEncodedOffset);
+    long targetAddress = address(compactChunk, compactOffset);
+    int sourceChunk = addressChunk(sourceAddress);
+    int sourceOffset = addressOffset(sourceAddress);
     byte[] source = chunks[sourceChunk];
     byte[] target = chunks[compactChunk];
     for (int index = 0; index < length; index++) {
       target[compactOffset + index] = source[sourceOffset + index];
     }
     compactOffset += length;
-    return targetEncodedOffset;
+    return targetAddress;
   }
 
   void finishCompaction() {
@@ -194,13 +194,13 @@ final class PendingRowArena {
     currentOffset = compactOffset;
   }
 
-  void truncateTo(int encodedOffset) {
-    currentChunk = chunkIndex(encodedOffset);
-    currentOffset = chunkOffset(encodedOffset);
+  void truncateTo(long address) {
+    currentChunk = addressChunk(address);
+    currentOffset = addressOffset(address);
   }
 
-  int endOffset() {
-    return encodeOffset(currentChunk, currentOffset);
+  long endAddress() {
+    return address(currentChunk, currentOffset);
   }
 
   private void advanceFor(int rowBytes) {
@@ -240,15 +240,15 @@ final class PendingRowArena {
     return next;
   }
 
-  private int encodeOffset(int chunk, int offset) {
-    return chunk * chunkBytes + offset;
+  static long address(int chunk, int offset) {
+    return ((long) chunk << Integer.SIZE) | Integer.toUnsignedLong(offset);
   }
 
-  private int chunkIndex(int encodedOffset) {
-    return encodedOffset / chunkBytes;
+  static int addressChunk(long address) {
+    return (int) (address >>> Integer.SIZE);
   }
 
-  private int chunkOffset(int encodedOffset) {
-    return encodedOffset % chunkBytes;
+  static int addressOffset(long address) {
+    return (int) address;
   }
 }

@@ -82,13 +82,15 @@ final class SqlMaterializedStatement {
     return StatusCode.OK;
   }
 
-  StatusCode reserveSortPages(SqlMaterializedSortReservation reservation) {
-    if (owner == null || lease == null || reservation == null || !reservation.available()) {
+  StatusCode reserveSortPages(
+      SqlMaterializedSortReservation reservation, int runPages) {
+    if (owner == null || lease == null || reservation == null || !reservation.available()
+        || runPages < RiverRuntimeConfig.MINIMUM_SORT_RUN_PAGES
+        || runPages > lease.config().sortRunPages()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    int pages = lease.config().sortRunPages();
-    if (pages > Integer.MAX_VALUE - 2) return StatusCode.RESOURCE_EXHAUSTED;
-    int total = pages + 2;
+    if (runPages > Integer.MAX_VALUE - 2) return StatusCode.RESOURCE_EXHAUSTED;
+    int total = runPages + 2;
     StatusCode status = owner.reservePages(total);
     if (status.isOk()) reservation.attach(this, total);
     return status;
@@ -106,17 +108,13 @@ final class SqlMaterializedStatement {
   int sortRunPages() { return lease == null ? 0 : lease.config().sortRunPages(); }
 
   int sortPageBytes() {
-    return lease == null ? RiverRuntimeConfig.DEFAULT_PAGE_BYTES : lease.config().pageBytes();
+    return lease == null
+        ? RiverRuntimeConfig.DEFAULT_MATERIALIZED_PAGE_BYTES : lease.config().pageBytes();
   }
 
   int effectiveSortRunPages() {
     return lease == null ? RiverRuntimeConfig.MINIMUM_SORT_RUN_PAGES
         : lease.config().sortRunPages();
-  }
-
-  long sortRunPayloadBytes() {
-    long payload = Math.max(1, sortPageBytes() - 32L);
-    return payload * effectiveSortRunPages();
   }
 
   StatusCode close(StatusDetail detail) {

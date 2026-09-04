@@ -30,7 +30,7 @@ final class TpccRecoveryPhase {
       TpccInputs.StockLevel input = new TpccInputs.StockLevel();
       input.generate(values, 1, 1);
       TpccRetry.execute(() -> session.stockLevel.execute(input), config,
-          System.nanoTime() + 30_000_000_000L);
+          System.nanoTime() + 30_000_000_000L, TpccRetryObserver.NONE);
     }
   }
 }

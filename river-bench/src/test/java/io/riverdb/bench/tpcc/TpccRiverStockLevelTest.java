@@ -1,5 +1,6 @@
 package io.riverdb.bench.tpcc;
 
+import static io.riverdb.bench.tpcc.TpccTestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,7 +27,8 @@ final class TpccRiverStockLevelTest {
   void executesCompleteStockLevelInOneRequest(@TempDir Path root) throws Exception {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, WalGeneration.of(1), 8, opened));
+        EmbeddedRiver.create(
+            databaseRequest(8), root, DATABASE, WalGeneration.of(1), 8, opened));
     RiverDatabase database = opened.database();
     LoopbackServerOpenResult serverResult = new LoopbackServerOpenResult();
     assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, serverResult));

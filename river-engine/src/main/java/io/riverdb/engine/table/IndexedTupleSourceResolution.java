@@ -55,7 +55,8 @@ final class IndexedTupleSourceResolution {
     }
     if (borrowed.isActive()) return StatusCode.CONFLICT;
     StatusCode status = session.protectKey(
-        io.riverdb.format.catalog.CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+        io.riverdb.format.catalog.CatalogKeyspace.INDEX_ROOT_SPACE,
+        keyId, LockMode.SHARED);
     return status.isOk() ? session.lockWait().acquireBorrowedTupleKey(
         session.transaction(), keyId, key,
         IndexedTupleLockKey.userOffset(key, offset, length),

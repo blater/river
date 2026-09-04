@@ -15,7 +15,7 @@ final class TupleBTreeInternalSearch {
       ByteBuffer key, int keyOffset, int keyLength, TupleBTreeWorkspace workspace) {
     if (workspace == null || !TupleKeyCodec.matchesPhysicalIndexKey(
         key, keyOffset, keyLength, shape)) return 0;
-    StatusCode status = TupleBTreePageSupport.validate(
+    StatusCode status = TupleBTreePageAdmission.validate(
         page, start, schemaId, shape, TupleBTreePageCodec.TYPE_INTERNAL, workspace);
     if (!status.isOk()) return 0;
     return childForKeyValidated(page, start, key, keyOffset, keyLength, workspace);

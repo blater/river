@@ -17,6 +17,7 @@ public final class Transaction {
   private long transactionGeneration;
   private long transactionStartOrder;
   private long diagnosticTag;
+  private long diagnosticStepTag;
   private long metricsEpoch;
   private long commitSequence;
   private IsolationLevel isolationLevel = IsolationLevel.READ_COMMITTED;
@@ -39,15 +40,29 @@ public final class Transaction {
   /** Opaque session-owned correlation value copied into lock state at begin. */
   public long diagnosticTag() { return diagnosticTag; }
 
+  /** Opaque caller-owned operation tag within the current transaction attempt. */
+  public long diagnosticStepTag() { return diagnosticStepTag; }
+
   /** Generic caller-defined metrics epoch copied into lock state at begin. */
   public long metricsEpoch() { return metricsEpoch; }
 
   /** Configures diagnostics for the next begin without introducing benchmark-specific types. */
-  public StatusCode configureDiagnostics(long opaqueTag, long epoch) {
+  public StatusCode configureDiagnostics(
+      long opaqueTag, long opaqueStepTag, long epoch) {
     if (activeHandle) return StatusCode.CONFLICT;
+    if (!validDiagnosticContext(opaqueTag, opaqueStepTag, epoch)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     diagnosticTag = opaqueTag;
+    diagnosticStepTag = opaqueStepTag;
     metricsEpoch = epoch;
     return StatusCode.OK;
+  }
+
+  /** Updates the operation tag copied into any subsequent lock diagnostics. */
+  public StatusCode updateDiagnosticStep(long opaqueStepTag) {
+    if (!activeHandle || owner == null) return StatusCode.CONFLICT;
+    return owner.updateDiagnosticStep(this, opaqueStepTag);
   }
 
   /** Borrowed operation context; valid only while this transaction handle is active. */
@@ -85,6 +100,7 @@ public final class Transaction {
     transactionId = 0;
     transactionStartOrder = 0;
     diagnosticTag = 0;
+    diagnosticStepTag = 0;
     metricsEpoch = 0;
     commitSequence = 0;
     isolationLevel = IsolationLevel.READ_COMMITTED;
@@ -149,5 +165,15 @@ public final class Transaction {
     if (terminal) {
       activeHandle = false;
     }
+  }
+
+  void acceptDiagnosticStep(long opaqueStepTag) {
+    diagnosticStepTag = opaqueStepTag;
+  }
+
+  private static boolean validDiagnosticContext(
+      long opaqueTag, long opaqueStepTag, long epoch) {
+    return opaqueTag == 0 && opaqueStepTag == 0 && epoch == 0
+        || opaqueTag > 0 && opaqueStepTag >= 0 && epoch > 0;
   }
 }

@@ -22,22 +22,23 @@ import java.util.zip.CRC32C;
  */
 public final class LocalWal {
   public static final String FILE_NAME = "river.wal";
-  public static final int MAX_PENDING_RECORDS = 16;
 
   private DurableFile file;
   private final DatabaseIncarnation databaseIncarnation;
   private WalGeneration walGeneration;
   private String fileName;
-  private final ByteBuffer[] appendRecords = new ByteBuffer[MAX_PENDING_RECORDS];
-  private final ByteBuffer[] appendPayloads = new ByteBuffer[MAX_PENDING_RECORDS];
-  private final long[] pendingEnds = new long[MAX_PENDING_RECORDS];
+  private final ByteBuffer appendRecord;
+  private final ByteBuffer appendPayload;
   private final ByteBuffer readRecord;
   private final ByteBuffer readPayload;
   private final IoResult ioResult = new IoResult();
   private final FileSizeResult fileSizeResult = new FileSizeResult();
   private final WalRecordHeader recoveryHeader = new WalRecordHeader();
   private final LocalWalForceResult publishForceResult = new LocalWalForceResult();
+  private final LocalWalBatchAdmissionResult batchAdmissionResult =
+      new LocalWalBatchAdmissionResult();
   private final LocalWalReadResult suffixReadResult = new LocalWalReadResult();
+  private final LocalWalForceMetrics forceMetrics = new LocalWalForceMetrics();
   private final CRC32C checksum = new CRC32C();
   private long tailEnd = WalFileHeaderCodec.HEADER_BYTES;
   private long durableEnd = WalFileHeaderCodec.HEADER_BYTES;
@@ -50,7 +51,7 @@ public final class LocalWal {
   private long activeReservationToken;
   private long activeLogicalStreamToken;
   private long copiedPayloadBytes;
-  private int pendingRecordCount;
+  private long pendingRecordCount;
   private DurableWalQuorum durableQuorum;
   private boolean forcedBatch;
   private boolean logicalStreamAppended;
@@ -69,10 +70,8 @@ public final class LocalWal {
     walGeneration = generation;
     fileName = openedFileName;
     int capacity = WalRecordCodec.HEADER_BYTES + WalRecordCodec.MAX_PAYLOAD_BYTES;
-    for (int index = 0; index < MAX_PENDING_RECORDS; index++) {
-      appendRecords[index] = ByteBuffer.allocateDirect(capacity);
-      appendPayloads[index] = payloadView(appendRecords[index]);
-    }
+    appendRecord = ByteBuffer.allocateDirect(capacity);
+    appendPayload = payloadView(appendRecord);
     readRecord = ByteBuffer.allocateDirect(capacity);
     readPayload = payloadView(readRecord);
   }
@@ -83,7 +82,8 @@ public final class LocalWal {
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
     return open(
-        directory, FILE_NAME, databaseIncarnation, walGeneration, true, false, result);
+        directory, FILE_NAME, databaseIncarnation, walGeneration, true, false,
+        LocalWalForceCause.OTHER, result);
   }
 
   public static StatusCode create(
@@ -92,7 +92,8 @@ public final class LocalWal {
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
     return open(
-        directory, FILE_NAME, databaseIncarnation, walGeneration, false, true, result);
+        directory, FILE_NAME, databaseIncarnation, walGeneration, false, true,
+        LocalWalForceCause.OTHER, result);
   }
 
   public static StatusCode openExisting(
@@ -101,7 +102,8 @@ public final class LocalWal {
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
     return open(
-        directory, FILE_NAME, databaseIncarnation, walGeneration, false, false, result);
+        directory, FILE_NAME, databaseIncarnation, walGeneration, false, false,
+        LocalWalForceCause.OTHER, result);
   }
 
   public static StatusCode createNamed(
@@ -111,7 +113,19 @@ public final class LocalWal {
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
     return open(
-        directory, fileName, databaseIncarnation, walGeneration, false, true, result);
+        directory, fileName, databaseIncarnation, walGeneration, false, true,
+        LocalWalForceCause.OTHER, result);
+  }
+
+  static StatusCode createCheckpointGeneration(
+      DurableDirectory directory,
+      String fileName,
+      DatabaseIncarnation databaseIncarnation,
+      WalGeneration walGeneration,
+      LocalWalOpenResult result) {
+    return open(
+        directory, fileName, databaseIncarnation, walGeneration, false, true,
+        LocalWalForceCause.CHECKPOINT, result);
   }
 
   public static StatusCode openExistingNamed(
@@ -121,7 +135,8 @@ public final class LocalWal {
       WalGeneration walGeneration,
       LocalWalOpenResult result) {
     return open(
-        directory, fileName, databaseIncarnation, walGeneration, false, false, result);
+        directory, fileName, databaseIncarnation, walGeneration, false, false,
+        LocalWalForceCause.OTHER, result);
   }
 
   private static StatusCode open(
@@ -131,6 +146,7 @@ public final class LocalWal {
       WalGeneration walGeneration,
       boolean createWhenMissing,
       boolean requireCreate,
+      LocalWalForceCause createForceCause,
       LocalWalOpenResult result) {
     return LocalWalOpener.open(
         directory,
@@ -139,6 +155,7 @@ public final class LocalWal {
         walGeneration,
         createWhenMissing,
         requireCreate,
+        createForceCause,
         result);
   }
 
@@ -220,6 +237,28 @@ public final class LocalWal {
     return copiedPayloadBytes;
   }
 
+  /** Copies bounded force telemetry into caller-owned storage without allocating. */
+  public StatusCode copyMetrics(LocalWalMetrics result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    forceMetrics.copyTo(result);
+    return StatusCode.OK;
+  }
+
+  /** Starts one explicit aggregate-only observation window. */
+  public StatusCode beginMetricsCapture() {
+    return forceMetrics.beginCapture();
+  }
+
+  /** Ends the active observation window into caller-owned storage. */
+  public StatusCode endMetricsCapture(LocalWalMetrics result) {
+    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    return forceMetrics.endCapture(result);
+  }
+
+  public StatusCode cancelMetricsCapture() {
+    return forceMetrics.cancelCapture();
+  }
+
   /**
    * Enables fixed-membership synchronous durable replication for all subsequent force batches.
    */
@@ -249,12 +288,6 @@ public final class LocalWal {
 
   public StatusCode reserve(int payloadBytes, LocalWalReservation reservation) {
     return LocalWalReservationAdmission.reserve(this, payloadBytes, reservation);
-  }
-
-  /** Atomically reserves contiguous provider-owned payload storage for a logical record group. */
-  public StatusCode reserveGroup(
-      int[] payloadBytes, int recordCount, LocalWalGroupReservation reservation) {
-    return LocalWalGroupAdmission.reserve(this, payloadBytes, recordCount, reservation);
   }
 
   /** Opens one authenticated, non-interleavable logical stream across force batches. */
@@ -289,35 +322,34 @@ public final class LocalWal {
     return status;
   }
 
-  public StatusCode reserveLogicalStreamBatch(
-      LocalWalLogicalStream stream,
-      int[] payloadBytes,
-      int recordCount,
-      LocalWalGroupReservation reservation) {
-    return LocalWalGroupAdmission.reserve(
-        this, stream, payloadBytes, recordCount, reservation);
-  }
-
   public StatusCode appendLogicalStreamContinuation(
       LocalWalLogicalStream stream,
-      LocalWalGroupReservation reservation,
+      LocalWalRecordBatch batch,
       LocalWalGroupAppendResult result) {
-    return LocalWalGroupAppender.appendContinuation(this, stream, reservation, result);
+    return LocalWalRecordBatchAppender.appendContinuation(this, stream, batch, result);
   }
 
   public StatusCode appendLogicalStreamFinal(
       LocalWalLogicalStream stream,
-      LocalWalGroupReservation reservation,
+      LocalWalRecordBatch batch,
       long commitSequence,
       LocalWalGroupAppendResult result) {
-    return LocalWalGroupAppender.appendFinal(
-        this, stream, reservation, commitSequence, result);
+    return LocalWalRecordBatchAppender.appendFinal(
+        this, stream, batch, commitSequence, result);
   }
 
   public StatusCode forceLogicalStreamBatch(
       LocalWalLogicalStream stream, LocalWalForceResult result) {
+    return forceLogicalStreamBatch(stream, result, LocalWalForceCause.OTHER);
+  }
+
+  public StatusCode forceLogicalStreamBatch(
+      LocalWalLogicalStream stream,
+      LocalWalForceResult result,
+      LocalWalForceCause cause) {
+    if (cause == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
-    return LocalWalForceCoordinator.force(this, result);
+    return LocalWalForceCoordinator.force(this, result, cause);
   }
 
   public StatusCode releaseLogicalStreamBatch(LocalWalLogicalStream stream) {
@@ -340,18 +372,6 @@ public final class LocalWal {
     return status;
   }
 
-  public StatusCode cancelLogicalStreamBatch(
-      LocalWalLogicalStream stream, LocalWalGroupReservation reservation) {
-    if (!ownsLogicalStream(stream) || reservation == null
-        || !reservation.isOwnedBy(this, activeReservationToken)
-        || !reservation.belongsToStream(activeLogicalStreamToken)) {
-      return StatusCode.CONFLICT;
-    }
-    activeReservationToken = 0;
-    reservation.complete();
-    return StatusCode.OK;
-  }
-
   /** Permanently fences this provider after a partially accepted logical stream fails. */
   public StatusCode fenceLogicalStream(LocalWalLogicalStream stream) {
     if (!ownsLogicalStream(stream)) return StatusCode.CONFLICT;
@@ -362,12 +382,6 @@ public final class LocalWal {
     return StatusCode.OK;
   }
 
-  public StatusCode reserveGroup(
-      int[] payloadBytes, LocalWalGroupReservation reservation) {
-    return reserveGroup(
-        payloadBytes, payloadBytes == null ? 0 : payloadBytes.length, reservation);
-  }
-
   public StatusCode publish(
       LocalWalReservation reservation,
       long transactionId,
@@ -376,6 +390,22 @@ public final class LocalWal {
       int formatId,
       int formatVersion,
       LocalWalAppendResult result) {
+    return publish(
+        reservation, transactionId, commitSequence, decisionCode,
+        formatId, formatVersion, result, LocalWalForceCause.DIRECT_COMMIT);
+  }
+
+  /** Appends and forces one record with an explicit force cause. */
+  public StatusCode publish(
+      LocalWalReservation reservation,
+      long transactionId,
+      long commitSequence,
+      int decisionCode,
+      int formatId,
+      int formatVersion,
+      LocalWalAppendResult result,
+      LocalWalForceCause cause) {
+    if (cause == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = appendUnforced(
         reservation,
         transactionId,
@@ -385,7 +415,7 @@ public final class LocalWal {
         formatVersion,
         result);
     if (status.isOk()) {
-      status = forcePending(publishForceResult);
+      status = forcePending(publishForceResult, cause);
     }
     if (status.isOk()) {
       status = releaseForcedBatch();
@@ -415,65 +445,56 @@ public final class LocalWal {
 
   /** Appends one fully populated logical record group without forcing its pending batch. */
   public StatusCode appendGroupUnforced(
-      LocalWalGroupReservation reservation,
+      LocalWalRecordBatch batch,
       long transactionId,
       long commitSequence,
       int formatId,
       int formatVersion,
       LocalWalGroupAppendResult result) {
-    return LocalWalGroupAppender.appendFinal(
-        this, reservation, transactionId, commitSequence, formatId, formatVersion, result);
+    return LocalWalRecordBatchAppender.appendFinal(
+        this, batch, transactionId, commitSequence, formatId, formatVersion, result);
   }
 
   /** Appends independently decided logical groups admitted by one aggregate reservation. */
   public StatusCode appendDecisionBatchUnforced(
-      LocalWalGroupReservation reservation,
-      long[] transactionIds,
-      long[] commitSequences,
-      int[] groupEnds,
-      int groupCount,
+      LocalWalDecisionBatch batch,
       int formatId,
       int formatVersion,
       LocalWalGroupAppendResult result) {
     return LocalWalDecisionBatchAppender.append(
-        this, reservation, transactionIds, commitSequences, groupEnds, groupCount,
-        formatId, formatVersion, result);
+        this, batch, formatId, formatVersion, result);
   }
 
   /** Appends a forced-batch continuation whose records carry no transaction decision. */
   StatusCode appendContinuationGroupUnforced(
-      LocalWalGroupReservation reservation,
+      LocalWalRecordBatch batch,
       long transactionId,
       int formatId,
       int formatVersion,
       LocalWalGroupAppendResult result) {
-    return LocalWalGroupAppender.appendContinuation(
-        this, reservation, transactionId, formatId, formatVersion, result);
+    return LocalWalRecordBatchAppender.appendContinuation(
+        this, batch, transactionId, formatId, formatVersion, result);
   }
 
   /** Forces the current append batch and atomically advances its local durable frontier. */
   public StatusCode forcePending(LocalWalForceResult result) {
-    if (hasOpenLogicalStream()) return StatusCode.CONFLICT;
-    return LocalWalForceCoordinator.force(this, result);
+    return forcePending(result, LocalWalForceCause.OTHER);
   }
 
-  /** Borrows one record from the last forced batch until {@link #releaseForcedBatch()}. */
-  public StatusCode readForcedRecord(int index, LocalWalReadResult result) {
-    if (result == null || !forcedBatch || index < 0 || index >= pendingRecordCount) {
+  /** Forces pending WAL records with an explicit, mutually exclusive cause. */
+  public StatusCode forcePending(
+      LocalWalForceResult result, LocalWalForceCause cause) {
+    if (cause == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (hasOpenLogicalStream()) return StatusCode.CONFLICT;
+    return LocalWalForceCoordinator.force(this, result, cause);
+  }
+
+  /** Opens a sequential view over the current forced range. */
+  public StatusCode openForcedCursor(LocalWalForcedCursor cursor) {
+    if (cursor == null || !forcedBatch || pendingRecordCount <= 0) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    result.reset();
-    ByteBuffer record = appendRecords[index];
-    record.position(0);
-    StatusCode status = WalRecordCodec.validate(record, result.header(), checksum);
-    if (!status.isOk()) {
-      return status;
-    }
-    ByteBuffer payload = appendPayloads[index];
-    payload.position(0);
-    payload.limit(result.header().payloadBytes());
-    result.set(pendingEnds[index], payload);
-    return StatusCode.OK;
+    return cursor.open(this, pendingStart, durableEnd, pendingRecordCount);
   }
 
   /** Releases provider-owned forced views so their fixed slots may be reused. */
@@ -487,9 +508,6 @@ public final class LocalWal {
       return StatusCode.CONFLICT;
     }
     forcedBatch = false;
-    for (int index = 0; index < pendingRecordCount; index++) {
-      pendingEnds[index] = 0;
-    }
     pendingStart = 0;
     pendingRecordCount = 0;
     return StatusCode.OK;
@@ -511,20 +529,9 @@ public final class LocalWal {
     return StatusCode.OK;
   }
 
-  public StatusCode cancelGroup(LocalWalGroupReservation reservation) {
-    if (reservation == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    StatusCode admission = admission();
-    if (!admission.isOk()) return admission;
-    if (hasOpenLogicalStream()) return StatusCode.CONFLICT;
-    if (!reservation.isOwnedBy(this, activeReservationToken)) return StatusCode.CONFLICT;
-    activeReservationToken = 0;
-    reservation.complete();
-    return StatusCode.OK;
-  }
-
   /** Fences a partially assembled decision batch whose outcome can no longer be reported safely. */
   public StatusCode fencePendingBatch() {
-    if (pendingRecordCount == 0 || forcedBatch || activeReservationToken != 0) {
+    if (pendingRecordCount == 0 || activeReservationToken != 0) {
       return StatusCode.CONFLICT;
     }
     failed = true;
@@ -599,7 +606,8 @@ public final class LocalWal {
     return recoverValidTail();
   }
 
-  private StatusCode initializeFile(DurableDirectory directory) {
+  private StatusCode initializeFile(
+      DurableDirectory directory, LocalWalForceCause forceCause) {
     ByteBuffer header = ByteBuffer.allocate(WalFileHeaderCodec.HEADER_BYTES);
     StatusCode status = WalFileHeaderCodec.encode(
         new WalFileHeader(databaseIncarnation, walGeneration),
@@ -613,7 +621,7 @@ public final class LocalWal {
       status = StatusCode.IO_FAILURE;
     }
     if (status.isOk()) {
-      status = file.force(ForceMode.CONTENT_AND_METADATA);
+      status = forceFile(forceCause, WalFileHeaderCodec.HEADER_BYTES);
     }
     if (status.isOk()) {
       DirectoryOperationResult forceResult = new DirectoryOperationResult();
@@ -622,8 +630,9 @@ public final class LocalWal {
     return status;
   }
 
-  StatusCode initializeFileForOpen(DurableDirectory directory) {
-    return initializeFile(directory);
+  StatusCode initializeFileForOpen(
+      DurableDirectory directory, LocalWalForceCause forceCause) {
+    return initializeFile(directory, forceCause);
   }
 
   StatusCode closeFileAfterOpen() {
@@ -633,7 +642,7 @@ public final class LocalWal {
   private StatusCode truncateTail(long validEnd, long sequence) {
     StatusCode status = file.truncate(validEnd);
     if (status.isOk()) {
-      status = file.force(ForceMode.CONTENT_AND_METADATA);
+      status = forceFile(LocalWalForceCause.RECOVERY_MAINTENANCE, validEnd);
     }
     if (status.isOk()) {
       tailEnd = validEnd;
@@ -782,28 +791,31 @@ public final class LocalWal {
     return reservation.isOwnedBy(this, activeReservationToken);
   }
 
-  boolean ownsGroupReservation(LocalWalGroupReservation reservation) {
-    return reservation.isOwnedBy(this, activeReservationToken);
-  }
-
   boolean validDecisionForAppend(long transactionId, long commitSequence, int decisionCode) {
     return validDecision(transactionId, commitSequence, decisionCode);
   }
 
   ByteBuffer appendRecordBuffer() {
-    return appendRecords[pendingRecordCount];
+    return appendRecord;
   }
-
-  ByteBuffer appendRecordBufferAt(int slot) { return appendRecords[slot]; }
 
   ByteBuffer appendPayloadBuffer() {
-    return appendPayloads[pendingRecordCount];
+    return appendPayload;
   }
 
-  ByteBuffer appendPayloadBufferAt(int slot) { return appendPayloads[slot]; }
+  ByteBuffer prepareAppendPayload(int payloadBytes) {
+    appendRecord.clear();
+    appendPayload.clear();
+    appendPayload.limit(payloadBytes);
+    return appendPayload;
+  }
 
-  int pendingRecordCountValue() {
+  long pendingRecordCountValue() {
     return pendingRecordCount;
+  }
+
+  LocalWalBatchAdmissionResult batchAdmissionResult() {
+    return batchAdmissionResult;
   }
 
   long claimNextReservationToken() {
@@ -815,8 +827,19 @@ public final class LocalWal {
     recoveryTailOpen = false;
   }
 
-  StatusCode forceAppendFile() {
-    return file.force(ForceMode.CONTENT_AND_METADATA);
+  StatusCode forceAppendFile(LocalWalForceCause cause) {
+    return forceFile(cause, pendingForceBytes());
+  }
+
+  private StatusCode forceFile(LocalWalForceCause cause, long coveredBytes) {
+    long started = System.nanoTime();
+    StatusCode status = file.force(ForceMode.CONTENT_AND_METADATA);
+    forceMetrics.record(cause, coveredBytes, System.nanoTime() - started, status);
+    return status;
+  }
+
+  long pendingForceBytes() {
+    return Math.max(0, tailEnd - durableEnd);
   }
 
   void markFailed() {
@@ -830,10 +853,10 @@ public final class LocalWal {
     forcedBatch = true;
   }
 
-  StatusCode replicateForcedBatch() {
+  StatusCode replicateForcedBatch(LocalWalForceCause cause) {
     return hasOpenLogicalStream()
-        ? durableQuorum.replicateLogicalStreamBatch(this, pendingRecordCount)
-        : durableQuorum.replicateForcedBatch(this, pendingRecordCount);
+        ? durableQuorum.replicateLogicalStreamBatch(this, pendingRecordCount, cause)
+        : durableQuorum.replicateForcedBatch(this, pendingRecordCount, cause);
   }
 
   StatusCode adoptRotatedState(
@@ -841,6 +864,7 @@ public final class LocalWal {
       String nextFileName,
       WalGeneration nextGeneration,
       long checkpointTransactionId) {
+    forceMetrics.merge(replacement.forceMetrics);
     replacement.lastCommitSequence = lastCommitSequence;
     replacement.lastAppendedCommitSequence = lastCommitSequence;
     replacement.maximumTransactionId = Math.max(maximumTransactionId, checkpointTransactionId);
@@ -879,12 +903,6 @@ public final class LocalWal {
     reservation.complete();
   }
 
-  void abortGroupAppend(LocalWalGroupReservation reservation) {
-    failed = true;
-    activeReservationToken = 0;
-    reservation.complete();
-  }
-
   void acceptAppend(
       LocalWalReservation reservation,
       LocalWalAppendResult result,
@@ -897,7 +915,6 @@ public final class LocalWal {
       pendingStart = start;
     }
     tailEnd += recordBytes;
-    pendingEnds[pendingRecordCount] = tailEnd;
     result.set(start, tailEnd, nextJournalSequence);
     nextJournalSequence = nextJournalSequence == Long.MAX_VALUE
         ? 0 : nextJournalSequence + 1;
@@ -912,48 +929,45 @@ public final class LocalWal {
     reservation.complete();
   }
 
-  void acceptGroupAppend(
-      LocalWalGroupReservation reservation,
+  void abortRecordBatchAppend() {
+    failed = true;
+  }
+
+  void acceptRecordBatchAppend(
       LocalWalGroupAppendResult result,
       long transactionId,
-      long commitSequence) {
+      long commitSequence,
+      long appendedEnd,
+      int recordCount) {
     long start = tailEnd;
     long firstSequence = nextJournalSequence;
     if (pendingRecordCount == 0) pendingStart = start;
-    for (int index = 0; index < reservation.recordCount(); index++) {
-      tailEnd += WalRecordCodec.encodedBytes(reservation.payloadBytes(index));
-      pendingEnds[pendingRecordCount++] = tailEnd;
-      nextJournalSequence = nextJournalSequence == Long.MAX_VALUE
-          ? 0 : nextJournalSequence + 1;
-    }
+    tailEnd = appendedEnd;
+    pendingRecordCount += recordCount;
+    nextJournalSequence = firstSequence > Long.MAX_VALUE - recordCount
+        ? 0 : firstSequence + recordCount;
     if (commitSequence > 0) lastAppendedCommitSequence = commitSequence;
     if (transactionId > maximumTransactionId) maximumTransactionId = transactionId;
-    result.set(start, tailEnd, firstSequence, reservation.recordCount());
-    activeReservationToken = 0;
-    reservation.complete();
+    result.set(start, tailEnd, firstSequence, recordCount);
   }
 
   void acceptDecisionBatchAppend(
-      LocalWalGroupReservation reservation,
       LocalWalGroupAppendResult result,
-      long[] transactionIds,
-      long[] commitSequences,
-      int groupCount) {
+      LocalWalDecisionBatch batch,
+      long appendedEnd) {
     long start = tailEnd;
     long firstSequence = nextJournalSequence;
     if (pendingRecordCount == 0) pendingStart = start;
-    for (int index = 0; index < reservation.recordCount(); index++) {
-      tailEnd += WalRecordCodec.encodedBytes(reservation.payloadBytes(index));
-      pendingEnds[pendingRecordCount++] = tailEnd;
-      nextJournalSequence = nextJournalSequence == Long.MAX_VALUE
-          ? 0 : nextJournalSequence + 1;
+    int records = batch.recordCount();
+    tailEnd = appendedEnd;
+    pendingRecordCount += records;
+    nextJournalSequence = firstSequence > Long.MAX_VALUE - records
+        ? 0 : firstSequence + records;
+    int transactions = batch.transactionCount();
+    lastAppendedCommitSequence = batch.commitSequence(transactions - 1);
+    for (int index = 0; index < transactions; index++) {
+      maximumTransactionId = Math.max(maximumTransactionId, batch.transactionId(index));
     }
-    lastAppendedCommitSequence = commitSequences[groupCount - 1];
-    for (int index = 0; index < groupCount; index++) {
-      maximumTransactionId = Math.max(maximumTransactionId, transactionIds[index]);
-    }
-    result.set(start, tailEnd, firstSequence, reservation.recordCount());
-    activeReservationToken = 0;
-    reservation.complete();
+    result.set(start, tailEnd, firstSequence, records);
   }
 }

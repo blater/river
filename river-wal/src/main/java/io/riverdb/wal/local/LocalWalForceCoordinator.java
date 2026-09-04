@@ -7,8 +7,9 @@ final class LocalWalForceCoordinator {
   private LocalWalForceCoordinator() {
   }
 
-  static StatusCode force(LocalWal wal, LocalWalForceResult result) {
-    if (result == null) {
+  static StatusCode force(
+      LocalWal wal, LocalWalForceResult result, LocalWalForceCause cause) {
+    if (result == null || cause == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
@@ -19,7 +20,7 @@ final class LocalWalForceCoordinator {
     if (wal.hasActiveReservation() || !wal.hasPendingRecords() || wal.hasForcedBatch()) {
       return StatusCode.CONFLICT;
     }
-    status = wal.forceAppendFile();
+    status = wal.forceAppendFile(cause);
     if (!status.isOk()) {
       wal.markFailed();
       return status;
@@ -28,7 +29,7 @@ final class LocalWalForceCoordinator {
     if (!wal.hasDurableQuorum()) {
       return StatusCode.OK;
     }
-    status = wal.replicateForcedBatch();
+    status = wal.replicateForcedBatch(cause);
     if (!status.isOk()) {
       wal.markFailed();
       return status;

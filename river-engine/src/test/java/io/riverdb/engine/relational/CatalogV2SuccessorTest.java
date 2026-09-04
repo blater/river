@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -31,9 +32,11 @@ final class CatalogV2SuccessorTest {
     RelationalDatabaseOpenResult firstOpen = new RelationalDatabaseOpenResult();
     RelationalDatabaseOpenResult secondOpen = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8),
         Files.createDirectory(root.resolve("first")),
         DATABASE, GENERATION, 8, firstOpen));
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8),
         Files.createDirectory(root.resolve("second")),
         DatabaseIncarnation.of(0x535543434553534fL, 0x52434154414c4f48L),
         GENERATION, 8, secondOpen));
@@ -68,7 +71,7 @@ final class CatalogV2SuccessorTest {
   void abortPreservesPredecessorAndCreateSuccessorSurvivesReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     createInitial(database);
 
@@ -104,7 +107,7 @@ final class CatalogV2SuccessorTest {
     assertEquals(StatusCode.OK, database.checkpoint(new CheckpointResult()));
     assertEquals(StatusCode.OK, database.close());
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     SchemaPin reopened = open(database, "items");
     assertEquals(2, reopened.catalogGeneration());
@@ -119,7 +122,7 @@ final class CatalogV2SuccessorTest {
   void thirtyTwoPartHighOrdinalIndexBindsAndSurvivesReopen(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     createInitial(database, "wide_items", wideInitial());
     SchemaPin current = open(database, "wide_items");
@@ -142,7 +145,7 @@ final class CatalogV2SuccessorTest {
     assertEquals(StatusCode.OK, database.close());
 
     assertEquals(StatusCode.OK,
-        RelationalDatabase.openExisting(root, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     SchemaPin reopened = open(database, "wide_items");
     assertEquals(objectId, reopened.tableId());

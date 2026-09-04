@@ -2,26 +2,23 @@ package io.riverdb.jdbc;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.sql.SQLException;
 import org.junit.jupiter.api.Test;
 
 final class RiverJdbcStatementRegistryTest {
   @Test
-  void admitsBoundedLiveStatementsAndReusesClosedSlots() throws Exception {
+  void growsBeyondLegacyLiveStatementCapacityAndReusesClosedSlots() throws Exception {
     RiverJdbcStatementRegistry registry = new RiverJdbcStatementRegistry();
-    RiverJdbcStatement[] statements = new RiverJdbcStatement[
-        RiverJdbcStatementRegistry.MAXIMUM_STATEMENTS];
+    RiverJdbcStatement[] statements = new RiverJdbcStatement[257];
     for (int index = 0; index < statements.length; index++) {
       statements[index] = new RiverJdbcStatement(null, null);
       registry.register(statements[index]);
     }
-    RiverJdbcStatement rejected = new RiverJdbcStatement(null, null);
-    assertThrows(SQLException.class, () -> registry.register(rejected));
+    RiverJdbcStatement additional = new RiverJdbcStatement(null, null);
+    assertDoesNotThrow(() -> registry.register(additional));
     registry.unregister(statements[7]);
-    assertDoesNotThrow(() -> registry.register(rejected));
+    assertDoesNotThrow(() -> registry.register(new RiverJdbcStatement(null, null)));
   }
 
   @Test
@@ -34,8 +31,7 @@ final class RiverJdbcStatementRegistryTest {
     assertDoesNotThrow(() -> assertNull(registry.closeAll()));
     assertTrue(first.wasClosed);
     assertTrue(second.wasClosed);
-    for (int index = 0; index < RiverJdbcStatementRegistry.MAXIMUM_STATEMENTS;
-        index++) {
+    for (int index = 0; index < 257; index++) {
       assertDoesNotThrow(() -> registry.register(new TrackingStatement()));
     }
   }

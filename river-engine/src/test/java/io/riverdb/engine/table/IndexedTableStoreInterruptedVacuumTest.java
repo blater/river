@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -121,7 +122,12 @@ final class IndexedTableStoreInterruptedVacuumTest {
   private static void commitWideVersions(IndexedTable table, int batches) {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
-    IndexedTransactionSession writer = new IndexedTransactionSession(manager, table, ROW_BYTES);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext.Result contextResult = new IndexedSessionContext.Result();
+    assertEquals(
+        StatusCode.OK,
+        IndexedSessionContext.bind(manager, table, null, vacuum, contextResult));
+    IndexedTransactionSession writer = openSession(contextResult.context(), ROW_BYTES);
     TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer row = ByteBuffer.allocateDirect(ROW_BYTES);
     for (int batch = 0; batch < batches; batch++) {
@@ -152,8 +158,12 @@ final class IndexedTableStoreInterruptedVacuumTest {
       IndexedTable table, int rows, int batchSize) {
     TransactionManager manager = new TransactionManager(
         DATABASE.high(), DATABASE.low(), table.nextTransactionId(), 5);
-    IndexedTransactionSession writer = new IndexedTransactionSession(
-        manager, table, Long.BYTES);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext.Result contextResult = new IndexedSessionContext.Result();
+    assertEquals(
+        StatusCode.OK,
+        IndexedSessionContext.bind(manager, table, null, vacuum, contextResult));
+    IndexedTransactionSession writer = openSession(contextResult.context(), Long.BYTES);
     TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     for (int pass = 0; pass < 2; pass++) {
@@ -187,6 +197,13 @@ final class IndexedTableStoreInterruptedVacuumTest {
     return result.directory();
   }
 
+  private static IndexedTransactionSession openSession(
+      IndexedSessionContext context, int maximumRowBytes) {
+    IndexedTransactionSessionOpenResult result = new IndexedTransactionSessionOpenResult();
+    assertEquals(StatusCode.OK, context.openSession(maximumRowBytes, result));
+    return result.session();
+  }
+
   private static LocalWal openWal(NioDurableDirectory directory) {
     LocalWalOpenResult result = new LocalWalOpenResult();
     assertEquals(StatusCode.OK, LocalWal.open(directory, DATABASE, GENERATION, result));
@@ -199,7 +216,8 @@ final class IndexedTableStoreInterruptedVacuumTest {
     IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, result));
+        IndexedTableStore.create(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(5), result));
     return result.store();
   }
 

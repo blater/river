@@ -84,8 +84,127 @@ because module `build/` outputs still collide. See the Gradle
 [command-line](https://docs.gradle.org/current/userguide/command_line_interface.html)
 documentation.
 
+## TPC-C performance loop
+
+Use the standalone local harness at
+`~/src/ingres/river-harness/benchmark` for TPC-C-derived workload checks and
+River/MariaDB comparisons. Run it from the River repository root. The wrapper
+builds only the required River classes, starts a fresh ephemeral River server
+on an unused port, and stops it on success, failure, or interruption. It does
+not run `clean`.
+
+The harness provides two data profiles:
+
+- `sample` has reduced cardinalities and is the normal development profile;
+- `full` has standard TPC-C cardinalities and is an occasional wider sanity or
+  capacity profile.
+
+Both profiles implement `new-order`, `payment`, `order-status`, `delivery`, and
+`stock-level`; `all` selects the standard 45/43/4/4/4 mix. A selected subset
+retains and normalizes those relative weights. These are engineering workloads,
+not audited TPC-C runs, and must not be reported as `tpmC`.
+
+Choose the smallest level that can answer the current question:
+
+1. **Focused smoke:** one affected category, sample data, one worker, and a
+   short window. Use `--no-report` when immutable comparison evidence is not
+   needed.
+
+   ```sh
+   ~/src/ingres/river-harness/benchmark run river tpcc sample new-order \
+     --river-home="$PWD" --warmup=1s --duration=3s --workers=1 \
+     --warehouses=1 --seed=42 --max-retries=3 --no-report
+   ```
+
+2. **Targeted contention or transaction interaction:** use only the implicated
+   category or pair, a fixed seed, and enough workers to reproduce the boundary.
+   Start with sample data and 10 seconds; lengthen the run before widening the
+   workload.
+
+   ```sh
+   ~/src/ingres/river-harness/benchmark run river tpcc sample \
+     new-order payment \
+     --river-home="$PWD" --warmup=2s --duration=10s --workers=4 \
+     --warehouses=1 --seed=42 --max-retries=3
+   ```
+
+3. **Paired mature-system comparison:** run exactly the same profile,
+   categories, seed, warehouse count, worker count, retry limit, warmup, and
+   measured duration against MariaDB and River. Change only the target and
+   River lifecycle option.
+
+   ```sh
+   ~/src/ingres/river-harness/benchmark run mariadb tpcc sample new-order \
+     --warmup=5s --duration=30s --workers=4 --warehouses=1 \
+     --seed=42 --max-retries=3
+
+   ~/src/ingres/river-harness/benchmark run river tpcc sample new-order \
+     --river-home="$PWD" --warmup=5s --duration=30s --workers=4 \
+     --warehouses=1 --seed=42 --max-retries=3
+   ```
+
+   The harness owns report locations below `river-harness/runs`; its friendly
+   command does not accept an output-directory override. Both runs must report
+   `status: passed`, zero failed/unknown outcomes, and successful invariants.
+   Open the printed report paths and require
+   `.comparison.eligibility == "eligible"` and identical `.comparison.key`
+   values in `result.json` before comparing `.workload.committed_tps`, latency,
+   or retries. A quick pair is diagnostic only. Any performance claim requires
+   multiple longer interleaved samples, normally MariaDB/River/River/MariaDB,
+   because short local runs exhibit substantial host variability.
+
+4. **Occasional wider sanity:** after focused runs pass, exercise all five
+   families. Use `sample all` for routine integration checkpoints; use
+   `full all` only when data cardinality, access paths, cache behavior, page
+   splits, or capacity are in scope.
+
+   ```sh
+   ~/src/ingres/river-harness/benchmark run river tpcc sample all \
+     --river-home="$PWD" --warmup=5s --duration=30s --workers=8 \
+     --warehouses=1 --seed=42 --max-retries=3
+
+   ~/src/ingres/river-harness/benchmark run river tpcc full all \
+     --river-home="$PWD" --warmup=5s --duration=1m --workers=8 \
+     --warehouses=1 --seed=42 --max-retries=3
+   ```
+
+Run the equivalent MariaDB command only when a mature-system control is useful;
+do not make a full cross-target matrix part of every edit loop. Warehouse and
+worker sweeps belong to an explicit scaling investigation or promotion gate,
+not routine correctness work.
+
+The harness comparison and `tools/tps-test.sh` serve different purposes:
+
+- use the harness for a shared logical workload and cross-engine behavioral or
+  performance comparison;
+- use `tools/tps-test.sh` for River-specific isolation, retry/deadlock,
+  protocol, lock-wait, WAL, JFR, and workspace-fingerprint evidence;
+- never compare a harness MariaDB TPS figure directly with a
+  `tools/tps-test.sh` River figure because the workload implementations,
+  profiles, and isolation contracts differ.
+
+A River harness invocation is also a Gradle build and must obey the one-build-
+at-a-time rule. Do not overlap any harness run with compilation, tests,
+profiling, another harness run, or another database workload on the same host.
+For MariaDB, use the wrapper rather than the low-level Go command so its guarded
+Homebrew lifecycle and owned-database cleanup apply. If MariaDB is already
+service-managed or active, do not stop the user's server; let the harness fail
+safely and ask before changing external state. Set
+`RIVER_HARNESS_MARIADB_PASSWORD` only when the selected local account requires
+it; never print or persist the value.
+
 ## Hot-path engineering
 
+- Do not impose arbitrary low row, byte, cardinality, or concurrency caps to
+  make a prototype work. Implement against long-addressed or configured
+  resource boundaries from the first production slice. A finite limit is
+  acceptable only when it follows from an external format, an admitted runtime
+  budget, addressability, or another named correctness contract. Page size,
+  address or slot width, protocol framing, and configured resource budgets are
+  legitimate structural bounds when their owning invariant is explicit.
+  Document the status and recovery/backpressure behavior at every finite
+  boundary; scale beyond it by paging, streaming, spill, continuation, or
+  backpressure rather than a convenience or prototype cap.
 - Zero steady-state allocation is the aspiration for WAL, page, lock,
   transaction, queue, and vector inner paths. SQL execution must not allocate
   per row.
@@ -101,6 +220,44 @@ documentation.
   formatted strings in hot loops.
 - Keep every queue, arena, history, lock table, and retained view bounded. A
   bound must have an explicit status and recovery/backpressure behavior.
+
+## Slopmark boundary
+
+Use `slopmark` as a stop-and-review signal while changing performance-critical
+code. Capture a compact baseline over the affected production modules before a
+slice and compare the touched files afterward, for example:
+
+```sh
+slopmark -compact -limit 50 \
+  river-engine/src/main/java river-tx/src/main/java \
+  river-bench/src/main/java river-jdbc/src/main/java \
+  river-client/src/main/java river-protocol/src/main/java \
+  river-server/src/main/java river-wal/src/main/java tools
+```
+
+The score is a review trigger, not a mechanical quality verdict. Stop adding
+behavior and reconsider the design when a touched high-scoring file gains
+another technical responsibility, its score materially worsens, or equivalent
+policy starts appearing in multiple layers. In particular, stop when:
+
+- benchmark-family semantics enter engine, transaction, WAL, or protocol
+  internals;
+- diagnostics, metrics, or formatting can alter transaction control flow;
+- lock grant/fairness predicates are reimplemented outside one transaction-
+  layer owner;
+- commit stages or failure reasons are represented by overlapping enums or
+  recorded by unrelated components;
+- shell code duplicates Java defaults, semantic validation, classpath logic,
+  or evidence validity decisions;
+- a second executor, retry loop, value representation, result encoder, or
+  commit path appears for implementation convenience.
+
+Refactor toward the existing owning boundary before continuing: share policy,
+not incidental syntax. DRY applies most strongly to technical responsibilities
+and semantic decisions; small local duplication is preferable to coupling
+unrelated modules through a speculative abstraction. Record the slopmark
+before/after scores with performance evidence when the tool materially shapes
+the refactor.
 
 ## Errors and trust boundaries
 

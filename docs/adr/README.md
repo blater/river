@@ -33,6 +33,7 @@ promotion evidence remain controlled by the
 | [0011](0011-backup-boundary-and-retention.md) | Backup boundary and retention | Proposed | K14/O01 crash and restore evidence |
 | [0012](0012-embedded-api-and-protocol-boundaries.md) | Embedded API and protocol boundaries | Accepted | Q01/N01-N06 compatibility and security evidence |
 | [0013](0013-dependency-neutral-identities.md) | Dependency-neutral identity catalog | Accepted | Physical encodings remain ADR 0004/K02 decisions |
+| [0014](0014-riverd-instance-security.md) | `riverd` instance security and client discovery | Accepted | Authenticated TLS is the only production listener path |
 
 ## Coupled vocabulary
 

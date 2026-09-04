@@ -43,15 +43,18 @@ final class SqlBlockRowExternalOrder {
     SqlMaterializedPagedByteStream target = open(
         statement, SqlMaterializedScratchFileKind.RUNS1);
     if (target == null) return closeAfter(source, detail.code());
-    status = reservation.acquire(statement);
+    int runPages = SqlMaterializedSortRunSizing.pages(
+        statement.sortRunPages(), source.pageBytes(), rowCount);
+    if (runPages <= 0) return closeAfter(source, target, StatusCode.INVARIANT_BROKEN);
+    status = reservation.acquire(statement, runPages);
     boolean reserved = status.isOk();
-    long width = runRows(statement.sortRunPages(), source.pageBytes());
+    long width = runRows(runPages, source.pageBytes());
     if (status.isOk() && width <= 0) status = StatusCode.RESOURCE_EXHAUSTED;
     if (status.isOk()) status = generate(source, index, keys, shape, rowCount, width);
     if (status.isOk()) {
       merger.configure(ordinals, index, keys, shape, probe);
       status = external.merge(
-          source, target, rowCount, width, statement.sortRunPages(), merger, merged);
+          source, target, rowCount, width, runPages, merger, merged);
       if (status.isOk()) {
         source = merged.output();
         target = merged.spare();
@@ -141,4 +144,5 @@ final class SqlBlockRowExternalOrder {
     int payload = pageBytes - 32;
     return pages <= 0 || payload <= 0 ? 0 : (long) pages * payload / Long.BYTES;
   }
+
 }

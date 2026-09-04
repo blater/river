@@ -1,6 +1,7 @@
 package io.riverdb.engine.sql;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.tx.api.lock.LockMode;
 
 /** Opens the validated descriptor cursor selected for one subquery invocation. */
 final class SqlDescriptorSubqueryCursor {
@@ -17,7 +18,7 @@ final class SqlDescriptorSubqueryCursor {
     if (status.isOk() && !state.index.empty() && limit > 0) {
       status = state.index.active()
           ? state.session.descriptorRows().beginIndexScan(
-              state.pin, state.index.bounds(), state.cursor)
+              state.pin, state.index.bounds(), LockMode.SHARED, state.cursor)
           : state.session.descriptorRows().beginScan(state.pin, state.cursor);
     }
     return status;

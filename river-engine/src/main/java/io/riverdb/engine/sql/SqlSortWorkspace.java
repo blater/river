@@ -7,6 +7,8 @@ import io.riverdb.storage.heap.HeapRowResult;
 
 /** Reusable bounded sort storage and spill lifecycle for one SQL session. */
 final class SqlSortWorkspace implements SqlNullWords {
+  private final SqlSessionShapeBudget budget;
+  private final SqlSortAdmission admission = new SqlSortAdmission();
   private final SqlSortSpill spill;
   private final SqlSortRunStorage storage;
   private final SqlSortHeap heap = new SqlSortHeap();
@@ -30,6 +32,7 @@ final class SqlSortWorkspace implements SqlNullWords {
 
   SqlSortWorkspace(
       SqlRetainedArrayAllocator retainedAllocator, SqlSessionShapeBudget budget) {
+    this.budget = budget;
     spill = new SqlSortSpill(retainedAllocator, budget);
     storage = new SqlSortRunStorage(retainedAllocator, budget);
   }
@@ -68,13 +71,28 @@ final class SqlSortWorkspace implements SqlNullWords {
     if (!status.isOk()) {
       return status;
     }
-    status = storage.prepare(
-        projectionCount, textRows, generatedTextRows, spill.sortRunPayloadBytes());
-    if (!status.isOk()) return status;
-    if (status.isOk() && tupleKeys > 1) {
+    if (tupleKeys > 1) {
       status = groupComparator.configure(
           command, bound, tupleKeys, projectionCount, groupTuple);
     }
+    if (!status.isOk()) return status;
+    long availableBytes = budget.maximumReplacementBytes(retainedBytes());
+    if (availableBytes < 0) return StatusCode.INVARIANT_BROKEN;
+    status = admission.select(
+        spill.configuredRunPages(), spill.sortPageBytes(),
+        projectionCount, textRows, generatedTextRows, availableBytes);
+    if (!status.isOk()) return status;
+    long retainedTarget = SqlSortRunCapacity.add(
+        storage.requiredBytes(
+            projectionCount, textRows, generatedTextRows, admission.runPayloadBytes()),
+        spill.requiredBytes(
+            projectionCount, textRows, generatedTextRows, admission.pages()));
+    if (retainedTarget > availableBytes) {
+      status = releaseInactiveStorage();
+      if (!status.isOk()) return status;
+    }
+    status = storage.prepare(
+        projectionCount, textRows, generatedTextRows, admission.runPayloadBytes());
     if (!status.isOk()) return status;
     status = spill.begin(
         definition,
@@ -86,8 +104,11 @@ final class SqlSortWorkspace implements SqlNullWords {
         sortKeyDescriptor,
         tupleKeys > 1 ? groupComparator : null,
         tupleKeys,
-        storage.runRows());
-    if (!status.isOk()) return status;
+        storage.runRows(), admission.pages());
+    if (!status.isOk()) {
+      storage.closeHighWater();
+      return status;
+    }
     table = definition;
     descending = descendingOrder;
     textKey = textualKey;
@@ -122,9 +143,9 @@ final class SqlSortWorkspace implements SqlNullWords {
     }
     if (totalRows == Long.MAX_VALUE) return StatusCode.RESOURCE_EXHAUSTED;
     int rowIndex = rowCount++;
-    totalRows++;
+    long ordinal = totalRows++;
     status = storage.append(
-        rowIndex, keyHigh, key, keyNull, primaryKey,
+        rowIndex, ordinal, keyHigh, key, keyNull, primaryKey,
         projectedHighs, projectedValues, projectedNulls, source, projected);
     if (!status.isOk()) {
       rowCount--;
@@ -163,6 +184,10 @@ final class SqlSortWorkspace implements SqlNullWords {
 
   long retainedProjectionBytes() {
     return storage.retainedProjectionBytes();
+  }
+
+  long retainedBytes() {
+    return SqlSortRunCapacity.add(storage.retainedBytes(), spill.retainedBytes());
   }
 
   long primaryKeyAt(int index) {
@@ -239,6 +264,19 @@ final class SqlSortWorkspace implements SqlNullWords {
     return status;
   }
 
+  private StatusCode releaseInactiveStorage() {
+    long retained = retainedBytes();
+    long reclaimable = SqlSortRunCapacity.add(
+        storage.reclaimableRetainedBytes(), spill.reclaimableRetainedBytes());
+    if (reclaimable != retained) return StatusCode.INVARIANT_BROKEN;
+    if (retained == 0) return StatusCode.OK;
+    StatusCode status = budget.release(retained);
+    if (!status.isOk()) return status;
+    storage.releaseRetainedStorage();
+    spill.releaseRetainedStorage();
+    return retainedBytes() == 0 ? StatusCode.OK : StatusCode.INVARIANT_BROKEN;
+  }
+
   int compareRows(int left, int right) {
     return storage.compare(
         left, right, groupKeyCount, groupComparator,
@@ -250,4 +288,5 @@ final class SqlSortWorkspace implements SqlNullWords {
   }
 
   int configuredRunRows() { return storage.runRows(); }
+  int admittedRunPages() { return admission.pages(); }
 }

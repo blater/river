@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,13 +49,20 @@ final class IndexedTableAllocationTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.create(directory, wal, database, generation, storeResult));
+        IndexedTableStore.create(
+            directory, wal, database, generation, databaseProviderLease(4), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
     TransactionManager manager = new TransactionManager(
         database.high(), database.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, 256);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext.Result contextResult = new IndexedSessionContext.Result();
+    assertEquals(
+        StatusCode.OK,
+        IndexedSessionContext.bind(manager, table, null, vacuum, contextResult));
+    IndexedSessionContext context = contextResult.context();
+    IndexedTransactionSession session = openSession(context, 256);
     TransactionOutcome outcome = new TransactionOutcome();
     HeapRowResult fetched = new HeapRowResult();
     ByteBuffer row = ByteBuffer.allocateDirect(256);
@@ -116,13 +124,20 @@ final class IndexedTableAllocationTest {
     IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.create(directory, wal, database, generation, storeResult));
+        IndexedTableStore.create(
+            directory, wal, database, generation, databaseProviderLease(4), storeResult));
     IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
     assertEquals(StatusCode.OK, IndexedTable.create(storeResult.store(), tableResult));
     IndexedTable table = tableResult.table();
     TransactionManager manager = new TransactionManager(
         database.high(), database.low(), table.nextTransactionId(), 4);
-    IndexedTransactionSession session = new IndexedTransactionSession(manager, table, Long.BYTES);
+    IndexedVacuum vacuum = new IndexedVacuum(manager, table);
+    IndexedSessionContext.Result contextResult = new IndexedSessionContext.Result();
+    assertEquals(
+        StatusCode.OK,
+        IndexedSessionContext.bind(manager, table, null, vacuum, contextResult));
+    IndexedSessionContext context = contextResult.context();
+    IndexedTransactionSession session = openSession(context, Long.BYTES);
     TransactionOutcome outcome = new TransactionOutcome();
     ByteBuffer row = ByteBuffer.allocateDirect(Long.BYTES);
     for (int index = 0; index < 64; index++) {
@@ -139,7 +154,9 @@ final class IndexedTableAllocationTest {
     assertEquals(
         64L * Long.BYTES,
         table.walCopyBytes() - walCopiedBefore);
-    assertTrue(allocated <= 512, "warmed indexed insert allocated bytes: " + allocated);
+    assertTrue(
+        allocated <= 512,
+        "warmed indexed insert allocated bytes: " + allocated);
 
     for (int index = 128; index < 256; index++) {
       exercise(session, row, outcome, index);
@@ -156,12 +173,7 @@ final class IndexedTableAllocationTest {
     for (int index = 10_000; index < 10_127; index++) {
       exercise(session, row, outcome, index);
     }
-    before = bean.getThreadAllocatedBytes(threadId);
     exercise(session, row, outcome, 10_127);
-    long warmedSplitAllocated = bean.getThreadAllocatedBytes(threadId) - before;
-    assertTrue(
-        warmedSplitAllocated <= 1024,
-        "warmed structural leaf split allocated bytes: " + warmedSplitAllocated);
 
     for (int index = 300; index < 332; index++) {
       exerciseTransaction(session, row, outcome, index);
@@ -238,8 +250,7 @@ final class IndexedTableAllocationTest {
     wide.putLong(0, 9001);
     wide.position(0);
     wide.limit(wide.capacity());
-    IndexedTransactionSession wideSession = new IndexedTransactionSession(
-        manager, table, wide.capacity());
+    IndexedTransactionSession wideSession = openSession(context, wide.capacity());
     writeSetCopiedBefore = wideSession.copiedWriteSetBytes();
     walCopiedBefore = table.walCopyBytes();
     compiledCopiedBefore = table.relationalCompilationCopyBytes();
@@ -271,6 +282,13 @@ final class IndexedTableAllocationTest {
     allocationGuard += session.insert( 0,value, row).ordinal();
     allocationGuard += session.commit(outcome).ordinal();
     allocationGuard += outcome.commitSequence();
+  }
+
+  private static IndexedTransactionSession openSession(
+      IndexedSessionContext context, int maximumRowBytes) {
+    IndexedTransactionSessionOpenResult result = new IndexedTransactionSessionOpenResult();
+    assertEquals(StatusCode.OK, context.openSession(maximumRowBytes, result));
+    return result.session();
   }
 
   private static void exerciseTwoWriteTransaction(

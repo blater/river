@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -79,14 +80,20 @@ final class SqlCompositeRowLockTest {
   }
 
   @Test
-  void blockedSelectForUpdateQueuesWithoutCreatingAnUpgradeDeadlock(@TempDir Path root)
+  void serializableSelectForUpdateQueuesAtSourceWithoutAnUpgradeDeadlock(
+      @TempDir Path root)
       throws Exception {
     Fixture fixture = open(root, "500ms");
     ExecutorService executor = Executors.newSingleThreadExecutor();
     try {
       createDistrict(fixture);
-      lockDistrict(fixture);
-      assertEquals(StatusCode.OK, fixture.waiter.execute("BEGIN", fixture.result));
+      assertEquals(StatusCode.OK,
+          fixture.holder.execute("BEGIN SERIALIZABLE", fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=7 FOR UPDATE",
+          fixture.result));
+      assertEquals(StatusCode.OK,
+          fixture.waiter.execute("BEGIN SERIALIZABLE", fixture.result));
       AtomicReference<Thread> worker = new AtomicReference<>();
       SqlExecutionResult waitingResult = new SqlExecutionResult();
       Future<StatusCode> waiting = executor.submit(() -> {
@@ -109,6 +116,224 @@ final class SqlCompositeRowLockTest {
           fixture.result));
       assertEquals(StatusCode.OK, fixture.waiter.execute("COMMIT", fixture.result));
       assertDistrictValue(fixture, 12);
+    } finally {
+      executor.shutdownNow();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void semanticSingletonWithANonpointOrderedAccessRemainsAScan(@TempDir Path root)
+      throws Exception {
+    Fixture fixture = open(root, "500ms");
+    try {
+      createDistrict(fixture);
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "CREATE INDEX district_by_next ON district(d_next_o_id)", fixture.result));
+      assertEquals(StatusCode.OK,
+          fixture.holder.execute("BEGIN SERIALIZABLE", fixture.result));
+      SqlScanCursor cursor = new SqlScanCursor();
+      SqlScanRowResult row = new SqlScanRowResult();
+      assertEquals(StatusCode.OK, fixture.holder.beginScan(
+          "SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=7 "
+              + "ORDER BY d_next_o_id LIMIT 1 FOR UPDATE",
+          cursor));
+      assertEquals(StatusCode.OK, fixture.holder.nextScan(cursor, row));
+      assertEquals(10, row.valueAt(0));
+      assertEquals(StatusCode.OK, fixture.holder.closeScan(cursor, fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute("ROLLBACK", fixture.result));
+    } finally {
+      fixture.close();
+    }
+  }
+
+  @Test
+  void serializableOldestRowWorkersQueueAtTheOrderedSource(@TempDir Path root)
+      throws Exception {
+    Fixture fixture = open(root, "500ms");
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "CREATE TABLE new_order (no_w_id BIGINT NOT NULL,no_d_id BIGINT NOT NULL,"
+              + "no_o_id BIGINT NOT NULL,PRIMARY KEY(no_w_id,no_d_id,no_o_id))",
+          fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "INSERT INTO new_order VALUES (1,7,10),(1,7,11)", fixture.result));
+      assertEquals(StatusCode.OK,
+          fixture.holder.execute("BEGIN SERIALIZABLE", fixture.result));
+      SqlScanCursor holderCursor = new SqlScanCursor();
+      SqlScanRowResult holderRow = new SqlScanRowResult();
+      assertEquals(StatusCode.OK, fixture.holder.beginScan(
+          "SELECT no_o_id FROM new_order WHERE no_w_id=1 AND no_d_id=7 "
+              + "ORDER BY no_o_id LIMIT 1 FOR UPDATE",
+          holderCursor));
+      assertEquals(StatusCode.OK, fixture.holder.nextScan(holderCursor, holderRow));
+      assertEquals(10, holderRow.valueAt(0));
+      assertEquals(StatusCode.OK,
+          fixture.holder.closeScan(holderCursor, fixture.result));
+
+      assertEquals(StatusCode.OK,
+          fixture.waiter.execute("BEGIN SERIALIZABLE", fixture.result));
+      AtomicReference<Thread> worker = new AtomicReference<>();
+      SqlScanCursor waiterCursor = new SqlScanCursor();
+      SqlScanRowResult waiterRow = new SqlScanRowResult();
+      Future<StatusCode> waiting = executor.submit(() -> {
+        worker.set(Thread.currentThread());
+        StatusCode status = fixture.waiter.beginScan(
+            "SELECT no_o_id FROM new_order WHERE no_w_id=1 AND no_d_id=7 "
+                + "ORDER BY no_o_id LIMIT 1 FOR UPDATE",
+            waiterCursor);
+        if (status.isOk()) status = fixture.waiter.nextScan(waiterCursor, waiterRow);
+        return status;
+      });
+      awaitParked(worker, waiting);
+
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "DELETE FROM new_order WHERE no_w_id=1 AND no_d_id=7 AND no_o_id=10",
+          fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute("COMMIT", fixture.result));
+      assertEquals(StatusCode.OK, waiting.get(1, TimeUnit.SECONDS));
+      assertEquals(11, waiterRow.valueAt(0));
+      assertEquals(StatusCode.OK,
+          fixture.waiter.closeScan(waiterCursor, fixture.result));
+      assertEquals(StatusCode.OK, fixture.waiter.execute("ROLLBACK", fixture.result));
+    } finally {
+      executor.shutdownNow();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void emptySerializableOldestRowScanProtectsOnlyItsPrefix(@TempDir Path root)
+      throws Exception {
+    Fixture fixture = open(root, "500ms");
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "CREATE TABLE new_order (no_w_id BIGINT NOT NULL,no_d_id BIGINT NOT NULL,"
+              + "no_o_id BIGINT NOT NULL,PRIMARY KEY(no_w_id,no_d_id,no_o_id))",
+          fixture.result));
+      assertEquals(StatusCode.OK,
+          fixture.holder.execute("BEGIN SERIALIZABLE", fixture.result));
+      SqlScanCursor cursor = new SqlScanCursor();
+      SqlScanRowResult row = new SqlScanRowResult();
+      assertEquals(StatusCode.OK, fixture.holder.beginScan(
+          "SELECT no_o_id FROM new_order WHERE no_w_id=1 AND no_d_id=7 "
+              + "ORDER BY no_o_id LIMIT 1 FOR UPDATE",
+          cursor));
+      assertEquals(StatusCode.CONFLICT, fixture.holder.nextScan(cursor, row));
+      assertEquals(StatusCode.OK, fixture.holder.closeScan(cursor, fixture.result));
+
+      assertEquals(StatusCode.OK,
+          fixture.waiter.execute("BEGIN SERIALIZABLE", fixture.result));
+      assertEquals(StatusCode.OK, fixture.waiter.execute(
+          "INSERT INTO new_order VALUES (1,8,10)", fixture.result));
+      assertEquals(StatusCode.OK, fixture.waiter.execute("COMMIT", fixture.result));
+
+      assertEquals(StatusCode.OK,
+          fixture.waiter.execute("BEGIN SERIALIZABLE", fixture.result));
+      AtomicReference<Thread> worker = new AtomicReference<>();
+      Future<StatusCode> matchingInsert = executor.submit(() -> {
+        worker.set(Thread.currentThread());
+        return fixture.waiter.execute(
+            "INSERT INTO new_order VALUES (1,7,10)", new SqlExecutionResult());
+      });
+      awaitParked(worker, matchingInsert);
+      assertEquals(StatusCode.OK, fixture.holder.execute("ROLLBACK", fixture.result));
+      assertEquals(StatusCode.OK, matchingInsert.get(1, TimeUnit.SECONDS));
+      assertEquals(StatusCode.OK, fixture.waiter.execute("COMMIT", fixture.result));
+    } finally {
+      executor.shutdownNow();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void serializableDependentPointJoinLocksInnerKeysInCanonicalOrder(
+      @TempDir Path root) throws Exception {
+    Fixture fixture = open(root, "500ms");
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "CREATE TABLE stock (s_w_id BIGINT NOT NULL,s_i_id BIGINT NOT NULL,"
+              + "s_quantity BIGINT NOT NULL,PRIMARY KEY(s_w_id,s_i_id))",
+          fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "CREATE TABLE order_line (ol_w_id BIGINT NOT NULL,ol_d_id BIGINT NOT NULL,"
+              + "ol_o_id BIGINT NOT NULL,ol_number BIGINT NOT NULL,ol_i_id BIGINT NOT NULL,"
+              + "PRIMARY KEY(ol_w_id,ol_d_id,ol_o_id,ol_number))",
+          fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "INSERT INTO stock VALUES (1,1,5),(1,2,5)", fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "INSERT INTO order_line VALUES (1,1,1,1,2),(1,1,2,1,1)",
+          fixture.result));
+
+      assertEquals(StatusCode.OK,
+          fixture.holder.execute("BEGIN SERIALIZABLE", fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "UPDATE stock SET s_quantity=s_quantity+1 WHERE s_w_id=1 AND s_i_id=1",
+          fixture.result));
+      assertEquals(StatusCode.OK,
+          fixture.waiter.execute("BEGIN SERIALIZABLE", fixture.result));
+      AtomicReference<Thread> worker = new AtomicReference<>();
+      SqlExecutionResult stockLevelResult = new SqlExecutionResult();
+      Future<StatusCode> stockLevel = executor.submit(() -> {
+        worker.set(Thread.currentThread());
+        return fixture.waiter.execute(
+            "SELECT COUNT(DISTINCT s.s_i_id) FROM order_line ol "
+                + "INNER JOIN stock s ON s.s_w_id=ol.ol_w_id "
+                + "AND s.s_i_id=ol.ol_i_id WHERE ol.ol_w_id=1 "
+                + "AND ol.ol_d_id=1 AND ol.ol_o_id>=1 AND ol.ol_o_id<3 "
+                + "AND s.s_quantity<10",
+            stockLevelResult);
+      });
+      awaitParked(worker, stockLevel, stockLevelResult);
+
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "UPDATE stock SET s_quantity=s_quantity+1 WHERE s_w_id=1 AND s_i_id=2",
+          fixture.result));
+      assertFalse(stockLevel.isDone());
+      assertEquals(StatusCode.OK, fixture.holder.execute("ROLLBACK", fixture.result));
+      assertEquals(StatusCode.OK, stockLevel.get(1, TimeUnit.SECONDS));
+      assertEquals(2, stockLevelResult.value());
+      assertEquals(StatusCode.OK,
+          fixture.waiter.execute("COMMIT", fixture.result));
+    } finally {
+      executor.shutdownNow();
+      fixture.close();
+    }
+  }
+
+  @Test
+  void unchangedIndexUpdateDoesNotUpgradePastAWaitingSerializableReader(
+      @TempDir Path root) throws Exception {
+    Fixture fixture = open(root, "500ms");
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      createDistrict(fixture);
+      assertEquals(StatusCode.OK, fixture.holder.execute("BEGIN SERIALIZABLE", fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=7 FOR UPDATE",
+          fixture.result));
+      assertEquals(StatusCode.OK, fixture.waiter.execute("BEGIN SERIALIZABLE", fixture.result));
+      AtomicReference<Thread> worker = new AtomicReference<>();
+      SqlExecutionResult waitingResult = new SqlExecutionResult();
+      Future<StatusCode> waiting = executor.submit(() -> {
+        worker.set(Thread.currentThread());
+        return fixture.waiter.execute(
+            "SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=7",
+            waitingResult);
+      });
+      awaitParked(worker, waiting);
+
+      assertEquals(StatusCode.OK, fixture.holder.execute(
+          "UPDATE district SET d_next_o_id=d_next_o_id+1 WHERE d_w_id=1 AND d_id=7",
+          fixture.result));
+      assertEquals(StatusCode.OK, fixture.holder.execute("COMMIT", fixture.result));
+      assertEquals(StatusCode.OK, waiting.get(1, TimeUnit.SECONDS));
+      assertEquals(11, waitingResult.value());
+      assertEquals(StatusCode.OK, fixture.waiter.execute("COMMIT", fixture.result));
     } finally {
       executor.shutdownNow();
       fixture.close();
@@ -457,8 +682,28 @@ final class SqlCompositeRowLockTest {
       }
       Thread.onSpinWait();
     }
-    assertFalse(future.isDone());
+    assertFalse(future.isDone(), () -> "future completed with " + completedValue(future));
     assertTrue(state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING);
+  }
+
+  private static void awaitParked(
+      AtomicReference<Thread> worker,
+      Future<?> future,
+      SqlExecutionResult result) {
+    try {
+      awaitParked(worker, future);
+    } catch (AssertionError failure) {
+      throw new AssertionError(
+          failure.getMessage() + " value=" + result.value(), failure);
+    }
+  }
+
+  private static Object completedValue(Future<?> future) {
+    try {
+      return future.get();
+    } catch (Exception failure) {
+      return failure;
+    }
   }
 
   private static Fixture open(Path root, String timeout) throws Exception {
@@ -468,7 +713,7 @@ final class SqlCompositeRowLockTest {
         StandardCharsets.UTF_8);
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, GENERATION, 4, opened));
+        RelationalDatabase.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     SqlSessionOpenResult sessions = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(opened.database(), sessions));
     SqlSession holder = sessions.session();

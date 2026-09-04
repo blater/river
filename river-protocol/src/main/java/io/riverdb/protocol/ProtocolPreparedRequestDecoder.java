@@ -8,9 +8,13 @@ import java.nio.ByteBuffer;
 /** Reusable strict decoder for prepared-handle requests. */
 public final class ProtocolPreparedRequestDecoder {
   // Parameter count is the protocol's unsigned 16-bit field, not a session admission limit.
-  private static final int HEADER_BYTES = Long.BYTES + Short.BYTES * 2;
+  private static final int HEADER_BYTES = Long.BYTES + Short.BYTES * 2
+      + ProtocolTransactionDiagnosticContext.BYTES;
   private final ProtocolParameterDecoder parameterDecoder;
   private long handle;
+  private long diagnosticTag;
+  private long diagnosticStepTag;
+  private long metricsEpoch;
 
   public ProtocolPreparedRequestDecoder() {
     this(RetainedMemoryLease.unbounded());
@@ -38,8 +42,13 @@ public final class ProtocolPreparedRequestDecoder {
     if (!close) {
       int count = Short.toUnsignedInt(source.getShort(input));
       int reserved = Short.toUnsignedInt(source.getShort(input + Short.BYTES));
-      input += Short.BYTES * 2;
-      if (reserved != 0 || count > ParameterSet.MAXIMUM_PARAMETERS) return fail(frame);
+      diagnosticTag = source.getLong(input + Short.BYTES * 2);
+      diagnosticStepTag = source.getLong(input + Short.BYTES * 2 + Long.BYTES);
+      metricsEpoch = source.getLong(input + Short.BYTES * 2 + Long.BYTES * 2);
+      input += Short.BYTES * 2 + ProtocolTransactionDiagnosticContext.BYTES;
+      if (reserved != 0 || count > ParameterSet.MAXIMUM_PARAMETERS
+          || !ProtocolTransactionDiagnosticContext.valid(
+              diagnosticTag, diagnosticStepTag, metricsEpoch)) return fail(frame);
       StatusCode status = parameterDecoder.decode(source, input, end, count);
       if (!status.isOk()) return failure(frame, status);
     }
@@ -50,7 +59,16 @@ public final class ProtocolPreparedRequestDecoder {
 
   public long handle() { return handle; }
   public ParameterSet parameters() { return parameterDecoder.parameters(); }
-  public void reset() { handle = 0; parameterDecoder.reset(); }
+  public long diagnosticTag() { return diagnosticTag; }
+  public long diagnosticStepTag() { return diagnosticStepTag; }
+  public long metricsEpoch() { return metricsEpoch; }
+  public void reset() {
+    handle = 0;
+    diagnosticTag = 0;
+    diagnosticStepTag = 0;
+    metricsEpoch = 0;
+    parameterDecoder.reset();
+  }
   public StatusCode releaseHighWater() {
     handle = 0;
     return parameterDecoder.releaseHighWater();

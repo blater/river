@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 
 final class TableSchemaCapacityTest {
   @Test
-  void rejectsLogicalNarrowColumnsBeforePhysicalRowExceedsBound() {
+  void admitsMaximumLogicalNarrowColumnsWithinPhysicalRowBound() {
     TableSchema schema = new TableSchema();
     assertEquals(StatusCode.OK, schema.addBigint("id", false));
     StatusCode status = StatusCode.OK;
@@ -20,9 +20,8 @@ final class TableSchemaCapacityTest {
     }
 
     int admitted = schema.columnCount();
-    assertEquals(StatusCode.RESOURCE_EXHAUSTED, status);
-    assertEquals(1_004, admitted);
-    assertTrue(admitted < SqlShapeLimits.MAX_TABLE_COLUMNS);
+    assertEquals(StatusCode.OK, status);
+    assertEquals(SqlShapeLimits.MAX_TABLE_COLUMNS, admitted);
     assertTrue(schema.maximumRowBytes() <= TableSchema.MAXIMUM_ROW_BYTES);
     TableDefinition definition = new TableDefinition();
     assertEquals(StatusCode.OK, definition.set(

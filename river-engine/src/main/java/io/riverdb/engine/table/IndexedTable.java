@@ -2,14 +2,17 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.key.OrderedKey;
+import io.riverdb.engine.runtime.DatabaseResourceGovernor;
 import io.riverdb.storage.heap.HeapRowResult;
-import io.riverdb.tx.CommitSequenceSource;
+import io.riverdb.tx.TransactionAdmissionSource;
 import io.riverdb.tx.TransactionGroupCommitParticipant;
+import io.riverdb.tx.TransactionManager;
+import io.riverdb.wal.local.LocalWalMetrics;
 import java.nio.ByteBuffer;
 
 /** Transaction-facing facade over one authoritative indexed-table store. */
 public final class IndexedTable extends IndexedRelationalTableAccess
-    implements CommitSequenceSource, TransactionGroupCommitParticipant {
+    implements TransactionAdmissionSource, TransactionGroupCommitParticipant {
   private final IndexedTableStore store;
 
   private IndexedTable(IndexedTableStore tableStore) {
@@ -47,16 +50,68 @@ public final class IndexedTable extends IndexedRelationalTableAccess
     return status;
   }
 
-  synchronized StatusCode preflightHybridCommitGroup(
-      IndexedTransactionSession[] sessions, int count,
-      long oldestVisibleCommitSequence) {
-    return store.preflightHybridGroup(
-        sessions, count, oldestVisibleCommitSequence);
+  @Override
+  public synchronized StatusCode transactionAdmissionStatus() {
+    return store.transactionAdmissionStatus();
   }
 
+  synchronized StatusCode admitDurableVersionOperations(int required) {
+    return store.admitDurableVersionOperations(required);
+  }
+
+  synchronized StatusCode completeVersionMaintenance() {
+    return store.completeVersionMaintenance();
+  }
+
+  synchronized StatusCode preflightHybridCommitGroup(
+      IndexedPreparedLogicalCommit[] prepared, int count,
+      long oldestVisibleCommitSequence) {
+    return store.preflightHybridGroup(
+        prepared, count, oldestVisibleCommitSequence);
+  }
+
+  synchronized StatusCode reserveHybridCommitGroupCapacity(int required) {
+    return store.reserveHybridGroupCapacity(required);
+  }
+
+  /** Copies indexed commit-path telemetry into caller-owned storage. */
+  public StatusCode copyCommitTelemetry(IndexedGroupCommitTelemetry result) {
+    return store.copyCommitMetrics(result);
+  }
+
+  /** Copies local WAL force telemetry into caller-owned storage. */
+  public StatusCode copyWalMetrics(LocalWalMetrics result) {
+    return store.copyWalMetrics(result);
+  }
+
+  /** Starts one aggregate-only capture at a caller-established quiescent boundary. */
+  public StatusCode beginPerformanceCapture() {
+    return store.beginPerformanceCapture();
+  }
+
+  /** Ends the active capture into caller-owned snapshots. */
+  public StatusCode endPerformanceCapture(
+      IndexedGroupCommitTelemetry commitResult,
+      LocalWalMetrics walResult) {
+    return store.endPerformanceCapture(commitResult, walResult);
+  }
+
+  public StatusCode cancelPerformanceCapture() {
+    return store.cancelPerformanceCapture();
+  }
+
+  IndexedGroupCommitMetrics commitMetrics() { return store.commitMetrics(); }
+
+  DatabaseResourceGovernor resourceGovernor() { return store.resourceGovernor(); }
+
+  boolean matches(TransactionManager manager) { return store.matches(manager); }
+
   synchronized StatusCode appendHybridCommitGroup(
-      IndexedTransactionSession[] sessions, long[] commitSequences, int count) {
-    return store.appendHybridGroup(sessions, commitSequences, count);
+      IndexedPreparedLogicalCommit[] prepared,
+      long[] commitSequences,
+      long[] committedRows,
+      int count) {
+    return store.appendHybridGroup(prepared, commitSequences, committedRows, count);
   }
 
   StatusCode forceHybridCommitGroup() { return store.forceHybridGroup(); }
@@ -67,6 +122,14 @@ public final class IndexedTable extends IndexedRelationalTableAccess
 
   synchronized boolean commitGroupDecisionAppended() {
     return store.commitGroupDecisionAppended();
+  }
+
+  synchronized boolean commitGroupDurabilityUncertain() {
+    return store.commitGroupDurabilityUncertain();
+  }
+
+  synchronized StatusCode fenceCommitWriter() {
+    return store.fenceCommitWriter();
   }
 
   synchronized StatusCode prepareForcedGroupPublication() {

@@ -1,7 +1,9 @@
 package io.riverdb.engine.sql;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.text.PackedText;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalScanResult;
 
@@ -9,7 +11,7 @@ import io.riverdb.engine.relational.RelationalScanResult;
 public final class SqlScanRowResult {
   private final RelationalScanResult relational = new RelationalScanResult();
   private final SqlResultLanes lanes = new SqlResultLanes();
-  private final char[] pendingText = new char[io.riverdb.engine.api.CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  private char[] pendingText = new char[0];
   private long key;
   private long value;
   private int pendingTextIndex = -1;
@@ -129,9 +131,9 @@ public final class SqlScanRowResult {
   }
 
   StatusCode setTextAt(int index, CharSequence source) {
-    if (source == null || source.length() > pendingText.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
+    if (source == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+    StatusCode status = reservePendingText(index, source.length());
+    if (!status.isOk()) return status;
     for (int character = 0; character < source.length(); character++) {
       pendingText[character] = source.charAt(character);
     }
@@ -147,9 +149,8 @@ public final class SqlScanRowResult {
   }
 
   StatusCode beginTextAt(int index, int length) {
-    if (!available || !lanes.isText(index) || length < 0 || length > pendingText.length) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
+    StatusCode status = reservePendingText(index, length);
+    if (!status.isOk()) return status;
     pendingTextIndex = index;
     pendingTextLength = length;
     return StatusCode.OK;
@@ -171,6 +172,8 @@ public final class SqlScanRowResult {
 
   StatusCode setPackedTextAt(int index, long packed) {
     int length = PackedText.length(packed);
+    StatusCode reserved = reservePendingText(index, length);
+    if (!reserved.isOk()) return reserved;
     for (int character = 0; character < length; character++) {
       pendingText[character] = PackedText.charAt(packed, character);
     }
@@ -200,6 +203,7 @@ public final class SqlScanRowResult {
   public boolean isVarchar(int index) { return lanes.isText(index); }
   public int typeDescriptorAt(int index) { return lanes.descriptor(index); }
   public int textLengthAt(int index) { return lanes.textLength(index); }
+  public int encodedTextLengthAt(int index) { return lanes.encodedTextLength(index); }
   public int copyTextAt(int index, char[] destination, int offset) {
     return lanes.copyText(index, destination, offset);
   }
@@ -207,4 +211,23 @@ public final class SqlScanRowResult {
     return lanes.textCharacter(index, character);
   }
   public boolean isAvailable() { return available; }
+
+  private StatusCode reservePendingText(int index, int required) {
+    if (!available || !lanes.isText(index) || required < 0) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    int maximum = Math.min(
+        Utf8Text.MAXIMUM_UTF16_CODE_UNITS,
+        SqlTypeDescriptor.parameterOne(lanes.descriptor(index)) * 2);
+    if (required > maximum) return StatusCode.STRING_DATA_RIGHT_TRUNCATION;
+    if (required <= pendingText.length) return StatusCode.OK;
+    int capacity = BoundedArrayGrowth.capacity(
+        pendingText.length, required, maximum, 8);
+    try {
+      pendingText = java.util.Arrays.copyOf(pendingText, capacity);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError error) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
+  }
 }

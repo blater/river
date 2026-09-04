@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -20,6 +21,7 @@ final class SqlUnionSessionExecutionTest {
   void executesNestedSetBoundariesWithJoinIndexAndLocalTails(@TempDir Path root) {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(StatusCode.OK, RelationalDatabase.create(
+        databaseRequest(8),
         root, DATABASE, WalGeneration.of(1), 8, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessions = new SqlSessionOpenResult();

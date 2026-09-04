@@ -46,7 +46,7 @@ final class SqlSubqueryGraphExecution
         relationalSession, statement, evaluator, temporalContext, this, shapeBudget);
     frames = new SqlSubqueryFrames(
         relationalSession, statement, evaluator, temporalContext, joined);
-    plan = new SqlSubqueryPlan(statement, frames.access(), cache);
+    plan = new SqlSubqueryPlan(statement, frames, cache);
     joined.plan(plan);
     predicates = new SqlSubqueryPredicateBank(
         statement, evaluator, temporalContext, this, frames, plan, shapeBudget);

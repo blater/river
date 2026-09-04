@@ -6,11 +6,17 @@ import io.riverdb.base.text.Utf8Text;
 import io.riverdb.base.type.SqlDefaultKind;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.base.type.SqlValueDomain;
+import io.riverdb.storage.heap.HeapPage;
 import java.nio.ByteBuffer;
 
 /** Caller-owned reusable schema carrying one canonical descriptor per admitted column. */
 public final class TableSchema {
-  public static final int MAXIMUM_ROW_BYTES = SqlShapeLimits.MAX_STORED_ROW_BYTES;
+  public static final int MAXIMUM_ROW_BYTES = HeapPage.MAXIMUM_ROW_BYTES;
+  /**
+   * Largest UTF-16 scratch needed by a valid stored row. Row admission reserves four UTF-8
+   * bytes per declared VARCHAR scalar, while one scalar occupies at most two UTF-16 units.
+   */
+  public static final int MAXIMUM_ROW_TEXT_CHARACTERS = MAXIMUM_ROW_BYTES / 2;
   public static final int CHECK_EQUAL = 1;
   public static final int CHECK_NOT_EQUAL = 2;
   public static final int CHECK_LESS_THAN = 3;

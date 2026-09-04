@@ -12,17 +12,10 @@ final class IndexedSessionCursors {
   private IndexedTupleScanCursor[] tuples = new IndexedTupleScanCursor[8];
   private int scalarCount;
   private int tupleCount;
-  private boolean serializable;
 
   int scalarCount() { return scalarCount; }
 
   boolean active() { return scalarCount + tupleCount != 0; }
-
-  boolean serializable() { return serializable; }
-
-  void markSerializable() { serializable = true; }
-
-  void resetSerializable() { serializable = false; }
 
   StatusCode reserveScalar() {
     if (full()) return StatusCode.RESOURCE_EXHAUSTED;

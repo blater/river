@@ -19,7 +19,8 @@ import java.util.Map;
 import java.util.concurrent.Executor;
 
 /** One JDBC connection owns one ordered remote River session. */
-final class RiverJdbcConnection extends AbstractConnection implements RiverConnectionMetrics {
+final class RiverJdbcConnection extends AbstractConnection
+    implements RiverConnectionMetrics, RiverTransactionDiagnostics {
   private static final int MAXIMUM_SAVEPOINT_NAME_LENGTH = 64;
   private static final int MAXIMUM_SAVEPOINTS = 3;
 
@@ -39,6 +40,9 @@ final class RiverJdbcConnection extends AbstractConnection implements RiverConne
   private int isolation = Connection.TRANSACTION_REPEATABLE_READ;
   private int nextSavepointId = 1;
   private int savepointCount;
+  private long diagnosticTag;
+  private long diagnosticStepTag;
+  private long metricsEpoch;
 
   RiverJdbcConnection(
       RiverClientConnection remoteClient,
@@ -351,6 +355,39 @@ final class RiverJdbcConnection extends AbstractConnection implements RiverConne
     return client.bytesReceived();
   }
 
+  @Override
+  public void beginDiagnosticAttempt(long requestedDiagnosticTag, long requestedMetricsEpoch)
+      throws SQLException {
+    requireOpen();
+    if (requestedDiagnosticTag <= 0 || requestedMetricsEpoch <= 0) {
+      throw JdbcExceptions.invalid("diagnostic attempt and epoch must be positive");
+    }
+    JdbcExceptions.require(session.configureTransactionDiagnostics(
+        requestedDiagnosticTag, 0, requestedMetricsEpoch),
+        "configure transaction diagnostics");
+    diagnosticTag = requestedDiagnosticTag;
+    diagnosticStepTag = 0;
+    metricsEpoch = requestedMetricsEpoch;
+  }
+
+  @Override
+  public void diagnosticStep(long requestedDiagnosticStepTag) throws SQLException {
+    requireOpen();
+    if (diagnosticTag <= 0 || metricsEpoch <= 0 || requestedDiagnosticStepTag < 0) {
+      throw JdbcExceptions.invalid("diagnostic attempt is not configured");
+    }
+    JdbcExceptions.require(session.configureTransactionDiagnostics(
+        diagnosticTag, requestedDiagnosticStepTag, metricsEpoch),
+        "configure transaction diagnostic step");
+    diagnosticStepTag = requestedDiagnosticStepTag;
+  }
+
+  @Override
+  public long diagnosticStepTag() throws SQLException {
+    requireOpen();
+    return diagnosticStepTag;
+  }
+
   void beforeExecution() throws SQLException {
     requireOpen();
     transactionActive = RiverJdbcTransactionStarter.ensure(
@@ -515,7 +552,6 @@ final class RiverJdbcConnection extends AbstractConnection implements RiverConne
     StatusCode status = session.execute(sql, transactionResult);
     transactionActive = transactionResult.transactionActive();
     if (!transactionActive) completeSavepointsFrom(0);
-    if (status == StatusCode.CONFLICT && "ROLLBACK".equals(sql)) return;
     JdbcExceptions.require(status, operation);
   }
 

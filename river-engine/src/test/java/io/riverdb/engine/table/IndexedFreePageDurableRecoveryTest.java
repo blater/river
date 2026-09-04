@@ -1,5 +1,6 @@
 package io.riverdb.engine.table;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -62,7 +63,8 @@ final class IndexedFreePageDurableRecoveryTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.CORRUPTION,
-        IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened),
+        IndexedTableStore.openExisting(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(1), reopened),
         corruption.name());
     assertNull(reopened.store(), corruption.name());
     assertEquals(StatusCode.OK, wal.close());
@@ -91,7 +93,8 @@ final class IndexedFreePageDurableRecoveryTest {
     IndexedTableStoreOpenResult reopened = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.openExisting(directory, wal, DATABASE, GENERATION, reopened));
+        IndexedTableStore.openExisting(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(1), reopened));
     assertNotNull(reopened.store());
     assertEquals(3, reopened.store().pageCount());
     assertEquals(StatusCode.OK, reopened.store().validate());
@@ -281,7 +284,8 @@ final class IndexedFreePageDurableRecoveryTest {
     IndexedTableStoreOpenResult result = new IndexedTableStoreOpenResult();
     assertEquals(
         StatusCode.OK,
-        IndexedTableStore.create(directory, wal, DATABASE, GENERATION, result));
+        IndexedTableStore.create(
+            directory, wal, DATABASE, GENERATION, databaseProviderLease(1), result));
     return result.store();
   }
 

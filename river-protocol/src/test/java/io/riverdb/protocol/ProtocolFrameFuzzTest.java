@@ -28,7 +28,8 @@ final class ProtocolFrameFuzzTest {
         ProtocolMessageType.EXECUTE,
         1,
         "SELECT id FROM rows WHERE id=1",
-        null));
+        null,
+        0, 0, 0));
     int requestBytes = seed.remaining();
     for (int iteration = 0; iteration < MUTATIONS; iteration++) {
       System.arraycopy(seedBytes, 0, candidateBytes, 0, requestBytes);

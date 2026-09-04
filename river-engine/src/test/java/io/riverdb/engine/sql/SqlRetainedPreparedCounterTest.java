@@ -1,5 +1,6 @@
 package io.riverdb.engine.sql;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -16,7 +17,7 @@ final class SqlRetainedPreparedCounterTest {
   @Test
   void compilesOnceAndExecutesTheRetainedTemplateWithoutReparsing(@TempDir Path root) {
     RelationalDatabaseOpenResult databaseResult = new RelationalDatabaseOpenResult();
-    assertEquals(StatusCode.OK, RelationalDatabase.create(root,
+    assertEquals(StatusCode.OK, RelationalDatabase.create(databaseRequest(4), root,
         DatabaseIncarnation.of(0x5052455041524544L, 0x434F554E54455231L),
         WalGeneration.of(1), 4, databaseResult));
     RelationalDatabase database = databaseResult.database();

@@ -30,9 +30,6 @@ public final class RelationalSession {
   private final RelationalDatabaseServices services;
   private final CatalogStatisticsCleanup statisticsCleanup = new CatalogStatisticsCleanup();
   private final SchemaPin descriptorNamespace = new SchemaPin();
-  private final SchemaPin bindingTablePin = new SchemaPin();
-  private final RelationalDescriptorJoinTableView bindingTableView =
-      new RelationalDescriptorJoinTableView();
   private final TableSchema.ColumnName pendingDropIndexName =
       new TableSchema.ColumnName();
   private final TableSchema.ColumnName pendingDropTableName =
@@ -158,6 +155,28 @@ public final class RelationalSession {
     return registeredTransaction;
   }
 
+  /** True while the active transaction requires strict two-phase read protection. */
+  public boolean isSerializableTransaction() {
+    return registeredTransaction
+        && session.transaction().isolationLevel() == IsolationLevel.SERIALIZABLE;
+  }
+
+  /** True only while the kernel transaction can still execute or retain statement state. */
+  public boolean transactionHandleActive() {
+    return session.transaction().isActiveHandle();
+  }
+
+  /** Applies opaque attempt, operation, and phase tags to the next or active transaction. */
+  public StatusCode configureTransactionDiagnostics(
+      long diagnosticTag, long diagnosticStepTag, long metricsEpoch) {
+    return session.configureTransactionDiagnostics(
+        diagnosticTag, diagnosticStepTag, metricsEpoch);
+  }
+
+  public StatusCode updateTransactionDiagnosticStep(long diagnosticStepTag) {
+    return session.updateTransactionDiagnosticStep(diagnosticStepTag);
+  }
+
   /** Current global catalog publication token for conservative plan invalidation. */
   public long catalogGeneration() { return schemaGate.version(); }
 
@@ -192,17 +211,6 @@ public final class RelationalSession {
 
   public StatusCode resolveTable(CharSequence name, TableDefinition result) {
     return catalogReader.resolveTable(name, result);
-  }
-
-  /** Resolves the current descriptor catalog directly into the binder's primitive view. */
-  public StatusCode resolveBindingTable(CharSequence name, TableDefinition result) {
-    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    result.reset();
-    StatusCode status = resolveDescriptor(name, bindingTablePin, null);
-    if (status.isOk()) status = bindingTableView.prepare(bindingTablePin.descriptor(), result);
-    StatusCode released = bindingTablePin.isActive()
-        ? bindingTablePin.release() : StatusCode.OK;
-    return status.isOk() ? released : status;
   }
 
   public StatusCode resolveView(
@@ -836,6 +844,17 @@ public final class RelationalSession {
     }
     long space = RelationalKey.dataSpace(table.tableId());
     return session.lockCurrentKey(space, key, result);
+  }
+
+  /** Borrows the current row after taking its exclusive key lock before reading it. */
+  public StatusCode lockCurrentRowCurrent(
+      TableDefinition table, long key, HeapRowResult result) {
+    if (table == null || !table.isOwnedBy(schemaGate) || !registeredTransaction
+        || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long space = RelationalKey.dataSpace(table.tableId());
+    return session.lockCurrentKeyCurrent(space, key, result);
   }
 
   /** Retains the current-row claim through transaction completion. */

@@ -56,10 +56,6 @@ final class IndexedTransactionScanCoordinator {
     }
     if (status.isOk()) {
       session.registerScan(cursor);
-      if (session.transaction().isolationLevel()
-          == io.riverdb.tx.api.IsolationLevel.SERIALIZABLE) {
-        session.markSerializableScan();
-      }
     }
     return status;
   }

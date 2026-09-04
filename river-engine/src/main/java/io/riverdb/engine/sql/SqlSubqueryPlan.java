@@ -19,7 +19,7 @@ final class SqlSubqueryPlan {
 
   private final BoundSqlQuery query;
   private final BoundSqlStatement bound;
-  private final SqlSubqueryAccess access;
+  private final SqlSubqueryFrames frames;
   private final SqlSubqueryResultCache cache;
   private final long[] invocations = new long[SqlQuery.MAXIMUM_EDGES];
   private final long[] executions = new long[SqlQuery.MAXIMUM_EDGES];
@@ -32,11 +32,11 @@ final class SqlSubqueryPlan {
 
   SqlSubqueryPlan(
       BoundSqlStatement statement,
-      SqlSubqueryAccess accessPlan,
+      SqlSubqueryFrames subqueryFrames,
       SqlSubqueryResultCache resultCache) {
     bound = statement;
     query = statement.executableQuery;
-    access = accessPlan;
+    frames = subqueryFrames;
     cache = resultCache;
   }
 
@@ -121,6 +121,6 @@ final class SqlSubqueryPlan {
 
   private int accessColumn(int edge) {
     return specializedAccess[edge] == Integer.MIN_VALUE
-        ? access.column(query.edgeChild(edge)) : specializedAccess[edge];
+        ? frames.accessColumn(query.edgeChild(edge)) : specializedAccess[edge];
   }
 }

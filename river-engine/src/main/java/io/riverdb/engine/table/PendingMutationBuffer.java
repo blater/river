@@ -2,7 +2,6 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.storage.heap.HeapInsertResult;
-import io.riverdb.storage.heap.HeapPage;
 import io.riverdb.storage.heap.HeapRowResult;
 import java.nio.ByteBuffer;
 
@@ -12,13 +11,17 @@ import java.nio.ByteBuffer;
  */
 final class PendingMutationBuffer {
   private static final int MUTATION_NONE = 0;
+  // IndexedRelationalMutation uses int payload positions. Reject that exact representation
+  // boundary during admission; row-arena addressing itself remains chunked and long-addressed.
+  private static final long MAXIMUM_COMPILED_PAYLOAD_BYTES = Integer.MAX_VALUE;
 
   private final PendingRowArena rows;
   private final PendingMutationMetadata metadata;
   private final PendingMutationLatestIndex latest;
   private final int rowStride;
   private int count;
-  private int payloadBytes;
+  private long payloadBytes;
+  private long generation = 1;
 
   PendingMutationBuffer(int capacity, int maximumRowBytes) {
     this(capacity, maximumRowBytes, PendingRowChunkAllocator.HEAP);
@@ -46,10 +49,11 @@ final class PendingMutationBuffer {
     return rowStride;
   }
 
-  int payloadBytes() { return payloadBytes; }
+  int payloadBytes() { return (int) payloadBytes; }
 
   long accountedBytesForReservation(int additionalRows, int additionalRowBytes) {
     if (additionalRows != 1 || additionalRows > capacity() - count) return -1;
+    if (!payloadAddressable(additionalRowBytes)) return -1;
     long rowBytes = rows.accountedBytesForRow(additionalRowBytes);
     long indexBytes = latest.accountedBytesForEntries(count + 1);
     return rowBytes < 0 || indexBytes < 0 ? -1
@@ -58,6 +62,9 @@ final class PendingMutationBuffer {
 
   long accountedBytesForReservation(int[] rowLengths, int start, int additionalRows) {
     if (additionalRows <= 0 || additionalRows > capacity() - count) return -1;
+    if (!validRange(rowLengths, start, additionalRows)) return -1;
+    long additionalPayload = payloadBytes(rowLengths, start, additionalRows);
+    if (!payloadAddressable(additionalPayload)) return -1;
     long rowBytes = rows.accountedBytesForRows(rowLengths, start, additionalRows);
     long indexBytes = latest.accountedBytesForEntries(count + additionalRows);
     return rowBytes < 0 || indexBytes < 0 ? -1
@@ -70,11 +77,13 @@ final class PendingMutationBuffer {
   }
 
   void release() {
+    boolean changed = count != 0;
     truncate(0);
     metadata.release();
     latest.release();
     rows.release();
     payloadBytes = 0;
+    if (!changed) changeGeneration();
   }
 
   int operationAt(int index) {
@@ -103,6 +112,10 @@ final class PendingMutationBuffer {
     }
     if (additionalRows > capacity() - count) return StatusCode.RESOURCE_EXHAUSTED;
     if (additionalRows != 1) return StatusCode.INVALID_EXTERNAL_INPUT;
+    if (!payloadAddressable(additionalRowBytes)
+        || rows.accountedBytesForRow(additionalRowBytes) < 0) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     StatusCode status = metadata.reserve(count, additionalRows);
     if (status.isOk()) status = latest.reserve(count + additionalRows);
     return status.isOk() ? rows.reserveRow(additionalRowBytes) : status;
@@ -111,6 +124,15 @@ final class PendingMutationBuffer {
   StatusCode reserve(int[] rowLengths, int start, int additionalRows) {
     if (additionalRows <= 0) return StatusCode.INVALID_EXTERNAL_INPUT;
     if (additionalRows > capacity() - count) return StatusCode.RESOURCE_EXHAUSTED;
+    if (!validRange(rowLengths, start, additionalRows)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    long additionalPayload = payloadBytes(rowLengths, start, additionalRows);
+    if (additionalPayload < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    if (!payloadAddressable(additionalPayload)
+        || rows.accountedBytesForRows(rowLengths, start, additionalRows) < 0) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
     StatusCode status = metadata.reserve(count, additionalRows);
     if (status.isOk()) status = latest.reserve(count + additionalRows);
     return status.isOk() ? rows.reserveRows(rowLengths, start, additionalRows) : status;
@@ -122,6 +144,7 @@ final class PendingMutationBuffer {
     latest.put(space, key, count);
     count++;
     payloadBytes++;
+    changeGeneration();
   }
 
   void append(
@@ -138,21 +161,22 @@ final class PendingMutationBuffer {
     latest.put(space, key, count);
     count++;
     payloadBytes += rowBytes;
+    changeGeneration();
   }
 
   void copyRowTo(int index, ByteBuffer target, int targetOffset) {
     rows.copyTo(
-        metadata.rowOffsetAt(index), metadata.rowLengthAt(index), target, targetOffset);
+        metadata.rowAddressAt(index), metadata.rowLengthAt(index), target, targetOffset);
   }
 
   StatusCode insertRowInto(int index, ByteBuffer heap, HeapInsertResult result) {
     return rows.insertInto(
-        metadata.rowOffsetAt(index), metadata.rowLengthAt(index), heap, result);
+        metadata.rowAddressAt(index), metadata.rowLengthAt(index), heap, result);
   }
 
   /** Borrow remains valid only until this owner next appends, compacts, or truncates/reuses. */
   void setRowResult(int index, HeapRowResult result) {
-    rows.setResult(metadata.rowOffsetAt(index), metadata.rowLengthAt(index), result);
+    rows.setResult(metadata.rowAddressAt(index), metadata.rowLengthAt(index), result);
   }
 
   boolean containsNonInsertMutation() {
@@ -174,14 +198,16 @@ final class PendingMutationBuffer {
   }
 
   void truncate(int first) {
-    int retainedBytes = first < count ? metadata.rowOffsetAt(first) : rows.endOffset();
+    boolean changed = first != count;
+    long retainedAddress = first < count ? metadata.rowAddressAt(first) : rows.endAddress();
     for (int index = first; index < count; index++) {
       payloadBytes -= metadata.rowLengthAt(index);
       metadata.clear(index);
     }
-    rows.truncateTo(retainedBytes);
+    rows.truncateTo(retainedAddress);
     count = first;
     latest.rebuild(metadata, count);
+    if (changed) changeGeneration();
   }
 
   void compact() {
@@ -192,15 +218,15 @@ final class PendingMutationBuffer {
               && metadata.operationAt(index) != MUTATION_NONE);
     }
     int output = 0;
-    int compactedPayloadBytes = 0;
+    long compactedPayloadBytes = 0;
     rows.beginCompaction();
     for (int index = 0; index < originalCount; index++) {
       if (!metadata.retainedAt(index)) {
         continue;
       }
       int rowBytes = metadata.rowLengthAt(index);
-      int compactedOffset = rows.compactRow(metadata.rowOffsetAt(index), rowBytes);
-      metadata.copy(index, output, compactedOffset);
+      long compactedAddress = rows.compactRow(metadata.rowAddressAt(index), rowBytes);
+      metadata.copy(index, output, compactedAddress);
       compactedPayloadBytes += rowBytes;
       output++;
     }
@@ -214,5 +240,32 @@ final class PendingMutationBuffer {
     count = output;
     payloadBytes = compactedPayloadBytes;
     latest.rebuild(metadata, count);
+    changeGeneration();
+  }
+
+  long generation() { return generation; }
+
+  private void changeGeneration() {
+    generation = generation == Long.MAX_VALUE ? 0 : generation + 1;
+  }
+
+  private boolean payloadAddressable(long additionalPayloadBytes) {
+    return additionalPayloadBytes > 0
+        && additionalPayloadBytes <= MAXIMUM_COMPILED_PAYLOAD_BYTES - payloadBytes;
+  }
+
+  private long payloadBytes(int[] rowLengths, int start, int additionalRows) {
+    long bytes = 0;
+    for (int index = 0; index < additionalRows; index++) {
+      int rowBytes = rowLengths[start + index];
+      if (rowBytes <= 0 || rowBytes > rowStride) return -1;
+      bytes += rowBytes;
+    }
+    return bytes;
+  }
+
+  private static boolean validRange(int[] rowLengths, int start, int count) {
+    return rowLengths != null && start >= 0 && count > 0
+        && start <= rowLengths.length - count;
   }
 }

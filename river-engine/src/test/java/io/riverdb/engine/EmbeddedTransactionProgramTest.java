@@ -1,5 +1,6 @@
 package io.riverdb.engine;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -339,7 +340,7 @@ final class EmbeddedTransactionProgramTest {
     io.riverdb.engine.api.DatabaseOpenResult opened =
         new io.riverdb.engine.api.DatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     SessionOpenResult sessionResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));

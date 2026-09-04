@@ -4,10 +4,12 @@ import io.riverdb.base.error.StatusCode;
 
 /** Fan-in-bounded primitive cursor and heap storage for legacy record merging. */
 final class SqlSortSpillCursors {
+  private static final long[] EMPTY_LONGS = new long[0];
+  private static final int[] EMPTY_INTS = new int[0];
   private final SqlSessionShapeBudget budget;
-  private long[] offsets = new long[0];
-  private long[] remaining = new long[0];
-  private int[] heap = new int[0];
+  private long[] offsets = EMPTY_LONGS;
+  private long[] remaining = EMPTY_LONGS;
+  private int[] heap = EMPTY_INTS;
   private long retainedBytes;
 
   SqlSortSpillCursors(SqlSessionShapeBudget shapeBudget) { budget = shapeBudget; }
@@ -35,8 +37,23 @@ final class SqlSortSpillCursors {
     }
   }
 
-  void close() {
-    // Session-owned fan-in storage is bounded by configuration and retained for reuse.
+  long retainedBytes() { return retainedBytes; }
+
+  long requiredBytes(int fanIn) {
+    return fanIn < 2 ? Long.MAX_VALUE : offsets.length >= fanIn
+        ? retainedBytes : cleanRequiredBytes(fanIn);
+  }
+
+  static long cleanRequiredBytes(int fanIn) {
+    return fanIn < 2 ? Long.MAX_VALUE
+        : (long) fanIn * (2L * Long.BYTES + Integer.BYTES);
+  }
+
+  void releaseRetainedStorage() {
+    offsets = EMPTY_LONGS;
+    remaining = EMPTY_LONGS;
+    heap = EMPTY_INTS;
+    retainedBytes = 0;
   }
 
   long[] offsets() { return offsets; }

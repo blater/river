@@ -2985,17 +2985,6 @@ final class SqlParserTest {
                 + "AND e=5 AND f=6 AND g=7 AND h=8 AND i=9",
             command));
     assertEquals(9, command.wherePredicates().leafCount());
-    StringBuilder tooManyRows = new StringBuilder("INSERT INTO x VALUES ");
-    for (int index = 0; index <= SqlCommand.MAXIMUM_INSERT_ROWS; index++) {
-      if (index > 0) {
-        tooManyRows.append(',');
-      }
-      tooManyRows.append('(').append(index).append(',').append(index).append(')');
-    }
-    assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
-        parser.parse(tooManyRows.toString(), command));
-    assertFalse(command.isAvailable());
   }
 
   @Test
@@ -3038,16 +3027,24 @@ final class SqlParserTest {
     assertEquals(StatusCode.OK, parser.parse(predicates, command));
     assertEquals(SqlCommand.MAXIMUM_PREDICATES, command.wherePredicates().leafCount());
     assertTrue(command.isAvailable());
+  }
 
+  @Test
+  void acceptsInsertRowsBeyondLegacyFixtureBatchSize() {
+    SqlParser parser = new SqlParser();
+    SqlCommand command = new SqlCommand();
+    int rowCount = 257;
     StringBuilder rows = new StringBuilder("INSERT INTO x VALUES ");
-    for (int index = 0; index < SqlCommand.MAXIMUM_INSERT_ROWS; index++) {
+    for (int index = 0; index < rowCount; index++) {
       if (index > 0) {
         rows.append(',');
       }
       rows.append('(').append(index).append(',').append(index).append(')');
     }
     assertEquals(StatusCode.OK, parser.parse(rows, command));
-    assertEquals(SqlCommand.MAXIMUM_INSERT_ROWS, command.insertRowCount());
+    assertEquals(rowCount, command.insertRowCount());
+    assertEquals(256, command.insertValue(256, 0));
+    assertEquals(256, command.insertValue(256, 1));
     assertTrue(command.isAvailable());
   }
 

@@ -3,7 +3,10 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.engine.runtime.DatabasePageCachePlan;
+import io.riverdb.engine.runtime.DatabaseResourcePlan;
 import io.riverdb.format.page.PageHeader;
+import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.IoResult;
 import java.nio.ByteBuffer;
@@ -18,21 +21,8 @@ final class IndexedPageSet {
       DurableFile durableFile,
       DurableFile durableStagingFile,
       DatabaseIncarnation database,
-      WalGeneration generation) {
-    this(
-        durableFile,
-        durableStagingFile,
-        database,
-        generation,
-        IndexedPageCacheConfig.DEFAULT);
-  }
-
-  IndexedPageSet(
-      DurableFile durableFile,
-      DurableFile durableStagingFile,
-      DatabaseIncarnation database,
       WalGeneration generation,
-      IndexedPageCacheConfig config) {
+      DatabasePageCachePlan config) {
     state = new IndexedPageState(config);
     cache = new IndexedPageFrameCache(
         durableFile, durableStagingFile, database, generation, state, config);
@@ -41,11 +31,15 @@ final class IndexedPageSet {
   void setGeneration(WalGeneration generation) { cache.setGeneration(generation); }
   void beginPageImageOperation() { state.beginPageImageOperation(); }
 
-  IndexedTableKernel createKernel(DurableFile rowFile, DurableFile versionFile) {
+  IndexedTableKernel createKernel(
+      DurableFile rowFile,
+      DurableFile versionFile,
+      DatabaseResourcePlan resourcePlan) {
     return new IndexedTableKernel(
         this,
         new IndexedVersionState(
-            new IndexedRowDirectory(rowFile), new IndexedVersionDirectory(versionFile)));
+            new IndexedRowDirectory(rowFile), new IndexedVersionDirectory(versionFile),
+            resourcePlan));
   }
 
   ByteBuffer currentPayloadUnchecked(int pageId) { return cache.currentPayloadUnchecked(pageId); }
@@ -55,6 +49,7 @@ final class IndexedPageSet {
   long recordStart(int pageId) { return cache.recordStart(pageId); }
   long recordEnd(int pageId) { return cache.recordEnd(pageId); }
   int changedPageCount() { return state.changedPageCount(); }
+  int changedPageCapacity() { return cache.changedPageCapacity(); }
   int changedPageId(int index) { return state.changedPageId(index); }
   int highestPageId() { return state.highestPageId(); }
   int payloadKind(int pageId) { return cache.payloadKind(pageId); }
@@ -68,17 +63,35 @@ final class IndexedPageSet {
     return cache.pinPageAt(pageId, visibleCommitSequence, result);
   }
   StatusCode unpinPage(IndexedPageGenerationPin pin) { return cache.unpinPage(pin); }
-  boolean pageValidationMatches(
+  StatusCode restorePageValidation(
       int pageId, long pageGeneration, long schemaId,
-      long descriptorHash, int expectedType) {
-    return cache.pageValidationMatches(
-        pageId, pageGeneration, schemaId, descriptorHash, expectedType);
+      long descriptorHash, int expectedType,
+      TupleBTreePageValidationProof target) {
+    return cache.restorePageValidation(
+        pageId, pageGeneration, schemaId, descriptorHash, expectedType, target);
   }
-  void rememberPageValidation(
+  StatusCode rememberPageValidation(
       int pageId, long pageGeneration, long schemaId,
-      long descriptorHash, int pageType) {
-    cache.rememberPageValidation(
-        pageId, pageGeneration, schemaId, descriptorHash, pageType);
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    return cache.rememberPageValidation(
+        pageId, pageGeneration, schemaId, descriptorHash, pageType, source);
+  }
+  StatusCode consumeTupleMutationInputValidation(
+      int pageId, long pageGeneration, long ownerKeyId,
+      long schemaId, long descriptorHash, int pageType,
+      TupleBTreePageValidationProof target) {
+    return cache.consumeTupleMutationInputValidation(
+        pageId, pageGeneration, ownerKeyId,
+        schemaId, descriptorHash, pageType, target);
+  }
+  StatusCode sealTupleMutationValidation(
+      int pageId, long pageGeneration, long ownerKeyId,
+      long schemaId, long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    return cache.sealTupleMutationValidation(
+        pageId, pageGeneration, ownerKeyId,
+        schemaId, descriptorHash, pageType, source);
   }
   StatusCode pinOperationPage(
       int pageId, boolean writable, IndexedOperationPage result) {
@@ -211,6 +224,14 @@ final class IndexedPageSet {
   }
   void clearStagedFlags() { cache.clearStagedFlags(); }
   StatusCode closeStagingFile() { return StatusCode.OK; }
+  StatusCode detach() {
+    StatusCode status = cache.detach();
+    return status.isOk() ? state.detach() : status;
+  }
+  void abandon() {
+    cache.abandon();
+    state.abandon();
+  }
   ByteBuffer beginVacuumPage(int pageId) { return cache.beginVacuumPage(pageId); }
   ByteBuffer vacuumPayload(int pageId) { return cache.vacuumPayload(pageId); }
   StatusCode sealVacuumPage(int pageId) { return cache.sealVacuumPage(pageId); }

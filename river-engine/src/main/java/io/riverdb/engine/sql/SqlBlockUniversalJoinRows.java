@@ -39,7 +39,8 @@ final class SqlBlockUniversalJoinRows implements SqlBlockJoinRows {
       boolean nested,
       SqlCommand command,
       SqlBoundJoinContext context,
-      SqlBoundBooleanPredicateProgram where) {
+      SqlBoundBooleanPredicateProgram where,
+      int orderedInnerColumn) {
     if (frame == null || frameBlock != block || frameNested != nested) {
       frame = new SqlSubqueryUniversalJoinFrame(
           session, expressions, temporal, block,
@@ -50,7 +51,7 @@ final class SqlBlockUniversalJoinRows implements SqlBlockJoinRows {
       frameBlock = block;
       frameNested = nested;
     }
-    StatusCode status = frame.prepare(command, context, where);
+    StatusCode status = frame.prepare(command, context, where, orderedInnerColumn);
     if (status.isOk() && nested) subqueries.registerExternalUniversal(block, frame.rows());
     if (!status.isOk()) {
       StatusCode reset = frame.reset();
@@ -74,8 +75,8 @@ final class SqlBlockUniversalJoinRows implements SqlBlockJoinRows {
     StatusCode finish = frame.finish();
     StatusCode reset = frame.reset();
     subqueries.clearExternalUniversal();
-    if (!body.isOk()) return body;
-    return finish.isOk() ? reset : finish;
+    StatusCode cleanup = finish.isOk() ? reset : finish;
+    return cleanup.isOk() ? body : cleanup;
   }
 
   @Override
@@ -88,4 +89,7 @@ final class SqlBlockUniversalJoinRows implements SqlBlockJoinRows {
     subqueries.clearExternalUniversal();
     return frame == null ? StatusCode.OK : frame.reset();
   }
+
+  @Override
+  public boolean hasResources() { return frame != null && frame.hasResources(); }
 }

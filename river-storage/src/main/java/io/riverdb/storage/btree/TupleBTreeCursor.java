@@ -88,7 +88,8 @@ public final class TupleBTreeCursor {
       result.reset();
       return StatusCode.CONFLICT;
     }
-    return TupleBTreePageCodec.readLeaf(page, pageStart, header, index++, result);
+    return TupleBTreePageCodec.readValidatedLeaf(
+        page, pageStart, header, index++, result);
   }
 
   public StatusCode close() {
@@ -124,6 +125,8 @@ public final class TupleBTreeCursor {
   }
 
   public int pageId() { return reference.pageId(); }
+
+  /** Borrowed read-only-by-contract view; invalid after cursor movement or close. */
   public ByteBuffer page() { return page; }
   public int pageStart() { return pageStart; }
 }

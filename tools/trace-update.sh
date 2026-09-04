@@ -10,6 +10,19 @@ server. The trace directory is retained for inspection.
 
 Options:
   --port=N                    Managed loopback port (default: 0, auto-select)
+  --maximum-connections=N     Managed server connection budget (default: 5)
+  --resource-maximum-bytes=N  Managed database root budget (default: 1073741824)
+  --resource-delivery-bytes=N Aggregate transaction/WAL budget (default: 268435456)
+  --resource-lock-provider-bytes=N
+                              Lock-provider budget (default: 67108864)
+  --resource-version-workspace-bytes=N
+                              Version-operation workspace budget (default: 67108864)
+  --resource-page-cache-bytes=N
+                              Page-cache budget (default: 268435456)
+  --resource-staging-frame-bytes=N
+                              Page-cache staging budget (default: 67108864)
+  --resource-staged-page-capacity=N
+                              Aggregate staged-page admission (default: 4096)
   --output-dir=PATH           Trace output directory (default: temporary)
   -h, --help                  Show this help
 
@@ -22,16 +35,54 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 river_root=$(cd -- "$script_dir/.." && pwd)
 
 port=0
+maximum_connections=5
+resource_maximum_bytes=1073741824
+resource_delivery_bytes=268435456
+resource_lock_provider_bytes=67108864
+resource_version_workspace_bytes=67108864
+resource_page_cache_bytes=268435456
+resource_staging_frame_bytes=67108864
+resource_staged_page_capacity=4096
 output_dir=
 while (($# > 0)); do
   case $1 in
     --port=*) port=${1#*=} ;;
+    --maximum-connections=*) maximum_connections=${1#*=} ;;
+    --resource-maximum-bytes=*) resource_maximum_bytes=${1#*=} ;;
+    --resource-delivery-bytes=*) resource_delivery_bytes=${1#*=} ;;
+    --resource-lock-provider-bytes=*) resource_lock_provider_bytes=${1#*=} ;;
+    --resource-version-workspace-bytes=*) resource_version_workspace_bytes=${1#*=} ;;
+    --resource-page-cache-bytes=*) resource_page_cache_bytes=${1#*=} ;;
+    --resource-staging-frame-bytes=*) resource_staging_frame_bytes=${1#*=} ;;
+    --resource-staged-page-capacity=*) resource_staged_page_capacity=${1#*=} ;;
     --output-dir=*) output_dir=${1#*=} ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
+
+require_positive() {
+  local name=$1
+  local value=$2
+  if [[ ! $value =~ ^[0-9]+$ ]] || ((value <= 0)); then
+    echo "error: $name must be a positive integer: $value" >&2
+    exit 2
+  fi
+}
+
+if [[ ! $port =~ ^[0-9]+$ ]] || ((port > 65535)); then
+  echo "error: port must be between 0 and 65535: $port" >&2
+  exit 2
+fi
+require_positive maximum_connections "$maximum_connections"
+require_positive resource_maximum_bytes "$resource_maximum_bytes"
+require_positive resource_delivery_bytes "$resource_delivery_bytes"
+require_positive resource_lock_provider_bytes "$resource_lock_provider_bytes"
+require_positive resource_version_workspace_bytes "$resource_version_workspace_bytes"
+require_positive resource_page_cache_bytes "$resource_page_cache_bytes"
+require_positive resource_staging_frame_bytes "$resource_staging_frame_bytes"
+require_positive resource_staged_page_capacity "$resource_staged_page_capacity"
 
 java_bin=${RIVER_JAVA:-java}
 if ! command -v "$java_bin" >/dev/null 2>&1; then
@@ -196,7 +247,14 @@ trap stop_server EXIT
   io.riverdb.bench.tpcc.TpccServerMain \
   "--directory=$output_dir/database" \
   "--port=$port" \
-  "--maximum-connections=16" \
+  "--maximum-connections=$maximum_connections" \
+  "--resource-maximum-bytes=$resource_maximum_bytes" \
+  "--resource-delivery-bytes=$resource_delivery_bytes" \
+  "--resource-lock-provider-bytes=$resource_lock_provider_bytes" \
+  "--resource-version-workspace-bytes=$resource_version_workspace_bytes" \
+  "--resource-page-cache-bytes=$resource_page_cache_bytes" \
+  "--resource-staging-frame-bytes=$resource_staging_frame_bytes" \
+  "--resource-staged-page-capacity=$resource_staged_page_capacity" \
   "--ready-file=$server_ready" \
   "--jfr=$server_jfr" \
   "--trace-start-file=$server_start" \
@@ -221,6 +279,7 @@ fi
 managed_port=$(<"$server_ready")
 url="jdbc:river://localhost:$managed_port"
 echo "managed_server=started port=$managed_port"
+echo "managed_server_resources=explicit maximum_connections=$maximum_connections maximum_bytes=$resource_maximum_bytes delivery_bytes=$resource_delivery_bytes lock_provider_bytes=$resource_lock_provider_bytes version_workspace_bytes=$resource_version_workspace_bytes page_cache_bytes=$resource_page_cache_bytes staging_frame_bytes=$resource_staging_frame_bytes staged_page_capacity=$resource_staged_page_capacity"
 echo "trace_directory=$output_dir"
 
 set +e

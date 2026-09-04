@@ -2,6 +2,7 @@ package io.riverdb.storage.btree;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import java.nio.ByteBuffer;
 
 /** Provider-populated borrowed tuple-page payload with explicit pin lifetime. */
@@ -11,6 +12,8 @@ public final class TupleBTreePageReference {
   private int start;
   private boolean writable;
   private long pageGeneration;
+  private final TupleBTreePageValidationProof validation =
+      new TupleBTreePageValidationProof();
 
   public StatusCode attach(
       int id, ByteBuffer source, int offset, boolean forWrite, long generation) {
@@ -29,6 +32,7 @@ public final class TupleBTreePageReference {
   }
 
   public void reset() {
+    validation.reset();
     pageId = 0;
     page = null;
     start = 0;
@@ -38,8 +42,14 @@ public final class TupleBTreePageReference {
 
   public boolean isAttached() { return page != null; }
   public int pageId() { return pageId; }
+
+  /**
+   * Returns the exact provider-owned borrowed view. Do not duplicate or retain it beyond successful
+   * release, and mutate it only while this reference is writable.
+   */
   public ByteBuffer page() { return page; }
   public int start() { return start; }
   public boolean isWritable() { return writable; }
   public long pageGeneration() { return pageGeneration; }
+  TupleBTreePageValidationProof validation() { return validation; }
 }

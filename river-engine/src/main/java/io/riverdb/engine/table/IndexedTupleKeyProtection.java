@@ -2,6 +2,7 @@ package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.format.catalog.CatalogKeyspace;
+import io.riverdb.tx.api.lock.LockMode;
 import java.nio.ByteBuffer;
 
 /** Ordered tuple-key identities and lifecycle-safe lock acquisition. */
@@ -30,7 +31,8 @@ final class IndexedTupleKeyProtection {
         || !IndexedTupleLockKey.valid(key, offset, length)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
-    StatusCode status = session.protectKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
+    StatusCode status = session.protectKey(
+        CatalogKeyspace.INDEX_ROOT_SPACE, keyId, LockMode.SHARED);
     return status.isOk()
         ? session.acquireTupleKey(
             keyId, key, IndexedTupleLockKey.userOffset(key, offset, length),

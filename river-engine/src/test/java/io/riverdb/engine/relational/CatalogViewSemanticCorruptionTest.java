@@ -1,5 +1,6 @@
 package io.riverdb.engine.relational;
 
+import static io.riverdb.engine.TestDatabaseResources.databaseRequest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.riverdb.base.error.StatusCode;
@@ -29,7 +30,7 @@ final class CatalogViewSemanticCorruptionTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(root, DATABASE, WalGeneration.of(1), 8, opened));
+        RelationalDatabase.create(databaseRequest(8), root, DATABASE, WalGeneration.of(1), 8, opened));
     RelationalDatabase database = opened.database();
     SqlSession sql = openSql(database);
     SqlExecutionResult result = new SqlExecutionResult();
@@ -188,6 +189,7 @@ final class CatalogViewSemanticCorruptionTest {
     assertEquals(
         StatusCode.OK,
         RelationalDatabase.create(
+            databaseRequest(8),
             root, CORRUPT_LINEAGE_DATABASE, WalGeneration.of(1), 8, opened));
     RelationalDatabase database = opened.database();
     SqlSession sql = openSql(database);

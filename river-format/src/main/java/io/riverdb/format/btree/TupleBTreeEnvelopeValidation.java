@@ -55,7 +55,9 @@ final class TupleBTreeEnvelopeValidation {
         || !TupleBTreePageBytes.zeroRange(source, start + freeStart, start + freeEnd)) {
       return StatusCode.CORRUPTION;
     }
-    result.set(type, count, pointer, leftSibling, arity, hash, schema, highOffset, highLength);
+    result.set(
+        type, count, pointer, leftSibling, arity, hash, schema,
+        freeEnd, highOffset, highLength);
     return StatusCode.OK;
   }
 

@@ -6,6 +6,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
+import io.riverdb.engine.TestDatabaseResources;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.FileSizeResult;
 import io.riverdb.platform.file.ForceMode;
@@ -54,7 +55,8 @@ final class IndexedSidecarStatusTest {
     ReadFailureFile rowsFile = new ReadFailureFile(-1);
     ReadFailureFile versionsFile = new ReadFailureFile(-1, true);
     IndexedVersionState versions = new IndexedVersionState(
-        new IndexedRowDirectory(rowsFile), new IndexedVersionDirectory(versionsFile));
+        new IndexedRowDirectory(rowsFile), new IndexedVersionDirectory(versionsFile),
+        TestDatabaseResources.databasePlan(1));
     CheckpointState checkpoint = new CheckpointState();
     assertEquals(StatusCode.OK, checkpoint.set(
         DatabaseIncarnation.of(7, 11), WalGeneration.of(1), 1, 3, 5, 3, 0));
@@ -66,7 +68,8 @@ final class IndexedSidecarStatusTest {
   void checkpointVersionPageBoundCountsBaseDeltaUnion() {
     IndexedVersionState versions = new IndexedVersionState(
         new IndexedRowDirectory(new ReadFailureFile(-1)),
-        new IndexedVersionDirectory(new ReadFailureFile(-1)));
+        new IndexedVersionDirectory(new ReadFailureFile(-1)),
+        TestDatabaseResources.databasePlan(1));
     CheckpointState checkpoint = new CheckpointState();
     assertEquals(StatusCode.OK, checkpoint.setLarge(
         DatabaseIncarnation.of(7, 11), WalGeneration.of(1), 1, 3, 5, 3, 5_000));

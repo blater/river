@@ -1,6 +1,6 @@
 # River JDBC slice
 
-The pre-V1 driver accepts `jdbc:river://localhost:PORT` and uses the production
+The pre-V1 driver accepts `jdbc:river:instance:/absolute/DATADIR` and uses the production
 River client, protocol, server, engine, WAL, and storage path. It currently
 supports one statement per connection, auto-commit or explicit repeatable-read
 and serializable transactions, update counts, and streaming forward-only,
@@ -60,11 +60,16 @@ Connection, statement, and result warnings are currently empty: `getWarnings`
 returns null and `clearWarnings` is a no-op while open; closed resources report
 `08003`.
 
-`RiverDataSource` supports both plain loopback connections and the production
-TLS 1.3 token-authenticated client path. It owns a private token copy, snapshots
-that copy per connection, and erases both snapshots and retained credentials.
-Username/password connection overloads remain unsupported; River tokens are
-high-entropy credentials, not human passwords.
+`RiverDataSource` accepts an instance directory, a `client.properties` path, or
+an explicit endpoint plus certificate-file and token-file paths. Every form
+uses TLS 1.3, pins the instance certificate exactly, and performs token
+authentication. The raw 32-byte token is read only for connection admission
+and the bounded buffer is erased afterward. Username/password connection
+overloads remain unsupported; River tokens are high-entropy credentials, not
+human passwords. Direct JDBC connections may equivalently use
+`jdbc:river:client-file:/absolute/security/client.properties`. The advanced
+`jdbc:river:files` form requires exactly the `endpoint`, `ca-file`, and
+`token-file` properties; credential values are never accepted.
 
 The audited server path binds that token to a configured service-principal
 permission mask. Authorization denial is reported as SQLSTATE `42501`; audit
@@ -75,7 +80,7 @@ remote transaction is rolled back when the server observes the disconnect.
 
 Projection names, column count, and typed metadata are available when the query
 opens. Server-side prepared plans, floating-point/binary/LOB parameters,
-callable statements, non-loopback URLs, and authenticated JDBC properties
+callable statements, non-loopback URLs, and credential values
 remain unsupported until their production consumers are implemented.
 `Connection.getMetaData()` truthfully reports the product, driver, JDBC version,
 transaction levels, result-set shape, identifier limits, and batching support.
@@ -83,8 +88,8 @@ transaction levels, result-set shape, identifier limits, and batching support.
 expose durable tables, views, and ready indexes;
 column names, order, aliases, and type descriptors come from the SQL binder,
 query and catalog-column nullability is exact, while unsupported default and
-identity details are reported as unknown. Secure JDBC configuration is currently
-provided by `RiverDataSource`.
+identity details are reported as unknown. Secure JDBC configuration is provided
+by the instance-scoped driver URL or `RiverDataSource`.
 
 River uses status returns internally. JDBC-mandated `SQLException` objects are
 created only at this external adapter boundary.

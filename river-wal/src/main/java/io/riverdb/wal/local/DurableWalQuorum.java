@@ -26,6 +26,7 @@ final class DurableWalQuorum {
   private final LocalWalForceResult[] forceResults =
       new LocalWalForceResult[MAXIMUM_FOLLOWERS];
   private final LocalWalReadResult primaryRead = new LocalWalReadResult();
+  private final LocalWalForcedCursor primaryCursor = new LocalWalForcedCursor();
   private final DurableWalLogicalStreams logicalStreams;
   private final int followerCount;
   private final int requiredNodeCount;
@@ -52,8 +53,9 @@ final class DurableWalQuorum {
     return logicalStreams.begin(transactionId, formatId, formatVersion);
   }
 
-  StatusCode replicateLogicalStreamBatch(LocalWal primary, int recordCount) {
-    return logicalStreams.replicate(primary, recordCount);
+  StatusCode replicateLogicalStreamBatch(
+      LocalWal primary, long recordCount, LocalWalForceCause cause) {
+    return logicalStreams.replicate(primary, recordCount, cause);
   }
 
   StatusCode cancelLogicalStreams() {
@@ -64,13 +66,17 @@ final class DurableWalQuorum {
     logicalStreams.fence();
   }
 
-  StatusCode replicateForcedBatch(LocalWal primary, int recordCount) {
+  StatusCode replicateForcedBatch(
+      LocalWal primary, long recordCount, LocalWalForceCause cause) {
     if (fenced || primary == null || recordCount <= 0) {
       return StatusCode.FENCED;
     }
-    for (int record = 0; record < recordCount; record++) {
-      StatusCode read = primary.readForcedRecord(record, primaryRead);
+    StatusCode opened = primary.openForcedCursor(primaryCursor);
+    if (!opened.isOk()) return fence(opened);
+    for (long record = 0; record < recordCount; record++) {
+      StatusCode read = primaryCursor.next(primaryRead);
       if (!read.isOk()) {
+        primaryCursor.reset();
         fenced = true;
         return read;
       }
@@ -102,12 +108,13 @@ final class DurableWalQuorum {
         }
       }
     }
+    primaryCursor.reset();
     int durableNodes = 1;
     for (int follower = 0; follower < followerCount; follower++) {
       if (!available[follower]) {
         continue;
       }
-      StatusCode status = followers[follower].forcePending(forceResults[follower]);
+      StatusCode status = followers[follower].forcePending(forceResults[follower], cause);
       if (status.isOk()) {
         status = followers[follower].releaseForcedBatch();
       }

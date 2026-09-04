@@ -4,6 +4,8 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
+import io.riverdb.engine.runtime.DatabaseProviderLease;
+import io.riverdb.engine.runtime.DatabaseStoreLease;
 import io.riverdb.platform.file.DirectoryOperationResult;
 import io.riverdb.platform.file.DurableDirectory;
 import io.riverdb.wal.local.LocalWal;
@@ -17,22 +19,29 @@ final class IndexedTableStoreFactory {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration generation,
+      DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
-    return create(
-        directory, wal, database, generation, IndexedPageCacheConfig.DEFAULT, result);
+    if (providerLease == null || !providerLease.active()
+        || !validInput(directory, wal, database, generation, result)) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    DatabaseStoreLease storeLease = new DatabaseStoreLease();
+    StatusCode claim = providerLease.claimStore(
+        database.high(), database.low(), generation.value(), storeLease);
+    if (!claim.isOk()) return claim;
+    StatusCode status = createClaimed(
+        directory, wal, database, generation, providerLease, storeLease, result);
+    return finishClaim(providerLease, storeLease, status);
   }
 
-  static StatusCode create(
+  private static StatusCode createClaimed(
       DurableDirectory directory,
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration generation,
-      IndexedPageCacheConfig pageCacheConfig,
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease,
       IndexedTableStoreOpenResult result) {
-    if (pageCacheConfig == null
-        || !validInput(directory, wal, database, generation, result)) {
-      return StatusCode.INVALID_EXTERNAL_INPUT;
-    }
     result.reset();
     DirectoryOperationResult operation;
     DirectoryOperationResult rows;
@@ -58,7 +67,7 @@ final class IndexedTableStoreFactory {
     }
     return IndexedTableStoreConstruction.construct(
         directory, operation, rows, versions, wal, database, generation, result,
-        pageCacheConfig);
+        providerLease, storeLease);
   }
 
   static StatusCode open(
@@ -66,11 +75,32 @@ final class IndexedTableStoreFactory {
       LocalWal wal,
       DatabaseIncarnation database,
       WalGeneration generation,
+      DatabaseProviderLease providerLease,
       boolean createWhenMissing,
       IndexedTableStoreOpenResult result) {
-    if (!validInput(directory, wal, database, generation, result)) {
+    if (providerLease == null || !providerLease.active()
+        || !validInput(directory, wal, database, generation, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    DatabaseStoreLease storeLease = new DatabaseStoreLease();
+    StatusCode claim = providerLease.claimStore(
+        database.high(), database.low(), generation.value(), storeLease);
+    if (!claim.isOk()) return claim;
+    StatusCode status = openClaimed(
+        directory, wal, database, generation, providerLease, storeLease,
+        createWhenMissing, result);
+    return finishClaim(providerLease, storeLease, status);
+  }
+
+  private static StatusCode openClaimed(
+      DurableDirectory directory,
+      LocalWal wal,
+      DatabaseIncarnation database,
+      WalGeneration generation,
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease,
+      boolean createWhenMissing,
+      IndexedTableStoreOpenResult result) {
     result.reset();
     DirectoryOperationResult operation;
     DirectoryOperationResult rows;
@@ -98,7 +128,8 @@ final class IndexedTableStoreFactory {
       return cleanup(status, rows.file(), operation.file());
     }
     return IndexedTableStoreConstruction.open(
-        directory, operation, rows, versions, wal, database, generation, result);
+        directory, operation, rows, versions, wal, database, generation,
+        providerLease, storeLease, result);
   }
 
   static StatusCode openCheckpoint(
@@ -106,14 +137,34 @@ final class IndexedTableStoreFactory {
       LocalWal wal,
       DatabaseIncarnation database,
       CheckpointState checkpoint,
+      DatabaseProviderLease providerLease,
       IndexedTableStoreOpenResult result) {
-    if (!validCheckpoint(checkpoint, database)) {
+    if (providerLease == null || !providerLease.active()
+        || !validCheckpoint(checkpoint, database)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     WalGeneration generation = checkpoint.walGeneration();
     if (!validInput(directory, wal, database, generation, result)) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
+    DatabaseStoreLease storeLease = new DatabaseStoreLease();
+    StatusCode claim = providerLease.claimStore(
+        database.high(), database.low(), generation.value(), storeLease);
+    if (!claim.isOk()) return claim;
+    StatusCode status = openCheckpointClaimed(
+        directory, wal, database, checkpoint, providerLease, storeLease, result);
+    return finishClaim(providerLease, storeLease, status);
+  }
+
+  private static StatusCode openCheckpointClaimed(
+      DurableDirectory directory,
+      LocalWal wal,
+      DatabaseIncarnation database,
+      CheckpointState checkpoint,
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease,
+      IndexedTableStoreOpenResult result) {
+    WalGeneration generation = checkpoint.walGeneration();
     result.reset();
     DirectoryOperationResult operation;
     DirectoryOperationResult rows;
@@ -138,7 +189,17 @@ final class IndexedTableStoreFactory {
       return cleanup(status, rows.file(), operation.file());
     }
     return IndexedTableStoreConstruction.openCheckpoint(
-        directory, operation, rows, versions, wal, database, generation, checkpoint, result);
+        directory, operation, rows, versions, wal, database, generation,
+        checkpoint, providerLease, storeLease, result);
+  }
+
+  private static StatusCode finishClaim(
+      DatabaseProviderLease providerLease,
+      DatabaseStoreLease storeLease,
+      StatusCode status) {
+    if (status.isOk() || !providerLease.storeClaimed()) return status;
+    StatusCode release = providerLease.releaseStore(storeLease);
+    return release.isOk() ? status : release;
   }
 
   private static boolean validCheckpoint(

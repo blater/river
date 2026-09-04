@@ -1,11 +1,10 @@
 package io.riverdb.engine.relational;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.sql.SqlShapeLimits;
 import io.riverdb.engine.EmbeddedDatabase;
 import io.riverdb.engine.EmbeddedSessionOpenResult;
 
-/** Opens reusable relational sessions with row capacity for the canonical 8 KiB format. */
+/** Opens reusable relational sessions with capacity for one complete heap-page row. */
 final class RelationalSessionFactory {
   private final EmbeddedDatabase embedded;
   private final RelationalSchemaGate gate;
@@ -26,7 +25,7 @@ final class RelationalSessionFactory {
     if (relationalResult == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     relationalResult.reset();
     EmbeddedSessionOpenResult result = new EmbeddedSessionOpenResult();
-    StatusCode status = embedded.createSession(SqlShapeLimits.MAX_STORED_ROW_BYTES, result);
+    StatusCode status = embedded.createSession(TableSchema.MAXIMUM_ROW_BYTES, result);
     if (!status.isOk()) return status;
     try {
       relationalResult.set(

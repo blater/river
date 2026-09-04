@@ -1,7 +1,9 @@
 package io.riverdb.client;
 
+import io.riverdb.base.collection.BoundedArrayGrowth;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.sql.SqlShapeLimits;
+import io.riverdb.base.text.Utf8Text;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.RowResult;
 import io.riverdb.protocol.ProtocolResponse;
@@ -14,7 +16,7 @@ final class RiverClientResultWorkspace {
   private long[] decimalHighs = new long[8];
   private int[] descriptors = new int[8];
   private long[] nullWords = new long[1];
-  private final char[] text = new char[CommandResult.MAXIMUM_TEXT_CHARACTERS];
+  private char[] text = new char[0];
 
   RiverClientResultWorkspace() {
     this(RiverClientResultAllocator.STANDARD);
@@ -65,6 +67,8 @@ final class RiverClientResultWorkspace {
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < columns; index++) {
       if (response.isVarchar(index) && !response.isNull(index)) {
+        StatusCode reserved = reserveText(response.textLengthAt(index));
+        if (!reserved.isOk()) return reserved;
         int length = response.copyTextAt(index, text, 0);
         status = length < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
             : target.setTextAt(index, text, 0, length);
@@ -78,6 +82,8 @@ final class RiverClientResultWorkspace {
     StatusCode status = StatusCode.OK;
     for (int index = 0; status.isOk() && index < columns; index++) {
       if (response.isVarchar(index) && !response.isNull(index)) {
+        StatusCode reserved = reserveText(response.textLengthAt(index));
+        if (!reserved.isOk()) return reserved;
         int length = response.copyTextAt(index, text, 0);
         status = length < 0 ? StatusCode.INVALID_EXTERNAL_INPUT
             : target.setTextAt(index, text, 0, length);
@@ -110,6 +116,21 @@ final class RiverClientResultWorkspace {
 
   int retainedColumns() {
     return Math.min(values.length, Math.min(decimalHighs.length, descriptors.length));
+  }
+
+  private StatusCode reserveText(int required) {
+    if (required < 0 || required > Utf8Text.MAXIMUM_UTF16_CODE_UNITS) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    if (required <= text.length) return StatusCode.OK;
+    int capacity = BoundedArrayGrowth.capacity(
+        text.length, required, Utf8Text.MAXIMUM_UTF16_CODE_UNITS, 8);
+    try {
+      text = Arrays.copyOf(text, capacity);
+      return StatusCode.OK;
+    } catch (OutOfMemoryError failure) {
+      return StatusCode.RESOURCE_EXHAUSTED;
+    }
   }
 
   private void copyNulls(ProtocolResponse response) {

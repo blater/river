@@ -25,24 +25,40 @@ public final class TupleBTreeLeafPage {
         prefixShape, workspace, result);
   }
 
-  public static StatusCode insert(
-      ByteBuffer page, int start, ByteBuffer scratch, int scratchStart,
-      long schemaId, TupleShape shape,
+  static StatusCode insert(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace) {
     return TupleBTreeLeafMutation.insert(
-        page, start, scratch, scratchStart, schemaId, shape,
-        key, keyOffset, keyLength, workspace);
+        page, start, schemaId, shape, key, keyOffset, keyLength, workspace);
   }
 
-  public static StatusCode delete(
-      ByteBuffer page, int start, ByteBuffer scratch, int scratchStart,
-      long schemaId, TupleShape shape,
+  static StatusCode insertBorrowed(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      TupleBTreeWorkspace workspace,
+      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
+    return TupleBTreeLeafMutation.insert(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        workspace, provider, reference);
+  }
+
+  static StatusCode delete(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
       ByteBuffer key, int keyOffset, int keyLength,
       TupleBTreeWorkspace workspace) {
     return TupleBTreeLeafMutation.delete(
-        page, start, scratch, scratchStart, schemaId, shape,
-        key, keyOffset, keyLength, workspace);
+        page, start, schemaId, shape, key, keyOffset, keyLength, workspace);
+  }
+
+  static StatusCode deleteBorrowed(
+      ByteBuffer page, int start, long schemaId, TupleShape shape,
+      ByteBuffer key, int keyOffset, int keyLength,
+      TupleBTreeWorkspace workspace,
+      TupleBTreePageProvider provider, TupleBTreePageReference reference) {
+    return TupleBTreeLeafMutation.delete(
+        page, start, schemaId, shape, key, keyOffset, keyLength,
+        workspace, provider, reference);
   }
 
   public static StatusCode splitInsert(

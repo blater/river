@@ -62,6 +62,9 @@ public final class RiverClientConnection implements RiverDatabase {
   long completedRequests;
   long bytesSent;
   long bytesReceived;
+  long diagnosticTag;
+  long diagnosticStepTag;
+  long metricsEpoch;
   boolean responseFullyRead;
   private boolean sessionActive;
   volatile boolean cancelled;
@@ -247,6 +250,23 @@ public final class RiverClientConnection implements RiverDatabase {
     private boolean active;
 
     @Override
+    public StatusCode configureTransactionDiagnostics(
+        long requestedDiagnosticTag,
+        long requestedDiagnosticStepTag,
+        long requestedMetricsEpoch) {
+      if (!active) return StatusCode.CLOSED;
+      if (query.active) return StatusCode.CONFLICT;
+      if (!validDiagnosticContext(
+          requestedDiagnosticTag, requestedDiagnosticStepTag, requestedMetricsEpoch)) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+      diagnosticTag = requestedDiagnosticTag;
+      diagnosticStepTag = requestedDiagnosticStepTag;
+      metricsEpoch = requestedMetricsEpoch;
+      return StatusCode.OK;
+    }
+
+    @Override
     public StatusCode prepare(String sql, PreparedOpenResult result) {
       if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
       result.reset();
@@ -424,6 +444,9 @@ public final class RiverClientConnection implements RiverDatabase {
 
     private void resetForOpen() {
       active = true;
+      diagnosticTag = 0;
+      diagnosticStepTag = 0;
+      metricsEpoch = 0;
       query.clearQueryState();
     }
 
@@ -729,5 +752,17 @@ public final class RiverClientConnection implements RiverDatabase {
     } catch (IOException ignored) {
       // The connection never escaped; no more useful status can be returned.
     }
+  }
+
+  private static boolean validDiagnosticContext(
+      long requestedDiagnosticTag,
+      long requestedDiagnosticStepTag,
+      long requestedMetricsEpoch) {
+    return requestedDiagnosticTag == 0
+            && requestedDiagnosticStepTag == 0
+            && requestedMetricsEpoch == 0
+        || requestedDiagnosticTag > 0
+            && requestedDiagnosticStepTag >= 0
+            && requestedMetricsEpoch > 0;
   }
 }

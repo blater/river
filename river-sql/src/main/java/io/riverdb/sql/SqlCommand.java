@@ -9,7 +9,8 @@ import java.nio.ByteBuffer;
 /** Caller-owned parsed SQL command for the first executable point-statement subset. */
 public final class SqlCommand {
   private final SqlJoinAllocator joinAllocator;
-  public static final int MAXIMUM_INSERT_ROWS = 64;
+  /** Optional batching granule for fixtures and callers; parsing does not enforce it. */
+  public static final int RECOMMENDED_INSERT_BATCH_ROWS = 64;
   public static final int MAXIMUM_COLUMNS = SqlShapeLimits.MAX_TABLE_COLUMNS;
   public static final int MAXIMUM_PROJECTIONS = SqlShapeLimits.MAX_RESULT_COLUMNS;
   public static final int MAXIMUM_CONSTRAINT_INDEXES =

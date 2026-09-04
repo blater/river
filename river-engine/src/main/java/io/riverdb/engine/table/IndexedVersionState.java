@@ -3,6 +3,7 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.engine.checkpoint.CheckpointState;
 import io.riverdb.engine.checkpoint.CheckpointVersionResult;
+import io.riverdb.engine.runtime.DatabaseResourcePlan;
 import java.nio.ByteBuffer;
 
 /** Owns fixed-record row-version metadata without one resident record per row. */
@@ -10,7 +11,7 @@ final class IndexedVersionState {
   private final IndexedVersionDirectory directory;
   private final IndexedVersionRows rows;
   private final IndexedVersionWalApply walApply;
-  private final IndexedVersionOperation operation = new IndexedVersionOperation();
+  private final IndexedVersionOperation operation;
   private long obsoleteCount;
   private long deletedCount;
   private CheckpointState checkpointBase;
@@ -20,10 +21,13 @@ final class IndexedVersionState {
   private int checkpointDeltaPageCursor;
 
   IndexedVersionState(
-      IndexedRowDirectory rowDirectory, IndexedVersionDirectory versionDirectory) {
+      IndexedRowDirectory rowDirectory,
+      IndexedVersionDirectory versionDirectory,
+      DatabaseResourcePlan resourcePlan) {
     rows = new IndexedVersionRows(rowDirectory);
     directory = versionDirectory;
     walApply = new IndexedVersionWalApply(directory);
+    operation = new IndexedVersionOperation(resourcePlan);
   }
 
   IndexedVersionRows rows() { return rows; }
@@ -162,12 +166,13 @@ final class IndexedVersionState {
     return StatusCode.OK;
   }
 
-  void close() {
-    operation.release();
+  StatusCode close() {
+    StatusCode status = operation.release();
     if (checkpointBase != null) {
       checkpointBase.close();
       checkpointBase = null;
     }
+    return status;
   }
 
   StatusCode applyRecovered(

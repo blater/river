@@ -12,7 +12,7 @@ final class TpccRiverNewOrderLayout {
   static final int ALL_LOCAL = 5;
   static final int HEADER_ARGUMENTS = 6;
   static final int ARGUMENTS_PER_LINE = 4;
-  static final int HEADER_STEPS = 6;
+  static final int HEADER_STEPS = 7;
   static final int STEPS_PER_LINE = 4;
 
   private TpccRiverNewOrderLayout() { }
@@ -28,6 +28,24 @@ final class TpccRiverNewOrderLayout {
   static int argumentCount(int lines) { return constants(lines) + 4; }
   static int stepCount(int lines) { return HEADER_STEPS + STEPS_PER_LINE * lines; }
   static int itemStep(int line) { return HEADER_STEPS + STEPS_PER_LINE * line; }
+
+  static int failureKind(int lines, int step) {
+    if (step == stepCount(lines)) return 11;
+    if (step < 0) return -1;
+    if (step >= HEADER_STEPS) {
+      return HEADER_STEPS + (step - HEADER_STEPS) % STEPS_PER_LINE;
+    }
+    return switch (step) {
+      case 0 -> 0;
+      case 1 -> 1;
+      case 2 -> 3;
+      case 3 -> 5;
+      case 4 -> 4;
+      case 5 -> 6;
+      case 6 -> 2;
+      default -> -1;
+    };
+  }
 
   static boolean validLines(int lines) {
     return lines >= MINIMUM_LINES && lines <= MAXIMUM_LINES;

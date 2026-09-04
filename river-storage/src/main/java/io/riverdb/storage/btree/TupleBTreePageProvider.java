@@ -1,6 +1,7 @@
 package io.riverdb.storage.btree;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.format.btree.TupleBTreePageValidationProof;
 
 /**
  * Ownership boundary for tuple-tree pages and its root reference.
@@ -10,7 +11,9 @@ import io.riverdb.base.error.StatusCode;
  * to abort and discard all staged pages. A borrowed page is valid and immovable until
  * {@link #release(TupleBTreePageReference)} succeeds. Pin and allocation failures must leave their
  * result detached. A release failure retains the borrow so the caller can retry release or fence the
- * owning workspace. Implementations support at least two simultaneous borrows from one workspace.
+ * owning workspace. On successful release the caller resets the reference exactly once; providers
+ * end their own pin but do not reset caller-owned reference state. Tree algorithms retain no more
+ * than two page borrows at once; implementations must support those two and may support more.
  */
 public interface TupleBTreePageProvider {
   int rootPageId();
@@ -20,21 +23,44 @@ public interface TupleBTreePageProvider {
 
   StatusCode pin(int pageId, boolean writable, TupleBTreePageReference result);
 
-  /** Admits a first graph traversal of a page; mutation providers need no extra accounting. */
+  /**
+   * Graph-validation providers admit a page's first visit and reject repeated reachability;
+   * mutation providers need no additional accounting.
+   */
   default StatusCode visit(int pageId) { return StatusCode.OK; }
 
   /**
-   * Reports whether this borrowed page generation has already passed complete
-   * tuple-page validation for the requested schema and page type.
+   * Restores complete validation for this exact borrowed page generation.
+   * {@link StatusCode#CONFLICT} is a cache miss, not a transaction conflict.
    */
-  boolean pageValidationMatches(
+  StatusCode restorePageValidation(
       TupleBTreePageReference reference, long schemaId,
-      long descriptorHash, int expectedType);
+      long descriptorHash, int expectedType,
+      TupleBTreePageValidationProof target);
 
   /** Records successful complete validation for this immutable page generation. */
-  void rememberPageValidation(
+  StatusCode rememberPageValidation(
       TupleBTreePageReference reference, long schemaId,
-      long descriptorHash, int pageType);
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source);
+
+  /**
+   * Consumes validation lineage retained for the exact bytes presented by this writable borrow.
+   * {@link StatusCode#CONFLICT} is a cache miss; implementations discard stale lineage either way.
+   */
+  StatusCode consumeCanonicalMutationValidation(
+      TupleBTreePageReference reference, long schemaId,
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof target);
+
+  /**
+   * Authenticates canonical bytes produced under this exact writable borrow.
+   * The provider must reject detached, read-only, stale, or foreign references.
+   */
+  StatusCode sealCanonicalMutation(
+      TupleBTreePageReference reference, long schemaId,
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source);
 
   StatusCode allocate(TupleBTreePageReference result);
 

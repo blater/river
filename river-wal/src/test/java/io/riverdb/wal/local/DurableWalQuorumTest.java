@@ -13,6 +13,7 @@ import io.riverdb.platform.file.nio.NioDurableDirectory;
 import io.riverdb.platform.file.nio.NioIoCounters;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -84,25 +85,18 @@ final class DurableWalQuorumTest {
     assertEquals(StatusCode.OK, primary.wal.beginLogicalStream(37, 9, 2, stream));
     assertEquals(StatusCode.CONFLICT,
         primary.wal.reserve(1, new LocalWalReservation()));
-    LocalWalGroupReservation batch = new LocalWalGroupReservation();
     LocalWalGroupAppendResult append = new LocalWalGroupAppendResult();
     LocalWalForceResult force = new LocalWalForceResult();
     assertEquals(StatusCode.OK,
-        primary.wal.reserveLogicalStreamBatch(stream, new int[] {8, 8}, 2, batch));
-    batch.writablePayload(0).putLong(211);
-    batch.writablePayload(1).putLong(223);
-    assertEquals(StatusCode.OK,
-        primary.wal.appendLogicalStreamContinuation(stream, batch, append));
+        primary.wal.appendLogicalStreamContinuation(
+            stream, new LongBatch(211, 223), append));
     assertEquals(StatusCode.OK, primary.wal.forceLogicalStreamBatch(stream, force));
     assertEquals(StatusCode.OK, primary.wal.releaseLogicalStreamBatch(stream));
     assertEquals(true, stream.isActive());
 
     assertEquals(StatusCode.OK,
-        primary.wal.reserveLogicalStreamBatch(stream, new int[] {8, 8}, 2, batch));
-    batch.writablePayload(0).putLong(227);
-    batch.writablePayload(1).putLong(229);
-    assertEquals(StatusCode.OK,
-        primary.wal.appendLogicalStreamFinal(stream, batch, 7, append));
+        primary.wal.appendLogicalStreamFinal(
+            stream, new LongBatch(227, 229), 7, append));
     assertEquals(StatusCode.OK, primary.wal.forceLogicalStreamBatch(stream, force));
     assertEquals(StatusCode.OK, primary.wal.releaseLogicalStreamBatch(stream));
     assertEquals(false, stream.isActive());
@@ -333,5 +327,29 @@ final class DurableWalQuorumTest {
       NioDurableDirectory directory,
       LocalWal wal,
       NioIoCounters counters) {
+  }
+
+  private static final class LongBatch implements LocalWalRecordBatch {
+    private final long[] values;
+
+    LongBatch(long... recordValues) {
+      values = recordValues;
+    }
+
+    @Override
+    public int recordCount() {
+      return values.length;
+    }
+
+    @Override
+    public int payloadBytes(int record) {
+      return Long.BYTES;
+    }
+
+    @Override
+    public StatusCode encodePayload(int record, ByteBuffer target) {
+      target.putLong(values[record]);
+      return StatusCode.OK;
+    }
   }
 }

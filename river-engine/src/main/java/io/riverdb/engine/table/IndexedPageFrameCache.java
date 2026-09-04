@@ -3,7 +3,9 @@ package io.riverdb.engine.table;
 import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
+import io.riverdb.engine.runtime.DatabasePageCachePlan;
 import io.riverdb.format.page.PageCodec;
+import io.riverdb.format.btree.TupleBTreePageValidationProof;
 import io.riverdb.format.page.PageHeader;
 import io.riverdb.platform.file.DurableFile;
 import io.riverdb.platform.file.IoResult;
@@ -12,13 +14,14 @@ import java.util.zip.CRC32C;
 
 /** Bounded current/staging frame cache with pin-aware eviction. */
 final class IndexedPageFrameCache {
+  private static final IndexedPageFrame[] DETACHED_FRAMES = new IndexedPageFrame[0];
   final IndexedPageState state;
   private final IndexedPageFrameIo io;
-  final IndexedPageFrame[] currentFrames;
-  final IndexedPageFrame[] stagingFrames;
-  final IndexedPageFrameMap currentMap;
-  final IndexedPageFrameMap stagingMap;
-  final IndexedPreparedPageBatch prepared;
+  IndexedPageFrame[] currentFrames;
+  IndexedPageFrame[] stagingFrames;
+  IndexedPageFrameMap currentMap;
+  IndexedPageFrameMap stagingMap;
+  IndexedPreparedPageBatch prepared;
   private final IndexedOperationPagePins operationPins;
   private long accessClock;
   private long pageGenerationClock;
@@ -32,7 +35,7 @@ final class IndexedPageFrameCache {
       DatabaseIncarnation database,
       WalGeneration generation,
       IndexedPageState pageState,
-      IndexedPageCacheConfig config) {
+      DatabasePageCachePlan config) {
     state = pageState;
     io = new IndexedPageFrameIo(backingFile, stagingFile, database, generation, state);
     currentFrames = new IndexedPageFrame[config.currentFrames()];
@@ -41,13 +44,42 @@ final class IndexedPageFrameCache {
     stagingMap = new IndexedPageFrameMap(config.stagingMapCapacity());
     prepared = new IndexedPreparedPageBatch(config);
     operationPins = new IndexedOperationPagePins(this);
-    for (int index = 0; index < config.eagerFrames(); index++) {
-      currentFrames[index] = new IndexedPageFrame();
-      stagingFrames[index] = new IndexedPageFrame();
-    }
   }
 
   void setGeneration(WalGeneration generation) { io.setGeneration(generation); }
+
+  StatusCode detach() {
+    if (prepared.active()) return StatusCode.CONFLICT;
+    for (IndexedPageFrame frame : currentFrames) {
+      if (frame != null && (frame.pinCount != 0 || frame.publicationReserved)) {
+        return StatusCode.CONFLICT;
+      }
+    }
+    for (IndexedPageFrame frame : stagingFrames) {
+      if (frame != null && frame.pinCount != 0) return StatusCode.CONFLICT;
+    }
+    StatusCode status = prepared.detach();
+    if (!status.isOk()) return status;
+    detachFrames();
+    return StatusCode.OK;
+  }
+
+  void abandon() {
+    prepared.abandon();
+    detachFrames();
+  }
+
+  private void detachFrames() {
+    for (IndexedPageFrame frame : currentFrames) {
+      if (frame != null) frame.invalidatePageValidation();
+    }
+    for (IndexedPageFrame frame : stagingFrames) {
+      if (frame != null) frame.invalidatePageValidation();
+    }
+    currentMap.detach();
+    stagingMap.detach();
+    currentFrames = stagingFrames = DETACHED_FRAMES;
+  }
 
   ByteBuffer currentPayloadUnchecked(int pageId) {
     IndexedPageFrame frame = currentFrame(pageId, true);
@@ -106,20 +138,48 @@ final class IndexedPageFrameCache {
     return StatusCode.OK;
   }
 
-  boolean pageValidationMatches(
+  StatusCode restorePageValidation(
       int pageId, long pageGeneration, long schemaId,
-      long descriptorHash, int expectedType) {
+      long descriptorHash, int expectedType,
+      TupleBTreePageValidationProof target) {
     IndexedPageFrame frame = frameForGeneration(pageId, pageGeneration);
-    return frame != null && frame.pageValidationMatches(
-        pageGeneration, schemaId, descriptorHash, expectedType);
+    return frame == null ? StatusCode.CONFLICT : frame.restorePageValidation(
+        pageGeneration, schemaId, descriptorHash, expectedType, target);
   }
 
-  void rememberPageValidation(
+  StatusCode rememberPageValidation(
       int pageId, long pageGeneration, long schemaId,
-      long descriptorHash, int pageType) {
+      long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
     IndexedPageFrame frame = frameForGeneration(pageId, pageGeneration);
-    if (frame != null) frame.rememberPageValidation(schemaId, descriptorHash, pageType);
+    return frame == null ? StatusCode.CONFLICT
+        : frame.rememberPageValidation(schemaId, descriptorHash, pageType, source);
   }
+
+  StatusCode consumeTupleMutationInputValidation(
+      int pageId, long pageGeneration, long ownerKeyId,
+      long schemaId, long descriptorHash, int pageType,
+      TupleBTreePageValidationProof target) {
+    IndexedPageFrame frame = stagingFrame(pageId);
+    return frame != null && frame.payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+        && frame.ownerKeyId == ownerKeyId
+        ? frame.consumeMutationInputValidation(
+            pageGeneration, schemaId, descriptorHash, pageType, target)
+        : StatusCode.CONFLICT;
+  }
+
+  StatusCode sealTupleMutationValidation(
+      int pageId, long pageGeneration, long ownerKeyId,
+      long schemaId, long descriptorHash, int pageType,
+      TupleBTreePageValidationProof source) {
+    IndexedPageFrame frame = stagingFrame(pageId);
+    return frame != null && frame.payloadKind == PageCodec.PAYLOAD_KIND_TUPLE_BTREE
+        && frame.ownerKeyId == ownerKeyId
+        ? frame.sealMutationValidation(
+            pageGeneration, schemaId, descriptorHash, pageType, source)
+        : StatusCode.INVARIANT_BROKEN;
+  }
+
 
   StatusCode pinOperationPage(
       int pageId, boolean writable, IndexedOperationPage result) {
@@ -135,7 +195,7 @@ final class IndexedPageFrameCache {
       return lastStatus;
     }
     return operationPins.pin(
-        pageId, writable, IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES, result);
+        pageId, writable, state.changedPageCapacity(), result);
   }
 
   StatusCode pinScalarOperationPage(
@@ -147,7 +207,7 @@ final class IndexedPageFrameCache {
       return lastStatus;
     }
     return operationPins.pin(
-        pageId, writable, IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES, result);
+        pageId, writable, state.changedPageCapacity(), result);
   }
 
   StatusCode pinNewOperationPage(int pageId, IndexedOperationPage result) {
@@ -160,7 +220,7 @@ final class IndexedPageFrameCache {
   StatusCode pinNewOperationPage(
       int pageId, int payloadKind, long ownerKeyId, IndexedOperationPage result) {
     return operationPins.pinNew(
-        pageId, IndexedTableLimits.MAX_LOGICAL_CHANGED_PAGES,
+        pageId, state.changedPageCapacity(),
         payloadKind, ownerKeyId, result);
   }
 
@@ -405,7 +465,7 @@ final class IndexedPageFrameCache {
     IndexedPageFrame current = preparedFrame(pageId);
     if (current == null) current = currentFrame(pageId, true);
     if (current == null) return lastStatus;
-    copyPage(current.page, staging.page);
+    staging.copyPageFrom(current);
     staging.identity(current.payloadKind, current.ownerKeyId);
     staging.rememberIdentity(current.payloadKind, current.ownerKeyId);
     return state.setIdentity(pageId, current.payloadKind, current.ownerKeyId);
@@ -608,9 +668,10 @@ final class IndexedPageFrameCache {
     IndexedPageFrame staging = stagingFrames[stagingMap.find(pageId)];
     IndexedPageFrame current = currentFrame(pageId, true);
     if (current == null) return lastStatus;
-    current.beginPageGeneration(nextPageGeneration());
-    copyPage(staging.page, current.page);
-    current.copyPageValidationFrom(staging);
+    long pageGeneration = nextPageGeneration();
+    if (pageGeneration == 0) return lastStatus;
+    current.beginPageGeneration(pageGeneration);
+    current.copyPageFrom(staging);
     current.identity(staging.payloadKind, staging.ownerKeyId);
     StatusCode status = state.markChanged(pageId, start, end);
     if (status.isOk()) {
@@ -639,6 +700,7 @@ final class IndexedPageFrameCache {
 
   StatusCode lastStatus() { return lastStatus; }
   int changedPageCount() { return state.changedPageCount(); }
+  int changedPageCapacity() { return state.changedPageCapacity(); }
   int changedPageId(int index) { return state.changedPageId(index); }
   int highestPageId() { return state.highestPageId(); }
   long stagedCopyBytes() { return state.stagedCopyBytes(); }
@@ -732,8 +794,10 @@ final class IndexedPageFrameCache {
       StatusCode status = prepareCurrentSlotForReuse(slot);
       if (!status.isOk()) return fail(status);
     }
+    long pageGeneration = nextPageGeneration();
+    if (pageGeneration == 0) return fail(lastStatus);
     frame.pageId = pageId;
-    frame.beginPageGeneration(nextPageGeneration());
+    frame.beginPageGeneration(pageGeneration);
     frame.identity(PageCodec.PAYLOAD_KIND_SCALAR_BTREE, PageCodec.SCALAR_OWNER_KEY_ID);
     frame.recordStart = 0;
     frame.recordEnd = 0;
@@ -807,8 +871,10 @@ final class IndexedPageFrameCache {
       if (!status.isOk()) return fail(status);
       stagingMap.remove(frame.pageId);
     }
+    long pageGeneration = nextPageGeneration();
+    if (pageGeneration == 0) return fail(lastStatus);
     frame.pageId = pageId;
-    frame.beginPageGeneration(nextPageGeneration());
+    frame.beginPageGeneration(pageGeneration);
     IndexedPageFrame prepared = preparedFrame(pageId);
     frame.identity(
         prepared == null ? state.payloadKind(pageId) : prepared.payloadKind,
@@ -825,9 +891,11 @@ final class IndexedPageFrameCache {
   }
 
   long nextPageGeneration() {
-    pageGenerationClock++;
-    if (pageGenerationClock <= 0) pageGenerationClock = 1;
-    return pageGenerationClock;
+    if (pageGenerationClock == Long.MAX_VALUE) {
+      lastStatus = StatusCode.FENCED;
+      return 0;
+    }
+    return ++pageGenerationClock;
   }
 
   IndexedPageFrame frameAt(IndexedPageFrame[] frames, int slot) {

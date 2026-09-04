@@ -30,11 +30,10 @@ final class SqlSubqueryTableFrames {
     session = relationalSession;
     query = bound.executableQuery;
     access = new SqlSubqueryAccess(relationalSession, bound, evaluator, temporal);
-    descriptors = new SqlDescriptorSubqueryFrames(relationalSession, query);
+    descriptors = new SqlDescriptorSubqueryFrames(relationalSession, bound);
   }
 
   void prepareAccess() { access.prepare(); }
-  SqlSubqueryAccess access() { return access; }
 
   StatusCode prepare(int block, boolean valueProjection, boolean textProjection,
       boolean tableSource, boolean parent) {
@@ -88,7 +87,7 @@ final class SqlSubqueryTableFrames {
 
   StatusCode begin(int block, SqlNestedRowProvider provider) {
     definitions[block] = query.block(block).table();
-    return descriptor(block) ? descriptors.begin(block)
+    return descriptor(block) ? descriptors.begin(block, provider)
         : access.begin(block, provider, cursors[frame(block)]);
   }
 
@@ -130,6 +129,9 @@ final class SqlSubqueryTableFrames {
     return source == null ? null : source.table(role);
   }
   SqlBlockRow blockRow(int block, int role) { return role == 0 ? descriptors.row(block) : null; }
+  int accessColumn(int block) {
+    return descriptor(block) ? descriptors.accessColumn(block) : access.column(block);
+  }
   SqlPredicateOperand projected(int block) { return projected[frame(block)]; }
   HeapRowResult evaluatedRow(int block, HeapRowResult original) {
     return copied[block] ? rows[block] : original;
