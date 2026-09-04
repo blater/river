@@ -25,7 +25,3 @@ Specify which events must be durable before admission, how group append/force or
 ## Acceptance Criteria
 
 Concurrency, security, recovery, and performance reviewers accept the state machine; every event is accounted for; no secret is retained; no arbitrary record cap or unaudited fallback is introduced; a matched baseline and regression test are defined.
-
-## Evidence
-
-- [`2026-09-04-tic-a221-audit-durability-design.md`](../delivery/evidence/2026-09-04-tic-a221-audit-durability-design.md)
