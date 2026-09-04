@@ -18,11 +18,15 @@ created: 2026-09-04T15:23:11.631905Z
 ---
 # Implement offline audit archive and credential renewal
 
-Implement the ADR's explicit stopped-instance recovery operations under exclusive ownership.
+Implement exact `riverd audit archive -D` and `riverd credentials renew -D`
+stopped-instance operations under exclusive ownership.
 
 ## Design
 
-Validate and content-identify immutable audit archives without overwrite, preserve corrupt audit, create and force a new active audit, and renew a complete credential generation while preserving prior public identity as specified.
+Implement the accepted five-step audit control transition without overwrite,
+preserve corrupt audit, and refuse archive for terminal `EXHAUSTED` authority.
+Renew a complete generation without overlap, preserving and forcing the prior
+public certificate and manifest before publishing the new security authority.
 
 ## Acceptance Criteria
 

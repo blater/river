@@ -16,12 +16,24 @@ created: 2026-09-04T15:23:11.178601Z
 ---
 # Implement incarnation-bound instance credentials and identity
 
-Implement launcher-owned atomic instance metadata and owner-only credential bundle persistence for first creation and strict restart.
+Create the non-empty `river-server-app` boundary with launcher-owned atomic
+instance metadata, POSIX filesystem proof, owner-only credential generations,
+and the one bounded client-configuration format for first creation and strict
+restart.
 
 ## Design
 
-Bind the database incarnation, credential generation, certificate digest, algorithms, principal, permissions, validity, and client configuration. Validate regular-file, symlink, ownership, mode, size, hostname, and manifest invariants before listener start.
+Bind the database incarnation, credential generation, certificate/token
+digests, algorithms, principal, permissions, validity, and client
+configuration. `river-client` owns the only config parser. Generate the
+certificate through the ADR's public Bouncy Castle builder APIs with one
+aligned dependency-verified set. Add real code/tests plus used module/settings
+and dependency-policy entries; do not add the application distribution yet.
 
 ## Acceptance Criteria
 
-Partial first publication is recoverable only before authority exists; accepted missing or mismatched material fails closed; no implicit regeneration or arbitrary non-empty-directory adoption occurs; fault and permission tests pass.
+Partial first publication is recoverable only before instance authority exists;
+accepted missing or mismatched material fails closed; no implicit regeneration
+or arbitrary non-empty-directory adoption occurs. POSIX/no-follow/provider,
+format bound, X.509, expiry, manifest, config-loader, fault, and permission
+tests pass.

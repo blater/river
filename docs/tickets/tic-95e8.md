@@ -20,8 +20,15 @@ Exercise the exact installed revision through the real lifecycle and security fa
 
 ## Design
 
-Use fresh instance directories and real client configuration; include wrong token/certificate/hostname, replay, corrupt files, occupied port, engine-open failure, startup interruption, no-secret scans, and reproducible archive checks.
+Use fresh instance directories and the real `riverd-client-v1` configuration;
+include wrong token/certificate/hostname, replay, corrupt files, unsupported
+filesystem proof, occupied port, engine-open failure, startup interruption,
+no-secret scans, and reproducible distribution checks. Inspect source and
+compiled output for the ADR's deleted plain APIs and nullable branches.
 
 ## Acceptance Criteria
 
-Every expected failure has the declared exit/status, emits no false readiness, leaks no resource or secret, preserves diagnosable data, and leaves the instance restartable where the contract permits; evidence and source tag are recorded.
+Every expected failure has the declared exit/status, emits no false readiness,
+leaks no resource or secret, preserves diagnosable data, and leaves the instance
+restartable where the contract permits. No plain path remains in source or
+compiled output; evidence and source tag are recorded.

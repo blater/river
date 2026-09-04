@@ -1,6 +1,13 @@
 # River standalone server (`riverd`) plan
 
-Status: proposed
+Status: Accepted; ratified by
+[`ADR 0014`](../adr/0014-riverd-instance-security.md)
+
+ADR 0014 is authoritative when this implementation plan summarizes a public
+command, status, format, security, or recovery rule. The complete scalable
+audit contract is the independently accepted `tic-a221` evidence merged at
+`e592addff67ac6016ae6e9e37e3bf374a6511f0d`; this plan does not define a second
+audit state machine.
 
 ## 1. Objective
 
@@ -22,8 +29,11 @@ build and classpath assembly will then be deleted from the harness.
 
 ## 2. Module decision
 
-Create a production application module named `river-server-app`. Configure its
-Gradle application distribution to install an executable named `riverd`.
+Create a production application module named `river-server-app`.
+`tic-615d` creates it only when real identity, credential, filesystem, and
+client-configuration production code and tests land. `tic-ec50` then configures
+its Gradle application distribution to install the executable `riverd` and
+wires the complete composition. The module is never empty scaffolding.
 
 Do not place the launcher in `river-server`.
 
@@ -41,11 +51,15 @@ those responsibilities and a concrete `river-engine` dependency to
 - `river-base` for stable status and database identity values;
 - `river-engine` for the embedded implementation and resource-plan input;
 - `river-engine-api` for the database lifecycle contract;
-- `river-server` for the loopback listener.
+- `river-server` for the loopback listener;
+- `river-protocol` for native protocol version/constants; and
+- the aligned dependency-verified Bouncy Castle PKIX set for certificate
+  construction.
 
-The module is not speculative: it contains the real command and distribution
-in its first change. Add it to River's production-module and dependency-policy
-lists at the same time.
+The module is not speculative: its first change contains the immediate
+identity/security consumer. Add it to River's production-module and
+dependency-policy lists then; add application/distribution policy in
+`tic-ec50` with the real command.
 
 ## 3. Component and process diagrams
 
@@ -65,6 +79,7 @@ flowchart TD
 
     app -->|"create / open / close"| engine
     app -->|"start / close"| server
+    app -->|"read protocol version"| protocol
     engine -->|"implements"| api
     server -->|"uses"| api
     server -->|"frames"| protocol
@@ -102,8 +117,10 @@ sequenceDiagram
   D->>D: parse and validate all arguments
   D->>H: resolve paths and acquire exclusive lock
   alt first start
-    D->>H: atomically create instance identity
-    D->>E: create(data, identity, generation)
+    D->>H: force bootstrap record
+    D->>E: create(data, in-memory identity, generation)
+    D->>H: force initial security and audit
+    D->>H: atomically publish instance identity last
   else existing instance
     D->>H: validate stored identity
     D->>E: openExisting(data, identity, generation)
@@ -111,6 +128,7 @@ sequenceDiagram
   E-->>D: RiverDatabase or native failure status
   D->>S: start(database, requested port)
   S-->>D: selected loopback port
+  D->>H: atomically publish selected client configuration
   D->>R: atomically publish live-instance record
   D-->>C: print paths, PID, endpoint, protocol, status=ready
   Q->>S: connect and execute requests
@@ -145,17 +163,20 @@ riverd start [options]
 riverd stop [options]
 riverd ps
 riverd audit archive [options]
+riverd credentials renew [options]
 riverd version
 riverd help
 riverd help start
 riverd help stop
 riverd help ps
+riverd help audit archive
+riverd help credentials renew
 ```
 
 `riverd start` and `riverd stop` are the lifecycle commands in the first
-delivery. `riverd ps` is read-only. `riverd audit archive` is the one offline
-security-audit recovery operation and requires exclusive ownership of a stopped
-instance. Invoking `riverd` without arguments is
+delivery. `riverd ps` is read-only. `riverd audit archive` and `riverd
+credentials renew` are the two offline security recovery operations and
+require exclusive ownership of a stopped instance. Invoking `riverd` without arguments is
 equivalent to `riverd ps`. Do not add daemonisation, service installation,
 remote administration, or database deletion.
 
@@ -167,6 +188,12 @@ Help behaviour:
 - help and version do not create directories or otherwise mutate state;
 - invalid syntax prints a short error plus brief usage and exits with status 2.
 
+Exit zero is `OK`; invalid syntax is exit 2 with
+`INVALID_EXTERNAL_INPUT`; every operational failure is exit 1 with the exact
+native `StatusCode` and stable number required by ADR 0014. Failure records go
+to standard error, never accompany `riverd_status=ready`, and do not replace
+native status propagation with diagnostic text.
+
 ### 4.2 Start options and defaults
 
 ```text
@@ -177,11 +204,20 @@ Help behaviour:
 --ready-file=PATH           optional; no default file
 ```
 
+`N` is canonical decimal `1..2147483647`. Out-of-width input is
+`INVALID_EXTERNAL_INPUT`; a valid count that the one resource profile cannot
+admit is `RESOURCE_EXHAUSTED` before mutation.
+`DURATION` is a positive canonical decimal plus `ms`, `s`, or `m`; checked
+conversion must fit a positive signed-long millisecond value. Fractional,
+signed, whitespace, unitless, zero, and overflow values are invalid.
+
 `riverd stop` accepts the same `-D PATH` or `--datadir=PATH` option and:
 
 ```text
 --timeout=DURATION          default: 30s
 ```
+
+Both offline recovery commands accept only the same `-D`/`--datadir` option.
 
 The resolved instance layout is:
 
@@ -189,9 +225,10 @@ The resolved instance layout is:
 DATADIR/
   instance.properties      launcher-owned database identity and format
   instance.lock            exclusive live-process lock
+  bootstrap.properties     first-create recovery record; normally absent
   runtime.properties       bounded process, endpoint, and client-config identity
   database/                River-owned embedded database directory
-  security/                owner-only credential bundle and manifest
+  security/                owner-only generation bundles and manifest
   audit/                   active forced audit and immutable archives
 ```
 
@@ -217,36 +254,53 @@ single configured service principal. Other processes running as that account
 are inside the trusted boundary. Other host accounts may reach the port but
 cannot authenticate.
 
+The exact filesystem admission contract is ADR 0014: the resolved data tree is
+POSIX owner-only, all owned paths are accessed through no-follow
+directory-relative handles, and the qualified NIO provider must prove POSIX
+attributes, `SecureDirectoryStream`, file locking, atomic exclusive and
+replacement renames, and file/directory force. Unsupported proof is
+`FEATURE_NOT_SUPPORTED`; wrong type/owner/mode/symlink proof is
+`ACCESS_DENIED`. There is no best-effort or non-POSIX mode. Version-1 property
+formats reject control characters and `=` in paths rather than escaping them.
+
 ### 4.3 Security bootstrap and client discovery
 
-On first creation, `riverd` generates a raw 32-byte token and a self-signed
-instance TLS leaf with P-256/SHA-256, `CA=false`, `serverAuth`, digital-signature
-usage, and SANs for `localhost`, `127.0.0.1`, and `::1`. The `security`
-directory and private components are owner-only. Credential files are
-exclusively staged, forced, atomically renamed, and directory-forced; the
-bounded `security.properties` manifest is published last and binds the bundle
-to the database incarnation, credential generation, algorithms, principal,
-permission mask, validity, and certificate SHA-256.
+On first creation, `riverd` generates the exact ADR 0014 credential generation:
+a raw 32-byte token, principal 1 with `SessionPermissions.ALL`, and a 365-day
+self-signed X.509 v3 P-256/SHA-256 leaf with the required constraints, usages,
+and three loopback SANs. It constructs the certificate only through the public
+Bouncy Castle `bcpkix-jdk18on` builder/converter APIs over a JCA-generated key
+pair; `tic-615d` pins and dependency-verifies one aligned Bouncy Castle set.
+No global provider, JDK-internal certificate class, external `keytool`, or
+second DER encoder is permitted.
 
-Restart validates regular-file type, no-symlink status, owner, permissions,
-size, manifest fields, incarnation, certificate digest, hostname coverage, and
-validity before opening the listener. Once the manifest or database identity is
-authoritative, missing or mismatched material fails closed and is never
-regenerated implicitly. A platform on which owner-only access cannot be proved
-is unsupported for `riverd`.
+Generation directories hold an exact 32-byte token, bounded PKCS#8 key, and DER
+certificate. A forced
+`security.properties` is the credential authority and binds the instance,
+generation, principal, permissions, algorithms, validity, fixed names, and
+SHA-256 digests. Restart applies the ADR's no-follow type/owner/mode/size,
+canonical-field, incarnation, digest, key/certificate, signature, algorithm,
+constraint, SAN, validity, principal, and permission checks before admission.
+Missing or mismatched accepted material is preserved as `CORRUPTION`; a valid
+expired generation is `ACCESS_DENIED` on start.
 
-The runtime record identifies the selected endpoint, PID/start identity,
-transport `tls-v1.3`, certificate fingerprint, and the owner-only bounded client
-configuration. `river sql -D PATH` consumes that configuration automatically.
-Advanced clients accept certificate-file and token-file paths, never secret
-values in arguments, environment variables, URLs, readiness, registry, logs,
-or audit.
+After the listener selects its concrete port, `river-server-app` atomically
+replaces and directory-forces `security/client.properties`, the exact
+`riverd-client-v1` file defined by ADR 0014. It is discovery state, not restart
+authority, and may be stale while stopped. `river-client` owns its only parser,
+validation, pinned TLS 1.3 connector, hostname check, and credential erasure.
+JDBC and CLI delegate to that owner.
+The file carries incarnation, credential generation, principal, transport,
+protocol, selected host/port, certificate path/digest, and token path. It never
+carries a token or private key value. Advanced clients accept file paths, never
+secret argv, environment, URL, readiness, registry, log, or audit values.
 
-The certificate-expiry recovery operation replaces the complete validated
-bundle only while the instance is stopped and exclusively locked, preserves
-the prior public certificate and manifest under a content-identified archive,
-and increments the credential generation. It never repairs partial or corrupt
-material implicitly.
+`riverd credentials renew -D PATH` is the only expiry recovery operation. It
+validates the old generation except for expiry, archives and forces the prior
+public certificate and manifest under the ADR's content-identified name,
+creates and forces generation plus one, and atomically publishes the new
+security authority. It has no overlap generation or implicit repair; stale
+client configuration fails `ACCESS_DENIED`.
 
 ### 4.4 Multiple instances
 
@@ -306,7 +360,10 @@ PID    LISTEN           DATADIR
 The listing never scans the operating-system process table for unregistered
 River processes and never signals a process. Invalid or stale records are not
 reported as running; they produce a concise warning and remain available for
-diagnosis. The `ps` command is otherwise side-effect free.
+diagnosis. The `ps` command is otherwise side-effect free. Only a later
+`start`, under the matching instance lock and after proving the exact recorded
+process absent, may replace a canonical stale same-datadir record; malformed or
+mismatched collisions are preserved and fail.
 
 When there are no verified live records, exit successfully and print:
 
@@ -351,23 +408,32 @@ only after the listener is ready. Refuse to overwrite an existing file. The
 stdout records remain mandatory so direct users can see the resolved
 configuration without opening another file.
 
-`riverd version` prints the River release version, launcher contract version,
-and native protocol version. The distribution manifest is the source of the
-release version; it must not inspect Git or the source checkout at runtime.
+`riverd version` prints the exact ADR 0014 keys for River release version,
+`riverd-v1`, `river-v4`, and `riverd_status=OK`. The distribution manifest is
+the source of the release version; it must not inspect Git or the source
+checkout at runtime. Successful stop prints only its normalized datadir,
+verified PID, and `riverd_status=OK` after process exit and matching-record
+removal.
 
 ### 4.7 Stop contract
 
 After acquiring the instance lock, `riverd start` atomically writes
-`runtime.properties`. The bounded record contains the PID, process start instant,
-resolved executable, and resolved data directory. These values are all known to
-the launcher; no process search or Java-class inspection is involved.
+`runtime.properties`. The bounded record contains the PID, process start
+instant, resolved `ProcessHandle` command, resolved data directory, endpoint,
+client configuration, credential generation, and a random nonzero 128-bit
+owner nonce. The forced lock record contains the same process identity,
+datadir, and nonce. Unavailable process start/command evidence is
+`FEATURE_NOT_SUPPORTED`.
 
-`riverd stop` reads that one record and verifies the live process PID, start
-instant, executable, and data directory before sending SIGTERM. A missing,
-malformed, stale, reused, or mismatched PID record produces a clear nonzero
-error and sends no signal. The command waits up to `--timeout` for the process
-to exit and the PID record to disappear. Timeout is an error; the first
-delivery does not escalate automatically to SIGKILL.
+`riverd stop` never acquires or steals the live exclusive lock. It requires
+the runtime and lock records to match, requires a nonblocking exclusive lock
+attempt to fail, obtains the exact `ProcessHandle`, and rechecks PID, start
+instant, command, and datadir immediately before SIGTERM. Missing, malformed,
+stale, reused, mismatched, unexpectedly unlocked, or unverifiable state returns
+`NOT_OWNER` and sends no signal. The command waits up to `--timeout` for both
+process exit and matching runtime-record removal, and after registry delivery
+also its matching registry-record removal. Timeout returns `TIMEOUT` and never
+escalates automatically to SIGKILL.
 
 The running process removes only its own runtime record during orderly shutdown.
 On startup, a stale record may be replaced only after the instance lock has
@@ -376,20 +442,25 @@ identity files are never removed by either lifecycle command.
 
 ### 4.8 Audit archive and recovery
 
-`riverd audit archive -D PATH` succeeds only after acquiring the instance lock
-and proving no live owner. It validates the complete active audit, forces and
-atomically renames it to a content-identified name that is never overwritten,
-creates and forces a new empty active audit, and prints the archive path and
-digest. Corrupt audit remains untouched and returns `CORRUPTION`; recovery then
-requires restoring a known-good audit or a separately reviewed explicit
-preserve-and-reinitialize operation.
+`riverd audit archive -D PATH` succeeds only after acquiring the stopped
+instance lock and proving no live owner or pending slot. It executes the
+accepted `tic-a221` order: validate and force the old active generation;
+create, force, and directory-force the linked new generation; publish and
+force an `ARCHIVING` control record; no-overwrite rename the old generation to
+`audit-<generation>-sha256-<digest>.log` and force the directory; then publish
+and force the next `ACTIVE` control record. It prints only the archive path,
+SHA-256 digest, and `riverd_status=OK`. Corrupt audit remains untouched and
+returns `CORRUPTION`; collision is `CONFLICT`. Retry follows the accepted
+idempotent recovery matrix. There is no preserve-and-reinitialize operation.
 
-The configured active-audit capacity must cover the immediate harness workload
+The configured active-audit capacity must cover its declared immediate workload
 with documented headroom. Startup fails before readiness when it cannot admit
 at least one authentication and statement record. Runtime exhaustion returns
 `RESOURCE_EXHAUSTED` before statement admission and directs the owner to the
-offline archive command. Silent truncation, overwrite, deletion, and automatic
-rollover are prohibited.
+offline archive command. Global sequence/generation/control terminal
+exhaustion instead persists `EXHAUSTED`; archive cannot clear it and recovery
+requires a reviewed wider format or new incarnation. Silent truncation,
+overwrite, deletion, and automatic rollover are prohibited.
 
 ## 5. Persistent identity, security, and open/create behaviour
 
@@ -405,13 +476,19 @@ initial-wal-generation=1
 On the first start:
 
 1. Parse and validate all arguments without mutation.
-2. Create the instance data directory and acquire an exclusive `instance.lock`.
-3. Require a new `database` directory or a launcher identity that already owns
-   it; never adopt an arbitrary non-empty directory.
-4. Generate a non-zero 128-bit database incarnation with `SecureRandom`.
-5. Atomically publish the bounded identity file with owner-only permissions
-   where the platform supports them.
-6. Create the database using that exact identity and WAL generation.
+2. Resolve the secure parent, create or validate POSIX `0700` `DATADIR`, and
+   acquire its exclusive `instance.lock` through no-follow handles.
+3. Require a new directory or a canonical stale `riverd-bootstrap-v1` record
+   naming every fixed stage and no extra entries; otherwise preserve and return
+   `CONFLICT`.
+4. Generate a non-zero 128-bit database incarnation and attempt nonce with
+   `SecureRandom`, then force the bootstrap record and directory.
+5. Create the database, initial credential generation, and initial audit
+   authority using that identity; force every file and
+   directory required to reopen them.
+6. Exclusively publish and force bounded `instance.properties` last, then force
+   `DATADIR`. It is the single instance-authority transition; remove only a
+   matching bootstrap residue after authoritative validation succeeds.
 
 On later starts, validate the identity file strictly and call
 `EmbeddedRiver.openExisting` with its recorded values. Do not infer identity
@@ -427,9 +504,12 @@ inspect or kill the competing process.
 
 `riverd start` remains in the foreground and owns these resources in order:
 
-1. instance lock;
-2. opened `RiverDatabase`;
-3. `LoopbackRiverServer`.
+1. secure directory handle and instance lock;
+2. validated identity, credential, and audit authority;
+3. opened `RiverDatabase`;
+4. authenticated `LoopbackRiverServer`;
+5. matching runtime and registry records;
+6. optional ready file and flushed readiness output.
 
 Register the JVM shutdown hook only after database ownership exists. On SIGINT
 or SIGTERM, close the listener first and the database second, reporting both
@@ -459,7 +539,7 @@ as a coherent resource profile rather than independent low-level engine knobs.
 
 ## 8. Production structure
 
-Suggested files:
+Owned files (class names may change locally without changing their owner):
 
 ```text
 river-server-app/
@@ -469,6 +549,8 @@ river-server-app/
     RiverDaemonArguments.java   side-effect-free command decoding/help
     RiverDaemonInstance.java    create/open/start/close ownership
     RiverDaemonIdentity.java    bounded metadata read/write
+    RiverDaemonCredentials.java exact credential generation/validation
+    RiverDaemonFileSystem.java  POSIX/no-follow trust proof
     RiverDaemonRegistry.java    owned live-instance records and listing
     RiverDaemonOutput.java      stable startup/error records
     RiverDaemonResources.java   one resource-plan policy
@@ -481,9 +563,14 @@ different failure boundaries. Do not introduce interfaces unless a genuine
 provider boundary is needed for deterministic tests; package-private concrete
 classes and injected narrow Java facilities are sufficient.
 
-Once `riverd` is the owner, move only generally useful lifecycle logic out of
-`TpccServerMain`; delete that benchmark launcher when River-owned callers have
-migrated. TPC-C diagnostics and performance capture remain in `river-bench`
+`tic-615d` owns the identity, credential, filesystem, and client-configuration
+classes and the non-empty module boundary. `tic-ec50` owns the command,
+lifecycle, resources, output, final runtime/registry publication formats,
+application distribution, and complete caller
+migration. It secures `TpccServerMain` and deletes every plain server/client
+API in that same delivery. `tic-3f57` later preserves or replaces the already
+authenticated benchmark launcher only after every accepted diagnostic remains
+available. TPC-C diagnostics and performance capture remain in `river-bench`
 and must not enter `riverd`.
 
 ## 9. Build and distribution
@@ -509,10 +596,11 @@ river-server-app/build/install/riverd/bin/riverd start
 start scripts and distribution include one coherent dependency graph; external
 consumers execute the installed script and never assemble their own classpath.
 
-Update the root dependency allowlist, declared-dependency map, production
-module list, settings, archive/reproducibility coverage, and any module-policy
-fixtures in the same change. Do not exempt the new module from existing build
-policy.
+`tic-615d` adds the used identity/security module edges, settings entry,
+production-module list, and dependency-policy fixtures. `tic-ec50` adds the
+application/distribution/archive/reproducibility entries and removes the unused
+`river-server -> river-engine` allowance while adding only used app edges. Do
+not exempt the new module from existing build policy.
 
 ## 10. Test and acceptance plan
 
@@ -543,6 +631,8 @@ policy.
 - missing, oversized, duplicate, malformed, or unknown-required identity
   fields fail closed;
 - a non-empty unowned data directory is rejected;
+- interrupted bootstrap cleanup removes only fixed children named by a valid
+  stale record; missing/invalid bootstrap or any extra entry is preserved;
 - lock contention starts no listener and kills no process;
 - a ready instance publishes one bounded registry record and orderly shutdown
   removes only that matching record;
@@ -551,6 +641,8 @@ policy.
 - stop signals the exact recorded live process and rejects a missing,
   malformed, stale, reused, or mismatched PID record without signalling;
 - stop timeout returns nonzero and does not escalate to SIGKILL;
+- stop requires matching runtime/lock owner nonce and live-lock evidence,
+  rejects unavailable process start/command proof, and never steals the lock;
 - failures preserve the instance data directory for diagnosis and never delete
   data.
 
@@ -558,8 +650,8 @@ policy.
 
 - first creation publishes a complete incarnation-bound 256-bit-token and
   pinned-certificate bundle; restart reuses the exact accepted identity;
-- partial publication before the authoritative manifest is safely recoverable,
-  while missing, oversized, mismatched, expired, symlinked, special,
+- partial first publication before `instance.properties` authority is safely
+  recoverable, while missing, oversized, mismatched, expired, symlinked, special,
   wrong-owner, or group/world-readable accepted material fails closed;
 - wrong token, wrong certificate, wrong hostname, replayed proof, and omitted
   authentication admit no session or statement;
@@ -568,7 +660,12 @@ policy.
 - readiness, registry, diagnostics, process arguments, and audit contain no
   secret values;
 - audit full-at-start, runtime exhaustion, intact archive, archive collision,
-  corruption preservation, and restart after archive have focused tests;
+  corruption preservation, terminal persistent exhaustion, every accepted
+  archive interruption point, and restart after archive have focused tests;
+- credential renewal covers expiry, generation overflow, public archive,
+  every publication interruption, stale clients, and no old-token overlap;
+- supported and unsupported POSIX/secure-directory providers, symlink swaps,
+  owner/mode/type failures, and every format framing bound have focused tests;
 - a source and compiled-code check proves that production contains no plain
   listener/client fallback.
 
@@ -606,6 +703,23 @@ Capture a compact slopmark baseline for `river-server`, `river-server-app`, and
 the touched build files. A rising score or duplicated lifecycle/resource policy
 is a signal to move ownership back to one class rather than adding wrappers.
 
+### 10.6 Audit performance promotion
+
+`tic-72ea` executes the exact accepted `tic-a221` correctness, fault,
+allocation/copy, and matched performance plan. Fixed-count correctness runs use
+1, 2, 4, and 16 clients. Five 30-second control/candidate samples per client
+count use interleave `C,A,A,C,C,A,A,C,C,A` and 10,000 fixed-seed whole-sample
+bootstrap resamples. Correctness, gap-free audit sequence, recovery, cleanup,
+zero warmed allocation/event, zero River-owned byte-array copies, and one force
+for the deterministic cohort are absolute.
+
+At 4 and 16 clients the forces/decision upper 95% bound is at most 0.75. At all
+client counts the throughput-ratio lower 95% bound is at least 0.95, while the
+p99.9 latency, CPU/decision, monitor-blocked/decision, GC pause/decision, and GC
+collections/million-decisions upper 95% ratio bounds are at most 1.10. A zero
+control metric requires zero candidate metric. Preserve failed artifacts; no
+diagnostic profile shape waives a numeric failure.
+
 ## 11. Harness migration and deletion gate
 
 After the installed command passes its real lifecycle test:
@@ -622,16 +736,14 @@ After the installed command passes its real lifecycle test:
    child, and require verified graceful shutdown.
 6. Delete the harness Gradle invocation, init script, classpath parsing and
    fingerprinting, Java-main-class knowledge, and process-class inspection.
-7. Migrate only callers whose accepted evidence can be reproduced. The
-   standalone Go harness moves in this slice. `tools/tps-test.sh` and
+7. Migrate the standalone Go harness in this slice. `tools/tps-test.sh` and
    `tools/trace-update.sh` currently consume server-side JFR gates, resource
    controls, performance capture, deadlock/commit diagnostics, and terminal
    metrics that `riverd` deliberately does not own. Do not delete
-   `TpccServerMain` or pretend those gates survived until a named generic
-   diagnostics boundary or a narrow benchmark orchestrator replaces every
-   accepted evidence producer. While it remains, secure its listener with the
-   same TLS/authentication boundary; it is not an unauthenticated compatibility
-   path.
+   `TpccServerMain` before those gates move. `tic-ec50` has already secured its
+   listener and removed every plain API; `tic-3f57` replaces or retains that
+   authenticated diagnostic owner only after every accepted producer is
+   preserved. It is not a public lifecycle or compatibility path.
 
 The native River v4 Go transport is a separate migration boundary. It may
 remain only while River explicitly owns protocol v4 as the supported client
@@ -665,7 +777,8 @@ The launcher slice is complete when:
 ## 13. Explicitly deferred
 
 - PostgreSQL wire compatibility and a PostgreSQL Go driver;
-- non-loopback listening, TLS, tokens, and multi-principal authorization;
+- non-loopback listening and multi-principal SQL authorization; TLS 1.3 and
+  the single incarnation-bound token are mandatory and are not deferred;
 - background daemonisation, OS service installation, and privilege changes;
 - remote stop/restart administration;
 - automated database deletion, repair, migration, backup, or restore;

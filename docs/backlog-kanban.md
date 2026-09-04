@@ -31,9 +31,12 @@ is non-blocking support work and must not become a substitute for delivery.
 2. Ratify one contract in [`tic-11a5`](tickets/tic-11a5.md) (**Now**).
 3. Implement resource-accounted audit durability in
    [`tic-72ea`](tickets/tic-72ea.md) and instance identity/credentials in
-   [`tic-615d`](tickets/tic-615d.md). These may proceed in parallel after the ADR.
-4. Deliver authenticated start/restart in [`tic-ec50`](tickets/tic-ec50.md), then prove
-   the distribution lifecycle in [`tic-95e8`](tickets/tic-95e8.md).
+   [`tic-615d`](tickets/tic-615d.md). These may proceed in parallel after the ADR;
+   `tic-615d` creates the non-empty app boundary with its real security consumer.
+4. Complete authenticated start/restart in [`tic-ec50`](tickets/tic-ec50.md),
+   migrate every River caller including diagnostics, and delete all plain APIs;
+   then prove the distribution and no-plain-path gate in
+   [`tic-95e8`](tickets/tic-95e8.md).
 5. Deliver exact stop and instance discovery in
    [`tic-0803`](tickets/tic-0803.md) then [`tic-d2e9`](tickets/tic-d2e9.md). Audit archive and
    credential renewal in [`tic-b901`](tickets/tic-b901.md) may proceed after the audit
