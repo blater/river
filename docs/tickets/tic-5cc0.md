@@ -23,18 +23,22 @@ while retained savepoint arrays have no configured resource-admission boundary.
 ## Design
 
 Replace the stale convenience-cap contract with savepoint retention admitted by
-an existing or explicitly owned database/session resource budget. Preserve
-growable savepoints within that budget, return `RESOURCE_EXHAUSTED` before
-mutation at the declared boundary, and reclaim accounting on release, rollback,
-commit, abort, and close. Do not reintroduce a fixed low cardinality cap.
+the existing session-shape resource budget. Preserve growable, reusable
+high-water storage within that budget and return `RESOURCE_EXHAUSTED` before
+relational savepoint mutation at the declared boundary. Release, rollback,
+commit, and abort clear logical savepoints and reusable name contents while the
+retained capacity remains honestly charged; session close returns its runtime
+lease. Do not introduce a second quota system or reintroduce a fixed low
+cardinality cap.
 
 ## Acceptance Criteria
 
 Focused tests prove more than three named savepoints succeed when budget permits;
 deterministic budget exhaustion returns `RESOURCE_EXHAUSTED` without corrupting
-transaction state; release, rollback, commit, abort, and close reclaim retained
-state; the exact formerly failing `SqlSessionTest` method and affected engine
-module suite pass. Record clean-master failure XML SHA-256
+transaction state; release, rollback, commit, and abort clear logical state and
+reuse admitted high-water capacity without double charging; session close
+returns the runtime lease; the exact formerly failing `SqlSessionTest` method
+and affected engine module suite pass. Record clean-master failure XML SHA-256
 `92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab4` and
 accepted candidate evidence.
 
