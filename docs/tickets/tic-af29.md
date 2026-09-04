@@ -1,10 +1,12 @@
 ---
 id: tic-af29
-status: open
+status: in_progress
 type: story
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: 9f756561f79d1ad0952c0ff4d38c07f670badd31
+branch: ticket/tic-af29-lock-block-causality
 tags:
     - performance
     - tpcc
