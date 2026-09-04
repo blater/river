@@ -117,6 +117,18 @@ Run the clean, reproducible release check at an integration checkpoint:
 and dependency policies, and uses an isolated repository-local Gradle home by
 default.
 
+## Development backlog
+
+River keeps its execution backlog as source-controlled Markdown tickets under
+[`docs/tickets/`](docs/tickets/). The visible project configuration in
+[`ticket.yaml`](ticket.yaml) lets `tk` discover that directory from the
+repository root or any nested directory without a user-global setting.
+
+Tickets track epics, stories, investigations, dependencies, ownership, and
+delivery evidence. They link to plans and ADRs rather than replacing those
+architectural and semantic authorities. The working and promotion rules remain
+defined by [`manifesto.md`](manifesto.md) and [`AGENTS.md`](AGENTS.md).
+
 ## License
 
 River uses the [GNU Affero General Public License v3](LICENSE).
