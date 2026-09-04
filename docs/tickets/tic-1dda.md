@@ -1,10 +1,12 @@
 ---
 id: tic-1dda
-status: open
+status: in_progress
 type: investigation
 assignee: blater
 parent: tic-5db4
 delivery: evidence
+base-commit: 10acfa58664f715c0023b31280d75eabdcbfa5cd
+branch: ticket/tic-1dda-p0-promotion-matrix
 tags:
     - performance
     - tpcc
