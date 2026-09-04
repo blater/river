@@ -86,7 +86,19 @@ fields. A force cohort is an I/O grouping, not a variable durable frame: each
 request always reserves exactly one record's bytes before sequence assignment,
 so `headerBytes + durableRecordBytes + reservedRecordBytes` can never exceed
 `activeAuditMaximumBytes`. Offsets, sequence numbers, generations, and byte
-limits are `long`. The format has no benchmark-derived event cap.
+limits are positive `long` values. `Long.MAX_VALUE` is reserved as the terminal
+control generation and is never an event sequence, audit generation, or
+ordinary control generation. Before reservation, control publication, or
+archive mutation, the owner preflights all next values with checked arithmetic.
+If any operational next value would reach the reserved value, it writes an
+`EXHAUSTED` record at terminal control generation `Long.MAX_VALUE` into the
+inactive control slot and forces that file and its directory. Only a successful
+terminal force returns `RESOURCE_EXHAUSTED`; a write/force failure follows the
+normal `IO_FAILURE`/`FENCED` path and admits nothing. Recovery selects the
+terminal record over every ordinary generation and remains exhausted. No
+sequence or generation is reset or reused. Recovery requires a separately
+reviewed wider durable format or a new instance incarnation; ordinary startup
+and archive cannot clear it. The format has no benchmark-derived event cap.
 
 The launcher supplies two explicit byte budgets:
 
@@ -159,6 +171,7 @@ executor. It never changes allowed/denied or calls the engine.
 | Crash after force and before notification/admission | The complete record validates on restart. It is retained; the interrupted work was not acknowledged or admitted by the dead process. Duplicate insertion is avoided through global sequence/record validation, not by promising that the work occurred. |
 | Header, instance, generation, sequence, length, checksum, reserved field, or tail invalid | Startup returns `CORRUPTION`, publishes no readiness, and performs no truncation, repair, rollover, or implicit reinitialization. |
 | Active capacity full at startup/runtime | Startup fails before readiness if minimum admission cannot fit. Runtime returns `RESOURCE_EXHAUSTED` before effects and names the stopped-instance archive operation. |
+| Global sequence, audit generation, or ordinary control generation reaches its reserved terminal boundary | Before reservation or archive mutation, publish and force the terminal `EXHAUSTED` control record. On success return `RESOURCE_EXHAUSTED`; on persistence failure return `IO_FAILURE` and fence. Admit no work and never wrap, reset, or reuse an identity under the instance incarnation. Restart remains unavailable until an explicitly reviewed format/incarnation migration. |
 
 Java/NIO exceptions are translated at the platform adapter. Expected pressure,
 cancellation, corruption, and I/O outcomes remain `StatusCode` values.
@@ -168,7 +181,7 @@ cancellation, corruption, and I/O outcomes remain `StatusCode` values.
 Audit generations use immutable `audit-<generation>.log` files and a redundant,
 independently checksummed two-generation control store following ADR 0003. A
 control record contains instance identity, control generation, state
-`ACTIVE|ARCHIVING`, old/new audit generation and names, content-archive name and
+`ACTIVE|ARCHIVING|EXHAUSTED`, old/new audit generation and names, content-archive name and
 digest, first/next global sequence, and predecessor digest. Recovery selects
 the highest valid control generation; disagreement, missing authoritative data,
 or invalid identity/checksum is `CORRUPTION`.
@@ -229,17 +242,31 @@ secrets or affect control flow.
 starts the real authenticated loopback path on a fresh instance, executes a
 fixed seeded mix of allowed reads, denied writes, prepare/execute, and a
 conditional mixed-step program, and writes a checksummed immutable artifact.
-No shell script copies its semantics. A typical sample command is:
+No shell script copies its semantics. A fixed-count correctness command is:
 
 ```sh
-./gradlew :river-bench:securityAuditAdmission --args="--clients=16 \
+./gradlew :river-bench:securityAuditAdmission --args="--mode=correctness \
+  --clients=16 --requests-per-client=10000 --seed=410221 \
+  --output-dir=/private/tmp/river-audit-<source>-correctness-16"
+```
+
+This mode has no timed cutoff. Its manifest defines every request ID and
+per-client order, so the control and candidate must produce the identical
+request-correlated decision multiset and admitted effects while each audit
+stream independently has gap-free global sequences. A typical timed sample
+command is:
+
+```sh
+./gradlew :river-bench:securityAuditAdmission --args="--mode=performance \
+  --clients=16 \
   --warmup-seconds=5 --measured-seconds=30 --seed=410221 \
   --output-dir=/private/tmp/river-audit-<source>-16-<sample>"
 ```
 
 Build a telemetry-only control SHA and candidate SHA in separate worktrees and
-Gradle homes/project caches. With no other build/workload active, run client
-counts 1, 2, 4, and 16 using the fixed interleave order
+Gradle homes/project caches. First run fixed-count correctness once per source
+at client counts 1, 2, 4, and 16. Then, with no other build/workload active,
+run timed samples at those client counts using the fixed interleave order
 `C,A,A,C,C,A,A,C,C,A`, giving five 30-second measured samples per source/count.
 Every artifact records source/configuration fingerprint, JDK/host/filesystem,
 decision/status counts, admitted effects, p50/p99/p99.9 latency, throughput,
@@ -247,10 +274,13 @@ force count/time and cohort histogram, queue occupancy/pressure, CPU/profile
 and monitor contention, allocation bytes/objects, River-owned copy bytes/count,
 and GC count/pause/allocation rate.
 
-Correctness is absolute: identical request-correlated decision multiset,
-per-client request order, and admitted effects for the seed; each independently
-scheduled audit stream must have gap-free global sequences. There must also be
-zero unexplained outcomes, valid audit/restart, and zero resource residue.
+Correctness is absolute in the fixed-count phase: identical request-correlated
+decision multiset, per-client request order, and admitted effects for the seed;
+each independently scheduled audit stream must have gap-free global sequences.
+Timed samples may complete different request counts, but each must independently
+reconcile every issued request with its decision and admitted effect. Both
+phases require zero unexplained outcomes, valid audit/restart, and zero resource
+residue.
 Warmed audit allocation is 0 bytes/objects per event and the
 audit record is encoded directly once into reserved provider storage with zero
 River-owned byte-array copies. The deterministic overlap test requires one
@@ -258,6 +288,12 @@ force to release the whole forced cohort. At 4 and 16 clients, the upper 95%
 bootstrap confidence bound for forces/decision must be at most 0.75. At every
 client count, the lower 95% bound for candidate/control throughput must be at
 least 0.95 and the upper 95% bound for p99.9 latency ratio at most 1.10. Compute
+the upper 95% bounds for candidate/control CPU nanoseconds per audited decision
+and monitor-blocked nanoseconds per decision; each must be at most 1.10. The
+same 1.10 upper-bound gate applies to GC pause nanoseconds per decision and GC
+collections per million decisions. If a control metric is zero, the candidate
+must also be zero. Profile shape and cache-miss counters are diagnostic and
+cannot waive a failed numeric gate. Compute
 10,000 fixed-seed bootstrap resamples over complete samples; preserve failures
 and both interval endpoints. If an interval fails, the ticket does not promote.
 
@@ -274,7 +310,9 @@ request; pending/full pressure; cancellation in every state; close with waiters;
 partial write; short/zero progress; force failure; coordinator failure; crash
 before/after force and notification; restart validation; corrupt/torn tails;
 archive collision/interruption; full-at-start; long-offset arithmetic; secret
-scans; and the non-applicable embedded path's zero file/queue/thread/force cost.
+scans; near-`Long.MAX_VALUE` sequence and generation preflight with persistent
+exhaustion across restart; and the non-applicable embedded path's zero
+file/queue/thread/force cost.
 Warmed admission must allocate zero per event after provider construction.
 
 ## Proposed conclusion
