@@ -44,6 +44,7 @@ tasks.register("writeRiverTpsRuntimeClasspath") {
       add("schema=river-tps-runtime-v1")
       add("gradle.version=${gradle.gradleVersion}")
       add("gradle.home=${gradle.gradleHomeDir?.absolutePath ?: "unavailable"}")
+      add("gradle.process.pid=${ProcessHandle.current().pid()}")
       add("java.home=${System.getProperty("java.home")}")
       add("java.version=${System.getProperty("java.version")}")
       entries.forEach { entry ->

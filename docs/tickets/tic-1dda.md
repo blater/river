@@ -27,9 +27,17 @@ Run the required serializable 50/50 discriminator and standard-mix terminal swee
 
 Use the exact P0 correctness, failure-mode displacement, correlation, cleanup, and performance-regression criteria in docs/perf_review.md. Preserve every anomalous sample.
 
+Promotion evidence uses the cooperative host boundary owned by `tic-0636`.
+The shared River performance lease proves full-interval exclusion among
+lease-participating River workflows. Bounded periodic process observations
+reject nonparticipants that are observed, but cannot prove absence between
+samples. Each promoted interval therefore requires an operator attestation
+that no uncoordinated River build, test, profile, client/server, harness, or
+database workload ran on the host. Idle Gradle daemons are allowed.
+
 ## Acceptance Criteria
 
-Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references and the source tag are recorded.
+Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references, source tag, cooperative lease record, bounded host observations, and operator no-uncoordinated-work attestation are recorded. Evidence does not claim that periodic observation proves unconditional host-wide absence between samples.
 
 ## Notes
 

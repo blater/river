@@ -28,6 +28,15 @@ assert_contains() {
   grep -F -- "$2" "$1" >/dev/null || fail "$1 does not contain $2"
 }
 
+retained_temp_dir() {
+  local output_dir=$1
+  local descriptor
+  descriptor=$(tr '\0' '\n' <"$output_dir/build-command.argv" |
+    sed -n 's/^-PriverTpsClasspathOutput=//p' | head -1)
+  [[ -n $descriptor ]] || fail "cannot recover owned temporary path from retained build argv"
+  dirname -- "$descriptor"
+}
+
 classpath_root="$test_root/classpath"
 mkdir -p "$classpath_root/classes/a" "$classpath_root/resources"
 printf 'class-a\n' >"$classpath_root/classes/a/A.class"
@@ -119,15 +128,29 @@ mkdir "$own_monitor"
 : >"$own_monitor/host-observations.tsv"
 : >"$own_monitor/host-violations.tsv"
 : >"$own_monitor/owned-build"
+: >"$own_monitor/provisional.tsv"
+printf 'build\n' >"$own_monitor/phase"
 provenance_capture_processes() { printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
 provenance_gradle_daemon_state() { printf 'busy\n'; }
 provenance_gradle_daemon_home() { printf '/owned/home\n'; }
 provenance_process_start() { printf 'Fri Sep 4 11:00:00 2026\n'; }
 sleep() { : >"$own_monitor/stop"; }
 provenance_monitor_host "$own_monitor" 100 "$own_monitor/stop" 0 \
-  /owned/home "$own_monitor/owned-build"
+  /owned/home "$own_monitor/owned-build" "$own_monitor/phase" 65536 1 \
+  "$own_monitor/provisional.tsv"
 [[ ! -s $own_monitor/host-violations.tsv ]] || fail "owned busy Gradle daemon was rejected"
-assert_contains "$own_monitor/host-classification.000001.tsv" $'allowed_owned_gradle_daemon\t200'
+assert_contains "$own_monitor/host-classifications.tsv" $'provisional_owned_gradle_daemon\t200'
+printf 'gradle.process.pid=200\n' >"$own_monitor/descriptor"
+provenance_validate_gradle_daemons "$own_monitor/descriptor" \
+  "$own_monitor/provisional.tsv" || fail "exact owned Gradle daemon was rejected"
+printf 'gradle.process.pid=201\n' >"$own_monitor/foreign-descriptor"
+if provenance_validate_gradle_daemons "$own_monitor/foreign-descriptor" \
+    "$own_monitor/provisional.tsv"; then
+  fail "different Gradle daemon was accepted by home and marker alone"
+fi
+[[ -z $(find "$own_monitor" \( -name 'host-processes.0*' -o \
+  -name 'host-classification.0*' \) -print -quit) ]] ||
+  fail "per-sample host evidence was retained without a bound"
 pass
 
 foreign_monitor="$test_root/foreign-monitor"
@@ -135,10 +158,13 @@ mkdir "$foreign_monitor"
 : >"$foreign_monitor/host-observations.tsv"
 : >"$foreign_monitor/host-violations.tsv"
 : >"$foreign_monitor/owned-build"
+: >"$foreign_monitor/provisional.tsv"
+printf 'build\n' >"$foreign_monitor/phase"
 provenance_gradle_daemon_home() { printf '/foreign/home\n'; }
 sleep() { : >"$foreign_monitor/stop"; }
 provenance_monitor_host "$foreign_monitor" 100 "$foreign_monitor/stop" 0 \
-  /owned/home "$foreign_monitor/owned-build"
+  /owned/home "$foreign_monitor/owned-build" "$foreign_monitor/phase" 65536 1 \
+  "$foreign_monitor/provisional.tsv"
 assert_contains "$foreign_monitor/host-violations.tsv" $'violation\tbusy_gradle_daemon\t200'
 pass
 
@@ -149,24 +175,117 @@ provenance_process_start() {
 
 lease="$test_root/lease"
 provenance_process_start() {
-  [[ $1 == "$$" ]] && printf 'Fri Sep  4 12:00:00 2026\n'
+  [[ $1 != 999 ]] && printf 'Fri Sep  4 12:00:00 2026\n'
 }
 mkdir "$lease"
 {
-  printf 'pid=%s\n' "$$"
+  printf 'schema=river-tps-host-lease-v1\n'
+  printf 'pid=999\n'
   printf 'start=definitely-not-this-process\n'
+  printf 'token_sha256=%s\n' \
+    "$(provenance_sha256_text '999:definitely-not-this-process')"
 } >"$lease/owner"
 provenance_acquire_lease "$lease" || fail "stale PID-reuse lease was not reclaimed"
 provenance_release_lease "$lease" || fail "owned lease was not released"
 mkdir "$lease"
 {
-  printf 'pid=%s\n' "$$"
-  printf 'start=%s\n' "$(provenance_process_start "$$")"
+  printf 'schema=river-tps-host-lease-v1\n'
+  printf 'pid=%s\n' "${BASHPID:-$$}"
+  printf 'start=%s\n' "$(provenance_process_start "${BASHPID:-$$}")"
+  printf 'token_sha256=%s\n' "$(provenance_sha256_text \
+    "${BASHPID:-$$}:$(provenance_process_start "${BASHPID:-$$}")")"
 } >"$lease/owner"
 if provenance_acquire_lease "$lease"; then
   fail "live lease owner was displaced"
 fi
 rm -rf -- "$lease"
+mkdir "$lease"
+if provenance_acquire_lease "$lease"; then
+  fail "ownerless crash-before-owner lease was reclaimed"
+fi
+rm -rf -- "$lease"
+mkdir "$lease"
+printf 'not-an-owner-record\n' >"$lease/owner"
+if provenance_acquire_lease "$lease"; then
+  fail "malformed lease owner was reclaimed"
+fi
+rm -rf -- "$lease"
+mkdir "$lease"
+{
+  printf 'schema=river-tps-host-lease-v1\n'
+  printf 'pid=999\n'
+  printf 'start=definitely-not-this-process\n'
+  printf 'token_sha256=%064d\n' 0
+} >"$lease/owner"
+if provenance_acquire_lease "$lease"; then
+  fail "lease with mismatched owner token was reclaimed"
+fi
+rm -rf -- "$lease"
+mkdir "$lease"
+{
+  printf 'schema=river-tps-host-lease-v1\n'
+  printf 'pid=999\n'
+  printf 'start=definitely-not-this-process\n'
+  printf 'token_sha256=%s\n' \
+    "$(provenance_sha256_text '999:definitely-not-this-process')"
+  printf 'pid=998\n'
+} >"$lease/owner"
+if provenance_acquire_lease "$lease"; then
+  fail "lease with duplicate or extra owner fields was reclaimed"
+fi
+rm -rf -- "$lease"
+mkdir "$lease"
+{
+  printf 'pid=999\n'
+  printf 'schema=river-tps-host-lease-v1\n'
+  printf 'start=definitely-not-this-process\n'
+  printf 'token_sha256=%s\n' \
+    "$(provenance_sha256_text '999:definitely-not-this-process')"
+} >"$lease/owner"
+if provenance_acquire_lease "$lease"; then
+  fail "lease with reordered canonical owner fields was reclaimed"
+fi
+rm -rf -- "$lease"
+mv() { return 1; }
+if provenance_acquire_lease "$lease"; then
+  fail "lease acquisition accepted owner-record publication failure"
+fi
+unset -f mv
+[[ -d $lease && ! -e $lease/owner ]] ||
+  fail "owner publication failure did not remain fail-closed for manual recovery"
+rm -rf -- "$lease"
+pass
+
+provenance_process_start() {
+  ps -p "$1" -o lstart= 2>/dev/null |
+    awk 'NF >= 5 {print $1 " " $2 " " $3 " " $4 " " $5}'
+}
+race_lease="$test_root/simultaneous-lease"
+race_results="$test_root/simultaneous-results"
+race_release="$test_root/simultaneous-release"
+: >"$race_results"
+for contender in 1 2; do
+  bash -c '
+    set -euo pipefail
+    source "$1"
+    provenance_process_start() { printf "fixture-start-%s\n" "$1"; }
+    if provenance_acquire_lease "$2"; then
+      printf "success\t%s\n" "$5" >>"$3"
+      while [[ ! -e $4 ]]; do /bin/sleep 0.01; done
+      provenance_release_lease "$2"
+    else
+      printf "failed\t%s\n" "$5" >>"$3"
+    fi
+  ' bash "$script_dir/tps-provenance.sh" "$race_lease" "$race_results" \
+    "$race_release" "$contender" &
+done
+for _ in {1..200}; do
+  [[ $(wc -l <"$race_results") -eq 2 ]] && break
+  /bin/sleep 0.01
+done
+assert_equal "$(awk '$1 == "success" {count++} END {print count+0}' "$race_results")" 1
+: >"$race_release"
+wait
 pass
 
 printf 'first\n' >"$test_root/publication-source"
@@ -195,6 +314,8 @@ mkdir "$race_monitor"
 : >"$race_monitor/host-observations.tsv"
 : >"$race_monitor/host-violations.tsv"
 : >"$race_monitor/start-calls"
+: >"$race_monitor/provisional.tsv"
+printf 'prebuild\n' >"$race_monitor/phase"
 provenance_capture_processes() { printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
 provenance_gradle_daemon_state() { printf 'busy\n'; }
 provenance_process_start() {
@@ -206,7 +327,8 @@ provenance_process_start() {
   fi
 }
 sleep() { : >"$race_monitor/stop"; }
-provenance_monitor_host "$race_monitor" 100 "$race_monitor/stop" 0
+provenance_monitor_host "$race_monitor" 100 "$race_monitor/stop" 0 '' '' \
+  "$race_monitor/phase" 65536 1 "$race_monitor/provisional.tsv"
 assert_contains "$race_monitor/host-violations.tsv" $'violation\tprocess_identity_race\t200'
 pass
 
@@ -214,11 +336,65 @@ monitor_dir="$test_root/monitor"
 mkdir "$monitor_dir"
 : >"$monitor_dir/host-observations.tsv"
 : >"$monitor_dir/host-violations.tsv"
+printf 'prebuild\n' >"$monitor_dir/phase"
 provenance_capture_processes() { return 1; }
-if provenance_monitor_host "$monitor_dir" "$$" "$monitor_dir/stop" 0; then
+if provenance_monitor_host "$monitor_dir" "$$" "$monitor_dir/stop" 0 '' '' \
+    "$monitor_dir/phase" 65536 1 "$monitor_dir/provisional.tsv"; then
   fail "process observation race/failure was accepted"
 fi
 assert_contains "$monitor_dir/host-violations.tsv" process_snapshot_failed
+pass
+
+workload_monitor="$test_root/workload-monitor"
+mkdir "$workload_monitor"
+: >"$workload_monitor/host-observations.tsv"
+: >"$workload_monitor/host-violations.tsv"
+: >"$workload_monitor/provisional.tsv"
+: >"$workload_monitor/jcmd-calls"
+printf 'workload\n' >"$workload_monitor/phase"
+provenance_capture_processes() { printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
+provenance_gradle_daemon_state() { printf x >>"$workload_monitor/jcmd-calls"; printf 'busy\n'; }
+sleep() { : >"$workload_monitor/stop"; }
+provenance_monitor_host "$workload_monitor" 100 "$workload_monitor/stop" 0 '' '' \
+  "$workload_monitor/phase" 65536 1 "$workload_monitor/provisional.tsv"
+[[ ! -s $workload_monitor/jcmd-calls ]] || fail "daemon inspection ran during workload phase"
+assert_contains "$workload_monitor/host-classifications.tsv" 'state=not_inspected'
+assert_contains "$workload_monitor/host-observations.tsv" $'workload\t'
+awk -F '\t' 'NF == 6 && $4 ~ /^[0-9]+$/ {valid=1} END {exit !valid}' \
+  "$workload_monitor/host-observations.tsv" ||
+  fail "host observation did not retain phase and inspection cost"
+pass
+
+budget_monitor="$test_root/budget-monitor"
+mkdir "$budget_monitor"
+: >"$budget_monitor/host-observations.tsv"
+: >"$budget_monitor/host-violations.tsv"
+: >"$budget_monitor/provisional.tsv"
+printf 'workload\n' >"$budget_monitor/phase"
+provenance_capture_processes() { printf '%s\n' ' 1 0 Fri Sep  4 00:00:00 2026 launchd'; }
+if provenance_monitor_host "$budget_monitor" 100 "$budget_monitor/stop" 0 '' '' \
+    "$budget_monitor/phase" 512 1 "$budget_monitor/provisional.tsv"; then
+  fail "host evidence byte budget was not enforced"
+fi
+assert_contains "$budget_monitor/host-violations.tsv" host_evidence_budget_exhausted
+budget_bytes=$(provenance_evidence_bytes \
+  "$budget_monitor/host-observations.tsv" "$budget_monitor/host-processes.tsv" \
+  "$budget_monitor/host-classifications.tsv" "$budget_monitor/host-violations.tsv" \
+  "$budget_monitor/provisional.tsv")
+((budget_bytes <= 512)) || fail "retained host evidence exceeded configured byte budget"
+pass
+
+timeout_started=$SECONDS
+provenance_run_bounded 2 "$test_root/bounded-success.log" \
+  sh -c 'printf "bounded-success\n"'
+assert_contains "$test_root/bounded-success.log" bounded-success
+if provenance_run_bounded 1 "$test_root/bounded-command.log" /bin/sleep 5; then
+  fail "bounded daemon inspection did not time out"
+else
+  timeout_status=$?
+fi
+assert_equal "$timeout_status" 124
+((SECONDS - timeout_started < 4)) || fail "bounded daemon inspection exceeded deadline"
 pass
 
 fixture="$test_root/full-run-fixture"
@@ -251,11 +427,16 @@ for argument in "$@"; do
   esac
 done
 [[ -n $descriptor ]]
+[[ -f $(dirname -- "$descriptor")/owned-gradle-build.active ]] || {
+  printf 'owned build marker missing during exact build subprocess\n' >&2
+  exit 19
+}
 printf 'fresh-class-bytes\n' >"$FAKE_RIVER_ROOT/build/classes/Main.class"
 {
   printf 'schema=river-tps-runtime-v1\n'
   printf 'gradle.version=fake-1\n'
   printf 'gradle.home=%s\n' "$FAKE_RIVER_ROOT/fake-gradle-home"
+  printf 'gradle.process.pid=%s\n' "$$"
   printf 'java.home=/fake/java\n'
   printf 'java.version=fake-25\n'
   printf 'classpath=%s\n' "$FAKE_RIVER_ROOT/build/classes"
@@ -310,6 +491,30 @@ artifact=
 for argument in "$@"; do
   case $argument in --artifact=*) artifact=${argument#*=} ;; esac
 done
+[[ ! -e $(dirname -- "$artifact")/owned-gradle-build.active ]] || {
+  printf 'owned build marker leaked into workload\n' >&2
+  exit 20
+}
+if [[ -n ${FAKE_ARTIFACT_COLLISION_PATH:-} ]]; then
+  printf 'external-artifact-sentinel\n' >"$FAKE_ARTIFACT_COLLISION_PATH"
+fi
+if [[ -n ${FAKE_PERSIST_COLLISION_DIR:-} ]]; then
+  printf 'external-build-log-sentinel\n' >"$FAKE_PERSIST_COLLISION_DIR/build.log"
+fi
+if [[ -n ${FAKE_CHECKPOINT_COLLISION_DIR:-} ]]; then
+  printf 'external-checkpoint-sentinel\n' >"$FAKE_CHECKPOINT_COLLISION_DIR/checkpoints"
+fi
+if [[ -n ${FAKE_METADATA_COLLISION_PATH:-} ]]; then
+  printf 'external-metadata-sentinel\n' >"$FAKE_METADATA_COLLISION_PATH"
+fi
+if [[ ${FAKE_LEDGER_FAILURE:-false} == true ]]; then
+  ledger="$(dirname -- "$artifact")/provenance-checkpoints.tsv"
+  rm -f -- "$ledger"
+  mkdir "$ledger"
+fi
+if [[ -n ${FAKE_CORRUPT_LEASE_OWNER:-} ]]; then
+  printf 'unexpected=field\n' >>"$FAKE_CORRUPT_LEASE_OWNER/owner"
+fi
 if [[ -n ${FAKE_CLIENT_STARTED:-} ]]; then : >"$FAKE_CLIENT_STARTED"; fi
 if [[ -n ${FAKE_CLIENT_DELAY:-} ]]; then /bin/sleep "$FAKE_CLIENT_DELAY"; fi
 if [[ -n ${FAKE_MUTATE_SOURCE:-} ]]; then
@@ -340,9 +545,22 @@ git -C "$fixture" config user.email test@example.invalid
 git -C "$fixture" add .
 git -C "$fixture" commit -qm fixture
 
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  "$fixture/tools/tps-test.sh" --output-dir="$test_root/missing-attestation-output" \
+  >"$test_root/missing-attestation.stdout" 2>"$test_root/missing-attestation.stderr"
+missing_attestation_status=$?
+set -e
+assert_equal "$missing_attestation_status" 2
+assert_contains "$test_root/missing-attestation.stderr" \
+  'RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true is required'
+pass
+
 printf 'stale-class-bytes\n' >"$fixture/build/classes/Main.class"
 full_output="$test_root/full-output"
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
   RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
   RIVER_TPS_HOST_LEASE_DIR="$test_root/full-lease" \
   RIVER_TPS_GRADLE_USER_HOME="$test_root/full-gradle-home" \
@@ -356,9 +574,20 @@ gradle_manifest_hash=$(sed -n 's/^build.gradle_runtime_manifest_sha256=//p' \
   "$full_output/run-metadata.properties")
 assert_equal "$(provenance_sha256_file "$full_output/gradle-runtime-manifest.tsv")" \
   "$gradle_manifest_hash"
+provisional_hash=$(sed -n 's/^provenance.host_provisional_daemons_sha256=//p' \
+  "$full_output/run-metadata.properties")
+assert_equal "$(provenance_sha256_file "$full_output/host-provisional-daemons.tsv")" \
+  "$provisional_hash"
 assert_contains "$full_output/run-metadata.properties" 'provenance.source_stable=true'
 assert_contains "$full_output/run-metadata.properties" 'provenance.classpath_stable=true'
 assert_contains "$full_output/run-metadata.properties" 'provenance.host_exclusion_valid=true'
+assert_contains "$full_output/run-metadata.properties" \
+  'provenance.host_provisional_daemons_sha256='
+assert_contains "$full_output/run-metadata.properties" 'provenance.publication_valid=true'
+assert_contains "$full_output/run-metadata.properties" \
+  'configuration.operator_no_uncoordinated_work_attestation=true'
+full_temp_dir=$(retained_temp_dir "$full_output")
+[[ ! -e $full_temp_dir ]] || fail "successful persisted run retained owned temporary database tree"
 
 provenance_write_classpath_manifest "$full_output/runtime-classpath.properties" \
   "$test_root/full-replayed-classpath.tsv"
@@ -376,6 +605,7 @@ metadata_status_hash=$(sed -n 's/^git.status_sha256=//p' "$full_output/run-metad
 assert_equal "$(provenance_sha256_file "$full_output/checkpoints/git-status.metadata.txt")" "$metadata_status_hash"
 publication_hash_before=$(provenance_sha256_file "$full_output/run-metadata.properties")
 if PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+    RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
     RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
     "$fixture/tools/tps-test.sh" --output-dir="$full_output" >/dev/null 2>&1; then
   fail "full-run evidence directory was overwritten"
@@ -387,6 +617,7 @@ source_mutation_output="$test_root/source-mutation-output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_MUTATE_SOURCE="$fixture/mutable-source.txt" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
   RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
   RIVER_TPS_HOST_LEASE_DIR="$test_root/source-mutation-lease" \
   "$fixture/tools/tps-test.sh" --output-dir="$source_mutation_output" \
@@ -402,6 +633,9 @@ source_final_hash=$(sed -n 's/^git.workspace_finish_sha256=//p' \
   "$source_mutation_output/run-metadata.properties")
 assert_equal "$(provenance_sha256_file "$source_mutation_output/checkpoints/source-manifest.metadata.tsv")" \
   "$source_final_hash"
+source_mutation_temp=$(retained_temp_dir "$source_mutation_output")
+[[ ! -e $source_mutation_temp ]] ||
+  fail "invalid but successfully persisted source run retained temporary tree"
 printf 'original-source\n' >"$fixture/mutable-source.txt"
 pass
 
@@ -409,6 +643,7 @@ classpath_mutation_output="$test_root/classpath-mutation-output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_MUTATE_CLASSPATH="$fixture/build/classes/Main.class" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
   RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
   RIVER_TPS_HOST_LEASE_DIR="$test_root/classpath-mutation-lease" \
   "$fixture/tools/tps-test.sh" --output-dir="$classpath_mutation_output" \
@@ -420,11 +655,15 @@ assert_contains "$classpath_mutation_output/run-metadata.properties" 'provenance
 cmp -s "$classpath_mutation_output/checkpoints/classpath-manifest.start.tsv" \
   "$classpath_mutation_output/checkpoints/classpath-manifest.metadata.tsv" &&
   fail "invalid final classpath bytes were not retained"
+classpath_mutation_temp=$(retained_temp_dir "$classpath_mutation_output")
+[[ ! -e $classpath_mutation_temp ]] ||
+  fail "invalid but successfully persisted classpath run retained temporary tree"
 pass
 
 failed_output="$test_root/failed-output"
 set +e
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" FAKE_BUILD_FAIL=true \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
   RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
   RIVER_TPS_HOST_LEASE_DIR="$test_root/failed-lease" \
   "$fixture/tools/tps-test.sh" --output-dir="$failed_output" >/dev/null 2>&1
@@ -434,12 +673,15 @@ assert_equal "$failed_status" 17
 assert_contains "$failed_output/build.log" 'fake Gradle declared failure'
 assert_contains "$failed_output/run-metadata.properties" 'run.result=build_failed'
 assert_contains "$failed_output/run-metadata.properties" 'build.exit_status=17'
+failed_temp_dir=$(retained_temp_dir "$failed_output")
+[[ ! -e $failed_temp_dir ]] || fail "failed persisted run retained owned temporary database tree"
 pass
 
 interrupted_output="$test_root/interrupted-output"
 client_started="$test_root/client-started"
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   FAKE_CLIENT_STARTED="$client_started" FAKE_CLIENT_DELAY=30 \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
   RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
   RIVER_TPS_HOST_LEASE_DIR="$test_root/interrupted-lease" \
   "$fixture/tools/tps-test.sh" --output-dir="$interrupted_output" \
@@ -460,6 +702,135 @@ assert_contains "$interrupted_output/run-metadata.properties" 'run.result=interr
 assert_contains "$interrupted_output/run-metadata.properties" 'run.status=INTERRUPTED'
 [[ -f $interrupted_output/build.log && -f $interrupted_output/provenance-checkpoints.tsv ]] ||
   fail "interrupted evidence was not preserved"
+interrupted_temp_dir=$(retained_temp_dir "$interrupted_output")
+[[ ! -e $interrupted_temp_dir ]] || fail "interrupted persisted run retained owned temporary database tree"
+pass
+
+artifact_collision_output="$test_root/artifact-collision-output"
+mkdir "$artifact_collision_output"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_ARTIFACT_COLLISION_PATH="$artifact_collision_output/tpcc-acceptance.properties" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/artifact-collision-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$artifact_collision_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/artifact-collision.stdout" 2>"$test_root/artifact-collision.stderr"
+artifact_collision_status=$?
+set -e
+assert_equal "$artifact_collision_status" 1
+assert_contains "$artifact_collision_output/tpcc-acceptance.properties" \
+  external-artifact-sentinel
+assert_contains "$artifact_collision_output/run-metadata.properties" \
+  'run.result=evidence_invalid'
+assert_contains "$artifact_collision_output/run-metadata.properties" \
+  'provenance.publication_valid=false'
+assert_contains "$artifact_collision_output/run-metadata.properties" \
+  'artifact.published=false'
+pass
+
+persist_collision_output="$test_root/persist-collision-output"
+mkdir "$persist_collision_output"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_PERSIST_COLLISION_DIR="$persist_collision_output" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/persist-collision-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$persist_collision_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
+persist_collision_status=$?
+set -e
+assert_equal "$persist_collision_status" 1
+assert_contains "$persist_collision_output/build.log" external-build-log-sentinel
+assert_contains "$persist_collision_output/run-metadata.properties" \
+  'run.status=EVIDENCE_PUBLICATION_FAILED'
+assert_contains "$persist_collision_output/run-metadata.properties" \
+  'provenance.publication_valid=false'
+pass
+
+checkpoint_collision_output="$test_root/checkpoint-collision-output"
+mkdir "$checkpoint_collision_output"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_CHECKPOINT_COLLISION_DIR="$checkpoint_collision_output" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/checkpoint-collision-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$checkpoint_collision_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
+checkpoint_collision_status=$?
+set -e
+assert_equal "$checkpoint_collision_status" 1
+assert_contains "$checkpoint_collision_output/checkpoints" external-checkpoint-sentinel
+assert_contains "$checkpoint_collision_output/run-metadata.properties" \
+  'run.result=evidence_invalid'
+pass
+
+ledger_failure_output="$test_root/ledger-failure-output"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" FAKE_LEDGER_FAILURE=true \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/ledger-failure-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$ledger_failure_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
+ledger_failure_status=$?
+set -e
+assert_equal "$ledger_failure_status" 1
+assert_contains "$ledger_failure_output/run-metadata.properties" \
+  'run.status=EVIDENCE_PUBLICATION_FAILED'
+assert_contains "$ledger_failure_output/run-metadata.properties" \
+  'provenance.publication_valid=false'
+pass
+
+metadata_collision_output="$test_root/metadata-collision-output"
+mkdir "$metadata_collision_output"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_METADATA_COLLISION_PATH="$metadata_collision_output/run-metadata.properties" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/metadata-collision-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$metadata_collision_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/metadata-collision.stdout" 2>"$test_root/metadata-collision.stderr"
+metadata_collision_status=$?
+set -e
+assert_equal "$metadata_collision_status" 1
+assert_contains "$metadata_collision_output/run-metadata.properties" \
+  external-metadata-sentinel
+assert_contains "$test_root/metadata-collision.stderr" \
+  'evidence_status=evidence_invalid reason=publication_failed'
+metadata_collision_temp=$(retained_temp_dir "$metadata_collision_output")
+assert_contains "$metadata_collision_temp/evidence-invalid.status" \
+  'status=EVIDENCE_PUBLICATION_FAILED'
+assert_contains "$metadata_collision_output/evidence-invalid.status" \
+  'result=evidence_invalid'
+pass
+
+lease_release_output="$test_root/lease-release-output"
+lease_release_dir="$test_root/lease-release-lease"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_CORRUPT_LEASE_OWNER="$lease_release_dir" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$lease_release_dir" \
+  "$fixture/tools/tps-test.sh" --output-dir="$lease_release_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/lease-release.stdout" 2>"$test_root/lease-release.stderr"
+lease_release_status=$?
+set -e
+assert_equal "$lease_release_status" 1
+assert_contains "$lease_release_output/lease-release-failure.properties" 'status=failed'
+assert_contains "$test_root/lease-release.stderr" \
+  'evidence_status=evidence_invalid reason=lease_release_failed'
+lease_release_temp=$(retained_temp_dir "$lease_release_output")
+[[ -d $lease_release_temp && -d $lease_release_dir ]] ||
+  fail "lease-release failure did not retain diagnostics and fail-closed lease"
+rm -rf -- "$lease_release_dir" "$lease_release_temp"
 pass
 
 grep -F 'writeRiverTpsRuntimeClasspath' "$script_dir/../river-bench/build.gradle.kts" >/dev/null ||
@@ -468,7 +839,8 @@ if grep -F 'RIVER_TPS_SKIP_BUILD' "$script_dir/tps-test.sh" >/dev/null; then
   fail "stale-class build bypass remains"
 fi
 assert_contains "$script_dir/tps-test.sh" "trap 'run_result=interrupted"
-assert_contains "$script_dir/tps-test.sh" 'build_status=$?'
+assert_contains "$script_dir/tps-test.sh" 'build_status=${PROVENANCE_LOGGED_COMMAND_STATUS:-125}'
+assert_contains "$script_dir/tps-test.sh" 'build_wrapper_status=$?'
 pass
 
 echo "PASS: $tests provenance boundary tests"

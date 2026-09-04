@@ -1,6 +1,6 @@
-# `tic-0636` build and host-exclusion provenance
+# `tic-0636` build and cooperative host-exclusion provenance
 
-Status: **candidate evidence; independent review and integration pending**
+Status: **historical candidate rejected at `0d50ada30379f3829d35c37196dd234757588401`; replacement evidence pending**
 
 This record validates the provenance mechanism on one minimal River-specific
 diagnostic. It is not a performance comparison, an Alpha3 result, or closure of
@@ -26,9 +26,11 @@ classpath entries present; its independently reproduced 208-line manifest was
 byte-identical.
 
 Slopmark was run before and after across the production performance modules
-and `tools`. The top-50 output was unchanged; the highest score remained
-283.617 for `SqlSessionExecutionCoordinator`. No production Java file was
-touched, and slopmark does not score the shell files changed here.
+and `tools`. The console summaries appeared unchanged and the highest observed
+score was 283.617 for `SqlSessionExecutionCoordinator`, but the raw reports
+were not retained. Those observations are historical review notes, not durable
+or independently replayable evidence. No production Java file was touched,
+and slopmark did not score the shell files changed here.
 
 ## Rejected development attempts
 
@@ -108,3 +110,13 @@ decide whether that residual platform limitation satisfies the promotion
 contract before merge. No process was stopped by the exclusion monitor, no
 secret-bearing environment or Java option value was retained, and no
 `perf-checkpoint-*` tag or P0 certification is proposed here.
+
+Independent operations/security review rejected this candidate because the
+then-current contract overstated host-wide exclusion and because lease,
+publication, exact Gradle-daemon identity, bounded inspection/retention, and
+temporary-tree cleanup boundaries were incomplete. The hashes and paths above
+remain immutable historical development evidence; they are not promotion
+evidence under the corrected cooperative contract. In particular, the old
+command did not record the now-required operator no-uncoordinated-work
+attestation. No result in this section may be used to close `tic-0636` or
+unblock `tic-1dda`.
