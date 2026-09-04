@@ -26,14 +26,24 @@ restart.
 Bind the database incarnation, credential generation, certificate/token
 digests, algorithms, principal, permissions, validity, and client
 configuration. `river-client` owns the only config parser. Generate the
-certificate through the ADR's public Bouncy Castle builder APIs with one
-aligned dependency-verified set. Add real code/tests plus used module/settings
-and dependency-policy entries; do not add the application distribution yet.
+certificate with one local `BouncyCastleProvider` object passed explicitly to
+EC key generation, signer, converter, certificate parsing, and signature
+verification; never install/select it globally. Treat `token-sha256` and the
+security manifest as credential-equivalent, and implement the exact owned
+buffer/JSSE/authenticator destruction lifecycle. Add real code/tests plus used
+module/settings and dependency-policy entries; do not add the application
+distribution yet.
 
 ## Acceptance Criteria
 
 Partial first publication is recoverable only before instance authority exists;
 accepted missing or mismatched material fails closed; no implicit regeneration
-or arbitrary non-empty-directory adoption occurs. POSIX/no-follow/provider,
-format bound, X.509, expiry, manifest, config-loader, fault, and permission
-tests pass.
+or arbitrary non-empty-directory adoption occurs. Exact nonce-staged bootstrap
+and every properties checksum pass forced-write/rename/directory-force fault
+tests. POSIX/no-follow/provider tests cover overriding ACLs, the sole
+fixed-component path-based directory create and revalidation race, file-key
+swaps, and probed atomic exclusive/replacement/force semantics; unsupported
+stores including APFS/NFS/FUSE and capabilities fail closed, while the
+qualified default-Linux local ext4/xfs adapter passes. X.509 provider
+selection, expiry, manifest, config-loader, secret zero/destroy on every path,
+format-bound, fault, and permission tests pass.

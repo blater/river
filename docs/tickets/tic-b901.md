@@ -25,9 +25,20 @@ stopped-instance operations under exclusive ownership.
 
 Implement the accepted five-step audit control transition without overwrite,
 preserve corrupt audit, and refuse archive for terminal `EXHAUSTED` authority.
-Renew a complete generation without overlap, preserving and forcing the prior
-public certificate and manifest before publishing the new security authority.
+Renew in the ADR's exact nonce-derived stage/archive names without overlap,
+preserving and forcing only the prior public certificate and redacted public
+manifest before publishing the new security authority. Durably unlink old
+secrets after the authority switch. Fence a running generation at `notAfter`
+across listener, active sessions, TLS resumption, statement admission, and
+ordered shutdown.
 
 ## Acceptance Criteria
 
-Live-owner rejection, archive collision, corruption preservation, full-at-start, runtime exhaustion, forced publication, renewal interruption, stale client config, and restart tests pass with no silent truncation, repair, or secret exposure.
+Live-owner rejection, audit/archive collision, corruption preservation,
+full-at-start, runtime exhaustion, and both audit control directory forces are
+proved. Renewal tests cover generation overflow, every force/crash boundary
+before and after authority switch, archive/stage identity collision, durable
+secret deletion, safe retry/cleanup, running expiry with new/active/resumed TLS
+sessions and admission races, exit/recovery, loaded-old `ACCESS_DENIED`, and
+reload-missing-secret `IO_FAILURE`, with no silent truncation, repair, or secret
+exposure.

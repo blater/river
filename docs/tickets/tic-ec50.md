@@ -36,5 +36,11 @@ delivery without wrappers.
 The installed distribution handles help/version, defaults, explicit paths,
 loopback IPv4/IPv6, port zero, ready-file refusal, first start, authenticated
 SQL, SIGINT/SIGTERM, restart, persistence, and reverse-order failure cleanup
-without Gradle or classpath knowledge. Source and compiled-code checks find no
-plain listener/client fallback or optional authentication branch.
+without Gradle or classpath knowledge. With a ready file, forced atomic
+publication is the sole commit and broken stdout is an irrelevant mirror;
+without one, prefix/partial failures clean up but an observed complete final
+ready record remains irrevocable across later flush failure. Publication races
+are deterministic. Normal, failed, and signal shutdown release the listener,
+workers, and JSSE before idempotent authenticator destruction; caller scratch
+is zeroed on every path. Source and compiled-code checks find no plain
+listener/client fallback or optional authentication branch.
