@@ -1,6 +1,6 @@
 ---
 id: tic-1c78
-status: in_progress
+status: closed
 type: story
 priority: 1
 assignee: blater
@@ -8,6 +8,7 @@ parent: tic-ef07
 delivery: documentation
 base-commit: a2301a376666638b3494e57279be9c1674ac248c
 branch: ticket/tic-1c78-priority-kanban
+delivered-commit: 9395b1814f0d87c3e00568b8c46ca2641946cfb9
 tags:
     - workflow
     - backlog
@@ -25,4 +26,3 @@ Keep ticket status and dependencies authoritative; summarize the immediate ready
 ## Acceptance Criteria
 
 The document identifies the current P0 queue, riverd prerequisite chain, performance P0-P4 route, 500 TPS and parity gates, external-tool ownership boundaries, and a deterministic refresh procedure; README and manifesto link to it.
-
