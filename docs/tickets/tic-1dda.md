@@ -67,9 +67,32 @@ additional workload family or post-hoc acceptance rule may be added.
 
 Use the exact P0 correctness, failure-mode displacement, correlation, cleanup, and performance-regression criteria in docs/perf_review.md. Preserve every anomalous sample.
 
+The accepted `tic-0636` baseline uses the following cooperative host boundary.
+`tic-d7c2` must replace its periodic observation behavior before this matrix
+resumes; the remaining provenance and terminal-receipt requirements still apply.
+The shared River performance lease proves full-interval exclusion among
+lease-participating River workflows. Bounded periodic process observations
+reject nonparticipants that are observed, but cannot prove absence between
+samples. Each promoted interval therefore requires an operator attestation
+that no uncoordinated River build, test, profile, client/server, harness, or
+database workload ran on the host. Idle Gradle daemons are allowed.
+
+For every matrix cell, the lease and bounded observations must begin before
+source capture. Background observations continue through provisional metadata;
+a final synchronous observation seals the ledger immediately before its
+immutable publication under the still-held lease. The lease remains valid
+through all evidence publication. Base run metadata is provisional, not a completion result. The
+only consumable success is a canonical no-replace terminal receipt, published
+after verified lease release, that binds the run/artifact identity, exact
+metadata bytes, lease owner commitment, final host/checkpoint ledgers, and
+release outcome. The receipt step is outside the exclusion interval. Missing,
+failure, malformed, mutated, or colliding receipts invalidate the cell. All
+River-owned consumers, including `tools/tps-p4.sh`, require v2 evidence and the
+shared receipt validator; v1 evidence has no compatibility path.
+
 ## Acceptance Criteria
 
-Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references and the source tag are recorded.
+Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references, source tag, cooperative lease record, bounded host observations, operator no-uncoordinated-work attestation, and a shared-validator-accepted v2 success receipt are recorded. Every raw collector and retained ledger remains within its declared time/byte budget. Evidence does not claim that periodic observation proves unconditional host-wide absence between samples.
 
 ## Notes
 
@@ -86,6 +109,9 @@ P0 certification, or performance checkpoint tag is accepted.
 The prior combined prerequisites were narrowed without adding behavior to this
 investigation. `tic-af29` now owns only scheduler-derived successful-block
 classification and `tic-8e74` owns the independent terminal snapshot gauge;
-`tic-0636` now owns only exact built-byte provenance and `tic-d7c2` owns
-exclusive-host evidence. This ticket consumes all four and remains prohibited
-from implementing or repairing any of them.
+`tic-0636` owns exact built-byte provenance and `tic-d7c2` owns the remaining
+exclusive-host change. The concurrently accepted `tic-0636` delivery also
+contains cooperative host observations; preserve that historical evidence and
+reuse its canonical lease and terminal receipts under `tic-d7c2`. This ticket
+consumes all four and remains prohibited from implementing or repairing any
+of them.

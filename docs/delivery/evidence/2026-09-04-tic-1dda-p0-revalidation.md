@@ -304,23 +304,41 @@ Kanban's Now column. The full `tic-1dda` revalidation remains immediately Next.
 - Parent: `tic-5db4`
 - Delivery: `code`
 - Tags: `performance`, `tpcc`, `p0`, `benchmark`, `provenance`
-- Title: **Retain exact build and host-exclusion provenance for P0 diagnostics**
+- Title: **Retain exact build and cooperative host-exclusion provenance for P0 diagnostics**
 - Design: Make `tools/tps-test.sh` retain the exact incremental/full build
   command, exit status and complete log; Git source/status fingerprints before
   build and run; Gradle/JDK identity; and a deterministic SHA-256 manifest of
   every classpath entry/file actually launched. Refuse evidence when source or
   manifest changes between build, server, client, and metadata publication.
-  Before every build/workload, record a broad host exclusion that distinguishes
-  idle from busy Gradle daemons and detects River builds, tests, profiles,
-  clients, servers, harnesses, and database workloads. Fail closed rather than
-  silently accepting an overlap. Preserve failed and interrupted evidence and
-  never expose secrets.
+  Before every build/workload, acquire the shared River performance lease,
+  distinguish idle from busy Gradle daemons, and retain bounded periodic
+  observations that detect River builds, tests, profiles, clients, servers,
+  harnesses, and database workloads. Fail closed rather than silently
+  accepting an observed overlap. Preserve failed and interrupted evidence and
+  never expose secrets. Acquire the lease and start bounded observation before
+  source capture, retain background observation through provisional metadata,
+  then drain it and make one final synchronous observation before sealing the
+  immutable ledger. Keep the lease through every evidence publication. Base
+  metadata is explicitly provisional.
+  After verified release, require the canonical no-replace success receipt that
+  binds exact metadata bytes, run/artifact identity, owner commitment, final
+  host/checkpoint ledgers, and the release outcome. The receipt publication is
+  outside the exclusion interval; a missing, failure, malformed, mutated, or
+  colliding receipt invalidates the run. River-owned consumers reject v1 and
+  share one v2 receipt validator. The lease proves full-interval exclusion
+  among participating River workflows. Observation rejects nonparticipants
+  that are seen, but cannot prove absence between samples, so promotion also
+  requires an operator no-uncoordinated-work attestation. Idle Gradle daemons
+  are allowed only after bounded identity/state inspection.
 - Acceptance: focused tests cover clean/current build, stale classes, source
   mutation, classpath mutation, missing/hash-mismatched entry, failed build,
   active Gradle daemon/build, River workload/harness/profile overlap, process
   race, interrupted run, and immutable non-overwrite publication. A retained
-  diagnostic independently reproduces every build/classpath/source hash and
-  proves the host exclusion remained valid for its full interval.
+  diagnostic independently reproduces every build/classpath/source hash,
+  proves the cooperative lease exclusion remained valid for its full interval,
+  retains time- and byte-bounded process/daemon observations, includes the
+  operator attestation, and has a shared-validator-accepted terminal success
+  receipt without claiming unconditional host-wide exclusion.
 
 After both prerequisites close, rerun the correlated mixed-isolation
 reproducer plus all serializable 50/50 and standard cells with a reviewed

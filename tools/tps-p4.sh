@@ -10,10 +10,10 @@ Usage:
   tools/tps-p4.sh --run --output-dir=PATH [options]
   tools/tps-p4.sh --calculate=PATH
 
-Run or validate the normative Alpha3 capacity evidence. A run executes exactly
-ten independent standard-scale River samples, each using alpha3 evidence mode.
-The calculator is also standalone for reviewing persisted samples and never
-runs the capacity gate implicitly.
+Run or validate the partial River P4 point calculation. A run executes exactly
+ten independent standard-scale River samples using alpha3 workload settings.
+This remains a non-normative local calculator; it is not an Alpha3 promotion
+claim or a complete capacity gate.
 
 Run options:
   --output-dir=PATH             New empty evidence directory (required for run)
@@ -38,15 +38,16 @@ Run options:
   --run                          Run samples (default)
   -h, --help                     Show this help
 
-The hard gate requires exactly ten samples, >=100000 completed transactions in
-each, no failed or retry-exhausted family outcome, identical persisted
-configuration/provenance, and a one-sided 95% lower confidence bound for
-committed TPS of at least 1000. The calculator uses t(0.95,9)=1.8331129.
+The partial point requires exactly ten authoritative v2 terminal receipts,
+>=100000 completed transactions in each sample, no failed or retry-exhausted
+family outcome, identical persisted configuration/provenance, and a one-sided
+95% lower confidence bound for committed TPS of at least 1000. The calculator
+uses t(0.95,9)=1.8331129.
 EOF
 }
 
 fail() {
-  echo "p4_gate=failed reason=$*" >&2
+  echo "p4_point=failed reason=$*" >&2
   exit 1
 }
 
@@ -62,8 +63,7 @@ require_positive() {
 property() {
   local key=$1
   local file=$2
-  [[ -f $file ]] || return 0
-  sed -n "s/^$key=//p" "$file" | head -1
+  provenance_property_once "$key" "$file" 2>/dev/null || true
 }
 
 hash_file() {
@@ -81,6 +81,7 @@ absolute_path() {
 tool_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 tps_test="$tool_dir/tps-test.sh"
 [[ -x $tps_test ]] || fail "tps-test.sh is not executable"
+source "$tool_dir/tps-provenance.sh"
 
 mode=run
 calculate_dir=
@@ -126,7 +127,7 @@ while (($# > 0)); do
 done
 
 require_uint samples "$sample_count"
-((sample_count == 10)) || fail "normative P4 requires exactly 10 samples"
+((sample_count == 10)) || fail "the partial P4 point requires exactly 10 samples"
 if [[ $mode == run ]]; then
   [[ -n $output_dir ]] || fail "--output-dir is required with --run"
   output_dir=$(absolute_path "$output_dir")
@@ -146,15 +147,6 @@ if [[ $mode == run ]]; then
   else runner_timeout_seconds=$((warmup_seconds + measured_seconds + 300)); fi
   require_positive server_start_timeout_seconds "$server_start_timeout_seconds"
   require_positive server_stop_timeout_seconds "$server_stop_timeout_seconds"
-  p4_result=running
-  {
-    printf 'tool.schema=river-tps-p4-v1\n'
-    printf 'p4.result=%s\n' "$p4_result"
-    printf 'p4.samples_expected=10\n'
-    printf 'p4.required_completed_per_sample=100000\n'
-    printf 'p4.required_lower_bound_tps=1000\n'
-    printf 'p4.confidence=one-sided-95-percent-t9\n'
-  } >"$output_dir/p4-result.properties"
   for index in $(seq 1 10); do
     label=$(printf '%02d' "$index")
     sample_dir="$output_dir/sample-$label"
@@ -176,8 +168,6 @@ if [[ $mode == run ]]; then
     set -e
     if ((sample_status != 0)); then
       echo "p4_sample=$label failed status=$sample_status" >&2
-      sed -i.bak 's/^p4.result=.*/p4.result=failed/' "$output_dir/p4-result.properties"
-      rm -f "$output_dir/p4-result.properties.bak"
       exit "$sample_status"
     fi
     echo "p4_sample=$label/10 completed"
@@ -191,7 +181,10 @@ calculate_dir=$(absolute_path "$calculate_dir")
 if [[ -n $output_dir ]]; then fail "--output-dir is valid only with --run"; fi
 
 metadata_keys=(
-  tool.schema run.result run.phase run.status run.exit_status run.sample_id
+  tool.schema run.result run.phase run.status run.exit_status
+  run.provisional_result run.provisional_phase run.provisional_status
+  run.provisional_exit_status run.sample_id evidence.run_id terminal.required terminal.path
+  terminal.commitment_sha256 lease.owner_pid lease.owner_start lease.owner_identity_sha256
   git.commit_sha git.dirty_state git.status_sha256 environment.java_version
   environment.host configuration.fingerprint configuration.backend configuration.profile
   configuration.mix configuration.isolation configuration.scheduling configuration.evidence configuration.fresh_load
@@ -205,6 +198,7 @@ metadata_keys=(
 )
 common_metadata_keys=(
   tool.schema run.result run.phase run.status run.exit_status
+  run.provisional_result run.provisional_phase run.provisional_status run.provisional_exit_status
   git.commit_sha git.dirty_state git.status_sha256 environment.java_version
   environment.host configuration.fingerprint configuration.backend configuration.profile
   configuration.mix configuration.scheduling configuration.evidence configuration.fresh_load
@@ -254,15 +248,25 @@ for index in $(seq 1 10); do
   sample_dir="$calculate_dir/sample-$label"
   artifact="$sample_dir/tpcc-acceptance.properties"
   metadata="$sample_dir/run-metadata.properties"
+  terminal="$metadata.terminal-receipt"
   [[ -f $artifact ]] || fail "missing sample artifact: $artifact"
   [[ -f $metadata ]] || fail "missing sample metadata: $metadata"
+  [[ -f $terminal ]] || fail "missing sample terminal receipt: $terminal"
   if [[ -z $first_metadata ]]; then first_metadata=$metadata; first_artifact=$artifact; fi
 
   for key in "${metadata_keys[@]}"; do require_value "$key" "$metadata" >/dev/null; done
-  [[ $(property tool.schema "$metadata") == river-tps-tool-v1 ]] || fail "$metadata has wrong tool schema"
-  [[ $(property run.result "$metadata") == completed ]] || fail "$metadata is not a completed run"
-  [[ $(property run.phase "$metadata") == checkpoint ]] || fail "$metadata did not reach checkpoint"
-  [[ $(property run.status "$metadata") == OK ]] || fail "$metadata status is not OK"
+  [[ $(property tool.schema "$metadata") == river-tps-tool-v2 ]] || fail "$metadata has wrong tool schema"
+  [[ $(property run.result "$metadata") == provisional ]] || fail "$metadata is not provisional"
+  [[ $(property run.status "$metadata") == TERMINAL_RECEIPT_REQUIRED ]] ||
+    fail "$metadata does not require terminal validation"
+  [[ $(property run.provisional_result "$metadata") == completed ]] ||
+    fail "$metadata provisional run did not complete"
+  [[ $(property run.provisional_phase "$metadata") == checkpoint ]] ||
+    fail "$metadata provisional run did not reach checkpoint"
+  [[ $(property run.provisional_status "$metadata") == OK ]] ||
+    fail "$metadata provisional status is not OK"
+  [[ $(property run.provisional_exit_status "$metadata") == 0 ]] ||
+    fail "$metadata provisional exit status is not zero"
   [[ $(property run.sample_id "$metadata") == p4-$label ]] || fail "$metadata has wrong sample identity"
   run_id=$(property run.id "$artifact")
   [[ -n $run_id ]] || fail "$artifact has no run.id"
@@ -272,6 +276,8 @@ for index in $(seq 1 10); do
   [[ $(property artifact.database_digest_sha256 "$metadata") == "$(property database.digest.sha256 "$artifact")" ]] ||
     fail "$metadata does not bind database identity"
   [[ $(property artifact.sha256 "$metadata") == "$(hash_file "$artifact")" ]] || fail "$metadata artifact hash mismatch"
+  provenance_validate_terminal_receipt "$metadata" "$artifact" "$terminal" \
+    "$sample_dir" success || fail "$terminal is not an authoritative success receipt"
 
   for key in "${artifact_keys[@]}"; do require_value "$key" "$artifact" >/dev/null; done
   [[ $(property artifact.schema "$artifact") == river-tpcc-acceptance-v2 ]] || fail "$artifact has wrong schema"
@@ -337,19 +343,21 @@ echo "p4_mean_committed_tps=$mean"
 echo "p4_sample_standard_deviation_tps=$standard_deviation"
 echo "p4_95ci_lower_bound_committed_tps=$lower_bound"
 if awk -v lower="$lower_bound" 'BEGIN { exit !(lower >= 1000.0) }'; then
-  p4_result=passed
-  echo "p4_gate=passed"
+  p4_result=partial_point_passed
+  echo "p4_point=passed"
   exit_code=0
 else
-  p4_result=failed
-  echo "p4_gate=failed reason=95ci_lower_bound_below_1000" >&2
+  p4_result=partial_point_failed
+  echo "p4_point=failed reason=95ci_lower_bound_below_1000" >&2
   exit_code=1
 fi
 result_file="$calculate_dir/p4-result.properties"
-[[ ! -e $result_file || $mode == calculate ]] || fail "refusing to overwrite $result_file"
-staged="$result_file.staged.$$"
+[[ ! -e $result_file ]] || fail "refusing to overwrite $result_file"
+staged=$(mktemp "$calculate_dir/.river-tps-p4.XXXXXX") ||
+  fail "unable to stage the partial point result"
 {
-  printf 'tool.schema=river-tps-p4-v1\n'
+  printf 'tool.schema=river-tps-p4-v2\n'
+  printf 'p4.scope=partial-river-point-calculator\n'
   printf 'p4.result=%s\n' "$p4_result"
   printf 'p4.samples_expected=10\n'
   printf 'p4.samples_observed=10\n'
@@ -369,7 +377,14 @@ staged="$result_file.staged.$$"
     printf 'p4.sample.%s.artifact_sha256=%s\n' "$label" "$(hash_file "$artifact")"
     printf 'p4.sample.%s.metadata=%s\n' "$label" "$metadata"
     printf 'p4.sample.%s.metadata_sha256=%s\n' "$label" "$(hash_file "$metadata")"
+    printf 'p4.sample.%s.terminal=%s\n' "$label" "$metadata.terminal-receipt"
+    printf 'p4.sample.%s.terminal_sha256=%s\n' "$label" \
+      "$(hash_file "$metadata.terminal-receipt")"
   done
 } >"$staged"
-mv -f -- "$staged" "$result_file"
+provenance_publish_file "$staged" "$result_file" || {
+  rm -f -- "$staged"
+  fail "refusing to overwrite $result_file"
+}
+rm -f -- "$staged"
 exit "$exit_code"

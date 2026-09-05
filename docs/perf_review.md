@@ -1970,10 +1970,14 @@ single-run artifact and printed reminder do not calculate or enforce the
 ten-sample confidence gate.
 
 `tools/tps-p4.sh` is not a normative runner until it enforces this complete
-matrix. A ten-sample calculation for one River configuration is a useful point
-calculator, but it must be labelled partial evidence and cannot emit a passing
-Alpha3 result without the warmup, scaling, cross-engine, absolute, relative,
-latency, failure, retry, invariant, and provenance checks above.
+matrix. Its v2 calculator accepts only provisional metadata paired with the
+canonical, no-replace success receipt validated by the shared TPS provenance
+owner; v1, missing, failure, mutated, or noncanonical terminal evidence is
+rejected. That verifies the inputs to a ten-sample calculation for one River
+configuration, but the output remains explicitly
+`partial-river-point-calculator` evidence. It cannot emit a passing Alpha3
+result without the warmup, scaling, cross-engine, absolute, relative, latency,
+failure, retry, invariant, and provenance checks above.
 
 ## No-go list
 

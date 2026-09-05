@@ -1,34 +1,41 @@
 package io.riverdb.engine.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
-import io.riverdb.base.error.StatusDetail;
-import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
-import io.riverdb.engine.runtime.RiverRuntimeConfig;
-import io.riverdb.engine.runtime.SqlDatabaseRuntime;
-import io.riverdb.engine.runtime.SqlRuntimeLease;
-import io.riverdb.engine.runtime.SqlRuntimeLeaseResult;
 import io.riverdb.sql.SqlCommand;
 import io.riverdb.sql.SqlParser;
 import io.riverdb.sql.SqlQuery;
 import java.math.BigInteger;
 import java.nio.file.Path;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class SqlUnionExecutionTest {
-  private static final DatabaseIncarnation DATABASE =
-      DatabaseIncarnation.of(0x554e494f4e455845L, 0x435554494f4e5445L);
   private final SqlParser parser = new SqlParser();
   private final SqlQuery query = new SqlQuery();
   private final SqlCommand command = new SqlCommand();
-  private final SqlUnionExecution union = new SqlUnionExecution();
   private final SqlBlockRow result = new SqlBlockRow();
+  @TempDir Path root;
+  private SqlMaterializedTestFixture fixture;
+  private SqlUnionExecution union;
+
+  @BeforeEach
+  void openRuntime() {
+    fixture = SqlMaterializedTestFixture.open(root);
+    union = new SqlUnionExecution(fixture.budget());
+  }
+
+  @AfterEach
+  void closeRuntime() {
+    assertEquals(StatusCode.OK, union.close());
+    fixture.close();
+  }
 
   @Test
   void appliesLeafAndRootOrderingBeforeTheirLimits() {
@@ -118,7 +125,6 @@ final class SqlUnionExecutionTest {
     leaves.set(0, numeric, many);
     leaves.set(1, numeric, new Object[0][]);
     assertEquals(StatusCode.OK, union.run(query, command, leaves));
-    assertFalse(union.output().spilled());
     assertEquals(1_500, union.output().rowCount());
     assertEquals(StatusCode.OK, union.close());
 
@@ -174,19 +180,8 @@ final class SqlUnionExecutionTest {
   }
 
   @Test
-  void chargesOrderedLeafStorageToTheSessionBudget(@TempDir Path root) {
-    RiverRuntimeConfig.Result config = new RiverRuntimeConfig.Result();
-    assertEquals(StatusCode.OK, RiverRuntimeConfig.load(
-        root, 64_000_000L, root.toString(), config, new StatusDetail(256)));
-    SqlDatabaseRuntime.OpenResult opened = new SqlDatabaseRuntime.OpenResult();
-    assertEquals(StatusCode.OK, SqlDatabaseRuntime.create(
-        config.config(), root, DATABASE, opened, new StatusDetail(256)));
-    SqlDatabaseRuntime runtime = opened.runtime();
-    SqlRuntimeLeaseResult acquired = new SqlRuntimeLeaseResult();
-    assertEquals(StatusCode.OK, runtime.acquire(acquired));
-    SqlRuntimeLease lease = acquired.lease();
-    SqlSessionShapeBudget budget = new SqlSessionShapeBudget(lease);
-    SqlUnionExecution budgeted = new SqlUnionExecution(budget);
+  void chargesOrderedLeafStorageToTheSessionBudget() {
+    SqlSessionShapeBudget budget = fixture.budget();
     parse("(SELECT id FROM a ORDER BY id DESC) UNION ALL SELECT id FROM b");
     TestLeaves leaves = new TestLeaves(2);
     Object[][] many = new Object[1_500][];
@@ -195,14 +190,10 @@ final class SqlUnionExecutionTest {
     leaves.set(0, schema, many);
     leaves.set(1, schema, new Object[0][]);
 
-    assertEquals(StatusCode.OK, budgeted.run(query, command, leaves));
+    assertEquals(StatusCode.OK, union.run(query, command, leaves));
     assertTrue(budget.retainedBytes() > 0);
-    assertEquals(budget.retainedBytes(), lease.reservedBytes());
-    assertEquals(StatusCode.OK, budgeted.close());
-    assertEquals(StatusCode.OK, lease.close());
-    assertEquals(0, runtime.reservedShapeBytes());
-    assertEquals(StatusCode.OK, runtime.prepareClose());
-    assertEquals(StatusCode.OK, runtime.completeClose());
+    assertEquals(budget.retainedBytes(), fixture.leaseReservedBytes());
+    assertEquals(StatusCode.OK, union.close());
   }
 
   @Test

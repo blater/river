@@ -13,8 +13,8 @@ mechanism should be pursued next.
 
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
 | --- | --- | --- | --- |
-| Standalone `riverd` | [`tic-11a5`](tickets/tic-11a5.md): ratify the lifecycle/security ADR; the [`tic-de1d`](tickets/tic-de1d.md) and [`tic-a221`](tickets/tic-a221.md) investigations are closed | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-615d`](tickets/tic-615d.md) in parallel | Installable lifecycle, safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
-| Transaction performance | [`tic-5cc0`](tickets/tic-5cc0.md): restore resource-accounted SQL savepoint admission; then [`tic-af29`](tickets/tic-af29.md): classify successful lock blocking and [`tic-8e74`](tickets/tic-8e74.md): expose the independent snapshot-cleanup gauge; separately complete [`tic-0636`](tickets/tic-0636.md): exact built-byte provenance and [`tic-d7c2`](tickets/tic-d7c2.md): exclusive-host evidence | Resume [`tic-1dda`](tickets/tic-1dda.md) only after all four scoped P0 evidence prerequisites close; rerun the serializable P0 matrix, including the mixed-isolation reproducer | After P0, lead with the [`tic-b368`](tickets/tic-b368.md) durability-overlap design and [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
+| Standalone `riverd` | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-615d`](tickets/tic-615d.md) in parallel; [`tic-11a5`](tickets/tic-11a5.md) ratified accepted ADR 0014 | [`tic-ec50`](tickets/tic-ec50.md): deliver the installable authenticated lifecycle | Safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
+| Transaction performance | [`tic-2828`](tickets/tic-2828.md): restore warmed page-generation reuse and complete the joint engine gate for the independent `tic-288d`, `tic-e2be`, `tic-50e8`, and `tic-5cc0` baseline fixes; then [`tic-af29`](tickets/tic-af29.md): classify successful lock blocking and [`tic-8e74`](tickets/tic-8e74.md): expose the independent snapshot-cleanup gauge; [`tic-0636`](tickets/tic-0636.md) is closed with accepted v2 provenance; [`tic-d7c2`](tickets/tic-d7c2.md) owns the remaining exclusive-host evidence change | Resume [`tic-1dda`](tickets/tic-1dda.md) only after all four scoped P0 evidence prerequisites close; rerun the serializable P0 matrix, including the mixed-isolation reproducer | After P0, lead with the [`tic-b368`](tickets/tic-b368.md) durability-overlap design and [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
 | Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Verify `river-harness` uses the published `riverd` process contract; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
 | Workflow safety | [`tic-701f`](tickets/tic-701f.md) and [`tic-dd80`](tickets/tic-dd80.md) may proceed when they do not displace P0 product work | Atomic cross-worktree claims and promotion enforcement | Close [`tic-ef07`](tickets/tic-ef07.md) when both enforcement gaps are proved |
 
@@ -28,12 +28,16 @@ is non-blocking support work and must not become a substitute for delivery.
 
 1. The [`tic-a221`](tickets/tic-a221.md) audit design and parallel
    [`tic-de1d`](tickets/tic-de1d.md) boundary inventory are closed.
-2. Ratify one contract in [`tic-11a5`](tickets/tic-11a5.md) (**Now**).
+2. [`tic-11a5`](tickets/tic-11a5.md) is closed after independent acceptance of
+   the one ADR 0014 lifecycle/security contract.
 3. Implement resource-accounted audit durability in
    [`tic-72ea`](tickets/tic-72ea.md) and instance identity/credentials in
-   [`tic-615d`](tickets/tic-615d.md). These may proceed in parallel after the ADR.
-4. Deliver authenticated start/restart in [`tic-ec50`](tickets/tic-ec50.md), then prove
-   the distribution lifecycle in [`tic-95e8`](tickets/tic-95e8.md).
+   [`tic-615d`](tickets/tic-615d.md) (**Now**). These may proceed in parallel after the ADR;
+   `tic-615d` creates the non-empty app boundary with its real security consumer.
+4. Complete authenticated start/restart in [`tic-ec50`](tickets/tic-ec50.md),
+   migrate every River caller including diagnostics, and delete all plain APIs;
+   then prove the distribution and no-plain-path gate in
+   [`tic-95e8`](tickets/tic-95e8.md).
 5. Deliver exact stop and instance discovery in
    [`tic-0803`](tickets/tic-0803.md) then [`tic-d2e9`](tickets/tic-d2e9.md). Audit archive and
    credential renewal in [`tic-b901`](tickets/tic-b901.md) may proceed after the audit
@@ -51,17 +55,24 @@ No harness-based River promotion or cross-engine comparison starts before step
 
 1. The first [`tic-1dda`](tickets/tic-1dda.md) revalidation found a statistically
    detected standard-mix 10:2 regression and missing promotion evidence. First
-   close the clean-master savepoint resource-admission regression in
-   [`tic-5cc0`](tickets/tic-5cc0.md), which blocks affected-module acceptance for
+   close the independent clean-master regressions: warmed page-generation
+   reuse in [`tic-2828`](tickets/tic-2828.md), group-commit fault fencing in
+   [`tic-288d`](tickets/tic-288d.md), the stale spill-test boundary in
+   [`tic-e2be`](tickets/tic-e2be.md), UNION execution in
+   [`tic-50e8`](tickets/tic-50e8.md), and savepoint resource admission in
+   [`tic-5cc0`](tickets/tic-5cc0.md). None depends on another. The independent
+   fixes must meet one joint module gate before affected-module acceptance for
    the successful-block classifier in [`tic-af29`](tickets/tic-af29.md) and the
    separately owned terminal snapshot gauge in
-   [`tic-8e74`](tickets/tic-8e74.md). Independently close exact built-byte
-   provenance in [`tic-0636`](tickets/tic-0636.md) and exclusive-host ownership
-   in [`tic-d7c2`](tickets/tic-d7c2.md), then resume the full P0 matrix. The
-   promotion investigation consumes those four capabilities and does not
-   implement or repair them. The engine-diagnostics and tooling tracks may
-   proceed concurrently only with disjoint file ownership; deliveries that
-   share a diagnostics surface or `tools/tps-test.sh` are serialized.
+   [`tic-8e74`](tickets/tic-8e74.md). Exact built-byte provenance and cooperative
+   host observations in [`tic-0636`](tickets/tic-0636.md) are accepted and closed.
+   Complete the remaining exclusive-host change in
+   [`tic-d7c2`](tickets/tic-d7c2.md) against that existing mechanism, then resume
+   the full P0 matrix. The promotion investigation consumes those four
+   capabilities and does not implement or repair them. The engine-diagnostics
+   and tooling tracks may proceed concurrently only with disjoint file
+   ownership; deliveries that share a diagnostics surface or
+   `tools/tps-test.sh` are serialized.
    Correctness requires matching serializable isolation, explained retries,
    blocks and cycles, complete cleanup, and no timeout or liveness failure;
    TPS remains a separate regression guard.

@@ -11,6 +11,8 @@ tags:
     - p0
     - benchmark
     - operations
+deps:
+    - tic-0636
 created: 2026-09-04T23:19:29Z
 ---
 # Enforce exclusive-host ownership for P0 diagnostics
@@ -73,3 +75,15 @@ an uncooperative-process race at lifecycle boundaries, interruption, failed
 build or workload cleanup, and non-owner release refusal. The retained record
 identifies one owner for the complete interval, and enabled exclusion adds no
 measured-phase polling, server allocation, or server control-flow change.
+
+## Notes
+
+### 2026-09-05 accepted-provenance reconciliation
+
+`tic-0636` closed with the existing cooperative lease, bounded periodic host
+observations, and v2 terminal receipts. Start by identifying the exact gap
+between that accepted implementation and this ticket's prohibition on polling
+during the measured phase. Reuse the canonical lease and receipt/publication path;
+replace superseded host observation behavior in the same delivery. Do not
+reimplement launched-byte provenance or claim the stronger host contract from
+the historical `tic-0636` evidence.
