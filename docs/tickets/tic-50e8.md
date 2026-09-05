@@ -15,7 +15,12 @@ created: 2026-09-04T23:03:21.406097Z
 ---
 # Restore UNION execution acceptance on clean master
 
-Clean pre-ticket source 9f756561f79d1ad0952c0ff4d38c07f670badd31 fails SqlUnionExecutionTest: existing UNION and UNION ALL cases return INVALID_EXTERNAL_INPUT because the parsed query does not satisfy the set-expression execution contract. The same failures reproduce on tic-5cc0 and are not caused by savepoint resource accounting.
+Clean pre-ticket source 9f756561f79d1ad0952c0ff4d38c07f670badd31
+fails `SqlUnionExecutionTest`. The parser and set-expression topology are valid;
+the stale test-only no-argument `SqlUnionExecution` constructor supplies no
+runtime lease, causing materialized-store admission to return
+`INVALID_EXTERNAL_INPUT` before any operand opens. The same failures reproduce
+on `tic-5cc0` and are independent of savepoint resource accounting.
 
 ## Design
 
@@ -45,7 +50,33 @@ That run's `SqlSessionTest` XML SHA-256 is
 `07ae206c55692c4bf455f0d443fe2db21b59c99f581743392cf945b7872fc363`;
 the clean exact-method baseline SHA-256 is
 `92c4d946d7345afc377ffd1b0eb43120b26e8af1587348ca86fda4bcc32bbab4`.
-The candidate remains `in_progress` and cannot claim a green affected-module
-gate until combined with `tic-5cc0`. Full commands, scope, and comparison are
-recorded in
+The candidate remains `in_progress`. `tic-50e8` and `tic-5cc0` are independent
+clean-master fixes which must both be present at their joint integration gate;
+neither ticket formally depends on the other. Full commands, scope, and
+comparison are recorded in
 `docs/delivery/evidence/2026-09-05-tic-50e8-union-execution.md`.
+
+### 2026-09-04T23:59:30Z
+
+Independent review rejected candidate `8c71502` on evidence and process only;
+the implementation's static review remained sound. This correction records all
+three required resolutions: the ticket now states the valid parser topology and
+the no-lease materialized-store admission root cause; the incorrect
+`tic-5cc0 -> tic-50e8` dependency is removed with no reverse dependency; and a
+complete `--no-fail-fast` module run plus clean-baseline attribution replace the
+partial gate account.
+
+The no-fail-fast candidate run completed 779 tests with 4 failures and 1 skip,
+then its test executor exhausted heap while allocating a fault-directory entry.
+`SqlUnionExecutionTest` completed all 9 tests with no failure or skip; its XML
+SHA-256 is
+`ff8f564c3b1524423ffc3d03d9ccc9280443669b2789d68c652dd0dcf827af51`.
+Besides the known `tic-5cc0` failure, clean source `9f75656` independently
+reproduced the wide-decimal sort failure (1 of 1 failed, XML SHA-256
+`f37c6205b2b3ebccdda0e90e63f2d170490e23e4de7c641275cc13453d5c4149`)
+and both group-commit fencing cases (2 of 2 failed, XML SHA-256
+`6c89fb7238a7cbc0314b4079f63fb4656d0a2a8350f1c3098fd9b715a2d9ed64`)
+without heap exhaustion. Those regressions require separate P0 tickets and are
+not part of `tic-50e8`; no such tickets are created by this correction.
+`tic-50e8` remains `in_progress`, and the green affected-module claim remains a
+joint integration gate across all independently owned fixes.
