@@ -715,6 +715,17 @@ fi
 if [[ -n ${FAKE_CORRUPT_LEASE_OWNER:-} ]]; then
   printf 'unexpected=field\n' >>"$FAKE_CORRUPT_LEASE_OWNER/owner"
 fi
+if [[ -n ${FAKE_MUTATE_LEASE_COMMITMENT:-} ]]; then
+  awk '
+    /^terminal_commitment_sha256=/ {
+      print "terminal_commitment_sha256=0000000000000000000000000000000000000000000000000000000000000000"
+      next
+    }
+    { print }
+  ' "$FAKE_MUTATE_LEASE_COMMITMENT/owner" >"$FAKE_MUTATE_LEASE_COMMITMENT/owner.mutated"
+  mv -- "$FAKE_MUTATE_LEASE_COMMITMENT/owner.mutated" \
+    "$FAKE_MUTATE_LEASE_COMMITMENT/owner"
+fi
 if [[ -n ${FAKE_CLIENT_STARTED:-} ]]; then : >"$FAKE_CLIENT_STARTED"; fi
 if [[ -n ${FAKE_CLIENT_DELAY:-} ]]; then /bin/sleep "$FAKE_CLIENT_DELAY"; fi
 if [[ -n ${FAKE_MUTATE_SOURCE:-} ]]; then
@@ -1213,6 +1224,44 @@ lease_release_temp=$(retained_temp_dir "$lease_release_output")
 [[ ! -d $lease_release_temp && -d $lease_release_dir ]] ||
   fail "lease-release failure did not preserve the fail-closed lease after evidence persistence"
 rm -rf -- "$lease_release_dir"
+pass
+
+commitment_release_output="$test_root/commitment-release-output"
+commitment_release_dir="$test_root/commitment-release-lease"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_MUTATE_LEASE_COMMITMENT="$commitment_release_dir" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$commitment_release_dir" \
+  "$fixture/tools/tps-test.sh" --output-dir="$commitment_release_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/commitment-release.stdout" 2>"$test_root/commitment-release.stderr"
+commitment_release_status=$?
+set -e
+assert_equal "$commitment_release_status" 1
+[[ -d $commitment_release_dir && -f $commitment_release_dir/owner ]] ||
+  fail "commitment-only release mismatch deleted the fail-closed lease"
+assert_contains "$commitment_release_dir/owner" \
+  'terminal_commitment_sha256=0000000000000000000000000000000000000000000000000000000000000000'
+metadata_commitment=$(provenance_property_once terminal.commitment_sha256 \
+  "$commitment_release_output/run-metadata.properties")
+[[ $metadata_commitment != \
+    0000000000000000000000000000000000000000000000000000000000000000 ]] ||
+  fail "fixture did not isolate a commitment-only owner mutation"
+assert_contains "$commitment_release_output/run-metadata.properties.terminal-receipt" \
+  'terminal.result=evidence_invalid'
+assert_contains "$commitment_release_output/run-metadata.properties.terminal-receipt" \
+  'terminal.status=LEASE_RELEASE_FAILED'
+assert_contains "$commitment_release_output/run-metadata.properties.terminal-receipt" \
+  'lease.release_outcome=failed'
+provenance_validate_terminal_receipt \
+  "$commitment_release_output/run-metadata.properties" \
+  "$commitment_release_output/tpcc-acceptance.properties" \
+  "$commitment_release_output/run-metadata.properties.terminal-receipt" \
+  "$commitment_release_output" evidence_invalid ||
+  fail "commitment-only mismatch did not produce a bound failure receipt"
+rm -rf -- "$commitment_release_dir"
 pass
 
 grep -F 'writeRiverTpsRuntimeClasspath' "$script_dir/../river-bench/build.gradle.kts" >/dev/null ||
