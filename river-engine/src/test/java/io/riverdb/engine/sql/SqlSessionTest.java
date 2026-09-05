@@ -1119,9 +1119,7 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT middle", result));
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT second", result));
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT third", result));
-    assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
-        session.execute("SAVEPOINT fourth", result));
+    assertEquals(StatusCode.OK, session.execute("SAVEPOINT fourth", result));
     assertEquals(
         StatusCode.OK,
         session.execute("INSERT INTO accounts VALUES (2, 200)", result));

@@ -11,7 +11,31 @@ import java.util.Arrays;
 
 /** Owns reusable SQL transaction, statement, and savepoint state for one session. */
 final class SqlTransactionState {
+  private static final long CONSERVATIVE_64_BIT_HEADER_BYTES = 32;
+  private static final long CONSERVATIVE_64_BIT_REFERENCE_BYTES = 8;
+  private static final long CONSERVATIVE_INDEXED_SAVEPOINT_BYTES = 64;
+  /** One conservative array header plus four non-compressed 64-bit references. */
+  private static final long LOWER_SAVEPOINT_STACK_BASE_RETAINED_BYTES =
+      CONSERVATIVE_64_BIT_HEADER_BYTES + 4 * CONSERVATIVE_64_BIT_REFERENCE_BYTES;
+  private static final long LOWER_SAVEPOINT_STACK_BYTES_PER_USER_SLOT =
+      2 * CONSERVATIVE_64_BIT_REFERENCE_BYTES;
+  /**
+   * Conservative non-compressed 64-bit charge for the two SQL reference lanes,
+   * int lane, savepoint, maximum identifier buffer, amortized SQL array
+   * headers, and two lower-stack references for geometric statement slack.
+   */
+  private static final long SQL_USER_SAVEPOINT_RETAINED_BYTES =
+      2 * CONSERVATIVE_64_BIT_REFERENCE_BYTES
+          + Long.BYTES
+          + CONSERVATIVE_INDEXED_SAVEPOINT_BYTES
+          + CONSERVATIVE_64_BIT_HEADER_BYTES
+          + 2L * SqlIdentifier.MAXIMUM_LENGTH
+          + 3 * CONSERVATIVE_64_BIT_HEADER_BYTES / 4;
+  private static final long USER_SAVEPOINT_RETAINED_BYTES =
+      SQL_USER_SAVEPOINT_RETAINED_BYTES + LOWER_SAVEPOINT_STACK_BYTES_PER_USER_SLOT;
+
   private final RelationalSession session;
+  private final SqlSessionShapeBudget budget;
   private final TransactionOutcome outcome = new TransactionOutcome();
   private final IndexedSavepoint statementSavepoint = new IndexedSavepoint();
   private IndexedSavepoint[] userSavepoints = new IndexedSavepoint[0];
@@ -19,10 +43,12 @@ final class SqlTransactionState {
   private int[] userSavepointNameLengths = new int[0];
   private boolean explicit;
   private boolean statementActive;
+  private boolean lowerSavepointStackReserved;
   private int userSavepointCount;
 
-  SqlTransactionState(RelationalSession relational) {
+  SqlTransactionState(RelationalSession relational, SqlSessionShapeBudget shapeBudget) {
     session = relational;
+    budget = shapeBudget;
   }
 
   boolean isExplicit() {
@@ -106,7 +132,8 @@ final class SqlTransactionState {
   }
 
   StatusCode createStatementSavepoint() {
-    return session.createSavepoint(statementSavepoint);
+    StatusCode status = reserveLowerSavepointStack();
+    return status.isOk() ? session.createSavepoint(statementSavepoint) : status;
   }
 
   boolean statementSavepointActive() {
@@ -127,6 +154,8 @@ final class SqlTransactionState {
       return StatusCode.CONFLICT;
     }
     StatusCode status = reserveUserSavepoint();
+    if (!status.isOk()) return status;
+    status = reserveLowerSavepointStack();
     if (!status.isOk()) return status;
     status = session.createSavepoint(userSavepoints[userSavepointCount]);
     if (status.isOk()) {
@@ -172,6 +201,10 @@ final class SqlTransactionState {
     int capacity = BoundedArrayGrowth.capacity(
         userSavepoints.length, userSavepointCount + 1, Integer.MAX_VALUE, 4);
     if (capacity < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    long charged = retainedUserSavepointGrowthBytes(userSavepoints.length, capacity);
+    if (charged < 0) return StatusCode.RESOURCE_EXHAUSTED;
+    StatusCode admission = budget.reserve(charged);
+    if (!admission.isOk()) return admission;
     try {
       IndexedSavepoint[] nextSavepoints = Arrays.copyOf(userSavepoints, capacity);
       char[][] nextNames = Arrays.copyOf(userSavepointNames, capacity);
@@ -185,8 +218,31 @@ final class SqlTransactionState {
       userSavepointNameLengths = nextNameLengths;
       return StatusCode.OK;
     } catch (OutOfMemoryError failure) {
+      budget.rollback(charged);
       return StatusCode.RESOURCE_EXHAUSTED;
     }
+  }
+
+  private StatusCode reserveLowerSavepointStack() {
+    if (lowerSavepointStackReserved) return StatusCode.OK;
+    StatusCode status = budget.reserve(LOWER_SAVEPOINT_STACK_BASE_RETAINED_BYTES);
+    if (status.isOk()) lowerSavepointStackReserved = true;
+    return status;
+  }
+
+  static long retainedUserSavepointGrowthBytes(long current, long target) {
+    long slots = target - current;
+    return current < 0 || target <= current
+        || slots > Long.MAX_VALUE / USER_SAVEPOINT_RETAINED_BYTES
+        ? -1 : slots * USER_SAVEPOINT_RETAINED_BYTES;
+  }
+
+  static long retainedLowerSavepointStackCoverageBytes(long userCapacity) {
+    return userCapacity < 0
+        || userCapacity > (Long.MAX_VALUE - LOWER_SAVEPOINT_STACK_BASE_RETAINED_BYTES)
+            / LOWER_SAVEPOINT_STACK_BYTES_PER_USER_SLOT
+        ? -1 : LOWER_SAVEPOINT_STACK_BASE_RETAINED_BYTES
+            + userCapacity * LOWER_SAVEPOINT_STACK_BYTES_PER_USER_SLOT;
   }
 
   private int findUserSavepoint(CharSequence name) {

@@ -135,7 +135,8 @@ final class SqlAtomicStatementLifecycleTest {
         new RelationalSessionOpenResult();
     assertEquals(StatusCode.OK, database.createSession(sessionResult));
     RelationalSession session = sessionResult.session();
-    SqlTransactionState transactions = new SqlTransactionState(session);
+    SqlTransactionState transactions =
+        new SqlTransactionState(session, new SqlSessionShapeBudget(null));
     return new Fixture(
         database,
         session,

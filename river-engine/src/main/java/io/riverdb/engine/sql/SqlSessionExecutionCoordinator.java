@@ -69,7 +69,7 @@ final class SqlSessionExecutionCoordinator {
     blockBinder = new SqlBlockPlanBinder(temporal, binder, shapeBudget);
     rowExpressions = new SqlRowProjectionEvaluator(expressions, temporal, shapeBudget);
     bound = new BoundSqlStatement(shapeBudget);
-    transactions = new SqlTransactionState(session);
+    transactions = new SqlTransactionState(session, shapeBudget);
     dispatcher = new SqlCommandDispatcher(database, session, transactions, temporal);
     queries = new SqlQueryExecution(
         session,
