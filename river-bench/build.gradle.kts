@@ -1,4 +1,5 @@
 import org.gradle.api.tasks.compile.JavaCompile
+import java.nio.charset.StandardCharsets
 
 // Module policy and production dependencies are declared by the root build.
 
@@ -26,6 +27,36 @@ tasks.register("riverHarnessRuntimeClasspath") {
   dependsOn(configurations.runtimeClasspath)
   doLast {
     println("RIVER_HARNESS_CLASSPATH=" + sourceSets.main.get().runtimeClasspath.asPath)
+  }
+}
+
+val riverTpsClasspathOutput = providers.gradleProperty("riverTpsClasspathOutput")
+
+tasks.register("writeRiverTpsRuntimeClasspath") {
+  group = "verification"
+  description = "Builds and writes the authoritative TPS launch classpath."
+  dependsOn(tasks.named("classes"), configurations.runtimeClasspath)
+  outputs.file(riverTpsClasspathOutput)
+  doLast {
+    val output = file(riverTpsClasspathOutput.get())
+    val entries = sourceSets.main.get().runtimeClasspath.files.toList()
+    val fields = buildList {
+      add("schema=river-tps-runtime-v1")
+      add("gradle.version=${gradle.gradleVersion}")
+      add("gradle.home=${gradle.gradleHomeDir?.absolutePath ?: "unavailable"}")
+      add("gradle.process.pid=${ProcessHandle.current().pid()}")
+      add("java.home=${System.getProperty("java.home")}")
+      add("java.version=${System.getProperty("java.version")}")
+      entries.forEach { entry ->
+        val path = entry.absolutePath
+        check('\n' !in path && '\r' !in path) {
+          "runtime classpath entry contains a line break"
+        }
+        add("classpath=$path")
+      }
+    }
+    output.parentFile.mkdirs()
+    output.writeText(fields.joinToString("\n", postfix = "\n"), StandardCharsets.UTF_8)
   }
 }
 
