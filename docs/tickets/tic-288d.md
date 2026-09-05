@@ -1,10 +1,12 @@
 ---
 id: tic-288d
-status: open
+status: in_progress
 type: bug
 assignee: blater
 parent: tic-5db4
 delivery: code
+base-commit: 56ccd9d317e135a9f06cd2ec022bba2160c43a71
+branch: ticket/tic-288d-group-commit-fencing
 tags:
     - p0
     - transactions
