@@ -237,54 +237,177 @@ provenance_classpath_value() {
   printf '%s\n' "${entries[*]}"
 }
 
+provenance_canonical_hash() {
+  local domain=$1
+  shift
+  {
+    printf '%s\n' "$domain"
+    printf '%s\n' "$@"
+  } | shasum -a 256 | awk '{print $1}'
+}
+
+provenance_random_hex() {
+  perl -e '
+    use strict;
+    use warnings;
+    open my $random, "<:raw", "/dev/urandom" or exit 1;
+    my $bytes = "";
+    read($random, $bytes, 32) == 32 or exit 1;
+    close $random or exit 1;
+    print unpack("H*", $bytes), "\n";
+  '
+}
+
+provenance_owner_identity_hash() {
+  provenance_canonical_hash river-tps-owner-v2 "$1" "$2" "$3"
+}
+
+provenance_terminal_commitment_hash() {
+  provenance_canonical_hash river-tps-terminal-commitment-v1 "$1" "$2" "$3"
+}
+
+provenance_capture_bounded() {
+  local timeout_seconds=$1
+  local maximum_bytes=$2
+  shift 2
+  [[ $timeout_seconds =~ ^[0-9]+$ && $timeout_seconds -gt 0 &&
+      $maximum_bytes =~ ^[0-9]+$ && $maximum_bytes -gt 0 ]] || return 126
+  perl -MIPC::Open3 -MIO::Select -MTime::HiRes=time,sleep -MSymbol=gensym \
+    -e '
+      use strict;
+      use warnings;
+      use POSIX qw(WNOHANG);
+      my ($timeout, $maximum, @command) = @ARGV;
+      my $error = gensym;
+      my ($input, $output);
+      my $pid = eval { open3($input, $output, $error, @command) };
+      exit 126 unless defined $pid;
+      close $input;
+      my $selector = IO::Select->new($output, $error);
+      my $started = time();
+      my $stdout = "";
+      my $total = 0;
+      my $failure = 0;
+      my $reaped = 0;
+      my $status = 0;
+      while (!$reaped || $selector->count) {
+        my $remaining = $timeout - (time() - $started);
+        if ($remaining <= 0) { $failure = 124; last; }
+        my @ready = $selector->can_read($remaining < 0.05 ? $remaining : 0.05);
+        for my $handle (@ready) {
+          my $chunk = "";
+          my $count = sysread($handle, $chunk, 8192);
+          if (!defined $count) { $failure = 126; last; }
+          if ($count == 0) { $selector->remove($handle); close $handle; next; }
+          $total += $count;
+          if ($total > $maximum) { $failure = 125; last; }
+          $stdout .= $chunk if fileno($handle) == fileno($output);
+        }
+        last if $failure;
+        if (!$reaped) {
+          my $waited = waitpid($pid, WNOHANG);
+          if ($waited == $pid) { $status = $?; $reaped = 1; }
+          elsif ($waited == -1) { $failure = 126; last; }
+        }
+      }
+      if ($failure) {
+        if (!$reaped) {
+          kill 15, $pid;
+          for (1..10) {
+            my $waited = waitpid($pid, WNOHANG);
+            if ($waited == $pid || $waited == -1) { $reaped = 1; last; }
+            sleep 0.01;
+          }
+          if (!$reaped) { kill 9, $pid; waitpid($pid, 0); }
+        }
+        exit $failure;
+      }
+      exit 126 if $status == -1;
+      exit 128 + ($status & 127) if $status & 127;
+      my $exit = $status >> 8;
+      exit $exit if $exit;
+      print $stdout;
+    ' "$timeout_seconds" "$maximum_bytes" "$@"
+}
+
 provenance_process_start() {
-  ps -p "$1" -o lstart= 2>/dev/null |
+  local pid=$1
+  local timeout_seconds=${2:-2}
+  local maximum_bytes=${3:-4096}
+  local raw
+  raw=$(provenance_capture_bounded "$timeout_seconds" "$maximum_bytes" \
+    ps -p "$pid" -o lstart=) || return 1
+  printf '%s\n' "$raw" |
     awk 'NF >= 5 {print $1 " " $2 " " $3 " " $4 " " $5}'
+}
+
+provenance_path_identity() {
+  if stat -f '%d:%i:%HT:%l' "$1" >/dev/null 2>&1; then
+    stat -f '%d:%i:%HT:%l' "$1"
+  else
+    stat -c '%d:%i:%F:%h' "$1"
+  fi
 }
 
 provenance_read_lease_owner() {
   local owner_file=$1
-  local owner_lines owner_line_1 owner_line_2 owner_line_3 owner_line_4
-  local schema pid started recorded_token
-  owner_lines=$(awk 'END {print NR}' "$owner_file" 2>/dev/null || true)
-  owner_line_1=$(sed -n '1p' "$owner_file" 2>/dev/null)
-  owner_line_2=$(sed -n '2p' "$owner_file" 2>/dev/null)
-  owner_line_3=$(sed -n '3p' "$owner_file" 2>/dev/null)
-  owner_line_4=$(sed -n '4p' "$owner_file" 2>/dev/null)
-  schema=${owner_line_1#schema=}
-  pid=${owner_line_2#pid=}
-  started=${owner_line_3#start=}
-  recorded_token=${owner_line_4#token_sha256=}
-  [[ $owner_lines == 4 && $schema == river-tps-host-lease-v1 &&
-      $owner_line_1 == schema=* && $owner_line_2 == pid=* &&
-      $owner_line_3 == start=* && $owner_line_4 == token_sha256=* &&
-      $pid =~ ^[0-9]+$ && -n $started && $started != *$'\t'* &&
-      $started != *$'\r'* && $recorded_token =~ ^[0-9a-f]{64}$ &&
-      $recorded_token == "$(provenance_sha256_text "$pid:$started")" ]] || return 1
-  printf '%s\t%s\t%s\n' "$pid" "$started" "$recorded_token"
+  local lines line1 line2 line3 line4 line5 line6
+  local run_id pid started identity commitment
+  [[ -f $owner_file && ! -L $owner_file ]] || return 1
+  lines=$(awk 'END {print NR}' "$owner_file" 2>/dev/null || true)
+  line1=$(sed -n '1p' "$owner_file" 2>/dev/null)
+  line2=$(sed -n '2p' "$owner_file" 2>/dev/null)
+  line3=$(sed -n '3p' "$owner_file" 2>/dev/null)
+  line4=$(sed -n '4p' "$owner_file" 2>/dev/null)
+  line5=$(sed -n '5p' "$owner_file" 2>/dev/null)
+  line6=$(sed -n '6p' "$owner_file" 2>/dev/null)
+  run_id=${line2#evidence_run_id=}
+  pid=${line3#pid=}
+  started=${line4#start=}
+  identity=${line5#owner_identity_sha256=}
+  commitment=${line6#terminal_commitment_sha256=}
+  [[ $lines == 6 && $line1 == schema=river-tps-host-lease-v2 &&
+      $line2 == evidence_run_id=* && $line3 == pid=* && $line4 == start=* &&
+      $line5 == owner_identity_sha256=* && $line6 == terminal_commitment_sha256=* &&
+      $run_id =~ ^[0-9a-f]{64}$ && $pid =~ ^[0-9]+$ && -n $started &&
+      $started != *$'\t'* && $started != *$'\r'* && $started != *$'\n'* &&
+      $identity =~ ^[0-9a-f]{64}$ && $commitment =~ ^[0-9a-f]{64}$ &&
+      $identity == "$(provenance_owner_identity_hash "$run_id" "$pid" "$started")" ]] || return 1
+  printf '%s\t%s\t%s\t%s\t%s\n' "$run_id" "$pid" "$started" "$identity" "$commitment"
+}
+
+provenance_lease_exact_owner() {
+  local lease_dir=$1
+  local owner="$lease_dir/owner"
+  [[ -d $lease_dir && ! -L $lease_dir && -f $owner && ! -L $owner ]] || return 1
+  [[ -z $(find "$lease_dir" -mindepth 1 -maxdepth 1 ! -name owner -print -quit 2>/dev/null) ]] || return 1
+  [[ $(find "$lease_dir" -mindepth 1 -maxdepth 1 -name owner -print | wc -l | tr -d ' ') == 1 ]] || return 1
+  case $(provenance_path_identity "$owner") in *:1) ;; *) return 1 ;; esac
 }
 
 provenance_acquire_lease() {
   local lease_dir=$1
+  local run_id=$2
+  local nonce=$3
   local owner_file="$lease_dir/owner"
-  local owner_staged="$lease_dir/owner.staged"
-  local stale_dir pid expected recorded_token actual token token_hash owner_pid owner_record
+  local owner_staged owner_record old_run pid expected identity old_commitment actual commitment
+  local owner_pid owner_start owner_identity directory_before owner_before owner_hash_before
   PROVENANCE_LEASE_ACQUIRE_STATUS=owner_identity_unavailable
   owner_pid=${BASHPID:-$$}
-  expected=$(provenance_process_start "$owner_pid")
-  [[ -n $expected ]] || return 1
-  token="$owner_pid:$expected"
-  token_hash=$(provenance_sha256_text "$token") || {
-    PROVENANCE_LEASE_ACQUIRE_STATUS=owner_token_failed
-    return 1
-  }
+  owner_start=$(provenance_process_start "$owner_pid")
+  [[ -n $owner_start ]] || return 1
+  owner_identity=$(provenance_owner_identity_hash "$run_id" "$owner_pid" "$owner_start") || return 1
+  commitment=$(provenance_terminal_commitment_hash "$run_id" "$owner_identity" "$nonce") || return 1
   if ! mkdir "$lease_dir" 2>/dev/null; then
+    provenance_lease_exact_owner "$lease_dir" || {
+      PROVENANCE_LEASE_ACQUIRE_STATUS=existing_owner_invalid
+      return 1
+    }
     owner_record=$(provenance_read_lease_owner "$owner_file") || {
       PROVENANCE_LEASE_ACQUIRE_STATUS=existing_owner_invalid
       return 1
     }
-    IFS=$'\t' read -r pid expected recorded_token <<<"$owner_record"
-    actual=
+    IFS=$'\t' read -r old_run pid expected identity old_commitment <<<"$owner_record"
     actual=$(provenance_process_start "$pid" || true)
     if [[ -n $actual && $actual == "$expected" ]]; then
       PROVENANCE_LEASE_ACQUIRE_STATUS=lease_held
@@ -294,48 +417,211 @@ provenance_acquire_lease() {
       PROVENANCE_LEASE_ACQUIRE_STATUS=existing_owner_identity_unavailable
       return 1
     fi
-    stale_dir="$lease_dir.stale.$owner_pid.${SECONDS}"
-    mv -- "$lease_dir" "$stale_dir" 2>/dev/null || {
-      PROVENANCE_LEASE_ACQUIRE_STATUS=stale_reclaim_failed
+    directory_before=$(provenance_path_identity "$lease_dir") || return 1
+    owner_before=$(provenance_path_identity "$owner_file") || return 1
+    owner_hash_before=$(provenance_sha256_file "$owner_file") || return 1
+    provenance_lease_exact_owner "$lease_dir" &&
+      [[ $(provenance_path_identity "$lease_dir") == "$directory_before" &&
+        $(provenance_path_identity "$owner_file") == "$owner_before" &&
+        $(provenance_sha256_file "$owner_file") == "$owner_hash_before" ]] || {
+      PROVENANCE_LEASE_ACQUIRE_STATUS=stale_reclaim_raced
+      return 1
+    }
+    rm -- "$owner_file" 2>/dev/null || {
+      PROVENANCE_LEASE_ACQUIRE_STATUS=stale_owner_unlink_failed
+      return 1
+    }
+    rmdir "$lease_dir" 2>/dev/null || {
+      PROVENANCE_LEASE_ACQUIRE_STATUS=stale_directory_remove_failed
       return 1
     }
     mkdir "$lease_dir" 2>/dev/null || {
       PROVENANCE_LEASE_ACQUIRE_STATUS=stale_reclaim_raced
       return 1
     }
-    rm -rf -- "$stale_dir"
   fi
+  owner_staged=$(mktemp "$(dirname -- "$lease_dir")/.river-tps-owner.XXXXXX") || {
+    PROVENANCE_LEASE_ACQUIRE_STATUS=owner_write_failed
+    return 1
+  }
   if ! {
-    printf 'schema=river-tps-host-lease-v1\n'
+    printf 'schema=river-tps-host-lease-v2\n'
+    printf 'evidence_run_id=%s\n' "$run_id"
     printf 'pid=%s\n' "$owner_pid"
-    printf 'start=%s\n' "${token#*:}"
-    printf 'token_sha256=%s\n' "$token_hash"
+    printf 'start=%s\n' "$owner_start"
+    printf 'owner_identity_sha256=%s\n' "$owner_identity"
+    printf 'terminal_commitment_sha256=%s\n' "$commitment"
   } >"$owner_staged"; then
     PROVENANCE_LEASE_ACQUIRE_STATUS=owner_write_failed
     return 1
   fi
-  mv -- "$owner_staged" "$owner_file" 2>/dev/null || {
+  if ! ln "$owner_staged" "$owner_file" 2>/dev/null; then
+    rm -f -- "$owner_staged"
     PROVENANCE_LEASE_ACQUIRE_STATUS=owner_publish_failed
     return 1
+  fi
+  rm -f -- "$owner_staged" || {
+    PROVENANCE_LEASE_ACQUIRE_STATUS=owner_stage_cleanup_failed
+    return 1
   }
-  PROVENANCE_LEASE_TOKEN_SHA256=$token_hash
+  PROVENANCE_LEASE_OWNER_IDENTITY_SHA256=$owner_identity
+  PROVENANCE_LEASE_OWNER_PID=$owner_pid
+  PROVENANCE_LEASE_OWNER_START=$owner_start
+  PROVENANCE_TERMINAL_COMMITMENT_SHA256=$commitment
   PROVENANCE_LEASE_ACQUIRE_STATUS=acquired
-  export PROVENANCE_LEASE_TOKEN_SHA256
+  export PROVENANCE_LEASE_OWNER_IDENTITY_SHA256 PROVENANCE_LEASE_OWNER_PID \
+    PROVENANCE_LEASE_OWNER_START PROVENANCE_TERMINAL_COMMITMENT_SHA256
 }
 
 provenance_release_lease() {
   local lease_dir=$1
   local owner_file="$lease_dir/owner"
-  local owner_record pid started recorded
+  local owner_record run_id pid started identity commitment directory_before owner_before owner_hash
+  provenance_lease_exact_owner "$lease_dir" || return 1
   owner_record=$(provenance_read_lease_owner "$owner_file") || return 1
-  IFS=$'\t' read -r pid started recorded <<<"$owner_record"
-  [[ -n ${PROVENANCE_LEASE_TOKEN_SHA256:-} && $recorded == "$PROVENANCE_LEASE_TOKEN_SHA256" ]] || return 1
-  rm -f -- "$owner_file"
+  IFS=$'\t' read -r run_id pid started identity commitment <<<"$owner_record"
+  [[ -n ${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-} &&
+      $identity == "$PROVENANCE_LEASE_OWNER_IDENTITY_SHA256" ]] || return 1
+  directory_before=$(provenance_path_identity "$lease_dir") || return 1
+  owner_before=$(provenance_path_identity "$owner_file") || return 1
+  owner_hash=$(provenance_sha256_file "$owner_file") || return 1
+  provenance_lease_exact_owner "$lease_dir" &&
+    [[ $(provenance_path_identity "$lease_dir") == "$directory_before" &&
+      $(provenance_path_identity "$owner_file") == "$owner_before" &&
+      $(provenance_sha256_file "$owner_file") == "$owner_hash" ]] || return 1
+  rm -- "$owner_file" || return 1
   rmdir "$lease_dir"
 }
 
+provenance_property_once() {
+  local key=$1
+  local file=$2
+  [[ -f $file ]] || return 1
+  awk -v prefix="$key=" '
+    index($0, prefix) == 1 { count++; value=substr($0, length(prefix) + 1) }
+    END { if (count != 1 || value == "") exit 1; print value }
+  ' "$file"
+}
+
+provenance_write_terminal_receipt() {
+  local destination=$1
+  local result=$2
+  local status=$3
+  local evidence_run_id=$4
+  local artifact_run_id=$5
+  local metadata_sha256=$6
+  local owner_pid=$7
+  local owner_start=$8
+  local owner_identity=$9
+  local nonce=${10}
+  local commitment=${11}
+  local evidence_dir=${12}
+  local release_outcome=${13}
+  local released_epoch=${14}
+  {
+    printf 'schema=river-tps-terminal-v1\n'
+    printf 'terminal.result=%s\n' "$result"
+    printf 'terminal.status=%s\n' "$status"
+    printf 'evidence.run_id=%s\n' "$evidence_run_id"
+    printf 'artifact.run_id=%s\n' "$artifact_run_id"
+    printf 'metadata.sha256=%s\n' "$metadata_sha256"
+    printf 'lease.owner_pid=%s\n' "$owner_pid"
+    printf 'lease.owner_start=%s\n' "$owner_start"
+    printf 'lease.owner_identity_sha256=%s\n' "$owner_identity"
+    printf 'terminal.nonce=%s\n' "$nonce"
+    printf 'terminal.commitment_sha256=%s\n' "$commitment"
+    printf 'host.observations_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-observations.tsv")"
+    printf 'host.processes_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-processes.tsv")"
+    printf 'host.classifications_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-classifications.tsv")"
+    printf 'host.violations_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-violations.tsv")"
+    printf 'host.provisional_daemons_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/host-provisional-daemons.tsv")"
+    printf 'provenance.checkpoints_sha256=%s\n' "$(provenance_sha256_file "$evidence_dir/provenance-checkpoints.tsv")"
+    printf 'lease.release_outcome=%s\n' "$release_outcome"
+    printf 'lease.released_epoch=%s\n' "$released_epoch"
+  } >"$destination"
+}
+
+provenance_validate_terminal_receipt() {
+  local metadata=$1
+  local artifact=$2
+  local receipt=$3
+  local evidence_dir=$4
+  local expected_result=${5:-success}
+  local values schema result status run_id artifact_run_id metadata_hash owner_pid owner_start
+  local owner_identity nonce commitment observations_hash processes_hash classifications_hash
+  local violations_hash provisional_hash checkpoints_hash release_outcome released_epoch metadata_artifact
+  [[ -f $metadata && -f $receipt && -d $evidence_dir ]] || return 1
+  values=$(awk '
+    BEGIN {
+      keys[1]="schema"; keys[2]="terminal.result"; keys[3]="terminal.status";
+      keys[4]="evidence.run_id"; keys[5]="artifact.run_id"; keys[6]="metadata.sha256";
+      keys[7]="lease.owner_pid"; keys[8]="lease.owner_start";
+      keys[9]="lease.owner_identity_sha256"; keys[10]="terminal.nonce";
+      keys[11]="terminal.commitment_sha256"; keys[12]="host.observations_sha256";
+      keys[13]="host.processes_sha256"; keys[14]="host.classifications_sha256";
+      keys[15]="host.violations_sha256"; keys[16]="host.provisional_daemons_sha256";
+      keys[17]="provenance.checkpoints_sha256"; keys[18]="lease.release_outcome";
+      keys[19]="lease.released_epoch";
+    }
+    {
+      separator=index($0, "=");
+      if (separator < 2 || substr($0, 1, separator - 1) != keys[NR]) exit 1;
+      value=substr($0, separator + 1);
+      if (value == "" || value ~ /[\t\r]/) exit 1;
+      values[NR]=value;
+    }
+    END {
+      if (NR != 19) exit 1;
+      for (i=1; i<=19; i++) printf "%s%s", values[i], (i == 19 ? "\n" : "\t");
+    }
+  ' "$receipt") || return 1
+  IFS=$'\t' read -r schema result status run_id artifact_run_id metadata_hash owner_pid \
+    owner_start owner_identity nonce commitment observations_hash processes_hash \
+    classifications_hash violations_hash provisional_hash checkpoints_hash release_outcome released_epoch \
+    <<<"$values"
+  [[ $schema == river-tps-terminal-v1 && $result == "$expected_result" &&
+      $run_id =~ ^[0-9a-f]{64}$ && $metadata_hash =~ ^[0-9a-f]{64}$ &&
+      $owner_pid =~ ^[0-9]+$ && $owner_identity =~ ^[0-9a-f]{64}$ &&
+      $nonce =~ ^[0-9a-f]{64}$ && $commitment =~ ^[0-9a-f]{64}$ &&
+      $released_epoch =~ ^[0-9]+$ ]] || return 1
+  [[ $(provenance_property_once tool.schema "$metadata") == river-tps-tool-v2 &&
+      $(provenance_property_once run.result "$metadata") == provisional &&
+      $(provenance_property_once run.status "$metadata") == TERMINAL_RECEIPT_REQUIRED &&
+      $(provenance_property_once terminal.required "$metadata") == true &&
+      $(provenance_property_once terminal.path "$metadata") == "$receipt" &&
+      $(provenance_property_once evidence.run_id "$metadata") == "$run_id" &&
+      $(provenance_property_once lease.owner_pid "$metadata") == "$owner_pid" &&
+      $(provenance_property_once lease.owner_start "$metadata") == "$owner_start" &&
+      $(provenance_property_once lease.owner_identity_sha256 "$metadata") == "$owner_identity" &&
+      $(provenance_property_once terminal.commitment_sha256 "$metadata") == "$commitment" &&
+      $(provenance_sha256_file "$metadata") == "$metadata_hash" &&
+      $(provenance_owner_identity_hash "$run_id" "$owner_pid" "$owner_start") == "$owner_identity" &&
+      $(provenance_terminal_commitment_hash "$run_id" "$owner_identity" "$nonce") == "$commitment" ]] || return 1
+  [[ $(provenance_sha256_file "$evidence_dir/host-observations.tsv") == "$observations_hash" &&
+      $(provenance_sha256_file "$evidence_dir/host-processes.tsv") == "$processes_hash" &&
+      $(provenance_sha256_file "$evidence_dir/host-classifications.tsv") == "$classifications_hash" &&
+      $(provenance_sha256_file "$evidence_dir/host-violations.tsv") == "$violations_hash" &&
+      $(provenance_sha256_file "$evidence_dir/host-provisional-daemons.tsv") == "$provisional_hash" &&
+      $(provenance_sha256_file "$evidence_dir/provenance-checkpoints.tsv") == "$checkpoints_hash" ]] || return 1
+  metadata_artifact=$(provenance_property_once artifact.run_id "$metadata") || return 1
+  [[ $metadata_artifact == "$artifact_run_id" ]] || return 1
+  if [[ $result == success ]]; then
+    [[ $status == OK && $release_outcome == released && -f $artifact &&
+        $artifact_run_id != unavailable &&
+        $(provenance_property_once run.id "$artifact") == "$artifact_run_id" &&
+        $(provenance_property_once artifact.sha256 "$metadata") == "$(provenance_sha256_file "$artifact")" &&
+        ! -s $evidence_dir/host-violations.tsv ]] || return 1
+  else
+    [[ $status != OK ]] || return 1
+    [[ $release_outcome == released || $release_outcome == failed ]] || return 1
+  fi
+}
+
 provenance_capture_processes() {
-  ps -axo pid=,ppid=,lstart=,command=
+  local timeout_seconds=${1:-5}
+  local maximum_bytes=${2:-1048576}
+  provenance_capture_bounded "$timeout_seconds" "$maximum_bytes" \
+    ps -axo pid=,ppid=,lstart=,command=
 }
 
 provenance_normalize_snapshot() {
@@ -371,13 +657,14 @@ provenance_normalize_snapshot() {
 
 provenance_gradle_daemon_state() {
   local pid=$1
-  local output=$2
-  local timeout_seconds=${3:-2}
+  local timeout_seconds=${2:-2}
+  local maximum_bytes=${3:-262144}
+  local selected
   command -v jcmd >/dev/null 2>&1 || return 1
-  provenance_run_bounded "$timeout_seconds" "$output" \
-    jcmd "$pid" Thread.print -l || return 1
+  selected=$(provenance_capture_bounded "$timeout_seconds" "$maximum_bytes" \
+    jcmd "$pid" Thread.print -l) || return 1
   if grep -E 'org\.gradle\.launcher\.exec\.(ExecuteBuild|ChainingBuildActionRunner)|org\.gradle\.internal\.buildtree' \
-      "$output" >/dev/null; then
+      <<<"$selected" >/dev/null; then
     printf 'busy\n'
   else
     printf 'idle\n'
@@ -386,35 +673,25 @@ provenance_gradle_daemon_state() {
 
 provenance_gradle_daemon_home() {
   local pid=$1
-  local output=$2
-  local timeout_seconds=${3:-2}
+  local timeout_seconds=${2:-2}
+  local maximum_bytes=${3:-262144}
+  local selected home count
   command -v jcmd >/dev/null 2>&1 || return 1
-  provenance_run_bounded "$timeout_seconds" "$output" \
-    jcmd "$pid" VM.system_properties || return 1
-  sed -n 's/^gradle\.user\.home=//p' "$output" | head -1
+  selected=$(provenance_capture_bounded "$timeout_seconds" "$maximum_bytes" \
+    jcmd "$pid" VM.system_properties) || return 1
+  count=$(grep -c '^gradle\.user\.home=' <<<"$selected" || true)
+  [[ $count == 1 ]] || return 1
+  home=$(sed -n 's/^gradle\.user\.home=//p' <<<"$selected")
+  [[ -n $home && $home != *$'\t'* && $home != *$'\r'* ]] || return 1
+  printf '%s\n' "$home"
 }
 
 provenance_run_bounded() {
   local timeout_seconds=$1
-  local output=$2
-  shift 2
-  local child_pid started=$SECONDS status
-  "$@" >"$output" 2>/dev/null &
-  child_pid=$!
-  while kill -0 "$child_pid" 2>/dev/null; do
-    if ((SECONDS - started >= timeout_seconds)); then
-      kill "$child_pid" 2>/dev/null || true
-      wait "$child_pid" 2>/dev/null || true
-      return 124
-    fi
-    sleep 0.05
-  done
-  if wait "$child_pid"; then
-    status=0
-  else
-    status=$?
-  fi
-  return "$status"
+  local maximum_bytes=$2
+  local result_file=$3
+  shift 3
+  provenance_capture_bounded "$timeout_seconds" "$maximum_bytes" "$@" >"$result_file"
 }
 
 provenance_evidence_bytes() {
@@ -425,6 +702,18 @@ provenance_evidence_bytes() {
     total=$((total + bytes))
   done
   printf '%s\n' "$total"
+}
+
+provenance_remaining_timeout() {
+  local deadline=$1
+  local maximum=$2
+  local remaining=$((deadline - SECONDS))
+  ((remaining > 0)) || return 1
+  if ((remaining < maximum)); then
+    printf '%s\n' "$remaining"
+  else
+    printf '%s\n' "$maximum"
+  fi
 }
 
 provenance_append_with_budget() {
@@ -507,10 +796,13 @@ provenance_monitor_host() {
   local provisional_daemons=${10:-$evidence_dir/host-provisional-daemons.tsv}
   local ready_file=${11:-}
   local maximum_observations=${12:-0}
+  local process_snapshot_maximum_bytes=${13:-1048576}
+  local daemon_inspection_maximum_bytes=${14:-262144}
+  local observation_timeout_seconds=${15:-30}
   local retained_maximum=$((maximum_bytes - 256))
-  local sequence=0 raw_snapshot snapshot raw_classification classification now label pid state daemon_home
+  local sequence=0 raw_snapshot_content snapshot raw_classification classification now label pid state daemon_home
   local snapshot_start live_start_before live_start_after phase observation observation_finished provisional_addition
-  local observations_completed=0 monitor_stop_requested=false
+  local observations_completed=0 monitor_stop_requested=false observation_deadline inspection_timeout
   local retained_files=( "$evidence_dir/host-observations.tsv"
     "$evidence_dir/host-processes.tsv" "$evidence_dir/host-classifications.tsv"
     "$evidence_dir/host-violations.tsv" "$provisional_daemons" )
@@ -526,29 +818,31 @@ provenance_monitor_host() {
   while [[ $monitor_stop_requested != true && ! -e $stop_file ]]; do
     sequence=$((sequence + 1))
     now=$(date +%s)
+    observation_deadline=$((SECONDS + observation_timeout_seconds))
     phase=unknown
     [[ -f $phase_file ]] && phase=$(tr -d '\r\n' <"$phase_file")
     case $phase in prebuild|build|workload|publication) ;; *) phase=unknown ;; esac
-    raw_snapshot="$evidence_dir/host-processes-raw.$(printf '%06d' "$sequence").txt"
     snapshot="$evidence_dir/host-processes.$(printf '%06d' "$sequence").tsv"
     raw_classification="$evidence_dir/host-classification-raw.$(printf '%06d' "$sequence").tsv"
     classification="$evidence_dir/host-classification.$(printf '%06d' "$sequence").tsv"
     observation="$evidence_dir/host-observation.$(printf '%06d' "$sequence").tsv"
     provisional_addition="$evidence_dir/host-provisional.$(printf '%06d' "$sequence").tsv"
     : >"$provisional_addition"
-    if ! provenance_capture_processes >"$raw_snapshot"; then
+    raw_snapshot_content=$(provenance_capture_processes \
+      "$observation_timeout_seconds" "$process_snapshot_maximum_bytes") || {
       printf 'violation\tprocess_snapshot_failed\t%s\tphase=%s\n' "$now" "$phase" \
         >>"$evidence_dir/host-violations.tsv"
-      rm -f -- "$raw_snapshot" "$provisional_addition"
+      rm -f -- "$provisional_addition"
       return 1
-    fi
-    if ! provenance_normalize_snapshot "$raw_snapshot" "$snapshot"; then
+    }
+    if ! provenance_normalize_snapshot \
+        <(printf '%s\n' "$raw_snapshot_content") "$snapshot"; then
       printf 'violation\tprocess_normalization_failed\t%s\tphase=%s\n' "$now" "$phase" \
         >>"$evidence_dir/host-violations.tsv"
-      rm -f -- "$raw_snapshot" "$provisional_addition"
+      rm -f -- "$provisional_addition"
       return 1
     fi
-    rm -f -- "$raw_snapshot"
+    raw_snapshot_content=
     provenance_classify_snapshot "$snapshot" "$self_pid" >"$raw_classification" || {
       printf 'violation\tprocess_classification_failed\t%s\tphase=%s\n' "$now" "$phase" \
         >>"$evidence_dir/host-violations.tsv"
@@ -562,31 +856,41 @@ provenance_monitor_host() {
         continue
       fi
       snapshot_start=$(awk -F '\t' -v pid="$pid" '$1 == pid {print $3}' "$snapshot")
-      if [[ $phase == workload || $phase == publication ]]; then
-        printf 'allowed_cooperative_gradle_daemon\t%s\tstate=not_inspected\tphase=%s\n' \
-          "$pid" "$phase" >>"$classification"
+      if ! inspection_timeout=$(provenance_remaining_timeout \
+          "$observation_deadline" "$inspection_timeout_seconds"); then
+        printf 'violation\thost_observation_timeout\t%s\n' "$pid" >>"$classification"
         continue
       fi
-      live_start_before=$(provenance_process_start "$pid" || true)
-      state=$(provenance_gradle_daemon_state "$pid" \
-        "$evidence_dir/gradle-daemon-thread.$sequence.$pid.txt" \
-        "$inspection_timeout_seconds") || state=unknown
-      live_start_after=$(provenance_process_start "$pid" || true)
+      live_start_before=$(provenance_process_start "$pid" "$inspection_timeout" || true)
+      if ! inspection_timeout=$(provenance_remaining_timeout \
+          "$observation_deadline" "$inspection_timeout_seconds"); then
+        printf 'violation\thost_observation_timeout\t%s\n' "$pid" >>"$classification"
+        continue
+      fi
+      state=$(provenance_gradle_daemon_state "$pid" "$inspection_timeout" \
+        "$daemon_inspection_maximum_bytes") || state=unknown
+      if ! inspection_timeout=$(provenance_remaining_timeout \
+          "$observation_deadline" "$inspection_timeout_seconds"); then
+        printf 'violation\thost_observation_timeout\t%s\n' "$pid" >>"$classification"
+        continue
+      fi
+      live_start_after=$(provenance_process_start "$pid" "$inspection_timeout" || true)
       if [[ -z $snapshot_start || $live_start_before != "$snapshot_start" ||
           $live_start_after != "$snapshot_start" ]]; then
         printf 'violation\tprocess_identity_race\t%s\n' "$pid" >>"$classification"
-        rm -f -- "$evidence_dir/gradle-daemon-thread.$sequence.$pid.txt"
         continue
       fi
       if [[ $state == busy && -e $owned_build_marker && -n $owned_gradle_home ]]; then
-        daemon_home=$(provenance_gradle_daemon_home "$pid" \
-          "$evidence_dir/gradle-daemon-properties.$sequence.$pid.txt" \
-          "$inspection_timeout_seconds") || daemon_home=unknown
+        if ! inspection_timeout=$(provenance_remaining_timeout \
+            "$observation_deadline" "$inspection_timeout_seconds"); then
+          printf 'violation\thost_observation_timeout\t%s\n' "$pid" >>"$classification"
+          continue
+        fi
+        daemon_home=$(provenance_gradle_daemon_home "$pid" "$inspection_timeout" \
+          "$daemon_inspection_maximum_bytes") || daemon_home=unknown
         if [[ $daemon_home == "$owned_gradle_home" ]]; then
           printf '%s\t%s\n' "$pid" "$snapshot_start" >>"$provisional_addition" || return 1
           printf 'provisional_owned_gradle_daemon\t%s\tstate=busy\thome_match=true\n' "$pid" >>"$classification"
-          rm -f -- "$evidence_dir/gradle-daemon-thread.$sequence.$pid.txt" \
-            "$evidence_dir/gradle-daemon-properties.$sequence.$pid.txt"
           continue
         fi
       fi
@@ -595,8 +899,6 @@ provenance_monitor_host() {
         busy) printf 'violation\tbusy_gradle_daemon\t%s\thome_match=false\n' "$pid" >>"$classification" ;;
         *) printf 'violation\tuninspectable_gradle_daemon\t%s\n' "$pid" >>"$classification" ;;
       esac
-      rm -f -- "$evidence_dir/gradle-daemon-thread.$sequence.$pid.txt" \
-        "$evidence_dir/gradle-daemon-properties.$sequence.$pid.txt"
     done <"$raw_classification"
     rm -f -- "$raw_classification"
     observation_finished=$(date +%s)
@@ -623,7 +925,7 @@ provenance_monitor_host() {
       if ((append_status != 0)); then
         printf 'violation\thost_evidence_budget_exhausted\t%s\tphase=%s\tmaximum_bytes=%s\n' \
           "$now" "$phase" "$maximum_bytes" >>"$evidence_dir/host-violations.tsv"
-        rm -f -- "$raw_snapshot" "$snapshot" "$raw_classification" "$classification" \
+        rm -f -- "$snapshot" "$raw_classification" "$classification" \
           "$observation" "$provisional_addition" "$prefixed"
         return 1
       fi

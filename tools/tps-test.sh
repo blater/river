@@ -276,11 +276,17 @@ if [[ -n $seed ]]; then require_uint seed "$seed"; fi
 
 host_evidence_maximum_bytes=${RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES:-16777216}
 daemon_inspection_timeout_seconds=${RIVER_TPS_DAEMON_INSPECTION_TIMEOUT_SECONDS:-2}
+process_snapshot_maximum_bytes=${RIVER_TPS_PROCESS_SNAPSHOT_MAXIMUM_BYTES:-1048576}
+daemon_inspection_maximum_bytes=${RIVER_TPS_DAEMON_INSPECTION_MAXIMUM_BYTES:-262144}
+host_observation_timeout_seconds=${RIVER_TPS_HOST_OBSERVATION_TIMEOUT_SECONDS:-30}
 operator_attestation=${RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION:-false}
 require_positive RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES "$host_evidence_maximum_bytes"
 ((host_evidence_maximum_bytes >= 1024)) ||
   die "RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES must be at least 1024"
 require_positive RIVER_TPS_DAEMON_INSPECTION_TIMEOUT_SECONDS "$daemon_inspection_timeout_seconds"
+require_positive RIVER_TPS_PROCESS_SNAPSHOT_MAXIMUM_BYTES "$process_snapshot_maximum_bytes"
+require_positive RIVER_TPS_DAEMON_INSPECTION_MAXIMUM_BYTES "$daemon_inspection_maximum_bytes"
+require_positive RIVER_TPS_HOST_OBSERVATION_TIMEOUT_SECONDS "$host_observation_timeout_seconds"
 [[ $operator_attestation == true ]] ||
   die "RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true is required"
 
@@ -336,6 +342,7 @@ publication_valid=true
 persistence_valid=true
 artifact_published=false
 temp_cleanup_valid=true
+terminal_publication_valid=false
 build_status=125
 build_wrapper_status=125
 build_command_line=unavailable
@@ -344,7 +351,9 @@ workspace_finish_sha256=unavailable
 classpath_manifest_sha256=unavailable
 classpath_descriptor_sha256=unavailable
 gradle_manifest_sha256=unavailable
-host_lease_dir=${RIVER_TPS_HOST_LEASE_DIR:-${TMPDIR:-/tmp}/river-tps-host-exclusion-v1}
+host_lease_dir=${RIVER_TPS_HOST_LEASE_DIR:-${TMPDIR:-/tmp}/river-tps-host-exclusion-v2}
+evidence_run_id=$(provenance_random_hex) || die "unable to generate evidence run identity"
+terminal_nonce=$(provenance_random_hex) || die "unable to generate terminal commitment nonce"
 if [[ -z $artifact ]]; then
   if [[ -n $output_dir ]]; then artifact_destination="$output_dir/tpcc-acceptance.properties";
   else artifact_destination="$temp_dir/tpcc-acceptance.properties"; fi
@@ -354,10 +363,21 @@ if [[ -z $metadata ]]; then
   if [[ -n $output_dir ]]; then metadata="$output_dir/run-metadata.properties";
   else metadata="$temp_dir/run-metadata.properties"; fi
 else metadata=$(absolute_path "$metadata"); fi
+terminal_receipt_destination="${metadata}.terminal-receipt"
+if [[ -n $output_dir ]]; then
+  invalid_status_destination="$output_dir/evidence-invalid.status"
+else
+  invalid_status_destination="${metadata}.evidence-invalid.status"
+fi
 case $artifact_destination in "$river_root"/*) die "artifact must be outside the source workspace" ;; esac
 case $metadata in "$river_root"/*) die "metadata must be outside the source workspace" ;; esac
+case $terminal_receipt_destination in "$river_root"/*) die "terminal receipt must be outside the source workspace" ;; esac
 [[ ! -e $artifact_destination ]] || die "refusing to overwrite acceptance artifact: $artifact_destination"
 [[ ! -e $metadata ]] || die "refusing to overwrite tool metadata: $metadata"
+[[ ! -e $terminal_receipt_destination ]] ||
+  die "refusing to overwrite terminal receipt: $terminal_receipt_destination"
+[[ ! -e $invalid_status_destination ]] ||
+  die "refusing to overwrite evidence status: $invalid_status_destination"
 
 stdout_log="$temp_dir/tpcc.stdout.log"
 stderr_log="$temp_dir/tpcc.stderr.log"
@@ -390,6 +410,7 @@ host_monitor_ready="$temp_dir/host-monitor.ready"
 owned_build_marker="$temp_dir/owned-gradle-build.active"
 provisional_daemons="$host_evidence_dir/host-provisional-daemons.tsv"
 provenance_checkpoints="$temp_dir/provenance-checkpoints.tsv"
+terminal_receipt_staged="$temp_dir/run-terminal.staged.properties"
 mkdir -p "$host_evidence_dir"
 : >"$provenance_checkpoints"
 
@@ -431,14 +452,17 @@ start_host_monitor() {
   if ! provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
       "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
       "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
-      "$provisional_daemons" '' 1; then
+      "$provisional_daemons" '' 1 "$process_snapshot_maximum_bytes" \
+      "$daemon_inspection_maximum_bytes" "$host_observation_timeout_seconds"; then
     return 1
   fi
   HOST_MONITOR_START_STATUS=readiness_failed
   provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
     "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
     "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
-    "$provisional_daemons" "$host_monitor_ready" &
+    "$provisional_daemons" "$host_monitor_ready" 0 \
+    "$process_snapshot_maximum_bytes" "$daemon_inspection_maximum_bytes" \
+    "$host_observation_timeout_seconds" &
   monitor_pid=$!
   for ((attempt = 0; attempt < 50; attempt++)); do
     kill -0 "$monitor_pid" 2>/dev/null || return 1
@@ -596,10 +620,14 @@ write_metadata() {
   command_line=$(redacted_command_line)
   {
     printf 'tool.schema=river-tps-tool-v2\n'
-    printf 'run.result=%s\n' "$run_result"
-    printf 'run.phase=%s\n' "$run_phase"
-    printf 'run.status=%s\n' "$run_status"
-    printf 'run.exit_status=%s\n' "$run_exit_status"
+    printf 'run.result=provisional\n'
+    printf 'run.phase=terminal_pending\n'
+    printf 'run.status=TERMINAL_RECEIPT_REQUIRED\n'
+    printf 'run.exit_status=1\n'
+    printf 'run.provisional_result=%s\n' "$run_result"
+    printf 'run.provisional_phase=%s\n' "$run_phase"
+    printf 'run.provisional_status=%s\n' "$run_status"
+    printf 'run.provisional_exit_status=%s\n' "$run_exit_status"
     printf 'run.sample_id=%s\n' "$sample_id"
     printf 'run.started_epoch=%s\n' "$started_epoch"
     printf 'run.finished_epoch=%s\n' "$(date +%s)"
@@ -652,6 +680,9 @@ write_metadata() {
     printf 'configuration.server_stop_timeout_seconds=%s\n' "$server_stop_timeout_seconds"
     printf 'configuration.host_evidence_maximum_bytes=%s\n' "$host_evidence_maximum_bytes"
     printf 'configuration.daemon_inspection_timeout_seconds=%s\n' "$daemon_inspection_timeout_seconds"
+    printf 'configuration.process_snapshot_maximum_bytes=%s\n' "$process_snapshot_maximum_bytes"
+    printf 'configuration.daemon_inspection_maximum_bytes=%s\n' "$daemon_inspection_maximum_bytes"
+    printf 'configuration.host_observation_timeout_seconds=%s\n' "$host_observation_timeout_seconds"
     printf 'configuration.operator_no_uncoordinated_work_attestation=%s\n' "$operator_attestation"
     printf 'configuration.resource_maximum_bytes=%s\n' "$resource_maximum_bytes"
     printf 'configuration.resource_delivery_bytes=%s\n' "$resource_delivery_bytes"
@@ -688,20 +719,22 @@ write_metadata() {
     printf 'provenance.source_stable=%s\n' "$source_stable"
     printf 'provenance.classpath_stable=%s\n' "$classpath_stable"
     printf 'provenance.host_exclusion_valid=%s\n' "$host_exclusion_valid"
-    printf 'provenance.host_observations_sha256=%s\n' "$(hash_file "$host_evidence_dir/host-observations.tsv")"
-    printf 'provenance.host_processes_sha256=%s\n' "$(hash_file "$host_evidence_dir/host-processes.tsv")"
-    printf 'provenance.host_classifications_sha256=%s\n' "$(hash_file "$host_evidence_dir/host-classifications.tsv")"
-    printf 'provenance.host_violations_sha256=%s\n' "$(hash_file "$host_evidence_dir/host-violations.tsv")"
-    printf 'provenance.host_provisional_daemons_sha256=%s\n' "$(hash_file "$provisional_daemons")"
-    printf 'provenance.host_evidence_bytes=%s\n' "$(provenance_evidence_bytes \
-      "$host_evidence_dir/host-observations.tsv" \
-      "$host_evidence_dir/host-processes.tsv" \
-      "$host_evidence_dir/host-classifications.tsv" \
-      "$host_evidence_dir/host-violations.tsv" "$provisional_daemons")"
-    printf 'provenance.checkpoints_sha256=%s\n' "$(hash_file "$provenance_checkpoints")"
+    printf 'provenance.host_observations_sha256=pending_terminal_receipt\n'
+    printf 'provenance.host_processes_sha256=pending_terminal_receipt\n'
+    printf 'provenance.host_classifications_sha256=pending_terminal_receipt\n'
+    printf 'provenance.host_violations_sha256=pending_terminal_receipt\n'
+    printf 'provenance.host_provisional_daemons_sha256=pending_terminal_receipt\n'
+    printf 'provenance.host_evidence_bytes=pending_terminal_receipt\n'
+    printf 'provenance.checkpoints_sha256=pending_terminal_receipt\n'
     printf 'provenance.publication_valid=%s\n' "$publication_valid"
     printf 'provenance.persistence_valid=%s\n' "$persistence_valid"
-    printf 'provenance.lease_release_pending_after_publication=true\n'
+    printf 'evidence.run_id=%s\n' "$evidence_run_id"
+    printf 'lease.owner_pid=%s\n' "${PROVENANCE_LEASE_OWNER_PID:-unavailable}"
+    printf 'lease.owner_start=%s\n' "${PROVENANCE_LEASE_OWNER_START:-unavailable}"
+    printf 'lease.owner_identity_sha256=%s\n' "${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-unavailable}"
+    printf 'terminal.required=true\n'
+    printf 'terminal.path=%s\n' "$terminal_receipt_destination"
+    printf 'terminal.commitment_sha256=%s\n' "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}"
     printf 'tool.tps_test_sha256=%s\n' "$(hash_file "$script_dir/tps-test.sh")"
     printf 'tool.provenance_sha256=%s\n' "$(hash_file "$script_dir/tps-provenance.sh")"
   } >"$staged" 2>/dev/null || {
@@ -743,14 +776,15 @@ stop_runner() {
 
 cleanup() {
   local requested_status=$?
+  local metadata_hash=unavailable artifact_run_id=unavailable release_outcome=not_acquired
+  local released_epoch=0 receipt_result=evidence_invalid receipt_status=NOT_STARTED
+  local receipt_evidence_dir=$host_evidence_dir receipt_parent receipt_staged
   set +e
   stop_runner
   stop_server
   printf 'publication\n' >"$host_monitor_phase" || publication_valid=false
   verify_provenance_checkpoint publication || true
-  stop_host_monitor || host_exclusion_valid=false
   [[ ! -s $host_evidence_dir/host-violations.tsv ]] || host_exclusion_valid=false
-  verify_provenance_checkpoint metadata || true
   if [[ $source_stable != true || $classpath_stable != true ||
       $host_exclusion_valid != true || $publication_valid != true ]]; then
     if [[ $run_result != evidence_invalid ]]; then
@@ -759,16 +793,6 @@ cleanup() {
       run_status=PROVENANCE_CHANGED_OR_HOST_BUSY
       run_exit_status=1
     fi
-  fi
-  if [[ $run_result == evidence_invalid ]]; then
-    {
-      printf 'schema=river-tps-evidence-status-v1\n'
-      printf 'result=evidence_invalid\n'
-      printf 'status=%s\n' "$run_status"
-    } >"$temp_dir/evidence-invalid.status" || {
-      publication_valid=false
-      persistence_valid=false
-    }
   fi
   if [[ -f $artifact ]]; then
     if ! mkdir -p "$(dirname -- "$artifact_destination")"; then
@@ -793,15 +817,61 @@ cleanup() {
     persist_if_present "$source_manifest_start" "$output_dir/source-manifest.tsv"
     persist_if_present "$git_status_start" "$output_dir/git-status.txt"
     persist_if_present "$classpath_manifest_start" "$output_dir/classpath-manifest.tsv"
+  fi
+  verify_provenance_checkpoint metadata || true
+  if [[ $publication_valid != true ]]; then
+    if [[ $run_result != evidence_invalid ]]; then
+      run_result=evidence_invalid
+      run_phase=provenance
+      run_status=EVIDENCE_PUBLICATION_FAILED
+      run_exit_status=1
+    fi
+  fi
+  if ! write_metadata; then
+    run_result=evidence_invalid
+    run_phase=provenance
+    run_status=EVIDENCE_PUBLICATION_FAILED
+    run_exit_status=1
+  fi
+  [[ -f $metadata ]] && metadata_hash=$(hash_file "$metadata")
+
+  if [[ $lease_acquired == true ]]; then
+    if ! stop_host_monitor; then
+      host_exclusion_valid=false
+    fi
+    rm -f -- "$host_monitor_stop" "$host_monitor_ready" || host_exclusion_valid=false
+    if ! provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
+        "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
+        "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
+        "$provisional_daemons" '' 1 "$process_snapshot_maximum_bytes" \
+        "$daemon_inspection_maximum_bytes" "$host_observation_timeout_seconds"; then
+      host_exclusion_valid=false
+      printf 'violation\tfinal_host_observation_failed\t%s\tphase=publication\n' \
+        "$(date +%s)" >>"$host_evidence_dir/host-violations.tsv"
+    fi
+  else
+    host_exclusion_valid=false
+  fi
+  [[ ! -s $host_evidence_dir/host-violations.tsv ]] || host_exclusion_valid=false
+  verify_provenance_checkpoint terminal || true
+  if [[ $source_stable != true || $classpath_stable != true ||
+      $host_exclusion_valid != true || $publication_valid != true ]]; then
+    if [[ $run_result != evidence_invalid ]]; then
+      run_result=evidence_invalid
+      run_phase=provenance
+      run_status=PROVENANCE_CHANGED_OR_HOST_BUSY
+      run_exit_status=1
+    fi
+  fi
+  if [[ -n ${output_dir:-} ]]; then
     persist_if_present "$host_evidence_dir/host-observations.tsv" "$output_dir/host-observations.tsv"
     persist_if_present "$host_evidence_dir/host-processes.tsv" "$output_dir/host-processes.tsv"
     persist_if_present "$host_evidence_dir/host-classifications.tsv" "$output_dir/host-classifications.tsv"
     persist_if_present "$host_evidence_dir/host-violations.tsv" "$output_dir/host-violations.tsv"
     persist_if_present "$provisional_daemons" "$output_dir/host-provisional-daemons.tsv"
-    persist_if_present "$temp_dir/evidence-invalid.status" \
-      "$output_dir/evidence-invalid.status"
     persist_file "$provenance_checkpoints" "$output_dir/provenance-checkpoints.tsv"
     persist_checkpoint_files "$output_dir/checkpoints"
+    receipt_evidence_dir=$output_dir
   fi
   if [[ $publication_valid != true ]]; then
     if [[ $run_result != evidence_invalid ]]; then
@@ -810,64 +880,110 @@ cleanup() {
       run_status=EVIDENCE_PUBLICATION_FAILED
       run_exit_status=1
     fi
+    echo "evidence_status=evidence_invalid reason=publication_failed" >&2
   fi
-  write_metadata
-  if [[ $publication_valid != true ]]; then
-    if [[ $run_result != evidence_invalid ]]; then
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=EVIDENCE_PUBLICATION_FAILED
-      run_exit_status=1
-    fi
+  if [[ $run_result == evidence_invalid ]]; then
     {
       printf 'schema=river-tps-evidence-status-v1\n'
       printf 'result=evidence_invalid\n'
       printf 'status=%s\n' "$run_status"
-    } >"$temp_dir/evidence-invalid.status"
-    if [[ -n ${output_dir:-} && ! -e $output_dir/evidence-invalid.status ]]; then
-      persist_if_present "$temp_dir/evidence-invalid.status" \
-        "$output_dir/evidence-invalid.status"
+    } >"$temp_dir/evidence-invalid.status" || publication_valid=false
+    if [[ $invalid_status_destination != "$temp_dir/evidence-invalid.status" ]]; then
+      persist_file "$temp_dir/evidence-invalid.status" "$invalid_status_destination" || true
     fi
-    echo "evidence_status=evidence_invalid reason=publication_failed" >&2
+  fi
+  if [[ -n $output_dir && $persistence_valid == true ]]; then
+    if rm -rf -- "$temp_dir"; then
+      temp_cleanup_valid=true
+    else
+      temp_cleanup_valid=false
+      run_result=evidence_invalid
+      run_phase=provenance
+      run_status=TEMPORARY_CLEANUP_FAILED
+      run_exit_status=1
+    fi
   fi
   if [[ $lease_acquired == true ]]; then
     if provenance_release_lease "$host_lease_dir"; then
       lease_acquired=false
+      release_outcome=released
+      released_epoch=$(date +%s)
     else
       lease_release_valid=false
+      release_outcome=failed
+      released_epoch=$(date +%s)
       run_result=evidence_invalid
       run_phase=provenance
       run_status=LEASE_RELEASE_FAILED
       run_exit_status=1
-      {
-        printf 'schema=river-tps-lease-release-v1\n'
-        printf 'status=failed\n'
-        printf 'lease=%s\n' "$host_lease_dir"
-      } >"$temp_dir/lease-release-failure.properties"
-      if [[ -n ${output_dir:-} ]]; then
-        persist_file "$temp_dir/lease-release-failure.properties" \
-          "$output_dir/lease-release-failure.properties"
-      fi
       echo "evidence_status=evidence_invalid reason=lease_release_failed" >&2
     fi
   fi
-  if [[ -n $output_dir && $persistence_valid == true && $lease_release_valid == true ]]; then
-    if ! rm -rf -- "$temp_dir"; then
-      temp_cleanup_valid=false
-      echo "evidence_status=evidence_invalid reason=temporary_cleanup_failed" >&2
-    fi
-  elif [[ -n $output_dir ]]; then
-    echo "temporary_run_dir=$temp_dir" >&2
-  elif [[ -z $output_dir && ($keep_output == true || $requested_status -ne 0 ||
-      $run_result != completed) ]]; then
-    echo "temporary_run_dir=$temp_dir" >&2
-  elif [[ -z $output_dir ]]; then
-    rm -rf -- "$temp_dir"
+  [[ -f $artifact_destination ]] && artifact_run_id=$(property run.id "$artifact_destination")
+  [[ -n $artifact_run_id ]] || artifact_run_id=unavailable
+  receipt_status=$run_status
+  if [[ $requested_status -eq 0 && $run_result == completed &&
+      $source_stable == true && $classpath_stable == true &&
+      $host_exclusion_valid == true && $publication_valid == true &&
+      $persistence_valid == true && $lease_release_valid == true &&
+      $temp_cleanup_valid == true && $release_outcome == released ]]; then
+    receipt_result=success
+    receipt_status=OK
   fi
-  if [[ $source_stable != true || $classpath_stable != true ||
+  if [[ $metadata_hash != unavailable && -d $receipt_evidence_dir ]]; then
+    receipt_parent=$(dirname -- "$terminal_receipt_destination")
+    mkdir -p "$receipt_parent" 2>/dev/null || terminal_publication_valid=false
+    receipt_staged=$(mktemp "$receipt_parent/.river-tps-terminal.XXXXXX" 2>/dev/null)
+    if [[ -n $receipt_staged ]] && provenance_write_terminal_receipt "$receipt_staged" \
+        "$receipt_result" "$receipt_status" "$evidence_run_id" "$artifact_run_id" \
+        "$metadata_hash" "${PROVENANCE_LEASE_OWNER_PID:-unavailable}" \
+        "${PROVENANCE_LEASE_OWNER_START:-unavailable}" \
+        "${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-unavailable}" "$terminal_nonce" \
+        "${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-unavailable}" "$receipt_evidence_dir" \
+        "$release_outcome" "$released_epoch" &&
+        provenance_publish_file "$receipt_staged" "$terminal_receipt_destination"; then
+      if provenance_validate_terminal_receipt "$metadata" "$artifact_destination" \
+          "$terminal_receipt_destination" "$receipt_evidence_dir" "$receipt_result"; then
+        terminal_publication_valid=true
+      fi
+    fi
+    [[ -z $receipt_staged ]] || rm -f -- "$receipt_staged"
+  fi
+  if [[ $terminal_publication_valid != true ]]; then
+    publication_valid=false
+    receipt_result=evidence_invalid
+    run_result=evidence_invalid
+    run_phase=provenance
+    run_status=TERMINAL_RECEIPT_PUBLICATION_FAILED
+    run_exit_status=1
+    echo "evidence_status=evidence_invalid reason=terminal_receipt_publication_failed" >&2
+    if [[ ! -e $invalid_status_destination ]]; then
+      receipt_staged=$(mktemp "$(dirname -- "$invalid_status_destination")/.river-tps-status.XXXXXX" 2>/dev/null)
+      if [[ -n $receipt_staged ]]; then
+        {
+          printf 'schema=river-tps-evidence-status-v1\n'
+          printf 'result=evidence_invalid\n'
+          printf 'status=TERMINAL_RECEIPT_PUBLICATION_FAILED\n'
+        } >"$receipt_staged" &&
+          provenance_publish_file "$receipt_staged" "$invalid_status_destination" || true
+        rm -f -- "$receipt_staged"
+      fi
+    fi
+  fi
+  if [[ -d $temp_dir ]]; then
+    if [[ -n $output_dir && $persistence_valid == true &&
+        $terminal_publication_valid == true ]]; then
+      rm -rf -- "$temp_dir" || temp_cleanup_valid=false
+    else
+      echo "temporary_run_dir=$temp_dir" >&2
+    fi
+  fi
+  if [[ $receipt_result != success || $terminal_publication_valid != true ||
+      $source_stable != true || $classpath_stable != true ||
       $host_exclusion_valid != true || $publication_valid != true ||
       $lease_release_valid != true || $temp_cleanup_valid != true ]]; then
     trap - EXIT
+    ((requested_status != 0)) && exit "$requested_status"
     exit 1
   fi
   return "$requested_status"
@@ -877,15 +993,16 @@ trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run
 trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run_exit_status=143; exit 143' TERM
 
 [[ -x $gradle_bin ]] || die "Gradle launcher is not executable: $gradle_bin"
-provenance_write_source_manifest "$river_root" "$source_manifest_start" ||
-  die "unable to capture source manifest"
-provenance_write_git_status "$river_root" "$git_status_start" ||
-  die "unable to capture Git status"
-git -C "$river_root" rev-parse HEAD >"$git_commit_start" ||
-  die "unable to capture Git commit"
-workspace_start_sha256=$(hash_file "$source_manifest_start")
-
-if ! provenance_acquire_lease "$host_lease_dir"; then
+root_cache_key=$(hash_text "$river_root")
+gradle_user_home=${RIVER_TPS_GRADLE_USER_HOME:-${GRADLE_USER_HOME:-${TMPDIR:-/tmp}/river-tps-gradle-user-$root_cache_key}}
+project_cache_dir=${RIVER_TPS_PROJECT_CACHE_DIR:-${TMPDIR:-/tmp}/river-tps-project-cache-$root_cache_key}
+mkdir -p "$gradle_user_home" "$project_cache_dir"
+: >"$host_evidence_dir/host-observations.tsv"
+: >"$host_evidence_dir/host-processes.tsv"
+: >"$host_evidence_dir/host-classifications.tsv"
+: >"$host_evidence_dir/host-violations.tsv"
+: >"$provisional_daemons"
+if ! provenance_acquire_lease "$host_lease_dir" "$evidence_run_id" "$terminal_nonce"; then
   host_exclusion_valid=false
   run_result=evidence_invalid
   run_phase=provenance
@@ -897,22 +1014,20 @@ if ! provenance_acquire_lease "$host_lease_dir"; then
   die "host exclusion lease acquisition failed: ${PROVENANCE_LEASE_ACQUIRE_STATUS:-unknown}"
 fi
 lease_acquired=true
-: >"$host_evidence_dir/host-observations.tsv"
-: >"$host_evidence_dir/host-processes.tsv"
-: >"$host_evidence_dir/host-classifications.tsv"
-: >"$host_evidence_dir/host-violations.tsv"
-: >"$provisional_daemons"
 printf 'prebuild\n' >"$host_monitor_phase" || die "unable to initialize host monitor phase"
-root_cache_key=$(hash_text "$river_root")
-gradle_user_home=${RIVER_TPS_GRADLE_USER_HOME:-${GRADLE_USER_HOME:-${TMPDIR:-/tmp}/river-tps-gradle-user-$root_cache_key}}
-project_cache_dir=${RIVER_TPS_PROJECT_CACHE_DIR:-${TMPDIR:-/tmp}/river-tps-project-cache-$root_cache_key}
-mkdir -p "$gradle_user_home" "$project_cache_dir"
 if ! start_host_monitor; then
   fail_host_monitor_start
   die "host exclusion monitor did not start: ${HOST_MONITOR_START_STATUS:-unknown}"
 fi
 [[ ! -s $host_evidence_dir/host-violations.tsv ]] ||
   die "shared host has an overlapping build or workload"
+provenance_write_source_manifest "$river_root" "$source_manifest_start" ||
+  die "unable to capture source manifest"
+provenance_write_git_status "$river_root" "$git_status_start" ||
+  die "unable to capture Git status"
+git -C "$river_root" rev-parse HEAD >"$git_commit_start" ||
+  die "unable to capture Git commit"
+workspace_start_sha256=$(hash_file "$source_manifest_start")
 
 build_command=( "$gradle_bin" "--gradle-user-home=$gradle_user_home"
   "--project-cache-dir=$project_cache_dir"

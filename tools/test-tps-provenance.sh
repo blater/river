@@ -28,6 +28,16 @@ assert_contains() {
   grep -F -- "$2" "$1" >/dev/null || fail "$1 does not contain $2"
 }
 
+replace_property() {
+  local file=$1 key=$2 value=$3
+  local staged="$file.replaced"
+  awk -v key="$key" -v value="$value" '
+    index($0, key "=") == 1 { print key "=" value; next }
+    { print }
+  ' "$file" >"$staged"
+  mv -- "$staged" "$file"
+}
+
 retained_temp_dir() {
   local output_dir=$1
   local descriptor
@@ -174,86 +184,159 @@ provenance_process_start() {
 }
 
 lease="$test_root/lease"
+lease_run_id=$(printf '%064d' 1)
+lease_nonce=$(printf '%064d' 2)
+write_lease_owner() {
+  local destination=$1 run_id=$2 pid=$3 started=$4 nonce=$5
+  local identity commitment
+  identity=$(provenance_owner_identity_hash "$run_id" "$pid" "$started")
+  commitment=$(provenance_terminal_commitment_hash "$run_id" "$identity" "$nonce")
+  {
+    printf 'schema=river-tps-host-lease-v2\n'
+    printf 'evidence_run_id=%s\n' "$run_id"
+    printf 'pid=%s\n' "$pid"
+    printf 'start=%s\n' "$started"
+    printf 'owner_identity_sha256=%s\n' "$identity"
+    printf 'terminal_commitment_sha256=%s\n' "$commitment"
+  } >"$destination"
+}
 provenance_process_start() {
   [[ $1 != 999 ]] && printf 'Fri Sep  4 12:00:00 2026\n'
 }
 mkdir "$lease"
-{
-  printf 'schema=river-tps-host-lease-v1\n'
-  printf 'pid=999\n'
-  printf 'start=definitely-not-this-process\n'
-  printf 'token_sha256=%s\n' \
-    "$(provenance_sha256_text '999:definitely-not-this-process')"
-} >"$lease/owner"
-provenance_acquire_lease "$lease" || fail "stale PID-reuse lease was not reclaimed"
+write_lease_owner "$lease/owner" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce" ||
+  fail "stale PID-reuse lease was not reclaimed"
 provenance_release_lease "$lease" || fail "owned lease was not released"
 mkdir "$lease"
-{
-  printf 'schema=river-tps-host-lease-v1\n'
-  printf 'pid=%s\n' "${BASHPID:-$$}"
-  printf 'start=%s\n' "$(provenance_process_start "${BASHPID:-$$}")"
-  printf 'token_sha256=%s\n' "$(provenance_sha256_text \
-    "${BASHPID:-$$}:$(provenance_process_start "${BASHPID:-$$}")")"
-} >"$lease/owner"
-if provenance_acquire_lease "$lease"; then
+write_lease_owner "$lease/owner" "$lease_run_id" "${BASHPID:-$$}" \
+  "$(provenance_process_start "${BASHPID:-$$}")" "$lease_nonce"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
   fail "live lease owner was displaced"
 fi
 rm -rf -- "$lease"
 mkdir "$lease"
-if provenance_acquire_lease "$lease"; then
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
   fail "ownerless crash-before-owner lease was reclaimed"
 fi
 rm -rf -- "$lease"
 mkdir "$lease"
 printf 'not-an-owner-record\n' >"$lease/owner"
-if provenance_acquire_lease "$lease"; then
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
   fail "malformed lease owner was reclaimed"
 fi
 rm -rf -- "$lease"
 mkdir "$lease"
-{
-  printf 'schema=river-tps-host-lease-v1\n'
-  printf 'pid=999\n'
-  printf 'start=definitely-not-this-process\n'
-  printf 'token_sha256=%064d\n' 0
-} >"$lease/owner"
-if provenance_acquire_lease "$lease"; then
+write_lease_owner "$lease/owner" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+sed -i.bak 's/^owner_identity_sha256=.*/owner_identity_sha256=0000000000000000000000000000000000000000000000000000000000000000/' "$lease/owner"
+rm -f -- "$lease/owner.bak"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
   fail "lease with mismatched owner token was reclaimed"
 fi
 rm -rf -- "$lease"
 mkdir "$lease"
-{
-  printf 'schema=river-tps-host-lease-v1\n'
-  printf 'pid=999\n'
-  printf 'start=definitely-not-this-process\n'
-  printf 'token_sha256=%s\n' \
-    "$(provenance_sha256_text '999:definitely-not-this-process')"
-  printf 'pid=998\n'
-} >"$lease/owner"
-if provenance_acquire_lease "$lease"; then
+write_lease_owner "$lease/owner" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+printf 'pid=998\n' >>"$lease/owner"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
   fail "lease with duplicate or extra owner fields was reclaimed"
 fi
 rm -rf -- "$lease"
 mkdir "$lease"
+write_lease_owner "$lease/owner.canonical" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
 {
-  printf 'pid=999\n'
-  printf 'schema=river-tps-host-lease-v1\n'
-  printf 'start=definitely-not-this-process\n'
-  printf 'token_sha256=%s\n' \
-    "$(provenance_sha256_text '999:definitely-not-this-process')"
+  sed -n '2p' "$lease/owner.canonical"
+  sed -n '1p' "$lease/owner.canonical"
+  sed -n '3,6p' "$lease/owner.canonical"
 } >"$lease/owner"
-if provenance_acquire_lease "$lease"; then
+rm -f -- "$lease/owner.canonical"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
   fail "lease with reordered canonical owner fields was reclaimed"
 fi
 rm -rf -- "$lease"
-mv() { return 1; }
-if provenance_acquire_lease "$lease"; then
+ln() { return 1; }
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
   fail "lease acquisition accepted owner-record publication failure"
 fi
-unset -f mv
+unset -f ln
 [[ -d $lease && ! -e $lease/owner ]] ||
   fail "owner publication failure did not remain fail-closed for manual recovery"
 rm -rf -- "$lease"
+pass
+
+lease_target="$test_root/lease-target"
+mkdir "$lease_target"
+ln -s "$lease_target" "$lease"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
+  fail "symlinked lease directory was reclaimed"
+fi
+[[ -L $lease && -d $lease_target ]] || fail "symlinked lease ambiguity was modified"
+rm -- "$lease"
+rmdir "$lease_target"
+
+mkdir "$lease"
+owner_target="$test_root/owner-target"
+write_lease_owner "$owner_target" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+ln -s "$owner_target" "$lease/owner"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
+  fail "symlinked lease owner was reclaimed"
+fi
+[[ -L $lease/owner && -f $owner_target ]] || fail "symlinked owner ambiguity was modified"
+rm -- "$lease/owner" "$owner_target"
+rmdir "$lease"
+
+mkdir "$lease"
+owner_target="$test_root/hardlinked-owner"
+write_lease_owner "$owner_target" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+ln "$owner_target" "$lease/owner"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
+  fail "multiply linked lease owner was reclaimed"
+fi
+[[ -f $lease/owner && -f $owner_target ]] || fail "hardlink ambiguity was modified"
+rm -- "$lease/owner" "$owner_target"
+rmdir "$lease"
+
+mkdir "$lease"
+write_lease_owner "$lease/owner" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+: >"$lease/unexpected"
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
+  fail "lease directory with an unexpected entry was reclaimed"
+fi
+[[ -f $lease/owner && -f $lease/unexpected ]] || fail "unexpected lease entries were modified"
+rm -- "$lease/owner" "$lease/unexpected"
+rmdir "$lease"
+
+mkdir "$lease"
+write_lease_owner "$lease/owner" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+rmdir() { return 1; }
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
+  fail "stale lease with failed directory removal was reclaimed"
+fi
+unset -f rmdir
+[[ -d $lease && ! -e $lease/owner ]] ||
+  fail "failed stale directory removal was not preserved for manual recovery"
+rmdir "$lease"
+
+mkdir "$lease"
+write_lease_owner "$lease/owner" "$lease_run_id" 999 definitely-not-this-process "$lease_nonce"
+lease_hash_calls="$test_root/lease-hash-calls"
+: >"$lease_hash_calls"
+provenance_sha256_file() {
+  if [[ $1 == "$lease/owner" ]]; then
+    printf x >>"$lease_hash_calls"
+    if [[ $(wc -c <"$lease_hash_calls") -gt 1 ]]; then
+      printf '%064d\n' 0
+      return
+    fi
+  fi
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+if provenance_acquire_lease "$lease" "$lease_run_id" "$lease_nonce"; then
+  fail "lease owner changed during stale verification was reclaimed"
+fi
+source "$script_dir/tps-provenance.sh"
+[[ -f $lease/owner ]] || fail "raced lease owner was removed"
+rm -- "$lease/owner"
+rmdir "$lease"
 pass
 
 provenance_process_start() {
@@ -269,7 +352,7 @@ for contender in 1 2; do
     set -euo pipefail
     source "$1"
     provenance_process_start() { printf "fixture-start-%s\n" "$1"; }
-    if provenance_acquire_lease "$2"; then
+    if provenance_acquire_lease "$2" "$6" "$7"; then
       printf "success\t%s\n" "$5" >>"$3"
       while [[ ! -e $4 ]]; do /bin/sleep 0.01; done
       provenance_release_lease "$2"
@@ -277,7 +360,8 @@ for contender in 1 2; do
       printf "failed\t%s\n" "$5" >>"$3"
     fi
   ' bash "$script_dir/tps-provenance.sh" "$race_lease" "$race_results" \
-    "$race_release" "$contender" &
+    "$race_release" "$contender" "$(printf '%064d' "$contender")" \
+    "$lease_nonce" &
 done
 for _ in {1..200}; do
   [[ $(wc -l <"$race_results") -eq 2 ]] && break
@@ -353,16 +437,33 @@ mkdir "$workload_monitor"
 : >"$workload_monitor/jcmd-calls"
 printf 'workload\n' >"$workload_monitor/phase"
 provenance_capture_processes() { printf '%s\n' ' 200    1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
-provenance_gradle_daemon_state() { printf x >>"$workload_monitor/jcmd-calls"; printf 'busy\n'; }
+provenance_process_start() { printf 'Fri Sep 4 11:00:00 2026\n'; }
+provenance_gradle_daemon_state() { printf x >>"$workload_monitor/jcmd-calls"; printf 'idle\n'; }
 sleep() { : >"$workload_monitor/stop"; }
 provenance_monitor_host "$workload_monitor" 100 "$workload_monitor/stop" 0 '' '' \
   "$workload_monitor/phase" 65536 1 "$workload_monitor/provisional.tsv"
-[[ ! -s $workload_monitor/jcmd-calls ]] || fail "daemon inspection ran during workload phase"
-assert_contains "$workload_monitor/host-classifications.tsv" 'state=not_inspected'
+[[ -s $workload_monitor/jcmd-calls ]] || fail "daemon inspection was skipped during workload phase"
+assert_contains "$workload_monitor/host-classifications.tsv" 'state=idle'
+if grep -F 'state=not_inspected' "$workload_monitor/host-classifications.tsv" >/dev/null; then
+  fail "workload daemon received blanket acceptance without inspection"
+fi
 assert_contains "$workload_monitor/host-observations.tsv" $'workload\t'
 awk -F '\t' 'NF == 6 && $4 ~ /^[0-9]+$/ {valid=1} END {exit !valid}' \
   "$workload_monitor/host-observations.tsv" ||
   fail "host observation did not retain phase and inspection cost"
+pass
+
+busy_workload_monitor="$test_root/busy-workload-monitor"
+mkdir "$busy_workload_monitor"
+: >"$busy_workload_monitor/host-observations.tsv"
+: >"$busy_workload_monitor/host-violations.tsv"
+: >"$busy_workload_monitor/provisional.tsv"
+printf 'workload\n' >"$busy_workload_monitor/phase"
+provenance_gradle_daemon_state() { printf 'busy\n'; }
+sleep() { : >"$busy_workload_monitor/stop"; }
+provenance_monitor_host "$busy_workload_monitor" 100 "$busy_workload_monitor/stop" 0 '' '' \
+  "$busy_workload_monitor/phase" 65536 1 "$busy_workload_monitor/provisional.tsv"
+assert_contains "$busy_workload_monitor/host-violations.tsv" $'violation\tbusy_gradle_daemon\t200'
 pass
 
 budget_monitor="$test_root/budget-monitor"
@@ -384,17 +485,100 @@ budget_bytes=$(provenance_evidence_bytes \
 ((budget_bytes <= 512)) || fail "retained host evidence exceeded configured byte budget"
 pass
 
+source "$script_dir/tps-provenance.sh"
 timeout_started=$SECONDS
-provenance_run_bounded 2 "$test_root/bounded-success.log" \
+provenance_run_bounded 2 1024 "$test_root/bounded-success.log" \
   sh -c 'printf "bounded-success\n"'
 assert_contains "$test_root/bounded-success.log" bounded-success
-if provenance_run_bounded 1 "$test_root/bounded-command.log" /bin/sleep 5; then
+if provenance_run_bounded 1 1024 "$test_root/bounded-command.log" /bin/sleep 5; then
   fail "bounded daemon inspection did not time out"
 else
   timeout_status=$?
 fi
 assert_equal "$timeout_status" 124
 ((SECONDS - timeout_started < 4)) || fail "bounded daemon inspection exceeded deadline"
+pass
+
+bounded_pid="$test_root/bounded-child.pid"
+if provenance_run_bounded 1 1024 "$test_root/bounded-closed-output.log" \
+    sh -c 'printf "%s\n" "$$" >"$1"; exec /bin/sleep 5' sh "$bounded_pid"; then
+  fail "child that kept running after closing output escaped the timeout"
+else
+  timeout_status=$?
+fi
+assert_equal "$timeout_status" 124
+bounded_child=$(cat "$bounded_pid")
+if kill -0 "$bounded_child" 2>/dev/null; then
+  fail "timed-out inspection child was not reaped"
+fi
+if provenance_run_bounded 2 32 "$test_root/bounded-overflow.log" \
+    sh -c 'awk "BEGIN { for (i=0; i<100; i++) printf \"x\" }"'; then
+  fail "bounded collector accepted oversized output"
+else
+  overflow_status=$?
+fi
+assert_equal "$overflow_status" 125
+[[ ! -s $test_root/bounded-overflow.log ]] || fail "oversized raw output was retained"
+pass
+
+collector_bin="$test_root/collector-bin"
+mkdir "$collector_bin"
+cat >"$collector_bin/ps" <<'EOF'
+#!/usr/bin/env bash
+if [[ ${FAKE_COLLECTOR_MODE:-} == slow ]]; then exec /bin/sleep 5; fi
+awk 'BEGIN { for (i=0; i<100; i++) printf "0123456789" }'
+EOF
+cat >"$collector_bin/jcmd" <<'EOF'
+#!/usr/bin/env bash
+case ${FAKE_COLLECTOR_MODE:-selected} in
+  slow) exec /bin/sleep 5 ;;
+  large) awk 'BEGIN { for (i=0; i<100; i++) print "unrelated.secret=low-entropy" }' ;;
+  selected)
+    printf 'unrelated.secret=do-not-retain\n'
+    printf 'gradle.user.home=/owned/home\n'
+    ;;
+esac
+EOF
+chmod +x "$collector_bin/ps" "$collector_bin/jcmd"
+if PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=large \
+    provenance_capture_processes 2 64 >"$test_root/raw-ps-overflow"; then
+  fail "oversized raw ps snapshot was accepted"
+fi
+[[ ! -s $test_root/raw-ps-overflow ]] || fail "oversized raw ps bytes were retained"
+collector_started=$SECONDS
+if PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=slow \
+    provenance_capture_processes 1 64 >"$test_root/raw-ps-timeout"; then
+  fail "raw ps snapshot escaped its time bound"
+fi
+((SECONDS - collector_started < 4)) || fail "raw ps timeout exceeded its bound"
+if PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=large \
+    provenance_gradle_daemon_home 200 2 64 >"$test_root/raw-jcmd-overflow"; then
+  fail "oversized raw jcmd output was accepted"
+fi
+[[ ! -s $test_root/raw-jcmd-overflow ]] || fail "oversized raw jcmd bytes were retained"
+PATH="$collector_bin:$PATH" FAKE_COLLECTOR_MODE=selected \
+  provenance_gradle_daemon_home 200 2 1024 >"$test_root/selected-daemon-home"
+assert_equal "$(cat "$test_root/selected-daemon-home")" /owned/home
+if grep -F 'do-not-retain' "$test_root/selected-daemon-home" >/dev/null; then
+  fail "unrelated jcmd system property was retained"
+fi
+pass
+
+timeout_monitor="$test_root/timeout-monitor"
+mkdir "$timeout_monitor"
+: >"$timeout_monitor/host-observations.tsv"
+: >"$timeout_monitor/host-violations.tsv"
+: >"$timeout_monitor/provisional.tsv"
+printf 'workload\n' >"$timeout_monitor/phase"
+provenance_capture_processes() { printf '%s\n' ' 200 1 Fri Sep  4 11:00:00 2026 java org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.0'; }
+provenance_process_start() { printf 'Fri Sep 4 11:00:00 2026\n'; }
+provenance_gradle_daemon_state() { /bin/sleep 2; printf 'idle\n'; }
+if provenance_monitor_host "$timeout_monitor" 100 "$timeout_monitor/stop" 0 '' '' \
+    "$timeout_monitor/phase" 65536 2 "$timeout_monitor/provisional.tsv" '' 1 \
+    1024 1024 1; then
+  :
+fi
+assert_contains "$timeout_monitor/host-violations.tsv" host_observation_timeout
 pass
 
 fixture="$test_root/full-run-fixture"
@@ -515,6 +699,9 @@ fi
 if [[ -n ${FAKE_METADATA_COLLISION_PATH:-} ]]; then
   printf 'external-metadata-sentinel\n' >"$FAKE_METADATA_COLLISION_PATH"
 fi
+if [[ -n ${FAKE_TERMINAL_COLLISION_PATH:-} ]]; then
+  printf 'external-terminal-sentinel\n' >"$FAKE_TERMINAL_COLLISION_PATH"
+fi
 if [[ ${FAKE_LEDGER_FAILURE:-false} == true ]]; then
   ledger="$(dirname -- "$artifact")/provenance-checkpoints.tsv"
   rm -f -- "$ledger"
@@ -578,18 +765,19 @@ PATH="$fixture/fake-bin:$PATH" TMPDIR="$lease_identity_tmp" \
   >"$test_root/lease-identity.stdout" 2>"$test_root/lease-identity.stderr"
 lease_identity_status=$?
 set -e
-assert_equal "$lease_identity_status" 1
+assert_equal "$lease_identity_status" 2
 assert_contains "$lease_identity_output/run-metadata.properties" \
-  'run.result=evidence_invalid'
+  'run.result=provisional'
 assert_contains "$lease_identity_output/run-metadata.properties" \
-  'run.status=HOST_LEASE_ACQUISITION_FAILED'
+  'run.provisional_status=HOST_LEASE_ACQUISITION_FAILED'
 assert_contains "$lease_identity_output/run-metadata.properties" \
   'provenance.host_exclusion_valid=false'
 assert_contains "$lease_identity_output/host-violations.tsv" \
   'reason=owner_identity_unavailable'
 assert_contains "$lease_identity_output/evidence-invalid.status" \
   'status=HOST_LEASE_ACQUISITION_FAILED'
-[[ -z $(find "$lease_identity_tmp" -mindepth 1 -print -quit) && \
+[[ -z $(find "$lease_identity_tmp" -mindepth 1 -maxdepth 1 \
+    -type d -name 'river-tps-test.*' -print -quit) && \
   ! -e $test_root/lease-identity-lease ]] ||
   fail "lease identity failure did not clean persisted temp state"
 pass
@@ -616,7 +804,9 @@ kill -0 "$slow_monitor_pid" 2>/dev/null ||
   fail "slow initial host observation hit the former five-second readiness race"
 : >"$slow_monitor_gate/release"
 wait "$slow_monitor_pid" || fail "slow initial host observation was rejected"
-assert_contains "$slow_monitor_output/run-metadata.properties" 'run.result=completed'
+assert_contains "$slow_monitor_output/run-metadata.properties" 'run.result=provisional'
+assert_contains "$slow_monitor_output/run-metadata.properties.terminal-receipt" \
+  'terminal.result=success'
 assert_contains "$slow_monitor_output/run-metadata.properties" \
   'provenance.host_exclusion_valid=true'
 pass
@@ -636,11 +826,11 @@ PATH="$fixture/fake-bin:$PATH" TMPDIR="$monitor_start_tmp" \
   >"$test_root/monitor-start.stdout" 2>"$test_root/monitor-start.stderr"
 monitor_start_status=$?
 set -e
-assert_equal "$monitor_start_status" 1
+assert_equal "$monitor_start_status" 2
 assert_contains "$monitor_start_output/run-metadata.properties" \
-  'run.result=evidence_invalid'
+  'run.result=provisional'
 assert_contains "$monitor_start_output/run-metadata.properties" \
-  'run.status=HOST_MONITOR_START_FAILED'
+  'run.provisional_status=HOST_MONITOR_START_FAILED'
 assert_contains "$monitor_start_output/run-metadata.properties" \
   'provenance.host_exclusion_valid=false'
 assert_contains "$monitor_start_output/host-violations.tsv" \
@@ -649,6 +839,8 @@ assert_contains "$monitor_start_output/host-violations.tsv" \
   'reason=initial_observation_failed'
 assert_contains "$monitor_start_output/evidence-invalid.status" \
   'status=HOST_MONITOR_START_FAILED'
+assert_contains "$monitor_start_output/run-metadata.properties.terminal-receipt" \
+  'terminal.result=evidence_invalid'
 [[ ! -e $monitor_start_output/tpcc-acceptance.properties ]] ||
   fail "monitor startup failure published an acceptance artifact"
 [[ -z $(find "$monitor_start_tmp" -mindepth 1 -maxdepth 1 \
@@ -668,14 +860,16 @@ PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   "$fixture/tools/tps-test.sh" --output-dir="$full_output" \
   --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null
 assert_contains "$fixture/build/classes/Main.class" fresh-class-bytes
-assert_contains "$full_output/run-metadata.properties" 'run.result=completed'
+assert_contains "$full_output/run-metadata.properties" 'run.result=provisional'
+assert_contains "$full_output/run-metadata.properties" 'run.status=TERMINAL_RECEIPT_REQUIRED'
+assert_contains "$full_output/run-metadata.properties.terminal-receipt" 'terminal.result=success'
 assert_contains "$full_output/run-metadata.properties" 'build.exit_status=0'
 gradle_manifest_hash=$(sed -n 's/^build.gradle_runtime_manifest_sha256=//p' \
   "$full_output/run-metadata.properties")
 assert_equal "$(provenance_sha256_file "$full_output/gradle-runtime-manifest.tsv")" \
   "$gradle_manifest_hash"
-provisional_hash=$(sed -n 's/^provenance.host_provisional_daemons_sha256=//p' \
-  "$full_output/run-metadata.properties")
+provisional_hash=$(sed -n 's/^host.provisional_daemons_sha256=//p' \
+  "$full_output/run-metadata.properties.terminal-receipt")
 assert_equal "$(provenance_sha256_file "$full_output/host-provisional-daemons.tsv")" \
   "$provisional_hash"
 assert_contains "$full_output/run-metadata.properties" 'provenance.source_stable=true'
@@ -686,6 +880,33 @@ assert_contains "$full_output/run-metadata.properties" \
 assert_contains "$full_output/run-metadata.properties" 'provenance.publication_valid=true'
 assert_contains "$full_output/run-metadata.properties" \
   'configuration.operator_no_uncoordinated_work_attestation=true'
+provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
+  "$full_output/tpcc-acceptance.properties" \
+  "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success ||
+  fail "shared validator rejected a complete terminal success receipt"
+cp "$full_output/run-metadata.properties.terminal-receipt" "$test_root/terminal.saved"
+printf 'unexpected=duplicate\n' >>"$full_output/run-metadata.properties.terminal-receipt"
+if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
+    "$full_output/tpcc-acceptance.properties" \
+    "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success; then
+  fail "noncanonical terminal receipt was accepted"
+fi
+mv -- "$test_root/terminal.saved" "$full_output/run-metadata.properties.terminal-receipt"
+cp "$full_output/run-metadata.properties" "$test_root/metadata.saved"
+replace_property "$full_output/run-metadata.properties" evidence.run_id "$(printf '%064d' 0)"
+if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
+    "$full_output/tpcc-acceptance.properties" \
+    "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success; then
+  fail "metadata mutation after terminal publication was accepted"
+fi
+mv -- "$test_root/metadata.saved" "$full_output/run-metadata.properties"
+mv -- "$full_output/run-metadata.properties.terminal-receipt" "$test_root/terminal.saved"
+if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
+    "$full_output/tpcc-acceptance.properties" \
+    "$full_output/run-metadata.properties.terminal-receipt" "$full_output" success; then
+  fail "missing terminal receipt was accepted"
+fi
+mv -- "$test_root/terminal.saved" "$full_output/run-metadata.properties.terminal-receipt"
 full_temp_dir=$(retained_temp_dir "$full_output")
 [[ ! -e $full_temp_dir ]] || fail "successful persisted run retained owned temporary database tree"
 
@@ -711,6 +932,22 @@ if PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   fail "full-run evidence directory was overwritten"
 fi
 assert_equal "$(provenance_sha256_file "$full_output/run-metadata.properties")" "$publication_hash_before"
+pass
+
+explicit_output="$test_root/explicit-output"
+explicit_metadata="$test_root/explicit-metadata.properties"
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/explicit-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$explicit_output" \
+  --metadata="$explicit_metadata" --warmup-seconds=1 --measured-seconds=1 \
+  --terminals=1 >/dev/null
+[[ -f $explicit_metadata.terminal-receipt ]] ||
+  fail "explicit metadata path did not receive an adjacent terminal receipt"
+provenance_validate_terminal_receipt "$explicit_metadata" \
+  "$explicit_output/tpcc-acceptance.properties" "$explicit_metadata.terminal-receipt" \
+  "$explicit_output" success || fail "explicit metadata terminal receipt was invalid"
 pass
 
 source_mutation_output="$test_root/source-mutation-output"
@@ -771,7 +1008,7 @@ failed_status=$?
 set -e
 assert_equal "$failed_status" 17
 assert_contains "$failed_output/build.log" 'fake Gradle declared failure'
-assert_contains "$failed_output/run-metadata.properties" 'run.result=build_failed'
+assert_contains "$failed_output/run-metadata.properties" 'run.provisional_result=build_failed'
 assert_contains "$failed_output/run-metadata.properties" 'build.exit_status=17'
 failed_temp_dir=$(retained_temp_dir "$failed_output")
 [[ ! -e $failed_temp_dir ]] || fail "failed persisted run retained owned temporary database tree"
@@ -798,12 +1035,45 @@ wait "$interrupted_pid"
 interrupted_status=$?
 set -e
 assert_equal "$interrupted_status" 143
-assert_contains "$interrupted_output/run-metadata.properties" 'run.result=interrupted'
-assert_contains "$interrupted_output/run-metadata.properties" 'run.status=INTERRUPTED'
+assert_contains "$interrupted_output/run-metadata.properties" 'run.provisional_result=interrupted'
+assert_contains "$interrupted_output/run-metadata.properties" 'run.provisional_status=INTERRUPTED'
+provenance_validate_terminal_receipt "$interrupted_output/run-metadata.properties" \
+  "$interrupted_output/tpcc-acceptance.properties" \
+  "$interrupted_output/run-metadata.properties.terminal-receipt" \
+  "$interrupted_output" evidence_invalid ||
+  fail "interruption did not publish a valid terminal failure receipt"
 [[ -f $interrupted_output/build.log && -f $interrupted_output/provenance-checkpoints.tsv ]] ||
   fail "interrupted evidence was not preserved"
 interrupted_temp_dir=$(retained_temp_dir "$interrupted_output")
 [[ ! -e $interrupted_temp_dir ]] || fail "interrupted persisted run retained owned temporary database tree"
+pass
+
+terminal_collision_output="$test_root/terminal-collision-output"
+terminal_collision_path="$terminal_collision_output/run-metadata.properties.terminal-receipt"
+mkdir "$terminal_collision_output"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_TERMINAL_COLLISION_PATH="$terminal_collision_path" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$test_root/terminal-collision-lease" \
+  "$fixture/tools/tps-test.sh" --output-dir="$terminal_collision_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/terminal-collision.stdout" 2>"$test_root/terminal-collision.stderr"
+terminal_collision_status=$?
+set -e
+assert_equal "$terminal_collision_status" 1
+assert_contains "$terminal_collision_path" external-terminal-sentinel
+assert_contains "$terminal_collision_output/evidence-invalid.status" \
+  'status=TERMINAL_RECEIPT_PUBLICATION_FAILED'
+assert_contains "$test_root/terminal-collision.stderr" \
+  'reason=terminal_receipt_publication_failed'
+if provenance_validate_terminal_receipt \
+    "$terminal_collision_output/run-metadata.properties" \
+    "$terminal_collision_output/tpcc-acceptance.properties" \
+    "$terminal_collision_path" "$terminal_collision_output" success; then
+  fail "terminal publication collision was accepted as successful evidence"
+fi
 pass
 
 artifact_collision_output="$test_root/artifact-collision-output"
@@ -823,7 +1093,7 @@ assert_equal "$artifact_collision_status" 1
 assert_contains "$artifact_collision_output/tpcc-acceptance.properties" \
   external-artifact-sentinel
 assert_contains "$artifact_collision_output/run-metadata.properties" \
-  'run.result=evidence_invalid'
+  'run.provisional_result=evidence_invalid'
 assert_contains "$artifact_collision_output/run-metadata.properties" \
   'provenance.publication_valid=false'
 assert_contains "$artifact_collision_output/run-metadata.properties" \
@@ -845,7 +1115,7 @@ set -e
 assert_equal "$persist_collision_status" 1
 assert_contains "$persist_collision_output/build.log" external-build-log-sentinel
 assert_contains "$persist_collision_output/run-metadata.properties" \
-  'run.status=EVIDENCE_PUBLICATION_FAILED'
+  'run.provisional_status=EVIDENCE_PUBLICATION_FAILED'
 assert_contains "$persist_collision_output/run-metadata.properties" \
   'provenance.publication_valid=false'
 pass
@@ -865,7 +1135,9 @@ set -e
 assert_equal "$checkpoint_collision_status" 1
 assert_contains "$checkpoint_collision_output/checkpoints" external-checkpoint-sentinel
 assert_contains "$checkpoint_collision_output/run-metadata.properties" \
-  'run.result=evidence_invalid'
+  'run.provisional_result=completed'
+assert_contains "$checkpoint_collision_output/run-metadata.properties.terminal-receipt" \
+  'terminal.result=evidence_invalid'
 pass
 
 ledger_failure_output="$test_root/ledger-failure-output"
@@ -880,7 +1152,7 @@ ledger_failure_status=$?
 set -e
 assert_equal "$ledger_failure_status" 1
 assert_contains "$ledger_failure_output/run-metadata.properties" \
-  'run.result=evidence_invalid'
+  'run.provisional_result=evidence_invalid'
 assert_contains "$ledger_failure_output/run-metadata.properties" \
   'provenance.publication_valid=false'
 pass
@@ -924,13 +1196,18 @@ PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
 lease_release_status=$?
 set -e
 assert_equal "$lease_release_status" 1
-assert_contains "$lease_release_output/lease-release-failure.properties" 'status=failed'
+assert_contains "$lease_release_output/run-metadata.properties.terminal-receipt" \
+  'terminal.result=evidence_invalid'
+assert_contains "$lease_release_output/run-metadata.properties.terminal-receipt" \
+  'terminal.status=LEASE_RELEASE_FAILED'
+assert_contains "$lease_release_output/run-metadata.properties.terminal-receipt" \
+  'lease.release_outcome=failed'
 assert_contains "$test_root/lease-release.stderr" \
   'evidence_status=evidence_invalid reason=lease_release_failed'
 lease_release_temp=$(retained_temp_dir "$lease_release_output")
-[[ -d $lease_release_temp && -d $lease_release_dir ]] ||
-  fail "lease-release failure did not retain diagnostics and fail-closed lease"
-rm -rf -- "$lease_release_dir" "$lease_release_temp"
+[[ ! -d $lease_release_temp && -d $lease_release_dir ]] ||
+  fail "lease-release failure did not preserve the fail-closed lease after evidence persistence"
+rm -rf -- "$lease_release_dir"
 pass
 
 grep -F 'writeRiverTpsRuntimeClasspath' "$script_dir/../river-bench/build.gradle.kts" >/dev/null ||
