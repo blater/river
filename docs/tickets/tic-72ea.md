@@ -1,10 +1,12 @@
 ---
 id: tic-72ea
-status: open
+status: in_progress
 type: story
 assignee: blater
 parent: tic-bf0b
 delivery: code
+base-commit: 56bc2ecff4d3967e1c6a51ba5df08205776c13d4
+branch: ticket/tic-72ea-audit-durability
 tags:
     - riverd
     - security
