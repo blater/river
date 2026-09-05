@@ -1,6 +1,6 @@
 # `tic-0636` build and cooperative host-exclusion provenance
 
-Status: **historical candidates rejected through `f07b73a401f26473eb179616fc4eefdb238f5558`; replacement independent review pending**
+Status: **accepted at `7e10cde09293de9f9ace7ef8ed63be3cc4e7b677`**
 
 This record validates the provenance mechanism on one minimal River-specific
 diagnostic. It is not a performance comparison, an Alpha3 result, or closure of
@@ -202,3 +202,45 @@ remains: the lease proves exclusion only for participating workflows, and
 bounded sampling can reject observed nonparticipants but cannot prove absence
 between samples. Promotion still requires the operator no-uncoordinated-work
 attestation.
+
+## Accepted v2 candidate and clean diagnostic
+
+Independent operations/security review accepted exact pushed candidate
+`7e10cde09293de9f9ace7ef8ed63be3cc4e7b677`. The final release path snapshots
+the canonical lease directory identity, owner identity, and owner bytes before
+parsing; compares the parsed owner identity and terminal commitment with the
+exported expected values; and revalidates the original object and bytes
+immediately before unlink. The deterministic post-parse replacement fixture
+preserves the replacement and lease and produces a shared-validator-accepted
+`LEASE_RELEASE_FAILED` receipt. Bash syntax, diff checks, 41 provenance groups,
+and 7 v2 P4 consumer groups passed.
+
+One clean diagnostic was then run from that exact commit with isolated Gradle
+caches, `profile=tiny`, `mix=payment`, one terminal, one second each of warmup
+and measurement, maximum three attempts, seed 42, and the explicit operator
+no-uncoordinated-work attestation. Its immutable evidence is retained at
+`/private/tmp/river-tic-0636-clean-7e10cde-20260905T1915Z`. The command exited
+zero after 134 measured commits, zero retries or errors, reconciled deadlocks,
+valid performance capture, and terminal counts of zero active transactions,
+locks, and waiters. The metadata records clean and stable Git source, Java
+25.0.4, Gradle 9.7.0, and an empty host-violation ledger.
+
+| Retained item | SHA-256 |
+| --- | --- |
+| Metadata | `1d2cac61fc23a09d73124455e678023d38da57c8e5f407af36fcf7511c4080ac` |
+| Terminal receipt | `8331e9dcf0a170037604fc9703ef222cb48540a12df8da8b78daaba69d37f6a8` |
+| Acceptance artifact | `dab071290233b89a88b1b0db289068a4226a1a472f0c02d12d8cc23da7014f0e` |
+
+The shared validator independently accepted the adjacent
+`river-tps-terminal-v1` success receipt. It binds the exact metadata and
+artifact run identities, owner identity and nonce commitment, final host and
+checkpoint ledgers, and `lease.release_outcome=released`. The base metadata
+correctly remains provisional and terminal-pending; only the receipt authorizes
+consumption.
+
+This is mechanism acceptance evidence, not a throughput claim. The run is a
+short River-specific diagnostic and must not be used as a P0 matrix result,
+cross-database comparison, or proof that bounded observation saw an
+uncoordinated process that started and exited between samples. The cooperative
+lease and operator attestation retain exactly the limitation stated in the
+ticket contract.
