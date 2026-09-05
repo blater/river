@@ -1,6 +1,6 @@
 # `tic-0636` build and cooperative host-exclusion provenance
 
-Status: **historical candidate rejected at `0d50ada30379f3829d35c37196dd234757588401`; replacement evidence pending**
+Status: **historical candidates rejected through `f07b73a401f26473eb179616fc4eefdb238f5558`; replacement independent review pending**
 
 This record validates the provenance mechanism on one minimal River-specific
 diagnostic. It is not a performance comparison, an Alpha3 result, or closure of
@@ -120,3 +120,82 @@ evidence under the corrected cooperative contract. In particular, the old
 command did not record the now-required operator no-uncoordinated-work
 attestation. No result in this section may be used to close `tic-0636` or
 unblock `tic-1dda`.
+
+## 2026-09-05 v2 terminal-contract correction
+
+Independent cumulative review also rejected
+`f07b73a401f26473eb179616fc4eefdb238f5558`. Although that candidate improved
+the cooperative lease, bounded retained observations, exact daemon PID
+validation, and cleanup behavior, it still lacked a terminal record that bound
+the published bytes to successful lease release. Its development smokes remain
+unchanged and rejected; they must not be reinterpreted under the replacement
+contract.
+
+The replacement code is split into two reviewable checkpoints:
+
+- `fc19439b8d0eb875c90dea68d4e1825db220a0b5` owns the v2 lease, bounded raw
+  collectors, full lifecycle, provisional metadata, terminal receipt, shared
+  validator, and deterministic fake coverage;
+- `80eaa2759dfc7f238a1775da913e3cf175e1360e` replaces the River-owned
+  `tools/tps-p4.sh` v1 consumer with the same v2 receipt validator and adds its
+  synthetic suite. It retains only a partial River point calculation and makes
+  no normative P4 or Alpha3 claim.
+
+The corrected sequence is explicit. The tool acquires a canonical v2 lease,
+completes a bounded prebuild observation, starts the monitor, and only then
+captures source state. Background observation remains active through build,
+workload, source/classpath checkpoints, evidence preparation, and provisional
+metadata. The writer is then stopped and drained; one final synchronous
+observation seals the ledger immediately before its immutable publication under
+the still-held lease. Release removes only the revalidated
+single-link owner and empty lease directory. The subsequent receipt publication
+is intentionally outside the exclusion interval. Base metadata always says
+`run.result=provisional`, `run.phase=terminal_pending`, and
+`run.status=TERMINAL_RECEIPT_REQUIRED`; it is never an authoritative
+`completed/OK` result.
+
+A no-replace `river-tps-terminal-v1` success receipt is the sole acceptance
+authority. The shared validator checks its canonical field order and exact
+bindings to metadata bytes, evidence and artifact run IDs, owner PID/start and
+identity hash, nonce commitment, all final host-ledger hashes, checkpoint-ledger
+hash, and `lease.release_outcome=released`. Missing/colliding records and any
+mutation or failure receipt are invalid. Explicit `--metadata` paths receive the
+same adjacent receipt. Publication faults produce a nonzero result and immutable
+invalid-status sidecar; a collision is never overwritten.
+
+Stale recovery now rejects ownerless, malformed, reordered, bad-hash, symlinked,
+multiply linked, or extra-entry leases. A valid dead owner is rechecked for
+directory identity, owner identity, and bytes; recovery unlinks only that owner
+and calls `rmdir`. A collision/removal race preserves the ambiguous remainder
+for manual recovery. There is no recursive delete or rename in stale recovery.
+
+Raw `ps` and `jcmd` collection is transient and subject to separate time and
+aggregate stdout/stderr byte bounds. The monitor also has a per-observation
+deadline and a retained-ledger byte budget. Only normalized PID/PPID/start/rule
+and selected daemon-state/home-match facts are persisted; raw arguments,
+argument-derived hashes, and unrelated Java system properties are not. Every
+phase, including measured workload and publication, inspects an observed
+daemon rather than granting phase-based blanket acceptance. Repeated bounded
+inspection is retained because an existing idle daemon can become busy without
+changing PID/start; the cost is recorded per observation.
+
+Static verification on the code checkpoints passed:
+
+- Bash parsing for `tps-provenance.sh`, `tps-test.sh`, `tps-p4.sh`, and both
+  test scripts;
+- `tools/test-tps-provenance.sh`: 39 boundary groups, including simultaneous
+  lease acquisition, stale-reclaim collision/refusal, source/classpath drift,
+  process identity races, raw and retained bounds, interruption, exact explicit
+  metadata receipt, terminal mutation/missing/collision, publication faults,
+  replay, and temporary-tree cleanup;
+- `tools/test-tps-p4.sh`: 7 v2 consumer groups, including valid calculation,
+  result non-overwrite, and rejection of v1, missing, mutated, failure, and
+  noncanonical terminal evidence.
+
+No Gradle task, server, profiler, database workload, or replacement smoke was
+run for this correction. This is a static candidate for the same independent
+operations/security reviewer, not closure evidence. The cooperative limitation
+remains: the lease proves exclusion only for participating workflows, and
+bounded sampling can reject observed nonparticipants but cannot prove absence
+between samples. Promotion still requires the operator no-uncoordinated-work
+attestation.

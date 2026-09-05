@@ -315,19 +315,30 @@ Kanban's Now column. The full `tic-1dda` revalidation remains immediately Next.
   observations that detect River builds, tests, profiles, clients, servers,
   harnesses, and database workloads. Fail closed rather than silently
   accepting an observed overlap. Preserve failed and interrupted evidence and
-  never expose secrets. The lease proves full-interval exclusion among
-  participating River workflows. Observation rejects nonparticipants that are
-  seen, but cannot prove absence between samples, so promotion also requires
-  an operator no-uncoordinated-work attestation. Idle Gradle daemons are
-  allowed.
+  never expose secrets. Acquire the lease and start bounded observation before
+  source capture, retain background observation through provisional metadata,
+  then drain it and make one final synchronous observation before sealing the
+  immutable ledger. Keep the lease through every evidence publication. Base
+  metadata is explicitly provisional.
+  After verified release, require the canonical no-replace success receipt that
+  binds exact metadata bytes, run/artifact identity, owner commitment, final
+  host/checkpoint ledgers, and the release outcome. The receipt publication is
+  outside the exclusion interval; a missing, failure, malformed, mutated, or
+  colliding receipt invalidates the run. River-owned consumers reject v1 and
+  share one v2 receipt validator. The lease proves full-interval exclusion
+  among participating River workflows. Observation rejects nonparticipants
+  that are seen, but cannot prove absence between samples, so promotion also
+  requires an operator no-uncoordinated-work attestation. Idle Gradle daemons
+  are allowed only after bounded identity/state inspection.
 - Acceptance: focused tests cover clean/current build, stale classes, source
   mutation, classpath mutation, missing/hash-mismatched entry, failed build,
   active Gradle daemon/build, River workload/harness/profile overlap, process
   race, interrupted run, and immutable non-overwrite publication. A retained
   diagnostic independently reproduces every build/classpath/source hash,
   proves the cooperative lease exclusion remained valid for its full interval,
-  retains bounded process observations, and includes the operator attestation
-  without claiming unconditional host-wide exclusion.
+  retains time- and byte-bounded process/daemon observations, includes the
+  operator attestation, and has a shared-validator-accepted terminal success
+  receipt without claiming unconditional host-wide exclusion.
 
 After both prerequisites close, rerun the correlated mixed-isolation
 reproducer plus all serializable 50/50 and standard cells with a reviewed

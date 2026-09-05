@@ -35,9 +35,22 @@ samples. Each promoted interval therefore requires an operator attestation
 that no uncoordinated River build, test, profile, client/server, harness, or
 database workload ran on the host. Idle Gradle daemons are allowed.
 
+For every matrix cell, the lease and bounded observations must begin before
+source capture. Background observations continue through provisional metadata;
+a final synchronous observation seals the ledger immediately before its
+immutable publication under the still-held lease. The lease remains valid
+through all evidence publication. Base run metadata is provisional, not a completion result. The
+only consumable success is a canonical no-replace terminal receipt, published
+after verified lease release, that binds the run/artifact identity, exact
+metadata bytes, lease owner commitment, final host/checkpoint ledgers, and
+release outcome. The receipt step is outside the exclusion interval. Missing,
+failure, malformed, mutated, or colliding receipts invalidate the cell. All
+River-owned consumers, including `tools/tps-p4.sh`, require v2 evidence and the
+shared receipt validator; v1 evidence has no compatibility path.
+
 ## Acceptance Criteria
 
-Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references, source tag, cooperative lease record, bounded host observations, and operator no-uncoordinated-work attestation are recorded. Evidence does not claim that periodic observation proves unconditional host-wide absence between samples.
+Every run has matching effective isolation, zero unexplained outcomes and cleanup residue, passing invariants, reconciled victim/retry accounting, and a statistically stated scaling conclusion; evidence references, source tag, cooperative lease record, bounded host observations, operator no-uncoordinated-work attestation, and a shared-validator-accepted v2 success receipt are recorded. Every raw collector and retained ledger remains within its declared time/byte budget. Evidence does not claim that periodic observation proves unconditional host-wide absence between samples.
 
 ## Notes
 
