@@ -12,7 +12,6 @@ final class SqlUnionExecution {
   private final SqlBlockRowStore output;
   private final SqlUnionStagePlan stagePlan = new SqlUnionStagePlan();
 
-  SqlUnionExecution() { this(new SqlSessionShapeBudget(null)); }
   SqlUnionExecution(SqlSessionShapeBudget budget) {
     schema = new SqlUnionSchema(budget);
     nodes = new SqlUnionNodeExecution(budget);
