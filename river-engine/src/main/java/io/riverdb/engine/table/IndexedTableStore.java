@@ -104,7 +104,8 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   }
 
   StatusCode transactionAdmissionStatus() {
-    return durableVersions.transactionAdmissionStatus();
+    StatusCode status = admission();
+    return status.isOk() ? durableVersions.transactionAdmissionStatus() : status;
   }
 
   StatusCode admitDurableVersionOperations(int required) {
