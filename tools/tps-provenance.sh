@@ -478,15 +478,15 @@ provenance_release_lease() {
   local owner_file="$lease_dir/owner"
   local owner_record run_id pid started identity commitment directory_before owner_before owner_hash
   provenance_lease_exact_owner "$lease_dir" || return 1
+  directory_before=$(provenance_path_identity "$lease_dir") || return 1
+  owner_before=$(provenance_path_identity "$owner_file") || return 1
+  owner_hash=$(provenance_sha256_file "$owner_file") || return 1
   owner_record=$(provenance_read_lease_owner "$owner_file") || return 1
   IFS=$'\t' read -r run_id pid started identity commitment <<<"$owner_record"
   [[ -n ${PROVENANCE_LEASE_OWNER_IDENTITY_SHA256:-} &&
       -n ${PROVENANCE_TERMINAL_COMMITMENT_SHA256:-} &&
       $identity == "$PROVENANCE_LEASE_OWNER_IDENTITY_SHA256" &&
       $commitment == "$PROVENANCE_TERMINAL_COMMITMENT_SHA256" ]] || return 1
-  directory_before=$(provenance_path_identity "$lease_dir") || return 1
-  owner_before=$(provenance_path_identity "$owner_file") || return 1
-  owner_hash=$(provenance_sha256_file "$owner_file") || return 1
   provenance_lease_exact_owner "$lease_dir" &&
     [[ $(provenance_path_identity "$lease_dir") == "$directory_before" &&
       $(provenance_path_identity "$owner_file") == "$owner_before" &&

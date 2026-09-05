@@ -609,6 +609,27 @@ else
   printf '1 0 Fri Sep  4 00:00:00 2026 launchd\n'
 fi
 EOF
+cat >"$fixture/fake-bin/sed" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+/usr/bin/sed "$@"
+status=$?
+if [[ $status -eq 0 && -n ${FAKE_RELEASE_OWNER_RACE:-} &&
+    ${1:-} == -n && ${2:-} == 6p && ${3:-} == "$FAKE_RELEASE_OWNER_RACE/owner" &&
+    ! -e ${FAKE_RELEASE_OWNER_RACE}.race-complete ]]; then
+  /usr/bin/awk '
+    /^terminal_commitment_sha256=/ {
+      print "terminal_commitment_sha256=0000000000000000000000000000000000000000000000000000000000000000"
+      next
+    }
+    { print }
+  ' "$FAKE_RELEASE_OWNER_RACE/owner" >"$FAKE_RELEASE_OWNER_RACE/owner.replacement"
+  /bin/mv -- "$FAKE_RELEASE_OWNER_RACE/owner.replacement" \
+    "$FAKE_RELEASE_OWNER_RACE/owner"
+  : >"${FAKE_RELEASE_OWNER_RACE}.race-complete"
+fi
+exit "$status"
+EOF
 cat >"$fixture/fake-gradle" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -748,7 +769,8 @@ printf 'completed_transactions=1\n'
 printf 'in_flight_at_cutoff=0\n'
 printf 'transaction=new-order committed=1 retry_exhausted=0 failed=0\n'
 EOF
-chmod +x "$fixture/fake-bin/ps" "$fixture/fake-gradle" "$fixture/fake-java" \
+chmod +x "$fixture/fake-bin/ps" "$fixture/fake-bin/sed" \
+  "$fixture/fake-gradle" "$fixture/fake-java" \
   "$fixture/tools/tps-test.sh" "$fixture/tools/tps-provenance.sh"
 git -C "$fixture" init -q
 git -C "$fixture" config user.name test
@@ -1262,6 +1284,43 @@ provenance_validate_terminal_receipt \
   "$commitment_release_output" evidence_invalid ||
   fail "commitment-only mismatch did not produce a bound failure receipt"
 rm -rf -- "$commitment_release_dir"
+pass
+
+release_race_output="$test_root/release-race-output"
+release_race_dir="$test_root/release-race-lease"
+set +e
+PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
+  FAKE_RELEASE_OWNER_RACE="$release_race_dir" \
+  RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true \
+  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
+  RIVER_TPS_HOST_LEASE_DIR="$release_race_dir" \
+  "$fixture/tools/tps-test.sh" --output-dir="$release_race_output" \
+  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
+  >"$test_root/release-race.stdout" 2>"$test_root/release-race.stderr"
+release_race_status=$?
+set -e
+assert_equal "$release_race_status" 1
+[[ -d $release_race_dir && -f $release_race_dir/owner &&
+    -f ${release_race_dir}.race-complete ]] ||
+  fail "post-parse owner replacement was not preserved with the lease"
+assert_contains "$release_race_dir/owner" \
+  'terminal_commitment_sha256=0000000000000000000000000000000000000000000000000000000000000000'
+provenance_read_lease_owner "$release_race_dir/owner" >/dev/null ||
+  fail "post-parse replacement was not a canonical owner record"
+assert_contains "$release_race_output/run-metadata.properties.terminal-receipt" \
+  'terminal.result=evidence_invalid'
+assert_contains "$release_race_output/run-metadata.properties.terminal-receipt" \
+  'terminal.status=LEASE_RELEASE_FAILED'
+assert_contains "$release_race_output/run-metadata.properties.terminal-receipt" \
+  'lease.release_outcome=failed'
+provenance_validate_terminal_receipt \
+  "$release_race_output/run-metadata.properties" \
+  "$release_race_output/tpcc-acceptance.properties" \
+  "$release_race_output/run-metadata.properties.terminal-receipt" \
+  "$release_race_output" evidence_invalid ||
+  fail "post-parse replacement did not produce a bound failure receipt"
+rm -rf -- "$release_race_dir"
+rm -- "${release_race_dir}.race-complete"
 pass
 
 grep -F 'writeRiverTpsRuntimeClasspath' "$script_dir/../river-bench/build.gradle.kts" >/dev/null ||
