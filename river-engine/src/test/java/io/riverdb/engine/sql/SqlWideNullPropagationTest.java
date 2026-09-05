@@ -82,7 +82,8 @@ final class SqlWideNullPropagationTest {
     int descriptor = SqlTypeDescriptor.decimal(22, 18);
     assertEquals(StatusCode.OK, workspace.begin(
         new TableDefinition(), false, 1, false, false, false, descriptor));
-    for (int row = 0; row < 1_024; row++) {
+    int residentRows = workspace.configuredRunRows();
+    for (int row = 0; row < residentRows; row++) {
       projected.setDecimal128(0, 0, row);
       assertEquals(StatusCode.OK, workspace.append(
           0, row, false, row + 1L,
@@ -93,6 +94,7 @@ final class SqlWideNullPropagationTest {
         -1, -1, false, 2_000,
         projected.highs(), projected.values(), projected, null, projected));
     assertEquals(StatusCode.OK, workspace.finish());
+    assertTrue(workspace.isSpilled());
     long[] highs = new long[1];
     long[] values = new long[1];
     assertEquals(StatusCode.OK, workspace.nextSpilled(1, highs, values));
