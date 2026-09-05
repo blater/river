@@ -353,7 +353,8 @@ else
 fi
 result_file="$calculate_dir/p4-result.properties"
 [[ ! -e $result_file ]] || fail "refusing to overwrite $result_file"
-staged="$result_file.staged.$$"
+staged=$(mktemp "$calculate_dir/.river-tps-p4.XXXXXX") ||
+  fail "unable to stage the partial point result"
 {
   printf 'tool.schema=river-tps-p4-v2\n'
   printf 'p4.scope=partial-river-point-calculator\n'

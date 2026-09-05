@@ -158,6 +158,11 @@ if provenance_validate_gradle_daemons "$own_monitor/foreign-descriptor" \
     "$own_monitor/provisional.tsv"; then
   fail "different Gradle daemon was accepted by home and marker alone"
 fi
+printf 'gradle.process.pid=200\ngradle.process.pid=201\n' >"$own_monitor/duplicate-descriptor"
+if provenance_validate_gradle_daemons "$own_monitor/duplicate-descriptor" \
+    "$own_monitor/provisional.tsv"; then
+  fail "duplicate Gradle-owned daemon identity was accepted"
+fi
 [[ -z $(find "$own_monitor" \( -name 'host-processes.0*' -o \
   -name 'host-classification.0*' \) -print -quit) ]] ||
   fail "per-sample host evidence was retained without a bound"

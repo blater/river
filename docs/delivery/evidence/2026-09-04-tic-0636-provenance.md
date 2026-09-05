@@ -143,11 +143,14 @@ The replacement code is split into two reviewable checkpoints:
 
 The corrected sequence is explicit. The tool acquires a canonical v2 lease,
 completes a bounded prebuild observation, starts the monitor, and only then
-captures source state. Background observation remains active through build,
-workload, source/classpath checkpoints, evidence preparation, and provisional
-metadata. The writer is then stopped and drained; one final synchronous
-observation seals the ledger immediately before its immutable publication under
-the still-held lease. Release removes only the revalidated
+captures source state. At the build boundary the writer is stopped and drained
+so every provisionally allowed busy daemon can be validated against the exact
+Gradle descriptor PID; a new synchronous observation and background writer
+begin before the next source checkpoint. Observation then spans workload,
+source/classpath checkpoints, evidence preparation, and provisional metadata.
+The writer is stopped and drained once more; one final synchronous observation
+seals the ledger immediately before its immutable publication under the
+still-held lease. Release removes only the revalidated
 single-link owner and empty lease directory. The subsequent receipt publication
 is intentionally outside the exclusion interval. Base metadata always says
 `run.result=provisional`, `run.phase=terminal_pending`, and

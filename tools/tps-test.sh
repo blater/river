@@ -410,7 +410,6 @@ host_monitor_ready="$temp_dir/host-monitor.ready"
 owned_build_marker="$temp_dir/owned-gradle-build.active"
 provisional_daemons="$host_evidence_dir/host-provisional-daemons.tsv"
 provenance_checkpoints="$temp_dir/provenance-checkpoints.tsv"
-terminal_receipt_staged="$temp_dir/run-terminal.staged.properties"
 mkdir -p "$host_evidence_dir"
 : >"$provenance_checkpoints"
 

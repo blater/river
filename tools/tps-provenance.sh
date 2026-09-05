@@ -732,7 +732,7 @@ provenance_validate_gradle_daemons() {
   local descriptor=$1
   local provisional=$2
   local expected pid started current
-  expected=$(sed -n 's/^gradle\.process\.pid=//p' "$descriptor" | head -1)
+  expected=$(provenance_property_once gradle.process.pid "$descriptor") || return 1
   [[ $expected =~ ^[0-9]+$ ]] || return 1
   [[ -f $provisional ]] || return 0
   while IFS=$'\t' read -r pid started; do
