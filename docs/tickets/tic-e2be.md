@@ -1,9 +1,11 @@
 ---
 id: tic-e2be
-status: open
+status: in_progress
 type: bug
 assignee: blater
 delivery: code
+base-commit: 56ccd9d317e135a9f06cd2ec022bba2160c43a71
+branch: ticket/tic-e2be-wide-decimal-spill
 tags:
     - p0
     - sql
@@ -34,3 +36,4 @@ clean detached `9f756561f79d1ad0952c0ff4d38c07f670badd31` worktree as one test,
 one failure, and no skip or OOM. The existing assertion expected `OK` and
 received `CONFLICT`; the XML SHA-256 is
 `f37c6205b2b3ebccdda0e90e63f2d170490e23e4de7c641275cc13453d5c4149`.
+
