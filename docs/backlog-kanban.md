@@ -14,7 +14,7 @@ mechanism should be pursued next.
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
 | --- | --- | --- | --- |
 | Standalone `riverd` | [`tic-11a5`](tickets/tic-11a5.md): ratify the lifecycle/security ADR; the [`tic-de1d`](tickets/tic-de1d.md) and [`tic-a221`](tickets/tic-a221.md) investigations are closed | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-615d`](tickets/tic-615d.md) in parallel | Installable lifecycle, safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
-| Transaction performance | [`tic-5cc0`](tickets/tic-5cc0.md): restore resource-accounted SQL savepoint admission; [`tic-af29`](tickets/tic-af29.md): classify successful lock blocking after that baseline blocker; [`tic-0636`](tickets/tic-0636.md): retain exact build/run provenance | Resume [`tic-1dda`](tickets/tic-1dda.md): rerun the serializable P0 matrix, including the mixed-isolation reproducer | P1 logical-commit preparation, visibility design, and lock-scope audit; then P1 promotion, Payment protocol A/B, measured P3 work, and the 500 TPS gate |
+| Transaction performance | [`tic-5cc0`](tickets/tic-5cc0.md): restore resource-accounted SQL savepoint admission; then [`tic-af29`](tickets/tic-af29.md): classify successful lock blocking and [`tic-8e74`](tickets/tic-8e74.md): expose the independent snapshot-cleanup gauge; separately complete [`tic-0636`](tickets/tic-0636.md): exact built-byte provenance and [`tic-d7c2`](tickets/tic-d7c2.md): exclusive-host evidence | Resume [`tic-1dda`](tickets/tic-1dda.md) only after all four scoped P0 evidence prerequisites close; rerun the serializable P0 matrix, including the mixed-isolation reproducer | After P0, lead with the [`tic-b368`](tickets/tic-b368.md) durability-overlap design and [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
 | Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Verify `river-harness` uses the published `riverd` process contract; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
 | Workflow safety | [`tic-701f`](tickets/tic-701f.md) and [`tic-dd80`](tickets/tic-dd80.md) may proceed when they do not displace P0 product work | Atomic cross-worktree claims and promotion enforcement | Close [`tic-ef07`](tickets/tic-ef07.md) when both enforcement gaps are proved |
 
@@ -53,22 +53,45 @@ No harness-based River promotion or cross-engine comparison starts before step
    detected standard-mix 10:2 regression and missing promotion evidence. First
    close the clean-master savepoint resource-admission regression in
    [`tic-5cc0`](tickets/tic-5cc0.md), which blocks affected-module acceptance for
-   [`tic-af29`](tickets/tic-af29.md). Close `tic-af29` and
-   [`tic-0636`](tickets/tic-0636.md), then resume the full P0 matrix.
+   the successful-block classifier in [`tic-af29`](tickets/tic-af29.md) and the
+   separately owned terminal snapshot gauge in
+   [`tic-8e74`](tickets/tic-8e74.md). Independently close exact built-byte
+   provenance in [`tic-0636`](tickets/tic-0636.md) and exclusive-host ownership
+   in [`tic-d7c2`](tickets/tic-d7c2.md), then resume the full P0 matrix. The
+   promotion investigation consumes those four capabilities and does not
+   implement or repair them. The engine-diagnostics and tooling tracks may
+   proceed concurrently only with disjoint file ownership; deliveries that
+   share a diagnostics surface or `tools/tps-test.sh` are serialized.
    Correctness requires matching serializable isolation, explained retries,
    blocks and cycles, complete cleanup, and no timeout or liveness failure;
    TPS remains a separate regression guard.
-2. After P0, pursue three evidence-linked streams:
+2. After P0, pursue three evidence-linked streams. The design and audit are
+   the first P1 decisions; the preparation and WAL stories must begin by
+   identifying the exact missing behavior in current source rather than
+   recreating mechanisms that are already present:
 
-   - design durable visibility and fencing in [`tic-b368`](tickets/tic-b368.md);
-   - seal and admit immutable logical commits in [`tic-ca05`](tickets/tic-ca05.md),
-     reserve cumulative cohort demand in [`tic-5b3e`](tickets/tic-5b3e.md), and append
-     budget-derived WAL chunks in [`tic-6f81`](tickets/tic-6f81.md);
+   - design durable visibility and fencing in [`tic-b368`](tickets/tic-b368.md),
+     including the pre-force transition that lets a blocked successor make
+     progress under an explicit durability dependency;
+   - re-baseline the existing logical sealing and chunked WAL paths against
+     [`tic-ca05`](tickets/tic-ca05.md) and [`tic-6f81`](tickets/tic-6f81.md), then
+     close either ticket without production changes when current source already
+     satisfies it; make any proved missing contract a separately scoped code
+     ticket before implementation; reserve cumulative cohort demand in
+     [`tic-5b3e`](tickets/tic-5b3e.md) as a scalability and failure-safety
+     prerequisite rather than an independent TPS claim;
    - audit lock scope in [`tic-4d14`](tickets/tic-4d14.md), then remove only holdings
-     proved redundant in [`tic-845d`](tickets/tic-845d.md).
+     proved redundant in [`tic-845d`](tickets/tic-845d.md). Before implementation,
+     narrow `tic-845d` to exactly one audit-selected rule; every additional
+     candidate is a separate ticket. A predicted fall in lock work with the
+     singleton-force ceiling becoming dominant is an acceptable bottleneck shift.
 3. Implement safe durability overlap and exact publication in
    [`tic-f1bb`](tickets/tic-f1bb.md) after visibility design and WAL chunking are
-   complete.
+   complete. Keep this one atomic vertical implementation rather than splitting
+   unsafe module-local states. Do not implement another append-force-publish path: the accepted
+   design must make dependent progress possible before the predecessor's force
+   returns and must reduce the force-per-write or cohort-size denominator. If
+   it cannot, reject the throughput mechanism rather than retain complexity.
 4. Run the P1 promotion matrix and publish a stable checkpoint in
    [`tic-7a5a`](tickets/tic-7a5a.md) after both commit and lock streams pass.
 5. Prove complete Payment semantics in [`tic-00e1`](tickets/tic-00e1.md), run the
@@ -77,9 +100,22 @@ No harness-based River promotion or cross-engine comparison starts before step
 6. Add further P3 implementation stories only for costs demonstrated by that
    profile. Do not invent an optimization, arbitrary cap, or expected speedup.
 
+The production-throughput hypotheses on this path are therefore deliberately
+narrow: `tic-845d` may reduce measured lock work, `tic-f1bb` must amortise
+durability by an explicitly proved mechanism, and `tic-af0a` may shorten the
+Payment protocol and hot-lock residence. `tic-ca05`, `tic-5b3e`, and `tic-6f81`
+are preparation, scale, and failure-safety enablers; neutral TPS is acceptable
+only when their named mechanism and non-regression evidence pass. Diagnostic,
+profiling, and promotion tickets produce evidence rather than database speed.
+
 Each performance story gets a clean feature-point build, focused correctness
 evidence, repeated matched before/after measurements, a pushed merge, and a
 recoverable checkpoint before the next mechanism is changed.
+Its outcome, owning mechanism, non-goals, stop conditions, and maximum change
+shape are locked under the
+[`docs/tickets` scope rule](tickets/README.md#performance-ticket-scope-lock)
+before implementation begins; discoveries become dependencies or follow-ups,
+not additions to an in-progress ticket.
 
 ### C. Prepare both gates, promote 500 TPS, then pursue parity
 

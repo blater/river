@@ -27,3 +27,13 @@ Review ROW_SET/value dependency and ordered-selection needs against the shared t
 ## Acceptance Criteria
 
 A reviewed mapping covers all branches, isolation, business rollback, result shapes, and failure outcomes; any protocol gap is named with one owner and focused tests.
+
+## Notes
+
+### 2026-09-04 ten-terminal architecture priority review
+
+This is a semantic design gate after P1, not a performance result. Prefer a
+mapping through the existing program and relational owners. If correct
+last-name lower-median selection requires a broad new protocol abstraction or
+a second executor, stop and compare that complexity with the Payment-only
+benefit before authorizing `tic-af0a`.

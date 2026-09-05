@@ -20,6 +20,40 @@ deterministically fails
 savepoint now returns `OK` after the arbitrary three-savepoint cap was removed,
 while retained savepoint arrays have no configured resource-admission boundary.
 
+## Outcome
+
+Named SQL savepoints grow beyond three only while their retained high-water
+storage is admitted by the existing session-shape resource budget; rejection
+occurs before relational savepoint state changes, and lifecycle cleanup reuses
+or returns the admitted capacity exactly once.
+
+## In Scope / Owning Mechanism
+
+The SQL session's existing session-shape lease owns both savepoint capacity
+admission and the reusable retained savepoint representation. All River-owned
+savepoint callers use that single path.
+
+## Non-goals
+
+- Add a savepoint-specific quota, a replacement runtime budget, or another
+  resource-admission service.
+- Restore a fixed savepoint-count cap or tune TPC-C throughput.
+- Redesign transaction savepoint semantics, statement rollback, or unrelated
+  session-retained structures.
+
+## Stop Conditions
+
+Stop and raise a prerequisite rather than broadening this ticket if the
+existing session-shape lease cannot charge every retained savepoint byte, or if
+admission cannot be ordered before relational mutation. An unrelated failing
+test is evidence for a separate ticket, not additional scope here.
+
+## Maximum Change Shape
+
+One admission/accounting path and one retained savepoint representation may
+change, together with their River-owned callers and focused tests. Do not add a
+feature flag, compatibility wrapper, alternate quota, or second storage path.
+
 ## Design
 
 Replace the stale convenience-cap contract with savepoint retention admitted by

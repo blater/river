@@ -27,3 +27,14 @@ Reuse shared typed-value ownership and execution; require exactly one EXECUTE_PR
 ## Acceptance Criteria
 
 Semantic differential tests and rollback/retry tests pass; interleaved JDBC/program A/B reports requests, bytes, CPU, allocation, latency, and TPS; expansion to other families occurs only if the predeclared mechanism result justifies it.
+
+## Notes
+
+### 2026-09-04 ten-terminal architecture priority review
+
+This is the first P2 direct throughput hypothesis because Payment is 43 percent
+of the standard mix and retains hot warehouse and district locks across a
+chatty JDBC path. Request count alone is not success. The paired A/B must show
+the predicted reduction in Payment lock residence, client/server service cost,
+or latency and TPS. If only the request counter moves, do not expand transaction
+program work to another family.

@@ -34,3 +34,13 @@ The top material mechanism has a stable denominator and owning boundary; startup
 ### 2026-09-04T19:20:01Z
 
 Carry-over review docs/plans/billion-row-capacity-carryover-review.md records an unintegrated constructor-owned page-frame payload-view candidate. Reproduce and attribute the allocation on stable source before creating any P3 implementation story; the dirty code is not accepted evidence.
+
+### 2026-09-04 ten-terminal architecture priority review
+
+This is the mandatory admission gate for every later CPU, allocation, buffer,
+page, index, or publication optimization. The parked `tic-2828` remote-branch
+frame-reuse candidate is the negative example: it changed cache policy to
+remove a bounded warm-up allocation without proving measured-phase materiality,
+and both candidate TPS samples were below their immediate-parent controls. Do
+not import or redesign that mechanism unless this profile first attributes a
+material stable-source cost to the same owner and denominator.

@@ -25,6 +25,29 @@ Ticket descriptions should link to those sources instead of copying their
 requirements. Ticket files remain in Git after completion so dependencies,
 delivery history, and rollback evidence remain reproducible.
 
+## Performance ticket scope lock
+
+Before a performance-critical ticket becomes `in_progress`, it records one
+observable outcome, the canonical mechanism and owner in scope, explicit
+non-goals, evidence-based stop conditions, and a maximum change shape. The
+maximum change shape names how many production mechanisms or policy owners may
+change and forbids adjacent executors, queues, representations, state machines,
+formats, or protocol work unless the ticket explicitly owns them.
+
+Discovery may narrow the ticket, prove that no implementation is required, or
+identify a correctness prerequisite that blocks it. Discovery does not broaden
+the ticket. A required prerequisite becomes a separate dependency before its
+implementation starts; an optional improvement becomes a later follow-up. If
+the declared mechanism or denominator is falsified, close or replace the ticket
+rather than redefining success around unrelated work. Any scope correction is
+recorded as a dated note with its evidence and dependency change.
+
+An investigation delivers a decision or retained evidence and does not absorb
+production fixes. A promotion ticket evaluates the exact accepted candidates
+and does not repair them. Where a correctness mechanism must cross modules
+atomically, keep one vertical implementation ticket rather than creating
+mergeable partial designs or transitional compatibility paths.
+
 River requires feature branches to identify their ticket and delivered commits
 to carry an exact `Ticket: <ticket-id>` Git trailer. Code and documentation
 tickets record that immutable commit before closure. Evidence investigations
