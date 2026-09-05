@@ -17,11 +17,17 @@ created: 2026-09-04T15:23:11.909416Z
 ---
 # Preserve River diagnostics behind the authenticated lifecycle
 
-Keep tools/tps-test.sh and trace tooling secure and reproducible while they still require River-specific JFR, resource, deadlock, commit, and terminal evidence.
+Preserve `tools/tps-test.sh` and trace evidence after `tic-ec50` has already
+migrated `TpccServerMain` to authenticated transport and deleted every plain
+server/client API.
 
 ## Design
 
-Either consume riverd through a generic diagnostics boundary or retain a narrow benchmark orchestrator secured by the same TLS/auth contract. Do not move TPC-C flags into riverd or delete evidence producers prematurely.
+Keep the existing authenticated benchmark orchestrator only for the accepted
+JFR, resource, deadlock, commit, terminal, and workspace-fingerprint producers
+that `riverd` deliberately does not own. Move a producer only when the same
+evidence is available through a named generic diagnostics boundary. Do not move
+TPC-C flags into riverd or recreate a plain/optional-authentication path.
 
 ## Acceptance Criteria
 

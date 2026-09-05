@@ -260,6 +260,9 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(TransactionState.INDETERMINATE, firstOutcome.state());
     assertEquals(TransactionState.INDETERMINATE, secondOutcome.state());
     assertEquals(0, manager.activeTransactionCount());
+    assertEquals(0, manager.activeLockCount());
+    assertEquals(0, manager.waitingLockCount());
+    assertEquals(StatusCode.FENCED, storeResult.store().admission());
     IndexedTransactionSession rejected = session(context, Long.BYTES);
     TransactionOutcome rejectedOutcome = new TransactionOutcome();
     assertEquals(StatusCode.FENCED, rejected.begin(IsolationLevel.REPEATABLE_READ));

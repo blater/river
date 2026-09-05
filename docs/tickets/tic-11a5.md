@@ -1,10 +1,16 @@
 ---
 id: tic-11a5
-status: open
+status: closed
 type: story
 assignee: blater
 parent: tic-e2b7
 delivery: documentation
+base-commit: 8df484694039e9b53cd7ff6c5cccb44973b86c0e
+branch: ticket/tic-11a5-ratify-riverd-security
+delivered-commit: a7ca80184fb91141c2d4266e9a28dd3d53cc1c2e
+evidence:
+    - docs/adr/0014-riverd-instance-security.md
+    - docs/plans/riverd-standalone-server-plan.md
 tags:
     - riverd
     - security

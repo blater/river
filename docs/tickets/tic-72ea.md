@@ -16,11 +16,17 @@ created: 2026-09-04T15:23:11.086718Z
 ---
 # Implement resource-accounted durable security audit
 
-Replace per-operation synchronous audit forcing with the accepted durable admission mechanism while retaining fail-closed semantics.
+Replace per-operation synchronous audit forcing with the mechanism accepted in
+the `tic-a221` evidence merged at
+`e592addff67ac6016ae6e9e37e3bf374a6511f0d`, while retaining fail-closed
+semantics.
 
 ## Design
 
-Keep audit policy in one security owner; batch or coalesce only where the ADR proves equivalent ordering; account retained bytes against configured resources; return explicit pressure before statement side effects.
+Keep audit policy in one `river-server` security owner; implement the exact
+event, byte-reservation, group-force, exhaustion, archive-control, and recovery
+state machines ratified by ADR 0014. Change every `SessionAuthorizer` caller
+together; no transitional authorization wrapper remains.
 
 ## Acceptance Criteria
 
