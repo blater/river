@@ -110,6 +110,14 @@ Decision: accept this one mechanism based on repeated longer throughput and
 read-tail improvement, preserved durability/failure behavior, independent review
 and the clean gate. The per-index granularity remains an explicit limitation.
 
+Integration `23484fca398b9219b7ceba6a6ac06a53da04d044` is pushed with the
+annotated checkpoint above and the feature branch. Its exact tree matches the
+accepted feature. `merged-build.log` and `merged-smoke` record the successful
+merged build and 1-second warmup/3-second correctness smoke (zero retries/errors,
+successful invariants, reconciliation, capture and terminal receipt). The smoke's
+141.667 TPS is not used as a comparative sample. Ticket closure is recorded only
+after the pushed integration was verified.
+
 ### 2026-09-06 caller-owned catalog resolution (`tic-186e`)
 
 Status: promoted and pushed following the user's commit/push/promote instruction.

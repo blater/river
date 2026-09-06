@@ -1,11 +1,15 @@
 ---
 id: tic-e544
-status: in_progress
+status: closed
 type: story
 assignee: blater
 delivery: code
 base-commit: 7bcc11ea4624f3e7276cdb562cc33dd310a27fbd
 branch: ticket/tic-e544-read-durability-dependencies
+delivered-commit: 23484fca398b9219b7ceba6a6ac06a53da04d044
+checkpoint-tag: perf-checkpoint-20260906-read-durability-dependencies
+evidence:
+    - /private/tmp/river-tic-e544-evidence
 tags:
     - performance
     - transactions
@@ -137,3 +141,13 @@ short samples, interleaved controls, known intermittent allocation failures and
 identical baseline policy failures. The clean gate passed 1,775 tests with two
 skips. Independent concurrency/recovery review has no remaining blocker. Exact
 merged-revision smoke and pushed integration/closure are recorded at delivery.
+
+## Delivery
+
+Merged and pushed as `23484fca398b9219b7ceba6a6ac06a53da04d044`, tagged
+`perf-checkpoint-20260906-read-durability-dependencies`. The feature branch,
+master and annotated tag were pushed atomically. The exact merged tree matches
+the accepted feature and passed its `--warmup-seconds=1 --measured-seconds=3`
+TPS smoke with zero retries/errors, successful invariants/reconciliation and a
+valid terminal receipt (`merged-smoke`; 141.667 TPS, not a comparative sample).
+`merged-build.log` records the successful merged runtime build.
