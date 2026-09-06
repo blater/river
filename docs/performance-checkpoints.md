@@ -44,14 +44,21 @@ Decision and attribution:
 
 ### 2026-09-06 caller-owned catalog resolution (`tic-186e`)
 
-Status: reviewed feature candidate. The internal descriptor durability blocker
-is removed. Local saturated throughput improves with an explained Order Status
+Status: promoted and pushed following the user's commit/push/promote instruction.
+The internal descriptor durability blocker is removed. Local saturated
+throughput improves with an explained Order Status
 read-tail tradeoff; this is River-specific diagnostic evidence, not TPC-C or a
 cross-database performance claim.
 
 - Base: pushed `perf-checkpoint-20260906-page-generation-reuse` (`f7ff998`),
   plus its closure documentation at `7df1dc6`.
 - Branch: `ticket/tic-186e-catalog-transaction-resolution`.
+- Feature commit: `4e871da`.
+- Integration commit: `db1059a08257d35de9b1b7bc7ac72225d6225da1`.
+- Annotated tag: `perf-checkpoint-20260906-catalog-transaction-resolution`.
+- The exact merged revision passed `promotion-smoke` with zero retries/errors,
+  passed invariants, stable source and a successful terminal receipt. Feature,
+  integration and tag were pushed atomically to the existing origin.
 - Evidence: `/private/tmp/river-tic-186e-evidence`; individual sample artifacts,
   logs, terminal receipts and `sample-summary.json` remain outside Git.
 - Mechanism: internal name resolution passes the admitted relational transaction

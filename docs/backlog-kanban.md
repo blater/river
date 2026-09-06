@@ -9,10 +9,12 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-User-directed focused work: [`tic-186e`](tickets/tic-186e.md) is in progress to
-remove the traced internal catalog durability wait after lock handoff. It owns
-only caller-transaction descriptor resolution and its correctness/performance
-proof; the broader P0/P1 acceptance and Payment work below remain separate.
+User-directed focused work: [`tic-186e`](tickets/tic-186e.md) is closed at the
+pushed `perf-checkpoint-20260906-catalog-transaction-resolution` checkpoint.
+Caller-transaction descriptor resolution removes the traced internal durability
+wait after lock handoff. Longer local diagnostics improve approximately 25%,
+with an explained Order Status read-tail tradeoff recorded in the performance
+ledger. The broader P0/P1 acceptance and Payment work below remain separate.
 
 ## Board
 
