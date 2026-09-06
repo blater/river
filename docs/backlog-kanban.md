@@ -14,7 +14,7 @@ mechanism should be pursued next.
 | Lane | Now: ready work | Next: unlocked by Now | Later: promotion path |
 | --- | --- | --- | --- |
 | Standalone `riverd` | [`tic-72ea`](tickets/tic-72ea.md) and [`tic-615d`](tickets/tic-615d.md) in parallel; [`tic-11a5`](tickets/tic-11a5.md) ratified accepted ADR 0014 | [`tic-ec50`](tickets/tic-ec50.md): deliver the installable authenticated lifecycle | Safe operations, external consumer migration, then [`tic-45a7`](tickets/tic-45a7.md): certify the benchmark lifecycle prerequisite |
-| Transaction performance | [`tic-2828`](tickets/tic-2828.md): restore warmed page-generation reuse and complete the joint engine gate for the independent `tic-288d`, `tic-e2be`, `tic-50e8`, and `tic-5cc0` baseline fixes; then [`tic-af29`](tickets/tic-af29.md): classify successful lock blocking and [`tic-8e74`](tickets/tic-8e74.md): expose the independent snapshot-cleanup gauge; [`tic-0636`](tickets/tic-0636.md) is closed with accepted v2 provenance; [`tic-d7c2`](tickets/tic-d7c2.md) owns the remaining exclusive-host evidence change | Resume [`tic-1dda`](tickets/tic-1dda.md) only after all four scoped P0 evidence prerequisites close; rerun the serializable P0 matrix, including the mixed-isolation reproducer | After P0, lead with the [`tic-b368`](tickets/tic-b368.md) durability-overlap design and [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
+| Transaction performance | [`tic-2828`](tickets/tic-2828.md) is closed with warmed page-generation reuse and a passing joint engine/clean-test gate; finish delivery acceptance for the independent `tic-288d`, `tic-e2be`, `tic-50e8`, and `tic-5cc0` baseline tickets; then [`tic-af29`](tickets/tic-af29.md): classify successful lock blocking and [`tic-8e74`](tickets/tic-8e74.md): expose the independent snapshot-cleanup gauge; [`tic-0636`](tickets/tic-0636.md) is closed with accepted v2 provenance; [`tic-d7c2`](tickets/tic-d7c2.md) owns the remaining exclusive-host evidence change | Resume [`tic-1dda`](tickets/tic-1dda.md) only after all four scoped P0 evidence prerequisites close; rerun the serializable P0 matrix, including the mixed-isolation reproducer | After P0, lead with the [`tic-b368`](tickets/tic-b368.md) durability-overlap design and [`tic-4d14`](tickets/tic-4d14.md) lock-scope audit; re-baseline existing logical/WAL mechanisms before editing them; then admit cumulative cohorts, remove one proved redundant holding rule, implement only a real pre-force overlap mechanism, run P1 promotion, and proceed to the Payment A/B |
 | Stress and comparison | No River promotion work until [`tic-45a7`](tickets/tic-45a7.md) closes; `tools/tps-test.sh` remains available for River diagnostics | Verify `river-harness` uses the published `riverd` process contract; establish the independent artifact-comparison sidecar | [`tic-c7bb`](tickets/tic-c7bb.md): 500 committed TPS; then [`tic-9c58`](tickets/tic-9c58.md): MariaDB/PostgreSQL comparison and Alpha3 parity |
 | Workflow safety | [`tic-701f`](tickets/tic-701f.md) and [`tic-dd80`](tickets/tic-dd80.md) may proceed when they do not displace P0 product work | Atomic cross-worktree claims and promotion enforcement | Close [`tic-ef07`](tickets/tic-ef07.md) when both enforcement gaps are proved |
 
@@ -54,9 +54,12 @@ No harness-based River promotion or cross-engine comparison starts before step
 ### B. Remove the measured transaction ceilings
 
 1. The first [`tic-1dda`](tickets/tic-1dda.md) revalidation found a statistically
-   detected standard-mix 10:2 regression and missing promotion evidence. First
-   close the independent clean-master regressions: warmed page-generation
-   reuse in [`tic-2828`](tickets/tic-2828.md), group-commit fault fencing in
+   detected standard-mix 10:2 regression and missing promotion evidence.
+   Warmed page-generation reuse in [`tic-2828`](tickets/tic-2828.md) is now
+   closed at the pushed `perf-checkpoint-20260906-page-generation-reuse`
+   checkpoint, with all 981 engine tests and the clean full test build passing.
+   Existing source/bytecode policy failures remain recorded. Complete the
+   independent baseline deliveries: group-commit fault fencing in
    [`tic-288d`](tickets/tic-288d.md), the stale spill-test boundary in
    [`tic-e2be`](tickets/tic-e2be.md), UNION execution in
    [`tic-50e8`](tickets/tic-50e8.md), and savepoint resource admission in

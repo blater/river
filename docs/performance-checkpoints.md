@@ -44,7 +44,7 @@ Decision and attribution:
 
 ### 2026-09-06 reclaimed page-frame handoff (`tic-2828`)
 
-Status: user-authorized promotion of the allocation fix after independent
+Status: promoted and pushed at the user's request after independent
 review, engine tests, and the clean full test build passed. The user explicitly
 requested commit, push, and promotion after the existing repository policy
 failures were reported. This accepts those recorded gate limitations for this
@@ -53,6 +53,8 @@ delivery; it does not establish a throughput improvement or a green policy gate.
 - Base: pushed `1ce3c802c636cca9c6551f4fbb98d4ecebe6a153`, tagged
   `perf-checkpoint-20260906-batched-lock-release`.
 - Branch: `ticket/tic-2828-page-generation-reuse-followup`.
+- Feature commit: `7b87a0d`.
+- Integration commit: `f7ff998aa15145eee55eca3b1053851da83c06dd`.
 - Checkpoint tag: `perf-checkpoint-20260906-page-generation-reuse`.
 - Evidence root: `/private/tmp/river-tic-2828.XBvoMp`.
 - Mechanism: retain the frames cleared by preflight reclamation in an intrusive
@@ -126,6 +128,14 @@ NPath maximum/count stayed 54/96, while cyclomatic total/maximum changed from
 existing owner: extracting it would add indirection without simplifying
 ownership. Both isolated scores and full baseline ranking are retained in the
 evidence root. This is a reviewed trigger, not a waived correctness gate.
+
+Promotion: the feature branch, `master`, and annotated checkpoint tag were
+pushed atomically. The exact integration commit passed a post-merge smoke with
+`--seed=42 --warmup-seconds=1 --measured-seconds=3` after `./make.sh`: zero
+retries/errors, successful pre/post invariants, checkpoint, capture, and terminal
+receipt (`promotion-smoke`). This shorter smoke is a correctness check and is
+excluded from the matched performance samples. `tk validate` passed, and
+`tic-2828` was closed against the pushed integration commit and checkpoint tag.
 
 ### 2026-09-06 batched terminal lock-release scheduling
 
