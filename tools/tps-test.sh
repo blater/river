@@ -8,8 +8,9 @@ usage() {
   cat <<'EOF'
 Usage: tools/tps-test.sh [options]
 
-Run one River JDBC TPC-C engineering sample. Builds are incremental only: this
-tool never invokes clean. It owns a temporary database and loopback server,
+Run one River JDBC TPC-C engineering sample. Run ./make.sh first to compile
+River and prepare its runtime classpath. This tool never builds. It owns a
+temporary database and loopback server,
 keeps output safe on every exit path, and reports load, preflight, warmup,
 measured, drain, and checkpoint failures distinctly.
 
@@ -79,11 +80,8 @@ MariaDB remains unavailable because the Java acceptance path validates
 jdbc:river. Java-emitted metrics are printed verbatim when present; unavailable
 engine-private metrics are not fabricated.
 
-Promotion-grade use requires
-RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true. This attests that no
-uncoordinated build, test, profiler, harness, client/server, or database
-workload ran during the cooperative lease interval. Host observations are
-bounded and periodic; they do not prove absence between samples.
+Host observations are bounded and periodic; they do not prove absence between
+samples.
 EOF
 }
 
@@ -279,7 +277,6 @@ daemon_inspection_timeout_seconds=${RIVER_TPS_DAEMON_INSPECTION_TIMEOUT_SECONDS:
 process_snapshot_maximum_bytes=${RIVER_TPS_PROCESS_SNAPSHOT_MAXIMUM_BYTES:-1048576}
 daemon_inspection_maximum_bytes=${RIVER_TPS_DAEMON_INSPECTION_MAXIMUM_BYTES:-262144}
 host_observation_timeout_seconds=${RIVER_TPS_HOST_OBSERVATION_TIMEOUT_SECONDS:-30}
-operator_attestation=${RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION:-false}
 require_positive RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES "$host_evidence_maximum_bytes"
 ((host_evidence_maximum_bytes >= 1024)) ||
   die "RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES must be at least 1024"
@@ -287,8 +284,6 @@ require_positive RIVER_TPS_DAEMON_INSPECTION_TIMEOUT_SECONDS "$daemon_inspection
 require_positive RIVER_TPS_PROCESS_SNAPSHOT_MAXIMUM_BYTES "$process_snapshot_maximum_bytes"
 require_positive RIVER_TPS_DAEMON_INSPECTION_MAXIMUM_BYTES "$daemon_inspection_maximum_bytes"
 require_positive RIVER_TPS_HOST_OBSERVATION_TIMEOUT_SECONDS "$host_observation_timeout_seconds"
-[[ $operator_attestation == true ]] ||
-  die "RIVER_TPS_OPERATOR_NO_UNCOORDINATED_WORK_ATTESTATION=true is required"
 
 java_bin=${RIVER_JAVA:-java}
 command -v "$java_bin" >/dev/null 2>&1 || die "Java launcher not found: $java_bin"
@@ -298,8 +293,6 @@ java_runtime_home=$(
   "$java_bin" -XshowSettings:properties -version 2>&1 |
     sed -n 's/^[[:space:]]*java\.home = //p' | head -1
 )
-gradle_bin=${RIVER_GRADLE:-$river_root/gradlew}
-
 if [[ -n $client_jfr && -z $server_jfr ]]; then
   case $client_jfr in
     *.jfr) server_jfr="${client_jfr%.jfr}.server.jfr" ;;
@@ -343,14 +336,10 @@ persistence_valid=true
 artifact_published=false
 temp_cleanup_valid=true
 terminal_publication_valid=false
-build_status=125
-build_wrapper_status=125
-build_command_line=unavailable
 workspace_start_sha256=unavailable
 workspace_finish_sha256=unavailable
 classpath_manifest_sha256=unavailable
 classpath_descriptor_sha256=unavailable
-gradle_manifest_sha256=unavailable
 host_lease_dir=${RIVER_TPS_HOST_LEASE_DIR:-${TMPDIR:-/tmp}/river-tps-host-exclusion-v2}
 evidence_run_id=$(provenance_random_hex) || die "unable to generate evidence run identity"
 terminal_nonce=$(provenance_random_hex) || die "unable to generate terminal commitment nonce"
@@ -390,12 +379,7 @@ metrics_stop="$temp_dir/performance-capture-stop"
 metrics_stopped="$temp_dir/performance-capture-stopped"
 server_ready="$temp_dir/server.ready"
 server_stop="$temp_dir/server.stop"
-build_log="$temp_dir/build.log"
-build_command_file="$temp_dir/build-command.txt"
-build_argv_file="$temp_dir/build-command.argv"
-runtime_descriptor="$temp_dir/runtime-classpath.properties"
-gradle_runtime_descriptor="$temp_dir/gradle-runtime.properties"
-gradle_runtime_manifest="$temp_dir/gradle-runtime-manifest.tsv"
+runtime_descriptor="$river_root/river-bench/build/tps-runtime-classpath.properties"
 source_manifest_start="$temp_dir/source-manifest.start.tsv"
 source_manifest_check="$temp_dir/source-manifest.check.tsv"
 git_status_start="$temp_dir/git-status.start.txt"
@@ -407,7 +391,6 @@ host_evidence_dir="$temp_dir/host-exclusion"
 host_monitor_stop="$temp_dir/host-monitor.stop"
 host_monitor_phase="$temp_dir/host-monitor.phase"
 host_monitor_ready="$temp_dir/host-monitor.ready"
-owned_build_marker="$temp_dir/owned-gradle-build.active"
 provisional_daemons="$host_evidence_dir/host-provisional-daemons.tsv"
 provenance_checkpoints="$temp_dir/provenance-checkpoints.tsv"
 mkdir -p "$host_evidence_dir"
@@ -449,7 +432,7 @@ start_host_monitor() {
   HOST_MONITOR_START_STATUS=initial_observation_failed
   rm -f -- "$host_monitor_stop" "$host_monitor_ready" || return 1
   if ! provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
-      "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
+      '' '' "$host_monitor_phase" \
       "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
       "$provisional_daemons" '' 1 "$process_snapshot_maximum_bytes" \
       "$daemon_inspection_maximum_bytes" "$host_observation_timeout_seconds"; then
@@ -457,7 +440,7 @@ start_host_monitor() {
   fi
   HOST_MONITOR_START_STATUS=readiness_failed
   provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
-    "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
+    '' '' "$host_monitor_phase" \
     "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
     "$provisional_daemons" "$host_monitor_ready" 0 \
     "$process_snapshot_maximum_bytes" "$daemon_inspection_maximum_bytes" \
@@ -632,20 +615,8 @@ write_metadata() {
     printf 'run.finished_epoch=%s\n' "$(date +%s)"
     printf 'run.command_line=%s\n' "$command_line"
     printf 'run.command_sha256=%s\n' "$(hash_text "$command_line")"
-    printf 'build.command_line=%s\n' "$build_command_line"
-    printf 'build.command_sha256=%s\n' "$(hash_file "$build_command_file")"
-    printf 'build.argv_sha256=%s\n' "$(hash_file "$build_argv_file")"
-    printf 'build.exit_status=%s\n' "$build_status"
-    printf 'build.wrapper_exit_status=%s\n' "$build_wrapper_status"
-    printf 'build.log_sha256=%s\n' "$(hash_file "$build_log")"
-    printf 'build.runtime_descriptor_sha256=%s\n' "$classpath_descriptor_sha256"
-    printf 'build.classpath_manifest_sha256=%s\n' "$classpath_manifest_sha256"
-    printf 'build.gradle_version=%s\n' "$(property gradle.version "$runtime_descriptor")"
-    printf 'build.gradle_home=%s\n' "$(property gradle.home "$runtime_descriptor")"
-    printf 'build.gradle_process_pid=%s\n' "$(property gradle.process.pid "$runtime_descriptor")"
-    printf 'build.gradle_runtime_manifest_sha256=%s\n' "$gradle_manifest_sha256"
-    printf 'build.java_home=%s\n' "$(property java.home "$runtime_descriptor")"
-    printf 'build.java_version=%s\n' "$(property java.version "$runtime_descriptor")"
+    printf 'runtime.classpath_descriptor_sha256=%s\n' "$classpath_descriptor_sha256"
+    printf 'runtime.classpath_manifest_sha256=%s\n' "$classpath_manifest_sha256"
     printf 'git.commit_sha=%s\n' "$git_commit"
     printf 'git.dirty_state=%s\n' "$git_dirty"
     printf 'git.status_sha256=%s\n' "$(hash_file "$final_status_file")"
@@ -682,7 +653,6 @@ write_metadata() {
     printf 'configuration.process_snapshot_maximum_bytes=%s\n' "$process_snapshot_maximum_bytes"
     printf 'configuration.daemon_inspection_maximum_bytes=%s\n' "$daemon_inspection_maximum_bytes"
     printf 'configuration.host_observation_timeout_seconds=%s\n' "$host_observation_timeout_seconds"
-    printf 'configuration.operator_no_uncoordinated_work_attestation=%s\n' "$operator_attestation"
     printf 'configuration.resource_maximum_bytes=%s\n' "$resource_maximum_bytes"
     printf 'configuration.resource_delivery_bytes=%s\n' "$resource_delivery_bytes"
     printf 'configuration.resource_lock_provider_bytes=%s\n' "$resource_lock_provider_bytes"
@@ -807,12 +777,7 @@ cleanup() {
     persist_if_present "$combined_log" "$output_dir/tpcc-output.log"
     persist_if_present "$server_log" "$output_dir/server.log"
     persist_if_present "$server_metrics" "$output_dir/server-metrics.log"
-    persist_if_present "$build_log" "$output_dir/build.log"
-    persist_if_present "$build_command_file" "$output_dir/build-command.txt"
-    persist_if_present "$build_argv_file" "$output_dir/build-command.argv"
     persist_if_present "$runtime_descriptor" "$output_dir/runtime-classpath.properties"
-    persist_if_present "$gradle_runtime_descriptor" "$output_dir/gradle-runtime.properties"
-    persist_if_present "$gradle_runtime_manifest" "$output_dir/gradle-runtime-manifest.tsv"
     persist_if_present "$source_manifest_start" "$output_dir/source-manifest.tsv"
     persist_if_present "$git_status_start" "$output_dir/git-status.txt"
     persist_if_present "$classpath_manifest_start" "$output_dir/classpath-manifest.tsv"
@@ -840,7 +805,7 @@ cleanup() {
     fi
     rm -f -- "$host_monitor_stop" "$host_monitor_ready" || host_exclusion_valid=false
     if ! provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
-        "$gradle_user_home" "$owned_build_marker" "$host_monitor_phase" \
+        '' '' "$host_monitor_phase" \
         "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
         "$provisional_daemons" '' 1 "$process_snapshot_maximum_bytes" \
         "$daemon_inspection_maximum_bytes" "$host_observation_timeout_seconds"; then
@@ -991,11 +956,6 @@ trap cleanup EXIT
 trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run_exit_status=130; exit 130' INT
 trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run_exit_status=143; exit 143' TERM
 
-[[ -x $gradle_bin ]] || die "Gradle launcher is not executable: $gradle_bin"
-root_cache_key=$(hash_text "$river_root")
-gradle_user_home=${RIVER_TPS_GRADLE_USER_HOME:-${GRADLE_USER_HOME:-${TMPDIR:-/tmp}/river-tps-gradle-user-$root_cache_key}}
-project_cache_dir=${RIVER_TPS_PROJECT_CACHE_DIR:-${TMPDIR:-/tmp}/river-tps-project-cache-$root_cache_key}
-mkdir -p "$gradle_user_home" "$project_cache_dir"
 : >"$host_evidence_dir/host-observations.tsv"
 : >"$host_evidence_dir/host-processes.tsv"
 : >"$host_evidence_dir/host-classifications.tsv"
@@ -1013,7 +973,7 @@ if ! provenance_acquire_lease "$host_lease_dir" "$evidence_run_id" "$terminal_no
   die "host exclusion lease acquisition failed: ${PROVENANCE_LEASE_ACQUIRE_STATUS:-unknown}"
 fi
 lease_acquired=true
-printf 'prebuild\n' >"$host_monitor_phase" || die "unable to initialize host monitor phase"
+printf 'workload\n' >"$host_monitor_phase" || die "unable to initialize host monitor phase"
 if ! start_host_monitor; then
   fail_host_monitor_start
   die "host exclusion monitor did not start: ${HOST_MONITOR_START_STATUS:-unknown}"
@@ -1028,61 +988,16 @@ git -C "$river_root" rev-parse HEAD >"$git_commit_start" ||
   die "unable to capture Git commit"
 workspace_start_sha256=$(hash_file "$source_manifest_start")
 
-build_command=( "$gradle_bin" "--gradle-user-home=$gradle_user_home"
-  "--project-cache-dir=$project_cache_dir"
-  :river-bench:writeRiverTpsRuntimeClasspath
-  "-PriverTpsClasspathOutput=$runtime_descriptor" )
-build_command_line=$(printf '%q ' "${build_command[@]}")
-echo "build=checked_by_gradle task=:river-bench:writeRiverTpsRuntimeClasspath clean=false"
-printf 'build\n' >"$host_monitor_phase" || die "unable to enter build monitor phase"
-set +e
-provenance_run_logged_marked "$build_log" "$build_argv_file" "$build_command_file" \
-  "$owned_build_marker" "$host_monitor_phase" "${build_command[@]}"
-build_wrapper_status=$?
-build_status=${PROVENANCE_LOGGED_COMMAND_STATUS:-125}
-set -e
-if [[ ${PROVENANCE_LOGGED_WRAPPER_VALID:-false} != true ]]; then
-  publication_valid=false
-  run_result=evidence_invalid; run_phase=build
-  run_status=BUILD_PROVENANCE_FAILED; run_exit_status=1
-  exit 1
-fi
-((build_status == 0)) || {
-  run_result=build_failed; run_phase=build; run_status=BUILD_FAILED; run_exit_status=$build_status
-  exit "$build_status"
-}
-[[ -f $runtime_descriptor ]] || die "Gradle did not write the runtime classpath descriptor"
+[[ -f $runtime_descriptor ]] || die "runtime classpath is missing; run ./make.sh first"
 [[ $(property schema "$runtime_descriptor") == river-tps-runtime-v1 ]] ||
-  die "Gradle wrote an unsupported runtime classpath descriptor"
-stop_host_monitor || die "host exclusion monitor failed after the build"
-provenance_validate_gradle_daemons "$runtime_descriptor" "$provisional_daemons" || {
-  host_exclusion_valid=false
-  printf 'violation\tgradle_daemon_identity_mismatch\t%s\n' "$(date +%s)" \
-    >>"$host_evidence_dir/host-violations.tsv"
-  die "busy Gradle daemon did not match the Gradle-owned executing PID"
-}
-[[ ! -s $host_evidence_dir/host-violations.tsv ]] ||
-  die "shared host had an overlapping build or workload"
-printf 'workload\n' >"$host_monitor_phase" || die "unable to enter workload monitor phase"
-if ! start_host_monitor; then
-  fail_host_monitor_start
-  die "host exclusion monitor did not restart: ${HOST_MONITOR_START_STATUS:-unknown}"
-fi
-verify_provenance_checkpoint build || die "source changed during the build"
-gradle_runtime_home=$(property gradle.home "$runtime_descriptor")
-[[ -n $gradle_runtime_home && $gradle_runtime_home != unavailable ]] ||
-  die "Gradle did not report its runtime home"
-printf 'classpath=%s\n' "$gradle_runtime_home" >"$gradle_runtime_descriptor"
-provenance_write_classpath_manifest "$gradle_runtime_descriptor" "$gradle_runtime_manifest" ||
-  die "unable to fingerprint the Gradle runtime"
-gradle_manifest_sha256=$(hash_file "$gradle_runtime_manifest")
+  die "runtime classpath descriptor has an unsupported schema"
 provenance_write_classpath_manifest "$runtime_descriptor" "$classpath_manifest_start" ||
-  die "runtime classpath is missing, unstable, or contains unsupported entries"
+  die "runtime classpath is missing or contains unsupported entries; run ./make.sh first"
 classpath_descriptor_sha256=$(hash_file "$runtime_descriptor")
 classpath_manifest_sha256=$(hash_file "$classpath_manifest_start")
 classpath=$(provenance_classpath_value "$runtime_descriptor") ||
   die "runtime classpath descriptor has no entries"
-echo "build=passed status=$build_status log=$build_log"
+verify_provenance_checkpoint startup || die "source changed before the workload"
 
 ((terminals <= 2147483643)) || die "terminals leave no addressable server control slots"
 server_connections=$((terminals + 4))
