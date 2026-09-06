@@ -24,6 +24,7 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
   private final IndexedGroupCommitMetrics metrics;
   private final TransactionGroupCompletionTimings completionTimings =
       new TransactionGroupCompletionTimings();
+  private final IndexedCommitOpportunityEvent probe = new IndexedCommitOpportunityEvent();
   private boolean attemptedGroupRecorded;
   private boolean publicationInstallAttempted;
   private long publicationInstallNanos;
@@ -56,6 +57,11 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
   }
 
   void process(int count) {
+    probe.processStarted = System.nanoTime();
+    probe.published = 0;
+    probe.forceStarted = 0;
+    probe.forceFinished = 0;
+    probe.groupSize = count;
     if (requests[0].groupable) {
       metrics.recordAttemptedGroup(count);
       attemptedGroupRecorded = true;
@@ -137,7 +143,8 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     started = System.nanoTime();
     status = manager.publishCommitGroup(
         transactions, outcomes, commitSequences, count, this, completionTimings);
-    long publishNanos = System.nanoTime() - started;
+    probe.published = System.nanoTime();
+    long publishNanos = probe.published - started;
     if (publicationInstallAttempted) {
       metrics.recordStage(
           IndexedCommitPath.SHARED_GROUP,
@@ -242,6 +249,12 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
     for (int index = 0; index < count; index++) {
       IndexedGroupCommitRequest request = requests[index];
       StatusCode status = statuses[index];
+      probe.submitted = request.submittedNanos();
+      probe.enqueued = request.probeEnqueued;
+      probe.selected = request.probeSelected;
+      probe.successful = status.isOk();
+      probe.completed = System.nanoTime();
+      probe.commit();
       requests[index] = null;
       prepared[index] = null;
       transactions[index] = null;
@@ -278,8 +291,10 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
 
   private StatusCode force() {
     long started = System.nanoTime();
+    probe.forceStarted = started;
     StatusCode status = table.forceHybridCommitGroup();
-    long elapsed = System.nanoTime() - started;
+    probe.forceFinished = System.nanoTime();
+    long elapsed = probe.forceFinished - started;
     metrics.recordStage(
         IndexedCommitPath.SHARED_GROUP,
         IndexedCommitStage.GROUP_FORCE,

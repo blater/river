@@ -241,6 +241,7 @@ public final class IndexedGroupCommitCoordinator {
       queueTail.next = request;
     }
     queueTail = request;
+    request.probeEnqueued = System.nanoTime();
     queued++;
     if (request.groupable) queuedGroupable++;
     if (queued == 1) queueBecameNonemptyNanos = System.nanoTime();
@@ -257,6 +258,7 @@ public final class IndexedGroupCommitCoordinator {
       IndexedGroupCommitRequest request = queueHead;
       queueHead = request.next;
       request.next = null;
+      request.probeSelected = System.nanoTime();
       batch.add(count++, request);
       queued--;
       if (request.groupable) queuedGroupable--;
