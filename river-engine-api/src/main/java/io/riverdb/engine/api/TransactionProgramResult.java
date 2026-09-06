@@ -111,6 +111,11 @@ public final class TransactionProgramResult {
   public int firstCell(int row) {
     return metadata.validRow(row) ? metadata.firstCell(row) : -1;
   }
+  /**
+   * Reported commit or snapshot position. A read-only snapshot position can include unrelated
+   * pending publications; successful completion makes the observed dependencies durable, not
+   * every write through that position. This value is not a durable-prefix watermark.
+   */
   public long commitSequence() { return commitSequence; }
   public int failingStep() { return failingStep; }
   public StatusCode primaryStatus() { return primaryStatus; }

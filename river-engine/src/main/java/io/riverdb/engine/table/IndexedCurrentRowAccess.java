@@ -10,6 +10,7 @@ import io.riverdb.tx.api.lock.LockMode;
 final class IndexedCurrentRowAccess {
   private final IndexedTransactionSession session;
   private final IndexedVersionedRowResult successor = new IndexedVersionedRowResult();
+  private final HeapRowResult successorRow = new HeapRowResult();
   private final IndexedRowCandidate scanCandidate = new IndexedRowCandidate();
   private final IndexedRowCandidate keyCandidate = new IndexedRowCandidate();
   private final IndexedLockedRow keyCurrent = new IndexedLockedRow();
@@ -37,8 +38,8 @@ final class IndexedCurrentRowAccess {
       return release(result, StatusCode.CONFLICT);
     }
     status = session.table().fetchCurrentSuccessor(
-        candidate.keySpace(), candidate.key(), candidate.versionRowId(), successor);
-    session.observeCurrentCommit();
+        candidate.keySpace(), candidate.key(), candidate.versionRowId(), successorRow, successor);
+    session.observeCommit(successor.observedCommitSequence());
     if (!status.isOk()) return release(result, status);
     return publishCommitted(
         result, generation, candidate.keySpace(), candidate.key(), candidate.versionRowId());
@@ -100,8 +101,8 @@ final class IndexedCurrentRowAccess {
           session.pendingMutations().previousRowIdAt(pending), pending);
       return status.isOk() ? status : release(result, status);
     }
-    status = session.table().fetchCurrentByKey(space, key, successor);
-    session.observeCurrentCommit();
+    status = session.table().fetchCurrentByKey(space, key, successorRow, successor);
+    session.observeCommit(successor.observedCommitSequence());
     if (!status.isOk()) return release(result, status);
     return publishCommitted(
         result, generation, space, key, successor.versionRowId());
@@ -148,7 +149,7 @@ final class IndexedCurrentRowAccess {
   private StatusCode publishCommitted(
       IndexedLockedRow result, long generation, long space, long key,
       long sourceVersionRowId) {
-    result.row().copyFrom(successor.row());
+    result.row().copyFrom(successorRow);
     result.set(
         session, generation, space, key,
         sourceVersionRowId, successor.versionRowId(), -1);

@@ -12,6 +12,7 @@ import java.util.zip.CRC32C;
 /** Reusable decoded view of one durable tuple-index root record. */
 final class IndexedTupleRootSnapshot {
   private final IndexedTableKernel kernel;
+  private final IndexedVersionedRowResult version = new IndexedVersionedRowResult();
   private final HeapRowResult row = new HeapRowResult();
   private final TupleIndexRootRecord record = new TupleIndexRootRecord();
   private final ByteBuffer bytes = ByteBuffer.allocate(TupleIndexRootRecordCodec.BYTES);
@@ -22,8 +23,8 @@ final class IndexedTupleRootSnapshot {
   }
 
   StatusCode load(long visible, long keyId) {
-    StatusCode status = kernel.fetchByKeyAt(
-        visible, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row);
+    StatusCode status = kernel.fetchVersionedByKeyAt(
+        visible, CatalogKeyspace.INDEX_ROOT_SPACE, keyId, row, version);
     if (!status.isOk()) return pressure(status) ? status : StatusCode.CORRUPTION;
     bytes.clear();
     status = row.copyTo(bytes);
@@ -61,6 +62,9 @@ final class IndexedTupleRootSnapshot {
     }
     return true;
   }
+
+  // Every tuple mutation versions its registry row, covering entries and negative decisions.
+  long observedCommitSequence() { return version.observedCommitSequence(); }
 
   long generation() { return record.generation(); }
 

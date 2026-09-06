@@ -145,6 +145,11 @@ public final class CommandResult {
     return affectedRows;
   }
 
+  /**
+   * Reported commit or snapshot position. A read-only snapshot position can include unrelated
+   * pending publications; successful completion makes the observed dependencies durable, not
+   * every write through that position. This value is not a durable-prefix watermark.
+   */
   public long commitSequence() {
     return commitSequence;
   }

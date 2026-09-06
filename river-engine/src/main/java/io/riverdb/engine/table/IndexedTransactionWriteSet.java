@@ -39,6 +39,7 @@ final class IndexedTransactionWriteSet {
       status = session.table().prepareInsert(
           session.transaction().snapshot().visibleCommitSequence(),
           space, key, session.mutationTarget());
+      session.observeCommit(session.mutationTarget().observedCommitSequence());
     }
     if (!status.isOk()) return status;
     session.appendPending(
@@ -72,6 +73,7 @@ final class IndexedTransactionWriteSet {
       status = session.table().prepareMutation(
           session.transaction().snapshot().visibleCommitSequence(),
           space, key, session.mutationTarget());
+      session.observeCommit(session.mutationTarget().observedCommitSequence());
     }
     if (!status.isOk()) return status;
     session.appendPending(
@@ -108,6 +110,7 @@ final class IndexedTransactionWriteSet {
       status = session.table().prepareMutation(
           session.transaction().snapshot().visibleCommitSequence(),
           space, key, session.mutationTarget());
+      session.observeCommit(session.mutationTarget().observedCommitSequence());
     }
     if (!status.isOk()) return status;
     session.appendPendingDeletion(

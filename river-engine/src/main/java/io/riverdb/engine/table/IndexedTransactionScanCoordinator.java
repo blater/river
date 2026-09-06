@@ -87,6 +87,7 @@ final class IndexedTransactionScanCoordinator {
       return StatusCode.OK;
     }
     StatusCode status = session.table().nextScan(cursor, cursor.committedLookahead());
+    session.observeCommit(cursor.observedCommitSequence());
     if (status.isOk()) cursor.setCommittedLookahead(true);
     else if (status == StatusCode.CONFLICT) {
       cursor.setCommittedExhausted();

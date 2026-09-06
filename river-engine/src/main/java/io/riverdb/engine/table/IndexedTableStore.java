@@ -1,6 +1,7 @@
 package io.riverdb.engine.table;
 
 import io.riverdb.base.error.StatusCode;
+import io.riverdb.storage.heap.HeapRowResult;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.checkpoint.CheckpointState;
@@ -251,13 +252,13 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
 
   StatusCode fetchVersionedByKeyAt(
       long visibleCommitSequence, long space, long key,
-      IndexedVersionedRowResult result) {
-    return kernel.fetchVersionedByKeyAt(visibleCommitSequence, space, key, result);
+      HeapRowResult row, IndexedVersionedRowResult result) {
+    return kernel.fetchVersionedByKeyAt(visibleCommitSequence, space, key, row, result);
   }
 
   StatusCode fetchCurrentSuccessor(
-      long space, long key, long candidateRowId, IndexedVersionedRowResult result) {
-    return kernel.fetchCurrentSuccessor(space, key, candidateRowId, result);
+      long space, long key, long candidateRowId, HeapRowResult row, IndexedVersionedRowResult result) {
+    return kernel.fetchCurrentSuccessor(space, key, candidateRowId, row, result);
   }
 
   int firstLeafPageIdAt(long visibleCommitSequence, long space, long lowerKey) {

@@ -76,6 +76,9 @@ final class IndexedGroupCommitFaultTest {
     IndexedTransactionSession excess = fixture.newSession();
     assertEquals(StatusCode.RESOURCE_EXHAUSTED, excess.begin(IsolationLevel.REPEATABLE_READ));
     assertEquals(4, fixture.manager.activeTransactionCount());
+    assertEquals(StatusCode.OK, reader.beginStatement());
+    assertEquals(StatusCode.OK, reader.fetchByKey(0, 41, new HeapRowResult()));
+    assertEquals(StatusCode.OK, reader.completeStatement(false));
     TransactionOutcome readOutcome = new TransactionOutcome();
     CountDownLatch started = new CountDownLatch(1);
     ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -106,7 +109,7 @@ final class IndexedGroupCommitFaultTest {
   @ValueSource(longs = {41, 999})
   void failedForceWakesDependentReaderWithoutAcknowledgingRowsOrAbsence(long key)
       throws Exception {
-    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    ForcedGroupFixture fixture = new ForcedGroupFixture(true);
     assertTrue(fixture.batch.appendSharedGroup(2));
     assertTrue(fixture.batch.publishPrepared(2));
     IndexedTransactionSession reader = fixture.newSession();
@@ -164,6 +167,154 @@ final class IndexedGroupCommitFaultTest {
     assertEquals(StatusCode.OK, reader.releaseCurrentKey());
     assertEquals(StatusCode.OK, reader.abort(new TransactionOutcome()));
     assertEquals(StatusCode.OK, reader.close());
+  }
+
+  @Test
+  void unrelatedRowsAbsenceAndReadOnlyCommitCompleteWhileForceIsPending() throws Exception {
+    ForcedGroupFixture fixture = new ForcedGroupFixture(true);
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    IndexedTransactionSession reader = fixture.newSession();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    // First observe pending data, then abort and reuse the session: dependencies must reset.
+    assertEquals(StatusCode.OK, reader.beginStatement());
+    assertEquals(StatusCode.OK, reader.fetchByKey(0, 41, new HeapRowResult()));
+    assertEquals(StatusCode.OK, reader.completeStatement(false));
+    assertEquals(StatusCode.OK, reader.abort(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      assertEquals(StatusCode.OK, executor.submit(() -> {
+        HeapRowResult row = new HeapRowResult();
+        assertEquals(StatusCode.OK, reader.fetchByKey(0, 43, row));
+        assertEquals(430, value(row));
+        assertEquals(StatusCode.CONFLICT, reader.fetchByKey(0, 888, row));
+        IndexedScanCursor cursor = new IndexedScanCursor();
+        assertEquals(StatusCode.OK, reader.beginScan(0, 800, 0, 900, cursor));
+        assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, new IndexedScanResult()));
+        assertEquals(StatusCode.OK, reader.closeScan(cursor));
+        assertEquals(StatusCode.OK, reader.commit(new TransactionOutcome()));
+        return reader.awaitDurability();
+      }).get(5, TimeUnit.SECONDS));
+    } finally {
+      fixture.batch.completeDurability(2);
+      fixture.complete(StatusCode.OK);
+    }
+    assertEquals(StatusCode.OK, reader.close());
+    assertEquals(StatusCode.OK, fixture.first.close());
+    assertEquals(StatusCode.OK, fixture.second.close());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"scan", "current", "insert", "duplicate", "update", "savepoint"})
+  void negativeAndRolledBackObservationsRemainDependentOnFailedForce(String observation)
+      throws Exception {
+    ForcedGroupFixture fixture = new ForcedGroupFixture(true);
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    IndexedTransactionSession reader = fixture.newSession();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedSavepoint savepoint = new IndexedSavepoint();
+    assertEquals(StatusCode.OK, reader.createSavepoint(savepoint));
+    assertEquals(StatusCode.OK, reader.beginStatement());
+    switch (observation) {
+      case "scan" -> {
+        IndexedScanCursor cursor = new IndexedScanCursor();
+        assertEquals(StatusCode.OK, reader.beginScan(0, 999, 0, 1000, cursor));
+        assertEquals(StatusCode.CONFLICT, reader.nextScan(cursor, new IndexedScanResult()));
+        assertEquals(StatusCode.OK, reader.closeScan(cursor));
+      }
+      case "current" -> assertEquals(StatusCode.CONFLICT,
+          reader.lockCurrentKeyCurrent(0, 999, new HeapRowResult()));
+      case "insert" -> assertEquals(StatusCode.OK, reader.insert(0, 999, row(1)));
+      case "duplicate" -> assertEquals(StatusCode.CONFLICT, reader.insert(0, 41, row(1)));
+      case "update" -> assertEquals(StatusCode.CONFLICT, reader.update(0, 999, row(1)));
+      case "savepoint" -> assertEquals(StatusCode.OK,
+          reader.fetchByKey(0, 41, new HeapRowResult()));
+      default -> throw new AssertionError(observation);
+    }
+    assertEquals(StatusCode.OK, reader.completeStatement(false));
+    assertEquals(StatusCode.OK, reader.rollbackToSavepoint(savepoint));
+    assertEquals(StatusCode.OK, reader.releaseSavepoint(savepoint));
+    TransactionOutcome outcome = new TransactionOutcome();
+    CountDownLatch started = new CountDownLatch(1);
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      var delivered = executor.submit(() -> {
+        started.countDown();
+        return reader.commit(outcome);
+      });
+      assertTrue(started.await(5, TimeUnit.SECONDS));
+      assertThrows(TimeoutException.class, () -> delivered.get(100, TimeUnit.MILLISECONDS));
+      assertEquals(StatusCode.OK, fixture.faults.arm(
+          DirectoryOperation.FILE_FORCE, FaultOperation.DIRECTORY_FILE_FORCE,
+          FaultAction.FORCE_FAILURE));
+      fixture.batch.completeDurability(2);
+      fixture.complete(StatusCode.IO_FAILURE);
+      assertEquals(StatusCode.FENCED, delivered.get(5, TimeUnit.SECONDS));
+    }
+    assertEquals(TransactionState.ABORTED, reader.transaction().state());
+    assertEquals(TransactionState.ABORTED, outcome.state());
+    assertFalse(reader.transactionLifecycleActive());
+    fixture.assertTerminalFailure();
+    assertEquals(StatusCode.OK, reader.close());
+  }
+
+  @Test
+  void cancelledReadOnlyCommitRetainsItsDependencyAndCanRetryAfterForce() {
+    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    IndexedTransactionSession reader = fixture.newSession();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(StatusCode.OK, reader.beginStatement());
+    assertEquals(StatusCode.OK, reader.fetchByKey(0, 41, new HeapRowResult()));
+    assertEquals(StatusCode.OK, reader.completeStatement(false));
+    TransactionOutcome outcome = new TransactionOutcome();
+    Thread.currentThread().interrupt();
+    try {
+      assertEquals(StatusCode.CANCELLED, reader.commit(outcome));
+      assertTrue(Thread.currentThread().isInterrupted());
+      assertEquals(TransactionState.ACTIVE, reader.transaction().state());
+      assertTrue(reader.transactionLifecycleActive());
+      assertFalse(outcome.isAvailable());
+    } finally {
+      Thread.interrupted();
+      fixture.batch.completeDurability(2);
+      fixture.complete(StatusCode.OK);
+    }
+    assertEquals(StatusCode.OK, reader.commit(outcome));
+    assertEquals(TransactionState.COMMITTED, outcome.state());
+    assertEquals(StatusCode.OK, reader.close());
+    assertEquals(StatusCode.OK, fixture.first.close());
+    assertEquals(StatusCode.OK, fixture.second.close());
+    assertEquals(0, fixture.manager.activeTransactionCount());
+    assertEquals(0, fixture.manager.activeLockCount());
+  }
+
+  @Test
+  void rowResultsRetainTheirOwnBytesAcrossOtherReadsAndValidateSpaces() {
+    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    fixture.batch.process(2);
+    fixture.complete(StatusCode.OK);
+    IndexedTransactionSession reader = fixture.newSession();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    HeapRowResult first = new HeapRowResult();
+    HeapRowResult second = new HeapRowResult();
+    assertEquals(StatusCode.OK, reader.fetchByKey(0, 41, first));
+    assertEquals(StatusCode.OK, reader.fetchByKey(0, 42, second));
+    assertEquals(410, value(first));
+    assertEquals(420, value(second));
+    assertEquals(StatusCode.OK, reader.fetchCandidateByKey(
+        0, 42, io.riverdb.tx.api.lock.LockMode.SHARED, new IndexedRowCandidate()));
+    assertEquals(410, value(first));
+    assertEquals(420, value(second));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        reader.fetchByKey(-1, 41, new HeapRowResult()));
+    assertEquals(StatusCode.INVALID_EXTERNAL_INPUT,
+        reader.fetchByKey(Long.MIN_VALUE, 41, new HeapRowResult()));
+    assertEquals(StatusCode.OK, reader.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, reader.close());
+    assertEquals(StatusCode.OK, fixture.first.close());
+    assertEquals(StatusCode.OK, fixture.second.close());
   }
 
   @Test
@@ -510,7 +661,15 @@ final class IndexedGroupCommitFaultTest {
       this(pageCachePlan());
     }
 
+    private ForcedGroupFixture(boolean delete) {
+      this(pageCachePlan(), delete);
+    }
+
     private ForcedGroupFixture(DatabasePageCachePlan cachePlan) {
+      this(cachePlan, false);
+    }
+
+    private ForcedGroupFixture(DatabasePageCachePlan cachePlan, boolean delete) {
       LocalWalOpenResult walResult = new LocalWalOpenResult();
       assertEquals(
           StatusCode.OK,
@@ -532,8 +691,15 @@ final class IndexedGroupCommitFaultTest {
       IndexedSessionContext context = context(manager, table, null, vacuum);
       first = session(context, Long.BYTES);
       second = session(context, Long.BYTES);
+      if (delete) {
+        assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
+        assertEquals(StatusCode.OK, first.insert(0, 43, row(430)));
+        assertEquals(StatusCode.OK, first.insert(0, 999, row(9990)));
+        assertEquals(StatusCode.OK, first.commit(new TransactionOutcome()));
+      }
       assertEquals(StatusCode.OK, first.begin(IsolationLevel.REPEATABLE_READ));
       assertEquals(StatusCode.OK, first.insert(0, 41, row(410)));
+      if (delete) assertEquals(StatusCode.OK, first.delete(0, 999));
       assertEquals(StatusCode.OK, second.begin(IsolationLevel.REPEATABLE_READ));
       assertEquals(StatusCode.OK, second.insert(0, 42, row(420)));
       rowsBefore = table.rowCount();

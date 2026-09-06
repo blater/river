@@ -133,16 +133,15 @@ final class EmbeddedCatalogDurabilityOverlapTest {
           return catalog.open(objectId, standalonePin, null);
         });
         assertTrue(standaloneStarted.await(5, TimeUnit.SECONDS));
-        assertThrows(TimeoutException.class, () -> standalone.get(100, TimeUnit.MILLISECONDS));
+        assertEquals(StatusCode.OK, standalone.get(5, TimeUnit.SECONDS));
+        assertTrue(standalonePin.isActive());
+        assertEquals(StatusCode.OK, standalonePin.release());
         file.release.countDown();
         assertEquals(failForce ? StatusCode.IO_FAILURE : StatusCode.OK,
             first.get(5, TimeUnit.SECONDS));
         assertEquals(failForce ? StatusCode.FENCED : StatusCode.OK,
             next.get(5, TimeUnit.SECONDS));
-        assertEquals(failForce ? StatusCode.FENCED : StatusCode.OK,
-            standalone.get(5, TimeUnit.SECONDS));
-        assertEquals(!failForce, standalonePin.isActive());
-        if (standalonePin.isActive()) assertEquals(StatusCode.OK, standalonePin.release());
+
         assertEquals(StatusCode.OK, reader.abort(new TransactionOutcome()));
         if (!failForce) {
           assertTrue(result.commitSequence() > 0);
@@ -164,6 +163,88 @@ final class EmbeddedCatalogDurabilityOverlapTest {
       assertEquals(0, database.activeLockCount());
       assertEquals(0, database.waitingLockCount());
       database.close();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void sqlReadsWaitOnlyForObservedRowsAndTupleRoots(boolean failForce, @TempDir Path root)
+      throws Exception {
+    DatabaseOpenResult opened = new DatabaseOpenResult();
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root,
+        DatabaseIncarnation.of(1_217, 1_223), WalGeneration.of(1), 8, opened));
+    RiverDatabase database = opened.database();
+    RiverSession writer = session(database);
+    RiverSession independent = session(database);
+    RiverSession rowReader = session(database);
+    RiverSession missingReader = session(database);
+    RiverSession rangeReader = session(database);
+    execute(writer, "CREATE TABLE changing (id INTEGER PRIMARY KEY,value BIGINT NOT NULL)");
+    execute(writer, "CREATE TABLE stable (id INTEGER PRIMARY KEY,value BIGINT NOT NULL)");
+    execute(writer, "INSERT INTO changing VALUES (1,100)");
+    execute(writer, "INSERT INTO changing VALUES (2,200)");
+    execute(writer, "INSERT INTO stable VALUES (1,300)");
+    RelationalDatabase relational = (RelationalDatabase) field(database, "database");
+    EmbeddedDatabase embedded = (EmbeddedDatabase) field(relational, "embedded");
+    LocalWal wal = (LocalWal) field(embedded, "wal");
+    HeldForce file = new HeldForce((DurableFile) field(wal, "file"), failForce);
+    Field walFile = LocalWal.class.getDeclaredField("file");
+    walFile.setAccessible(true);
+    walFile.set(wal, file);
+    execute(writer, "BEGIN");
+    execute(writer, "UPDATE changing SET value=101 WHERE id=1");
+    execute(writer, "DELETE FROM changing WHERE id=2");
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      try {
+        var commit = executor.submit(() -> writer.execute("COMMIT", new CommandResult()));
+        assertTrue(file.entered.await(5, TimeUnit.SECONDS));
+        assertEquals(StatusCode.OK, executor.submit(() -> {
+          CommandResult result = new CommandResult();
+          assertEquals(StatusCode.OK, independent.execute("SELECT value FROM stable WHERE id=1", result));
+          assertEquals(300, result.valueAt(0));
+          execute(independent, "SELECT COUNT(*) FROM stable WHERE id=999");
+          execute(independent, "BEGIN");
+          execute(independent, "SELECT value FROM stable WHERE id=1");
+          execute(independent, "SELECT COUNT(*) FROM stable WHERE id>9");
+          return independent.execute("COMMIT", new CommandResult());
+        }).get(5, TimeUnit.SECONDS));
+        CommandResult rowResult = new CommandResult();
+        CommandResult missingResult = new CommandResult();
+        CommandResult rangeResult = new CommandResult();
+        var row = executor.submit(() -> rowReader.execute(
+            "SELECT value FROM changing WHERE id=1", rowResult));
+        var missing = executor.submit(() -> missingReader.execute(
+            "SELECT COUNT(*) FROM changing WHERE id=2", missingResult));
+        var range = executor.submit(() -> rangeReader.execute(
+            "SELECT COUNT(*) FROM changing WHERE id>1", rangeResult));
+        assertThrows(TimeoutException.class, () -> row.get(100, TimeUnit.MILLISECONDS));
+        assertThrows(TimeoutException.class, () -> missing.get(100, TimeUnit.MILLISECONDS));
+        assertThrows(TimeoutException.class, () -> range.get(100, TimeUnit.MILLISECONDS));
+        assertFalse(commit.isDone());
+        file.release.countDown();
+        assertEquals(failForce ? StatusCode.IO_FAILURE : StatusCode.OK,
+            commit.get(5, TimeUnit.SECONDS));
+        StatusCode expected = failForce ? StatusCode.FENCED : StatusCode.OK;
+        assertEquals(expected, row.get(5, TimeUnit.SECONDS));
+        assertEquals(expected, missing.get(5, TimeUnit.SECONDS));
+        assertEquals(expected, range.get(5, TimeUnit.SECONDS));
+        if (!failForce) {
+          assertEquals(101, rowResult.valueAt(0));
+          assertEquals(0, missingResult.valueAt(0));
+          assertEquals(0, rangeResult.valueAt(0));
+        }
+      } finally {
+        file.release.countDown();
+      }
+    } finally {
+      assertEquals(StatusCode.OK, writer.close());
+      assertEquals(StatusCode.OK, independent.close());
+      assertEquals(StatusCode.OK, rowReader.close());
+      assertEquals(StatusCode.OK, missingReader.close());
+      assertEquals(StatusCode.OK, rangeReader.close());
+      assertEquals(0, database.activeTransactionCount());
+      assertEquals(0, database.activeLockCount());
+      assertEquals(failForce ? StatusCode.FENCED : StatusCode.OK, database.close());
     }
   }
 

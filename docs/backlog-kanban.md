@@ -9,12 +9,12 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-User-directed focused work: [`tic-186e`](tickets/tic-186e.md) is closed at the
+User-directed focused work: [`tic-e544`](tickets/tic-e544.md) is implementing
+read durability dependencies on its own feature branch. The engine tests pass;
+short TPS and Order Status p95 results are neutral. Longer interleaved evidence
+and the clean checkpoint determine acceptance. This does not displace the broader
+P0/P1 frontier below. The preceding [`tic-186e`](tickets/tic-186e.md) remains the
 pushed `perf-checkpoint-20260906-catalog-transaction-resolution` checkpoint.
-Caller-transaction descriptor resolution removes the traced internal durability
-wait after lock handoff. Longer local diagnostics improve approximately 25%,
-with an explained Order Status read-tail tradeoff recorded in the performance
-ledger. The broader P0/P1 acceptance and Payment work below remain separate.
 
 ## Board
 
