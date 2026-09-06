@@ -26,6 +26,9 @@ final class IndexedPageFrameCache {
   private long accessClock;
   private long pageGenerationClock;
   private int currentProbeCursor;
+  // Empty reclaimed frames use previousVersionSlot as an intrusive free link.
+  // Only reclaimHistorical offers them; selection consumes them before probing.
+  private int reclaimedFrameHead = -1;
   private StatusCode lastStatus = StatusCode.OK;
   private final IoResult cacheIo = new IoResult();
 
@@ -79,6 +82,7 @@ final class IndexedPageFrameCache {
     currentMap.detach();
     stagingMap.detach();
     currentFrames = stagingFrames = DETACHED_FRAMES;
+    reclaimedFrameHead = -1;
   }
 
   ByteBuffer currentPayloadUnchecked(int pageId) {
@@ -568,6 +572,8 @@ final class IndexedPageFrameCache {
           || frame.validUntilCommitSequence > oldestVisibleCommitSequence) continue;
       StatusCode status = prepareCurrentSlotForReuse(slot);
       if (!status.isOk()) return setStatus(status);
+      frame.previousVersionSlot = reclaimedFrameHead;
+      reclaimedFrameHead = slot;
     }
     return setStatus(StatusCode.OK);
   }
@@ -809,6 +815,13 @@ final class IndexedPageFrameCache {
   }
 
   int reusableCurrentSlot(boolean allowEviction, long oldestVisibleCommitSequence) {
+    if (reclaimedFrameHead >= 0) {
+      int slot = reclaimedFrameHead;
+      IndexedPageFrame frame = currentFrames[slot];
+      reclaimedFrameHead = frame.previousVersionSlot;
+      frame.previousVersionSlot = -1;
+      return slot;
+    }
     for (int probe = 0; probe < currentFrames.length; probe++) {
       int index = currentProbeCursor;
       currentProbeCursor = (currentProbeCursor + 1) % currentFrames.length;

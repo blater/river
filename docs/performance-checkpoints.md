@@ -42,6 +42,91 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-06 reclaimed page-frame handoff (`tic-2828`)
+
+Status: user-authorized promotion of the allocation fix after independent
+review, engine tests, and the clean full test build passed. The user explicitly
+requested commit, push, and promotion after the existing repository policy
+failures were reported. This accepts those recorded gate limitations for this
+delivery; it does not establish a throughput improvement or a green policy gate.
+
+- Base: pushed `1ce3c802c636cca9c6551f4fbb98d4ecebe6a153`, tagged
+  `perf-checkpoint-20260906-batched-lock-release`.
+- Branch: `ticket/tic-2828-page-generation-reuse-followup`.
+- Checkpoint tag: `perf-checkpoint-20260906-page-generation-reuse`.
+- Evidence root: `/private/tmp/river-tic-2828.XBvoMp`.
+- Mechanism: retain the frames cleared by preflight reclamation in an intrusive
+  cache-owned free chain and consume them before circular probing. The chain
+  borrows the previous-version link only while a frame is empty; selection
+  clears the link before admission. Existing visibility, pin, reservation,
+  version-splicing, and eviction policy remain authoritative. No extra scan,
+  per-operation allocation, copy, queue capacity, or payload-view change.
+- Baseline allocation test: warmed single-row inserts allocated 80,896 bytes
+  against the existing 512-byte ceiling (`baseline-allocation.log`). Both
+  unchanged allocation tests pass after the fix (`focused-allocation.xml`).
+  Five small-geometry tests cover production preflight order, multiple retained
+  frames, pin/snapshot protection, prepared publication, and pressure recovery
+  (`focused-reuse.xml`); the existing eviction tests also pass.
+
+Matched diagnostic command, serialized with all builds and other workloads:
+
+```sh
+./make.sh
+tools/tps-test.sh --seed=42 --warmup-seconds=1 --measured-seconds=10 \
+  --output-dir=/private/tmp/river-tic-2828.XBvoMp/<sample>
+```
+
+Fixed defaults: tiny standard mix, serializable isolation, one warehouse,
+ten terminals, no-wait-stress scheduling, 32 maximum attempts, default resource
+budgets, OpenJDK launcher 26.0.2.1. These are engineering TPS, not tpmC.
+
+| Sample | Committed TPS | Retries/errors | Result |
+| --- | ---: | --- | --- |
+| `baseline-1` | 121.600 | 0 / 0 | Successful capture and terminal receipt |
+| `baseline-2` | 121.300 | 0 / 0 | Successful capture and terminal receipt |
+| `candidate-1` | 118.700 | 0 / 0 | Repeated short-run drop triggered investigation |
+| `candidate-2` | 114.700 | 0 / 0 | Repeated short-run drop triggered investigation |
+| `control-long-1` | 129.400 | 1 / 0 | Reconciled order-status deadlock retry |
+| `candidate-long-1` | 132.167 | 0 / 0 | Successful capture and terminal receipt |
+| `control-long-2` | 124.967 | 0 / 0 | Successful capture and terminal receipt |
+| `candidate-long-2` | 133.933 | 0 / 0 | Successful capture and terminal receipt |
+
+The four longer runs used `--warmup-seconds=5 --measured-seconds=30`, alternating
+control/candidate in the order shown with all other settings fixed. Only the
+cache source differed; `interleave.sh` rebuilt each variant and restored the
+candidate afterward. Every sample completed with zero errors, successful
+capture, deadlock reconciliation, and a successful terminal receipt. The longer
+interleaved evidence did not reproduce the short-run regression; it does not
+establish a throughput claim. Mean preflight reclamation fell from
+119.255–127.666 microseconds/event in the longer controls to 30.909–32.993 in
+the candidates. Mean group preflight fell from 476.667–493.737 to
+373.135–382.089 microseconds/event. WAL force remained variable at
+3.427–3.682 milliseconds/event across those four samples. Exact values and
+source-linked raw metrics are retained in `mechanism-summary.txt` and each
+sample directory.
+
+Validation: all 981 engine tests executed successfully in
+`engine-and-policy.log`; `verifyIndexedTableClassReferences` passed.
+`./gradlew clean test --no-fail-fast --continue` then passed in
+`clean-test.log`, with 1,762 reported tests, zero failures/errors and two skipped
+benchmark tests (`clean-test-summary.txt`). Gradle reused valid cached results,
+including the just-executed engine suite. The separate `verifySourcePolicy`
+and `verifyHotPathBytecode` checks still fail on unchanged source-format and
+test-support findings, stale/missing method entries, and the existing engine
+API exception instruction. No finding names either touched Java file; no
+policy allowlist or allocation threshold was changed. Those failures prevent
+reporting a fully green repository policy gate.
+
+Independent correctness review found no blocker in reclamation ownership,
+duplicate prevention, generation links, pins/reservations, failure cleanup,
+or detach. Slopmark triggered a separate design review: the touched cache's
+score rose from 76.6761 to 87.1949; cognitive maximum/count stayed 18/96 and
+NPath maximum/count stayed 54/96, while cyclomatic total/maximum changed from
+341/14 to 342/15. The reviewer recommended retaining the small addition in its
+existing owner: extracting it would add indirection without simplifying
+ownership. Both isolated scores and full baseline ranking are retained in the
+evidence root. This is a reviewed trigger, not a waived correctness gate.
+
 ### 2026-09-06 batched terminal lock-release scheduling
 
 Status: promotion requested from `perf/batched-lock-release`, currently held
