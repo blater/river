@@ -56,7 +56,14 @@ public enum StatusCode {
     return family;
   }
 
+  private static int corruptionProbeCount;
+
+  private static synchronized void traceCorruption() {
+    if (corruptionProbeCount++ < 16) Thread.dumpStack();
+  }
+
   public boolean isOk() {
+    if (this == CORRUPTION) traceCorruption();
     return this == OK;
   }
 
