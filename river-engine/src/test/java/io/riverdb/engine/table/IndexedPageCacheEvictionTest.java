@@ -107,7 +107,11 @@ final class IndexedPageCacheEvictionTest {
     assertEquals(StatusCode.OK, pages.releaseOperationPage(firstGeneration));
     assertEquals(StatusCode.OK,
         pages.installPreparedPages(new long[] {1, 2}, 2, 1, 2));
+    IndexedPageGenerationPin reader = new IndexedPageGenerationPin();
+    assertEquals(StatusCode.OK, pages.pinPageAt(1, 2, reader));
     assertEquals(StatusCode.OK, pages.releasePreparedBatch());
+    assertEquals(22, reader.payload().getLong(0));
+    assertEquals(StatusCode.OK, pages.unpinPage(reader));
     assertEquals(22, pages.currentPayload(1).getLong(0));
 
     assertEquals(StatusCode.OK, pageFile.file().close());

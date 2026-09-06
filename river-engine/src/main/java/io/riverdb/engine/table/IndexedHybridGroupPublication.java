@@ -24,7 +24,7 @@ final class IndexedHybridGroupPublication {
       int[] heapPageEnds,
       int count,
       long groupBaseRow) {
-    StatusCode status = preparedCommitSequence == 0 && wal != null && wal.forced()
+    StatusCode status = preparedCommitSequence == 0 && wal != null && wal.appended()
         ? installer.install(
             mutations, sequences, rowEnds, heapPageEnds, count, groupBaseRow,
             wal.start(), wal.end(), false)
@@ -38,13 +38,8 @@ final class IndexedHybridGroupPublication {
   }
 
   StatusCode install(IndexedRelationalWalGroupAppender wal) {
-    if (preparedCommitSequence <= store.lastCommitSequence || !wal.forced()) {
+    if (preparedCommitSequence <= store.lastCommitSequence || !wal.appended()) {
       return StatusCode.INVARIANT_BROKEN;
-    }
-    StatusCode status = wal.release();
-    if (!status.isOk()) {
-      store.failed = true;
-      return status;
     }
     store.lastCommitSequence = preparedCommitSequence;
     preparedCommitSequence = 0;

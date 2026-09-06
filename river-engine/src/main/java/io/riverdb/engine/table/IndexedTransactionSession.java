@@ -24,6 +24,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final IndexedSessionRegistry sessionRegistry;
   private final IndexedSessionState state;
   private long committedSequence;
+  private long observedCurrentSequence;
   private long copiedWriteSetBytes;
   private boolean statementActive;
   private boolean closed;
@@ -204,6 +205,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     state.logicalRowFloors.reset();
     state.preparedCommit.reset();
     committedSequence = 0;
+    observedCurrentSequence = 0;
     statementActive = false;
     StatusCode maintenance = maintainVersions();
     if (!maintenance.isOk()) {
@@ -232,7 +234,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     return status;
   }
 
-  public StatusCode completeStatement() {
+  public StatusCode completeStatement(boolean deliverResult) {
     if (!statementActive || hasActiveScans()) {
       return StatusCode.CONFLICT;
     }
@@ -241,7 +243,24 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       return transaction.isActiveHandle() ? StatusCode.CONFLICT : StatusCode.OK;
     }
     statementActive = false;
-    return StatusCode.OK;
+    return deliverResult ? awaitDurability() : StatusCode.OK;
+  }
+
+  /** Completes observation of committed state before it crosses a caller's result boundary. */
+  public StatusCode awaitDurability() {
+    return table.awaitDurability(Math.max(observedCurrentSequence,
+        Math.max(transaction.snapshot().visibleCommitSequence(), transaction.commitSequence())));
+  }
+
+  // Current-row integrity probes may observe beyond a repeatable-read snapshot.
+  void observeCurrentCommit() {
+    observedCurrentSequence = Math.max(observedCurrentSequence, table.currentCommitSequence());
+  }
+
+  private StatusCode deliverRead(StatusCode status) {
+    if (statementActive || !status.isOk() && status != StatusCode.CONFLICT) return status;
+    StatusCode durability = awaitDurability();
+    return durability.isOk() ? status : durability;
   }
 
   private StatusCode maintainVersions() {
@@ -262,7 +281,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   /** Reads one durable tuple-root state through this transaction's current snapshot. */
   public StatusCode readTupleIndexState(long keyId, IndexedTupleIndexState result) {
-    return state.tupleAccess.readState(keyId, result);
+    return deliverRead(state.tupleAccess.readState(keyId, result));
   }
 
   /**
@@ -276,8 +295,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       long ownerObjectId, long keyId, long schemaId,
       io.riverdb.base.tuple.TupleShape shape,
       ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
-    return state.tupleAccess.probePrefix(
-        ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
+    return deliverRead(state.tupleAccess.probePrefix(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, result));
   }
 
   /** Resolves one SQL-unique tuple through the visible root plus this transaction's intents. */
@@ -285,8 +304,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       long ownerObjectId, long keyId, long schemaId,
       io.riverdb.base.tuple.TupleShape shape,
       ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
-    return state.tupleAccess.resolveUnique(
-        ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
+    return deliverRead(state.tupleAccess.resolveUnique(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, result));
   }
 
   /** Resolves a stable SQL-unique source mapping under shared or exclusive tuple protection. */
@@ -295,8 +314,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       io.riverdb.base.tuple.TupleShape shape,
       ByteBuffer key, int offset, int length, LockMode mode,
       IndexedTupleProbeResult result) {
-    return state.tupleAccess.source.resolve(
-        ownerObjectId, keyId, schemaId, shape, key, offset, length, mode, result);
+    return deliverRead(state.tupleAccess.source.resolve(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, mode, result));
   }
 
   /** Resolves one current SQL-unique tuple while retaining shared integrity protection. */
@@ -304,8 +323,8 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       long ownerObjectId, long keyId, long schemaId,
       io.riverdb.base.tuple.TupleShape shape,
       ByteBuffer key, int offset, int length, IndexedTupleProbeResult result) {
-    return state.tupleAccess.current.unique(
-        ownerObjectId, keyId, schemaId, shape, key, offset, length, result);
+    return deliverRead(state.tupleAccess.current.unique(
+        ownerObjectId, keyId, schemaId, shape, key, offset, length, result));
   }
 
   /** Resolves any tuple sharing a user prefix through the visible root plus this transaction. */
@@ -323,9 +342,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       io.riverdb.base.tuple.TupleShape shape,
       ByteBuffer key, int offset, int length, long excludedRowId,
       IndexedTupleProbeResult result) {
-    return state.tupleAccess.resolveAny(
+    return deliverRead(state.tupleAccess.resolveAny(
         ownerObjectId, keyId, schemaId, shape, key, offset, length,
-        excludedRowId, result);
+        excludedRowId, result));
   }
 
   /** Resolves any current tuple sharing a user prefix after its integrity lock is retained. */
@@ -344,9 +363,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
       io.riverdb.base.tuple.TupleShape shape,
       ByteBuffer key, int offset, int length, long excludedRowId,
       IndexedTupleProbeResult result) {
-    return state.tupleAccess.current.any(
+    return deliverRead(state.tupleAccess.current.any(
         ownerObjectId, keyId, schemaId, shape, key, offset, length,
-        excludedRowId, result);
+        excludedRowId, result));
   }
 
   /** Holds shared lifecycle and ordered tuple-key protection through transaction completion. */
@@ -493,29 +512,29 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode fetchByKey(long space, long key, HeapRowResult result) {
-    return state.readAccess.fetchByKey(space, key, result);
+    return deliverRead(state.readAccess.fetchByKey(space, key, result));
   }
 
   public StatusCode fetchCandidateByKey(
       long space, long key, LockMode protectionMode, IndexedRowCandidate result) {
-    return state.readAccess.fetchCandidateByKey(space, key, protectionMode, result);
+    return deliverRead(state.readAccess.fetchCandidateByKey(space, key, protectionMode, result));
   }
 
   /** Locks a selected logical key and returns its current uninterrupted update successor. */
   public StatusCode lockCurrent(
       IndexedRowCandidate candidate, IndexedLockedRow result) {
-    return state.currentRows.lockCurrent(candidate, result);
+    return deliverRead(state.currentRows.lockCurrent(candidate, result));
   }
 
   public StatusCode lockCurrent(
       IndexedScanResult scanned, IndexedLockedRow result) {
-    return state.currentRows.lockCurrent(scanned, result);
+    return deliverRead(state.currentRows.lockCurrent(scanned, result));
   }
 
   /** Locks and discovers one current committed logical row without snapshot candidacy. */
   public StatusCode lockCurrentKeyCurrent(
       long space, long key, IndexedLockedRow result) {
-    return state.currentRows.lockCurrentKeyCurrent(space, key, result);
+    return deliverRead(state.currentRows.lockCurrentKeyCurrent(space, key, result));
   }
 
   public StatusCode updateLocked(IndexedLockedRow target, ByteBuffer row) {
@@ -560,12 +579,12 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   /** Borrows the current uninterrupted successor of one snapshot-selected logical key. */
   public StatusCode lockCurrentKey(long space, long key, HeapRowResult result) {
-    return state.currentRows.lockCurrentKey(space, key, result);
+    return deliverRead(state.currentRows.lockCurrentKey(space, key, result));
   }
 
   /** Borrows the current row after acquiring its exclusive key lock before reading it. */
   public StatusCode lockCurrentKeyCurrent(long space, long key, HeapRowResult result) {
-    return state.currentRows.lockCurrentKeyCurrent(space, key, result);
+    return deliverRead(state.currentRows.lockCurrentKeyCurrent(space, key, result));
   }
 
   /** Adopts the borrowed current-key guard as transaction-lifetime ownership. */
@@ -588,7 +607,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   }
 
   public StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {
-    return state.scans.next(cursor, result);
+    return deliverRead(state.scans.next(cursor, result));
   }
 
   public StatusCode closeScan(IndexedScanCursor cursor) {
@@ -607,7 +626,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   public StatusCode nextTupleScan(
       IndexedTupleScanCursor cursor, IndexedTupleScanResult result) {
-    return state.tupleScans.next(cursor, result);
+    return deliverRead(state.tupleScans.next(cursor, result));
   }
 
   public StatusCode closeTupleScan(IndexedTupleScanCursor cursor) {
@@ -735,7 +754,9 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     if (state.pendingMutations.count() == 0 && state.tupleIntents.mutationCount() == 0
         && !state.tupleLifecycle.active() && state.logicalRowFloors.count() == 0) {
       table.commitMetrics().recordReadOnlyCommit();
-      StatusCode status = manager.commitReadOnly(transaction, result);
+      result.reset();
+      StatusCode status = awaitDurability();
+      if (status.isOk()) status = manager.commitReadOnly(transaction, result);
       return !transaction.isActiveHandle() ? completeTerminalCleanup(status) : status;
     }
     if (state.groupCommit != null) {

@@ -64,6 +64,7 @@ final class IndexedExtendedCommitCoordinator {
   }
 
   StatusCode forceHybridGroup() { return hybridGroup.force(); }
+  StatusCode completeHybridGroupDurability() { return hybridGroup.completeDurability(); }
   StatusCode prepareHybridGroupPublication() { return hybridGroup.preparePublication(); }
   StatusCode installHybridGroupPublication() { return hybridGroup.installPublication(); }
   StatusCode cancelHybridGroup() { return hybridGroup.cancel(); }

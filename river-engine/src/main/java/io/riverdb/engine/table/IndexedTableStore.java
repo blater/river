@@ -51,6 +51,8 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
   private boolean providerReleased;
   private boolean baseLoaded;
   volatile long lastCommitSequence;
+  // First visible CSN whose durability is still owned by the single commit writer.
+  long pendingDurabilitySequence;
 
   IndexedTableStore(
       DurableDirectory durableDirectory,
@@ -151,6 +153,10 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     return relationalServices().forceHybridGroup();
   }
 
+  StatusCode completeHybridGroupDurability() {
+    return relationalServices().completeHybridGroupDurability();
+  }
+
   StatusCode cancelCommitGroup() {
     return relationalServices().cancelHybridGroup();
   }
@@ -212,7 +218,7 @@ public final class IndexedTableStore extends IndexedRelationalStoreAccess {
     return commitStatus.isOk() ? walStatus : commitStatus;
   }
 
-  StatusCode prepareForcedGroupPublication() {
+  StatusCode prepareGroupPublication() {
     return relationalServices().prepareHybridGroupPublication();
   }
 

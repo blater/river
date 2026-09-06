@@ -43,13 +43,15 @@ final class IndexedTuplePublishedRootProbe {
       ByteBuffer key, int offset, int length, long afterRowId,
       IndexedTupleProbeResult result) {
     long privateOwner = privateOwner(ownerId, keyId, schemaId, shape);
-    return privateOwner > 0
+    StatusCode status = privateOwner > 0
         ? buildingAfter(
             ownerId, keyId, schemaId, privateOwner,
             shape, key, offset, length, afterRowId, result)
         : session.table().probeTuplePrefixAfterCurrent(
             ownerId, keyId, schemaId, shape,
             key, offset, length, afterRowId, result);
+    session.observeCurrentCommit();
+    return status;
   }
 
   private StatusCode buildingAfter(

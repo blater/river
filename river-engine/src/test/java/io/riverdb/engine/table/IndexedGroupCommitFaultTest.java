@@ -4,6 +4,7 @@ import static io.riverdb.engine.TestDatabaseResources.databaseProviderLease;
 import static io.riverdb.engine.TestDatabaseResources.pageCachePlan;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.riverdb.base.error.StatusCode;
@@ -34,16 +35,165 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Named;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 final class IndexedGroupCommitFaultTest {
   private static final DatabaseIncarnation DATABASE = DatabaseIncarnation.of(919, 929);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
+
+  @Test
+  void publishedGroupHandsOffLocksButRetainsAdmissionAndWithholdsReaderCompletion()
+      throws Exception {
+    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    long durableEnd = fixture.wal.durableEnd();
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    assertEquals(durableEnd, fixture.wal.durableEnd());
+    assertEquals(0, fixture.manager.activeLockCount());
+    assertEquals(2, fixture.manager.activeTransactionCount());
+    assertEquals(TransactionState.COMMITTING, fixture.first.transaction().state());
+    assertFalse(fixture.firstRequest.outcome.isAvailable());
+
+    IndexedTransactionSession successor = fixture.newSession();
+    assertEquals(StatusCode.OK, successor.begin(IsolationLevel.SERIALIZABLE));
+    assertEquals(0, successor.transaction().snapshot().activeTransactionCount());
+    assertEquals(StatusCode.OK, successor.beginStatement());
+    HeapRowResult row = new HeapRowResult();
+    assertEquals(StatusCode.OK, successor.fetchByKey(0, 41, row));
+    assertEquals(410, value(row));
+    assertEquals(StatusCode.OK, successor.update(0, 41, row(411)));
+    assertEquals(StatusCode.OK, successor.completeStatement(false));
+
+    IndexedTransactionSession reader = fixture.newSession();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    IndexedTransactionSession excess = fixture.newSession();
+    assertEquals(StatusCode.RESOURCE_EXHAUSTED, excess.begin(IsolationLevel.REPEATABLE_READ));
+    assertEquals(4, fixture.manager.activeTransactionCount());
+    TransactionOutcome readOutcome = new TransactionOutcome();
+    CountDownLatch started = new CountDownLatch(1);
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<StatusCode> readCommit = executor.submit(() -> {
+        started.countDown();
+        return reader.commit(readOutcome);
+      });
+      assertTrue(started.await(5, TimeUnit.SECONDS));
+      assertThrows(TimeoutException.class, () -> readCommit.get(100, TimeUnit.MILLISECONDS));
+      assertFalse(readOutcome.isAvailable());
+      fixture.batch.completeDurability(2);
+      fixture.complete(StatusCode.OK);
+      assertEquals(StatusCode.OK, readCommit.get(5, TimeUnit.SECONDS));
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(TransactionState.COMMITTED, readOutcome.state());
+    assertEquals(StatusCode.OK, successor.commit(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, successor.close());
+    assertEquals(StatusCode.OK, reader.close());
+    assertEquals(StatusCode.OK, excess.close());
+    assertEquals(0, fixture.manager.activeTransactionCount());
+    assertEquals(0, fixture.manager.activeLockCount());
+  }
+
+  @ParameterizedTest
+  @ValueSource(longs = {41, 999})
+  void failedForceWakesDependentReaderWithoutAcknowledgingRowsOrAbsence(long key)
+      throws Exception {
+    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    IndexedTransactionSession reader = fixture.newSession();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    CountDownLatch started = new CountDownLatch(1);
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<StatusCode> read = executor.submit(() -> {
+        started.countDown();
+        return reader.fetchByKey(0, key, new HeapRowResult());
+      });
+      assertTrue(started.await(5, TimeUnit.SECONDS));
+      assertThrows(TimeoutException.class, () -> read.get(100, TimeUnit.MILLISECONDS));
+      assertEquals(StatusCode.OK, fixture.faults.arm(
+          DirectoryOperation.FILE_FORCE, FaultOperation.DIRECTORY_FILE_FORCE,
+          FaultAction.FORCE_FAILURE));
+      fixture.batch.completeDurability(2);
+      fixture.complete(StatusCode.IO_FAILURE);
+      assertEquals(StatusCode.FENCED, read.get(5, TimeUnit.SECONDS));
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(StatusCode.OK, reader.abort(new TransactionOutcome()));
+    fixture.assertTerminalFailure();
+    assertEquals(StatusCode.OK, reader.close());
+  }
+
+  @Test
+  void oldSnapshotProceedsButCurrentRowObservationWaitsForItsNewerDependency() throws Exception {
+    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    IndexedTransactionSession reader = fixture.newSession();
+    assertEquals(StatusCode.OK, reader.begin(IsolationLevel.REPEATABLE_READ));
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      Future<StatusCode> oldRead = executor.submit(
+          () -> reader.fetchByKey(0, 41, new HeapRowResult()));
+      assertEquals(StatusCode.CONFLICT, oldRead.get(5, TimeUnit.SECONDS));
+      HeapRowResult current = new HeapRowResult();
+      CountDownLatch started = new CountDownLatch(1);
+      Future<StatusCode> currentRead = executor.submit(() -> {
+        started.countDown();
+        return reader.lockCurrentKeyCurrent(0, 41, current);
+      });
+      assertTrue(started.await(5, TimeUnit.SECONDS));
+      assertThrows(TimeoutException.class, () -> currentRead.get(100, TimeUnit.MILLISECONDS));
+      fixture.batch.completeDurability(2);
+      fixture.complete(StatusCode.OK);
+      assertEquals(StatusCode.OK, currentRead.get(5, TimeUnit.SECONDS));
+      assertEquals(410, value(current));
+    } finally {
+      executor.shutdownNow();
+    }
+    assertEquals(StatusCode.OK, reader.releaseCurrentKey());
+    assertEquals(StatusCode.OK, reader.abort(new TransactionOutcome()));
+    assertEquals(StatusCode.OK, reader.close());
+  }
+
+  @Test
+  void crashAfterVisiblePublicationBeforeForceDiscardsTheUnacknowledgedGroup() {
+    ForcedGroupFixture fixture = new ForcedGroupFixture();
+    long durableTail = fixture.wal.durableEnd();
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertTrue(fixture.batch.publishPrepared(2));
+    assertEquals(fixture.secondSequence, fixture.table.currentCommitSequence());
+    assertFalse(fixture.firstRequest.outcome.isAvailable());
+    // Crash the file model directly: orderly close would hide an early-write violation.
+    assertEquals(StatusCode.OK, fixture.faults.directory.crash());
+    assertEquals(StatusCode.OK, fixture.faults.directory.restart());
+    LocalWalOpenResult walResult = new LocalWalOpenResult();
+    assertEquals(StatusCode.OK, LocalWal.openExisting(
+        fixture.faults.directory, DATABASE, GENERATION, walResult));
+    assertEquals(durableTail, walResult.wal().tailEnd());
+    IndexedTableStoreOpenResult storeResult = new IndexedTableStoreOpenResult();
+    assertEquals(StatusCode.OK, IndexedTableStore.openExisting(
+        fixture.faults.directory, walResult.wal(), DATABASE, GENERATION,
+        databaseProviderLease(4), storeResult));
+    IndexedTableOpenResult tableResult = new IndexedTableOpenResult();
+    assertEquals(StatusCode.OK, IndexedTable.open(storeResult.store(), tableResult));
+    assertEquals(fixture.firstSequence - 1, tableResult.table().currentCommitSequence());
+    assertEquals(fixture.rowsBefore, tableResult.table().rowCount());
+    assertEquals(StatusCode.CONFLICT, tableResult.table().fetchByKey(0, 41, new HeapRowResult()));
+    assertEquals(StatusCode.CONFLICT, tableResult.table().fetchByKey(0, 42, new HeapRowResult()));
+    assertEquals(StatusCode.OK, tableResult.table().close());
+    assertEquals(StatusCode.OK, walResult.wal().close());
+  }
 
   @Test
   void preflightFailureAbortsPreparedMembersWithoutWalOrFallbackAndAllowsNextCommit() {
@@ -174,12 +324,13 @@ final class IndexedGroupCommitFaultTest {
   @Test
   void forcedGroupPreparationFailureTerminalizesFencesAndRecoversExactlyOnce() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
-    assertTrue(fixture.batch.forceSharedGroup(2));
-    assertEquals(StatusCode.OK, fixture.table.prepareForcedGroupPublication());
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(StatusCode.OK, fixture.table.forceHybridCommitGroup());
+    assertEquals(StatusCode.OK, fixture.table.prepareGroupPublication());
     long tail = fixture.wal.tailEnd();
     long nextJournalSequence = fixture.wal.nextJournalSequence();
 
-    fixture.batch.publishForced(2);
+    fixture.batch.publishPrepared(2);
     fixture.complete(StatusCode.INVALID_EXTERNAL_INPUT);
     fixture.assertTerminalFailure();
     fixture.assertRecoveredExactlyOnce(tail, nextJournalSequence);
@@ -188,9 +339,11 @@ final class IndexedGroupCommitFaultTest {
   @Test
   void forcedGroupInstallationFailureTerminalizesFencesAndRecoversExactlyOnce() {
     ForcedGroupFixture fixture = new ForcedGroupFixture();
+    assertTrue(fixture.batch.appendSharedGroup(2));
+    assertEquals(StatusCode.OK, fixture.table.forceHybridCommitGroup());
     fixture.store.lastCommitSequence = Long.MAX_VALUE;
 
-    fixture.batch.process(2);
+    fixture.batch.publishPrepared(2);
     long tail = fixture.wal.tailEnd();
     long nextJournalSequence = fixture.wal.nextJournalSequence();
     fixture.complete(StatusCode.INVARIANT_BROKEN);
@@ -200,7 +353,7 @@ final class IndexedGroupCommitFaultTest {
 
   @ParameterizedTest(name = "{0}")
   @MethodSource("groupFaults")
-  void groupedFacadeCommitFailureDoesNotPublishAndFencesAdmission(
+  void groupedFacadeCommitFailureWithholdsAcknowledgmentAndFencesAdmission(
       String name,
       DirectoryOperation operation,
       FaultOperation faultOperation,
@@ -252,9 +405,12 @@ final class IndexedGroupCommitFaultTest {
       executor.shutdownNow();
     }
 
-    assertEquals(publishedBefore, table.currentCommitSequence());
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,41, new HeapRowResult()));
-    assertEquals(StatusCode.CONFLICT, table.fetchByKey( 0,42, new HeapRowResult()));
+    if (operation == DirectoryOperation.FILE_FORCE) {
+      assertTrue(table.currentCommitSequence() > publishedBefore);
+    } else {
+      assertEquals(publishedBefore, table.currentCommitSequence());
+    }
+    assertEquals(StatusCode.FENCED, table.awaitDurability(table.currentCommitSequence()));
     assertEquals(TransactionState.INDETERMINATE, first.transaction().state());
     assertEquals(TransactionState.INDETERMINATE, second.transaction().state());
     assertEquals(TransactionState.INDETERMINATE, firstOutcome.state());
@@ -414,6 +570,10 @@ final class IndexedGroupCommitFaultTest {
       assertEquals(expected, secondStatus);
       assertEquals(expected, first.completeCoordinatedCommit(firstStatus));
       assertEquals(expected, second.completeCoordinatedCommit(secondStatus));
+    }
+
+    private IndexedTransactionSession newSession() {
+      return session(context(manager, table, null, new IndexedVacuum(manager, table)), Long.BYTES);
     }
 
     private void assertTerminalFailure() {

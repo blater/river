@@ -145,7 +145,7 @@ final class IndexedTransactionSessionTest {
     assertNotEquals(candidate.versionRowId(), current.currentVersionRowId());
     assertEquals(8102, value(current.row()));
     assertEquals(StatusCode.OK, claimant.updateLocked(current, row(8103)));
-    assertEquals(StatusCode.OK, claimant.completeStatement());
+    assertEquals(StatusCode.OK, claimant.completeStatement(true));
     assertEquals(StatusCode.OK, claimant.commit(outcome));
     HeapRowResult fetched = new HeapRowResult();
     assertEquals(StatusCode.OK, table.fetchByKey(0, 81, fetched));
@@ -192,7 +192,7 @@ final class IndexedTransactionSessionTest {
       IndexedLockedRow firstCurrent = new IndexedLockedRow();
       assertEquals(StatusCode.OK, first.lockCurrent(firstCandidate, firstCurrent));
       assertEquals(StatusCode.OK, first.updateLocked(firstCurrent, row(8702)));
-      assertEquals(StatusCode.OK, first.completeStatement());
+      assertEquals(StatusCode.OK, first.completeStatement(true));
       assertEquals(StatusCode.OK, first.commit(outcome));
       assertEquals(StatusCode.OK, waiting.get());
     } finally {
@@ -203,7 +203,7 @@ final class IndexedTransactionSessionTest {
     IndexedLockedRow secondCurrent = new IndexedLockedRow();
     assertEquals(StatusCode.OK, second.lockCurrent(secondCandidate, secondCurrent));
     assertEquals(StatusCode.OK, second.updateLocked(secondCurrent, row(8703)));
-    assertEquals(StatusCode.OK, second.completeStatement());
+    assertEquals(StatusCode.OK, second.completeStatement(true));
     assertEquals(StatusCode.OK, second.commit(outcome));
     assertEquals(0, manager.deadlockVictimSelections());
     HeapRowResult fetched = new HeapRowResult();
@@ -278,7 +278,7 @@ final class IndexedTransactionSessionTest {
 
     assertEquals(StatusCode.CONFLICT,
         claimant.lockCurrent(candidate, new IndexedLockedRow()));
-    assertEquals(StatusCode.OK, claimant.completeStatement());
+    assertEquals(StatusCode.OK, claimant.completeStatement(true));
     assertEquals(StatusCode.OK, claimant.abort(outcome));
     close(table, wal, directory);
   }
@@ -448,12 +448,12 @@ final class IndexedTransactionSessionTest {
     assertEquals(StatusCode.OK, writer.commit(outcome));
     assertEquals(StatusCode.CONFLICT, reader.fetchByKey( 0,72, fetched));
     assertEquals(StatusCode.CONFLICT, reader.commit(outcome));
-    assertEquals(StatusCode.OK, reader.completeStatement());
+    assertEquals(StatusCode.OK, reader.completeStatement(true));
 
     assertEquals(StatusCode.OK, reader.beginStatement());
     assertEquals(StatusCode.OK, reader.fetchByKey( 0,72, fetched));
     assertEquals(7201, value(fetched));
-    assertEquals(StatusCode.OK, reader.completeStatement());
+    assertEquals(StatusCode.OK, reader.completeStatement(true));
     assertEquals(StatusCode.OK, reader.commit(outcome));
     close(table, wal, directory);
   }
@@ -2097,7 +2097,7 @@ final class IndexedTransactionSessionTest {
     assertEquals(0, first.committedSequence());
     assertEquals(0, second.committedSequence());
     assertEquals(StatusCode.OK, table.forceHybridCommitGroup());
-    assertEquals(StatusCode.OK, table.prepareForcedGroupPublication());
+    assertEquals(StatusCode.OK, table.prepareGroupPublication());
     assertEquals(previousFrontier, table.currentCommitSequence());
 
     IndexedTransactionSession oldSnapshot = session(context);
@@ -2109,6 +2109,8 @@ final class IndexedTransactionSessionTest {
         manager.publishCommitGroup(
             transactions, outcomes, sequences, transactions.length, table,
             new TransactionGroupCompletionTimings()));
+    assertEquals(StatusCode.OK, manager.completeCommitGroup(
+        transactions, outcomes, transactions.length));
     assertEquals(StatusCode.OK, first.completeCoordinatedCommit(StatusCode.OK));
     assertEquals(StatusCode.OK, second.completeCoordinatedCommit(StatusCode.OK));
     assertEquals(sequences[1], table.currentCommitSequence());

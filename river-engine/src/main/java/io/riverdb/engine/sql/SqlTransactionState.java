@@ -18,6 +18,7 @@ final class SqlTransactionState {
   private char[][] userSavepointNames = new char[0][];
   private int[] userSavepointNameLengths = new int[0];
   private boolean explicit;
+  private boolean program;
   private boolean statementActive;
   private int userSavepointCount;
 
@@ -27,6 +28,14 @@ final class SqlTransactionState {
 
   boolean isExplicit() {
     return explicit;
+  }
+
+  boolean isProgram() { return program; }
+
+  StatusCode beginProgram(IsolationLevel isolation) {
+    StatusCode status = beginExplicit(isolation);
+    if (status.isOk()) program = true;
+    return status;
   }
 
   boolean transactionHandleActive() {
@@ -51,6 +60,7 @@ final class SqlTransactionState {
     StatusCode status = session.commit(outcome);
     if (!session.transactionActive()) {
       explicit = false;
+      program = false;
       statementActive = false;
       clearUserSavepointsFrom(0);
     }
@@ -64,6 +74,7 @@ final class SqlTransactionState {
     StatusCode status = session.abort(outcome);
     if (!session.transactionActive()) {
       explicit = false;
+      program = false;
       statementActive = false;
       clearUserSavepointsFrom(0);
     }
@@ -98,7 +109,7 @@ final class SqlTransactionState {
     if (!statementActive) {
       return StatusCode.OK;
     }
-    StatusCode status = session.completeStatement();
+    StatusCode status = session.completeStatement(false);
     if (status.isOk()) {
       statementActive = false;
     }

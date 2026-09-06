@@ -45,6 +45,7 @@ final class SqlSessionExecutionCoordinator {
   private long preparedCompiles;
   private long preparedExecutions;
   private long preparedRecompiles;
+  StatusCode awaitDurability() { return session.awaitDurability(); }
 
   SqlSessionExecutionCoordinator(
       RelationalDatabase database, RelationalSession session) {
@@ -655,7 +656,7 @@ final class SqlSessionExecutionCoordinator {
     StatusCode status = retryPendingCleanup();
     if (!status.isOk()) return status;
     if (queries.hasActiveScan() || transactions.isExplicit()) return StatusCode.CONFLICT;
-    status = transactions.beginExplicit(transactionIsolation(isolationLevel));
+    status = transactions.beginProgram(transactionIsolation(isolationLevel));
     if (status.isOk()) result.setTransaction(true, session.visibleCommitSequence());
     return status;
   }
@@ -689,7 +690,7 @@ final class SqlSessionExecutionCoordinator {
     return status;
   }
 
-  boolean programTransactionActive() { return transactions.isExplicit(); }
+  boolean programTransactionActive() { return transactions.isProgram(); }
 
   StatusCode close() {
     if (closes.closed()) return StatusCode.CLOSED;

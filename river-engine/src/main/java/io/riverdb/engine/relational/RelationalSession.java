@@ -205,9 +205,11 @@ public final class RelationalSession {
     return session.beginStatement();
   }
 
-  public StatusCode completeStatement() {
-    return session.completeStatement();
+  public StatusCode completeStatement(boolean deliverResult) {
+    return session.completeStatement(deliverResult);
   }
+
+  public StatusCode awaitDurability() { return session.awaitDurability(); }
 
   public StatusCode resolveTable(CharSequence name, TableDefinition result) {
     return catalogReader.resolveTable(name, result);
