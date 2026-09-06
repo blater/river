@@ -47,6 +47,8 @@ Decision and attribution:
 - Stable base: `e6e17b1fd7dbc0433e64c01b2918e9075cc25858`.
 - Fix: `f790f9975eb366eff86aad5b36807f4b641307ac`; policy selectors: `e9af239`.
 - Checkpoint: `perf-checkpoint-20260906-directory-cache-reload`.
+- Pushed integration: `0cf9970f5371f520b6a9639424b4446d9e4c3412`; exact-merge
+  lifecycle smoke passed with zero retries/errors and complete cleanup.
 - Evidence: `/private/tmp/river-tic-f8dd-evidence`; details: [`tic-f8dd`](tickets/tic-f8dd.md).
 
 The unchanged 30-second workload reproduced order_line CORRUPTION. A 60-second

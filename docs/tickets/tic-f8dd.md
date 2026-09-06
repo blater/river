@@ -1,12 +1,16 @@
 ---
 id: tic-f8dd
-status: in_progress
+status: closed
 type: bug
 priority: 1
 assignee: blater
 delivery: code
 base-commit: e6e17b1fd7dbc0433e64c01b2918e9075cc25858
 branch: ticket/tic-f8dd-order-line-corruption
+delivered-commit: 0cf9970f5371f520b6a9639424b4446d9e4c3412
+checkpoint-tag: perf-checkpoint-20260906-directory-cache-reload
+evidence:
+    - /private/tmp/river-tic-f8dd-evidence
 tags:
     - correctness
     - storage
@@ -156,3 +160,13 @@ provide no basis for a TPS gain or regression claim. This is accepted for
 correctness, with no speedup claim. Successful real-path scans and checkpoint /
 shutdown after cache eviction, together with the deterministic red/green tests,
 resolve the specific corruption stop raised by tic-f539.
+
+## Delivery
+
+Merged and pushed at `0cf9970f5371f520b6a9639424b4446d9e4c3412`. The feature
+branch tip `7d6cd7aa9ef80fbfa8c99fdc594651c5e6133188` and annotated
+`perf-checkpoint-20260906-directory-cache-reload` tag were pushed atomically.
+The exact integration revision passed a 1-second-warmup / 3-second end-to-end
+smoke with valid invariants, cleanup and receipt, zero retries/errors
+(140.667 TPS; lifecycle evidence only, not a comparative sample). The specific
+corruption blocker is resolved and this ticket is closed.

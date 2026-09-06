@@ -9,7 +9,7 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-User-directed correctness fix [`tic-f8dd`](tickets/tic-f8dd.md) resolves the
+Closed user-directed correctness fix [`tic-f8dd`](tickets/tic-f8dd.md) resolves the
 post-run CORRUPTION found by [`tic-f539`](tickets/tic-f539.md): metadata-directory
 frames now reload from the start of their buffers, and read misses use bounded
 LRU eviction. The clean gate, independent review, repeated TPS invariants and
