@@ -42,6 +42,67 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-06 batched terminal lock-release scheduling
+
+Status: implemented experiment on `perf/batched-lock-release`; not merged or
+promoted as a performance checkpoint.
+
+- Control: handoff integration `1d94901`. Short controls used `f557af1`, whose
+  production/test source is identical to that integration.
+- Candidate source: `fa1a910`.
+- Evidence root: `/private/tmp/river-batched-lock-release.U3GReO`.
+- Scope: two production files, `LockExactLifecycle` and `LockExactScheduler`.
+  Defer scheduler draining across terminal request cancellation and holding
+  release; reuse the existing deduplicated resource worklist and drain before
+  transaction recycling/return. Final drain remains included in lock-release
+  timing. No grant/fairness, lock-count, WAL, engine, protocol, or harness change.
+- Independent concurrency review approved resource lifetime, cancellation,
+  conversion, and nested deadlock-drain behavior. Two focused tests extend the
+  existing lock-table tests; no new production queue or allocation is introduced.
+- Slopmark: both touched production files scored 0 before and after. Rankings
+  are `slopmark-before.txt` and `slopmark-after.txt`; no file crossed 80.
+
+Each source switch was followed by `./make.sh`, with no overlapping build or
+workload. Commands retained the prior entry's fixed tiny/serializable/default
+configuration and seed 42:
+
+```sh
+tools/tps-test.sh --seed=42 --warmup-seconds=1 --measured-seconds=10 \
+  --output-dir=/private/tmp/river-batched-lock-release.U3GReO/<short-sample>
+tools/tps-test.sh --seed=42 --warmup-seconds=3 --measured-seconds=30 \
+  --output-dir=/private/tmp/river-batched-lock-release.U3GReO/<long-sample>
+```
+
+| Sample, in execution order | TPS | Lock release microseconds / captured write |
+| --- | ---: | ---: |
+| `baseline-1` | 120.200 | 442.4 |
+| `baseline-2` | 121.100 | 444.6 |
+| `candidate-1` | 123.500 | 433.4 |
+| `candidate-2` | 123.400 | 438.2 |
+| `control-long-1` | 129.867 | 408.5 |
+| `candidate-long-1` | 128.767 | 408.9 |
+| `control-long-2` | 126.333 | 404.6 |
+| `candidate-long-2` | 130.900 | 412.3 |
+
+All eight samples passed invariants and complete capture, with zero measured
+retries/errors and zero terminal transactions, lock holdings, and waiters.
+The short-run increase triggered longer interleaving. The longer pairs have
+mixed TPS direction and no consistent improvement in normalized lock-release
+cost. Do not attribute a throughput gain to this change from these results.
+
+Validation: the new overlap test initially used a mismatched keyspace, corrected
+before candidate measurements. `affected-tests-repeat.log` records all 138
+transaction tests: 137 passed, with only the known warmed lock-allocation
+assertion failing (6,832 bytes, also observed before this feature). All 51
+focused engine handoff/fault, relational WAL, and embedded-program tests passed.
+The unchanged allocation test passed in isolation (`allocation-repeat.log`).
+The full transaction invocation is still reported as failed, not waived by
+the isolated pass. The baseline full-build and policy failures are recorded
+in the handoff entry below; no green clean full-build checkpoint is claimed.
+
+Decision: retain the bounded implementation on its separate branch for review,
+without merging, tagging, pushing, or expanding into another optimization.
+
 ### 2026-09-06 prepared-lock handoff experiment
 
 Status: user-requested integration of prepared-lock handoff; no demonstrated
