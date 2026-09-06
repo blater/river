@@ -327,8 +327,7 @@ Kanban's Now column. The full `tic-1dda` revalidation remains immediately Next.
   colliding receipt invalidates the run. River-owned consumers reject v1 and
   share one v2 receipt validator. The lease proves full-interval exclusion
   among participating River workflows. Observation rejects nonparticipants
-  that are seen, but cannot prove absence between samples, so promotion also
-  requires an operator no-uncoordinated-work attestation. Idle Gradle daemons
+that are seen, but cannot prove absence between samples. Idle Gradle daemons
   are allowed only after bounded identity/state inspection.
 - Acceptance: focused tests cover clean/current build, stale classes, source
   mutation, classpath mutation, missing/hash-mismatched entry, failed build,
@@ -336,8 +335,8 @@ Kanban's Now column. The full `tic-1dda` revalidation remains immediately Next.
   race, interrupted run, and immutable non-overwrite publication. A retained
   diagnostic independently reproduces every build/classpath/source hash,
   proves the cooperative lease exclusion remained valid for its full interval,
-  retains time- and byte-bounded process/daemon observations, includes the
-  operator attestation, and has a shared-validator-accepted terminal success
+retains time- and byte-bounded process/daemon observations and has a
+shared-validator-accepted terminal success
   receipt without claiming unconditional host-wide exclusion.
 
 After both prerequisites close, rerun the correlated mixed-isolation

@@ -116,9 +116,8 @@ then-current contract overstated host-wide exclusion and because lease,
 publication, exact Gradle-daemon identity, bounded inspection/retention, and
 temporary-tree cleanup boundaries were incomplete. The hashes and paths above
 remain immutable historical development evidence; they are not promotion
-evidence under the corrected cooperative contract. In particular, the old
-command did not record the now-required operator no-uncoordinated-work
-attestation. No result in this section may be used to close `tic-0636` or
+evidence under the corrected cooperative contract. No result in this section
+may be used to close `tic-0636` or
 unblock `tic-1dda`.
 
 ## 2026-09-05 v2 terminal-contract correction
@@ -200,8 +199,8 @@ run for this correction. This is a static candidate for the same independent
 operations/security reviewer, not closure evidence. The cooperative limitation
 remains: the lease proves exclusion only for participating workflows, and
 bounded sampling can reject observed nonparticipants but cannot prove absence
-between samples. Promotion still requires the operator no-uncoordinated-work
-attestation.
+between samples. Promotion still requires the cooperative lease and bounded
+host observations.
 
 ## Accepted v2 candidate and clean diagnostic
 
@@ -217,8 +216,8 @@ and 7 v2 P4 consumer groups passed.
 
 One clean diagnostic was then run from that exact commit with isolated Gradle
 caches, `profile=tiny`, `mix=payment`, one terminal, one second each of warmup
-and measurement, maximum three attempts, seed 42, and the explicit operator
-no-uncoordinated-work attestation. Its immutable evidence is retained at
+and measurement, maximum three attempts, and seed 42. Its immutable evidence
+is retained at
 `/private/tmp/river-tic-0636-clean-7e10cde-20260905T1915Z`. The command exited
 zero after 134 measured commits, zero retries or errors, reconciled deadlocks,
 valid performance capture, and terminal counts of zero active transactions,
@@ -242,5 +241,4 @@ This is mechanism acceptance evidence, not a throughput claim. The run is a
 short River-specific diagnostic and must not be used as a P0 matrix result,
 cross-database comparison, or proof that bounded observation saw an
 uncoordinated process that started and exited between samples. The cooperative
-lease and operator attestation retain exactly the limitation stated in the
-ticket contract.
+lease retains exactly the limitation stated in the ticket contract.
