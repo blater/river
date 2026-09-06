@@ -17,14 +17,12 @@ final class IndexedGroupCommitMetrics {
     if (capturing) return StatusCode.CONFLICT;
     capture.reset();
     capturing = true;
-    IndexedCommitCaptureEvent.record(true);
     return StatusCode.OK;
   }
 
   synchronized StatusCode endCapture(IndexedGroupCommitTelemetry target) {
     if (!capturing || target == null) return StatusCode.CONFLICT;
     capturing = false;
-    IndexedCommitCaptureEvent.record(false);
     target.copyFrom(capture);
     return StatusCode.OK;
   }
