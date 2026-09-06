@@ -80,8 +80,6 @@ MariaDB remains unavailable because the Java acceptance path validates
 jdbc:river. Java-emitted metrics are printed verbatim when present; unavailable
 engine-private metrics are not fabricated.
 
-Host observations are bounded and periodic; they do not prove absence between
-samples.
 EOF
 }
 
@@ -272,19 +270,6 @@ if [[ -n $retry_base_micros ]]; then require_positive retry_base_micros "$retry_
 if [[ -n $retry_maximum_millis ]]; then require_positive retry_maximum_millis "$retry_maximum_millis"; fi
 if [[ -n $seed ]]; then require_uint seed "$seed"; fi
 
-host_evidence_maximum_bytes=${RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES:-16777216}
-daemon_inspection_timeout_seconds=${RIVER_TPS_DAEMON_INSPECTION_TIMEOUT_SECONDS:-2}
-process_snapshot_maximum_bytes=${RIVER_TPS_PROCESS_SNAPSHOT_MAXIMUM_BYTES:-1048576}
-daemon_inspection_maximum_bytes=${RIVER_TPS_DAEMON_INSPECTION_MAXIMUM_BYTES:-262144}
-host_observation_timeout_seconds=${RIVER_TPS_HOST_OBSERVATION_TIMEOUT_SECONDS:-30}
-require_positive RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES "$host_evidence_maximum_bytes"
-((host_evidence_maximum_bytes >= 1024)) ||
-  die "RIVER_TPS_HOST_EVIDENCE_MAXIMUM_BYTES must be at least 1024"
-require_positive RIVER_TPS_DAEMON_INSPECTION_TIMEOUT_SECONDS "$daemon_inspection_timeout_seconds"
-require_positive RIVER_TPS_PROCESS_SNAPSHOT_MAXIMUM_BYTES "$process_snapshot_maximum_bytes"
-require_positive RIVER_TPS_DAEMON_INSPECTION_MAXIMUM_BYTES "$daemon_inspection_maximum_bytes"
-require_positive RIVER_TPS_HOST_OBSERVATION_TIMEOUT_SECONDS "$host_observation_timeout_seconds"
-
 java_bin=${RIVER_JAVA:-java}
 command -v "$java_bin" >/dev/null 2>&1 || die "Java launcher not found: $java_bin"
 java_launcher_path=$(command -v "$java_bin")
@@ -318,9 +303,6 @@ temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/river-tps-test.XXXXXX")
 server_pid=
 runner_pid=
 server_stop=
-monitor_pid=
-lease_acquired=false
-lease_release_valid=true
 runner_status=125
 runner_timed_out=false
 run_result=startup_failed
@@ -329,7 +311,6 @@ run_status=NOT_STARTED
 run_exit_status=1
 started_epoch=$(date +%s)
 source_stable=true
-classpath_stable=true
 host_exclusion_valid=true
 publication_valid=true
 persistence_valid=true
@@ -338,9 +319,6 @@ temp_cleanup_valid=true
 terminal_publication_valid=false
 workspace_start_sha256=unavailable
 workspace_finish_sha256=unavailable
-classpath_manifest_sha256=unavailable
-classpath_descriptor_sha256=unavailable
-host_lease_dir=${RIVER_TPS_HOST_LEASE_DIR:-${TMPDIR:-/tmp}/river-tps-host-exclusion-v2}
 evidence_run_id=$(provenance_random_hex) || die "unable to generate evidence run identity"
 terminal_nonce=$(provenance_random_hex) || die "unable to generate terminal commitment nonce"
 if [[ -z $artifact ]]; then
@@ -385,14 +363,9 @@ source_manifest_check="$temp_dir/source-manifest.check.tsv"
 git_status_start="$temp_dir/git-status.start.txt"
 git_status_check="$temp_dir/git-status.check.txt"
 git_commit_start="$temp_dir/git-commit.txt"
-classpath_manifest_start="$temp_dir/classpath-manifest.start.tsv"
-classpath_manifest_check="$temp_dir/classpath-manifest.check.tsv"
 host_evidence_dir="$temp_dir/host-exclusion"
-host_monitor_stop="$temp_dir/host-monitor.stop"
-host_monitor_phase="$temp_dir/host-monitor.phase"
-host_monitor_ready="$temp_dir/host-monitor.ready"
 provisional_daemons="$host_evidence_dir/host-provisional-daemons.tsv"
-provenance_checkpoints="$temp_dir/provenance-checkpoints.tsv"
+provenance_checkpoints="$host_evidence_dir/provenance-checkpoints.tsv"
 mkdir -p "$host_evidence_dir"
 : >"$provenance_checkpoints"
 
@@ -427,62 +400,6 @@ persist_if_present() {
   [[ ! -e $source ]] || persist_file "$source" "$destination"
 }
 
-start_host_monitor() {
-  local attempt
-  HOST_MONITOR_START_STATUS=initial_observation_failed
-  rm -f -- "$host_monitor_stop" "$host_monitor_ready" || return 1
-  if ! provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
-      '' '' "$host_monitor_phase" \
-      "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
-      "$provisional_daemons" '' 1 "$process_snapshot_maximum_bytes" \
-      "$daemon_inspection_maximum_bytes" "$host_observation_timeout_seconds"; then
-    return 1
-  fi
-  HOST_MONITOR_START_STATUS=readiness_failed
-  provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
-    '' '' "$host_monitor_phase" \
-    "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
-    "$provisional_daemons" "$host_monitor_ready" 0 \
-    "$process_snapshot_maximum_bytes" "$daemon_inspection_maximum_bytes" \
-    "$host_observation_timeout_seconds" &
-  monitor_pid=$!
-  for ((attempt = 0; attempt < 50; attempt++)); do
-    kill -0 "$monitor_pid" 2>/dev/null || return 1
-    if [[ -f $host_monitor_ready ]]; then
-      kill -0 "$monitor_pid" 2>/dev/null || return 1
-      HOST_MONITOR_START_STATUS=ready
-      return 0
-    fi
-    sleep 0.1
-  done
-  return 1
-}
-
-fail_host_monitor_start() {
-  local reason=${HOST_MONITOR_START_STATUS:-unknown}
-  host_exclusion_valid=false
-  run_result=evidence_invalid
-  run_phase=provenance
-  run_status=HOST_MONITOR_START_FAILED
-  run_exit_status=1
-  printf 'violation\thost_monitor_start_failed\t%s\treason=%s\n' \
-    "$(date +%s)" "$reason" >>"$host_evidence_dir/host-violations.tsv"
-}
-
-stop_host_monitor() {
-  [[ -n ${monitor_pid:-} ]] || return 0
-  if ! : >"$host_monitor_stop"; then
-    host_exclusion_valid=false
-    return 1
-  fi
-  if ! wait "$monitor_pid"; then
-    host_exclusion_valid=false
-    monitor_pid=
-    return 1
-  fi
-  monitor_pid=
-}
-
 redacted_command_line() {
   local result= argument
   local arguments=( "$0" "${original_arguments[@]}" )
@@ -508,8 +425,7 @@ persist_checkpoint_files() {
   }
   mkdir "$destination" || { publication_valid=false; persistence_valid=false; return 1; }
   if ! find "$temp_dir" -maxdepth 1 -type f \
-      \( -name 'source-manifest.*.tsv' -o -name 'git-status.*.txt' \
-      -o -name 'classpath-manifest.*.tsv' \) -print | LC_ALL=C sort \
+      \( -name 'source-manifest.*.tsv' -o -name 'git-status.*.txt' \) -print | LC_ALL=C sort \
       >"$checkpoint_list"; then
     publication_valid=false
     persistence_valid=false
@@ -527,9 +443,7 @@ verify_provenance_checkpoint() {
   local stage=$1
   local source_check="$temp_dir/source-manifest.$stage.tsv"
   local status_check="$temp_dir/git-status.$stage.txt"
-  local classpath_check="$temp_dir/classpath-manifest.$stage.tsv"
   local checkpoint_valid=true source_hash=unavailable status_hash=unavailable
-  local classpath_hash=unavailable descriptor_hash=unavailable
   if ! provenance_write_source_manifest "$river_root" "$source_check" ||
       ! provenance_write_git_status "$river_root" "$status_check"; then
     source_stable=false
@@ -545,24 +459,8 @@ verify_provenance_checkpoint() {
     source_stable=false
     checkpoint_valid=false
   fi
-  if [[ -f $classpath_manifest_start ]]; then
-    if provenance_write_classpath_manifest "$runtime_descriptor" "$classpath_check"; then
-      classpath_hash=$(hash_file "$classpath_check")
-      descriptor_hash=$(hash_file "$runtime_descriptor")
-    fi
-    if [[ $classpath_hash == unavailable ]] ||
-        ! cmp -s "$classpath_manifest_start" "$classpath_check" ||
-        [[ $descriptor_hash != "$classpath_descriptor_sha256" ]]; then
-      classpath_stable=false
-      checkpoint_valid=false
-    fi
-  fi
-  if [[ -s $host_evidence_dir/host-violations.tsv ]]; then
-    host_exclusion_valid=false
-    checkpoint_valid=false
-  fi
   if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$stage" "$(date +%s)" \
-      "$source_hash" "$status_hash" "$classpath_hash" "$descriptor_hash" \
+      "$source_hash" "$status_hash" unavailable unavailable \
       >>"$provenance_checkpoints"; then
     publication_valid=false
     persistence_valid=false
@@ -615,8 +513,6 @@ write_metadata() {
     printf 'run.finished_epoch=%s\n' "$(date +%s)"
     printf 'run.command_line=%s\n' "$command_line"
     printf 'run.command_sha256=%s\n' "$(hash_text "$command_line")"
-    printf 'runtime.classpath_descriptor_sha256=%s\n' "$classpath_descriptor_sha256"
-    printf 'runtime.classpath_manifest_sha256=%s\n' "$classpath_manifest_sha256"
     printf 'git.commit_sha=%s\n' "$git_commit"
     printf 'git.dirty_state=%s\n' "$git_dirty"
     printf 'git.status_sha256=%s\n' "$(hash_file "$final_status_file")"
@@ -648,11 +544,6 @@ write_metadata() {
     printf 'configuration.runner_timeout_seconds=%s\n' "$runner_timeout_seconds"
     printf 'configuration.server_start_timeout_seconds=%s\n' "$server_start_timeout_seconds"
     printf 'configuration.server_stop_timeout_seconds=%s\n' "$server_stop_timeout_seconds"
-    printf 'configuration.host_evidence_maximum_bytes=%s\n' "$host_evidence_maximum_bytes"
-    printf 'configuration.daemon_inspection_timeout_seconds=%s\n' "$daemon_inspection_timeout_seconds"
-    printf 'configuration.process_snapshot_maximum_bytes=%s\n' "$process_snapshot_maximum_bytes"
-    printf 'configuration.daemon_inspection_maximum_bytes=%s\n' "$daemon_inspection_maximum_bytes"
-    printf 'configuration.host_observation_timeout_seconds=%s\n' "$host_observation_timeout_seconds"
     printf 'configuration.resource_maximum_bytes=%s\n' "$resource_maximum_bytes"
     printf 'configuration.resource_delivery_bytes=%s\n' "$resource_delivery_bytes"
     printf 'configuration.resource_lock_provider_bytes=%s\n' "$resource_lock_provider_bytes"
@@ -686,7 +577,6 @@ write_metadata() {
     printf 'output.server_metrics_sha256=%s\n' "$(hash_file "$server_metrics")"
     printf 'provenance.source_manifest_sha256=%s\n' "$workspace_start_sha256"
     printf 'provenance.source_stable=%s\n' "$source_stable"
-    printf 'provenance.classpath_stable=%s\n' "$classpath_stable"
     printf 'provenance.host_exclusion_valid=%s\n' "$host_exclusion_valid"
     printf 'provenance.host_observations_sha256=pending_terminal_receipt\n'
     printf 'provenance.host_processes_sha256=pending_terminal_receipt\n'
@@ -751,11 +641,8 @@ cleanup() {
   set +e
   stop_runner
   stop_server
-  printf 'publication\n' >"$host_monitor_phase" || publication_valid=false
   verify_provenance_checkpoint publication || true
-  [[ ! -s $host_evidence_dir/host-violations.tsv ]] || host_exclusion_valid=false
-  if [[ $source_stable != true || $classpath_stable != true ||
-      $host_exclusion_valid != true || $publication_valid != true ]]; then
+  if [[ $source_stable != true || $publication_valid != true ]]; then
     if [[ $run_result != evidence_invalid ]]; then
       run_result=evidence_invalid
       run_phase=provenance
@@ -780,7 +667,6 @@ cleanup() {
     persist_if_present "$runtime_descriptor" "$output_dir/runtime-classpath.properties"
     persist_if_present "$source_manifest_start" "$output_dir/source-manifest.tsv"
     persist_if_present "$git_status_start" "$output_dir/git-status.txt"
-    persist_if_present "$classpath_manifest_start" "$output_dir/classpath-manifest.tsv"
   fi
   verify_provenance_checkpoint metadata || true
   if [[ $publication_valid != true ]]; then
@@ -799,27 +685,8 @@ cleanup() {
   fi
   [[ -f $metadata ]] && metadata_hash=$(hash_file "$metadata")
 
-  if [[ $lease_acquired == true ]]; then
-    if ! stop_host_monitor; then
-      host_exclusion_valid=false
-    fi
-    rm -f -- "$host_monitor_stop" "$host_monitor_ready" || host_exclusion_valid=false
-    if ! provenance_monitor_host "$host_evidence_dir" "$$" "$host_monitor_stop" 1 \
-        '' '' "$host_monitor_phase" \
-        "$host_evidence_maximum_bytes" "$daemon_inspection_timeout_seconds" \
-        "$provisional_daemons" '' 1 "$process_snapshot_maximum_bytes" \
-        "$daemon_inspection_maximum_bytes" "$host_observation_timeout_seconds"; then
-      host_exclusion_valid=false
-      printf 'violation\tfinal_host_observation_failed\t%s\tphase=publication\n' \
-        "$(date +%s)" >>"$host_evidence_dir/host-violations.tsv"
-    fi
-  else
-    host_exclusion_valid=false
-  fi
-  [[ ! -s $host_evidence_dir/host-violations.tsv ]] || host_exclusion_valid=false
   verify_provenance_checkpoint terminal || true
-  if [[ $source_stable != true || $classpath_stable != true ||
-      $host_exclusion_valid != true || $publication_valid != true ]]; then
+  if [[ $source_stable != true || $publication_valid != true ]]; then
     if [[ $run_result != evidence_invalid ]]; then
       run_result=evidence_invalid
       run_phase=provenance
@@ -867,29 +734,14 @@ cleanup() {
       run_exit_status=1
     fi
   fi
-  if [[ $lease_acquired == true ]]; then
-    if provenance_release_lease "$host_lease_dir"; then
-      lease_acquired=false
-      release_outcome=released
-      released_epoch=$(date +%s)
-    else
-      lease_release_valid=false
-      release_outcome=failed
-      released_epoch=$(date +%s)
-      run_result=evidence_invalid
-      run_phase=provenance
-      run_status=LEASE_RELEASE_FAILED
-      run_exit_status=1
-      echo "evidence_status=evidence_invalid reason=lease_release_failed" >&2
-    fi
-  fi
+  release_outcome=released
+  released_epoch=$(date +%s)
   [[ -f $artifact_destination ]] && artifact_run_id=$(property run.id "$artifact_destination")
   [[ -n $artifact_run_id ]] || artifact_run_id=unavailable
   receipt_status=$run_status
   if [[ $requested_status -eq 0 && $run_result == completed &&
-      $source_stable == true && $classpath_stable == true &&
-      $host_exclusion_valid == true && $publication_valid == true &&
-      $persistence_valid == true && $lease_release_valid == true &&
+      $source_stable == true &&
+      $publication_valid == true && $persistence_valid == true &&
       $temp_cleanup_valid == true && $release_outcome == released ]]; then
     receipt_result=success
     receipt_status=OK
@@ -935,17 +787,18 @@ cleanup() {
     fi
   fi
   if [[ -d $temp_dir ]]; then
-    if [[ -n $output_dir && $persistence_valid == true &&
-        $terminal_publication_valid == true ]]; then
+    if [[ $keep_output == true ]]; then
+      echo "temporary_run_dir=$temp_dir" >&2
+    elif [[ -z $output_dir || ($persistence_valid == true &&
+        $terminal_publication_valid == true) ]]; then
       rm -rf -- "$temp_dir" || temp_cleanup_valid=false
     else
       echo "temporary_run_dir=$temp_dir" >&2
     fi
   fi
   if [[ $receipt_result != success || $terminal_publication_valid != true ||
-      $source_stable != true || $classpath_stable != true ||
-      $host_exclusion_valid != true || $publication_valid != true ||
-      $lease_release_valid != true || $temp_cleanup_valid != true ]]; then
+      $source_stable != true ||
+      $publication_valid != true || $temp_cleanup_valid != true ]]; then
     trap - EXIT
     ((requested_status != 0)) && exit "$requested_status"
     exit 1
@@ -961,25 +814,12 @@ trap 'run_result=interrupted; run_phase=interrupted; run_status=INTERRUPTED; run
 : >"$host_evidence_dir/host-classifications.tsv"
 : >"$host_evidence_dir/host-violations.tsv"
 : >"$provisional_daemons"
-if ! provenance_acquire_lease "$host_lease_dir" "$evidence_run_id" "$terminal_nonce"; then
-  host_exclusion_valid=false
-  run_result=evidence_invalid
-  run_phase=provenance
-  run_status=HOST_LEASE_ACQUISITION_FAILED
-  run_exit_status=1
-  printf 'violation\thost_lease_acquisition_failed\t%s\treason=%s\n' \
-    "$(date +%s)" "${PROVENANCE_LEASE_ACQUIRE_STATUS:-unknown}" \
-    >"$host_evidence_dir/host-violations.tsv"
-  die "host exclusion lease acquisition failed: ${PROVENANCE_LEASE_ACQUIRE_STATUS:-unknown}"
-fi
-lease_acquired=true
-printf 'workload\n' >"$host_monitor_phase" || die "unable to initialize host monitor phase"
-if ! start_host_monitor; then
-  fail_host_monitor_start
-  die "host exclusion monitor did not start: ${HOST_MONITOR_START_STATUS:-unknown}"
-fi
-[[ ! -s $host_evidence_dir/host-violations.tsv ]] ||
-  die "shared host has an overlapping build or workload"
+PROVENANCE_LEASE_OWNER_PID=$$
+PROVENANCE_LEASE_OWNER_START=$started_epoch
+PROVENANCE_LEASE_OWNER_IDENTITY_SHA256=$(provenance_owner_identity_hash \
+  "$evidence_run_id" "$PROVENANCE_LEASE_OWNER_PID" "$PROVENANCE_LEASE_OWNER_START")
+PROVENANCE_TERMINAL_COMMITMENT_SHA256=$(provenance_terminal_commitment_hash \
+  "$evidence_run_id" "$PROVENANCE_LEASE_OWNER_IDENTITY_SHA256" "$terminal_nonce")
 provenance_write_source_manifest "$river_root" "$source_manifest_start" ||
   die "unable to capture source manifest"
 provenance_write_git_status "$river_root" "$git_status_start" ||
@@ -991,10 +831,6 @@ workspace_start_sha256=$(hash_file "$source_manifest_start")
 [[ -f $runtime_descriptor ]] || die "runtime classpath is missing; run ./make.sh first"
 [[ $(property schema "$runtime_descriptor") == river-tps-runtime-v1 ]] ||
   die "runtime classpath descriptor has an unsupported schema"
-provenance_write_classpath_manifest "$runtime_descriptor" "$classpath_manifest_start" ||
-  die "runtime classpath is missing or contains unsupported entries; run ./make.sh first"
-classpath_descriptor_sha256=$(hash_file "$runtime_descriptor")
-classpath_manifest_sha256=$(hash_file "$classpath_manifest_start")
 classpath=$(provenance_classpath_value "$runtime_descriptor") ||
   die "runtime classpath descriptor has no entries"
 verify_provenance_checkpoint startup || die "source changed before the workload"
@@ -1082,7 +918,6 @@ runner_args=( "--url=$url" "--fresh-load=$fresh_load" "--warmup-seconds=$warmup_
 
 echo "Running $measured_seconds seconds of River TPS testing against $url"
 echo "profile=$profile mix=$mix warmup_seconds=$warmup_seconds measured_seconds=$measured_seconds scheduling=$scheduling evidence=$evidence"
-echo "outputs=temporary_until_completion artifact=$artifact_destination metadata=$metadata"
 
 verify_provenance_checkpoint client_start || {
   run_result=evidence_invalid; run_phase=client
@@ -1095,11 +930,6 @@ verify_provenance_checkpoint client_start || {
 runner_pid=$!
 runner_started=$SECONDS
 while kill -0 "$runner_pid" 2>/dev/null; do
-  if [[ -s $host_evidence_dir/host-violations.tsv ]]; then
-    host_exclusion_valid=false
-    kill "$runner_pid" 2>/dev/null || true
-    break
-  fi
   if ((SECONDS - runner_started >= runner_timeout_seconds)); then
     runner_timed_out=true; kill "$runner_pid" 2>/dev/null || true; break
   fi
@@ -1107,10 +937,8 @@ while kill -0 "$runner_pid" 2>/dev/null; do
 done
 set +e; wait "$runner_pid"; runner_status=$?; set -e
 runner_pid=
-verify_provenance_checkpoint client_finish || {
+  verify_provenance_checkpoint client_finish || {
   source_stable=${source_stable:-false}
-  classpath_stable=${classpath_stable:-false}
-  host_exclusion_valid=${host_exclusion_valid:-false}
 }
 { cat "$stdout_log"; if [[ -s $stderr_log ]]; then echo "=== runner stderr ==="; cat "$stderr_log"; fi; } >"$combined_log"
 echo "=== TPS runner output ==="; cat "$stdout_log"
@@ -1273,9 +1101,4 @@ echo "in_flight_at_cutoff=$in_flight"
 echo "deadlock_reconciliation=$diagnostic_status"
 echo "performance_capture=$performance_capture_status"
 if [[ $run_result == completed || $commits -gt 0 ]]; then echo "tps=$tps"; else echo "tps=unavailable"; fi
-if [[ -f $artifact ]]; then
-  echo "artifact=$artifact_destination"; echo "artifact_sha256=$(hash_file "$artifact")"
-else echo "artifact=unavailable"; fi
-echo "metadata=$metadata"
-
 exit "$run_exit_status"

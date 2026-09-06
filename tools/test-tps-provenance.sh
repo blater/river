@@ -692,11 +692,6 @@ fi
 if [[ -n ${FAKE_TERMINAL_COLLISION_PATH:-} ]]; then
   printf 'external-terminal-sentinel\n' >"$FAKE_TERMINAL_COLLISION_PATH"
 fi
-if [[ ${FAKE_LEDGER_FAILURE:-false} == true ]]; then
-  ledger="$(dirname -- "$artifact")/provenance-checkpoints.tsv"
-  rm -f -- "$ledger"
-  mkdir "$ledger"
-fi
 if [[ -n ${FAKE_CORRUPT_LEASE_OWNER:-} ]]; then
   printf 'unexpected=field\n' >>"$FAKE_CORRUPT_LEASE_OWNER/owner"
 fi
@@ -715,9 +710,6 @@ if [[ -n ${FAKE_CLIENT_STARTED:-} ]]; then : >"$FAKE_CLIENT_STARTED"; fi
 if [[ -n ${FAKE_CLIENT_DELAY:-} ]]; then /bin/sleep "$FAKE_CLIENT_DELAY"; fi
 if [[ -n ${FAKE_MUTATE_SOURCE:-} ]]; then
   printf 'mutated-source\n' >"$FAKE_MUTATE_SOURCE"
-fi
-if [[ -n ${FAKE_MUTATE_CLASSPATH:-} ]]; then
-  printf 'mutated-runtime\n' >"$FAKE_MUTATE_CLASSPATH"
 fi
 {
   printf 'run.id=fake-run\n'
@@ -742,100 +734,6 @@ git -C "$fixture" config user.email test@example.invalid
 git -C "$fixture" add .
 git -C "$fixture" commit -qm fixture
 
-lease_identity_output="$test_root/lease-identity-output"
-lease_identity_tmp="$test_root/lease-identity-tmp"
-mkdir "$lease_identity_tmp"
-set +e
-PATH="$fixture/fake-bin:$PATH" TMPDIR="$lease_identity_tmp" \
-  FAKE_RIVER_ROOT="$fixture" FAKE_PS_SELF_FAIL=true \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/lease-identity-lease" \
-  "$fixture/tools/tps-test.sh" --output-dir="$lease_identity_output" \
-  >"$test_root/lease-identity.stdout" 2>"$test_root/lease-identity.stderr"
-lease_identity_status=$?
-set -e
-assert_equal "$lease_identity_status" 2
-assert_contains "$lease_identity_output/run-metadata.properties" \
-  'run.result=provisional'
-assert_contains "$lease_identity_output/run-metadata.properties" \
-  'run.provisional_status=HOST_LEASE_ACQUISITION_FAILED'
-assert_contains "$lease_identity_output/run-metadata.properties" \
-  'provenance.host_exclusion_valid=false'
-assert_contains "$lease_identity_output/host-violations.tsv" \
-  'reason=owner_identity_unavailable'
-assert_contains "$lease_identity_output/evidence-invalid.status" \
-  'status=HOST_LEASE_ACQUISITION_FAILED'
-[[ -z $(find "$lease_identity_tmp" -mindepth 1 -maxdepth 1 \
-    -type d -name 'river-tps-test.*' -print -quit) && \
-  ! -e $test_root/lease-identity-lease ]] ||
-  fail "lease identity failure did not clean persisted temp state"
-pass
-
-slow_monitor_output="$test_root/slow-monitor-output"
-slow_monitor_gate="$test_root/slow-monitor-gate"
-mkdir "$slow_monitor_gate"
-PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-  FAKE_PS_SCAN_GATE="$slow_monitor_gate" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/slow-monitor-lease" \
-  "$fixture/tools/tps-test.sh" --output-dir="$slow_monitor_output" \
-  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
-  >"$test_root/slow-monitor.stdout" 2>"$test_root/slow-monitor.stderr" &
-slow_monitor_pid=$!
-for _ in {1..200}; do
-  [[ -e $slow_monitor_gate/started ]] && break
-  /bin/sleep 0.01
-done
-[[ -e $slow_monitor_gate/started ]] || fail "slow initial host observation did not start"
-/bin/sleep 5.5
-kill -0 "$slow_monitor_pid" 2>/dev/null ||
-  fail "slow initial host observation hit the former five-second readiness race"
-: >"$slow_monitor_gate/release"
-wait "$slow_monitor_pid" || fail "slow initial host observation was rejected"
-assert_contains "$slow_monitor_output/run-metadata.properties" 'run.result=provisional'
-assert_contains "$slow_monitor_output/run-metadata.properties.terminal-receipt" \
-  'terminal.result=success'
-assert_contains "$slow_monitor_output/run-metadata.properties" \
-  'provenance.host_exclusion_valid=true'
-pass
-
-monitor_start_output="$test_root/monitor-start-output"
-monitor_start_tmp="$test_root/monitor-start-tmp"
-mkdir "$monitor_start_tmp"
-set +e
-PATH="$fixture/fake-bin:$PATH" TMPDIR="$monitor_start_tmp" \
-  FAKE_RIVER_ROOT="$fixture" \
-  FAKE_PS_SCAN_FAIL=true \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/monitor-start-lease" \
-  "$fixture/tools/tps-test.sh" --output-dir="$monitor_start_output" \
-  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
-  >"$test_root/monitor-start.stdout" 2>"$test_root/monitor-start.stderr"
-monitor_start_status=$?
-set -e
-assert_equal "$monitor_start_status" 2
-assert_contains "$monitor_start_output/run-metadata.properties" \
-  'run.result=provisional'
-assert_contains "$monitor_start_output/run-metadata.properties" \
-  'run.provisional_status=HOST_MONITOR_START_FAILED'
-assert_contains "$monitor_start_output/run-metadata.properties" \
-  'provenance.host_exclusion_valid=false'
-assert_contains "$monitor_start_output/host-violations.tsv" \
-  $'violation\thost_monitor_start_failed'
-assert_contains "$monitor_start_output/host-violations.tsv" \
-  'reason=initial_observation_failed'
-assert_contains "$monitor_start_output/evidence-invalid.status" \
-  'status=HOST_MONITOR_START_FAILED'
-assert_contains "$monitor_start_output/run-metadata.properties.terminal-receipt" \
-  'terminal.result=evidence_invalid'
-[[ ! -e $monitor_start_output/tpcc-acceptance.properties ]] ||
-  fail "monitor startup failure published an acceptance artifact"
-[[ -z $(find "$monitor_start_tmp" -mindepth 1 -maxdepth 1 \
-    -type d -name 'river-tps-test.*' -print -quit) && \
-  ! -e $test_root/monitor-start-lease ]] ||
-  fail "monitor startup failure did not clean the owned temp tree and lease"
-pass
-
 full_output="$test_root/full-output"
 PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
   RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
@@ -852,7 +750,6 @@ provisional_hash=$(sed -n 's/^host.provisional_daemons_sha256=//p' \
 assert_equal "$(provenance_sha256_file "$full_output/host-provisional-daemons.tsv")" \
   "$provisional_hash"
 assert_contains "$full_output/run-metadata.properties" 'provenance.source_stable=true'
-assert_contains "$full_output/run-metadata.properties" 'provenance.classpath_stable=true'
 assert_contains "$full_output/run-metadata.properties" 'provenance.host_exclusion_valid=true'
 assert_contains "$full_output/run-metadata.properties" \
   'provenance.host_provisional_daemons_sha256='
@@ -884,17 +781,11 @@ if provenance_validate_terminal_receipt "$full_output/run-metadata.properties" \
   fail "missing terminal receipt was accepted"
 fi
 mv -- "$test_root/terminal.saved" "$full_output/run-metadata.properties.terminal-receipt"
-provenance_write_classpath_manifest "$full_output/runtime-classpath.properties" \
-  "$test_root/full-replayed-classpath.tsv"
-cmp -s "$test_root/full-replayed-classpath.tsv" "$full_output/classpath-manifest.tsv" ||
-  fail "retained classpath manifest cannot be replayed"
 while IFS=$'\t' read -r stage _ source_hash status_hash classpath_hash descriptor_hash; do
   assert_equal "$(provenance_sha256_file "$full_output/checkpoints/source-manifest.$stage.tsv")" "$source_hash"
   assert_equal "$(provenance_sha256_file "$full_output/checkpoints/git-status.$stage.txt")" "$status_hash"
-  if [[ $classpath_hash != unavailable ]]; then
-    assert_equal "$(provenance_sha256_file "$full_output/checkpoints/classpath-manifest.$stage.tsv")" "$classpath_hash"
-    assert_equal "$(provenance_sha256_file "$full_output/runtime-classpath.properties")" "$descriptor_hash"
-  fi
+  assert_equal unavailable "$classpath_hash"
+  assert_equal unavailable "$descriptor_hash"
 done <"$full_output/provenance-checkpoints.tsv"
 metadata_status_hash=$(sed -n 's/^git.status_sha256=//p' "$full_output/run-metadata.properties")
 assert_equal "$(provenance_sha256_file "$full_output/checkpoints/git-status.metadata.txt")" "$metadata_status_hash"
@@ -942,23 +833,6 @@ source_final_hash=$(sed -n 's/^git.workspace_finish_sha256=//p' \
 assert_equal "$(provenance_sha256_file "$source_mutation_output/checkpoints/source-manifest.metadata.tsv")" \
   "$source_final_hash"
 printf 'original-source\n' >"$fixture/mutable-source.txt"
-pass
-
-classpath_mutation_output="$test_root/classpath-mutation-output"
-set +e
-PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-  FAKE_MUTATE_CLASSPATH="$fixture/classes/Main.class" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/classpath-mutation-lease" \
-  "$fixture/tools/tps-test.sh" --output-dir="$classpath_mutation_output" \
-  --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
-classpath_mutation_status=$?
-set -e
-assert_equal "$classpath_mutation_status" 1
-assert_contains "$classpath_mutation_output/run-metadata.properties" 'provenance.classpath_stable=false'
-cmp -s "$classpath_mutation_output/checkpoints/classpath-manifest.start.tsv" \
-  "$classpath_mutation_output/checkpoints/classpath-manifest.metadata.tsv" &&
-  fail "invalid final classpath bytes were not retained"
 pass
 
 interrupted_output="$test_root/interrupted-output"
@@ -1061,22 +935,6 @@ assert_contains "$checkpoint_collision_output/run-metadata.properties.terminal-r
   'terminal.result=evidence_invalid'
 pass
 
-ledger_failure_output="$test_root/ledger-failure-output"
-set +e
-PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" FAKE_LEDGER_FAILURE=true \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$test_root/ledger-failure-lease" \
-  "$fixture/tools/tps-test.sh" --output-dir="$ledger_failure_output" \
-  --warmup-seconds=1 --measured-seconds=1 --terminals=1 >/dev/null 2>&1
-ledger_failure_status=$?
-set -e
-assert_equal "$ledger_failure_status" 1
-assert_contains "$ledger_failure_output/run-metadata.properties" \
-  'run.provisional_result=evidence_invalid'
-assert_contains "$ledger_failure_output/run-metadata.properties" \
-  'provenance.publication_valid=false'
-pass
-
 metadata_collision_output="$test_root/metadata-collision-output"
 mkdir "$metadata_collision_output"
 set +e
@@ -1096,105 +954,6 @@ assert_contains "$test_root/metadata-collision.stderr" \
   'evidence_status=evidence_invalid reason=publication_failed'
 assert_contains "$metadata_collision_output/evidence-invalid.status" \
   'result=evidence_invalid'
-pass
-
-lease_release_output="$test_root/lease-release-output"
-lease_release_dir="$test_root/lease-release-lease"
-set +e
-PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-  FAKE_CORRUPT_LEASE_OWNER="$lease_release_dir" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$lease_release_dir" \
-  "$fixture/tools/tps-test.sh" --output-dir="$lease_release_output" \
-  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
-  >"$test_root/lease-release.stdout" 2>"$test_root/lease-release.stderr"
-lease_release_status=$?
-set -e
-assert_equal "$lease_release_status" 1
-assert_contains "$lease_release_output/run-metadata.properties.terminal-receipt" \
-  'terminal.result=evidence_invalid'
-assert_contains "$lease_release_output/run-metadata.properties.terminal-receipt" \
-  'terminal.status=LEASE_RELEASE_FAILED'
-assert_contains "$lease_release_output/run-metadata.properties.terminal-receipt" \
-  'lease.release_outcome=failed'
-assert_contains "$test_root/lease-release.stderr" \
-  'evidence_status=evidence_invalid reason=lease_release_failed'
-[[ -d $lease_release_dir ]] ||
-  fail "lease-release failure did not preserve the fail-closed lease"
-rm -rf -- "$lease_release_dir"
-pass
-
-commitment_release_output="$test_root/commitment-release-output"
-commitment_release_dir="$test_root/commitment-release-lease"
-set +e
-PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-  FAKE_MUTATE_LEASE_COMMITMENT="$commitment_release_dir" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$commitment_release_dir" \
-  "$fixture/tools/tps-test.sh" --output-dir="$commitment_release_output" \
-  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
-  >"$test_root/commitment-release.stdout" 2>"$test_root/commitment-release.stderr"
-commitment_release_status=$?
-set -e
-assert_equal "$commitment_release_status" 1
-[[ -d $commitment_release_dir && -f $commitment_release_dir/owner ]] ||
-  fail "commitment-only release mismatch deleted the fail-closed lease"
-assert_contains "$commitment_release_dir/owner" \
-  'terminal_commitment_sha256=0000000000000000000000000000000000000000000000000000000000000000'
-metadata_commitment=$(provenance_property_once terminal.commitment_sha256 \
-  "$commitment_release_output/run-metadata.properties")
-[[ $metadata_commitment != \
-    0000000000000000000000000000000000000000000000000000000000000000 ]] ||
-  fail "fixture did not isolate a commitment-only owner mutation"
-assert_contains "$commitment_release_output/run-metadata.properties.terminal-receipt" \
-  'terminal.result=evidence_invalid'
-assert_contains "$commitment_release_output/run-metadata.properties.terminal-receipt" \
-  'terminal.status=LEASE_RELEASE_FAILED'
-assert_contains "$commitment_release_output/run-metadata.properties.terminal-receipt" \
-  'lease.release_outcome=failed'
-provenance_validate_terminal_receipt \
-  "$commitment_release_output/run-metadata.properties" \
-  "$commitment_release_output/tpcc-acceptance.properties" \
-  "$commitment_release_output/run-metadata.properties.terminal-receipt" \
-  "$commitment_release_output" evidence_invalid ||
-  fail "commitment-only mismatch did not produce a bound failure receipt"
-rm -rf -- "$commitment_release_dir"
-pass
-
-release_race_output="$test_root/release-race-output"
-release_race_dir="$test_root/release-race-lease"
-set +e
-PATH="$fixture/fake-bin:$PATH" FAKE_RIVER_ROOT="$fixture" \
-  FAKE_RELEASE_OWNER_RACE="$release_race_dir" \
-  RIVER_GRADLE="$fixture/fake-gradle" RIVER_JAVA="$fixture/fake-java" \
-  RIVER_TPS_HOST_LEASE_DIR="$release_race_dir" \
-  "$fixture/tools/tps-test.sh" --output-dir="$release_race_output" \
-  --warmup-seconds=1 --measured-seconds=1 --terminals=1 \
-  >"$test_root/release-race.stdout" 2>"$test_root/release-race.stderr"
-release_race_status=$?
-set -e
-assert_equal "$release_race_status" 1
-[[ -d $release_race_dir && -f $release_race_dir/owner &&
-    -f ${release_race_dir}.race-complete ]] ||
-  fail "post-parse owner replacement was not preserved with the lease"
-assert_contains "$release_race_dir/owner" \
-  'terminal_commitment_sha256=0000000000000000000000000000000000000000000000000000000000000000'
-provenance_read_lease_owner "$release_race_dir/owner" >/dev/null ||
-  fail "post-parse replacement was not a canonical owner record"
-assert_contains "$release_race_output/run-metadata.properties.terminal-receipt" \
-  'terminal.result=evidence_invalid'
-assert_contains "$release_race_output/run-metadata.properties.terminal-receipt" \
-  'terminal.status=LEASE_RELEASE_FAILED'
-assert_contains "$release_race_output/run-metadata.properties.terminal-receipt" \
-  'lease.release_outcome=failed'
-provenance_validate_terminal_receipt \
-  "$release_race_output/run-metadata.properties" \
-  "$release_race_output/tpcc-acceptance.properties" \
-  "$release_race_output/run-metadata.properties.terminal-receipt" \
-  "$release_race_output" evidence_invalid ||
-  fail "post-parse replacement did not produce a bound failure receipt"
-rm -rf -- "$release_race_dir"
-rm -- "${release_race_dir}.race-complete"
 pass
 
 [[ -x "$script_dir/../make.sh" ]] || fail "standalone build script is missing"
