@@ -1,10 +1,12 @@
 ---
 id: tic-f8dd
-status: open
+status: in_progress
 type: bug
 priority: 1
 assignee: blater
 delivery: code
+base-commit: e6e17b1fd7dbc0433e64c01b2918e9075cc25858
+branch: ticket/tic-f8dd-order-line-corruption
 tags:
     - correctness
     - storage
