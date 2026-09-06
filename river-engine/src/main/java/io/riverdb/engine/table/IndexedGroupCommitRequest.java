@@ -20,6 +20,8 @@ final class IndexedGroupCommitRequest {
   private volatile StatusCode status;
   private long ticket;
   private long submittedNanos;
+  long probeEnqueued;
+  long probeSelected;
   private volatile long completedNanos;
 
   IndexedGroupCommitRequest(IndexedTransactionSession owner) { session = owner; }
