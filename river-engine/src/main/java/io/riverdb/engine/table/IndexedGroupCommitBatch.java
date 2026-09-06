@@ -66,10 +66,10 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
       }
       return;
     }
-    if (forceSharedGroup(count)) publishForced(count);
+    if (appendSharedGroup(count) && publishPrepared(count)) completeDurability(count);
   }
 
-  boolean forceSharedGroup(int count) {
+  boolean appendSharedGroup(int count) {
     long started = System.nanoTime();
     StatusCode status = table.preflightHybridCommitGroup(
         prepared, count, manager.oldestVisibleCommitSequence());
@@ -107,18 +107,13 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
       failGroup(count, IndexedGroupFailureStage.APPEND, status);
       return false;
     }
-    status = force();
-    if (!status.isOk()) {
-      failGroup(count, IndexedGroupFailureStage.FORCE, status);
-      return false;
-    }
     return true;
   }
 
-  void publishForced(int count) {
+  boolean publishPrepared(int count) {
     long publicationStarted = System.nanoTime();
     long started = publicationStarted;
-    StatusCode status = table.prepareForcedGroupPublication();
+    StatusCode status = table.prepareGroupPublication();
     long preparedNanos = System.nanoTime() - started;
     metrics.recordStage(
         IndexedCommitPath.SHARED_GROUP,
@@ -134,7 +129,7 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
           IndexedCommitStage.GROUP_PUBLICATION,
           preparedNanos);
       failGroup(count, IndexedGroupFailureStage.PUBLICATION, status);
-      return;
+      return false;
     }
     publicationInstallAttempted = false;
     publicationInstallNanos = 0;
@@ -186,10 +181,6 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
             IndexedCommitPath.SHARED_GROUP,
             IndexedCommitStage.GROUP_ACTIVE_REMOVAL,
             completionTimings.activeRemovalNanos());
-        metrics.recordStage(
-            IndexedCommitPath.SHARED_GROUP,
-            IndexedCommitStage.GROUP_OUTCOME_PUBLICATION,
-            completionTimings.outcomePublicationNanos());
         if (!status.isOk()) {
           metrics.recordStageFailure(
               IndexedCommitPath.SHARED_GROUP,
@@ -206,6 +197,27 @@ class IndexedGroupCommitBatch implements TransactionGroupCommitParticipant {
       table.cancelCommitGroup();
       metrics.recordGroupFailure(IndexedGroupFailureStage.PUBLICATION, status, count);
       setAll(count, status);
+      return false;
+    }
+    return true;
+  }
+
+  void completeDurability(int count) {
+    StatusCode status = force();
+    if (!status.isOk()) {
+      failGroup(count, IndexedGroupFailureStage.FORCE, status);
+      return;
+    }
+    status = table.completeGroupDurability();
+    if (status.isOk()) {
+      long started = System.nanoTime();
+      status = manager.completeCommitGroup(transactions, outcomes, count);
+      metrics.recordStage(IndexedCommitPath.SHARED_GROUP,
+          IndexedCommitStage.GROUP_OUTCOME_PUBLICATION, System.nanoTime() - started);
+    }
+    if (!status.isOk()) {
+      table.fenceCommitWriter();
+      failGroup(count, IndexedGroupFailureStage.PUBLICATION, status);
       return;
     }
     for (int index = 0; index < count; index++) {

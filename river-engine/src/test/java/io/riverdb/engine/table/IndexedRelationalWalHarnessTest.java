@@ -1456,10 +1456,10 @@ final class IndexedRelationalWalHarnessTest {
     batch.add(1, secondRequest);
 
     long forceCalls = counters.forceCalls();
-    check(batch.forceSharedGroup(2),
-        "split cohort failed before forced publication");
-    check(counters.forceCalls() == forceCalls + 1,
-        "split cohort did not use exactly one shared force");
+    check(batch.appendSharedGroup(2),
+        "split cohort failed before prepared publication");
+    check(counters.forceCalls() == forceCalls,
+        "split cohort forced before handing off locks");
     check(table.commitGroupDecisionAppended(),
         "forced split cohort did not retain its WAL decision");
     IndexedGroupCommitTelemetry forcedTelemetry = new IndexedGroupCommitTelemetry();
@@ -1498,13 +1498,19 @@ final class IndexedRelationalWalHarnessTest {
         IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_APPEND) == 1,
         "split cohort append phase was not recorded");
     check(forcedTelemetry.stageCount(
-        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_FORCE) == 1,
-        "split cohort force phase was not recorded");
+        IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_FORCE) == 0,
+        "split cohort forced before publication");
     check(forcedTelemetry.stageCount(
         IndexedCommitPath.SHARED_GROUP, IndexedCommitStage.GROUP_PUBLICATION) == 0,
         "split cohort published before the explicit publication phase");
 
-    batch.publishForced(2);
+    check(batch.publishPrepared(2), "split cohort failed prepared publication");
+    check(first.groupTransaction().state() == TransactionState.COMMITTING
+            && second.groupTransaction().state() == TransactionState.COMMITTING,
+        "published cohort acknowledged before durability");
+    batch.completeDurability(2);
+    check(counters.forceCalls() == forceCalls + 1,
+        "split cohort did not use exactly one shared force");
     check(firstRequest.outcome.state() == TransactionState.COMMITTED
             && secondRequest.outcome.state() == TransactionState.COMMITTED,
         "split cohort publication did not commit both members");

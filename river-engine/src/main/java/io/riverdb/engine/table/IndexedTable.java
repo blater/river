@@ -116,8 +116,30 @@ public final class IndexedTable extends IndexedRelationalTableAccess
 
   StatusCode forceHybridCommitGroup() { return store.forceHybridGroup(); }
 
+  synchronized StatusCode completeGroupDurability() {
+    StatusCode status = store.completeHybridGroupDurability();
+    notifyAll();
+    return status;
+  }
+
+  /** Waits at a result-delivery boundary, releasing the table monitor while force is pending. */
+  public synchronized StatusCode awaitDurability(long visibleSequence) {
+    while (!store.failed && store.pendingDurabilitySequence != 0
+        && visibleSequence >= store.pendingDurabilitySequence) {
+      try {
+        wait();
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return StatusCode.CANCELLED;
+      }
+    }
+    return store.admission();
+  }
+
   synchronized StatusCode cancelCommitGroup() {
-    return store.cancelCommitGroup();
+    StatusCode status = store.cancelCommitGroup();
+    notifyAll();
+    return status;
   }
 
   synchronized boolean commitGroupDecisionAppended() {
@@ -129,11 +151,13 @@ public final class IndexedTable extends IndexedRelationalTableAccess
   }
 
   synchronized StatusCode fenceCommitWriter() {
-    return store.fenceCommitWriter();
+    StatusCode status = store.fenceCommitWriter();
+    notifyAll();
+    return status;
   }
 
-  synchronized StatusCode prepareForcedGroupPublication() {
-    return store.prepareForcedGroupPublication();
+  synchronized StatusCode prepareGroupPublication() {
+    return store.prepareGroupPublication();
   }
 
   @Override

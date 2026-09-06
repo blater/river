@@ -64,6 +64,7 @@ final class IndexedRelationalStoreServices {
   }
 
   StatusCode forceHybridGroup() { return commits.forceHybridGroup(); }
+  StatusCode completeHybridGroupDurability() { return commits.completeHybridGroupDurability(); }
   StatusCode prepareHybridGroupPublication() {
     return commits.prepareHybridGroupPublication();
   }

@@ -7,22 +7,29 @@ import io.riverdb.tx.api.TransactionState;
 /** Orders terminal lock cleanup, active-set removal, and outcome publication. */
 final class TransactionCompletion {
   private final TransactionManager manager;
+  private int publishedPending;
 
   TransactionCompletion(TransactionManager owner) { manager = owner; }
+
+  int publishedPending() { return publishedPending; }
 
   void finish(
       Transaction transaction, TransactionOutcome result,
       TransactionState state, long commitSequence, StatusCode lockOutcome) {
     long id = transaction.transactionId();
     long generation = transaction.transactionGeneration();
-    manager.locks.lifecycle.complete(id, generation, lockOutcome);
-    manager.removeActive(id);
+    if (transaction.state() == TransactionState.COMMITTING && transaction.commitSequence() > 0) {
+      publishedPending--;
+    } else {
+      manager.locks.lifecycle.complete(id, generation, lockOutcome);
+      manager.removeActive(id);
+    }
     transaction.transition(state, commitSequence, true);
     result.set(manager.databaseHigh, manager.databaseLow, id, state, commitSequence);
   }
 
   /** Completes a validated group in phases while the manager retains its snapshot barrier. */
-  void finishCommittedGroup(
+  void publishCommittedGroup(
       Transaction[] transactions,
       TransactionOutcome[] results,
       long[] commitSequences,
@@ -45,18 +52,29 @@ final class TransactionCompletion {
     long removed = System.nanoTime();
     for (int index = 0; index < count; index++) {
       Transaction transaction = transactions[index];
-      long transactionId = transaction.transactionId();
-      transaction.transition(
-          TransactionState.COMMITTED, commitSequences[index], true);
-      results[index].set(
-          manager.databaseHigh,
-          manager.databaseLow,
-          transactionId,
-          TransactionState.COMMITTED,
-          commitSequences[index]);
+      // Visibility and lock ownership transfer now; the handle remains pending durability.
+      transaction.transition(TransactionState.COMMITTING, commitSequences[index], false);
+      publishedPending++;
     }
-    long published = System.nanoTime();
-    timings.set(released - started, removed - released, published - removed);
+    timings.set(released - started, removed - released, 0);
+  }
+
+  StatusCode completePublishedGroup(
+      Transaction[] transactions, TransactionOutcome[] results, int count) {
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      if (transaction == null || !transaction.isOwnedBy(manager)
+          || transaction.state() != TransactionState.COMMITTING
+          || transaction.commitSequence() <= 0 || results[index] == null) {
+        return StatusCode.INVALID_EXTERNAL_INPUT;
+      }
+    }
+    for (int index = 0; index < count; index++) {
+      Transaction transaction = transactions[index];
+      finish(transaction, results[index], TransactionState.COMMITTED,
+          transaction.commitSequence(), StatusCode.CANCELLED);
+    }
+    return StatusCode.OK;
   }
 
   StatusCode abortFrozenForConflict(

@@ -117,7 +117,7 @@ public final class TransactionManager {
   }
 
   public synchronized int activeTransactionCount() {
-    return snapshots.count();
+    return snapshots.count() + completion.publishedPending();
   }
 
   /** Oldest commit sequence still visible to an active transaction. */
@@ -159,7 +159,7 @@ public final class TransactionManager {
   public synchronized StatusCode atQuiescentBoundary(
       TransactionQuiescentParticipant participant) {
     if (participant == null) return StatusCode.INVALID_EXTERNAL_INPUT;
-    if (snapshots.count() != 0
+    if (activeTransactionCount() != 0
         || locks.activeLockCount() != 0
         || locks.waitingCount() != 0) {
       return StatusCode.RETRY;
@@ -294,7 +294,7 @@ public final class TransactionManager {
       IsolationLevel isolationLevel,
       long visibleCommitSequence,
       Transaction result) {
-    if (snapshots.full()) {
+    if (activeTransactionCount() == snapshots.capacity()) {
       return StatusCode.RESOURCE_EXHAUSTED;
     }
     if (nextTransactionId <= 0 || nextTransactionStartOrder <= 0) {
@@ -455,7 +455,7 @@ public final class TransactionManager {
     return StatusCode.OK;
   }
 
-  /** Installs one prepared group and its outcomes as one bounded snapshot-barrier action. */
+  /** Publishes one irrevocably appended group and hands off locks under the snapshot barrier. */
   public synchronized StatusCode publishCommitGroup(
       Transaction[] transactions,
       TransactionOutcome[] results,
@@ -487,9 +487,19 @@ public final class TransactionManager {
       StatusCode terminal = failForcedCommitGroup(transactions, results, count, status);
       return terminal.isOk() ? status : terminal;
     }
-    completion.finishCommittedGroup(
+    completion.publishCommittedGroup(
         transactions, results, commitSequences, count, timings);
     return StatusCode.OK;
+  }
+
+  /** Acknowledges a published group only after its writer has established durability. */
+  public synchronized StatusCode completeCommitGroup(
+      Transaction[] transactions, TransactionOutcome[] results, int count) {
+    if (transactions == null || results == null || count <= 0
+        || count > transactions.length || count > results.length) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
+    return completion.completePublishedGroup(transactions, results, count);
   }
 
   /** Finalizes a group that could not establish or publish its durability outcome. */
@@ -648,7 +658,7 @@ public final class TransactionManager {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
-    if (snapshots.count() != 0 || locks.activeLockCount() != 0) {
+    if (activeTransactionCount() != 0 || locks.activeLockCount() != 0) {
       return StatusCode.RETRY;
     }
     if (nextTransactionId <= 0) {

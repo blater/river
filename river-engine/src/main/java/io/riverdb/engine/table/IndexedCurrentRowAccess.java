@@ -38,6 +38,7 @@ final class IndexedCurrentRowAccess {
     }
     status = session.table().fetchCurrentSuccessor(
         candidate.keySpace(), candidate.key(), candidate.versionRowId(), successor);
+    session.observeCurrentCommit();
     if (!status.isOk()) return release(result, status);
     return publishCommitted(
         result, generation, candidate.keySpace(), candidate.key(), candidate.versionRowId());
@@ -100,6 +101,7 @@ final class IndexedCurrentRowAccess {
       return status.isOk() ? status : release(result, status);
     }
     status = session.table().fetchCurrentByKey(space, key, successor);
+    session.observeCurrentCommit();
     if (!status.isOk()) return release(result, status);
     return publishCommitted(
         result, generation, space, key, successor.versionRowId());

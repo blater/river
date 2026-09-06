@@ -4,7 +4,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.wal.local.LocalWal;
 import io.riverdb.wal.local.LocalWalForceCause;
 
-/** Canonically stages one admitted hybrid commit cohort and publishes it after one WAL force. */
+/** Stages one cohort, publishes its irrevocable decision, and completes its WAL durability. */
 final class IndexedHybridCommitGroup {
   private long[] rowEnds = new long[0];
   private int[] heapPageEnds = new int[0];
@@ -175,7 +175,7 @@ final class IndexedHybridCommitGroup {
   }
 
   StatusCode preparePublication() {
-    if (!active || count <= 0 || !wal.forced() || !store.phase.hybridForced()) {
+    if (!active || count <= 0 || !wal.appended() || !store.phase.hybridEncoding()) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = publication.prepare(
@@ -184,24 +184,34 @@ final class IndexedHybridCommitGroup {
       fenceInstalledGroup();
       return status;
     }
-    status = cleanupPreparedWork();
-    if (!status.isOk()) {
-      fenceInstalledGroup();
-      return status;
-    }
+    // Keep publication pins until force: cache eviction must never write these pages first.
     prepared = true;
     return StatusCode.OK;
   }
 
   StatusCode installPublication() {
     if (!active || !prepared) return StatusCode.INVALID_EXTERNAL_INPUT;
+    store.pendingDurabilitySequence = sequences[0];
     StatusCode status = publication.install(wal);
     if (status.isOk()) {
-      finishInstalled();
+      if (wal.forced()) status = completeDurability();
     } else {
       fenceInstalledGroup();
     }
     return status;
+  }
+
+  StatusCode completeDurability() {
+    if (!active || !prepared || !wal.forced()) return StatusCode.INVARIANT_BROKEN;
+    StatusCode status = cleanupPreparedWork();
+    if (status.isOk()) status = wal.release();
+    if (!status.isOk()) {
+      fenceInstalledGroup();
+      return status;
+    }
+    store.pendingDurabilitySequence = 0;
+    finishInstalled();
+    return StatusCode.OK;
   }
 
   StatusCode cancel() {

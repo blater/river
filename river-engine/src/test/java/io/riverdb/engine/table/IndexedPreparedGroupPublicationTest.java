@@ -187,11 +187,13 @@ final class IndexedPreparedGroupPublicationTest {
     assertEquals(0, first.committedSequence());
     assertEquals(0, second.committedSequence());
     assertEquals(StatusCode.OK, table.forceHybridCommitGroup());
-    assertEquals(StatusCode.OK, table.prepareForcedGroupPublication());
+    assertEquals(StatusCode.OK, table.prepareGroupPublication());
     assertEquals(frontier, table.currentCommitSequence());
     assertEquals(StatusCode.OK, manager.publishCommitGroup(
         transactions, outcomes, sequences, transactions.length, table,
         new TransactionGroupCompletionTimings()));
+    assertEquals(StatusCode.OK, manager.completeCommitGroup(
+        transactions, outcomes, transactions.length));
     assertEquals(StatusCode.OK, first.completeCoordinatedCommit(StatusCode.OK));
     assertEquals(StatusCode.OK, second.completeCoordinatedCommit(StatusCode.OK));
     assertEquals(TransactionState.COMMITTED, outcomes[0].state());

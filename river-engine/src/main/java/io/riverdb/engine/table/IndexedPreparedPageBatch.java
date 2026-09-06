@@ -215,7 +215,7 @@ final class IndexedPreparedPageBatch {
     if (slot < 0 || slot >= cache.currentFrames.length) return false;
     IndexedPageFrame frame = cache.currentFrames[slot];
     return frame != null && frame.pageId == pageId
-        && frame.publicationReserved && frame.pinCount == 1;
+        && frame.publicationReserved && frame.pinCount >= 1;
   }
 
   private boolean validPredecessor(IndexedPageFrameCache cache, int index) {
@@ -250,8 +250,9 @@ final class IndexedPreparedPageBatch {
       IndexedPageFrameCache cache, int slot, boolean published) {
     if (slot < 0 || slot >= cache.currentFrames.length) return;
     IndexedPageFrame frame = cache.currentFrames[slot];
-    if (frame == null || !frame.publicationReserved || frame.pinCount != 1) return;
-    frame.pinCount = 0;
+    if (frame == null || !frame.publicationReserved || frame.pinCount < 1) return;
+    // Drop only the publication owner's pin; concurrent readers retain their own pins.
+    frame.pinCount--;
     frame.publicationReserved = false;
     if (published) return;
     frame.pageId = 0;

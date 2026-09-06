@@ -6,9 +6,15 @@ import io.riverdb.engine.api.ParameterSet;
 import io.riverdb.engine.api.SessionAuthorizer;
 import io.riverdb.engine.relational.RelationalDatabase;
 
-/** Public SQL session façade; mutable execution state is owned by its components. */
+/** Public SQL session façade and durable result-delivery boundary. */
 public final class SqlSession implements SqlRetainedBudget {
   private final SqlSessionExecutionCoordinator coordinator;
+  private StatusCode deliver(StatusCode status) {
+    if (coordinator.programTransactionActive()
+        || !status.isOk() && status != StatusCode.CONFLICT) return status;
+    StatusCode durability = coordinator.awaitDurability();
+    return durability.isOk() ? status : durability;
+  }
 
   SqlSession(SqlSessionExecutionCoordinator sessionCoordinator) {
     coordinator = sessionCoordinator;
@@ -36,12 +42,12 @@ public final class SqlSession implements SqlRetainedBudget {
   }
 
   public StatusCode execute(String sql, SqlExecutionResult result) {
-    return coordinator.execute(sql, result);
+    return deliver(coordinator.execute(sql, result));
   }
 
   public StatusCode execute(
       String sql, ParameterSet parameters, SqlExecutionResult result) {
-    return coordinator.execute(sql, parameters, result);
+    return deliver(coordinator.execute(sql, parameters, result));
   }
 
   public StatusCode validatePrepared(
@@ -51,21 +57,21 @@ public final class SqlSession implements SqlRetainedBudget {
 
   public StatusCode executePrepared(
       SqlPreparedPlan plan, ParameterSet parameters, SqlExecutionResult result) {
-    return coordinator.executePrepared(plan, parameters, result);
+    return deliver(coordinator.executePrepared(plan, parameters, result));
   }
 
   public StatusCode beginScan(String sql, SqlScanCursor cursor) {
-    return coordinator.beginScan(sql, cursor);
+    return deliver(coordinator.beginScan(sql, cursor));
   }
 
   public StatusCode beginScan(
       String sql, ParameterSet parameters, SqlScanCursor cursor) {
-    return coordinator.beginScan(sql, parameters, cursor);
+    return deliver(coordinator.beginScan(sql, parameters, cursor));
   }
 
   public StatusCode beginPreparedScan(
       SqlPreparedPlan plan, ParameterSet parameters, SqlScanCursor cursor) {
-    return coordinator.beginPreparedScan(plan, parameters, cursor);
+    return deliver(coordinator.beginPreparedScan(plan, parameters, cursor));
   }
 
   public StatusCode executePreparedSingleton(
@@ -74,7 +80,8 @@ public final class SqlSession implements SqlRetainedBudget {
       SqlScanCursor cursor,
       SqlExecutionResult result,
       SqlPreparedQueryPath path) {
-    return coordinator.executePreparedSingleton(plan, parameters, cursor, result, path);
+    return deliver(
+        coordinator.executePreparedSingleton(plan, parameters, cursor, result, path));
   }
 
   public StatusCode configureTransactionDiagnostics(
@@ -88,7 +95,7 @@ public final class SqlSession implements SqlRetainedBudget {
   }
 
   public StatusCode nextScan(SqlScanCursor cursor, SqlScanRowResult result) {
-    return coordinator.nextScan(cursor, result);
+    return deliver(coordinator.nextScan(cursor, result));
   }
 
   public CharSequence scanColumnName(SqlScanCursor cursor, int index) {
@@ -105,7 +112,7 @@ public final class SqlSession implements SqlRetainedBudget {
 
   public StatusCode closeScan(
       SqlScanCursor cursor, SqlExecutionResult result) {
-    return coordinator.closeScan(cursor, result);
+    return deliver(coordinator.closeScan(cursor, result));
   }
 
   public StatusCode beginProgram(
