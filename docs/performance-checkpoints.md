@@ -48,6 +48,7 @@ Status: user-requested integration of prepared-lock handoff; no demonstrated
 throughput improvement and not an accepted performance checkpoint.
 
 - Branch: `ticket/tic-f1bb-durability-handoff`
+- Feature source commit: `f557af1`.
 - Control: `1b9bf8f` (no existing `perf-checkpoint-*` tag was available).
 - Evidence root: `/private/tmp/river-durability-handoff.Ufwv2v`
 - Scope: publish the irrevocable prepared group and hand off its locks before
@@ -124,6 +125,20 @@ tests and stopped at `SqlSessionTest.namedSavepointCoexistsWithStatementRollback
 (fourth savepoint returned OK rather than RESOURCE_EXHAUSTED); its focused
 repeat is `final-focused-tests.log`. These are not reported as a green full
 engine gate.
+
+The savepoint assertion also failed on unchanged control `1b9bf8f`
+(`base-savepoint-test.log`). Final focused handoff, recovery, reader-pin,
+transaction-session, SQL ownership, and program validation passed all 121
+tests (`final-handoff-tests.log`); indexed-table reference verification passed.
+Hot-path bytecode verification failed on stale/missing method entries and an
+unchanged engine API exception instruction; source-policy verification also
+failed on unrelated existing files. No policy allowlists were edited.
+
+After rebuilding `f557af1`, two final identical short samples are retained at
+`/private/tmp/river-batched-lock-release.U3GReO/baseline-1` and `baseline-2`.
+These also serve as the separate batched-release feature's before samples.
+They recorded 120.200 and 121.100 TPS respectively, zero retries/errors,
+successful invariants and capture, and zero terminal transactions/locks/waiters.
 
 Follow-up recommendation, not implemented here: batch grant/deadlock scheduler
 draining across terminal lock cleanup in the existing transaction-layer owner.
