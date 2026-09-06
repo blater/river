@@ -29,39 +29,55 @@ final class CatalogTableOpener {
   }
 
   StatusCode open(long objectId, SchemaPin pin, StatusDetail detail) {
+    StatusCode status = validate(objectId, pin, detail);
+    if (!status.isOk()) return status;
+    status = transactions.open(opened);
+    if (!status.isOk()) return fail(detail, status);
+    IndexedTransactionSession session = opened.session();
+    status = session.begin(IsolationLevel.REPEATABLE_READ);
+    if (status.isOk()) status = load(session, objectId, pin, detail);
+    status = transactions.finish(session, status, false);
+    return complete(status, pin, detail);
+  }
+
+  StatusCode openInTransaction(
+      IndexedTransactionSession session, long objectId, SchemaPin pin, StatusDetail detail) {
+    StatusCode status = validate(objectId, pin, detail);
+    if (!status.isOk()) return status;
+    return complete(load(session, objectId, pin, detail), pin, detail);
+  }
+
+  private StatusCode validate(long objectId, SchemaPin pin, StatusDetail detail) {
     if (detail != null) detail.reset();
     descriptorResult.reset();
     if (!CatalogKeyspace.validObjectHead(objectId) || pin == null || pin.isActive()) {
       return fail(detail, StatusCode.INVALID_EXTERNAL_INPUT);
     }
-    StatusCode status = transactions.open(opened);
-    if (!status.isOk()) return fail(detail, status);
-    IndexedTransactionSession session = opened.session();
-    status = session.begin(IsolationLevel.REPEATABLE_READ);
-    if (status.isOk()) status = definitions.readHead(session, objectId);
+    return StatusCode.OK;
+  }
+
+  private StatusCode load(
+      IndexedTransactionSession session, long objectId, SchemaPin pin, StatusDetail detail) {
+    StatusCode status = definitions.readHead(session, objectId);
     if (status.isOk()) status = definitions.readCurrentManifest(session, objectId);
-    if (!status.isOk()) return fail(detail, transactions.finish(session, status, false));
+    if (!status.isOk()) return status;
     status = cache.lookupCurrent(objectId, definitions.headSchemaId(),
         definitions.currentRowLayoutId(),
         definitions.headGeneration(), pin);
-    if (status.isOk()) return finishCached(session, pin, detail);
-    if (status != StatusCode.CONFLICT) {
-      return fail(detail, transactions.finish(session, status, false));
-    }
+    if (status != StatusCode.CONFLICT) return status;
     status = definitions.assembleCurrent(session, objectId, descriptorResult, detail);
     if (status.isOk()) status = cache.reserveCurrent(
         descriptorResult.value(), definitions.headGeneration(), admission);
-    StatusCode terminal = transactions.finish(session, status, false);
-    if (!terminal.isOk()) return cancel(terminal, detail);
-    status = admission.publish(descriptorResult.value(), pin);
-    return status.isOk() ? succeed(detail) : cancel(status, detail);
+    return status;
   }
 
-  private StatusCode finishCached(
-      IndexedTransactionSession session, SchemaPin pin, StatusDetail detail) {
-    StatusCode terminal = transactions.finish(session, StatusCode.OK, false);
-    if (!terminal.isOk()) pin.release();
-    return terminal.isOk() ? succeed(detail) : fail(detail, terminal);
+  private StatusCode complete(StatusCode status, SchemaPin pin, StatusDetail detail) {
+    if (status.isOk() && admission.isActive()) {
+      status = admission.publish(descriptorResult.value(), pin);
+    }
+    if (status.isOk()) return succeed(detail);
+    if (pin.isActive()) pin.release();
+    return cancel(status, detail);
   }
 
   private StatusCode cancel(StatusCode status, StatusDetail detail) {

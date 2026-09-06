@@ -78,7 +78,7 @@ final class RelationalDescriptorNames {
   StatusCode open(CharSequence name, SchemaPin pin, StatusDetail detail) {
     if (pin == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     StatusCode status = find(name, found);
-    return status.isOk() ? services.descriptors().open(found.value, pin, detail) : status;
+    return status.isOk() ? services.openDescriptor(session, found.value, pin, detail) : status;
   }
 
   StatusCode validateCommitted() {

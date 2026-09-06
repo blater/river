@@ -143,6 +143,17 @@ public final class CatalogTableLifecycle {
     return status.isOk() ? opener.open(objectId, pin, detail) : status;
   }
 
+  /**
+   * Resolves committed metadata within a relational caller's admitted schema transaction.
+   * The caller resolves private DDL overlays first and owns the transaction and result
+   * durability boundary. This method never begins or finishes that transaction.
+   */
+  public synchronized StatusCode openInTransaction(
+      IndexedTransactionSession session, long objectId, SchemaPin pin, StatusDetail detail) {
+    StatusCode status = ensureInitialized();
+    return status.isOk() ? opener.openInTransaction(session, objectId, pin, detail) : status;
+  }
+
   /** Resolves the newest durable generation carrying one historical physical row layout. */
   public synchronized StatusCode openRetained(
       long objectId, long rowLayoutId, SchemaPin pin, StatusDetail detail) {
