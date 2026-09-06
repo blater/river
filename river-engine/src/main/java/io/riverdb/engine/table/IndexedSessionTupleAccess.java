@@ -191,8 +191,11 @@ final class IndexedSessionTupleAccess {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     StatusCode status = session.acquireExclusiveKey(CatalogKeyspace.INDEX_ROOT_SPACE, keyId);
-    if (status.isOk()) status = session.table().probeTupleBuildingPrefixCurrent(
-        ownerId, keyId, schemaId, privateOwner, shape, key, offset, length, probe);
+    if (status.isOk()) {
+      status = session.table().probeTupleBuildingPrefixCurrent(
+          ownerId, keyId, schemaId, privateOwner, shape, key, offset, length, probe);
+      session.observeCommit(probe.observedCommitSequence());
+    }
     return status.isOk() ? session.tupleIntents().appendOnlyUniquePrefixStatus(
         keyId, shape, key, offset, length, rowId,
         probe.found(), probe.logicalRowId()) : status;

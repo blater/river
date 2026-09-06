@@ -42,24 +42,31 @@ final class IndexedKernelVisibility {
 
   StatusCode fetchVersionedByKey(
       long visibleSequence, long space, long key, long rowCount,
-      IndexedVersionedRowResult result) {
-    if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
+      HeapRowResult row, IndexedVersionedRowResult result) {
+    if (!OrderedKey.isFiniteSpace(space) || row == null || result == null) {
+      return StatusCode.INVALID_EXTERNAL_INPUT;
+    }
     result.reset();
+    row.reset();
     StatusCode status = lookup(space, key);
-    if (status.isOk()) status = resolve(lookup.rowId(), visibleSequence, rowCount);
-    if (status.isOk()) status = fetchResolved(rowCount, result.row());
+    if (!status.isOk()) return status;
+    status = resolve(lookup.rowId(), visibleSequence, rowCount);
+    if (!status.isOk()) return status;
+    result.observeCommit(resolvedRowId > 0 ? version.commitSequence() : 0);
+    status = fetchResolved(rowCount, row);
     if (status.isOk()) result.set(resolvedRowId);
     return status;
   }
 
   StatusCode fetchCurrentSuccessor(
       long space, long key, long candidateRowId, long rowCount,
-      IndexedVersionedRowResult result) {
+      HeapRowResult row, IndexedVersionedRowResult result) {
     if (!OrderedKey.isFiniteSpace(space) || candidateRowId <= 0
-        || candidateRowId > rowCount || result == null) {
+        || candidateRowId > rowCount || row == null || result == null) {
       return StatusCode.INVALID_EXTERNAL_INPUT;
     }
     result.reset();
+    row.reset();
     StatusCode status = lookup(space, key);
     if (!status.isOk()) return status;
     long currentRowId = lookup.rowId();
@@ -67,9 +74,10 @@ final class IndexedKernelVisibility {
     while (rowId > 0) {
       status = versions.lookup(rowId, rowCount, version);
       if (!status.isOk()) return status;
+      result.observeCommit(Math.max(result.observedCommitSequence(), version.commitSequence()));
       if (version.deleted()) return StatusCode.CONFLICT;
       if (rowId == candidateRowId) {
-        status = rows.fetch(currentRowId, rowCount, result.row());
+        status = rows.fetch(currentRowId, rowCount, row);
         if (status.isOk()) result.set(currentRowId);
         return status;
       }
@@ -114,6 +122,7 @@ final class IndexedKernelVisibility {
     long latestRowId = lookup.rowId();
     status = versions.lookup(latestRowId, rowCount, version);
     if (!status.isOk()) return status;
+    result.observeCommit(version.commitSequence());
     if (version.commitSequence() > visibleSequence
         || insert != version.deleted()) {
       return StatusCode.CONFLICT;
@@ -142,6 +151,7 @@ final class IndexedKernelVisibility {
       if (resolvedRowId <= 0) continue;
       status = versions.lookup(resolvedRowId, rowCount, version);
       if (!status.isOk()) return status;
+      cursor.observeCommit(version.commitSequence());
       if (version.deleted()) continue;
       status = rows.fetch(resolvedRowId, rowCount, result.row());
       if (!status.isOk()) return status;

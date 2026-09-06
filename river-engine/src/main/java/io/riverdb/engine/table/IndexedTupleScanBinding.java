@@ -47,6 +47,8 @@ final class IndexedTupleScanBinding {
     return status.isOk() ? cursor.open(tree, bounds, workspace) : status;
   }
 
+  long observedCommitSequence() { return root.observedCommitSequence(); }
+
   private StatusCode bind(IndexedTableKernel kernel, IndexedPageSet pageSet) {
     if (provider != null) return pages == pageSet
         ? StatusCode.OK : StatusCode.INVALID_EXTERNAL_INPUT;

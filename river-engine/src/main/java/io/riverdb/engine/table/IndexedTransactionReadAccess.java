@@ -10,6 +10,7 @@ import io.riverdb.tx.api.lock.LockMode;
 final class IndexedTransactionReadAccess {
   private final IndexedTransactionSession session;
   private final IndexedVersionedRowResult visible = new IndexedVersionedRowResult();
+  private final HeapRowResult candidateRow = new HeapRowResult();
 
   IndexedTransactionReadAccess(IndexedTransactionSession session) {
     this.session = session;
@@ -57,8 +58,10 @@ final class IndexedTransactionReadAccess {
           session.transaction(), session.table());
       if (!status.isOk()) return status;
     }
-    return session.table().fetchByKeyAt(
-        session.transaction().snapshot().visibleCommitSequence(), space, key, result);
+    StatusCode status = session.table().fetchVersionedByKeyAt(
+        session.transaction().snapshot().visibleCommitSequence(), space, key, result, visible);
+    session.observeCommit(visible.observedCommitSequence());
+    return status;
   }
 
   StatusCode fetchCandidateByKey(
@@ -96,9 +99,10 @@ final class IndexedTransactionReadAccess {
       if (!status.isOk()) return status;
     }
     StatusCode status = session.table().fetchVersionedByKeyAt(
-        session.transaction().snapshot().visibleCommitSequence(), space, key, visible);
+        session.transaction().snapshot().visibleCommitSequence(), space, key, candidateRow, visible);
+    session.observeCommit(visible.observedCommitSequence());
     if (status.isOk()) {
-      result.row().copyFrom(visible.row());
+      result.row().copyFrom(candidateRow);
       result.setCommitted(
           session, session.transaction().transactionGeneration(),
           space, key, visible.versionRowId());

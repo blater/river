@@ -211,18 +211,18 @@ public final class IndexedTable extends IndexedRelationalTableAccess
 
   synchronized StatusCode fetchVersionedByKeyAt(
       long visibleCommitSequence, long space, long key,
-      IndexedVersionedRowResult result) {
-    return store.fetchVersionedByKeyAt(visibleCommitSequence, space, key, result);
+      HeapRowResult row, IndexedVersionedRowResult result) {
+    return store.fetchVersionedByKeyAt(visibleCommitSequence, space, key, row, result);
   }
 
   synchronized StatusCode fetchCurrentByKey(
-      long space, long key, IndexedVersionedRowResult result) {
-    return store.fetchVersionedByKeyAt(store.currentCommitSequence(), space, key, result);
+      long space, long key, HeapRowResult row, IndexedVersionedRowResult result) {
+    return store.fetchVersionedByKeyAt(store.currentCommitSequence(), space, key, row, result);
   }
 
   synchronized StatusCode fetchCurrentSuccessor(
-      long space, long key, long candidateRowId, IndexedVersionedRowResult result) {
-    return store.fetchCurrentSuccessor(space, key, candidateRowId, result);
+      long space, long key, long candidateRowId, HeapRowResult row, IndexedVersionedRowResult result) {
+    return store.fetchCurrentSuccessor(space, key, candidateRowId, row, result);
   }
 
   synchronized StatusCode probeTuplePrefixAt(

@@ -479,15 +479,15 @@ final class IndexedTableKernel extends IndexedKernelVersions {
 
   StatusCode fetchVersionedByKeyAt(
       long visibleCommitSequence, long space, long key,
-      IndexedVersionedRowResult result) {
+      HeapRowResult row, IndexedVersionedRowResult result) {
     return components.visibility.fetchVersionedByKey(
-        visibleCommitSequence, space, key, rowCount, result);
+        visibleCommitSequence, space, key, rowCount, row, result);
   }
 
   StatusCode fetchCurrentSuccessor(
-      long space, long key, long candidateRowId, IndexedVersionedRowResult result) {
+      long space, long key, long candidateRowId, HeapRowResult row, IndexedVersionedRowResult result) {
     return components.visibility.fetchCurrentSuccessor(
-        space, key, candidateRowId, rowCount, result);
+        space, key, candidateRowId, rowCount, row, result);
   }
 
   StatusCode nextScan(IndexedScanCursor cursor, IndexedScanResult result) {

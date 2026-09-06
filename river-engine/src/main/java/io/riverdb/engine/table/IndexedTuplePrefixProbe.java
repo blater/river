@@ -35,6 +35,7 @@ final class IndexedTuplePrefixProbe {
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : validate(owner, keyId, schemaId, shape, key, offset, length);
     if (status.isOk()) status = root.load(visible, keyId);
+    if (status.isOk()) result.observeCommit(root.observedCommitSequence());
     if (status.isOk() && !root.matches(owner, keyId, schemaId, shape)) {
       status = StatusCode.CORRUPTION;
     }
@@ -64,6 +65,7 @@ final class IndexedTuplePrefixProbe {
         ? StatusCode.INVALID_EXTERNAL_INPUT
         : validate(owner, keyId, schemaId, shape, key, offset, length);
     if (status.isOk()) status = root.load(current, keyId);
+    if (status.isOk()) result.observeCommit(root.observedCommitSequence());
     if (status.isOk() && !root.matchesBuilding(
         owner, keyId, schemaId, privateOwner, shape)) status = StatusCode.CORRUPTION;
     return status.isOk()

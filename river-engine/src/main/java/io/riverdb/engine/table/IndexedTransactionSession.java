@@ -24,7 +24,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
   private final IndexedSessionRegistry sessionRegistry;
   private final IndexedSessionState state;
   private long committedSequence;
-  private long observedCurrentSequence;
+  private long observedCommitSequence;
   private long copiedWriteSetBytes;
   private boolean statementActive;
   private boolean closed;
@@ -205,7 +205,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     state.logicalRowFloors.reset();
     state.preparedCommit.reset();
     committedSequence = 0;
-    observedCurrentSequence = 0;
+    observedCommitSequence = 0;
     statementActive = false;
     StatusCode maintenance = maintainVersions();
     if (!maintenance.isOk()) {
@@ -248,13 +248,12 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
 
   /** Completes observation of committed state before it crosses a caller's result boundary. */
   public StatusCode awaitDurability() {
-    return table.awaitDurability(Math.max(observedCurrentSequence,
-        Math.max(transaction.snapshot().visibleCommitSequence(), transaction.commitSequence())));
+    return table.awaitDurability(Math.max(observedCommitSequence, committedSequence));
   }
 
-  // Current-row integrity probes may observe beyond a repeatable-read snapshot.
-  void observeCurrentCommit() {
-    observedCurrentSequence = Math.max(observedCurrentSequence, table.currentCommitSequence());
+  // Includes negative results and current probes beyond the snapshot; survives savepoint rollback.
+  void observeCommit(long sequence) {
+    observedCommitSequence = Math.max(observedCommitSequence, sequence);
   }
 
   private StatusCode deliverRead(StatusCode status) {
@@ -753,11 +752,7 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     compactWriteSet();
     if (state.pendingMutations.count() == 0 && state.tupleIntents.mutationCount() == 0
         && !state.tupleLifecycle.active() && state.logicalRowFloors.count() == 0) {
-      table.commitMetrics().recordReadOnlyCommit();
-      result.reset();
-      StatusCode status = awaitDurability();
-      if (status.isOk()) status = manager.commitReadOnly(transaction, result);
-      return !transaction.isActiveHandle() ? completeTerminalCleanup(status) : status;
+      return commitReadOnly(result);
     }
     if (state.groupCommit != null) {
       return state.groupCommit.commit(state.groupCommitRequest, result);
@@ -780,6 +775,18 @@ public final class IndexedTransactionSession implements TransactionCommitPartici
     StatusCode status = manager.commit(transaction, this, result);
     if (transaction.state() == TransactionState.ACTIVE) cancelLogicalCommit();
     return completeCoordinatedCommit(status);
+  }
+
+  private StatusCode commitReadOnly(TransactionOutcome result) {
+    table.commitMetrics().recordReadOnlyCommit();
+    result.reset();
+    StatusCode status = awaitDurability();
+    if (status == StatusCode.FENCED) {
+      StatusCode aborted = abort(result);
+      return aborted.isOk() ? status : aborted;
+    }
+    if (status.isOk()) status = manager.commitReadOnly(transaction, result);
+    return !transaction.isActiveHandle() ? completeTerminalCleanup(status) : status;
   }
 
   boolean hasCommitWork() {

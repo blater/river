@@ -9,6 +9,8 @@ public final class IndexedScanCursor {
   private IndexedTable owner;
   private IndexedTransactionSession sessionOwner;
   private long visibleCommitSequence;
+  private long observedCommitSequence;
+
   private long lowerKey;
   private long upperKey;
   private long lowerSpace;
@@ -29,6 +31,7 @@ public final class IndexedScanCursor {
     owner = null;
     sessionOwner = null;
     visibleCommitSequence = 0;
+    observedCommitSequence = 0;
     lowerKey = 0;
     upperKey = 0;
     lowerSpace = 0;
@@ -57,6 +60,7 @@ public final class IndexedScanCursor {
     }
     owner = table;
     visibleCommitSequence = visible;
+    observedCommitSequence = 0;
     lowerSpace = scanLowerSpace;
     lowerKey = lower;
     upperKey = upper;
@@ -81,6 +85,12 @@ public final class IndexedScanCursor {
 
   boolean isOwnedBy(IndexedTable table) {
     return active && owner == table;
+  }
+
+  long observedCommitSequence() { return observedCommitSequence; }
+
+  void observeCommit(long sequence) {
+    observedCommitSequence = Math.max(observedCommitSequence, sequence);
   }
 
   long visibleCommitSequence() {

@@ -36,7 +36,10 @@ final class IndexedTransactionTupleScans {
     if (status.isOk()) status = session.table().beginTupleScanAt(
         session.visibleCommitSequence(), ownerObjectId, keyId, schemaId,
         privateOwner, shape, bounds, session.tupleIntents(), cursor);
-    if (status.isOk()) status = cursor.attach(session);
+    if (status.isOk()) {
+      session.observeCommit(cursor.observedCommitSequence());
+      status = cursor.attach(session);
+    }
     if (status.isOk()) {
       session.registerTupleScan(cursor);
     }

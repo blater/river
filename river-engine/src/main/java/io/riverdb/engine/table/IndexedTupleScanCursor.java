@@ -34,6 +34,8 @@ public final class IndexedTupleScanCursor {
     return status;
   }
 
+  long observedCommitSequence() { return binding.observedCommitSequence(); }
+
   StatusCode next(IndexedTupleIntentJournal intents, IndexedTupleScanResult result) {
     return !active || result == null ? StatusCode.CONFLICT
         : merge.next(cursor, entry, intents, result);

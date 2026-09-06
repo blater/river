@@ -1,20 +1,20 @@
 package io.riverdb.engine.table;
 
-import io.riverdb.storage.heap.HeapRowResult;
-
-/** Reusable borrowed row bytes paired with their explicit MVCC version identity. */
+/** Caller-owned MVCC identity and durability dependency of one resolved row decision. */
 final class IndexedVersionedRowResult {
-  private final HeapRowResult row = new HeapRowResult();
   private long versionRowId;
+  private long observedCommitSequence;
 
-  HeapRowResult row() { return row; }
+  long observedCommitSequence() { return observedCommitSequence; }
+
+  void observeCommit(long sequence) { observedCommitSequence = sequence; }
 
   long versionRowId() { return versionRowId; }
 
   void set(long rowId) { versionRowId = rowId; }
 
   void reset() {
-    row.reset();
     versionRowId = 0;
+    observedCommitSequence = 0;
   }
 }
