@@ -42,6 +42,95 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-06 caller-owned catalog resolution (`tic-186e`)
+
+Status: reviewed feature candidate. The internal descriptor durability blocker
+is removed. Local saturated throughput improves with an explained Order Status
+read-tail tradeoff; this is River-specific diagnostic evidence, not TPC-C or a
+cross-database performance claim.
+
+- Base: pushed `perf-checkpoint-20260906-page-generation-reuse` (`f7ff998`),
+  plus its closure documentation at `7df1dc6`.
+- Branch: `ticket/tic-186e-catalog-transaction-resolution`.
+- Evidence: `/private/tmp/river-tic-186e-evidence`; individual sample artifacts,
+  logs, terminal receipts and `sample-summary.json` remain outside Git.
+- Mechanism: internal name resolution passes the admitted relational transaction
+  into the existing authoritative catalog loader. Shared head/manifest checking,
+  exact cache identity and reservation cleanup remain in one opener. Standalone
+  catalog opens retain their independent durable transaction. Private DDL
+  overlays remain caller-owned. No new cache, queue, flag or allocation site.
+- Deterministic proof: unchanged production fails `reproducer.xml` because a
+  blocked successor cannot enqueue during a held force. The candidate passes
+  both success and force-failure cases through a SQL transaction program with
+  subsequent descriptor/FK reads. No response escapes early. Cold-cache assembly,
+  exact cache hits, failed lookup cleanup and standalone durability also pass.
+- Validation: all **983 engine tests** passed. `clean test --no-fail-fast
+  --continue` ultimately passed with **1,764 reported tests**, zero failures,
+  two skips and valid Gradle cache reuse. The first clean run hit the unchanged
+  `LockExactAllocationTest` (7,104 bytes against 512); the full transaction suite
+  reproduced it on unchanged master (6,832 bytes), its isolated rerun passed,
+  and the second clean build passed without code or threshold changes. Preserve
+  this intermittent baseline failure in `clean-lock-allocation-failure.xml`,
+  `base-lock-allocation.xml` and the associated logs.
+- `verifyIndexedTableClassReferences` passed. `verifySourcePolicy` and
+  `verifyHotPathBytecode` still fail on unchanged files/entries; no touched
+  production or test file is named. See `policy.log`; no allowlist was widened.
+- Slopmark: `CatalogTableOpener` **7.42713 -> 0**; descriptor names **17.9248**,
+  lifecycle **13.7851**, services **0**, all unchanged. Shared load/completion
+  reduced opener complexity. Bytecode retains only its three pre-existing
+  constructor allocation sites.
+- Independent concurrency, allocation and performance review:
+  `/root/review_catalog_overlap`; no blocking finding. The review accepts the
+  scoped mechanism and requires recording the read-tail tradeoff below.
+
+Build each source with `./make.sh` before `tools/tps-test.sh`. The feature
+worktree uses `GRADLE_USER_HOME=/private/tmp/river-gradle-tic-186e`; its project
+cache and outputs are isolated. The fixed workload command is:
+
+```sh
+tools/tps-test.sh --seed=42 --warmup-seconds=1 --measured-seconds=10 \
+  --output-dir=/private/tmp/river-tic-186e-evidence/<sample>
+```
+
+Defaults held fixed: tiny profile, standard mix, one warehouse, ten terminals,
+SERIALIZABLE JDBC/program isolation, no-wait stress, 32 maximum attempts,
+durable local WAL, diagnostic evidence, GraalVM Java **25.0.4**, same host and
+resource budgets. No build or other workload overlapped a sample. The longer
+investigation changes only warmup/duration to **5/30 seconds**, scheduled
+control-1, candidate-1, control-2, candidate-2. Configuration fingerprints match
+within each duration group; every terminal receipt reports success, source and
+workspace remain stable, invariants pass, and errors are zero.
+
+| Samples | Control TPS | Candidate TPS | Retries |
+| --- | --- | --- | --- |
+| Short 1 | 114.600 | 143.200 | 0 / 0 |
+| Short 2 | 116.800 | 143.500 | 0 / 0 |
+| Longer 1 | 128.467 | 160.400 | 0 / 0 |
+| Longer 2 | 128.533 | 160.767 | 1 reconciled control deadlock / 0 |
+
+The longer candidate mean is **25.0% higher** in this local saturated workload.
+Force duration remains approximately 3.7–3.9 ms. Cohorts remain predominantly
+singleton (long pair 1: 3,463 transactions / 3,463 forces in the control,
+4,299 / 4,238 in the candidate). The held-force test proves execution overlap;
+the gain should not be described as broad force amortization.
+
+**Latency tradeoff:** Order Status p95 rises from **8.388 ms to 16.777 ms** in
+both longer pairs; its approximately sixteen JDBC requests encounter a more
+continuously active writer. Other family distributions are retained in
+`sample-summary.json`; New Order, Payment and Stock Level improve in the first
+long pair. Tagged client/server diagnostic probes explain the read-tail shift:
+attempt **2684** takes **17.359 ms**, including **12.420 ms** in three public
+durability waits (4.963, 3.785, 3.672 ms), each overlapping a distinct WAL force.
+The matching baseline/candidate traces record waits of at least 100 us in
+**6/136 versus 54/176** Order Status attempts across warmup, measurement and
+drain. These instrumented traces are causal evidence, not TPS samples.
+
+The temporary probes are removed. Their JFRs, extracted events and correlated
+attempts remain under `base-waits-*`, `waits-*` and `order-status-waits.json`.
+Reducing repeated public read waits requires a separate dependency or transaction
+program improvement; this feature preserves public durability and does not
+absorb that mechanism or the separate Payment program work.
+
 ### 2026-09-06 reclaimed page-frame handoff (`tic-2828`)
 
 Status: promoted and pushed at the user's request after independent
