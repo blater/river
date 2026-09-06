@@ -9,7 +9,7 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-User-directed investigation [`tic-f539`](tickets/tic-f539.md) confirms a
+Closed user-directed investigation [`tic-f539`](tickets/tic-f539.md) confirms a
 commit/force overlap opportunity but delivers no production optimization.
 [`tic-f8dd`](tickets/tic-f8dd.md), the unchanged-master post-run CORRUPTION,
 is the next user-directed correctness priority before performance acceptance.

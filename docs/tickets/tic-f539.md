@@ -1,12 +1,15 @@
 ---
 id: tic-f539
-status: in_progress
+status: closed
 type: investigation
 priority: 2
 assignee: blater
 delivery: evidence
 base-commit: 4ee882b752d89d21eb219646d5730213f4bd18f0
 branch: ticket/tic-f539-commit-force-opportunity
+delivered-commit: 41e6886b131c6c0f0671599627725abd1714850d
+evidence:
+    - /private/tmp/river-commit-force-opportunity-20260906
 tags:
     - performance
     - wal
@@ -167,3 +170,11 @@ restored source is byte-for-byte identical to master across production, tests
 and tooling. No new production mechanism is delivered, so a clean full test
 checkpoint and a new performance tag are not claimed. The latest accepted
 performance checkpoint remains the read-durability checkpoint.
+
+## Delivery
+
+Documentation-only evidence merged and pushed at
+`41e6886b131c6c0f0671599627725abd1714850d`. Feature evidence tip
+`3b48867537f386fcd6c56a483435dd081faaa542` is also pushed. The investigation
+is complete; `tic-f8dd` remains open and blocks performance acceptance. No new
+performance checkpoint tag was created and production source is unchanged.
