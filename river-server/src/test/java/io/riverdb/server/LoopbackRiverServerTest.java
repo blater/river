@@ -8,6 +8,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.ProtocolFrame;
@@ -28,6 +29,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class LoopbackRiverServerTest {
+  private static DatabaseResourcePlanRequest databaseRequest(int owners) {
+    return new DatabaseResourcePlanRequest()
+        .memory(256_000_000L, 0, 0, 0, 64_000_000L)
+        .lockProviderBytes(8_000_000L)
+        .versionWorkspaceBytes(8_000_000L)
+        .indexedPageCache(32_000_000L, 8_000_000L)
+        .capacity(owners, Integer.MAX_VALUE, 800, 64_000_000L)
+        .maximumDelivery(Integer.MAX_VALUE, 800, 64_000_000L);
+  }
+
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x4e4554574f524b44L, 0x4154414241534531L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
@@ -38,7 +49,7 @@ final class LoopbackRiverServerTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
 
@@ -77,7 +88,7 @@ final class LoopbackRiverServerTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 8, opened));
+        EmbeddedRiver.openExisting(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     server = start(database);
     try (TestClient client = new TestClient(server.port())) {
@@ -103,7 +114,7 @@ final class LoopbackRiverServerTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (TestClient client = new TestClient(server.port())) {
@@ -163,7 +174,7 @@ final class LoopbackRiverServerTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (TestClient client = new TestClient(server.port())) {
@@ -184,7 +195,7 @@ final class LoopbackRiverServerTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     try (TestClient client = new TestClient(server.port())) {
@@ -235,7 +246,7 @@ final class LoopbackRiverServerTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database);
     ProtocolFrameCodec codec = new ProtocolFrameCodec();
@@ -266,7 +277,7 @@ final class LoopbackRiverServerTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database, 2);
 
@@ -296,7 +307,7 @@ final class LoopbackRiverServerTest {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database, 1);
 
@@ -334,7 +345,7 @@ final class LoopbackRiverServerTest {
       throws IOException {
     DatabaseOpenResult opened = new DatabaseOpenResult();
     assertEquals(StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, opened));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, opened));
     RiverDatabase database = opened.database();
     LoopbackRiverServer server = start(database, 1);
     long warmBytes = 2L * ProtocolFrameCodec.MAXIMUM_FRAME_BYTES;
@@ -346,9 +357,10 @@ final class LoopbackRiverServerTest {
         ProtocolMessageType.EXECUTE,
         1,
         " ".repeat(20_000) + "SELECT 1",
-        null));
+        null, 0, 0, 0));
     int firstFrameBytes = ProtocolFrameCodec.HEADER_BYTES + continued.getInt(24);
     try (Socket partial = connect(server.port())) {
+      awaitConnections(server, 1);
       partial.getOutputStream().write(continued.array(), 0, firstFrameBytes);
       partial.getOutputStream().flush();
     }
@@ -478,7 +490,8 @@ final class LoopbackRiverServerTest {
     }
 
     private ProtocolResponse send(ProtocolMessageType type, String sql) throws IOException {
-      assertEquals(StatusCode.OK, codec.encodeSqlRequest(request, type, requestId++, sql, null));
+      assertEquals(StatusCode.OK,
+          codec.encodeSqlRequest(request, type, requestId++, sql, null, 0, 0, 0));
       return exchange();
     }
 
@@ -486,8 +499,8 @@ final class LoopbackRiverServerTest {
       assertEquals(
           StatusCode.OK,
           codec.encodeSqlRequest(
-              request, ProtocolMessageType.EXECUTE, requestId++, "A", null));
-      request.put(ProtocolFrameCodec.HEADER_BYTES + 8, (byte) 0xc0);
+              request, ProtocolMessageType.EXECUTE, requestId++, "A", null, 0, 0, 0));
+      request.put(ProtocolFrameCodec.HEADER_BYTES + 32, (byte) 0xc0);
       return exchange();
     }
 

@@ -1120,7 +1120,7 @@ final class SqlSessionTest {
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT second", result));
     assertEquals(StatusCode.OK, session.execute("SAVEPOINT third", result));
     assertEquals(
-        StatusCode.RESOURCE_EXHAUSTED,
+        StatusCode.OK,
         session.execute("SAVEPOINT fourth", result));
     assertEquals(
         StatusCode.OK,

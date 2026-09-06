@@ -231,6 +231,90 @@ final class LockExactTableTest {
   }
 
   @Test
+  void terminalReleaseOfOverlappingHoldingsPreservesConversionPriority() {
+    Fixture fixture = new Fixture();
+    LockRequest sharedRange = new LockRequest().setRange(
+        11, 0, 11, 100, LockMode.SHARED, 0);
+    LockRequest exclusiveRange = new LockRequest().setRange(
+        11, 0, 11, 100, LockMode.EXCLUSIVE, 0);
+    assertEquals(StatusCode.OK, fixture.table.tryAcquire(
+        1, 1, 1, sharedRange, new LockToken()));
+    for (int index = 1; index <= 16; index++) {
+      assertEquals(StatusCode.OK, fixture.table.tryAcquire(
+          1, 1, 1, key(index, LockMode.SHARED), new LockToken()));
+    }
+    assertEquals(StatusCode.OK, fixture.table.tryAcquire(
+        2, 1, 2, sharedRange, new LockToken()));
+    LockWaitHandle conversion = new LockWaitHandle();
+    assertEquals(StatusCode.RETRY, fixture.table.enqueue(
+        2, 1, 2, 1, 1, exclusiveRange, new LockExecutionLane(), conversion));
+    LockWaitHandle reader = new LockWaitHandle();
+    assertEquals(StatusCode.RETRY, fixture.table.enqueue(
+        3, 1, 3, 1, 1, key(8, LockMode.SHARED), new LockExecutionLane(), reader));
+    long retained = fixture.arena.accountedBytes();
+
+    fixture.table.lifecycle.releaseAll(1, 1, StatusCode.CANCELLED);
+    assertEquals(LockWaitState.GRANTED, conversion.state());
+    assertEquals(LockWaitState.QUEUED, reader.state());
+    assertEquals(retained, fixture.arena.accountedBytes());
+    fixture.table.lifecycle.releaseAll(2, 1, StatusCode.CANCELLED);
+    assertEquals(LockWaitState.GRANTED, reader.state());
+    fixture.table.lifecycle.releaseAll(3, 1, StatusCode.CANCELLED);
+    assertEquals(0, fixture.table.waitingCount());
+    assertEquals(0, fixture.table.holdingCount());
+    assertEquals(-1, fixture.table.state.directory.resource(sharedRange));
+    for (int index = 1; index <= 16; index++) {
+      assertEquals(-1, fixture.table.state.directory.resource(key(index, LockMode.SHARED)));
+    }
+  }
+
+  @Test
+  void terminalReleaseCancelsQueuedAndUnconsumedGrantsBeforeHandingOffHoldings() {
+    Fixture fixture = new Fixture();
+    LockToken retained = new LockToken();
+    assertEquals(StatusCode.OK, fixture.table.tryAcquire(
+        1, 1, 1, key(10, LockMode.EXCLUSIVE), retained));
+    assertEquals(StatusCode.OK, fixture.table.retain(retained));
+    LockToken blocker = new LockToken();
+    assertEquals(StatusCode.OK, fixture.table.tryAcquire(
+        2, 1, 2, key(20, LockMode.EXCLUSIVE), blocker));
+    LockToken temporary = new LockToken();
+    assertEquals(StatusCode.OK, fixture.table.tryAcquire(
+        3, 1, 3, key(30, LockMode.EXCLUSIVE), temporary));
+    LockExecutionLane queuedLane = new LockExecutionLane();
+    LockWaitHandle queued = new LockWaitHandle();
+    assertEquals(StatusCode.RETRY, fixture.table.enqueue(
+        1, 1, 1, 1, 1, key(20, LockMode.EXCLUSIVE), queuedLane, queued));
+    LockExecutionLane grantedLane = new LockExecutionLane();
+    LockWaitHandle granted = new LockWaitHandle();
+    assertEquals(StatusCode.RETRY, fixture.table.enqueue(
+        1, 1, 1, 2, 1, key(30, LockMode.EXCLUSIVE), grantedLane, granted));
+    assertEquals(StatusCode.OK, fixture.table.release(temporary));
+    assertEquals(LockWaitState.GRANTED, granted.state());
+    LockExecutionLane successorLane = new LockExecutionLane();
+    LockWaitHandle successor = new LockWaitHandle();
+    assertEquals(StatusCode.RETRY, fixture.table.enqueue(
+        4, 1, 4, 1, 1, key(10, LockMode.EXCLUSIVE), successorLane, successor));
+
+    fixture.table.lifecycle.freeze(1, 1);
+    fixture.table.lifecycle.releaseAll(1, 1, StatusCode.CANCELLED);
+    assertEquals(LockWaitState.CANCELLED, queued.state());
+    assertEquals(LockWaitState.CANCELLED, granted.state());
+    assertEquals(StatusCode.CANCELLED, fixture.table.acknowledge(queuedLane, queued));
+    assertEquals(StatusCode.CANCELLED, fixture.table.acknowledge(grantedLane, granted));
+    assertEquals(LockWaitState.GRANTED, successor.state());
+    LockToken nextOwner = new LockToken();
+    assertEquals(StatusCode.OK, fixture.table.consume(successorLane, successor, nextOwner));
+    assertEquals(StatusCode.OK, fixture.table.release(nextOwner));
+    assertEquals(StatusCode.OK, fixture.table.release(blocker));
+    assertEquals(0, fixture.table.waitingCount());
+    assertEquals(0, fixture.table.holdingCount());
+    assertEquals(-1, fixture.table.state.directory.resource(key(10, LockMode.EXCLUSIVE)));
+    assertEquals(-1, fixture.table.state.directory.resource(key(20, LockMode.EXCLUSIVE)));
+    assertEquals(-1, fixture.table.state.directory.resource(key(30, LockMode.EXCLUSIVE)));
+  }
+
+  @Test
   void tupleKeyOwnerConvertsAheadOfAnOrdinaryTupleWaiter() {
     Fixture fixture = new Fixture();
     ByteBuffer key = ByteBuffer.allocate(Long.BYTES).putLong(0, 53);

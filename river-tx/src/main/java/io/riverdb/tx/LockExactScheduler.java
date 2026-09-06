@@ -16,8 +16,18 @@ final class LockExactScheduler {
   private long targetedWakes;
   private long overlapSearches;
   private boolean draining;
+  private boolean releasing;
 
   LockExactScheduler(LockExactTable owner) { table = owner; }
+
+  // Terminal cleanup cannot nest while the lock-manager monitor excludes callers.
+  // Deadlock-victim cleanup already joins the active drain instead of opening a release.
+  void beginRelease() { releasing = true; }
+
+  void endRelease() {
+    releasing = false;
+    drain();
+  }
 
   void schedule(long resource) {
     if (table.waitingCount == 0) return;
@@ -47,7 +57,7 @@ final class LockExactScheduler {
   }
 
   private void drain() {
-    if (draining) return;
+    if (draining || releasing) return;
     draining = true;
     try {
       while (workHead >= 0 || deadlockHead >= 0) {

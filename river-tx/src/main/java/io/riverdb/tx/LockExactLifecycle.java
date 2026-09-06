@@ -98,9 +98,15 @@ final class LockExactLifecycle {
             ? StatusCode.DEADLOCK : outcome;
     table.deadlocks.transactionOutcome(transaction, diagnosticOutcome);
     long outcomeCompleted = timings == null ? 0 : System.nanoTime();
-    table.requestLifecycle.cancelAll(transaction, outcome);
-    long requestsCompleted = timings == null ? 0 : System.nanoTime();
-    table.holdingLifecycle.releaseAll(transaction, timings);
+    long requestsCompleted;
+    table.scheduler.beginRelease();
+    try {
+      table.requestLifecycle.cancelAll(transaction, outcome);
+      requestsCompleted = timings == null ? 0 : System.nanoTime();
+      table.holdingLifecycle.releaseAll(transaction, timings);
+    } finally {
+      table.scheduler.endRelease();
+    }
     long holdingsCompleted = timings == null ? 0 : System.nanoTime();
     LockExactTransactionStore.Chunk chunk = table.state.transactions.record(transaction);
     chunk.transactionActive[LockTypedSlots.offset(transaction)] = 0;

@@ -42,6 +42,110 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-06 batched terminal lock-release scheduling
+
+Status: promotion requested from `perf/batched-lock-release`, currently held
+for remaining storage allocation failures after test-source repairs.
+Performance remains inconclusive.
+
+- Control: handoff integration `1d94901`. Short controls used `f557af1`, whose
+  production/test source is identical to that integration.
+- Candidate source: `fa1a910`.
+- Planned promotion tag: `perf-checkpoint-20260906-batched-lock-release`;
+  not created while the clean test gate remains red.
+- Evidence root: `/private/tmp/river-batched-lock-release.U3GReO`.
+- Scope: two production files, `LockExactLifecycle` and `LockExactScheduler`.
+  Defer scheduler draining across terminal request cancellation and holding
+  release; reuse the existing deduplicated resource worklist and drain before
+  transaction recycling/return. Final drain remains included in lock-release
+  timing. No grant/fairness, lock-count, WAL, engine, protocol, or harness change.
+- Independent concurrency review approved resource lifetime, cancellation,
+  conversion, and nested deadlock-drain behavior. Two focused tests extend the
+  existing lock-table tests; no new production queue or allocation is introduced.
+- Slopmark: both touched production files scored 0 before and after. Rankings
+  are `slopmark-before.txt` and `slopmark-after.txt`; no file crossed 80.
+
+Each source switch was followed by `./make.sh`, with no overlapping build or
+workload. Commands retained the prior entry's fixed tiny/serializable/default
+configuration and seed 42:
+
+```sh
+tools/tps-test.sh --seed=42 --warmup-seconds=1 --measured-seconds=10 \
+  --output-dir=/private/tmp/river-batched-lock-release.U3GReO/<short-sample>
+tools/tps-test.sh --seed=42 --warmup-seconds=3 --measured-seconds=30 \
+  --output-dir=/private/tmp/river-batched-lock-release.U3GReO/<long-sample>
+```
+
+| Sample, in execution order | TPS | Lock release microseconds / captured write |
+| --- | ---: | ---: |
+| `baseline-1` | 120.200 | 442.4 |
+| `baseline-2` | 121.100 | 444.6 |
+| `candidate-1` | 123.500 | 433.4 |
+| `candidate-2` | 123.400 | 438.2 |
+| `control-long-1` | 129.867 | 408.5 |
+| `candidate-long-1` | 128.767 | 408.9 |
+| `control-long-2` | 126.333 | 404.6 |
+| `candidate-long-2` | 130.900 | 412.3 |
+
+All eight samples passed invariants and complete capture, with zero measured
+retries/errors and zero terminal transactions, lock holdings, and waiters.
+The short-run increase triggered longer interleaving. The longer pairs have
+mixed TPS direction and no consistent improvement in normalized lock-release
+cost. Do not attribute a throughput gain to this change from these results.
+
+Validation: the new overlap test initially used a mismatched keyspace, corrected
+before candidate measurements. `affected-tests-repeat.log` records all 138
+transaction tests: 137 passed, with only the known warmed lock-allocation
+assertion failing (6,832 bytes, also observed before this feature). All 51
+focused engine handoff/fault, relational WAL, and embedded-program tests passed.
+The unchanged allocation test passed in isolation (`allocation-repeat.log`).
+The full transaction invocation is still reported as failed, not waived by
+the isolated pass. The baseline full-build and policy failures are recorded
+in the handoff entry below; no green clean full-build checkpoint was claimed
+at the initial measurement point.
+
+Promotion checkpoint: `./gradlew clean test`, with no competing build or
+workload, reproduced the existing CLI, backup, server, and client test-source
+compilation failures against unchanged APIs. The log is
+`promotion-clean-test.log` under the evidence root.
+
+The user then explicitly requested all test compilation errors be fixed before
+promotion. Five existing test classes now provide explicit resource requests
+matching the engine test profile, and server test SQL frames carry the current
+diagnostic fields. The server malformed-UTF-8 case now corrupts the SQL text
+at its current payload offset; the continuation cleanup test waits for socket
+acceptance before testing closure and slot reuse. The SQL savepoint test now
+expects successful fourth-savepoint admission under the dynamically growing
+store, preserving its rollback assertions. No production compatibility API,
+allocation threshold, or build configuration changed. Independent review
+approved these repairs. All test sources compiled (`test-compilation-fixes.log`)
+and the repaired module tests passed (`test-repairs-focused.log`, followed by
+`server-test-repairs.log` for the accept/close race correction).
+
+The full checkpoint `./gradlew clean test --no-fail-fast --continue` compiled
+all test sources and completed with only the engine task failing: 976 engine
+tests, three failures (`repaired-clean-test.log`). One was the deliberately
+corrupt tree fixture attempting a clean detach while dirty; it now explicitly
+abandons its disposable pages, preserving the cycle-detection assertions.
+Both tree-structure tests pass in `remaining-engine-test-failures.log`.
+The two remaining `IndexedTableAllocationTest` failures reproduce in isolation:
+80,896 bytes for warmed inserts and 20,224 bytes for wide-row inserts, against
+unchanged 512-byte limits (72,704 and 18,176 in the full run). These match the
+documented `tic-2828` page-generation reuse problem: current-frame selection
+can choose unused slots before reusable retired generations. Addressing that
+requires a storage implementation change, not another test-compilation repair.
+No allocation limit was raised, no test disabled, and no production storage
+change was made in this test-repair slice.
+
+Decision: after receiving the results and validation limitations, the user
+explicitly requested commit/merge/promotion. Integrate with a merge commit,
+annotated source-checkpoint tag, and push the feature, master, and tag. This
+is an explicit exception to the normal performance-promotion gate, not a
+reinterpretation of the measurements or a waiver of the recorded failures.
+The subsequent request for a clean test build holds that promotion pending
+resolution of the storage allocation failures. No batching merge, tag, or push
+has been performed.
+
 ### 2026-09-06 prepared-lock handoff experiment
 
 Status: user-requested integration of prepared-lock handoff; no demonstrated
