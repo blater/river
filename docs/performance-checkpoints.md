@@ -42,6 +42,36 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-06 commit-force opportunity investigation (`tic-f539`)
+
+Evidence only; no new performance checkpoint or production change.
+See [`tic-f539`](tickets/tic-f539.md) for commands, runtime correction, all
+samples and independent review. Evidence is retained under
+`/private/tmp/river-commit-force-opportunity-20260906`.
+
+With the user's constant background load left running, explicitly pinned
+GraalVM 25.0.4 short baselines were **146.6/146.4 TPS**, captured with all probes
+removed before the repeated experiment. Interleaved 30-second controls were
+**176.100/178.967**, timing probes **178.700/176.933**; all six pinned samples
+passed with zero measured retries/errors. Initial OpenJDK-control/GraalVM-probe
+TPS pairings are rejected and retained, not used for attribution.
+
+The corrected traces show about **41% of writes** wait behind a force, with
+**1.51–1.55 ms** mean overlap among affected writes. Force accounts for about
+**97% of actual enqueue-to-selection delay**. Observed preparation/publication
+cost fits the preceding force window for about **29% of all cohorts**. This is
+an optimistic local opportunity, not achieved TPS or causal-successor proof;
+existing QUEUE_RESIDENCE also includes preflight work.
+
+A separate unchanged-master OpenJDK control returned **CORRUPTION** on the
+post-run `order_line` count query before CHECKPOINT, and again on database
+shutdown. Its receipt is evidence_invalid; it has no valid TPS result.
+[`tic-f8dd`](tickets/tic-f8dd.md) owns root cause and resolution. Passing later
+samples do not clear it: performance acceptance remains stopped. All probes
+were removed, source restoration verified, and touched slopmark scores are
+unchanged. Future pipeline work requires prefix-specific force completion and
+bounded ownership of pending cohorts/pages after the correctness gate clears.
+
 ### 2026-09-06 observed read durability dependencies (`tic-e544`)
 
 - Stable base: `7bcc11ea4624f3e7276cdb562cc33dd310a27fbd`, immediately after
