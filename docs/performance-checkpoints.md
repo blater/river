@@ -42,6 +42,37 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-06 metadata-directory reload correctness (`tic-f8dd`)
+
+- Stable base: `e6e17b1fd7dbc0433e64c01b2918e9075cc25858`.
+- Fix: `f790f9975eb366eff86aad5b36807f4b641307ac`; policy selectors: `e9af239`.
+- Checkpoint: `perf-checkpoint-20260906-directory-cache-reload`.
+- Evidence: `/private/tmp/river-tic-f8dd-evidence`; details: [`tic-f8dd`](tickets/tic-f8dd.md).
+
+The unchanged 30-second workload reproduced order_line CORRUPTION. A 60-second
+trace and six deterministic failing disk-backed tests identified exhausted buffer
+positions in metadata-directory frame reloads. Both loaders now reset buffers;
+row-directory read misses use bounded LRU eviction. Stored formats and durability
+are unchanged. All temporary tracing was removed. Independent storage/recovery
+and policy review approved the scoped change.
+
+The final clean checkpoint passes **1,781 tests**, zero failures, two skips,
+including **1,000 engine tests**. The first run's unrelated exact-lock allocation
+assertion is retained; unchanged control and subsequent clean runs passed without
+changing its limit. Source/bytecode policy checks retain exactly **261 existing
+control violations**, with none added/removed; class-reference verification passes.
+Slopmark row directory **40.5049 -> 40.4243**, version directory **28.4651 unchanged**.
+
+Explicit OpenJDK 26.0.2.1, seed42, tiny/standard, serializable, ten terminals,
+one warehouse, user background load left running. Untouched 10-second baselines
+**153.4/161.5 TPS**, candidates **160.1/156.8**. The original 30-second configuration
+passes twice (**181.533/175.733**); the 60-second run also passes (**153.767**).
+Final samples have zero measured retries/errors and complete invariants/cleanup.
+Failed pre-fix samples have no valid TPS. No speedup is claimed; differing duration
+and invalid long control prevent treating the 60-second number as a performance
+comparison. This correctness checkpoint resolves tic-f539's specific corruption
+stop; it does not implement or accept commit-force pipelining.
+
 ### 2026-09-06 commit-force opportunity investigation (`tic-f539`)
 
 Evidence only; no new performance checkpoint or production change.
