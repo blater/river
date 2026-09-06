@@ -34,3 +34,4 @@ regression has been established by these samples.
 | Remove unconditional TPS gate | `ab7ffd0` | `tic-0636` | `ticket/tic-0636-remove-attestation` | 2026-09-06 02:05 +0100 | 129.600 TPS (latest valid HEAD sample) |
 | Move TPS build into standalone `make.sh` | `ab7ffd0` | `tic-0636` | `ticket/tic-0636-remove-attestation` | 2026-09-06 02:20 +0100 | 93.000 TPS (3-second no-build harness sample) |
 | Update no-build provenance coverage | `ab7ffd0` | `tic-0636` | `ticket/tic-0636-remove-attestation` | 2026-09-06 02:26 +0100 | 93.000 TPS (same no-build harness sample) |
+| Remove TPS host and classpath gates | `8609d49` | `tic-0636` | `master` | 2026-09-06 03:53 +0100 | 109.000 TPS (3-second no-build harness sample; status OK) |
