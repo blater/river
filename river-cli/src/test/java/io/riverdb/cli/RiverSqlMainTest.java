@@ -7,6 +7,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
 import io.riverdb.protocol.auth.TokenAuthenticator;
@@ -23,6 +24,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class RiverSqlMainTest {
+  private static DatabaseResourcePlanRequest databaseRequest(int owners) {
+    return new DatabaseResourcePlanRequest()
+        .memory(256_000_000L, 0, 0, 0, 64_000_000L)
+        .lockProviderBytes(8_000_000L)
+        .versionWorkspaceBytes(8_000_000L)
+        .indexedPageCache(32_000_000L, 8_000_000L)
+        .capacity(owners, Integer.MAX_VALUE, 800, 64_000_000L)
+        .maximumDelivery(Integer.MAX_VALUE, 800, 64_000_000L);
+  }
+
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x434c495445535430L, 0x3030303030303031L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
@@ -30,7 +41,7 @@ final class RiverSqlMainTest {
   @Test
   void executesScriptThroughRealRemoteDatabase(@TempDir Path root) {
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
     assertEquals(StatusCode.OK, LoopbackRiverServer.start(database, 0, listener));
@@ -125,7 +136,7 @@ final class RiverSqlMainTest {
         StatusCode.OK,
         TokenAuthenticator.create(token, token.length, authenticated));
     DatabaseOpenResult opened = new DatabaseOpenResult();
-    assertEquals(StatusCode.OK, EmbeddedRiver.create(root, DATABASE, GENERATION, 8, opened));
+    assertEquals(StatusCode.OK, EmbeddedRiver.create(databaseRequest(8), root, DATABASE, GENERATION, 8, opened));
     RiverDatabase database = opened.database();
     LoopbackServerOpenResult listener = new LoopbackServerOpenResult();
     assertEquals(

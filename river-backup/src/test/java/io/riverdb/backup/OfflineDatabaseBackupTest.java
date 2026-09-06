@@ -10,6 +10,7 @@ import io.riverdb.base.id.WalGeneration;
 import io.riverdb.base.text.PackedText;
 import io.riverdb.base.type.SqlTypeDescriptor;
 import io.riverdb.engine.relational.RelationalDatabase;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.relational.RelationalDatabaseOpenResult;
 import io.riverdb.engine.sql.SqlExecutionResult;
 import io.riverdb.engine.sql.SqlScanCursor;
@@ -23,6 +24,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class OfflineDatabaseBackupTest {
+  private static DatabaseResourcePlanRequest databaseRequest(int owners) {
+    return new DatabaseResourcePlanRequest()
+        .memory(256_000_000L, 0, 0, 0, 64_000_000L)
+        .lockProviderBytes(8_000_000L)
+        .versionWorkspaceBytes(8_000_000L)
+        .indexedPageCache(32_000_000L, 8_000_000L)
+        .capacity(owners, Integer.MAX_VALUE, 800, 64_000_000L)
+        .maximumDelivery(Integer.MAX_VALUE, 800, 64_000_000L);
+  }
+
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x4241434b55505445L, 0x5354444230303031L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
@@ -39,7 +50,7 @@ final class OfflineDatabaseBackupTest {
     RelationalDatabaseOpenResult opened = new RelationalDatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.create(source, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.create(databaseRequest(8), source, DATABASE, GENERATION, 8, opened));
     RelationalDatabase database = opened.database();
     SqlSessionOpenResult sessionResult = new SqlSessionOpenResult();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
@@ -144,7 +155,7 @@ final class OfflineDatabaseBackupTest {
 
     assertEquals(
         StatusCode.OK,
-        RelationalDatabase.openExisting(restored, DATABASE, GENERATION, 8, opened));
+        RelationalDatabase.openExisting(databaseRequest(8), restored, DATABASE, GENERATION, 8, opened));
     database = opened.database();
     assertEquals(StatusCode.OK, SqlSession.create(database, sessionResult));
     session = sessionResult.session();

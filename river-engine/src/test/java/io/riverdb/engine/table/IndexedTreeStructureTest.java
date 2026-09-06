@@ -96,7 +96,8 @@ final class IndexedTreeStructureTest {
     assertEquals(0, lookup.find(0, 0, false, true));
     assertEquals(StatusCode.CORRUPTION, lookup.lastStatus());
 
-    assertEquals(StatusCode.OK, pages.detach());
+    // This deliberately corrupt, dirty fixture is discarded, not durably detached.
+    pages.abandon();
     assertEquals(StatusCode.OK, pageFile.file().close());
     assertEquals(StatusCode.OK, stagingFile.file().close());
     assertEquals(StatusCode.OK, directory.close());

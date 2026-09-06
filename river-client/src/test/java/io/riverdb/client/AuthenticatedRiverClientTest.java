@@ -7,6 +7,7 @@ import io.riverdb.base.error.StatusCode;
 import io.riverdb.base.id.DatabaseIncarnation;
 import io.riverdb.base.id.WalGeneration;
 import io.riverdb.engine.EmbeddedRiver;
+import io.riverdb.engine.runtime.DatabaseResourcePlanRequest;
 import io.riverdb.engine.api.CommandResult;
 import io.riverdb.engine.api.DatabaseOpenResult;
 import io.riverdb.engine.api.RiverDatabase;
@@ -26,6 +27,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 final class AuthenticatedRiverClientTest {
+  private static DatabaseResourcePlanRequest databaseRequest(int owners) {
+    return new DatabaseResourcePlanRequest()
+        .memory(256_000_000L, 0, 0, 0, 64_000_000L)
+        .lockProviderBytes(8_000_000L)
+        .versionWorkspaceBytes(8_000_000L)
+        .indexedPageCache(32_000_000L, 8_000_000L)
+        .capacity(owners, Integer.MAX_VALUE, 800, 64_000_000L)
+        .maximumDelivery(Integer.MAX_VALUE, 800, 64_000_000L);
+  }
+
   private static final DatabaseIncarnation DATABASE =
       DatabaseIncarnation.of(0x544c534155544844L, 0x4154414241534531L);
   private static final WalGeneration GENERATION = WalGeneration.of(1);
@@ -44,7 +55,7 @@ final class AuthenticatedRiverClientTest {
     DatabaseOpenResult engineResult = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     RiverDatabase engine = engineResult.database();
     LoopbackRiverServer wrongHostnameServer = start(
         engine,
@@ -113,7 +124,7 @@ final class AuthenticatedRiverClientTest {
 
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.openExisting(root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.openExisting(databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     engine = engineResult.database();
     server = start(engine, root, serverContext, authResult.authenticator());
     assertEquals(
@@ -154,7 +165,7 @@ final class AuthenticatedRiverClientTest {
     DatabaseOpenResult engineResult = new DatabaseOpenResult();
     assertEquals(
         StatusCode.OK,
-        EmbeddedRiver.create(root, DATABASE, GENERATION, 4, engineResult));
+        EmbeddedRiver.create(databaseRequest(4), root, DATABASE, GENERATION, 4, engineResult));
     RiverDatabase engine = engineResult.database();
     SessionOpenResult localResult = new SessionOpenResult();
     assertEquals(StatusCode.OK, engine.createSession(localResult));
