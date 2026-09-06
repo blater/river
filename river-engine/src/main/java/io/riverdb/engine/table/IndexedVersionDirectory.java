@@ -295,6 +295,8 @@ final class IndexedVersionDirectory {
     for (int index = 0; index < PAGE_BYTES; index++) {
       frame.bytes.put(index, (byte) 0);
     }
+    // Positional I/O consumes the buffer, including on partial failed reads.
+    frame.bytes.clear();
     StatusCode status = file.read(pageIndex * PAGE_BYTES, frame.bytes, io);
     if (!status.isOk()) {
       lastStatus = status;

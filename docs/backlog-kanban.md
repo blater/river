@@ -9,12 +9,13 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-Closed user-directed investigation [`tic-f539`](tickets/tic-f539.md) confirms a
-commit/force overlap opportunity but delivers no production optimization.
-[`tic-f8dd`](tickets/tic-f8dd.md), the unchanged-master post-run CORRUPTION,
-is the next user-directed correctness priority before performance acceptance.
-The pinned baseline/trace evidence and rejected cross-JVM pairing are retained
-in the performance ledger. Existing broader dependencies remain authoritative.
+User-directed correctness fix [`tic-f8dd`](tickets/tic-f8dd.md) resolves the
+post-run CORRUPTION found by [`tic-f539`](tickets/tic-f539.md): metadata-directory
+frames now reload from the start of their buffers, and read misses use bounded
+LRU eviction. The clean gate, independent review, repeated TPS invariants and
+slopmark evidence are recorded at `perf-checkpoint-20260906-directory-cache-reload`.
+The commit-force overlap investigation remains evidence only; no pipeline or TPS
+speedup is accepted here. Existing broader dependencies remain authoritative.
 
 User-directed focused work: [`tic-e544`](tickets/tic-e544.md) is closed at the
 pushed `perf-checkpoint-20260906-read-durability-dependencies` checkpoint.

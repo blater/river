@@ -75,17 +75,17 @@ final class IndexedRowDirectory {
   }
 
   int pageId(long rowId) {
-    return read(rowId, false) ? record.getInt(0) : 0;
+    return read(rowId) ? record.getInt(0) : 0;
   }
 
   int slot(long rowId) {
-    return read(rowId, false) ? record.getInt(Integer.BYTES) : 0;
+    return read(rowId) ? record.getInt(Integer.BYTES) : 0;
   }
 
   StatusCode locate(long rowId, IndexedRowLocation result) {
     if (result == null) return StatusCode.INVALID_EXTERNAL_INPUT;
     result.reset();
-    if (!read(rowId, false)) return lastStatus;
+    if (!read(rowId)) return lastStatus;
     int pageId = record.getInt(0);
     int slot = record.getInt(Integer.BYTES);
     if (pageId <= 0 || pageId > IndexedTableLimits.MAX_PAGES || slot <= 0) {
@@ -101,7 +101,7 @@ final class IndexedRowDirectory {
       lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
       return lastStatus;
     }
-    DirectoryFrame frame = frame(rowId, true);
+    DirectoryFrame frame = frame(rowId);
     if (frame == null) return lastStatus;
     int offset = (int) ((rowId - 1) * RECORD_BYTES & PAGE_MASK);
     frame.bytes.putInt(offset, pageId);
@@ -116,7 +116,7 @@ final class IndexedRowDirectory {
       lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
       return lastStatus;
     }
-    return frame(rowId, true) == null ? lastStatus : StatusCode.OK;
+    return frame(rowId) == null ? lastStatus : StatusCode.OK;
   }
 
   StatusCode flush() {
@@ -172,12 +172,12 @@ final class IndexedRowDirectory {
     return file.close();
   }
 
-  private boolean read(long rowId, boolean create) {
+  private boolean read(long rowId) {
     if (rowId <= 0 || rowId > IndexedTableLimits.MAX_ROWS) {
       lastStatus = StatusCode.INVALID_EXTERNAL_INPUT;
       return false;
     }
-    DirectoryFrame frame = frame(rowId, create);
+    DirectoryFrame frame = frame(rowId);
     if (frame == null) return false;
     int offset = (int) ((rowId - 1) * RECORD_BYTES & PAGE_MASK);
     record.clear();
@@ -187,7 +187,7 @@ final class IndexedRowDirectory {
     return true;
   }
 
-  private DirectoryFrame frame(long rowId, boolean create) {
+  private DirectoryFrame frame(long rowId) {
     long byteOffset = (rowId - 1) * RECORD_BYTES;
     long pageOffset = HEADER_BYTES + (byteOffset & -((long) PAGE_BYTES));
     for (DirectoryFrame frame : frames) {
@@ -196,7 +196,7 @@ final class IndexedRowDirectory {
         return frame;
       }
     }
-    int slot = findFrame(create);
+    int slot = findFrame();
     if (slot < 0) {
       lastStatus = StatusCode.RESOURCE_EXHAUSTED;
       return null;
@@ -226,6 +226,8 @@ final class IndexedRowDirectory {
     for (int index = 0; index < PAGE_BYTES; index++) {
       frame.bytes.put(index, (byte) 0);
     }
+    // Positional I/O consumes the buffer, including on partial failed reads.
+    frame.bytes.clear();
     StatusCode status = file.read(pageOffset, frame.bytes, io);
     if (!status.isOk()) {
       lastStatus = status;
@@ -295,13 +297,13 @@ final class IndexedRowDirectory {
     header.putInt(HEADER_CHECKSUM_OFFSET, (int) headerChecksum.getValue());
   }
 
-  private int findFrame(boolean allowEviction) {
+  private int findFrame() {
     int oldest = -1;
     long oldestAccess = Long.MAX_VALUE;
     for (int index = 0; index < frames.length; index++) {
       DirectoryFrame frame = frames[index];
       if (frame == null || frame.fileOffset < 0) return index;
-      if (allowEviction && frame.access < oldestAccess) {
+      if (frame.access < oldestAccess) {
         oldest = index;
         oldestAccess = frame.access;
       }

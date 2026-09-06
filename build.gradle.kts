@@ -716,13 +716,13 @@ val liveHotPathMethods = setOf(
   hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "pageId", "(J)I"),
   hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "slot", "(J)I"),
   hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "set", "(JII)V"),
-  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "read", "(JZ)Z"),
+  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "read", "(J)Z"),
   hotMethod(
     "io.riverdb.engine.table.IndexedRowDirectory",
     "frame",
-    "(JZ)$indexedRowDirectoryFrameDescriptor"
+    "(J)$indexedRowDirectoryFrameDescriptor"
   ),
-  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "findFrame", "(Z)I"),
+  hotMethod("io.riverdb.engine.table.IndexedRowDirectory", "findFrame", "()I"),
   hotMethod(
     "io.riverdb.engine.table.IndexedVersionState",
     "commitSequence",
@@ -1884,7 +1884,7 @@ val liveHotPathAllowedRules = mapOf(
   hotMethod(
     "io.riverdb.engine.table.IndexedRowDirectory",
     "frame",
-    "(JZ)$indexedRowDirectoryFrameDescriptor"
+    "(J)$indexedRowDirectoryFrameDescriptor"
   ) to setOf(
     HotPathBytecodePolicy.Allowance(
       HotPathBytecodePolicy.Rule.OBJECT_ALLOCATION,
