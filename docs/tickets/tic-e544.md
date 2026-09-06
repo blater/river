@@ -73,7 +73,7 @@ Candidate samples `candidate-1` and `candidate-2` recorded 149.6 and 148.5 TPS.
 All six have zero retries/errors and successful terminal receipts, invariants,
 reconciliation and performance capture. Order Status p95 remains 16.777 ms in
 both repeat controls and both candidates. Short results show no throughput or
-p95 benefit. Longer interleaved validation and final acceptance are pending.
+p95 benefit. Longer validation below establishes a repeated benefit.
 
 Full engine validation passed all 994 tests in 7m26s, including all 19 group fault
 cases and the cancellation/interrupt-preservation/retry regression. The SQL allocation test reported 608 bytes against its 512-byte
@@ -98,3 +98,42 @@ with final evidence below.
 from `policy-and-lock-check.log`; normalized violation sets have no additions or
 removals (`policy-comparison.txt`). No allowlist was changed. The public API
 changes are documentation only. Production implementation remains engine-only.
+
+## Final acceptance
+
+Implementation commit: `046dd432ab2402ff085932af973d58faf5fc699a`.
+Longer commands replace the warmup/measured options with `--warmup-seconds=5
+--measured-seconds=30`. Both configurations otherwise remain identical. Execution
+order and committed TPS:
+
+| Artifact | Revision | TPS | Order Status p99 upper bound |
+| --- | --- | ---: | ---: |
+| `control-long-1` | `7bcc11e` | 149.133 | 33.554 ms |
+| `candidate-long-1` | `046dd43` | 174.967 | 16.777 ms |
+| `control-long-2` | `7bcc11e` | 161.467 | 33.554 ms |
+| `candidate-long-2` | `046dd43` | 176.100 | 16.777 ms |
+| `control-long-3` | `7bcc11e` | 159.233 | 33.554 ms |
+
+All five are clean, source-stable captures with the same configuration fingerprint,
+zero retries/errors, successful invariants/reconciliation, terminal receipts and
+performance capture. The last control brackets the candidate because the first
+control was lower. Against the two later controls' mean, candidate throughput is
+about 9.5% higher; the low initial samples are not used to inflate that figure.
+Order Status p95 remains 16.777 ms. Other family tails remain within the observed
+control/candidate histogram variation; no repeated unexplained regression emerged.
+
+The final control and second candidate have effectively identical mean shared WAL
+force duration (3.502/3.504 ms). Their captures contain 4,270/4,717 write submissions
+and 4,244/4,664 forces. Cohorts remain overwhelmingly singletons. This is an observed
+local gain from the existing workload, not a batching or cross-database claim.
+The held-force tests prove actual independence and dependent-result fencing. Existing
+tuple delta staging skips unchanged index keys, so non-key updates do not force
+otherwise independent reads to inherit a new tuple-root dependency. Changes within
+the same index still conservatively retain that index's registry-row dependency.
+
+Decision: accept the constrained mechanism. Promote with annotated checkpoint
+`perf-checkpoint-20260906-read-durability-dependencies`, retaining the original
+short samples, interleaved controls, known intermittent allocation failures and
+identical baseline policy failures. The clean gate passed 1,775 tests with two
+skips. Independent concurrency/recovery review has no remaining blocker. Exact
+merged-revision smoke and pushed integration/closure are recorded at delivery.

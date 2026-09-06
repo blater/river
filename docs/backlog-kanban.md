@@ -9,12 +9,13 @@ The queue is current at the revision containing this document. Refresh it when
 a listed ticket changes state, a dependency changes, or evidence changes which
 mechanism should be pursued next.
 
-User-directed focused work: [`tic-e544`](tickets/tic-e544.md) is implementing
-read durability dependencies on its own feature branch. The engine tests pass;
-short TPS and Order Status p95 results are neutral. Longer interleaved evidence
-and the clean checkpoint determine acceptance. This does not displace the broader
-P0/P1 frontier below. The preceding [`tic-186e`](tickets/tic-186e.md) remains the
-pushed `perf-checkpoint-20260906-catalog-transaction-resolution` checkpoint.
+User-directed focused work: [`tic-e544`](tickets/tic-e544.md) has passed the
+clean test gate and independent review. Longer interleaved local samples support
+accepting observed read durability dependencies, with about 9.5% higher TPS than
+the later controls and a lower Order Status p99. Promotion is tracked by
+`perf-checkpoint-20260906-read-durability-dependencies`; this does not displace
+the broader P0/P1 frontier below. [`tic-186e`](tickets/tic-186e.md) remains the
+preceding catalog-resolution checkpoint.
 
 ## Board
 

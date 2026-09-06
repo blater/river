@@ -42,6 +42,74 @@ Decision and attribution:
 
 ## Checkpoints
 
+### 2026-09-06 observed read durability dependencies (`tic-e544`)
+
+- Stable base: `7bcc11ea4624f3e7276cdb562cc33dd310a27fbd`, immediately after
+  `perf-checkpoint-20260906-catalog-transaction-resolution`.
+- Implementation: `046dd432ab2402ff085932af973d58faf5fc699a` on
+  `ticket/tic-e544-read-durability-dependencies`.
+- Checkpoint: `perf-checkpoint-20260906-read-durability-dependencies`.
+- Evidence: `/private/tmp/river-tic-e544-evidence`; detailed configuration,
+  review and decision: [`tic-e544`](tickets/tic-e544.md).
+
+Reads await the maximum sequence of the versions and tuple roots they observed,
+including tombstone, absence, range, current-row and write-admission decisions.
+Tuple dependencies remain conservative per index. Savepoint rollback retains
+observations; transaction reuse resets them. Caller row buffers retain their
+ownership without a new steady-state copy or allocation. Fenced read-only commit
+uses the existing abort cleanup; cancellation stays active and retryable. Write
+acknowledgment, WAL force, locks, isolation, SQL/client requests and workload are
+unchanged. Public getter documentation distinguishes a read-only snapshot CSN
+from a durable-prefix watermark.
+
+Fixed short command: `tools/tps-test.sh --seed=42 --warmup-seconds=1
+--measured-seconds=10 --output-dir=<artifact>`. Tiny/standard, one warehouse,
+ten terminals, serializable, no-wait stress, 32 attempts, synchronous durability,
+GraalVM 25.0.4. Initial controls were 73.4/62.0 TPS; the user requested repeats.
+Unchanged-master repeats were 147.3/149.9 and candidates 149.6/148.5. The short
+pair is neutral, including Order Status p95 of 16.777 ms.
+
+Longer interleaving uses 5 seconds warmup and 30 seconds measured, keeping all
+other configuration fixed:
+
+| Artifact (execution order) | TPS | Order Status p99 upper bound |
+| --- | ---: | ---: |
+| `control-long-1` | 149.133 | 33.554 ms |
+| `candidate-long-1` | 174.967 | 16.777 ms |
+| `control-long-2` | 161.467 | 33.554 ms |
+| `candidate-long-2` | 176.100 | 16.777 ms |
+| `control-long-3` | 159.233 | 33.554 ms |
+
+The extra trailing control checks the control shift. Candidate throughput is
+about 9.5% above the later controls' mean; retain the lower first control and
+initial short samples rather than presenting them as the gain denominator.
+Every sample has zero retries/errors and successful invariants, reconciliation,
+capture and terminal receipt. The longer runs have identical configuration
+fingerprints and clean, stable source identities. Order Status p95 is unchanged.
+The final control and second candidate have mean shared WAL force durations of
+3.502/3.504 ms, with 4,270/4,717 writes and 4,244/4,664 forces. This remains a
+local River diagnostic; no cross-database or audited TPC-C claim is made.
+
+Full engine tests passed all 994 cases, including held-force SQL results,
+negative observations, caller row ownership, session reuse, force-failure cleanup
+and cancellation/retry. Clean full tests passed 1,775 tests with two skips in
+`clean-tests-repeat.log`. The first clean run and isolated lock repeat hit the
+existing intermittent exact-lock allocation assertion; an isolated SQL allocation
+assertion also reproduced 608 bytes on unchanged master, then passed in the full
+engine run. No threshold or test was weakened. Source and bytecode policies have
+identical 261-violation sets on candidate/control; indexed-table reference checks
+pass. Independent concurrency/recovery review approved the final source.
+
+Slopmark triggered review at visibility 55.454 and session 53.5602. Simplifying
+the existing control flow reduced final visibility to 44.8766 (from 44.249) and
+session to 38.2417 (from 39.1925). Store forwarding is 157.04 versus 156.656;
+all other touched engine production scores are unchanged. Scores and raw reports
+are retained in `slopmark-touched.tsv` and the before/after artifacts.
+
+Decision: accept this one mechanism based on repeated longer throughput and
+read-tail improvement, preserved durability/failure behavior, independent review
+and the clean gate. The per-index granularity remains an explicit limitation.
+
 ### 2026-09-06 caller-owned catalog resolution (`tic-186e`)
 
 Status: promoted and pushed following the user's commit/push/promote instruction.
