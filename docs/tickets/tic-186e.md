@@ -19,6 +19,36 @@ created: 2026-09-06T12:37:55.670297Z
 ---
 # Resolve internal catalog descriptors in the owning transaction
 
+Independent catalog reads wait for an unrelated data force after lock handoff;
+cached descriptors miss the execution overlap window. Trace:
+`/private/tmp/river-successor-trace.bJxKdg/findings.md`. In a representative trace,
+the successor acquired its lock 0.021 ms after publication, entered the catalog
+wait at 0.157 ms, resumed after the force at 3.436 ms, and enqueued at 4.749 ms.
+
+## Design
+
+Scope lock: internal authoritative descriptor reads use their admitted
+relational transaction and existing response/commit fence. Preserve standalone
+catalog durability. No Payment, cohort scheduling, WAL format, new cache or
+telemetry. Stop if schema admission or cache publication cannot preserve
+authoritative identities. Maximum shape: catalog opener/lifecycle, relational
+bridge, focused tests and evidence.
+
+The admitted relational caller resolves private DDL overlays first. Catalog
+resolution reads the committed head/manifest and pins the exact schema identity;
+it does not begin or finish the caller transaction. Schema admission prevents
+concurrent relational DDL, and cache identity includes object, schema, row
+layout and generation. Shared lifecycle synchronization continues to protect
+the reusable loader and reservation state. Standalone opens retain an independent
+durable read transaction and finish it before cache publication.
+
+## Acceptance Criteria
+
+Held-force proof: successor resolves descriptors and reaches enqueue before
+predecessor force, without early response; force failure fences dependents.
+Cache miss/hit and DDL safety, focused/module tests, clean full test, independent
+review, two matched tps-test baseline/candidate samples and slopmark before/after.
+
 ## Evidence
 
 - Stable production base: pushed `perf-checkpoint-20260906-page-generation-reuse`
@@ -56,27 +86,3 @@ The exact merged revision passed the real-path promotion smoke with zero
 retries/errors, passed invariants and a successful terminal receipt. Closure
 references that pushed integration and its evidence; the documented baseline
 policy failures and Order Status latency tradeoff remain explicit.
-
-## Design
-
-Scope lock: internal authoritative descriptor reads use their admitted
-relational transaction and existing response/commit fence. Preserve standalone
-catalog durability. No Payment, cohort scheduling, WAL format, new cache or
-telemetry. Stop if schema admission or cache publication cannot preserve
-authoritative identities. Maximum shape: catalog opener/lifecycle, relational
-bridge, focused tests and evidence.
-
-The admitted relational caller resolves private DDL overlays first. Catalog
-resolution reads the committed head/manifest and pins the exact schema identity;
-it does not begin or finish the caller transaction. Schema admission prevents
-concurrent relational DDL, and cache identity includes object, schema, row
-layout and generation. Shared lifecycle synchronization continues to protect
-the reusable loader and reservation state. Standalone opens retain an independent
-durable read transaction and finish it before cache publication.
-
-## Acceptance Criteria
-
-Held-force proof: successor resolves descriptors and reaches enqueue before
-predecessor force, without early response; force failure fences dependents.
-Cache miss/hit and DDL safety, focused/module tests, clean full test, independent
-review, two matched tps-test baseline/candidate samples and slopmark before/after.
